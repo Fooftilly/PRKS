@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#6d6cf7">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <title>PRKS - Personal Research Knowledge System</title>
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/hint/show-hint.css">
+    <!-- CodeMirror lib must load before show-hint (addon needs global CodeMirror). EasyMDE bundles its own CM; we copy hint APIs onto that instance's constructor in works.js. -->
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/lib/codemirror.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/hint/show-hint.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
+</head>
+
+<body>
+    <div id="app-container">
+        <!-- Sidebar -->
+        <nav id="sidebar">
+            <div class="sidebar-header sidebar-header--split">
+                <div class="sidebar-brand">
+                    <img class="logo sidebar-logo" src="/logo.svg" alt="" width="32" height="32" fetchpriority="high" decoding="async">
+                    <div>
+                        <h2>PRKS</h2>
+                        <p>Personal Research</p>
+                        <p class="sidebar-caption-sm">Knowledge System</p>
+                    </div>
+                </div>
+                <button onclick="openModal('settings-modal')" class="ribbon-btn settings-btn" title="Settings">⚙️</button>
+            </div>
+
+            <div class="search-bar">
+                <div class="tag-add-shell">
+                    <div class="tag-add-shell__field">
+                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <input type="text" id="global-search" class="tag-add-shell__input" placeholder="Search title, notes, authors…" autocomplete="off" aria-label="Search library">
+                    </div>
+                </div>
+            </div>
+
+            <ul class="nav-menu">
+                <li class="nav-section">Library</li>
+                <li><a href="#/folders" class="nav-link active">📁 All Folders</a></li>
+                <li><a href="#/recent" class="nav-link">⏱ Recent</a></li>
+                <li><a href="#/types" class="nav-link">📚 File Types</a></li>
+                <li><a href="#/playlists" class="nav-link">🎞 Playlists</a></li>
+
+                <li class="nav-section">Tags</li>
+                <li class="sidebar-tags-wrap">
+                    <div id="sidebar-tag-cloud" class="tag-cloud tag-cloud--sidebar"></div>
+                </li>
+                <li><a href="#/publishers" class="nav-link">📚 Publishers</a></li>
+
+                <li class="nav-section">People</li>
+                <li><a href="#/people" class="nav-link">👥 People</a></li>
+                <li><a href="#/people/role/Author" class="nav-link nav-link--sub">✍️ Authors</a></li>
+                <li><a href="#/people/role/Editor" class="nav-link nav-link--sub">📝 Editors</a></li>
+                <li><a href="#/people/role/Reviewer" class="nav-link nav-link--sub">📋 Reviewers</a></li>
+                <li><a href="#/people/role/Translator" class="nav-link nav-link--sub">🌐 Translators</a></li>
+                <li><a href="#/people/groups" class="nav-link nav-link--sub">📂 Groups</a></li>
+
+                <li class="nav-section">My Progress</li>
+                <li class="sidebar-progress-block">
+                    <ul class="progress-legend">
+                        <li>
+                            <a href="#/progress?status=Not%20Started" class="nav-link progress-filter" data-status="Not Started">
+                                <span class="dot not-started" aria-hidden="true"></span>
+                                Not Started
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#/progress?status=Planned" class="nav-link progress-filter" data-status="Planned">
+                                <span class="dot planned" aria-hidden="true"></span>
+                                Planned
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#/progress?status=In%20Progress" class="nav-link progress-filter" data-status="In Progress">
+                                <span class="dot in-progress" aria-hidden="true"></span>
+                                In Progress
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#/progress?status=Paused" class="nav-link progress-filter" data-status="Paused">
+                                <span class="dot paused" aria-hidden="true"></span>
+                                Paused
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#/progress?status=Completed" class="nav-link progress-filter" data-status="Completed">
+                                <span class="dot completed" aria-hidden="true"></span>
+                                Completed
+                            </a>
+                        </li>
+                    </ul>
+                </li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <main id="main-content">
+            <div class="top-ribbon">
+                <div class="top-ribbon__left">
+                    <button
+                        type="button"
+                        id="prks-mobile-nav-btn"
+                        class="ribbon-btn"
+                        aria-label="Open navigation"
+                        aria-expanded="false"
+                        aria-controls="sidebar"
+                        title="Menu"
+                    >☰ <span class="prks-sr-only">Menu</span></button>
+                </div>
+                <div class="top-ribbon__center" aria-label="Quick actions">
+                    <button class="ribbon-btn" onclick="openModal('work-modal')" title="New File">
+                        <span class="ribbon-btn__icon" aria-hidden="true">📝</span>
+                        <span class="ribbon-btn__label">New File</span>
+                    </button>
+                    <button class="ribbon-btn" onclick="openModal('folder-modal')" title="New Folder">
+                        <span class="ribbon-btn__icon" aria-hidden="true">📁</span>
+                        <span class="ribbon-btn__label">New Folder</span>
+                    </button>
+                    <button class="ribbon-btn" onclick="openModal('person-modal')" title="New Person">
+                        <span class="ribbon-btn__icon" aria-hidden="true">👤</span>
+                        <span class="ribbon-btn__label">New Person</span>
+                    </button>
+                    <button class="ribbon-btn" onclick="openModal('group-modal')" title="New group">
+                        <span class="ribbon-btn__icon" aria-hidden="true">📂</span>
+                        <span class="ribbon-btn__label">New group</span>
+                    </button>
+                    <button class="ribbon-btn" onclick="openModal('role-modal')" title="Link Person to Work">
+                        <span class="ribbon-btn__icon" aria-hidden="true">🔗</span>
+                        <span class="ribbon-btn__label">Link Person to Work</span>
+                    </button>
+                </div>
+                <div class="top-ribbon__right">
+                    <button
+                        type="button"
+                        id="prks-mobile-details-btn"
+                        class="ribbon-btn"
+                        aria-label="Open details panel"
+                        aria-expanded="false"
+                        aria-controls="right-panel"
+                        title="Details"
+                    >ⓘ <span class="prks-sr-only">Details</span></button>
+                </div>
+            </div>
+            <div id="page-content"></div>
+        </main>
+
+        <!-- Right Panel (Details / Annotations) -->
+        <aside id="right-panel">
+            <div class="tabs">
+                <button class="tab-btn active" data-target="details">Details</button>
+                <button class="tab-btn" data-target="annotations">Annotations</button>
+            </div>
+            <div class="tab-content" id="panel-content">
+                <!-- Panel content dynamically fetched by app.js -->
+            </div>
+        </aside>
+    </div>
+
+    <!-- Drawer / panel overlay backdrop (mobile) -->
+    <div id="prks-overlay-backdrop" class="prks-overlay-backdrop hidden" aria-hidden="true"></div>
+
+    <!-- Modals -->
+    <div id="modal-backdrop" class="modal-backdrop hidden"></div>
+
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-header">
+            <h3>Settings</h3>
+            <button class="close-btn" onclick="closeModals()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <fieldset class="prks-theme-picker">
+                <legend class="prks-theme-picker__legend">App theme</legend>
+                <div class="prks-theme-picker__options" role="group" aria-label="Choose app theme">
+                    <button type="button" class="prks-theme-option" data-prks-theme="system" title="System default" aria-label="System default theme">
+                        <svg class="prks-theme-option__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                            <path d="M8 21h8M12 17v4"/>
+                        </svg>
+                        <span class="prks-theme-option__label">System</span>
+                    </button>
+                    <button type="button" class="prks-theme-option" data-prks-theme="light" title="Light theme" aria-label="Light theme">
+                        <svg class="prks-theme-option__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="4"/>
+                            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+                        </svg>
+                        <span class="prks-theme-option__label">Light</span>
+                    </button>
+                    <button type="button" class="prks-theme-option" data-prks-theme="dark" title="Dark theme" aria-label="Dark theme">
+                        <svg class="prks-theme-option__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                        </svg>
+                        <span class="prks-theme-option__label">Dark</span>
+                    </button>
+                </div>
+            </fieldset>
+            <section class="prks-settings-section" aria-labelledby="prks-settings-author-heading">
+                <h4 id="prks-settings-author-heading" class="prks-settings-section__title">Annotation author</h4>
+                <label for="annotation-author-input" class="prks-sr-only">Name shown on new PDF annotations</label>
+                <input type="text" id="annotation-author-input" class="prks-settings-text-input" autocomplete="name" placeholder="Name shown on new PDF annotations">
+                <p class="prks-settings-hint">Leave empty to use “You”. Stored with your library so every device using this PRKS server sees the same name. Applies to viewers opened after you change this.</p>
+            </section>
+            <section class="prks-settings-section" aria-labelledby="prks-settings-bibtex-heading">
+                <h4 id="prks-settings-bibtex-heading" class="prks-settings-section__title">BibTeX / BibLaTeX export</h4>
+                <p class="prks-settings-hint">When a toggle is on, that field is included when you copy BibTeX. Turn off to keep data in the app but omit it from export. Stored with your library for all devices using this server.</p>
+                <div class="prks-bibtex-export-toggles" id="prks-bibtex-export-fields" role="group" aria-label="Fields to include in BibTeX export"></div>
+                <button type="button" class="ribbon-btn prks-bibtex-export-reset" id="prks-bibtex-export-reset">Restore export defaults</button>
+            </section>
+            <section class="prks-settings-section" aria-labelledby="prks-settings-device-heading">
+                <h4 id="prks-settings-device-heading" class="prks-settings-section__title">This device</h4>
+                <div class="prks-setting-row">
+                    <div class="prks-setting-row__text">
+                        <span class="prks-setting-row__label" id="prks-lbl-ui-hints">Show help hints (? buttons)</span>
+                    </div>
+                    <button type="button" class="prks-toggle" role="switch" id="prks-setting-ui-hints" aria-labelledby="prks-lbl-ui-hints" aria-checked="false">
+                        <span class="prks-toggle__thumb" aria-hidden="true"></span>
+                    </button>
+                </div>
+                <div class="prks-setting-row">
+                    <div class="prks-setting-row__text">
+                        <span class="prks-setting-row__label" id="prks-lbl-force-mobile">Force mobile layout</span>
+                        <p id="prks-hint-force-mobile" class="prks-settings-hint prks-setting-row__hint">Drawer navigation and details overlay, even on wide screens. Stored on this device only.</p>
+                    </div>
+                    <button type="button" class="prks-toggle" role="switch" id="prks-setting-force-mobile" aria-labelledby="prks-lbl-force-mobile" aria-describedby="prks-hint-force-mobile" aria-checked="false">
+                        <span class="prks-toggle__thumb" aria-hidden="true"></span>
+                    </button>
+                </div>
+                <div class="prks-setting-row">
+                    <div class="prks-setting-row__text">
+                        <span class="prks-setting-row__label" id="prks-lbl-mobile-work-notes">Research notes beside the PDF (mobile)</span>
+                        <p id="prks-hint-mobile-work-notes" class="prks-settings-hint prks-setting-row__hint">Only applies in mobile / narrow layout (or with <strong>Force mobile layout</strong> on a wide screen). Stored on this device only.</p>
+                    </div>
+                    <button type="button" class="prks-toggle" role="switch" id="prks-setting-mobile-work-notes-right" aria-labelledby="prks-lbl-mobile-work-notes" aria-describedby="prks-hint-mobile-work-notes" aria-checked="false">
+                        <span class="prks-toggle__thumb" aria-hidden="true"></span>
+                    </button>
+                </div>
+                <div class="prks-setting-row">
+                    <div class="prks-setting-row__text">
+                        <span class="prks-setting-row__label" id="prks-lbl-pdf-remember">Remember PDF page per file</span>
+                        <p id="prks-hint-pdf-remember-page" class="prks-settings-hint prks-setting-row__hint">Last viewed page per file is kept in this browser. Stored on this device only.</p>
+                    </div>
+                    <button type="button" class="prks-toggle" role="switch" id="prks-setting-pdf-remember-page" aria-labelledby="prks-lbl-pdf-remember" aria-describedby="prks-hint-pdf-remember-page" aria-checked="false">
+                        <span class="prks-toggle__thumb" aria-hidden="true"></span>
+                    </button>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <div id="master-add-modal" class="modal hidden">
+        <div class="modal-header">
+            <h3>Create New Entity</h3>
+            <button class="close-btn" onclick="closeModals()">&times;</button>
+        </div>
+        <div class="modal-body modal-grid-2">
+            <button onclick="openModal('folder-modal')" class="add-new-btn create-entity-btn">📁 New
+                Folder</button>
+            <button onclick="openModal('work-modal')" class="add-new-btn create-entity-btn">📝 New
+                File</button>
+            <button onclick="openModal('person-modal')" class="add-new-btn create-entity-btn">👥 New
+                Author</button>
+            <button onclick="openModal('role-modal')" class="add-new-btn create-entity-btn">🔗 Link
+                Person to Work</button>
+        </div>
+    </div>
+
+    <div id="work-modal" class="modal modal-wide hidden">
+        <div class="modal-header">
+            <h3>New File</h3>
+            <button class="close-btn" onclick="closeModals()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="upload-grid">
+                <!-- Left: Preview -->
+                <div class="preview-pane" id="upload-drop-zone">
+                    <div id="upload-pdf-preview-actions" class="upload-pdf-preview-actions hidden" role="toolbar" aria-label="PDF preview actions">
+                        <button type="button" class="ribbon-btn" id="upload-pdf-remove-btn" title="Clear preview to choose a different PDF">Remove PDF</button>
+                    </div>
+                    <div id="upload-viewer" class="hidden"></div>
+                    <div id="drop-zone-prompt" class="drop-zone">
+                        <span class="drop-zone__icon">📄</span>
+                        <p id="drop-zone-label">Drag & Drop a PDF here<br><span class="drop-zone__label-sub">or click to browse</span></p>
+                        <input type="file" id="work-file" accept=".pdf,application/pdf" class="file-input-hidden">
+                    </div>
+                </div>
+
+                <!-- Right: Form -->
+                <div class="form-pane">
+                    <p id="work-file-kind-label" class="form-field-label">File kind</p>
+                    <input type="hidden" id="work-source-kind" value="pdf" autocomplete="off">
+                    <div class="prks-kind-toggle" role="tablist" aria-labelledby="work-file-kind-label">
+                        <button type="button" class="prks-kind-toggle__btn is-active" data-kind="pdf" role="tab" aria-selected="true">
+                            <span class="prks-kind-toggle__icon" aria-hidden="true">📄</span>
+                            <span class="prks-kind-toggle__label">PDF</span>
+                        </button>
+                        <button type="button" class="prks-kind-toggle__btn" data-kind="video" role="tab" aria-selected="false">
+                            <span class="prks-kind-toggle__icon" aria-hidden="true">▶</span>
+                            <span class="prks-kind-toggle__label">Video</span>
+                        </button>
+                    </div>
+
+                    <div id="work-pdf-source-url-row">
+                        <label for="work-pdf-source-url">Original URL (optional)</label>
+                        <input type="url" id="work-pdf-source-url" placeholder="https://… (article or source page)" autocomplete="off">
+                        <p class="meta-row meta-row--hint">
+                            If this PDF was saved from the web, keep the link here for reference and BibTeX.
+                        </p>
+                    </div>
+
+                    <div id="work-video-url-row" class="hidden">
+                        <label for="work-video-url">Video URL</label>
+                        <input type="url" id="work-video-url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
+                        <p class="meta-row meta-row--hint">
+                            We’ll embed the video in the file view and auto-fill title/channel when possible.
+                        </p>
+                        <div class="form-grid-2">
+                            <div>
+                                <label for="work-video-channel">Channel / author</label>
+                                <input type="text" id="work-video-channel" placeholder="e.g. YaleCourses" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="work-video-published-date">Date published</label>
+                                <input type="text" id="work-video-published-date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off">
+                            </div>
+                        </div>
+                        <div>
+                            <label for="work-video-urldate">Accessed date (urldate)</label>
+                            <input type="text" id="work-video-urldate" placeholder="Auto (last edit)" disabled>
+                            <p class="meta-row meta-row--hint">
+                                BibLaTeX <code>@online</code> expects <code>url</code> + <code>urldate</code>.
+                            </p>
+                        </div>
+                        <div>
+                            <label for="work-video-playlist-search">Playlist (optional)</label>
+                            <div class="tag-add-shell combobox-container tag-add-shell--flush">
+                                <div class="tag-add-shell__field">
+                                    <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                                    <input type="text" id="work-video-playlist-search" class="tag-add-shell__input" placeholder="Search playlists…" maxlength="300" autocomplete="off" aria-label="Search playlists">
+                                    <input type="hidden" id="work-video-playlist-id" value="">
+                                </div>
+                                <div id="work-video-playlist-results" class="combobox-results combobox-results--tag-panel hidden"></div>
+                            </div>
+                            <p class="meta-row meta-row--hint">
+                                If selected, the video will be added to the playlist when you create the file.
+                            </p>
+                        </div>
+                    </div>
+
+                    <label for="work-title">Document Title</label>
+                    <input type="text" id="work-title" placeholder="e.g. Capital Volume 1">
+                    
+                    <label for="work-folder-search">Folder</label>
+                    <div class="prks-combobox-with-action">
+                        <div class="combobox-container">
+                            <div class="tag-add-shell">
+                                <div class="tag-add-shell__field">
+                                    <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                    <input type="text" id="work-folder-search" class="tag-add-shell__input" placeholder="Search folder..." autocomplete="off" aria-label="Search folder">
+                                </div>
+                            </div>
+                            <input type="hidden" id="work-folder-id">
+                            <div id="folder-results" class="combobox-results hidden"></div>
+                        </div>
+                        <button type="button" onclick="quickCreateFolder()" class="ribbon-btn ribbon-btn--sm" title="Create New Folder">+</button>
+                    </div>
+
+                    <label for="work-doc-type-trigger">Document type (BibLaTeX)</label>
+                    <div class="prks-doc-type-menu combobox-container">
+                        <input type="hidden" id="work-doc-type" value="article">
+                        <button type="button" class="prks-doc-type-menu__trigger" id="work-doc-type-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="work-doc-type-listbox" aria-label="BibLaTeX document type">
+                            <span class="prks-doc-type-menu__label">Article</span>
+                            <span class="prks-doc-type-menu__caret" aria-hidden="true">▾</span>
+                        </button>
+                        <div id="work-doc-type-listbox" class="prks-doc-type-menu__panel hidden" role="listbox"></div>
+                    </div>
+
+                    <div class="form-grid-2">
+                        <div>
+                            <label for="work-year">Year</label>
+                            <input type="text" id="work-year" placeholder="1950" autocomplete="off">
+                        </div>
+                        <div id="work-upload-published-date-col">
+                            <label for="work-date">Published date</label>
+                            <input type="date" id="work-date" autocomplete="off">
+                        </div>
+                    </div>
+
+                    <label for="upload-person-search">Link Person(s) - <span class="meta-row--hint">Added in order for BibTeX</span></label>
+                    <div class="prks-upload-person-stack">
+                        <div class="form-row prks-upload-person-stack__search">
+                            <div class="prks-combobox-with-action">
+                                <div class="combobox-container">
+                                    <div class="tag-add-shell">
+                                        <div class="tag-add-shell__field">
+                                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                            <input type="text" id="upload-person-search" class="tag-add-shell__input" placeholder="Search person..." autocomplete="off" aria-label="Search person">
+                                        </div>
+                                    </div>
+                                    <input type="hidden" id="upload-person-id">
+                                    <div id="person-results" class="combobox-results hidden"></div>
+                                </div>
+                                <button type="button" onclick="quickCreatePerson()" class="ribbon-btn ribbon-btn--sm" title="Create New Person">+</button>
+                            </div>
+                            <button type="button" onclick="addRoleToUploadList()" class="ribbon-btn">+ Link</button>
+                        </div>
+                        <div class="prks-upload-person-stack__roles">
+                            <div class="prks-upload-person-stack__role-caption">Role</div>
+                            <div class="prks-upload-role-seg">
+                                <div class="prks-segmented-wrap prks-segmented-wrap--compact">
+                                    <input type="hidden" id="upload-role-type" value="Author">
+                                    <div class="prks-segmented prks-segmented--compact prks-segmented--roles" role="radiogroup" aria-label="Role for linked person">
+                                        <button type="button" class="prks-segmented__btn prks-segmented__btn--active" data-value="Author" aria-pressed="true" role="radio">Author</button>
+                                        <button type="button" class="prks-segmented__btn" data-value="Editor" aria-pressed="false" role="radio">Editor</button>
+                                        <button type="button" class="prks-segmented__btn" data-value="Reviewer" aria-pressed="false" role="radio">Reviewer</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="upload-roles-list" class="tag-cloud status-chip-list">
+                        <span class="status-chip-list__empty">No persons linked yet</span>
+                    </div>
+
+                    <div id="work-upload-pdf-only-meta">
+                        <details id="work-upload-biblio-details" class="work-upload-meta__details">
+                            <summary class="work-upload-meta__summary">
+                                <span class="work-upload-meta__summary-chevron" aria-hidden="true"></span>
+                                <span class="work-upload-meta__summary-text">
+                                    <span class="work-upload-meta__summary-title-row">
+                                        <span class="work-upload-meta__summary-title">Bibliographic details</span>
+                                        <button type="button" class="prks-hint-btn work-upload-meta__hint-btn" data-prks-hint-type="upload-biblio-details" aria-label="What is included in bibliographic details" aria-expanded="false" aria-controls="prks-hint-popover">?</button>
+                                    </span>
+                                </span>
+                            </summary>
+                            <div class="work-upload-meta__details-body form-pane form-pane--tight">
+                                <label for="work-publisher">Publisher</label>
+                                <input type="text" id="work-publisher" autocomplete="off">
+
+                                <label for="work-location">Location (place of publication)</label>
+                                <input type="text" id="work-location" autocomplete="off" placeholder="e.g. Cambridge, UK or Paris; Berlin">
+
+                                <label for="work-edition">Edition</label>
+                                <input type="text" id="work-edition" placeholder="e.g. 2 or revised" autocomplete="off">
+
+                                <label for="work-journal">Journal</label>
+                                <input type="text" id="work-journal" autocomplete="off">
+
+                                <div class="form-grid-2">
+                                    <div><label for="work-volume">Volume</label><input type="text" id="work-volume" autocomplete="off"></div>
+                                    <div><label for="work-issue">Issue</label><input type="text" id="work-issue" autocomplete="off"></div>
+                                </div>
+                                <div class="form-grid-2">
+                                    <div><label for="work-pages">Pages</label><input type="text" id="work-pages" autocomplete="off"></div>
+                                    <div><label for="work-isbn">ISBN</label><input type="text" id="work-isbn" autocomplete="off"></div>
+                                </div>
+
+                                <label for="work-doi">DOI</label>
+                                <input type="text" id="work-doi" autocomplete="off">
+
+                                <label for="work-thumb-page">Thumbnail page (PDF)</label>
+                                <input type="number" id="work-thumb-page" min="1" step="1" inputmode="numeric" placeholder="1" autocomplete="off">
+                            </div>
+                        </details>
+                    </div>
+
+                    <div id="work-upload-tags-block">
+                        <p class="tag-add-field__caption">Tags (optional)</p>
+                        <div class="tag-add-shell combobox-container tag-add-shell--flush">
+                            <div class="tag-add-shell__field">
+                                <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                                <input type="text" id="upload-tag-search" class="tag-add-shell__input" placeholder="Search or create tag…" maxlength="300" autocomplete="off" aria-label="Add tag for new file">
+                            </div>
+                            <div id="upload-tag-results" class="combobox-results combobox-results--tag-panel hidden"></div>
+                        </div>
+                        <div id="upload-tags-list" class="tag-cloud work-tags-list"></div>
+                    </div>
+
+                    <div class="prks-work-upload-status-field">
+                        <label for="work-status">Status</label>
+                        <div class="prks-segmented-wrap prks-segmented-wrap--status-row">
+                            <input type="hidden" id="work-status" value="Not Started">
+                            <div class="prks-segmented prks-segmented--status prks-segmented--single-row" role="radiogroup" aria-label="File status">
+                                <button type="button" class="prks-segmented__btn prks-segmented__btn--active" data-value="Not Started" aria-pressed="true" role="radio">Not Started</button>
+                                <button type="button" class="prks-segmented__btn" data-value="Planned" aria-pressed="false" role="radio">Planned</button>
+                                <button type="button" class="prks-segmented__btn" data-value="In Progress" aria-pressed="false" role="radio">In Progress</button>
+                                <button type="button" class="prks-segmented__btn" data-value="Completed" aria-pressed="false" role="radio">Completed</button>
+                                <button type="button" class="prks-segmented__btn" data-value="Paused" aria-pressed="false" role="radio">Paused</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <label for="work-private-notes">Private notes (optional)</label>
+                    <textarea id="work-private-notes" class="textarea-sm" placeholder="Reminders for yourself; not shown in search index."></textarea>
+
+                    <label for="work-abstract">Abstract / Preface</label>
+                    <textarea id="work-abstract" class="textarea-lg textarea-flex" placeholder="Briefly describe why this document is relevant, or use paper abstract..."></textarea>
+                    
+                    <button id="save-work-btn" class="add-new-btn">Add File</button>
+                    <div id="upload-status-msg" class="upload-status hidden"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="folder-modal" class="modal hidden">
+        <div class="modal-header">
+            <h3>Add New Folder</h3>
+            <button class="close-btn" onclick="closeModals()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-pane">
+                <p class="modal-helper">Folders can nest. Pick a parent to create a subfolder, or leave blank for top-level.</p>
+                <label for="folder-title">Title</label>
+                <input type="text" id="folder-title" placeholder="Folder title" autocomplete="off">
+                <p id="folder-title-error" class="folder-field-error hidden" role="alert" aria-live="polite"></p>
+                <label for="folder-parent-search">Parent folder (optional)</label>
+                <p class="modal-helper meta-row--hint meta-row--compact">Search and choose a parent folder to create this one as a subfolder.</p>
+                <div class="combobox-container">
+                    <div class="tag-add-shell">
+                        <div class="tag-add-shell__field">
+                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            <input type="text" id="folder-parent-search" class="tag-add-shell__input" placeholder="Search parent folder…" autocomplete="off" aria-label="Search parent folder">
+                        </div>
+                    </div>
+                    <input type="hidden" id="folder-parent-id" value="">
+                    <div id="folder-parent-results" class="combobox-results hidden"></div>
+                </div>
+                <label for="folder-description">Description</label>
+                <textarea id="folder-description" placeholder="Optional description…"></textarea>
+                <button id="save-folder-btn" class="add-new-btn">Save Folder</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="playlist-modal" class="modal hidden">
+        <div class="modal-header">
+            <h3>New playlist</h3>
+            <button class="close-btn" onclick="closeModals()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-pane">
+                <p class="modal-helper">Playlists group related videos (e.g. course lectures) and keep an ordered sequence.</p>
+                <label for="playlist-title">Title</label>
+                <input type="text" id="playlist-title" placeholder="e.g. Philosophy Lectures" autocomplete="off">
+                <label for="playlist-description">Description</label>
+                <textarea id="playlist-description" class="textarea-sm" placeholder="Optional description…"></textarea>
+                <button id="save-playlist-btn" class="add-new-btn">Create playlist</button>
+                <p id="playlist-error" class="folder-field-error hidden" role="alert" aria-live="polite"></p>
+            </div>
+        </div>
+    </div>
+
+    <div id="group-modal" class="modal hidden">
+        <div class="modal-header">
+            <h3>New people group</h3>
+            <button class="close-btn" onclick="closeModals()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-pane">
+                <p class="modal-helper">Groups can nest (e.g. Philosophy → Frankfurt School). People can belong to multiple groups.</p>
+                <label for="group-name">Name</label>
+                <input type="text" id="group-name" placeholder="e.g. Frankfurt School" autocomplete="off">
+                <label for="group-parent-search">Parent group (optional)</label>
+                <p class="modal-helper meta-row--hint meta-row--compact">Search for an existing group or type a new name — it will be created as a top-level group when you save.</p>
+                <div class="combobox-container">
+                    <div class="tag-add-shell">
+                        <div class="tag-add-shell__field">
+                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            <input type="text" id="group-parent-search" class="tag-add-shell__input" placeholder="Search or type new parent name…" autocomplete="off" aria-label="Search or type parent group">
+                        </div>
+                    </div>
+                    <input type="hidden" id="group-parent-id" value="">
+                    <div id="group-parent-results" class="combobox-results hidden"></div>
+                </div>
+                <label for="group-description">Description</label>
+                <textarea id="group-description" placeholder="Optional"></textarea>
+                <button type="button" id="save-group-btn" class="add-new-btn">Create group</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="person-modal" class="modal hidden">
+        <div class="modal-header">
+            <h3>Add New Person</h3>
+            <button class="close-btn" onclick="closeModals()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-pane">
+                <label for="person-fname">First name</label>
+                <input type="text" id="person-fname" placeholder="First name">
+                <label for="person-lname">Last name</label>
+                <input type="text" id="person-lname" placeholder="Required">
+                <label for="person-aliases">Aliases</label>
+                <input type="text" id="person-aliases" placeholder="Filled from names as you type; edit anytime">
+                <label for="person-about">About / expertise</label>
+                <textarea id="person-about" placeholder="Optional…"></textarea>
+                <div class="form-grid-2">
+                    <div>
+                        <label for="person-birth-date">Birth date</label>
+                        <input type="text" id="person-birth-date" placeholder="dd-mm-yyyy, yyyy, or -428" autocomplete="off">
+                    </div>
+                    <div>
+                        <label for="person-death-date">Date of death</label>
+                        <input type="text" id="person-death-date" placeholder="dd-mm-yyyy, yyyy, or -428" autocomplete="off">
+                    </div>
+                </div>
+                <label for="person-image-url">Portrait image URL</label>
+                <input type="url" id="person-image-url" placeholder="https://…">
+                <label for="person-link-wikipedia">Wikipedia</label>
+                <input type="url" id="person-link-wikipedia" placeholder="https://en.wikipedia.org/wiki/…">
+                <label for="person-link-stanford">Stanford Encyclopedia of Philosophy</label>
+                <input type="url" id="person-link-stanford" placeholder="https://plato.stanford.edu/entries/…">
+                <label for="person-link-iep">Internet Encyclopedia of Philosophy</label>
+                <input type="url" id="person-link-iep" placeholder="https://iep.utm.edu/…">
+                <label for="person-links-other">Other links</label>
+                <textarea id="person-links-other" class="textarea-sm" placeholder="One URL per line (e.g. other encyclopedias or profiles)"></textarea>
+                <button id="save-person-btn" class="add-new-btn">Save Person</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="role-modal" class="modal hidden">
+        <div class="modal-header">
+            <h3>Link Person to Work</h3>
+            <button class="close-btn" onclick="closeModals()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="modal-helper">Search for someone already in your library, or type a name and choose <strong>Quick-create person</strong> in the list. Then click Create Link.</p>
+            <div class="form-pane">
+                <label for="role-person-search">Person</label>
+                <div class="combobox-container">
+                    <div class="tag-add-shell">
+                        <div class="tag-add-shell__field">
+                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            <input type="text" id="role-person-search" class="tag-add-shell__input" placeholder="Search person…" autocomplete="off" aria-label="Search person">
+                        </div>
+                    </div>
+                    <input type="hidden" id="role-person-id">
+                    <div id="role-person-results" class="combobox-results hidden"></div>
+                </div>
+                <label for="role-work-search">File</label>
+                <div class="combobox-container">
+                    <div class="tag-add-shell">
+                        <div class="tag-add-shell__field">
+                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            <input type="text" id="role-work-search" class="tag-add-shell__input" placeholder="Search file…" autocomplete="off" aria-label="Search file">
+                        </div>
+                    </div>
+                    <input type="hidden" id="role-work-id">
+                    <div id="role-work-results" class="combobox-results hidden"></div>
+                </div>
+                <label for="role-type">Role</label>
+                <div class="prks-segmented-wrap">
+                    <input type="hidden" id="role-type" value="Author">
+                    <div class="prks-segmented prks-segmented--roles" role="radiogroup" aria-label="Link role">
+                        <button type="button" class="prks-segmented__btn prks-segmented__btn--active" data-value="Author" aria-pressed="true" role="radio">Author</button>
+                        <button type="button" class="prks-segmented__btn" data-value="Editor" aria-pressed="false" role="radio">Editor</button>
+                        <button type="button" class="prks-segmented__btn" data-value="Reviewer" aria-pressed="false" role="radio">Reviewer</button>
+                        <button type="button" class="prks-segmented__btn" data-value="Mentioned" aria-pressed="false" role="radio">Mentioned</button>
+                        <button type="button" class="prks-segmented__btn" data-value="Translator" aria-pressed="false" role="radio">Translator</button>
+                    </div>
+                </div>
+                <button id="save-role-btn" class="add-new-btn">Create Link</button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <script src="/js/api.js"></script>
+    <script src="/js/doc-types.js"></script>
+    <script src="/js/embedpdf-theme.js"></script>
+    <script src="/js/ui.js"></script>
+    <script src="/js/components/work-cards.js"></script>
+    <script src="/js/components/folders.js"></script>
+    <script src="/js/components/graph.js"></script>
+    <script src="/js/components/works.js"></script>
+    <script type="module" src="/js/components/works-pdf.js"></script>
+    <script src="/js/components/playlists.js"></script>
+    <script src="/js/components/people.js"></script>
+    <script src="/js/components/people-groups.js"></script>
+    <script src="/js/components/search.js"></script>
+    <script src="/js/components/publishers.js"></script>
+    <script src="/js/components/tags.js"></script>
+    <script src="/js/components/types.js"></script>
+    <script src="/js/components/progress.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+
+</html>

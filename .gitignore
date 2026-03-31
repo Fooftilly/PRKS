@@ -1,0 +1,52 @@
+# --- PRKS runtime storage (generated) ---
+/data/
+/data_testing/
+
+# --- Python bytecode / caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+env/
+.env/
+
+# --- Python packaging / build outputs ---
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# --- Testing / coverage ---
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# --- Type checkers / linters ---
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+.cursor/*.log
+
+# --- Logs ---
+*.log
+
+# --- OS / misc ---
+.DS_Store
+Thumbs.db
+log.txt
+to-do.md
+/.cursor

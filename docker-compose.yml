@@ -1,0 +1,13 @@
+# Build with pruning of replaced-tag leftovers: ./docker-build.sh
+services:
+  prks:
+    build: .
+    image: prks:latest
+    user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      - "8080:8080"
+    environment:
+      PRKS_STORAGE: /data
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
