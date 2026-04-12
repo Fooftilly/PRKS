@@ -1,6 +1,7 @@
 const PRKS_AUTOSIZE_TEXTAREA_SELECTOR = [
     '#pd-about',
     '#pd-links-other',
+    '#person-template-json',
     '#person-about',
     '#person-links-other',
     '#folder-description',

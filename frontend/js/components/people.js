@@ -135,6 +135,178 @@ function parsePersonOtherLinkLine(line) {
     return { label, href };
 }
 
+const PERSON_STANDARD_TEMPLATE_FIELDS = [
+    { key: 'first_name', id: 'pd-first-name' },
+    { key: 'last_name', id: 'pd-last-name' },
+    { key: 'aliases', id: 'pd-aliases' },
+    { key: 'about', id: 'pd-about' },
+    { key: 'birth_date', id: 'pd-birth-date' },
+    { key: 'death_date', id: 'pd-death-date' },
+    { key: 'image_url', id: 'pd-image-url' },
+    { key: 'link_wikipedia', id: 'pd-link-wikipedia' },
+    { key: 'link_stanford_encyclopedia', id: 'pd-link-stanford' },
+    { key: 'link_iep', id: 'pd-link-iep' },
+    { key: 'links_other', id: 'pd-links-other' }
+];
+
+const PERSON_TEMPLATE_HELP_TEXT = [
+    'How to fill template fields',
+    '- first_name, last_name, aliases, about: plain text strings.',
+    '- birth_date, death_date: use dd-mm-yyyy, dd/mm/yyyy, yyyy, or -yyyy (BC).',
+    '- image_url, link_wikipedia, link_stanford_encyclopedia, link_iep: full URL strings (prefer https://). For image_url, use Wikipedia profile photo URL if it exists; otherwise other reliable sources are allowed.',
+    '- links_other: one entry per line inside single JSON string. Prefer [Title](https://...) format. Avoid free-text notes.',
+    '- empty fields should stay empty; do not fill them with values such as N/A',
+    '- aliases: free text; comma-separated aliases recommended.',
+    '- Keep exact keys; do not add/remove keys.',
+    '- Keep all values as JSON strings.'
+].join('\n');
+
+function setPersonTemplateFeedback(message, isError, targetId = 'person-template-feedback') {
+    const feedback = document.getElementById(targetId);
+    if (!feedback) return;
+    feedback.textContent = message || '';
+    feedback.className = isError ? 'prks-inline-message prks-inline-message--error' : 'prks-inline-message';
+}
+
+function buildPersonStandardTemplateFromProfile() {
+    const out = {};
+    const p = window.currentPerson || {};
+    out.first_name = String(p.first_name || '');
+    out.last_name = String(p.last_name || '');
+    out.aliases = String(p.aliases || '');
+    out.about = String(p.about || '');
+    out.birth_date = String(personDateToDisplayFormat(p.birth_date || ''));
+    out.death_date = String(personDateToDisplayFormat(p.death_date || ''));
+    out.image_url = String(p.image_url || '');
+    out.link_wikipedia = String(p.link_wikipedia || '');
+    out.link_stanford_encyclopedia = String(p.link_stanford_encyclopedia || '');
+    out.link_iep = String(p.link_iep || '');
+    out.links_other = String(p.links_other || '');
+    return out;
+}
+
+function parsePersonStandardTemplateJson(raw) {
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (_e) {
+        return { ok: false, error: 'Invalid JSON. Paste valid JSON object template.' };
+    }
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+        return { ok: false, error: 'Template must be JSON object.' };
+    }
+    const allowed = new Set(PERSON_STANDARD_TEMPLATE_FIELDS.map((f) => f.key));
+    const keys = Object.keys(parsed);
+    const unknown = keys.filter((k) => !allowed.has(k));
+    if (unknown.length) {
+        return { ok: false, error: `Unknown field(s): ${unknown.join(', ')}` };
+    }
+    const missing = PERSON_STANDARD_TEMPLATE_FIELDS.map((f) => f.key).filter(
+        (k) => !Object.prototype.hasOwnProperty.call(parsed, k)
+    );
+    if (missing.length) {
+        return { ok: false, error: `Missing field(s): ${missing.join(', ')}` };
+    }
+    const values = {};
+    for (const field of PERSON_STANDARD_TEMPLATE_FIELDS) {
+        const v = parsed[field.key];
+        if (typeof v !== 'string') {
+            return { ok: false, error: `Field "${field.key}" must be string.` };
+        }
+        values[field.key] = v;
+    }
+    return { ok: true, values };
+}
+
+function openPersonProfileTemplateModal() {
+    if (typeof openModal === 'function') {
+        openModal('person-template-modal');
+    }
+    const templateArea = document.getElementById('person-template-json');
+    if (!templateArea) return;
+    const tpl = buildPersonStandardTemplateFromProfile();
+    templateArea.value = JSON.stringify(tpl, null, 2);
+    setPersonTemplateFeedback('', false);
+    if (typeof prksAutosizeTextarea === 'function') prksAutosizeTextarea(templateArea);
+}
+
+async function copyPersonTemplateGuideText() {
+    const s = PERSON_TEMPLATE_HELP_TEXT;
+    try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(s);
+            setPersonTemplateFeedback('Template field guide copied.', false);
+            return;
+        }
+    } catch (_e) {}
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try {
+        ok = !!document.execCommand('copy');
+    } catch (_e) {
+        ok = false;
+    } finally {
+        ta.remove();
+    }
+    if (ok) {
+        setPersonTemplateFeedback('Template field guide copied.', false);
+    } else {
+        setPersonTemplateFeedback('Could not copy guide. Copy manually.', true);
+    }
+}
+
+function insertPersonProfileTemplateFromCurrentData() {
+    const templateArea = document.getElementById('person-template-json');
+    if (!templateArea) return;
+    const tpl = buildPersonStandardTemplateFromProfile();
+    templateArea.value = JSON.stringify(tpl, null, 2);
+    setPersonTemplateFeedback('Template refreshed from current profile values.', false);
+    if (typeof prksAutosizeTextarea === 'function') prksAutosizeTextarea(templateArea);
+}
+
+function applyPersonTemplateValuesToEditForm(values) {
+    const targets = {};
+    for (const field of PERSON_STANDARD_TEMPLATE_FIELDS) {
+        const el = document.getElementById(field.id);
+        if (!el) return { ok: false, error: `Could not find field "${field.key}" in edit form.` };
+        targets[field.key] = el;
+    }
+    PERSON_STANDARD_TEMPLATE_FIELDS.forEach((field) => {
+        targets[field.key].value = values[field.key];
+    });
+    if (typeof prksAutosizeTextarea === 'function') {
+        ['pd-about', 'pd-links-other'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) prksAutosizeTextarea(el);
+        });
+    }
+    return { ok: true };
+}
+
+async function applyPersonProfileTemplateFromModal() {
+    const templateArea = document.getElementById('person-template-json');
+    if (!templateArea) return;
+    const parsed = parsePersonStandardTemplateJson(templateArea.value);
+    if (!parsed.ok) {
+        setPersonTemplateFeedback(parsed.error || 'Could not apply template.', true);
+        return;
+    }
+    await openPersonProfileEdit();
+    const applied = applyPersonTemplateValuesToEditForm(parsed.values);
+    if (!applied.ok) {
+        setPersonTemplateFeedback(applied.error || 'Could not apply template.', true);
+        return;
+    }
+    if (typeof closeModals === 'function') closeModals();
+}
+
 function renderPersonExternalLinksList(person) {
     const items = [];
     const wiki = safeHttpUrl(person.link_wikipedia);
@@ -327,6 +499,7 @@ function renderPersonProfileDetailsSidebarHtml(person) {
             <p class="route-sidebar__meta">${nWorks} linked file${nWorks === 1 ? '' : 's'}</p>
             ${worksEditBtn}
             <button type="button" class="add-new-btn person-sidebar__cta" onclick="openPersonProfileEdit()">Edit profile</button>
+            <button type="button" class="add-new-btn person-sidebar__cta" onclick="openPersonProfileTemplateModal()">Edit profile using template</button>
             <p class="route-sidebar__action"><a href="#/people" class="route-sidebar__link">All people</a></p>
         </div>`;
 }

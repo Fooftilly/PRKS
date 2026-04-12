@@ -630,6 +630,37 @@
             </div>
         </div>
     </div>
+    <div id="person-template-modal" class="modal hidden">
+        <div class="modal-header">
+            <h3>Edit Profile Using Template</h3>
+            <button class="close-btn" onclick="closeModals()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-pane">
+                <p class="modal-helper">Template uses strict JSON. Keep exact keys, string values only. Paste edited template then apply to open profile edit form.</p>
+                <div class="prks-inline-message">
+                    <p class="meta-row meta-row--compact" style="display:flex;align-items:center;gap:8px;">
+                        <strong>How to fill template fields</strong>
+                        <button type="button" class="inline-action-btn" onclick="copyPersonTemplateGuideText()" title="Copy template field guide" aria-label="Copy template field guide">📋</button>
+                    </p>
+                    <p><code>first_name</code>, <code>last_name</code>, <code>aliases</code>, <code>about</code>: plain text strings.</p>
+                    <p><code>birth_date</code>, <code>death_date</code>: use <code>dd-mm-yyyy</code>, <code>dd/mm/yyyy</code>, <code>yyyy</code>, or <code>-yyyy</code> (BC).</p>
+                    <p><code>image_url</code>, <code>link_wikipedia</code>, <code>link_stanford_encyclopedia</code>, <code>link_iep</code>: full URL strings (prefer <code>https://</code>). For <code>image_url</code>, use Wikipedia profile photo URL if it exists; otherwise other reliable sources are allowed.</p>
+                    <p><code>links_other</code>: one entry per line inside single string. Prefer <code>[Title](https://...)</code> format. Avoid free-text notes.</p>
+                    <p>empty fields should stay empty; do not fill them with values such as N/A.</p>
+                    <p><code>aliases</code>: free text; separate multiple aliases with commas (recommended).</p>
+                    <p>Do not add/remove keys. Keep all values as JSON strings.</p>
+                </div>
+                <label for="person-template-json">Profile template</label>
+                <textarea id="person-template-json" class="textarea-sm" placeholder='Click "Insert template" to generate from current profile fields.'></textarea>
+                <div class="form-actions">
+                    <button type="button" class="add-new-btn form-actions__btn form-actions__btn--secondary" onclick="insertPersonProfileTemplateFromCurrentData()">Insert template</button>
+                    <button type="button" class="add-new-btn form-actions__btn form-actions__btn--primary" onclick="applyPersonProfileTemplateFromModal()">Apply template</button>
+                </div>
+                <p id="person-template-feedback" class="prks-inline-message"></p>
+            </div>
+        </div>
+    </div>
 
     <div id="role-modal" class="modal hidden">
         <div class="modal-header">
