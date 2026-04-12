@@ -26,7 +26,7 @@ Optional port:
 python prks_app.py --port 9000
 ```
 
-### Testing mode (Created seperate testing database)
+### Testing mode (Creates seperate testing database)
 
 ```bash
 python prks_app.py --testing
@@ -38,13 +38,9 @@ This sets `PRKS_TESTING=1`, uses port **8070** by default (unless you pass `--po
 
 Build:
 
-```bash
-docker build -t prks:latest .
-```
+Use `./docker-build.sh`, which builds `prks:latest` and prunes dangling images (from previous builds).
 
-Or use `./docker-build.sh`, which builds `prks:latest` and prunes dangling images.
-
-Run with Compose (from the repo root):
+And run with Compose (from the repo root):
 
 ```bash
 docker compose up -d
@@ -61,7 +57,7 @@ This maps **8080:8080**, sets `PRKS_STORAGE=/data`, mounts **`./data` on the hos
 
 If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/prks_data.db`, `data/pdfs/`, and `data/thumbs/`.
 
-Back up by copying the database file and the `pdfs` (and `thumbs`) directories for your chosen root.
+Backup your database by copying `/data` folder.
 
 ## Development and tests
 
@@ -86,4 +82,4 @@ This discovers tests under `tests/`, sets `PRKS_TESTING=1` and `PRKS_STORAGE` to
 
 ## Security note
 
-PRKS is aimed at **local or trusted network** use. There is **no built-in authentication** in the application. If you expose it beyond localhost, put it behind a reverse proxy or VPN and enforce access control yourself.
+PRKS is aimed at **local or trusted network** use. There is **no built-in authentication** in the application. If you expose it beyond localhost, put it behind a reverse proxy or custom VPN and enforce access control yourself.
