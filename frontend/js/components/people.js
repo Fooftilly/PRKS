@@ -124,6 +124,17 @@ function safeHttpUrl(url) {
     return null;
 }
 
+function parsePersonOtherLinkLine(line) {
+    const trimmed = (line || '').trim();
+    if (!trimmed) return null;
+    const md = trimmed.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (!md) return null;
+    const label = (md[1] || '').trim();
+    const href = safeHttpUrl(md[2] || '');
+    if (!label || !href) return null;
+    return { label, href };
+}
+
 function renderPersonExternalLinksList(person) {
     const items = [];
     const wiki = safeHttpUrl(person.link_wikipedia);
@@ -140,6 +151,11 @@ function renderPersonExternalLinksList(person) {
     }
     const other = (person.links_other || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     other.forEach((line, i) => {
+        const mdLink = parsePersonOtherLinkLine(line);
+        if (mdLink) {
+            items.push(mdLink);
+            return;
+        }
         const href = safeHttpUrl(line);
         if (href) {
             items.push({ label: href.replace(/^https?:\/\//i, '').split('/')[0] || `Link ${i + 1}`, href });
@@ -177,7 +193,7 @@ function personExternalRefsSummary(person) {
     if (safeHttpUrl(person.link_stanford_encyclopedia)) bits.push('Stanford Enc.');
     if (safeHttpUrl(person.link_iep)) bits.push('IEP');
     const otherLines = (person.links_other || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    const otherHttp = otherLines.filter(l => safeHttpUrl(l)).length;
+    const otherHttp = otherLines.filter(l => parsePersonOtherLinkLine(l) || safeHttpUrl(l)).length;
     if (otherHttp) bits.push(otherHttp === 1 ? 'Other link' : `${otherHttp} other links`);
     return bits.length ? bits.join(' · ') : '';
 }
@@ -352,7 +368,7 @@ function renderPersonProfileEditFormHtml(person) {
                 <label for="pd-link-iep">Internet Encyclopedia of Philosophy</label>
                 <input type="url" id="pd-link-iep" value="${escapeHtmlPerson(person.link_iep)}">
                 <label for="pd-links-other">Other links</label>
-                <textarea id="pd-links-other" placeholder="One URL per line" class="textarea-sm">${escapeHtmlPerson(person.links_other)}</textarea>
+                <textarea id="pd-links-other" placeholder="One URL per line, or [Title](https://...)" class="textarea-sm">${escapeHtmlPerson(person.links_other)}</textarea>
                 <fieldset class="person-groups-fieldset">
                     <legend class="person-groups-fieldset__legend">Groups</legend>
                     <p class="meta-row">Search for a group, pick from the list, or type a new name and <strong>Add</strong> to create a top-level group. Names are unique. <a href="#/people/groups">Browse groups</a>.</p>
