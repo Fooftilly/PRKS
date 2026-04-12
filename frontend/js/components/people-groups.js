@@ -260,6 +260,9 @@ async function mountPersonGroupEditPanel(g) {
         const prow = all.find((x) => x.id === g.parent.id);
         searchEl.value = prow ? prksGroupRowLabel(prow, all) : g.parent.name;
     }
+    if (typeof prksBindAutosizeTextareas === 'function') {
+        prksBindAutosizeTextareas(document.getElementById('panel-content'));
+    }
 
     const saveBtn = document.getElementById('gd-save-btn');
     if (saveBtn) {

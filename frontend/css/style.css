@@ -833,6 +833,7 @@ a.tag.tag--sidebar-all:hover {
 /* Main Content */
 #main-content {
     flex-grow: 1;
+    min-width: 0;
     overflow-y: auto;
     padding: var(--space-sm) var(--space-md) var(--space-xl) var(--space-md);
     background: var(--bg-color);
@@ -1391,6 +1392,7 @@ a.tag.tag--sidebar-all:hover {
 /* Right Panel */
 #right-panel {
     width: 338px;
+    flex-shrink: 0;
     background-color: var(--sidebar-bg);
     border-left: 1px solid var(--border);
     display: flex;
@@ -2561,6 +2563,10 @@ a.tag.tag--sidebar-all:hover {
 
 .form-pane textarea.textarea-flex {
     flex-grow: 1;
+}
+
+textarea[data-prks-autosize="1"] {
+    overflow-y: hidden;
 }
 
 #work-pdf-source-url-row,

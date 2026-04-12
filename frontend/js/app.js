@@ -861,6 +861,9 @@ function initForms() {
         prksBindSegmentedHidden('upload-role-type');
         prksBindSegmentedHidden('role-type');
     }
+    if (typeof prksBindAutosizeTextareas === 'function') {
+        prksBindAutosizeTextareas(document);
+    }
 
     document.getElementById('save-work-btn').onclick = async () => {
         const kindEl = document.getElementById('work-source-kind');

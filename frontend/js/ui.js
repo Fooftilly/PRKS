@@ -1,3 +1,49 @@
+const PRKS_AUTOSIZE_TEXTAREA_SELECTOR = [
+    '#pd-about',
+    '#pd-links-other',
+    '#person-about',
+    '#person-links-other',
+    '#folder-description',
+    '#playlist-description',
+    '#group-description',
+    '#work-private-notes',
+    '#work-abstract',
+    '#prks-playlist-edit-desc',
+    '#gd-description',
+    '#meta-abstract',
+    'textarea.prks-private-notes-input'
+].join(', ');
+
+function prksAutosizeTextarea(el) {
+    if (!el || el.tagName !== 'TEXTAREA') return;
+    if (el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
+    const cs = window.getComputedStyle(el);
+    const minH = parseFloat(cs.minHeight || '0');
+    el.style.height = 'auto';
+    const next = Math.max(el.scrollHeight || 0, Number.isFinite(minH) ? minH : 0);
+    if (next > 0) {
+        el.style.height = `${Math.ceil(next)}px`;
+        el.dataset.prksAutosize = '1';
+    }
+}
+
+function prksBindAutosizeTextareas(root = document) {
+    const scope = root && typeof root.querySelectorAll === 'function' ? root : document;
+    const textareas = scope.querySelectorAll(PRKS_AUTOSIZE_TEXTAREA_SELECTOR);
+    textareas.forEach((el) => {
+        if (!el || el.tagName !== 'TEXTAREA') return;
+        if (el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
+        if (el.dataset.prksAutosizeBound !== '1') {
+            el.dataset.prksAutosizeBound = '1';
+            el.addEventListener('input', () => prksAutosizeTextarea(el));
+        }
+        prksAutosizeTextarea(el);
+    });
+}
+
+window.prksAutosizeTextarea = prksAutosizeTextarea;
+window.prksBindAutosizeTextareas = prksBindAutosizeTextareas;
+
 // Modal Logic
 function openModal(id) {
     if (typeof window.prksCloseTagsAliasModal === 'function') {
@@ -5,7 +51,8 @@ function openModal(id) {
     }
     document.getElementById('modal-backdrop').classList.remove('hidden');
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
-    document.getElementById(id).classList.remove('hidden');
+    const modalEl = document.getElementById(id);
+    modalEl.classList.remove('hidden');
 
     if (id === 'role-modal') {
         prepareRoleModal();
@@ -24,8 +71,7 @@ function openModal(id) {
     } else if (id === 'group-modal' && typeof window.prksInitNewGroupModal === 'function') {
         void window.prksInitNewGroupModal();
     }
-
-
+    requestAnimationFrame(() => prksBindAutosizeTextareas(modalEl));
 }
 
 // —— In-app help hints (popover + Settings toggle) ——
@@ -1152,6 +1198,7 @@ function updatePanelContent(tabId) {
             const panel = document.getElementById('panel-content');
             if (!panel) return;
             panel.innerHTML = editing ? renderPlaylistEditSidebarHtml(pl) : renderPlaylistSummarySidebarHtml(pl);
+            prksBindAutosizeTextareas(panel);
             if (editing) {
                 void mountPlaylistEditSidebar(pl);
             }
@@ -1164,7 +1211,9 @@ function updatePanelContent(tabId) {
         }
     }
 
+    prksBindAutosizeTextareas(panel);
     prksSyncRightPanelTabStrip(tabId || 'details');
+
 }
 
 function renderPlaylistSummarySidebarHtml(pl) {
@@ -1235,6 +1284,7 @@ function renderPlaylistEditSidebarHtml(pl) {
 
 async function mountPlaylistEditSidebar(pl) {
     if (!pl || !pl.id) return;
+    prksBindAutosizeTextareas(document.getElementById('panel-content'));
     const editBtn = document.getElementById('prks-playlist-edit-btn');
     if (editBtn && editBtn.dataset.bound !== '1') {
         editBtn.dataset.bound = '1';
@@ -1394,6 +1444,7 @@ function toggleWorkMetaEdit(isEditing) {
                     initPrksDocTypeMenu('meta-doc-type', { disabled: inf === 'video' });
                 }
             }
+            prksBindAutosizeTextareas(panel);
         }
         prksSyncRightPanelTabStrip('details');
     }
