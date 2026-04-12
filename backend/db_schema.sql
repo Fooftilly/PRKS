@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS playlists (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT,
+    original_url TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

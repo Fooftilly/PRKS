@@ -346,6 +346,7 @@ class PRKSDatabase:
                 "ALTER TABLE works ADD COLUMN hide_pdf_link_annotations INTEGER DEFAULT 0",
                 "ALTER TABLE works ADD COLUMN location TEXT",
                 "ALTER TABLE folders ADD COLUMN parent_id TEXT",
+                "ALTER TABLE playlists ADD COLUMN original_url TEXT",
             ]
             for sql in migrations:
                 try:
@@ -425,7 +426,7 @@ class PRKSDatabase:
                 except sqlite3.OperationalError:
                     pass
             # Record schema version so the DB file is auditable.
-            _PRKS_SCHEMA_VERSION = 4
+            _PRKS_SCHEMA_VERSION = 5
             existing_version = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
             if existing_version is None:
                 conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_PRKS_SCHEMA_VERSION,))
@@ -1087,23 +1088,26 @@ class PRKSDatabase:
 
     # --- Playlists (ordered collections of works, used for video courses) ---
 
-    def add_playlist(self, title: str, description: str = "") -> str:
+    def add_playlist(self, title: str, description: str = "", original_url: str = "") -> str:
         t = (title or "").strip() or "Untitled playlist"
         d = (description or "").strip()
+        u = (original_url or "").strip()
         pid = self.generate_id("PL")
         self.execute_query(
-            "INSERT INTO playlists (id, title, description) VALUES (?, ?, ?)",
-            (pid, t, d),
+            "INSERT INTO playlists (id, title, description, original_url) VALUES (?, ?, ?, ?)",
+            (pid, t, d, (u or None)),
         )
         return pid
 
     def update_playlist(self, playlist_id: str, fields: dict) -> None:
-        allowed = {"title", "description"}
+        allowed = {"title", "description", "original_url"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if "title" in updates:
             updates["title"] = (updates["title"] or "").strip() or "Untitled playlist"
         if "description" in updates:
             updates["description"] = (updates["description"] or "").strip()
+        if "original_url" in updates:
+            updates["original_url"] = (updates["original_url"] or "").strip() or None
         if not updates:
             return
         set_clause = ", ".join(f"{k} = ?" for k in updates)

@@ -7,6 +7,21 @@ function prksPlEsc(s) {
         .replace(/"/g, '&quot;');
 }
 
+function prksPlFormatPublishedDate(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!iso) return s;
+    return `${iso[3]}/${iso[2]}/${iso[1]}`;
+}
+
+function prksPlWorkSubtitle(w) {
+    const channel = String((w && w.author_text) || '').trim();
+    const published = prksPlFormatPublishedDate(w && w.published_date);
+    if (channel && published) return `${channel} · ${published}`;
+    return channel || published || '';
+}
+
 async function fetchPlaylists() {
     const res = await fetch('/api/playlists');
     if (!res.ok) return [];
@@ -139,12 +154,12 @@ function renderPlaylistDetail(pl, container) {
                                     <input type="text" id="prks-pl-rename-input-${prksPlEsc(w.id)}" value="${prksPlEsc(w.title || '')}" autocomplete="off"
                                         style="flex:1; min-width:0; padding:8px 10px; border:1px solid var(--border); background:var(--surface-muted); color:var(--text-primary);">
                                 </div>
-                                <div class="meta-row" style="margin-top:6px;">${prksPlEsc(w.author_text || '')}</div>
+                                <div class="meta-row" style="margin-top:6px;">${prksPlEsc(prksPlWorkSubtitle(w))}</div>
                             `
                                     : `
                                 <div style="cursor:pointer;" onclick="window.location.hash='#/works/${encodeURIComponent(w.id)}'">
                                     <div style="font-weight:600;">${prksPlEsc(w.title || 'Untitled')}</div>
-                                    <div class="meta-row">${prksPlEsc(w.author_text || '')}</div>
+                                    <div class="meta-row">${prksPlEsc(prksPlWorkSubtitle(w))}</div>
                                 </div>
                             `
                             }

@@ -1171,6 +1171,10 @@ function renderPlaylistSummarySidebarHtml(pl) {
     if (!pl) return '<p class="meta-row">Playlist not found.</p>';
     const title = escapeHtml(pl.title || 'Playlist');
     const desc = escapeHtml(pl.description || '').trim();
+    const originalUrl = String(pl.original_url || '').trim();
+    const originalUrlHtml = originalUrl
+        ? `<p class="meta-row meta-row--compact"><strong>Original playlist URL:</strong> <a href="${escapeHtml(originalUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrl)}</a></p>`
+        : '<p class="meta-row meta-row--compact meta-row--muted-italic">No original playlist URL.</p>';
     const count = Array.isArray(pl.items) ? pl.items.length : 0;
     return `
         <div class="right-panel-stack">
@@ -1181,6 +1185,7 @@ function renderPlaylistSummarySidebarHtml(pl) {
                 </div>
                 <p class="card-title">${title}</p>
                 ${desc ? `<p class="meta-row meta-row--compact">${desc}</p>` : '<p class="meta-row meta-row--compact meta-row--muted-italic">No description.</p>'}
+                ${originalUrlHtml}
                 <p class="meta-row meta-row--spaced">${count} item${count === 1 ? '' : 's'}</p>
             </div>
         </div>
@@ -1191,6 +1196,7 @@ function renderPlaylistEditSidebarHtml(pl) {
     if (!pl) return '<p class="meta-row">Playlist not found.</p>';
     const title = escapeHtml(pl.title || '');
     const desc = escapeHtml(pl.description || '');
+    const originalUrl = escapeHtml(pl.original_url || '');
     return `
         <div class="right-panel-stack">
             <div class="doc-meta-card form-pane doc-meta-card--editing">
@@ -1202,6 +1208,8 @@ function renderPlaylistEditSidebarHtml(pl) {
                 <input type="text" id="prks-playlist-edit-title" value="${title}" autocomplete="off">
                 <label for="prks-playlist-edit-desc">Description</label>
                 <textarea id="prks-playlist-edit-desc" class="textarea-sm">${desc}</textarea>
+                <label for="prks-playlist-edit-original-url">Original playlist URL</label>
+                <input type="url" id="prks-playlist-edit-original-url" value="${originalUrl}" placeholder="https://..." autocomplete="off">
                 <div class="form-actions">
                     <button type="button" class="ribbon-btn form-actions__btn form-actions__btn--secondary" id="prks-playlist-edit-cancel">Cancel</button>
                     <button type="button" class="add-new-btn form-actions__btn form-actions__btn--primary" id="prks-playlist-edit-save">Save</button>
@@ -1250,6 +1258,7 @@ async function mountPlaylistEditSidebar(pl) {
         saveBtn.onclick = async () => {
             const title = String(document.getElementById('prks-playlist-edit-title')?.value || '').trim();
             const description = String(document.getElementById('prks-playlist-edit-desc')?.value || '').trim();
+            const originalUrl = String(document.getElementById('prks-playlist-edit-original-url')?.value || '').trim();
             if (!title) {
                 if (statusEl) statusEl.textContent = 'Title is required.';
                 return;
@@ -1258,15 +1267,16 @@ async function mountPlaylistEditSidebar(pl) {
                 const res = await fetch('/api/playlists/' + encodeURIComponent(pl.id), {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title, description }),
+                    body: JSON.stringify({ title, description, original_url: originalUrl }),
                 });
                 if (!res.ok) throw new Error('save failed');
-                if (statusEl) statusEl.textContent = 'Saved.';
                 const fresh = typeof fetchPlaylistDetails === 'function' ? await fetchPlaylistDetails(pl.id) : null;
                 if (fresh) {
                     window.currentPlaylist = fresh;
                     window.__prksRouteSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
                 }
+                window.__prksPlaylistDetailEditing = false;
+                updatePanelContent('details');
             } catch (_e) {
                 if (statusEl) statusEl.textContent = 'Could not save.';
             }
@@ -1425,6 +1435,10 @@ async function submitWorkMetaEdit(workId) {
         doi: v('meta-doi'),
         abstract: v('meta-abstract')
     };
+    const metaAuthorEl = document.getElementById('meta-author-text');
+    if (metaAuthorEl) {
+        payload.author_text = String(metaAuthorEl.value || '').trim();
+    }
     const metaSrcEl = document.getElementById('meta-source-url');
     if (metaSrcEl) {
         payload.source_url = String(metaSrcEl.value || '').trim();
@@ -2324,6 +2338,12 @@ function renderWorkMetaEditTab(work) {
     const publishedType = isVideo ? 'text' : 'date';
     const publishedPlaceholder = isVideo ? 'dd/mm/yyyy' : '';
     const publishedInputMode = isVideo ? ' inputmode="numeric" autocomplete="off"' : '';
+    const channelField = isVideo
+        ? `
+            <label for="meta-author-text">Channel name</label>
+            <input type="text" id="meta-author-text" value="${safeStr(work.author_text)}" autocomplete="off">
+        `
+        : '';
     const bibFields = isVideo
         ? ''
         : `
@@ -2384,6 +2404,7 @@ function renderWorkMetaEditTab(work) {
                 <div><label for="meta-year">Year</label><input type="text" id="meta-year" value="${safeStr(work.year)}"></div>
                 <div><label for="meta-date">${dateLabel}</label><input type="${publishedType}" id="meta-date" value="${safeStr(work.published_date)}" placeholder="${publishedPlaceholder}"${publishedInputMode}></div>
             </div>
+            ${channelField}
             
             ${bibFields}
             ${thumbField}

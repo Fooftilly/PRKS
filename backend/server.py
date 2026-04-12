@@ -1032,6 +1032,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 pl_id = db.add_playlist(
                     title=data.get('title', '') or '',
                     description=data.get('description', '') or '',
+                    original_url=data.get('original_url', '') or '',
                 )
                 self.send_json(200, {'id': pl_id})
             elif path.startswith('/api/playlists/') and path.endswith('/items'):
