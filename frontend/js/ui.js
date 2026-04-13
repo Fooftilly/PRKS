@@ -474,7 +474,7 @@ function prksSplitTypedPersonName(name) {
 }
 
 /** Create a person from the Link Person to Work modal and select them for linking. */
-async function prksQuickCreatePersonForRoleLink(typedName) {
+async function prksQuickCreatePersonForSearchField(typedName, searchInputId, hiddenInputId, aboutText) {
     const trimmed = String(typedName || '').trim();
     if (!trimmed) {
         alert('Type a name in the Person field first.');
@@ -489,7 +489,7 @@ async function prksQuickCreatePersonForRoleLink(typedName) {
                 first_name,
                 last_name,
                 aliases: '',
-                about: 'Quick-created from Link Person to Work',
+                about: aboutText || 'Quick-created person',
             }),
         });
         const data = await res.json().catch(() => ({}));
@@ -500,8 +500,8 @@ async function prksQuickCreatePersonForRoleLink(typedName) {
         allPersons = await fetchPersons();
         window.allPersons = allPersons;
         const newPerson = allPersons.find((p) => String(p.id) === String(data.id));
-        const personSearch = document.getElementById('role-person-search');
-        const personHidden = document.getElementById('role-person-id');
+        const personSearch = document.getElementById(searchInputId);
+        const personHidden = document.getElementById(hiddenInputId);
         if (personHidden) personHidden.value = data.id;
         if (personSearch) {
             personSearch.value = newPerson ? personDisplayName(newPerson) : trimmed;
@@ -509,6 +509,98 @@ async function prksQuickCreatePersonForRoleLink(typedName) {
     } catch (e) {
         console.error(e);
         alert('Could not create person.');
+    }
+}
+
+async function prksQuickCreatePersonForRoleLink(typedName) {
+    await prksQuickCreatePersonForSearchField(
+        typedName,
+        'role-person-search',
+        'role-person-id',
+        'Quick-created from Link Person to Work'
+    );
+}
+
+async function quickCreateMetaRolePerson() {
+    const input = document.getElementById('meta-role-person-search');
+    await prksQuickCreatePersonForSearchField(
+        input ? input.value : '',
+        'meta-role-person-search',
+        'meta-role-person-id',
+        'Quick-created from Edit Metadata'
+    );
+}
+
+async function initWorkMetaRoleLinker(workId) {
+    if (!workId) return;
+    if (!Array.isArray(allPersons) || allPersons.length === 0) {
+        allPersons = await fetchPersons();
+        window.allPersons = allPersons;
+    }
+    initSearchableCombobox('meta-role-person-search', 'meta-role-person-results', 'meta-role-person-id', 'person', {
+        onQuickCreate: (typedName) => {
+            void prksQuickCreatePersonForSearchField(
+                typedName,
+                'meta-role-person-search',
+                'meta-role-person-id',
+                'Quick-created from Edit Metadata'
+            );
+        },
+    });
+    const workHidden = document.getElementById('meta-role-work-id');
+    if (workHidden) workHidden.value = String(workId);
+}
+
+async function addRoleToWorkFromMetaEditor(workId) {
+    const personHidden = document.getElementById('meta-role-person-id');
+    const personSearch = document.getElementById('meta-role-person-search');
+    const roleHidden = document.getElementById('meta-role-type');
+    const list = document.getElementById('meta-linked-persons-list');
+    const addBtn = document.getElementById('meta-role-add-btn');
+
+    const resolvedWorkId = String(workId || '').trim();
+    const personId = personHidden ? String(personHidden.value || '').trim() : '';
+    const roleType = roleHidden ? String(roleHidden.value || '').trim() : '';
+    if (!resolvedWorkId || !personId || !roleType) {
+        alert('Select a person and role first.');
+        return;
+    }
+
+    if (addBtn) {
+        addBtn.disabled = true;
+        addBtn.textContent = 'Linking...';
+    }
+    try {
+        const res = await fetch('/api/roles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                person_id: personId,
+                work_id: resolvedWorkId,
+                role_type: roleType,
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            alert(data.error || 'Could not create link.');
+            return;
+        }
+        if (typeof fetchWorkDetails === 'function') {
+            window.currentWork = await fetchWorkDetails(resolvedWorkId);
+            if (list && window.currentWork) {
+                list.innerHTML = buildWorkLinkedPersonsHtml(window.currentWork);
+            }
+        }
+        if (personHidden) personHidden.value = '';
+        if (personSearch) personSearch.value = '';
+    } catch (e) {
+        console.error(e);
+        alert('Could not create link.');
+    } finally {
+        if (addBtn) {
+            addBtn.disabled = false;
+            addBtn.textContent = '+ Link';
+        }
     }
 }
 
@@ -800,6 +892,8 @@ function renderRouteContextSidebar(mode) {
                 ${link('#/people/groups', 'People groups')}
                 ${link('#/people/role/Author', 'Filter: Authors')}
                 ${link('#/people/role/Editor', 'Filter: Editors')}
+                ${link('#/people/role/Translator', 'Filter: Translators')}
+                ${link('#/people/role/Foreword', 'Filter: Foreword writers')}
             </div>`;
     }
     if (mode === 'people-groups') {
@@ -1437,6 +1531,8 @@ function toggleWorkMetaEdit(isEditing) {
             }
             if (isEditing) {
                 prksBindSegmentedHidden('meta-status');
+                prksBindSegmentedHidden('meta-role-type');
+                void initWorkMetaRoleLinker(window.currentWork.id);
                 if (typeof initPrksDocTypeMenu === 'function') {
                     const inf =
                         typeof prksInferWorkSourceKind === 'function'
@@ -1868,8 +1964,8 @@ function escapeHtml(s) {
 }
 
 const PRKS_WORK_STATUS_LABELS = ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'];
-const PRKS_UPLOAD_ROLE_LABELS = ['Author', 'Editor', 'Reviewer'];
-const PRKS_LINK_ROLE_LABELS = ['Author', 'Editor', 'Reviewer', 'Mentioned', 'Translator'];
+const PRKS_UPLOAD_ROLE_LABELS = ['Author', 'Editor', 'Reviewer', 'Translator', 'Introduction', 'Foreword', 'Afterword'];
+const PRKS_LINK_ROLE_LABELS = ['Author', 'Editor', 'Reviewer', 'Mentioned', 'Translator', 'Introduction', 'Foreword', 'Afterword'];
 
 function prksEscapeAttr(s) {
     if (s == null || s === '') return '';
@@ -2463,6 +2559,37 @@ function renderWorkMetaEditTab(work) {
             
             <label for="meta-abstract">Abstract</label>
             <textarea id="meta-abstract" class="textarea-md">${safeStr(work.abstract)}</textarea>
+            
+            <div class="card-heading-row card-heading-row--wrap">
+                <h4>Linked Persons</h4>
+            </div>
+            <p class="meta-row meta-row--hint">Search a person, choose a role (including <strong>Translator</strong>), then click <strong>+ Link</strong>.</p>
+            <input type="hidden" id="meta-role-work-id" value="${safeStr(work.id)}">
+            <div class="prks-upload-person-stack">
+                <div class="form-row prks-upload-person-stack__search">
+                    <div class="prks-combobox-with-action">
+                        <div class="combobox-container">
+                            <div class="tag-add-shell">
+                                <div class="tag-add-shell__field">
+                                    <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                    <input type="text" id="meta-role-person-search" class="tag-add-shell__input" placeholder="Search person..." autocomplete="off" aria-label="Search person for role link">
+                                </div>
+                            </div>
+                            <input type="hidden" id="meta-role-person-id">
+                            <div id="meta-role-person-results" class="combobox-results hidden"></div>
+                        </div>
+                        <button type="button" onclick="quickCreateMetaRolePerson()" class="ribbon-btn ribbon-btn--sm" title="Create New Person">+</button>
+                    </div>
+                    <button type="button" id="meta-role-add-btn" onclick="addRoleToWorkFromMetaEditor('${work.id}')" class="ribbon-btn">+ Link</button>
+                </div>
+                <div class="prks-upload-person-stack__roles">
+                    <div class="prks-upload-person-stack__role-caption">Role</div>
+                    <div class="prks-upload-role-seg">
+                        ${prksSegmentedControlHtml('meta-role-type', 'Role for linked person', PRKS_UPLOAD_ROLE_LABELS, 'Author', 'roles')}
+                    </div>
+                </div>
+            </div>
+            <div id="meta-linked-persons-list" class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work)}</div>
             
             <div class="form-actions">
                 <button class="ribbon-btn form-actions__btn form-actions__btn--secondary" onclick="toggleWorkMetaEdit(false)">Cancel</button>

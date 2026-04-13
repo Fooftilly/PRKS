@@ -816,6 +816,78 @@ class TestServerAPI(unittest.TestCase):
         self.assertIn("@", txt)
         self.assertIn("Graph Bib Work", txt)
 
+    def test_21b_bibtex_includes_translator_role(self):
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps({"first_name": "Anne", "last_name": "Translator"}).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_p) as rp:
+            p_id = json.loads(rp.read().decode())["id"]
+
+        req_w = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": "Translated API Work", "status": "Not Started", "doc_type": "book"}).encode(),
+            method="POST",
+        )
+        req_w.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_w) as rw:
+            w_id = json.loads(rw.read().decode())["id"]
+
+        req_role = urllib.request.Request(
+            f"{self._base_url}/api/roles",
+            data=json.dumps({"person_id": p_id, "work_id": w_id, "role_type": "Translator"}).encode(),
+            method="POST",
+        )
+        req_role.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_role) as rr:
+            self.assertEqual(rr.status, 200)
+
+        with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/bibtex/{w_id}")) as br:
+            txt = br.read().decode("utf-8", errors="replace")
+        self.assertIn("translator = {Translator, Anne}", txt)
+
+    def test_21c_bibtex_includes_book_contributor_roles(self):
+        req_w = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": "Contributors API Work", "status": "Not Started", "doc_type": "book"}).encode(),
+            method="POST",
+        )
+        req_w.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_w) as rw:
+            w_id = json.loads(rw.read().decode())["id"]
+
+        contributors = [
+            ("Ivy", "Intro", "Introduction", "introduction = {Intro, Ivy}"),
+            ("Fiona", "Fore", "Foreword", "foreword = {Fore, Fiona}"),
+            ("Aaron", "After", "Afterword", "afterword = {After, Aaron}"),
+        ]
+
+        for first, last, role, _expected in contributors:
+            req_p = urllib.request.Request(
+                f"{self._base_url}/api/persons",
+                data=json.dumps({"first_name": first, "last_name": last}).encode(),
+                method="POST",
+            )
+            req_p.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req_p) as rp:
+                p_id = json.loads(rp.read().decode())["id"]
+
+            req_role = urllib.request.Request(
+                f"{self._base_url}/api/roles",
+                data=json.dumps({"person_id": p_id, "work_id": w_id, "role_type": role}).encode(),
+                method="POST",
+            )
+            req_role.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req_role) as rr:
+                self.assertEqual(rr.status, 200)
+
+        with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/bibtex/{w_id}")) as br:
+            txt = br.read().decode("utf-8", errors="replace")
+        for _, _, _, expected in contributors:
+            self.assertIn(expected, txt)
+
     def test_22_roles_and_annotations_endpoints(self):
         req_p = urllib.request.Request(
             f"{self._base_url}/api/persons",

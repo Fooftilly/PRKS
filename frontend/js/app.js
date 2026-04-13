@@ -55,6 +55,9 @@ const PRKS_BIBTEX_EXPORT_FIELD_DEFS = [
     ['author', 'Author'],
     ['editor', 'Editor'],
     ['translator', 'Translator'],
+    ['introduction', 'Introduction'],
+    ['foreword', 'Foreword'],
+    ['afterword', 'Afterword'],
     ['year', 'Year'],
     ['publisher', 'Publisher'],
     ['location', 'Location'],
@@ -713,7 +716,7 @@ async function handleRoute() {
         renderPeopleList(persons, contentDiv);
     } else if (hash.startsWith('#/people/role/')) {
         const roleSlug = hash.slice('#/people/role/'.length);
-        const allowed = ['Author', 'Editor', 'Reviewer', 'Translator'];
+        const allowed = ['Author', 'Editor', 'Reviewer', 'Translator', 'Introduction', 'Foreword', 'Afterword'];
         const roleFilter = allowed.includes(roleSlug) ? roleSlug : null;
         window.__prksRouteSidebar = { role: roleFilter || decodeURIComponent(roleSlug.replace(/\+/g, ' ')) || 'Unknown role' };
         const persons = await fetchPersons();

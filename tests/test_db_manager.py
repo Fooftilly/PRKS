@@ -83,6 +83,11 @@ class TestDBManager(unittest.TestCase):
         r3 = self.db.get_app_settings_response()["bibtex_export_fields"]
         self.assertTrue(r3["isbn"])
         self.assertFalse(r3["location"])
+        self.db.patch_app_settings({"bibtex_export_fields": {"foreword": False, "afterword": False}})
+        r4 = self.db.get_app_settings_response()["bibtex_export_fields"]
+        self.assertFalse(r4["foreword"])
+        self.assertFalse(r4["afterword"])
+        self.assertTrue(r4["introduction"])
 
     def test_app_settings_bibtex_export_fields_invalid(self):
         with self.assertRaises(ValueError):
@@ -465,6 +470,38 @@ class TestDBManager(unittest.TestCase):
         self.db.add_role(p_only_given, w2, "Author")
         bib2 = self.db.generate_bibtex(w2)
         self.assertIn("author = {Madonna}", bib2)
+
+    def test_bibtex_includes_translator_role(self):
+        w_id = self.db.add_work(title="Translated Work", year="1997", doc_type="book")
+        t_id = self.db.add_person(first_name="Mary", last_name="Lamb")
+        self.db.add_role(t_id, w_id, "Translator")
+
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("translator = {Lamb, Mary}", bibtex)
+
+        self.db.patch_app_settings({"bibtex_export_fields": {"translator": False}})
+        bibtex_no_translator = self.db.generate_bibtex(w_id)
+        self.assertNotIn("translator = ", bibtex_no_translator)
+
+    def test_bibtex_includes_intro_foreword_afterword_roles(self):
+        w_id = self.db.add_work(title="Critical Edition", year="2003", doc_type="book")
+        p_intro = self.db.add_person(first_name="Iris", last_name="Intro")
+        p_fore = self.db.add_person(first_name="Frank", last_name="Fore")
+        p_after = self.db.add_person(first_name="Alice", last_name="After")
+        self.db.add_role(p_intro, w_id, "Introduction")
+        self.db.add_role(p_fore, w_id, "Foreword")
+        self.db.add_role(p_after, w_id, "Afterword")
+
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("introduction = {Intro, Iris}", bibtex)
+        self.assertIn("foreword = {Fore, Frank}", bibtex)
+        self.assertIn("afterword = {After, Alice}", bibtex)
+
+        self.db.patch_app_settings({"bibtex_export_fields": {"introduction": False, "foreword": False, "afterword": False}})
+        bibtex_trimmed = self.db.generate_bibtex(w_id)
+        self.assertNotIn("introduction = ", bibtex_trimmed)
+        self.assertNotIn("foreword = ", bibtex_trimmed)
+        self.assertNotIn("afterword = ", bibtex_trimmed)
 
     def test_next_role_order_index(self):
         w_id = self.db.add_work(title="OrderIdx")

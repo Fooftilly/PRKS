@@ -31,6 +31,9 @@ PRKS_BIBTEX_EXPORT_FIELD_IDS: Tuple[str, ...] = (
     "author",
     "editor",
     "translator",
+    "introduction",
+    "foreword",
+    "afterword",
     "year",
     "publisher",
     "location",
@@ -2570,6 +2573,9 @@ class PRKSDatabase:
         linked_authors = self._biblatex_names_for_role(roles, "Author")
         editors = self._biblatex_names_for_role(roles, "Editor")
         translators = self._biblatex_names_for_role(roles, "Translator")
+        introductions = self._biblatex_names_for_role(roles, "Introduction")
+        forewords = self._biblatex_names_for_role(roles, "Foreword")
+        afterwords = self._biblatex_names_for_role(roles, "Afterword")
 
         if linked_authors:
             author_str = " and ".join(linked_authors)
@@ -2613,6 +2619,12 @@ class PRKSDatabase:
             bibtex += f"  editor = {{{esc(' and '.join(editors))}}},\n"
         if translators and _export("translator"):
             bibtex += f"  translator = {{{esc(' and '.join(translators))}}},\n"
+        if introductions and _export("introduction"):
+            bibtex += f"  introduction = {{{esc(' and '.join(introductions))}}},\n"
+        if forewords and _export("foreword"):
+            bibtex += f"  foreword = {{{esc(' and '.join(forewords))}}},\n"
+        if afterwords and _export("afterword"):
+            bibtex += f"  afterword = {{{esc(' and '.join(afterwords))}}},\n"
         if year and _export("year"):
             bibtex += f"  year = {{{esc(year)}}},\n"
         if work.get('publisher') and _export("publisher"):

@@ -418,7 +418,10 @@ const PEOPLE_LIST_ROLE_LABELS = {
     Author: 'Authors',
     Editor: 'Editors',
     Reviewer: 'Reviewers',
-    Translator: 'Translators'
+    Translator: 'Translators',
+    Introduction: 'Introduction writers',
+    Foreword: 'Foreword writers',
+    Afterword: 'Afterword writers'
 };
 
 function filterPersonsByAssignedRole(persons, roleType) {
