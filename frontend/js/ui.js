@@ -521,16 +521,6 @@ async function prksQuickCreatePersonForRoleLink(typedName) {
     );
 }
 
-async function quickCreateMetaRolePerson() {
-    const input = document.getElementById('meta-role-person-search');
-    await prksQuickCreatePersonForSearchField(
-        input ? input.value : '',
-        'meta-role-person-search',
-        'meta-role-person-id',
-        'Quick-created from Edit Metadata'
-    );
-}
-
 async function initWorkMetaRoleLinker(workId) {
     if (!workId) return;
     if (!Array.isArray(allPersons) || allPersons.length === 0) {
@@ -2578,7 +2568,6 @@ function renderWorkMetaEditTab(work) {
                             <input type="hidden" id="meta-role-person-id">
                             <div id="meta-role-person-results" class="combobox-results hidden"></div>
                         </div>
-                        <button type="button" onclick="quickCreateMetaRolePerson()" class="ribbon-btn ribbon-btn--sm" title="Create New Person">+</button>
                     </div>
                     <button type="button" id="meta-role-add-btn" onclick="addRoleToWorkFromMetaEditor('${work.id}')" class="ribbon-btn">+ Link</button>
                 </div>
@@ -2921,7 +2910,16 @@ async function populateUploadComboboxes() {
     }
 
     initSearchableCombobox('work-folder-search', 'folder-results', 'work-folder-id', 'folder');
-    initSearchableCombobox('upload-person-search', 'person-results', 'upload-person-id', 'person');
+    initSearchableCombobox('upload-person-search', 'person-results', 'upload-person-id', 'person', {
+        onQuickCreate: (typedName) => {
+            void prksQuickCreatePersonForSearchField(
+                typedName,
+                'upload-person-search',
+                'upload-person-id',
+                'Quick-created from upload'
+            );
+        },
+    });
     initUploadTagCombobox();
 }
 
@@ -3089,36 +3087,6 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
         }
         results.classList.remove('hidden');
     }
-}
-
-async function quickCreatePerson() {
-    const name = document.getElementById('upload-person-search').value;
-    if (!name) return alert("Please enter a name first");
-    const parts = name.trim().split(' ');
-    const fname = parts.length > 1 ? parts[0] : "";
-    const lname = parts.length > 1 ? parts.slice(1).join(' ') : parts[0];
-
-    const payload = { first_name: fname, last_name: lname, aliases: "", about: "Quick created via upload" };
-    const res = await fetch('/api/persons', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        alert(data.error || 'Could not create person.');
-        return;
-    }
-
-    allPersons = await fetchPersons(); // Refresh cache
-    const newPerson = allPersons.find(p => p.id === data.id);
-    if (!newPerson) { alert('Person created but could not be found in cache.'); return; }
-    document.getElementById('upload-person-id').value = data.id;
-    document.getElementById('upload-person-search').value = `${newPerson.first_name || ''} ${newPerson.last_name}`;
-    document.getElementById('person-results').classList.add('hidden');
-    
-    // Auto-link after quick create? User might want to check the role first.
-    // I'll leave it selected in the search box so they can just click "+ Link".
 }
 
 async function quickCreateFolder() {
