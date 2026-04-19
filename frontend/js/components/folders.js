@@ -105,13 +105,13 @@ function renderFolderTreeRoots(folders) {
             .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
     }
     function renderNode(node, depth) {
-        const pad = depth ? ` style="margin-left:${Math.min(depth, 8) * 14}px"` : '';
+        const pad = depth ? ` style="margin-left:${Math.min(depth, 8) * 10}px"` : '';
         const workCount = Number(node.work_count || 0);
         const childCount = Number(node.child_count || 0);
         const hasChildren = childCount > 0;
         const collapsed = hasChildren ? prksFolderNodeCollapsed(node.id) : false;
         const collapseBtn = hasChildren
-            ? `<button type="button" class="ribbon-btn form-actions__btn" style="margin-top:0;min-width:34px;" title="${
+            ? `<button type="button" class="ribbon-btn form-actions__btn" style="margin-top:0;min-width:28px;padding-left:8px;padding-right:8px;" title="${
                   collapsed ? 'Expand subfolders' : 'Collapse subfolders'
               }" onclick="event.stopPropagation(); prksToggleFolderNode('${encodeURIComponent(String(node.id || ''))}');">${
                   collapsed ? '▸' : '▾'
@@ -124,9 +124,9 @@ function renderFolderTreeRoots(folders) {
             ? `<p class="meta-row" style="font-size:0.8rem;">${prksFolderEsc(bits.join(' · '))}</p>`
             : '';
         let html = `
-            <div${pad} style="display:flex;align-items:stretch;gap:8px;">
+            <div class="prks-folder-tree-row"${pad} style="display:flex;align-items:stretch;gap:6px;">
                 ${collapseBtn}
-                <div class="project-card" style="flex:1;" role="link" tabindex="0" data-prks-middleclick-nav="1"
+                <div class="project-card prks-folder-tree-card" style="flex:1;" role="link" tabindex="0" data-prks-middleclick-nav="1"
                 onclick="window.location.hash='#/folders/${encodeURIComponent(String(node.id || ''))}'"
                 onkeydown="if(event && (event.key==='Enter' || event.key===' ')){event.preventDefault(); this.click();}">
                 <span class="status-badge Planned">Folder</span>
@@ -152,7 +152,7 @@ function renderDashboard(folders, container) {
     const list = Array.isArray(folders) ? folders : [];
     window.__prksFolderDashboardState = { folders: list, container };
     const body = list.length
-        ? `<div class="list-view">${renderFolderTreeRoots(list)}</div>`
+        ? `<div class="list-view prks-folder-library__list">${renderFolderTreeRoots(list)}</div>`
         : '<p class="meta-row" style="padding:12px 4px;">No folders yet. Use <strong>New folder</strong> to create one.</p>';
     const hasCollapsible = prksFolderTreeHasCollapsibleNodes(list);
     const allCollapsed = prksFolderTreeAllCollapsed(list);
@@ -164,12 +164,14 @@ function renderDashboard(folders, container) {
         `
         : '';
     container.innerHTML = `
-        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div class="prks-folder-library">
+        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
             <h2>Folder Library</h2>
             ${controls}
         </div>
-        <p class="meta-row" style="padding:4px 4px 16px;">Folders can nest. Move folders under other folders or keep them top-level.</p>
+        <p class="meta-row" style="padding:2px 4px 10px;">Folders can nest. Move folders under other folders or keep them top-level.</p>
         ${body}
+        </div>
     `;
 }
 
@@ -226,6 +228,9 @@ function renderFolderDetails(folder, container) {
         <div class="page-header"><h3>Files</h3></div>
         ${worksHtml}
     `;
+    if (typeof window.prksInitLazyWorkThumbs === 'function') {
+        window.prksInitLazyWorkThumbs(container);
+    }
     const delBtn = container.querySelector('[data-delete-folder-id]');
     if (delBtn) {
         delBtn.addEventListener('click', () => {

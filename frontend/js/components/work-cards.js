@@ -28,6 +28,53 @@ function prksWorkThumbUrl(workId, page) {
     return `/api/works/${wid}/thumbnail`;
 }
 
+const PRKS_WORK_THUMB_PLACEHOLDER =
+    'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+
+function prksHydrateLazyWorkThumb(img) {
+    if (!img || !(img instanceof HTMLImageElement)) return;
+    if (img.dataset.prksThumbLoaded === '1') return;
+    const src = String(img.getAttribute('data-prks-thumb-src') || '').trim();
+    if (!src) return;
+    img.setAttribute('src', src);
+    img.dataset.prksThumbLoaded = '1';
+    img.removeAttribute('data-prks-thumb-src');
+}
+
+function prksLazyThumbObserver() {
+    if (!('IntersectionObserver' in window)) return null;
+    if (!window.__prksWorkThumbObserver) {
+        window.__prksWorkThumbObserver = new IntersectionObserver(
+            (entries, obs) => {
+                entries.forEach((entry) => {
+                    if (!entry || !entry.isIntersecting) return;
+                    prksHydrateLazyWorkThumb(entry.target);
+                    obs.unobserve(entry.target);
+                    entry.target.removeAttribute('data-prks-thumb-observing');
+                });
+            },
+            { root: null, rootMargin: '240px 0px', threshold: 0.01 }
+        );
+    }
+    return window.__prksWorkThumbObserver;
+}
+
+function prksInitLazyWorkThumbs(root) {
+    const host = root && typeof root.querySelectorAll === 'function' ? root : document;
+    const imgs = host.querySelectorAll('img[data-prks-thumb-src]');
+    if (!imgs.length) return;
+    const observer = prksLazyThumbObserver();
+    if (!observer) {
+        imgs.forEach((img) => prksHydrateLazyWorkThumb(img));
+        return;
+    }
+    imgs.forEach((img) => {
+        if (img.dataset.prksThumbObserving === '1') return;
+        img.dataset.prksThumbObserving = '1';
+        observer.observe(img);
+    });
+}
+
 /** Plain year for meta row: `year` field, else leading YYYY from ISO `published_date`. */
 function prksWorkCardYearPlain(w) {
     if (!w) return '';
@@ -86,7 +133,7 @@ function prksWorkCardHtml(w, options = {}) {
               : '';
 
     const thumbHtml = thumbSrc
-        ? `<div class="work-card__thumb"><img loading="lazy" alt="" src="${prksWorkCardsEscapeHtml(
+        ? `<div class="work-card__thumb"><img loading="lazy" alt="" src="${PRKS_WORK_THUMB_PLACEHOLDER}" data-prks-thumb-src="${prksWorkCardsEscapeHtml(
               thumbSrc
           )}" onerror="this.closest('.work-card__thumb')?.classList.add('work-card__thumb--error'); this.remove();" /></div>`
         : `<div class="work-card__thumb work-card__thumb--empty" aria-hidden="true"></div>`;
@@ -122,4 +169,6 @@ function prksWorkCardHtml(w, options = {}) {
         </div>
     `;
 }
+
+window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;
 

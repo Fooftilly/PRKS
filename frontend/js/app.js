@@ -840,6 +840,10 @@ async function handleRoute() {
 
     if (routeGen !== window.__prksRouteGen) return;
 
+    if (typeof window.prksInitLazyWorkThumbs === 'function') {
+        window.prksInitLazyWorkThumbs(contentDiv);
+    }
+
     const apiErr = typeof window.prksConsumeApiError === 'function' ? window.prksConsumeApiError() : null;
     if (apiErr && contentDiv) {
         const bar = document.createElement('div');
