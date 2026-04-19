@@ -483,11 +483,38 @@ function prksTogglePersonWorksEdit() {
     }
 }
 
+function prksUniquePersonWorks(person) {
+    const works = Array.isArray(person && person.works) ? person.works : [];
+    const byId = new Map();
+    works.forEach((w, idx) => {
+        const rawId = w && w.id != null ? String(w.id).trim() : '';
+        const key = rawId || `__row_${idx}`;
+        if (!byId.has(key)) {
+            byId.set(key, w);
+        }
+    });
+    return Array.from(byId.values());
+}
+
+function prksPersonWorkRolesById(person) {
+    const works = Array.isArray(person && person.works) ? person.works : [];
+    const byId = new Map();
+    works.forEach((w, idx) => {
+        const rawId = w && w.id != null ? String(w.id).trim() : '';
+        const key = rawId || `__row_${idx}`;
+        if (!byId.has(key)) byId.set(key, []);
+        const roles = byId.get(key);
+        const role = w && w.role_type != null ? String(w.role_type).trim() : '';
+        if (role && !roles.includes(role)) roles.push(role);
+    });
+    return byId;
+}
+
 function renderPersonProfileDetailsSidebarHtml(person) {
     if (!person) return '';
     const display = `${(person.first_name || '').trim()} ${(person.last_name || '').trim()}`.trim() || 'Person';
     const name = escapeHtmlPerson(display);
-    const nWorks = person.works ? person.works.length : 0;
+    const nWorks = prksUniquePersonWorks(person).length;
     const editingWorks = window.__prksPersonWorksEditing === true;
     const worksEditBtn =
         nWorks > 0 || editingWorks
@@ -624,7 +651,7 @@ async function savePersonProfile(personId) {
             window.__prksRouteSidebar = {
                 personDisplayName:
                     typeof personDisplayName === 'function' ? personDisplayName(person) || 'Person' : 'Person',
-                linkedWorks: person.works ? person.works.length : 0
+                linkedWorks: prksUniquePersonWorks(person).length
             };
         }
         const contentDiv = document.getElementById('page-content');
@@ -657,22 +684,37 @@ function renderPersonDetails(person, container) {
     const worksEditing = window.__prksPersonWorksEditing === true;
     let worksHtml = `<div class="card-grid">`;
     if (person.works && person.works.length > 0) {
-        const groupedWorks = person.works.reduce((acc, w) => {
-            if (!acc[w.role_type]) acc[w.role_type] = [];
-            acc[w.role_type].push(w);
-            return acc;
-        }, {});
+        if (worksEditing) {
+            const groupedWorks = person.works.reduce((acc, w) => {
+                if (!acc[w.role_type]) acc[w.role_type] = [];
+                acc[w.role_type].push(w);
+                return acc;
+            }, {});
 
-        for (const [role, worksList] of Object.entries(groupedWorks)) {
-            worksHtml += `<h3 class="person-profile__role-heading">${escapeHtmlPerson(role)}</h3>`;
-            worksList.forEach((w) => {
-                const card = typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w) : '';
-                const oi =
-                    w.order_index != null && w.order_index !== '' ? String(w.order_index) : '0';
-                const rt = escapeHtmlPerson(w.role_type || 'Linked');
-                const pid = escapeHtmlPerson(person.id);
-                const wid = escapeHtmlPerson(w.id);
-                worksHtml += `<div class="person-profile__work-card-wrap">${card}<button type="button" class="person-profile__card-unlink" aria-label="Remove link to this file" data-work-id="${wid}" data-person-id="${pid}" data-role-type="${rt}" data-order-index="${escapeHtmlPerson(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></div>`;
+            for (const [role, worksList] of Object.entries(groupedWorks)) {
+                worksHtml += `<h3 class="person-profile__role-heading">${escapeHtmlPerson(role)}</h3>`;
+                worksList.forEach((w) => {
+                    const card = typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w) : '';
+                    const oi =
+                        w.order_index != null && w.order_index !== '' ? String(w.order_index) : '0';
+                    const rt = escapeHtmlPerson(w.role_type || 'Linked');
+                    const pid = escapeHtmlPerson(person.id);
+                    const wid = escapeHtmlPerson(w.id);
+                    worksHtml += `<div class="person-profile__work-card-wrap">${card}<button type="button" class="person-profile__card-unlink" aria-label="Remove link to this file" data-work-id="${wid}" data-person-id="${pid}" data-role-type="${rt}" data-order-index="${escapeHtmlPerson(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></div>`;
+                });
+            }
+        } else {
+            const uniqueWorks = prksUniquePersonWorks(person);
+            const rolesByWork = prksPersonWorkRolesById(person);
+            uniqueWorks.forEach((w) => {
+                const workId = w && w.id != null ? String(w.id).trim() : '';
+                const roleList = rolesByWork.get(workId) || [];
+                const subtitle = roleList.join(', ');
+                const card =
+                    typeof prksWorkCardHtml === 'function'
+                        ? prksWorkCardHtml(w, subtitle ? { subtitle } : {})
+                        : '';
+                worksHtml += `<div class="person-profile__work-card-wrap">${card}</div>`;
             });
         }
     } else {

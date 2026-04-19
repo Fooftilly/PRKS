@@ -459,7 +459,7 @@ function personDisplayName(p) {
     return `${(p.first_name || '').trim()} ${p.last_name || ''}`.trim();
 }
 
-/** Split typed display name into first / last (same rules as upload quick-create). */
+/** Split typed display name: mononym->last, otherwise all-but-last->first and last token->last. */
 function prksSplitTypedPersonName(name) {
     const parts = String(name || '')
         .trim()
@@ -470,7 +470,10 @@ function prksSplitTypedPersonName(name) {
     if (parts.length === 1) {
         return { first_name: '', last_name: parts[0] };
     }
-    return { first_name: parts[0], last_name: parts.slice(1).join(' ') };
+    return {
+        first_name: parts.slice(0, -1).join(' '),
+        last_name: parts[parts.length - 1],
+    };
 }
 
 /** Create a person from the Link Person to Work modal and select them for linking. */

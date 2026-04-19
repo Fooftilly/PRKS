@@ -820,7 +820,12 @@ async function handleRoute() {
             ? {
                   personDisplayName:
                       typeof personDisplayName === 'function' ? personDisplayName(person) || 'Person' : 'Person',
-                  linkedWorks: person.works ? person.works.length : 0
+                  linkedWorks:
+                      typeof prksUniquePersonWorks === 'function'
+                          ? prksUniquePersonWorks(person).length
+                          : person.works
+                            ? person.works.length
+                            : 0
               }
             : { personDisplayName: 'Person not found', linkedWorks: 0 };
         renderPersonDetails(person, contentDiv);
