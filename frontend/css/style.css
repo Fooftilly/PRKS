@@ -3534,6 +3534,12 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     font-weight: 600;
 }
 
+#work-header-doc-type-slot {
+    display: inline-flex;
+    align-items: center;
+    min-height: 0;
+}
+
 .doc-content {
     background: var(--surface);
     padding: var(--space-md) var(--space-lg);
@@ -4659,7 +4665,19 @@ html.prks-force-mobile .project-card--work .project-card__rail {
 }
 
 .page-header--work .doc-type-badge {
-    font-size: 0.7rem;
+    font-size: 0.62rem;
+    padding: 2px 6px;
+    line-height: 1.1;
+}
+
+@media (max-width: 900px) {
+    #work-header-doc-type-slot {
+        display: none;
+    }
+}
+
+html.prks-force-mobile #work-header-doc-type-slot {
+    display: none;
 }
 
 /* People group: right column summary + edit (flat; avoid nested doc-meta-card borders) */
