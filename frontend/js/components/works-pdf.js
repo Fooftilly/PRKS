@@ -409,44 +409,53 @@ async function applyEmbedPdfUiCustomization(viewer) {
         const hostForModeFix = document.getElementById(viewer === window.uploadViewer ? 'upload-viewer' : 'pdf-viewer');
         if (hostForModeFix && !viewer.__prksToolbarModeFixBound) {
             viewer.__prksToolbarModeFixBound = true;
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    const inBand = Number(window.innerWidth || 0) >= 421 && Number(window.innerWidth || 0) <= 521;
-                    if (!inBand) return;
-                    const seen = new Set();
-                    let panNode = null;
-                    let ptrNode = null;
-                    const walk = (node) => {
-                        if (!node || panNode && ptrNode) return;
-                        if (node.nodeType !== 1) return;
-                        if (seen.has(node)) return;
-                        seen.add(node);
-                        const aria = node.getAttribute ? String(node.getAttribute('aria-label') || '').toLowerCase() : '';
-                        if (!panNode && aria === 'toggle pan mode') {
-                            panNode = node;
-                        }
-                        if (!ptrNode && aria === 'toggle pointer mode') {
-                            ptrNode = node;
-                        }
-                        if (panNode && ptrNode) return;
-                        if (node.shadowRoot) {
-                            const sk = node.shadowRoot.children || [];
-                            for (let i = 0; i < sk.length; i++) walk(sk[i]);
-                        }
-                        const kids = node.children || [];
-                        for (let i = 0; i < kids.length; i++) walk(kids[i]);
-                    };
-                    walk(hostForModeFix);
-                    const panWrap = panNode && panNode.parentElement ? panNode.parentElement : null;
-                    const ptrWrap = ptrNode && ptrNode.parentElement ? ptrNode.parentElement : null;
-                    if (panWrap && window.getComputedStyle(panWrap).display === 'none') {
-                        panWrap.style.display = 'contents';
+            const inBand = Number(window.innerWidth || 0) >= 421 && Number(window.innerWidth || 0) <= 521;
+            if (!inBand) return;
+            const maxModeFixAttempts = 36;
+            let modeFixAttempt = 0;
+            const runModeFixAttempt = () => {
+                modeFixAttempt += 1;
+                const seen = new Set();
+                let panNode = null;
+                let ptrNode = null;
+                const walk = (node) => {
+                    if (!node || panNode && ptrNode) return;
+                    if (node.nodeType !== 1) return;
+                    if (seen.has(node)) return;
+                    seen.add(node);
+                    const aria = node.getAttribute ? String(node.getAttribute('aria-label') || '').toLowerCase() : '';
+                    if (!panNode && aria === 'toggle pan mode') {
+                        panNode = node;
                     }
-                    if (ptrWrap && window.getComputedStyle(ptrWrap).display === 'none') {
-                        ptrWrap.style.display = 'contents';
+                    if (!ptrNode && aria === 'toggle pointer mode') {
+                        ptrNode = node;
                     }
-                });
-            });
+                    if (panNode && ptrNode) return;
+                    if (node.shadowRoot) {
+                        const sk = node.shadowRoot.children || [];
+                        for (let i = 0; i < sk.length; i++) walk(sk[i]);
+                    }
+                    const kids = node.children || [];
+                    for (let i = 0; i < kids.length; i++) walk(kids[i]);
+                };
+                walk(hostForModeFix);
+                const panWrap = panNode && panNode.parentElement ? panNode.parentElement : null;
+                const ptrWrap = ptrNode && ptrNode.parentElement ? ptrNode.parentElement : null;
+                const panBefore = panWrap ? window.getComputedStyle(panWrap).display : null;
+                const ptrBefore = ptrWrap ? window.getComputedStyle(ptrWrap).display : null;
+                if (panWrap && window.getComputedStyle(panWrap).display === 'none') {
+                    panWrap.style.display = 'contents';
+                }
+                if (ptrWrap && window.getComputedStyle(ptrWrap).display === 'none') {
+                    ptrWrap.style.display = 'contents';
+                }
+                const gotBoth = !!panNode && !!ptrNode;
+                if (gotBoth || modeFixAttempt >= maxModeFixAttempts) {
+                    return;
+                }
+                requestAnimationFrame(runModeFixAttempt);
+            };
+            requestAnimationFrame(() => requestAnimationFrame(runModeFixAttempt));
         }
 
         const live = ui.getSchema();
