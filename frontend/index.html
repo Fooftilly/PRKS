@@ -649,14 +649,19 @@
                     <p class="meta-row meta-row--compact" style="display:flex;align-items:center;gap:8px;">
                         <strong>How to fill template fields</strong>
                         <button type="button" class="inline-action-btn" onclick="copyPersonTemplateGuideText()" title="Copy template field guide" aria-label="Copy template field guide">📋</button>
+                        <button type="button" class="inline-action-btn" onclick="copyPersonTemplateAndGuideText()" title="Copy template + field guide" aria-label="Copy template and field guide">📋＋</button>
                     </p>
-                    <p><code>first_name</code>, <code>last_name</code>, <code>aliases</code>, <code>about</code>: plain text strings.</p>
-                    <p><code>birth_date</code>, <code>death_date</code>: use <code>dd-mm-yyyy</code>, <code>dd/mm/yyyy</code>, <code>yyyy</code>, or <code>-yyyy</code> (BC).</p>
-                    <p><code>image_url</code>, <code>link_wikipedia</code>, <code>link_stanford_encyclopedia</code>, <code>link_iep</code>: full URL strings (prefer <code>https://</code>). For <code>image_url</code>, use Wikipedia profile photo URL if it exists; otherwise other reliable sources are allowed.</p>
-                    <p><code>links_other</code>: one entry per line inside single string. Prefer <code>[Title](https://...)</code> format. Avoid free-text notes.</p>
-                    <p>empty fields should stay empty; do not fill them with values such as N/A.</p>
-                    <p><code>aliases</code>: free text; separate multiple aliases with commas (recommended).</p>
-                    <p>Do not add/remove keys. Keep all values as JSON strings.</p>
+                    <p>Fill this template according to the provided rules:</p>
+                    <ul style="margin: 0 0 0 18px;">
+                        <li><code>first_name</code>, <code>last_name</code>, <code>aliases</code>, <code>about</code>: plain text strings. Middle names should be placed in <code>first_name</code> field.</li>
+                        <li><code>birth_date</code>, <code>death_date</code>: use <code>dd-mm-yyyy</code>, <code>dd/mm/yyyy</code>, <code>yyyy</code>, or <code>-yyyy</code> (BC).</li>
+                        <li><code>image_url</code>, <code>link_wikipedia</code>, <code>link_stanford_encyclopedia</code>, <code>link_iep</code>: full URL strings (prefer <code>https://</code>). For <code>image_url</code>, use Wikipedia (or Wikimedia related) profile photo URL if it exists; otherwise other reliable sources are allowed.</li>
+                        <li><code>links_other</code>: one entry per line inside single JSON string. MUST USE <code>[Title](https://...)</code> format for links in this field. DO NOT use free-text notes. This field meant for links such as personal website of person, or other reputable links about this person. Don't include links to papers discussing this person or papers by this person. Acceptable links in this field are links to encyclopedias, profile pages...</li>
+                        <li>empty fields should stay empty; do not fill them with values such as N/A</li>
+                        <li><code>aliases</code>: free text; comma-separated aliases recommended. Include Serbian Latin (not Cyrillic) variation of the name if it exists. If the person has a middle name, the variation with only first and last name should be added to the aliases field (if it was used anywhere).</li>
+                        <li>Keep exact keys; do not add/remove keys.</li>
+                        <li>Keep all values as JSON strings.</li>
+                    </ul>
                 </div>
                 <label for="person-template-json">Profile template</label>
                 <textarea id="person-template-json" class="textarea-sm" placeholder='Click "Insert template" to generate from current profile fields.'></textarea>

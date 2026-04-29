@@ -150,15 +150,16 @@ const PERSON_STANDARD_TEMPLATE_FIELDS = [
 ];
 
 const PERSON_TEMPLATE_HELP_TEXT = [
-    'How to fill template fields',
-    '- first_name, last_name, aliases, about: plain text strings.',
+    'Fill this template according to the provided rules:',
+    '',
+    '- first_name, last_name, aliases, about: plain text strings. Middle names should be placed in first_name field.',
     '- birth_date, death_date: use dd-mm-yyyy, dd/mm/yyyy, yyyy, or -yyyy (BC).',
-    '- image_url, link_wikipedia, link_stanford_encyclopedia, link_iep: full URL strings (prefer https://). For image_url, use Wikipedia profile photo URL if it exists; otherwise other reliable sources are allowed.',
-    '- links_other: one entry per line inside single JSON string. Prefer [Title](https://...) format. Avoid free-text notes.',
+    '- image_url, link_wikipedia, link_stanford_encyclopedia, link_iep: full URL strings (prefer https://). For image_url, use Wikipedia (or Wikimedia related) profile photo URL if it exists; otherwise other reliable sources are allowed.',
+    "- links_other: one entry per line inside single JSON string. MUST USE [Title](https://...) format for links in this field. DO NOT use free-text notes. This field meant for links such as personal website of person, or other reputable links about this person. Don't include links to papers discussing this person or papers by this person. Acceptable links in this field are links to encyclopedias, profile pages...",
     '- empty fields should stay empty; do not fill them with values such as N/A',
-    '- aliases: free text; comma-separated aliases recommended.',
+    '- aliases: free text; comma-separated aliases recommended. Include Serbian Latin (not Cyrillic) variation of the name if it exists. If the person has a middle name, the variation with only first and last name should be added to the aliases field (if it was used anywhere).',
     '- Keep exact keys; do not add/remove keys.',
-    '- Keep all values as JSON strings.'
+    '- Keep all values as JSON strings.',
 ].join('\n');
 
 function setPersonTemplateFeedback(message, isError, targetId = 'person-template-feedback') {
@@ -259,6 +260,43 @@ async function copyPersonTemplateGuideText() {
         setPersonTemplateFeedback('Template field guide copied.', false);
     } else {
         setPersonTemplateFeedback('Could not copy guide. Copy manually.', true);
+    }
+}
+
+async function copyPersonTemplateAndGuideText() {
+    const templateArea = document.getElementById('person-template-json');
+    const rawTemplate = templateArea ? String(templateArea.value || '') : '';
+    const template =
+        rawTemplate.trim() ||
+        JSON.stringify(buildPersonStandardTemplateFromProfile(), null, 2);
+    const s = `${template}\n\n${PERSON_TEMPLATE_HELP_TEXT}`;
+    try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(s);
+            setPersonTemplateFeedback('Template + field guide copied.', false);
+            return;
+        }
+    } catch (_e) {}
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try {
+        ok = !!document.execCommand('copy');
+    } catch (_e) {
+        ok = false;
+    } finally {
+        ta.remove();
+    }
+    if (ok) {
+        setPersonTemplateFeedback('Template + field guide copied.', false);
+    } else {
+        setPersonTemplateFeedback('Could not copy template + guide. Copy manually.', true);
     }
 }
 
