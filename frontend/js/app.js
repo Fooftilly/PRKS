@@ -599,6 +599,7 @@ function prksRouteTitleFromHash(hash) {
     if (hash.startsWith('#/playlists/')) return 'Playlist';
     if (hash.startsWith('#/search')) return 'Search';
     if (hash.startsWith('#/progress')) return 'Progress';
+    if (hash === '#/processing-files') return 'Files for Processing';
     if (hash.startsWith('#/types/')) return 'File Type';
     if (hash === '#/folders') return 'Folders';
     if (hash === '#/playlists') return 'Playlists';
@@ -772,6 +773,21 @@ async function handleRoute() {
         window.__prksRouteSidebar = { status };
         renderProgressByStatus(works, status, contentDiv);
         syncProgressSidebarActive(status);
+    } else if (hash === '#/processing-files') {
+        if (typeof prksRenderProcessingFilesPageWithFetch === 'function') {
+            await prksRenderProcessingFilesPageWithFetch(contentDiv, { rescan: true });
+            if (routeGen !== window.__prksRouteGen) return;
+        } else {
+            const rows = await fetchProcessingFiles({ rescan: true });
+            if (routeGen !== window.__prksRouteGen) return;
+            window.__prksRouteSidebar = { pendingCount: Array.isArray(rows) ? rows.length : 0 };
+            if (typeof renderProcessingFilesPage === 'function') {
+                renderProcessingFilesPage(rows, contentDiv);
+            } else {
+                contentDiv.innerHTML =
+                    '<div class="page-header"><h2>Files for Processing</h2></div><p class="meta-row">Processing inbox UI unavailable.</p>';
+            }
+        }
     } else if (hash.startsWith('#/search')) {
         const urlParams = new URLSearchParams(hash.split('?')[1]);
         const query = urlParams.get('q') || '';

@@ -2586,6 +2586,73 @@ a.tag.tag--sidebar-all:hover {
     resize: vertical;
 }
 
+.prks-processing-card {
+    padding: 14px;
+}
+
+.prks-processing-card__title {
+    margin-bottom: 2px;
+}
+
+.prks-processing-card__core {
+    margin-top: 6px;
+}
+
+.prks-processing-card__more {
+    margin-top: 8px;
+    border-top: 1px solid var(--line);
+    padding-top: 8px;
+}
+
+.prks-processing-card__more > summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.prks-processing-card__more-body {
+    margin-top: 8px;
+    display: grid;
+    gap: 8px;
+}
+
+.prks-processing-role-picker {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 170px auto;
+    gap: 8px;
+    align-items: end;
+}
+
+.prks-processing-card__actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.prks-processing-card__preview-wrap {
+    margin-top: 10px;
+}
+
+.prks-processing-card__preview-wrap > summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.prks-processing-card__preview-body {
+    margin-top: 8px;
+}
+
+.prks-processing-card__preview {
+    width: 100%;
+    min-height: 460px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+}
+
 .form-pane textarea.textarea-md {
     min-height: 80px;
     resize: vertical;

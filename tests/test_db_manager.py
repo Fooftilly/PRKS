@@ -799,5 +799,91 @@ class TestDBManager(unittest.TestCase):
         self.db.delete_work(w_id)
         self.assertIsNone(self.db.get_work(w_id))
 
+    def test_processing_files_scan_update_and_import_move_flow(self):
+        old_storage = os.environ.get("PRKS_STORAGE")
+        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
+        with tempfile.TemporaryDirectory(prefix="prks-processing-db-") as root:
+            processing_root = os.path.join(root, "for_processing")
+            nested = os.path.join(processing_root, "batch_a", "batch_b")
+            os.makedirs(nested, exist_ok=True)
+            pdf_path = os.path.join(nested, "sample.pdf")
+            txt_path = os.path.join(nested, "skip.txt")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4\n%DBTEST\n%%EOF\n")
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write("ignore")
+            try:
+                os.environ["PRKS_STORAGE"] = root
+                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
+                person_id = self.db.add_person(first_name="Role", last_name="Author")
+                folder_id = self.db.add_folder(title="Processing Target", description="")
+                staged = self.db.scan_processing_files()
+                self.assertEqual(len(staged), 1)
+                row = staged[0]
+                self.assertEqual(row["rel_path"], "batch_a/batch_b/sample.pdf")
+                self.assertEqual(self.db.search_works("Imported from inbox"), [])
+                self.db.update_processing_file(
+                    row["id"],
+                    {
+                        "title": "Imported from inbox",
+                        "status_draft": "Planned",
+                        "doc_type": "book",
+                        "target_folder_id": folder_id,
+                        "roles": [{"person_id": person_id, "role_type": "Author"}],
+                    },
+                )
+                out = self.db.import_processing_file(row["id"])
+                self.assertIn("work_id", out)
+                self.assertFalse(os.path.exists(pdf_path))
+                imported_work = self.db.get_work(out["work_id"])
+                self.assertEqual(imported_work.get("folder_id"), folder_id)
+                self.assertEqual(imported_work["title"], "Imported from inbox")
+                self.assertEqual(imported_work["status"], "Planned")
+                self.assertEqual(imported_work["doc_type"], "book")
+                self.assertTrue(any(r.get("id") == person_id and r.get("role_type") == "Author" for r in imported_work.get("roles", [])))
+                self.assertTrue(str(imported_work.get("file_path") or "").startswith("/api/pdfs/"))
+                pdf_name = imported_work["file_path"].split("/")[-1]
+                moved_abs = os.path.join(root, "pdfs", pdf_name)
+                self.assertTrue(os.path.isfile(moved_abs))
+                self.assertTrue(any(r["id"] == out["work_id"] for r in self.db.search_works("Imported from inbox")))
+                self.assertEqual(self.db.get_processing_files(), [])
+            finally:
+                if old_storage is None:
+                    os.environ.pop("PRKS_STORAGE", None)
+                else:
+                    os.environ["PRKS_STORAGE"] = old_storage
+                if old_processing is None:
+                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
+                else:
+                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+
+    def test_processing_files_rescan_marks_missing(self):
+        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
+        old_storage = os.environ.get("PRKS_STORAGE")
+        with tempfile.TemporaryDirectory(prefix="prks-processing-missing-") as root:
+            processing_root = os.path.join(root, "for_processing")
+            os.makedirs(processing_root, exist_ok=True)
+            pdf_path = os.path.join(processing_root, "gone.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4\n%MISSING\n%%EOF\n")
+            try:
+                os.environ["PRKS_STORAGE"] = root
+                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
+                staged = self.db.scan_processing_files()
+                self.assertEqual(len(staged), 1)
+                os.remove(pdf_path)
+                staged2 = self.db.scan_processing_files()
+                self.assertEqual(len(staged2), 1)
+                self.assertEqual(staged2[0]["status"], "missing")
+            finally:
+                if old_processing is None:
+                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
+                else:
+                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+                if old_storage is None:
+                    os.environ.pop("PRKS_STORAGE", None)
+                else:
+                    os.environ["PRKS_STORAGE"] = old_storage
+
 if __name__ == '__main__':
     unittest.main()

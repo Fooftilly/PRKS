@@ -65,7 +65,7 @@ async function fetchWorks() {
 }
 async function fetchFolders() {
     try {
-        const res = await fetch('/api/folders');
+        const res = await fetch('/api/folders', { cache: 'no-store' });
         const data = await prksParseJsonResponse(res, [], 'folders');
         return Array.isArray(data) ? data : [];
     } catch (e) {
@@ -84,7 +84,7 @@ async function fetchFolderDetails(id) {
 }
 async function fetchPersons() {
     try {
-        const res = await fetch('/api/persons');
+        const res = await fetch('/api/persons', { cache: 'no-store' });
         const data = await prksParseJsonResponse(res, [], 'persons');
         return Array.isArray(data) ? data : [];
     } catch (e) {
@@ -216,6 +216,48 @@ async function fetchGraph() {
         prksSetApiError('graph', 'Could not load graph data.');
         return empty;
     }
+}
+
+async function fetchProcessingFiles(options = {}) {
+    const params = new URLSearchParams();
+    if (options && options.rescan) {
+        params.set('rescan', '1');
+    }
+    const q = params.toString() ? '?' + params.toString() : '';
+    try {
+        const res = await fetch('/api/processing-files' + q);
+        const data = await prksParseJsonResponse(res, [], 'processing-files');
+        return Array.isArray(data) ? data : [];
+    } catch (_e) {
+        prksSetApiError('processing-files', 'Could not load files for processing.');
+        return [];
+    }
+}
+
+async function patchProcessingFile(processingFileId, fields) {
+    const res = await fetch('/api/processing-files/' + encodeURIComponent(processingFileId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(data.error || 'Could not update processing file metadata.');
+    }
+    return data;
+}
+
+async function importProcessingFile(processingFileId) {
+    const res = await fetch('/api/processing-files/' + encodeURIComponent(processingFileId) + '/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(data.error || 'Could not import file.');
+    }
+    return data;
 }
 
 /** Legacy device-only key; migrated once to server via prksLoadAppSettings. */

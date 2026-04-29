@@ -143,6 +143,52 @@ CREATE TABLE IF NOT EXISTS work_annotations (
     FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
 );
 
+-- Staging inbox for files discovered under /data/for_processing.
+-- Rows here are isolated from library/search until explicitly imported.
+CREATE TABLE IF NOT EXISTS processing_files (
+    id TEXT PRIMARY KEY,
+    rel_path TEXT NOT NULL UNIQUE,
+    abs_path TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'missing', 'imported', 'error')),
+    last_error TEXT,
+    imported_work_id TEXT,
+    imported_at TIMESTAMP,
+    discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    title TEXT,
+    status_draft TEXT CHECK(status_draft IN ('Planned', 'In Progress', 'Completed', 'Paused', 'Not Started')) DEFAULT 'Not Started',
+    published_date TEXT,
+    abstract TEXT,
+    source_url TEXT,
+    author_text TEXT,
+    year TEXT,
+    publisher TEXT,
+    location TEXT,
+    edition TEXT,
+    journal TEXT,
+    volume TEXT,
+    issue TEXT,
+    pages TEXT,
+    isbn TEXT,
+    doi TEXT,
+    doc_type TEXT DEFAULT 'article',
+    private_notes TEXT,
+    thumb_page INTEGER,
+    target_folder_id TEXT,
+    FOREIGN KEY (imported_work_id) REFERENCES works(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_processing_files_status ON processing_files(status);
+CREATE TABLE IF NOT EXISTS processing_file_roles (
+    processing_file_id TEXT NOT NULL,
+    person_id TEXT NOT NULL,
+    role_type TEXT NOT NULL,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (processing_file_id, person_id, role_type, order_index),
+    FOREIGN KEY (processing_file_id) REFERENCES processing_files(id) ON DELETE CASCADE,
+    FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE
+);
+
 -- FTS5 Indexing for semantic discovery of Works (includes free-text authors)
 CREATE VIRTUAL TABLE IF NOT EXISTS works_fts USING fts5(
     title,

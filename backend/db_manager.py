@@ -4,6 +4,7 @@ import re
 import uuid
 import json
 import html
+import shutil
 from collections import Counter, defaultdict
 from urllib.parse import unquote
 from datetime import datetime
@@ -199,6 +200,32 @@ def _resolve_pdfs_dir() -> str:
     return default_local_pdfs_dir()
 
 
+def _resolve_processing_dir() -> str:
+    configured = (os.environ.get("PRKS_FOR_PROCESSING_DIR") or "").strip()
+    if configured:
+        if _is_testing_env() and (configured == "/data" or configured.startswith("/data/")):
+            raise RuntimeError("PRKS_TESTING is set: refusing to use PRKS_FOR_PROCESSING_DIR under /data")
+        return configured
+    storage_root = _get_storage_root()
+    if storage_root:
+        return os.path.join(storage_root, "for_processing")
+    if _is_testing_env():
+        return os.path.join(_REPO_ROOT, "data_testing", "for_processing")
+    preferred = "/data/for_processing"
+    fallback = os.path.join(_REPO_ROOT, "data", "for_processing")
+    try:
+        os.makedirs(preferred, exist_ok=True)
+        return preferred
+    except OSError:
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+
+
+def resolve_processing_dir() -> str:
+    """Public resolver for processing inbox root directory."""
+    return _resolve_processing_dir()
+
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -236,6 +263,33 @@ def safe_pdf_path_under_dir(pdfs_dir: str, url_last_segment: str) -> Optional[st
     if candidate != base and not candidate.startswith(base + os.sep):
         return None
     return candidate
+
+
+def safe_processing_path_under_dir(processing_dir: str, relative_path: str) -> Optional[str]:
+    """Resolve a relative path under processing_dir; reject traversal and empty segments."""
+    if not relative_path or not str(relative_path).strip():
+        return None
+    rel = str(relative_path).replace("\\", "/").strip().lstrip("/")
+    if not rel:
+        return None
+    base = os.path.realpath(processing_dir)
+    try:
+        candidate = os.path.realpath(os.path.join(base, rel))
+    except OSError:
+        return None
+    if candidate != base and not candidate.startswith(base + os.sep):
+        return None
+    return candidate
+
+
+def _processing_safe_dest_name(filename: str) -> str:
+    safe = "".join(c for c in str(filename or "") if c.isalnum() or c in ".-_")
+    safe = safe.strip("._")
+    if not safe:
+        safe = "file"
+    if not safe.lower().endswith(".pdf"):
+        safe += ".pdf"
+    return safe
 
 
 def enrich_work_rows_pdf_file_size(rows: Optional[List[dict]]) -> None:
@@ -429,7 +483,12 @@ class PRKSDatabase:
                 except sqlite3.OperationalError:
                     pass
             # Record schema version so the DB file is auditable.
-            _PRKS_SCHEMA_VERSION = 5
+            try:
+                conn.execute("ALTER TABLE processing_files ADD COLUMN target_folder_id TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+            _PRKS_SCHEMA_VERSION = 8
             existing_version = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
             if existing_version is None:
                 conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_PRKS_SCHEMA_VERSION,))
@@ -548,6 +607,472 @@ class PRKSDatabase:
     def _get_bibtex_export_profile(self) -> Dict[str, bool]:
         m = self.get_app_settings_map()
         return _prks_parse_bibtex_export_fields_json(m.get("bibtex_export_fields", ""))
+
+    # --- Files for processing (staging inbox) ---
+    _PROCESSING_STATUSES_ORDER = {"pending": 0, "missing": 1, "error": 2, "imported": 3}
+    _PROCESSING_ROLE_TYPES = {
+        "Author",
+        "Editor",
+        "Reviewer",
+        "Translator",
+        "Introduction",
+        "Foreword",
+        "Afterword",
+    }
+
+    def _get_processing_roles(self, processing_file_id: str) -> List[dict]:
+        rows = self.execute_query(
+            """
+            SELECT p.id AS person_id, p.first_name, p.last_name, r.role_type, r.order_index
+            FROM processing_file_roles r
+            JOIN persons p ON p.id = r.person_id
+            WHERE r.processing_file_id = ?
+            ORDER BY r.order_index ASC, r.rowid ASC
+            """,
+            (processing_file_id,),
+        )
+        out: List[dict] = []
+        for row in rows:
+            first = (row.get("first_name") or "").strip()
+            last = (row.get("last_name") or "").strip()
+            name = " ".join([x for x in (first, last) if x]).strip() or row.get("person_id") or "Unknown"
+            out.append(
+                {
+                    "person_id": row.get("person_id"),
+                    "person_name": name,
+                    "role_type": row.get("role_type"),
+                    "order_index": row.get("order_index"),
+                }
+            )
+        return out
+
+    def _set_processing_roles(self, processing_file_id: str, roles: List[dict]) -> None:
+        if not isinstance(roles, list):
+            raise ValueError("roles must be an array.")
+        normalized: List[tuple[str, str, int]] = []
+        seen = set()
+        for idx, role in enumerate(roles):
+            if not isinstance(role, dict):
+                continue
+            person_id = str(role.get("person_id") or "").strip()
+            role_type = str(role.get("role_type") or "").strip()
+            if not person_id or not role_type:
+                continue
+            if role_type not in self._PROCESSING_ROLE_TYPES:
+                raise ValueError(f"Unsupported role_type: {role_type}")
+            exists = self.execute_query("SELECT 1 FROM persons WHERE id = ?", (person_id,))
+            if not exists:
+                raise ValueError(f"Unknown person id: {person_id}")
+            key = (person_id, role_type, idx)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append((person_id, role_type, idx))
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM processing_file_roles WHERE processing_file_id = ?", (processing_file_id,))
+            for person_id, role_type, order_index in normalized:
+                conn.execute(
+                    """
+                    INSERT INTO processing_file_roles (processing_file_id, person_id, role_type, order_index)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (processing_file_id, person_id, role_type, int(order_index)),
+                )
+            conn.commit()
+
+    def _processing_row_to_public(self, row: dict) -> dict:
+        rel_path = (row.get("rel_path") or "").replace("\\", "/")
+        folder_rel = os.path.dirname(rel_path).replace("\\", "/")
+        if folder_rel in ("", "."):
+            folder_rel = "/"
+        abs_path = (row.get("abs_path") or "").strip()
+        exists = os.path.isfile(abs_path) if abs_path else False
+        return {
+            "id": row.get("id"),
+            "rel_path": rel_path,
+            "filename": row.get("filename") or os.path.basename(rel_path),
+            "folder": folder_rel,
+            "status": row.get("status") or "pending",
+            "last_error": row.get("last_error"),
+            "imported_work_id": row.get("imported_work_id"),
+            "imported_at": row.get("imported_at"),
+            "discovered_at": row.get("discovered_at"),
+            "updated_at": row.get("updated_at"),
+            "exists": bool(exists),
+            "title": row.get("title") or "",
+            "status_draft": row.get("status_draft") or "Not Started",
+            "published_date": row.get("published_date") or "",
+            "abstract": row.get("abstract") or "",
+            "source_url": row.get("source_url") or "",
+            "author_text": row.get("author_text") or "",
+            "year": row.get("year") or "",
+            "publisher": row.get("publisher") or "",
+            "location": row.get("location") or "",
+            "edition": row.get("edition") or "",
+            "journal": row.get("journal") or "",
+            "volume": row.get("volume") or "",
+            "issue": row.get("issue") or "",
+            "pages": row.get("pages") or "",
+            "isbn": row.get("isbn") or "",
+            "doi": row.get("doi") or "",
+            "doc_type": row.get("doc_type") or "article",
+            "private_notes": row.get("private_notes") or "",
+            "thumb_page": row.get("thumb_page"),
+            "target_folder_id": row.get("target_folder_id") or "",
+            "roles": self._get_processing_roles(str(row.get("id") or "")),
+        }
+
+    def scan_processing_files(self) -> List[dict]:
+        root = _resolve_processing_dir()
+        os.makedirs(root, exist_ok=True)
+        root_real = os.path.realpath(root)
+        discovered_rel_paths: set[str] = set()
+        with self.get_connection() as conn:
+            for dirpath, _dirnames, filenames in os.walk(root_real):
+                for filename in sorted(filenames):
+                    if not str(filename).lower().endswith(".pdf"):
+                        continue
+                    abs_path = os.path.realpath(os.path.join(dirpath, filename))
+                    if abs_path != root_real and not abs_path.startswith(root_real + os.sep):
+                        continue
+                    rel_path = os.path.relpath(abs_path, root_real).replace(os.sep, "/")
+                    discovered_rel_paths.add(rel_path)
+                    existing = conn.execute(
+                        "SELECT status FROM processing_files WHERE rel_path = ?",
+                        (rel_path,),
+                    ).fetchone()
+                    next_status = "pending"
+                    if existing and str(existing["status"] or "") == "imported":
+                        next_status = "imported"
+                    conn.execute(
+                        """
+                        INSERT INTO processing_files (
+                            id, rel_path, abs_path, filename, status, last_error
+                        )
+                        VALUES (?, ?, ?, ?, ?, NULL)
+                        ON CONFLICT(rel_path) DO UPDATE SET
+                            abs_path = excluded.abs_path,
+                            filename = excluded.filename,
+                            status = CASE
+                                WHEN processing_files.status = 'imported' THEN 'imported'
+                                ELSE ?
+                            END,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        (self.generate_id("PF"), rel_path, abs_path, filename, next_status, next_status),
+                    )
+            if discovered_rel_paths:
+                placeholders = ",".join("?" * len(discovered_rel_paths))
+                conn.execute(
+                    f"""
+                    UPDATE processing_files
+                    SET status = 'missing',
+                        last_error = 'File no longer exists in for_processing directory.',
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE status != 'imported'
+                      AND rel_path NOT IN ({placeholders})
+                    """,
+                    tuple(discovered_rel_paths),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE processing_files
+                    SET status = 'missing',
+                        last_error = 'File no longer exists in for_processing directory.',
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE status != 'imported'
+                    """
+                )
+            conn.commit()
+        return self.get_processing_files(include_imported=False)
+
+    def get_processing_files(self, include_imported: bool = False) -> List[dict]:
+        sql = "SELECT * FROM processing_files"
+        params: tuple[Any, ...] = ()
+        if not include_imported:
+            sql += " WHERE status != ?"
+            params = ("imported",)
+        rows = list(self.execute_query(sql, params))
+        rows.sort(
+            key=lambda row: (
+                self._PROCESSING_STATUSES_ORDER.get(str(row.get("status") or "pending"), 99),
+                (row.get("rel_path") or "").lower(),
+            )
+        )
+        return [self._processing_row_to_public(row) for row in rows]
+
+    def get_processing_file(self, processing_file_id: str) -> Optional[dict]:
+        rows = self.execute_query("SELECT * FROM processing_files WHERE id = ?", (processing_file_id,))
+        if not rows:
+            return None
+        return self._processing_row_to_public(rows[0])
+
+    def get_processing_file_pdf_path(self, processing_file_id: str) -> Optional[str]:
+        rows = self.execute_query(
+            "SELECT rel_path, abs_path, status FROM processing_files WHERE id = ?",
+            (processing_file_id,),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        rel_path = (row.get("rel_path") or "").strip()
+        if not rel_path.lower().endswith(".pdf"):
+            return None
+        processing_root = _resolve_processing_dir()
+        abs_path = safe_processing_path_under_dir(processing_root, rel_path)
+        if not abs_path or not os.path.isfile(abs_path):
+            return None
+        return abs_path
+
+    def update_processing_file(self, processing_file_id: str, fields: Dict[str, Any]) -> dict:
+        current = self.execute_query("SELECT id FROM processing_files WHERE id = ?", (processing_file_id,))
+        if not current:
+            raise ValueError("Processing file not found.")
+        if not isinstance(fields, dict):
+            raise ValueError("JSON object body required.")
+        allowed = {
+            "title",
+            "status_draft",
+            "published_date",
+            "abstract",
+            "source_url",
+            "author_text",
+            "year",
+            "publisher",
+            "location",
+            "edition",
+            "journal",
+            "volume",
+            "issue",
+            "pages",
+            "isbn",
+            "doi",
+            "doc_type",
+            "private_notes",
+            "thumb_page",
+            "target_folder_id",
+        }
+        updates = dict(fields)
+        incoming_roles = updates.pop("roles", None)
+        if "status" in updates and "status_draft" not in updates:
+            updates["status_draft"] = updates.pop("status")
+        updates = {k: v for k, v in updates.items() if k in allowed}
+        if "doc_type" in updates:
+            updates["doc_type"] = normalize_doc_type(updates.get("doc_type"))
+        if "status_draft" in updates:
+            status_value = str(updates.get("status_draft") or "").strip()
+            if status_value not in ("Planned", "In Progress", "Completed", "Paused", "Not Started"):
+                raise ValueError("Invalid status_draft value.")
+            updates["status_draft"] = status_value
+        if "thumb_page" in updates:
+            raw = updates.get("thumb_page")
+            if raw is None or str(raw).strip() == "":
+                updates["thumb_page"] = None
+            else:
+                try:
+                    parsed = int(raw)
+                except (TypeError, ValueError):
+                    parsed = None
+                updates["thumb_page"] = parsed if parsed and parsed >= 1 else None
+        if "target_folder_id" in updates:
+            tf_raw = updates.get("target_folder_id")
+            if tf_raw is None or str(tf_raw).strip() == "":
+                updates["target_folder_id"] = None
+            else:
+                tid = str(tf_raw).strip()
+                if not self.get_folder(tid):
+                    raise ValueError("Unknown folder.")
+                updates["target_folder_id"] = tid
+        for k in list(updates.keys()):
+            if k in ("thumb_page", "target_folder_id"):
+                continue
+            if updates[k] is None:
+                updates[k] = None
+            else:
+                updates[k] = str(updates[k]).strip()
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            values = list(updates.values()) + [processing_file_id]
+            self.execute_query(
+                f"""
+                UPDATE processing_files
+                SET {set_clause},
+                    last_error = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                tuple(values),
+            )
+        if incoming_roles is not None:
+            self._set_processing_roles(processing_file_id, incoming_roles)
+        out = self.get_processing_file(processing_file_id)
+        if not out:
+            raise ValueError("Processing file not found.")
+        return out
+
+    def import_processing_file(self, processing_file_id: str) -> Dict[str, Any]:
+        rows = self.execute_query("SELECT * FROM processing_files WHERE id = ?", (processing_file_id,))
+        if not rows:
+            raise ValueError("Processing file not found.")
+        row = rows[0]
+        if row.get("status") == "imported" and row.get("imported_work_id"):
+            return {"processing_file_id": processing_file_id, "work_id": row.get("imported_work_id")}
+
+        fid = str(row.get("target_folder_id") or "").strip() or None
+        if fid and not self.get_folder(fid):
+            raise ValueError("Unknown folder.")
+
+        processing_root = _resolve_processing_dir()
+        os.makedirs(processing_root, exist_ok=True)
+        source_abs = safe_processing_path_under_dir(processing_root, row.get("rel_path") or "")
+        if not source_abs or not os.path.isfile(source_abs):
+            msg = "Source file missing from /data/for_processing."
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'missing', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
+
+        if not str(source_abs).lower().endswith(".pdf"):
+            msg = "Only PDF files can be imported from Files for Processing."
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
+        try:
+            with open(source_abs, "rb") as fp:
+                header = fp.read(5)
+        except OSError as e:
+            msg = f"Could not read source PDF: {e}"
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
+        if not header.startswith(b"%PDF-"):
+            msg = "File does not look like a valid PDF (missing %PDF header)."
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
+
+        safe_name = _processing_safe_dest_name(row.get("filename") or os.path.basename(source_abs))
+        local_filename = f"{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}_{safe_name}"
+        pdfs_dir = _resolve_pdfs_dir()
+        os.makedirs(pdfs_dir, exist_ok=True)
+        destination_abs = safe_pdf_path_under_dir(pdfs_dir, local_filename)
+        if not destination_abs:
+            msg = "Could not allocate safe destination path for PDF import."
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
+
+        try:
+            try:
+                os.replace(source_abs, destination_abs)
+            except OSError:
+                shutil.move(source_abs, destination_abs)
+        except Exception as e:
+            msg = f"Could not move PDF into managed storage: {e}"
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
+
+        title = (row.get("title") or "").strip() or os.path.splitext(row.get("filename") or "Untitled")[0]
+        status_draft = (row.get("status_draft") or "Not Started").strip() or "Not Started"
+        try:
+            work_id = self.add_work(
+                title=title,
+                status=status_draft,
+                abstract=row.get("abstract") or "",
+                published_date=row.get("published_date") or "",
+                file_path=f"/api/pdfs/{local_filename}",
+                author_text=row.get("author_text") or "",
+                year=row.get("year") or "",
+                publisher=row.get("publisher") or "",
+                location=row.get("location") or "",
+                edition=row.get("edition") or "",
+                journal=row.get("journal") or "",
+                volume=row.get("volume") or "",
+                issue=row.get("issue") or "",
+                pages=row.get("pages") or "",
+                isbn=row.get("isbn") or "",
+                doi=row.get("doi") or "",
+                doc_type=row.get("doc_type") or "article",
+                source_kind="pdf",
+                source_url=row.get("source_url") or "",
+                thumb_page=row.get("thumb_page"),
+                private_notes=row.get("private_notes") or "",
+            )
+            for role in self._get_processing_roles(processing_file_id):
+                person_id = str(role.get("person_id") or "").strip()
+                role_type = str(role.get("role_type") or "").strip()
+                if not person_id or not role_type:
+                    continue
+                try:
+                    order_index = int(role.get("order_index") or 0)
+                except (TypeError, ValueError):
+                    order_index = 0
+                self.add_role(person_id, work_id, role_type, order_index=order_index)
+            if fid:
+                self.add_work_to_folder(fid, work_id)
+        except Exception as e:
+            msg = f"Failed to insert imported file into works table: {e}"
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
+
+        self.execute_query(
+            """
+            UPDATE processing_files
+            SET status = 'imported',
+                imported_work_id = ?,
+                imported_at = CURRENT_TIMESTAMP,
+                last_error = NULL,
+                abs_path = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (work_id, destination_abs, processing_file_id),
+        )
+        return {"processing_file_id": processing_file_id, "work_id": work_id}
 
     # --- Works ---
     def add_work(self, title: str, status: str = 'Not Started', abstract: str = "",

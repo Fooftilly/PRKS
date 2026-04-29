@@ -13,7 +13,13 @@ from urllib.request import urlopen, Request
 
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from backend.db_manager import PRKSDatabase, default_prks_db_path, default_local_pdfs_dir, safe_pdf_path_under_dir
+from backend.db_manager import (
+    PRKSDatabase,
+    default_prks_db_path,
+    default_local_pdfs_dir,
+    safe_pdf_path_under_dir,
+    resolve_processing_dir,
+)
 
 PORT = 8080
 
@@ -72,6 +78,8 @@ pdfs_dir = _resolve_pdfs_dir()
 os.makedirs(pdfs_dir, exist_ok=True)
 thumbs_dir = _resolve_thumbs_dir()
 os.makedirs(thumbs_dir, exist_ok=True)
+processing_dir = resolve_processing_dir()
+os.makedirs(processing_dir, exist_ok=True)
 
 
 def _safe_pdf_path_in_pdfs_dir(url_last_segment: str) -> str | None:
@@ -303,7 +311,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is None:
                 return
-            if path.startswith('/api/works/') and len(path.split('/')) == 4:
+            if path.startswith('/api/processing-files/') and len(path.split('/')) == 4:
+                pf_id = path.split('/')[-1]
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                try:
+                    row = db.update_processing_file(pf_id, data)
+                except ValueError as e:
+                    self.send_json(400, {'error': str(e)})
+                    return
+                self.send_json(200, row)
+            elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 if not isinstance(data, dict):
                     self.send_json(400, {'error': 'JSON object body required'})
@@ -908,6 +927,23 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(bibtex.encode())
             elif path == '/api/settings':
                 self.send_json(200, db.get_app_settings_response())
+            elif path == '/api/processing-files':
+                rescan = query.get('rescan', [''])[0] in ('1', 'true', 'yes')
+                if rescan:
+                    db.scan_processing_files()
+                data = db.get_processing_files(include_imported=False)
+                self.send_json(200, data)
+            elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
+                parts = path.split('/')
+                if len(parts) == 5 and parts[4] == 'pdf':
+                    pf_id = parts[3]
+                    pdf_path = db.get_processing_file_pdf_path(pf_id)
+                    if pdf_path and os.path.exists(pdf_path):
+                        self._send_pdf_bytes(pdf_path)
+                    else:
+                        self.send_error(404, "PDF not found")
+                else:
+                    self.send_error(404, "API endpoint not found")
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception:
@@ -920,7 +956,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if data is None:
                 return
 
-            if path == '/api/works':
+            if path.startswith('/api/processing-files/') and path.endswith('/import'):
+                parts = path.split('/')
+                if len(parts) == 5 and parts[4] == 'import':
+                    pf_id = parts[3]
+                    try:
+                        out = db.import_processing_file(pf_id)
+                    except ValueError as e:
+                        self.send_json(400, {'error': str(e)})
+                        return
+                    self.send_json(200, out)
+                else:
+                    self.send_error(404, "API endpoint not found")
+            elif path == '/api/works':
                 file_path = data.get('file_path', '')
                 source_kind = (data.get('source_kind') or '').strip().lower()
                 source_url = (data.get('source_url') or '').strip()

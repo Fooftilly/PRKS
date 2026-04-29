@@ -477,7 +477,7 @@ function prksSplitTypedPersonName(name) {
 }
 
 /** Create a person from the Link Person to Work modal and select them for linking. */
-async function prksQuickCreatePersonForSearchField(typedName, searchInputId, hiddenInputId, aboutText) {
+async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText) {
     const trimmed = String(typedName || '').trim();
     if (!trimmed) {
         alert('Type a name in the Person field first.');
@@ -502,9 +502,12 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputId, hid
         }
         allPersons = await fetchPersons();
         window.allPersons = allPersons;
+        window.__prksProcessingPeople = allPersons;
         const newPerson = allPersons.find((p) => String(p.id) === String(data.id));
-        const personSearch = document.getElementById(searchInputId);
-        const personHidden = document.getElementById(hiddenInputId);
+        const personSearch =
+            typeof searchInputRef === 'string' ? document.getElementById(searchInputRef) : searchInputRef;
+        const personHidden =
+            typeof hiddenInputRef === 'string' ? document.getElementById(hiddenInputRef) : hiddenInputRef;
         if (personHidden) personHidden.value = data.id;
         if (personSearch) {
             personSearch.value = newPerson ? personDisplayName(newPerson) : trimmed;
@@ -809,6 +812,7 @@ function inferRightPanelListMode(h) {
     if (h.startsWith('#/people/')) return 'person';
     if (h === '#/recent') return 'recent';
     if (h.startsWith('#/progress')) return 'progress';
+    if (h === '#/processing-files') return 'processing-files';
     if (h.startsWith('#/search')) return 'search';
     if (h === '#/tags') return 'tags';
     if (h === '#/publishers') return 'publishers';
@@ -950,6 +954,20 @@ function renderRouteContextSidebar(mode) {
             <div class="route-sidebar">
                 ${prksRouteSidebarTitleRow(`Progress · ${st}`, 'route-progress-filters', 'How to switch progress filters')}
                 <p class="route-sidebar__lede">Files whose status is <strong>${st}</strong>. Change status from a file’s metadata panel.</p>
+                ${link('#/folders', 'Folder library')}
+            </div>`;
+    }
+    if (mode === 'processing-files') {
+        const n = ctx.pendingCount != null ? Number(ctx.pendingCount) : null;
+        const extra =
+            n != null && !Number.isNaN(n)
+                ? `<p class="route-sidebar__meta">${n} file${n === 1 ? '' : 's'} currently in inbox.</p>`
+                : '';
+        return `
+            <div class="route-sidebar">
+                <h2 class="route-sidebar__title">Files for Processing</h2>
+                <p class="route-sidebar__lede">Scans <code>/data/for_processing</code> recursively for PDFs. Items stay isolated from search and graph until imported.</p>
+                ${extra}
                 ${link('#/folders', 'Folder library')}
             </div>`;
     }
