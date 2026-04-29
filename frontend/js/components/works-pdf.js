@@ -1,7 +1,7 @@
 /**
  * PDF / EmbedPDF viewer and annotation integration — loaded on demand when opening a work with a PDF.
  */
- 
+
 function findDocumentIdFromState(state) {
     if (!state || typeof state !== 'object') return null;
     const candidates = [];
@@ -410,52 +410,54 @@ async function applyEmbedPdfUiCustomization(viewer) {
         if (hostForModeFix && !viewer.__prksToolbarModeFixBound) {
             viewer.__prksToolbarModeFixBound = true;
             const inBand = Number(window.innerWidth || 0) >= 421 && Number(window.innerWidth || 0) <= 521;
-            if (!inBand) return;
-            const maxModeFixAttempts = 36;
-            let modeFixAttempt = 0;
-            const runModeFixAttempt = () => {
-                modeFixAttempt += 1;
-                const seen = new Set();
-                let panNode = null;
-                let ptrNode = null;
-                const walk = (node) => {
-                    if (!node || panNode && ptrNode) return;
-                    if (node.nodeType !== 1) return;
-                    if (seen.has(node)) return;
-                    seen.add(node);
-                    const aria = node.getAttribute ? String(node.getAttribute('aria-label') || '').toLowerCase() : '';
-                    if (!panNode && aria === 'toggle pan mode') {
-                        panNode = node;
+            if (!inBand) {
+            } else {
+                const maxModeFixAttempts = 36;
+                let modeFixAttempt = 0;
+                const runModeFixAttempt = () => {
+                    modeFixAttempt += 1;
+                    const seen = new Set();
+                    let panNode = null;
+                    let ptrNode = null;
+                    const walk = (node) => {
+                        if (!node || panNode && ptrNode) return;
+                        if (node.nodeType !== 1) return;
+                        if (seen.has(node)) return;
+                        seen.add(node);
+                        const aria = node.getAttribute ? String(node.getAttribute('aria-label') || '').toLowerCase() : '';
+                        if (!panNode && aria === 'toggle pan mode') {
+                            panNode = node;
+                        }
+                        if (!ptrNode && aria === 'toggle pointer mode') {
+                            ptrNode = node;
+                        }
+                        if (panNode && ptrNode) return;
+                        if (node.shadowRoot) {
+                            const sk = node.shadowRoot.children || [];
+                            for (let i = 0; i < sk.length; i++) walk(sk[i]);
+                        }
+                        const kids = node.children || [];
+                        for (let i = 0; i < kids.length; i++) walk(kids[i]);
+                    };
+                    walk(hostForModeFix);
+                    const panWrap = panNode && panNode.parentElement ? panNode.parentElement : null;
+                    const ptrWrap = ptrNode && ptrNode.parentElement ? ptrNode.parentElement : null;
+                    const panBefore = panWrap ? window.getComputedStyle(panWrap).display : null;
+                    const ptrBefore = ptrWrap ? window.getComputedStyle(ptrWrap).display : null;
+                    if (panWrap && window.getComputedStyle(panWrap).display === 'none') {
+                        panWrap.style.display = 'contents';
                     }
-                    if (!ptrNode && aria === 'toggle pointer mode') {
-                        ptrNode = node;
+                    if (ptrWrap && window.getComputedStyle(ptrWrap).display === 'none') {
+                        ptrWrap.style.display = 'contents';
                     }
-                    if (panNode && ptrNode) return;
-                    if (node.shadowRoot) {
-                        const sk = node.shadowRoot.children || [];
-                        for (let i = 0; i < sk.length; i++) walk(sk[i]);
+                    const gotBoth = !!panNode && !!ptrNode;
+                    if (gotBoth || modeFixAttempt >= maxModeFixAttempts) {
+                        return;
                     }
-                    const kids = node.children || [];
-                    for (let i = 0; i < kids.length; i++) walk(kids[i]);
+                    requestAnimationFrame(runModeFixAttempt);
                 };
-                walk(hostForModeFix);
-                const panWrap = panNode && panNode.parentElement ? panNode.parentElement : null;
-                const ptrWrap = ptrNode && ptrNode.parentElement ? ptrNode.parentElement : null;
-                const panBefore = panWrap ? window.getComputedStyle(panWrap).display : null;
-                const ptrBefore = ptrWrap ? window.getComputedStyle(ptrWrap).display : null;
-                if (panWrap && window.getComputedStyle(panWrap).display === 'none') {
-                    panWrap.style.display = 'contents';
-                }
-                if (ptrWrap && window.getComputedStyle(ptrWrap).display === 'none') {
-                    ptrWrap.style.display = 'contents';
-                }
-                const gotBoth = !!panNode && !!ptrNode;
-                if (gotBoth || modeFixAttempt >= maxModeFixAttempts) {
-                    return;
-                }
-                requestAnimationFrame(runModeFixAttempt);
-            };
-            requestAnimationFrame(() => requestAnimationFrame(runModeFixAttempt));
+                requestAnimationFrame(() => requestAnimationFrame(runModeFixAttempt));
+            }
         }
 
         const live = ui.getSchema();
@@ -532,8 +534,10 @@ async function applyEmbedPdfUiCustomization(viewer) {
                         const defer = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : queueMicrotask;
                         defer(() => {
                             try {
-                                if (shouldModeView) scope.execute('mode:view', 'api');
-                            } catch (_x) {}
+                                if (shouldModeView) {
+                                    scope.execute('mode:view', 'api');
+                                }
+                            } catch (err) {}
                             if (!shouldFlush) return;
                             const flushLater =
                                 typeof requestAnimationFrame === 'function' ? requestAnimationFrame : queueMicrotask;
@@ -1555,9 +1559,14 @@ async function setupAnnotationPersistence(viewer, workId) {
                 state && state.plugins && Object.prototype.hasOwnProperty.call(state.plugins, 'annotation-engine')
                     ? state.plugins['annotation-engine']
                     : null;
+            const annV2PluginState =
+                state && state.plugins && Object.prototype.hasOwnProperty.call(state.plugins, 'annotation')
+                    ? state.plugins['annotation']
+                    : null;
             const serializedState = JSON.stringify({
                 d: currentDocId,
                 a: annPluginState || {},
+                a2: annV2PluginState || {},
                 p: state && state.core && state.core.pageNavigation ? state.core.pageNavigation : null,
             });
             if (serializedState === lastSerialized) return;
