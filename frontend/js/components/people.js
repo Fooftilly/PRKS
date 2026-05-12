@@ -808,4 +808,7 @@ function renderPersonDetails(person, container) {
             </div>
         </div>
     `;
+    if (typeof window.prksInitLazyWorkThumbs === 'function') {
+        window.prksInitLazyWorkThumbs(container);
+    }
 }
