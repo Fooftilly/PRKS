@@ -208,8 +208,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         ".webmanifest": "application/manifest+json",
     }
 
+    # Non-fingerprinted JS/CSS must revalidate so users don't get stale app versions.
+    _STATIC_REVALIDATE_EXTS = frozenset({".css", ".js", ".map"})
     _STATIC_LONG_CACHE_EXTS = frozenset(
-        {".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".css", ".js", ".woff2", ".map"}
+        {".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".woff2"}
     )
 
     def __init__(self, *args, **kwargs):
@@ -251,16 +253,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         # if Cache-Control is missing (default was heuristic / no-store in some cases).
         try:
             p = urlparse(self.path).path
-            if not p.startswith("/api/") and p != "/index.html":
+            if not p.startswith("/api/"):
                 leaf = p.rstrip("/").split("/")[-1].lower()
-                if leaf == "sw.js":
+                if p == "/" or p == "/index.html":
+                    # SPA shell should never be cached by intermediary proxies/CDNs.
+                    self.send_header("Cache-Control", "no-store, max-age=0")
+                elif leaf == "sw.js":
                     self.send_header("Cache-Control", "no-cache")
                 elif leaf == "manifest.webmanifest":
                     # Browsers re-check the manifest often; no-cache caused a 304 storm in logs.
                     self.send_header("Cache-Control", "public, max-age=3600")
                 else:
                     ext = os.path.splitext(p)[1].lower()
-                    if ext in self._STATIC_LONG_CACHE_EXTS:
+                    if ext in self._STATIC_REVALIDATE_EXTS:
+                        # App bundles are stable paths (no content hash), so force revalidation.
+                        self.send_header("Cache-Control", "public, max-age=0, must-revalidate")
+                    elif ext in self._STATIC_LONG_CACHE_EXTS:
                         self.send_header("Cache-Control", "public, max-age=604800, immutable")
         except Exception:
             pass
