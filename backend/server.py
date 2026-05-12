@@ -19,6 +19,9 @@ from backend.db_manager import (
     default_local_pdfs_dir,
     safe_pdf_path_under_dir,
     resolve_processing_dir,
+    _resolve_thumbs_dir,
+    prks_thumb_cache_safe_wid,
+    prune_orphan_pdf_thumbnails,
 )
 
 PORT = 8080
@@ -63,15 +66,6 @@ def _resolve_pdfs_dir() -> str:
 def _is_testing_env() -> bool:
     v = os.environ.get("PRKS_TESTING", "")
     return str(v).strip().lower() in ("1", "true", "yes")
-
-def _resolve_thumbs_dir() -> str:
-    storage_root = _get_storage_root()
-    if storage_root:
-        return os.path.join(storage_root, "thumbs")
-    # Mirror backend/db_manager.py default dirs
-    if _is_testing_env():
-        return os.path.join(base_dir, "data_testing", "thumbs")
-    return os.path.join(base_dir, "data", "thumbs")
 
 
 pdfs_dir = _resolve_pdfs_dir()
@@ -700,7 +694,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except Exception:
                     pdf_mtime = 0.0
 
-                safe_wid = re.sub(r"[^A-Za-z0-9_-]+", "_", str(w_id))
+                safe_wid = prks_thumb_cache_safe_wid(w_id)
                 cache_base = f"{safe_wid}_p{page}"
                 path_webp = os.path.join(thumbs_dir, cache_base + ".webp")
                 path_png = os.path.join(thumbs_dir, cache_base + ".png")
@@ -1382,6 +1376,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 def run_server(port=PORT):
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
+    try:
+        n = prune_orphan_pdf_thumbnails(db)
+        if n:
+            print(f"[PRKS] Pruned {n} orphan PDF thumbnail(s)", file=sys.stderr)
+    except Exception as e:
+        print("[PRKS] Thumbnail prune skipped:", e, file=sys.stderr)
     with socketserver.TCPServer(("", port), PRKSHandler) as httpd:
         print(f"Serving PRKS internal API and frontend at http://localhost:{port}")
         httpd.serve_forever()

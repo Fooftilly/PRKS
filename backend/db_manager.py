@@ -248,6 +248,92 @@ def default_local_pdfs_dir() -> str:
     return os.path.join(_REPO_ROOT, "data", "pdfs")
 
 
+def _resolve_thumbs_dir() -> str:
+    """On-disk PDF thumbnail cache (mirrors backend/server.py layout)."""
+    storage_root = _get_storage_root()
+    if storage_root:
+        return os.path.join(storage_root, "thumbs")
+    if _is_testing_env():
+        return os.path.join(_REPO_ROOT, "data_testing", "thumbs")
+    return os.path.join(_REPO_ROOT, "data", "thumbs")
+
+
+def prks_thumb_cache_safe_wid(work_id: str) -> str:
+    """Sanitize work id for thumbnail filenames (must match server thumbnail handler)."""
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", str(work_id))
+
+
+_PRKS_THUMB_CACHE_FINAL_RE = re.compile(r"^(.+)_p(\d+)\.(webp|png)$")
+_PRKS_THUMB_CACHE_TMP_RE = re.compile(r"^(.+)_p(\d+)\.(webp|png)\.tmp$")
+
+
+def prks_delete_pdf_thumbnails_for_work_id(work_id: str) -> None:
+    """Remove cached PDF thumbnails for one work (best-effort)."""
+    safe = prks_thumb_cache_safe_wid(work_id)
+    td = _resolve_thumbs_dir()
+    if not os.path.isdir(td):
+        return
+    pat_final = re.compile(r"^" + re.escape(safe) + r"_p\d+\.(webp|png)$")
+    pat_tmp = re.compile(r"^" + re.escape(safe) + r"_p\d+\.(webp|png)\.tmp$")
+    try:
+        names = os.listdir(td)
+    except OSError:
+        return
+    for fname in names:
+        if not pat_final.match(fname) and not pat_tmp.match(fname):
+            continue
+        try:
+            os.remove(os.path.join(td, fname))
+        except OSError:
+            pass
+
+
+def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
+    """Delete thumbnail files not referenced by any PDF work's thumb_page. Returns removal count."""
+    rows = db.execute_query(
+        "SELECT id, thumb_page FROM works WHERE file_path LIKE '/api/pdfs/%'"
+    )
+    allowed: set[str] = set()
+    for row in rows or []:
+        wid = row.get("id")
+        if not wid:
+            continue
+        tp = row.get("thumb_page")
+        try:
+            page = int(tp) if tp is not None and str(tp).strip() != "" else 1
+        except (TypeError, ValueError):
+            page = 1
+        if page < 1:
+            page = 1
+        safe = prks_thumb_cache_safe_wid(str(wid))
+        allowed.add(f"{safe}_p{page}")
+    td = _resolve_thumbs_dir()
+    if not os.path.isdir(td):
+        return 0
+    try:
+        names = os.listdir(td)
+    except OSError:
+        return 0
+    removed = 0
+    for fname in names:
+        stem: Optional[str] = None
+        m = _PRKS_THUMB_CACHE_FINAL_RE.match(fname)
+        if m:
+            stem = f"{m.group(1)}_p{m.group(2)}"
+        else:
+            m = _PRKS_THUMB_CACHE_TMP_RE.match(fname)
+            if m:
+                stem = f"{m.group(1)}_p{m.group(2)}"
+        if stem is None or stem in allowed:
+            continue
+        try:
+            os.remove(os.path.join(td, fname))
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def safe_pdf_path_under_dir(pdfs_dir: str, url_last_segment: str) -> Optional[str]:
     """Resolve a single PDF basename under pdfs_dir; reject traversal and empty names."""
     if not url_last_segment or not str(url_last_segment).strip():
@@ -1227,6 +1313,10 @@ class PRKSDatabase:
                     os.remove(abs_path)
             except Exception as e:
                 print("Error deleting file:", e)
+        try:
+            prks_delete_pdf_thumbnails_for_work_id(work_id)
+        except Exception as e:
+            print("Error deleting thumbnails:", e)
         tag_ids = [
             r["tag_id"]
             for r in self.execute_query(

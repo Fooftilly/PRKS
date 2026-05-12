@@ -13,6 +13,8 @@ from backend.db_manager import (
     PRKSDatabase,
     PRKS_BIBTEX_EXPORT_FIELD_IDS,
     safe_pdf_path_under_dir,
+    prks_thumb_cache_safe_wid,
+    prune_orphan_pdf_thumbnails,
 )
 
 class TestDBManager(unittest.TestCase):
@@ -160,6 +162,57 @@ class TestDBManager(unittest.TestCase):
         self.db.delete_work(w_id)
         work = self.db.get_work(w_id)
         self.assertIsNone(work)
+
+    def test_delete_work_removes_pdf_thumbnail_cache_files(self):
+        fname = f"td_{uuid.uuid4().hex}.pdf"
+        with tempfile.TemporaryDirectory(prefix="prks-pdf-del-") as pdfs_dir, tempfile.TemporaryDirectory(
+            prefix="prks-thumb-del-"
+        ) as thumbs_dir:
+            with open(os.path.join(pdfs_dir, fname), "wb") as f:
+                f.write(b"x")
+            with patch("backend.db_manager._resolve_pdfs_dir", return_value=pdfs_dir), patch(
+                "backend.db_manager._resolve_thumbs_dir", return_value=thumbs_dir
+            ):
+                w_id = self.db.add_work(title="DelThumb", file_path=f"/api/pdfs/{fname}")
+                sw = prks_thumb_cache_safe_wid(w_id)
+                p1 = os.path.join(thumbs_dir, f"{sw}_p1.webp")
+                p2 = os.path.join(thumbs_dir, f"{sw}_p2.png")
+                tmp = os.path.join(thumbs_dir, f"{sw}_p1.webp.tmp")
+                for p in (p1, p2, tmp):
+                    with open(p, "wb") as f:
+                        f.write(b"z")
+                self.db.delete_work(w_id)
+                self.assertFalse(os.path.exists(p1))
+                self.assertFalse(os.path.exists(p2))
+                self.assertFalse(os.path.exists(tmp))
+
+    def test_prune_orphan_pdf_thumbnails(self):
+        fname = f"tp_{uuid.uuid4().hex}.pdf"
+        with tempfile.TemporaryDirectory(prefix="prks-pdf-prune-") as pdfs_dir, tempfile.TemporaryDirectory(
+            prefix="prks-thumb-prune-"
+        ) as thumbs_dir:
+            with open(os.path.join(pdfs_dir, fname), "wb") as f:
+                f.write(b"x")
+            with patch("backend.db_manager._resolve_pdfs_dir", return_value=pdfs_dir), patch(
+                "backend.db_manager._resolve_thumbs_dir", return_value=thumbs_dir
+            ):
+                w_id = self.db.add_work(
+                    title="KeepThumb",
+                    file_path=f"/api/pdfs/{fname}",
+                    thumb_page=2,
+                )
+                sw = prks_thumb_cache_safe_wid(w_id)
+                good = os.path.join(thumbs_dir, f"{sw}_p2.webp")
+                stale_page = os.path.join(thumbs_dir, f"{sw}_p9.png")
+                orphan = os.path.join(thumbs_dir, "zzzorphan_p1.webp")
+                for p in (good, stale_page, orphan):
+                    with open(p, "wb") as f:
+                        f.write(b"z")
+                n = prune_orphan_pdf_thumbnails(self.db)
+                self.assertEqual(n, 2)
+                self.assertTrue(os.path.isfile(good))
+                self.assertFalse(os.path.exists(stale_page))
+                self.assertFalse(os.path.exists(orphan))
 
     def test_get_all_works_omits_text_and_private_notes(self):
         w_id = self.db.add_work(title="Heavy", text_content="x" * 5000, abstract="Short abs")
