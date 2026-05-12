@@ -13,6 +13,59 @@ function prksProcessingEsc(s) {
         .replace(/'/g, '&#39;');
 }
 
+function prksProcessingPreviewStacked() {
+    return typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1240px)').matches;
+}
+
+/** Put preview pane after list (second grid column on wide, below list on stacked). */
+function prksProcessingPlacePreviewAfterList() {
+    const listEl = document.getElementById('prks-processing-list');
+    const aside = document.getElementById('prks-processing-inline-preview');
+    if (!listEl || !aside) return;
+    listEl.insertAdjacentElement('afterend', aside);
+}
+
+/** Stacked only: preview directly under active card. */
+function prksProcessingPlacePreviewAfterCard(card) {
+    const aside = document.getElementById('prks-processing-inline-preview');
+    if (!card || !aside) return;
+    card.insertAdjacentElement('afterend', aside);
+}
+
+function prksProcessingSyncPreviewSlot() {
+    const layout = document.querySelector('.prks-processing-main-layout');
+    const listEl = document.getElementById('prks-processing-list');
+    const aside = document.getElementById('prks-processing-inline-preview');
+    const shell = document.getElementById('prks-processing-inline-preview-frame-shell');
+    if (!layout || !listEl || !aside) return;
+    if (!prksProcessingPreviewStacked()) {
+        prksProcessingPlacePreviewAfterList();
+        return;
+    }
+    const fid = layout.getAttribute('data-preview-for') || '';
+    if (fid && shell && !shell.classList.contains('hidden')) {
+        const esc = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(fid) : String(fid).replace(/\\/g, '');
+        const card = listEl.querySelector(`[data-processing-id="${esc}"]`);
+        if (card) prksProcessingPlacePreviewAfterCard(card);
+        else prksProcessingPlacePreviewAfterList();
+    } else {
+        prksProcessingPlacePreviewAfterList();
+    }
+}
+
+function prksProcessingEnsureResizeSync() {
+    if (window.__prksProcessingResizeBound) return;
+    window.__prksProcessingResizeBound = true;
+    let t;
+    window.addEventListener('resize', () => {
+        window.clearTimeout(t);
+        t = window.setTimeout(() => {
+            if (!document.getElementById('prks-processing-list')) return;
+            prksProcessingSyncPreviewSlot();
+        }, 150);
+    });
+}
+
 const PRKS_PROCESSING_ROLE_TYPES = [
     'Author',
     'Editor',
@@ -281,7 +334,6 @@ function prksProcessingCardHtml(file) {
     const sourceHint = file.exists
         ? 'Source file exists in for_processing.'
         : 'Source file missing from for_processing.';
-    const previewUrl = `/api/processing-files/${encodeURIComponent(String(file.id || ''))}/pdf`;
     const rolesPayload = encodeURIComponent(JSON.stringify(Array.isArray(file.roles) ? file.roles : []));
     const docDtPrefix = prksProcessingDocTypeIdPrefix(file.id);
     let docTypeMoreHtml = '';
@@ -429,17 +481,11 @@ function prksProcessingCardHtml(file) {
                 </details>
             </div>
             <div class="prks-processing-card__actions">
+                <button type="button" class="ribbon-btn" data-action="preview"${canPreview ? '' : ' disabled'}>Preview</button>
                 <button type="button" class="ribbon-btn" data-action="save">Save metadata</button>
                 <button type="button" class="add-new-btn" data-action="import"${canImport ? '' : ' disabled'}>Import to library</button>
                 <span class="meta-row" data-role="message" aria-live="polite"></span>
             </div>
-            <details class="prks-processing-card__preview-wrap" data-role="preview-wrap"${canPreview ? '' : ' hidden'}>
-                <summary>Open inline preview</summary>
-                <div class="prks-processing-card__preview-body">
-                    <iframe class="prks-processing-card__preview" data-role="preview-frame" title="PDF preview for ${prksProcessingEsc(file.filename || 'file')}" loading="lazy" referrerpolicy="no-referrer"></iframe>
-                    <p class="meta-row"><a class="route-sidebar__link" href="${prksProcessingEsc(previewUrl)}" target="_blank" rel="noopener">Open preview in new tab</a></p>
-                </div>
-            </details>
         </article>
     `;
 }
@@ -476,8 +522,19 @@ function renderProcessingFilesPage(items, container) {
         <p class="meta-row" style="margin:0 0 14px 0;">
             Inbox reads PDFs recursively from <code>/data/for_processing</code>. Files here stay out of library search and graph until imported.
         </p>
-        <div class="list-view" id="prks-processing-list">
-            ${cards || '<p class="meta-row">No PDF files waiting for processing.</p>'}
+        <div class="prks-processing-main-layout">
+            <div class="list-view prks-processing-main-layout__list" id="prks-processing-list">
+                ${cards || '<p class="meta-row">No PDF files waiting for processing.</p>'}
+            </div>
+            <aside class="prks-processing-inline-preview" id="prks-processing-inline-preview">
+                <h3 class="prks-processing-inline-preview__title">PDF Preview</h3>
+                <p class="prks-processing-inline-preview__file" id="prks-processing-inline-preview-file">No file selected</p>
+                <p class="prks-processing-inline-preview__empty" id="prks-processing-inline-preview-empty">Click Preview on file card to open PDF here.</p>
+                <div class="prks-processing-inline-preview__frame-shell hidden" id="prks-processing-inline-preview-frame-shell">
+                    <iframe class="prks-processing-inline-preview__frame hidden" id="prks-processing-inline-preview-frame" title="PDF preview" loading="lazy" referrerpolicy="no-referrer"></iframe>
+                </div>
+                <p class="meta-row"><a class="route-sidebar__link hidden" id="prks-processing-inline-preview-link" href="#" target="_blank" rel="noopener">Open preview in new tab</a></p>
+            </aside>
         </div>
     `;
 
@@ -496,18 +553,74 @@ function renderProcessingFilesPage(items, container) {
         });
     }
 
+    const inlinePreviewFile = container.querySelector('#prks-processing-inline-preview-file');
+    const inlinePreviewEmpty = container.querySelector('#prks-processing-inline-preview-empty');
+    const inlinePreviewFrameShell = container.querySelector('#prks-processing-inline-preview-frame-shell');
+    const inlinePreviewFrame = container.querySelector('#prks-processing-inline-preview-frame');
+    const inlinePreviewLink = container.querySelector('#prks-processing-inline-preview-link');
+    const layoutEl = container.querySelector('.prks-processing-main-layout');
+    const setInlinePreview = (fileRow, fileId, anchorCard) => {
+        const canPreview = !!(fileRow && fileRow.exists && fileRow.status !== 'missing' && fileRow.status !== 'error');
+        const src = `/api/processing-files/${encodeURIComponent(String(fileId || ''))}/pdf`;
+        const label = String((fileRow && (fileRow.filename || fileRow.rel_path)) || 'Selected file');
+        if (inlinePreviewFile) inlinePreviewFile.textContent = label;
+        if (!canPreview) {
+            if (layoutEl) layoutEl.removeAttribute('data-preview-for');
+            prksProcessingPlacePreviewAfterList();
+            if (inlinePreviewEmpty) {
+                inlinePreviewEmpty.textContent = 'Preview unavailable for this file.';
+                inlinePreviewEmpty.classList.remove('hidden');
+            }
+            if (inlinePreviewFrameShell) inlinePreviewFrameShell.classList.add('hidden');
+            if (inlinePreviewFrame) {
+                inlinePreviewFrame.classList.add('hidden');
+                inlinePreviewFrame.removeAttribute('src');
+            }
+            if (inlinePreviewLink) inlinePreviewLink.classList.add('hidden');
+            return canPreview;
+        }
+        if (inlinePreviewFrameShell) inlinePreviewFrameShell.classList.remove('hidden');
+        if (inlinePreviewFrame) {
+            inlinePreviewFrame.setAttribute('src', src);
+            inlinePreviewFrame.setAttribute('title', `PDF preview for ${label}`);
+            inlinePreviewFrame.classList.remove('hidden');
+        }
+        if (inlinePreviewEmpty) inlinePreviewEmpty.classList.add('hidden');
+        if (inlinePreviewLink) {
+            inlinePreviewLink.setAttribute('href', src);
+            inlinePreviewLink.classList.remove('hidden');
+        }
+        if (prksProcessingPreviewStacked() && anchorCard) {
+            if (layoutEl) layoutEl.setAttribute('data-preview-for', String(fileId || ''));
+            prksProcessingPlacePreviewAfterCard(anchorCard);
+        } else {
+            if (layoutEl) layoutEl.removeAttribute('data-preview-for');
+            prksProcessingPlacePreviewAfterList();
+        }
+        if (canPreview && prksProcessingPreviewStacked()) {
+            const root = document.getElementById('prks-processing-inline-preview');
+            if (root) {
+                requestAnimationFrame(() => {
+                    root.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                });
+            }
+        }
+        return canPreview;
+    };
+
+    prksProcessingEnsureResizeSync();
+
     container.querySelectorAll('[data-processing-id]').forEach((card) => {
         const fileId = card.getAttribute('data-processing-id');
         const fileRow = idToFile.get(String(fileId || ''));
         const msgEl = card.querySelector('[data-role="message"]');
+        const previewBtn = card.querySelector('[data-action="preview"]');
         const saveBtn = card.querySelector('[data-action="save"]');
         const importBtn = card.querySelector('[data-action="import"]');
         const addRoleBtn = card.querySelector('[data-action="add-role"]');
         const roleTypeEl = card.querySelector('[data-role="role-type"]');
         const personIdEl = card.querySelector('[data-role="person-id"]');
         const personSearchEl = card.querySelector('[data-role="person-search"]');
-        const previewWrap = card.querySelector('[data-role="preview-wrap"]');
-        const previewFrame = card.querySelector('[data-role="preview-frame"]');
         let sourceRoles = [];
         const rolesAttr = card.getAttribute('data-processing-roles');
         if (rolesAttr) {
@@ -572,17 +685,19 @@ function renderProcessingFilesPage(items, container) {
             card.__processingRoles.splice(idx, 1);
             prksProcessingRenderRoleList(card);
         });
-        if (previewWrap && previewFrame) {
-            const ensurePreviewSrc = () => {
-                const src = `/api/processing-files/${encodeURIComponent(String(fileId || ''))}/pdf`;
-                if (!previewFrame.getAttribute('src')) {
-                    previewFrame.setAttribute('src', src);
+        if (previewBtn) {
+            previewBtn.addEventListener('click', () => {
+                const canPreview = setInlinePreview(fileRow, fileId, card);
+                if (msgEl) {
+                    if (!canPreview) {
+                        msgEl.textContent = 'Preview unavailable for this file.';
+                    } else if (prksProcessingPreviewStacked()) {
+                        msgEl.textContent = 'Preview below this card.';
+                    } else {
+                        msgEl.textContent = 'Preview opened on the right.';
+                    }
                 }
-            };
-            previewWrap.addEventListener('toggle', () => {
-                if (previewWrap.open) ensurePreviewSrc();
             });
-            if (previewWrap.open) ensurePreviewSrc();
         }
         if (saveBtn) {
             saveBtn.addEventListener('click', async () => {

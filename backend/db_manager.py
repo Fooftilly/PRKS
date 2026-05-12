@@ -851,10 +851,7 @@ class PRKSDatabase:
                 placeholders = ",".join("?" * len(discovered_rel_paths))
                 conn.execute(
                     f"""
-                    UPDATE processing_files
-                    SET status = 'missing',
-                        last_error = 'File no longer exists in for_processing directory.',
-                        updated_at = CURRENT_TIMESTAMP
+                    DELETE FROM processing_files
                     WHERE status != 'imported'
                       AND rel_path NOT IN ({placeholders})
                     """,
@@ -863,10 +860,7 @@ class PRKSDatabase:
             else:
                 conn.execute(
                     """
-                    UPDATE processing_files
-                    SET status = 'missing',
-                        last_error = 'File no longer exists in for_processing directory.',
-                        updated_at = CURRENT_TIMESTAMP
+                    DELETE FROM processing_files
                     WHERE status != 'imported'
                     """
                 )
@@ -1013,15 +1007,8 @@ class PRKSDatabase:
         os.makedirs(processing_root, exist_ok=True)
         source_abs = safe_processing_path_under_dir(processing_root, row.get("rel_path") or "")
         if not source_abs or not os.path.isfile(source_abs):
-            msg = "Source file missing from /data/for_processing."
-            self.execute_query(
-                """
-                UPDATE processing_files
-                SET status = 'missing', last_error = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (msg, processing_file_id),
-            )
+            msg = "Inbox file no longer present."
+            self.execute_query("DELETE FROM processing_files WHERE id = ?", (processing_file_id,))
             raise ValueError(msg)
 
         if not str(source_abs).lower().endswith(".pdf"):

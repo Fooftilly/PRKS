@@ -699,6 +699,7 @@ function prksSyncRightPanelTabStrip(tabId) {
  */
 function setRightPanelRouteContext(hash) {
     const rp = document.getElementById('right-panel');
+    const app = document.getElementById('app-container');
     const tabs = rp?.querySelector('.tabs');
     const annBtn = rp?.querySelector('.tab-btn[data-target="annotations"]');
     if (!rp || !tabs) return;
@@ -716,6 +717,9 @@ function setRightPanelRouteContext(hash) {
     if (annBtn) annBtn.hidden = false;
 
     const h = hash || '';
+    if (app) {
+        app.classList.toggle('app-container--processing-inline-preview', h === '#/processing-files');
+    }
 
     function hideTabStripIfAtMostOneVisible() {
         const visibleTabs = [...tabs.querySelectorAll('.tab-btn')].filter((b) => !b.hidden);

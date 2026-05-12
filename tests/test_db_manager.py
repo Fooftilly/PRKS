@@ -910,7 +910,7 @@ class TestDBManager(unittest.TestCase):
                 else:
                     os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
 
-    def test_processing_files_rescan_marks_missing(self):
+    def test_processing_files_rescan_deletes_stale(self):
         old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
         old_storage = os.environ.get("PRKS_STORAGE")
         with tempfile.TemporaryDirectory(prefix="prks-processing-missing-") as root:
@@ -926,8 +926,7 @@ class TestDBManager(unittest.TestCase):
                 self.assertEqual(len(staged), 1)
                 os.remove(pdf_path)
                 staged2 = self.db.scan_processing_files()
-                self.assertEqual(len(staged2), 1)
-                self.assertEqual(staged2[0]["status"], "missing")
+                self.assertEqual(staged2, [])
             finally:
                 if old_processing is None:
                     os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)

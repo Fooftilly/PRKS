@@ -922,9 +922,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path == '/api/settings':
                 self.send_json(200, db.get_app_settings_response())
             elif path == '/api/processing-files':
-                rescan = query.get('rescan', [''])[0] in ('1', 'true', 'yes')
-                if rescan:
-                    db.scan_processing_files()
+                db.scan_processing_files()
                 data = db.get_processing_files(include_imported=False)
                 self.send_json(200, data)
             elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):

@@ -111,6 +111,10 @@ body {
     min-width: 0;
 }
 
+#app-container.app-container--processing-inline-preview #right-panel {
+    display: none;
+}
+
 /* Sidebar */
 #sidebar {
     width: 250px;
@@ -1333,6 +1337,11 @@ a.tag.tag--sidebar-all:hover {
 
 .list-view .project-card--work {
     padding-right: 18px;
+}
+
+/* Processing inbox: no work rail — avoid global list-view right gutter */
+#prks-processing-list.list-view .project-card {
+    padding-right: 14px;
 }
 
 .list-view .card-title {
@@ -2631,26 +2640,94 @@ a.tag.tag--sidebar-all:hover {
     align-items: center;
 }
 
-.prks-processing-card__preview-wrap {
-    margin-top: 10px;
+.prks-processing-main-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 1.05fr) minmax(260px, 0.95fr);
+    gap: 16px;
+    align-items: start;
 }
 
-.prks-processing-card__preview-wrap > summary {
-    cursor: pointer;
-    color: var(--text-secondary);
-    font-weight: 600;
+.prks-processing-main-layout__list {
+    min-width: 0;
 }
 
-.prks-processing-card__preview-body {
-    margin-top: 8px;
-}
-
-.prks-processing-card__preview {
+.prks-processing-inline-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    min-height: 0;
+    position: sticky;
+    top: 10px;
+    align-self: start;
     width: 100%;
-    min-height: 460px;
-    border: 1px solid var(--line);
+    box-sizing: border-box;
+    /* vh can exceed visible scrollport; svh/lvh chain caps sticky pane inside viewport */
+    max-height: calc(100vh - 72px);
+    max-height: calc(100svh - 64px);
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
+    background: var(--surface);
+    padding: 12px 12px 10px;
+}
+
+/* When PDF shown: reserve ribbon + main padding + sticky top (~152px) so bottom not clipped */
+.prks-processing-inline-preview:has(.prks-processing-inline-preview__frame-shell:not(.hidden)) {
+    min-height: max(280px, calc(100vh - 152px));
+    min-height: max(280px, calc(100svh - 144px));
+}
+
+.prks-processing-inline-preview__title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.prks-processing-inline-preview__file {
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.prks-processing-inline-preview__empty {
+    margin: 0;
+    padding: 10px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
+.prks-processing-inline-preview__frame-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
     background: var(--surface-raised);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.prks-processing-inline-preview__frame {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: var(--surface-raised);
+}
+
+.prks-processing-inline-preview .meta-row {
+    margin: 0;
+    flex-shrink: 0;
 }
 
 .form-pane textarea.textarea-md {
@@ -4252,6 +4329,28 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     text-decoration: underline;
 }
 
+@media (max-width: 1240px) {
+    .prks-processing-main-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .prks-processing-inline-preview {
+        position: static;
+        max-height: none;
+        scroll-margin-top: 10px;
+    }
+
+    /* Stacked: aside needs explicit min-height so flex shell grows (wide :has min-height overridden here). */
+    .prks-processing-inline-preview:has(.prks-processing-inline-preview__frame-shell:not(.hidden)) {
+        min-height: min(720px, 85svh);
+        min-height: min(720px, 85vh);
+    }
+
+    .prks-processing-inline-preview__frame-shell:not(.hidden) {
+        min-height: max(440px, min(68svh, 78vh));
+    }
+}
+
 /* EasyMDE dark theme (explicit dark + system dark) */
 :root[data-theme="dark"] .document-view--work .work-notes-editor-wrap .editor-toolbar {
     background: var(--surface-muted) !important;
@@ -4435,6 +4534,7 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     .tabs {
         padding: 0 8px;
     }
+
 }
 
 /* Mobile / small screens: one-pane layout with drawer + overlay (hamburger navigation). */
