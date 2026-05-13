@@ -365,7 +365,7 @@ function prksProcessingCardHtml(file) {
                 <div class="form-grid-2">
                     <div>
                         <label>Title</label>
-                        <input type="text" data-field="title" value="${prksProcessingEsc(file.title || '')}" placeholder="Defaults to file name">
+                        <input type="text" data-field="title" value="${prksProcessingEsc(file.title || '')}" placeholder="Library title">
                     </div>
                     <div>
                         <label>Status</label>
