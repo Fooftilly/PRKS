@@ -143,6 +143,26 @@ def _prks_sql_first_linked_person_for_role(work_alias: str, role_type: str, colu
     )
 
 
+def _prks_sql_linked_authors_concat(work_alias: str, column_alias: str = "linked_authors") -> str:
+    """Scalar subquery: all Author display names, comma-separated, same order as roles."""
+    wid = f"{work_alias}.id"
+    ca = (column_alias or "linked_authors").replace('"', "")
+    return (
+        "(SELECT GROUP_CONCAT(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')), ', ' "
+        "ORDER BY r.order_index ASC, r.rowid ASC) "
+        "FROM roles r JOIN persons p ON p.id = r.person_id "
+        f"WHERE r.work_id = {wid} AND r.role_type = 'Author') AS {ca}"
+    )
+
+
+def _prks_sql_work_summary_person_extras(work_alias: str) -> str:
+    """Append to work-summary SELECTs: first author/editor + full author list for cards."""
+    pa = _prks_sql_first_linked_person_for_role(work_alias, "Author", "primary_author")
+    pe = _prks_sql_first_linked_person_for_role(work_alias, "Editor", "primary_editor")
+    la = _prks_sql_linked_authors_concat(work_alias)
+    return f"{pa}, {pe}, {la}"
+
+
 def _prks_search_tokens(q: str) -> List[str]:
     """Split a user query into tokens for FTS/LIKE (hyphens become word breaks)."""
     if not q or not str(q).strip():
@@ -1273,9 +1293,8 @@ class PRKSDatabase:
     
     def get_all_works(self) -> List[dict]:
         sel = _prks_work_summary_select_with_folder("works")
-        pa = _prks_sql_first_linked_person_for_role("works", "Author", "primary_author")
-        pe = _prks_sql_first_linked_person_for_role("works", "Editor", "primary_editor")
-        rows = list(self.execute_query(f"SELECT {sel}, {pa}, {pe} FROM works ORDER BY created_at DESC"))
+        pex = _prks_sql_work_summary_person_extras("works")
+        rows = list(self.execute_query(f"SELECT {sel}, {pex} FROM works ORDER BY created_at DESC"))
         enrich_work_rows_pdf_file_size(rows)
         return rows
 
@@ -1284,7 +1303,9 @@ class PRKSDatabase:
         row = r[0] if r else {"c": 0, "m": ""}
         ff = self.execute_query("SELECT COUNT(*) AS c FROM folder_files")
         ffc = (ff[0] if ff else {"c": 0})["c"]
-        return f'W/"prks-works-{row["c"]}-{row["m"]}-ff{ffc}"'
+        rr = self.execute_query("SELECT COUNT(*) AS c FROM roles")
+        rc = (rr[0] if rr else {"c": 0})["c"]
+        return f'W/"prks-works-{row["c"]}-{row["m"]}-ff{ffc}-r{rc}"'
 
     def etag_graph(self) -> str:
         w = self.execute_query("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM works")
@@ -1607,11 +1628,10 @@ class PRKSDatabase:
             id_list = list(ids_set)
             ph = ",".join("?" * len(id_list))
             wsel = _prks_work_summary_select_with_folder("works")
-            pa = _prks_sql_first_linked_person_for_role("works", "Author", "primary_author")
-            pe = _prks_sql_first_linked_person_for_role("works", "Editor", "primary_editor")
+            pex = _prks_sql_work_summary_person_extras("works")
             rows = list(
                 self.execute_query(
-                    f"SELECT {wsel}, {pa}, {pe} FROM works WHERE id IN ({ph}) ORDER BY updated_at DESC, created_at DESC",
+                    f"SELECT {wsel}, {pex} FROM works WHERE id IN ({ph}) ORDER BY updated_at DESC, created_at DESC",
                     tuple(id_list),
                 )
             )
@@ -1622,11 +1642,10 @@ class PRKSDatabase:
             return []
         placeholders = ",".join("?" * len(ordered_ids))
         wsel = _prks_work_summary_select_with_folder("works")
-        pa = _prks_sql_first_linked_person_for_role("works", "Author", "primary_author")
-        pe = _prks_sql_first_linked_person_for_role("works", "Editor", "primary_editor")
+        pex = _prks_sql_work_summary_person_extras("works")
         rows = list(
             self.execute_query(
-                f"SELECT {wsel}, {pa}, {pe} FROM works WHERE id IN ({placeholders})",
+                f"SELECT {wsel}, {pex} FROM works WHERE id IN ({placeholders})",
                 tuple(ordered_ids),
             )
         )
@@ -1643,10 +1662,9 @@ class PRKSDatabase:
         if not tid:
             return []
         wsel = _prks_work_summary_select("w")
-        pa = _prks_sql_first_linked_person_for_role("w", "Author", "primary_author")
-        pe = _prks_sql_first_linked_person_for_role("w", "Editor", "primary_editor")
+        pex = _prks_sql_work_summary_person_extras("w")
         query = f"""
-        SELECT DISTINCT {wsel}, {pa}, {pe} FROM works w
+        SELECT DISTINCT {wsel}, {pex} FROM works w
         JOIN work_tags wt ON w.id = wt.work_id
         WHERE wt.tag_id = ?
         ORDER BY w.created_at DESC
@@ -1715,11 +1733,10 @@ class PRKSDatabase:
 
     def get_recent_works(self, limit: int = 30) -> List[dict]:
         sel = _prks_work_summary_select("works")
-        pa = _prks_sql_first_linked_person_for_role("works", "Author", "primary_author")
-        pe = _prks_sql_first_linked_person_for_role("works", "Editor", "primary_editor")
+        pex = _prks_sql_work_summary_person_extras("works")
         rows = list(
             self.execute_query(
-                f"SELECT {sel}, {pa}, {pe} FROM works WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC LIMIT ?",
+                f"SELECT {sel}, {pex} FROM works WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC LIMIT ?",
                 (limit,),
             )
         )
@@ -1813,16 +1830,15 @@ class PRKSDatabase:
             return None
         p = dict(rows[0])
         wsel = _prks_work_summary_select("w")
-        pa = _prks_sql_first_linked_person_for_role("w", "Author", "primary_author")
-        pe = _prks_sql_first_linked_person_for_role("w", "Editor", "primary_editor")
+        pex = _prks_sql_work_summary_person_extras("w")
         p["items"] = self.execute_query(
             """
-            SELECT {wsel}, i.position, {pa}, {pe}
+            SELECT {wsel}, i.position, {pex}
             FROM playlist_items i
             JOIN works w ON w.id = i.work_id
             WHERE i.playlist_id = ?
             ORDER BY i.position ASC, w.created_at ASC
-            """.format(wsel=wsel, pa=pa, pe=pe),
+            """.format(wsel=wsel, pex=pex),
             (playlist_id,),
         )
         enrich_work_rows_pdf_file_size(p["items"])
@@ -2158,13 +2174,11 @@ class PRKSDatabase:
         else:
             folder["parent"] = None
         wsel = _prks_work_summary_select("w")
-        pa = _prks_sql_first_linked_person_for_role("w", "Author", "primary_author")
-        pe = _prks_sql_first_linked_person_for_role("w", "Editor", "primary_editor")
+        pex = _prks_sql_work_summary_person_extras("w")
         query = f"""
         SELECT
             {wsel},
-            {pa},
-            {pe}
+            {pex}
         FROM works w
         JOIN folder_files ff ON w.id = ff.work_id
         WHERE ff.folder_id = ?
@@ -2356,10 +2370,9 @@ class PRKSDatabase:
         res = self.execute_query("SELECT * FROM persons WHERE id = ?", (person_id,))
         if not res: return None
         person = res[0]
-        pa = _prks_sql_first_linked_person_for_role("w", "Author", "primary_author")
-        pe = _prks_sql_first_linked_person_for_role("w", "Editor", "primary_editor")
+        pex = _prks_sql_work_summary_person_extras("w")
         query = f"""
-        SELECT w.*, r.role_type, r.order_index, {pa}, {pe}
+        SELECT w.*, r.role_type, r.order_index, {pex}
         FROM roles r
         JOIN works w ON r.work_id = w.id
         WHERE r.person_id = ?
@@ -2647,6 +2660,11 @@ class PRKSDatabase:
         VALUES (?, ?, ?, ?)
         """
         self.execute_query(query, (person_id, work_id, role_type, order_index))
+        # Bust /api/works ETag: catalog etag includes roles row count; also bump work row for clients/UI.
+        self.execute_query(
+            "UPDATE works SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (work_id,),
+        )
 
     def next_role_order_index(self, work_id: str) -> int:
         """Next order_index for a new role on this work (append after existing links)."""
@@ -2678,8 +2696,14 @@ class PRKSDatabase:
                 """,
                 (work_id, person_id, role_type, int(order_index)),
             )
+            deleted = cur.rowcount > 0
             conn.commit()
-            return cur.rowcount > 0
+        if deleted:
+            self.execute_query(
+                "UPDATE works SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (work_id,),
+            )
+        return deleted
 
     # --- Concepts & Arguments ---
     def add_concept(self, name: str, description: str = "") -> str:

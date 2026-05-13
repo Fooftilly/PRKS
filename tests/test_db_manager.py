@@ -340,6 +340,38 @@ class TestDBManager(unittest.TestCase):
         row = next(r for r in rows if r["id"] == w_id)
         self.assertEqual(row.get("folder_id"), f_id)
 
+    def test_get_all_works_linked_authors_multiple(self):
+        w_id = self.db.add_work(title="Dual Book", doc_type="book")
+        p_a = self.db.add_person(first_name="Ann", last_name="Ayer")
+        p_b = self.db.add_person(first_name="Ben", last_name="Boss")
+        self.db.add_role(p_a, w_id, "Author", order_index=0)
+        self.db.add_role(p_b, w_id, "Author", order_index=1)
+        rows = self.db.get_all_works()
+        row = next(r for r in rows if r["id"] == w_id)
+        self.assertEqual(row.get("primary_author"), "Ann Ayer")
+        la = row.get("linked_authors") or ""
+        self.assertIn("Ann Ayer", la)
+        self.assertIn("Ben Boss", la)
+
+    def test_etag_works_catalog_updates_on_add_role(self):
+        w_id = self.db.add_work(title="Etag Role Work")
+        e1 = self.db.etag_works_catalog()
+        p = self.db.add_person(first_name="P", last_name="Q")
+        self.db.add_role(p, w_id, "Author")
+        e2 = self.db.etag_works_catalog()
+        self.assertNotEqual(e1, e2)
+
+    def test_etag_works_catalog_updates_on_delete_work_role(self):
+        w_id = self.db.add_work(title="Etag Delete Role")
+        p1 = self.db.add_person(first_name="A", last_name="One")
+        p2 = self.db.add_person(first_name="B", last_name="Two")
+        self.db.add_role(p1, w_id, "Author", order_index=0)
+        self.db.add_role(p2, w_id, "Editor", order_index=1)
+        e1 = self.db.etag_works_catalog()
+        self.assertTrue(self.db.delete_work_role(w_id, p2, "Editor", 1))
+        e2 = self.db.etag_works_catalog()
+        self.assertNotEqual(e1, e2)
+
     def test_add_folder_rejects_duplicate_title(self):
         self.db.add_folder(title="Unique Name", description="")
         with self.assertRaises(ValueError):
