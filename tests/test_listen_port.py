@@ -3,7 +3,12 @@ import sys
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PROJECT_DIR)
+
+# server.py mkdirs pdfs/thumbs/processing at import — must not use ./data/ when tests run standalone.
+os.environ.setdefault("PRKS_TESTING", "1")
+os.environ.setdefault("PRKS_STORAGE", os.path.join(_PROJECT_DIR, "data_testing"))
 
 import backend.server as server_module
 

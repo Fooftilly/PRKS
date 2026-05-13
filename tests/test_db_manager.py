@@ -7,7 +7,12 @@ import uuid
 from unittest.mock import patch
 
 # Add the parent directory to sys.path so we can import 'backend'
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PROJECT_DIR)
+
+# Default PDF/DB paths follow PRKS_TESTING when PRKS_STORAGE unset; keep tests off ./data/.
+os.environ.setdefault("PRKS_TESTING", "1")
+os.environ.setdefault("PRKS_STORAGE", os.path.join(_PROJECT_DIR, "data_testing"))
 
 from backend.db_manager import (
     PRKSDatabase,
