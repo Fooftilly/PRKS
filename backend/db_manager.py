@@ -2122,8 +2122,15 @@ class PRKSDatabase:
                 (SELECT COUNT(*) FROM folder_files ff WHERE ff.folder_id = f.id) AS work_count,
                 (SELECT COUNT(*) FROM folders c WHERE c.parent_id = f.id) AS child_count
             FROM folders f
+            WHERE NOT (
+                f.parent_id IS NULL
+                AND TRIM(f.title) = ?
+                AND (SELECT COUNT(*) FROM folder_files ff WHERE ff.folder_id = f.id) = 0
+                AND (SELECT COUNT(*) FROM folders c WHERE c.parent_id = f.id) = 0
+            )
             ORDER BY f.title COLLATE NOCASE, f.created_at DESC
-            """
+            """,
+            (_PRKS_UNCATEGORIZED_FOLDER_TITLE,),
         )
 
     def get_folder(self, folder_id: str) -> Optional[dict]:

@@ -1035,6 +1035,16 @@ class TestDBManager(unittest.TestCase):
         self.assertEqual(row[0]["title"], "Uncategorized")
         self.assertIsNone(row[0]["parent_id"])
 
+    def test_get_all_folders_hides_empty_uncategorized(self):
+        unc = self.db.ensure_default_uncategorized_folder_id()
+        titles = [f["title"] for f in self.db.get_all_folders()]
+        self.assertNotIn("Uncategorized", titles)
+        self.assertIsNotNone(self.db.get_folder(unc))
+        w = self.db.add_work(title="Only in uncategorized")
+        self.db.add_work_to_folder(unc, w)
+        titles2 = [f["title"] for f in self.db.get_all_folders()]
+        self.assertIn("Uncategorized", titles2)
+
     def test_import_processing_without_target_folder_uses_uncategorized(self):
         old_storage = os.environ.get("PRKS_STORAGE")
         old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
