@@ -47,6 +47,7 @@
     --z-overlay: 1040;
     --z-modal-backdrop: 1100;
     --z-modal: 1200;
+    --z-modal-confirm: 1300;
     --z-dropdown: 2000;
     --z-autocomplete: 10050;
     --transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
@@ -1923,6 +1924,67 @@ a.tag.tag--sidebar-all:hover {
     color: var(--text-secondary);
     line-height: 1.45;
     margin: 0 0 12px 0;
+}
+
+/* Stacked confirm when closing modals with unsaved edits (above .modal, below dropdowns) */
+.prks-modal-unsaved-confirm {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal-confirm);
+    padding: var(--space-xl);
+    box-sizing: border-box;
+}
+.prks-modal-unsaved-confirm:not(.hidden) {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+}
+.prks-modal-unsaved-confirm__scrim {
+    position: absolute;
+    inset: 0;
+    background: var(--overlay-scrim);
+    cursor: default;
+}
+.prks-modal-unsaved-confirm__panel {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 420px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-2xl);
+    box-shadow: var(--shadow-sm);
+}
+.prks-modal-unsaved-confirm__title {
+    margin: 0 0 var(--space-md);
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.prks-modal-unsaved-confirm__desc {
+    margin: 0 0 var(--space-xl);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+.prks-modal-unsaved-confirm__actions {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: var(--space-md);
+    justify-content: center;
+    align-items: center;
+}
+/* .add-new-btn defaults width:100% + margin-top:auto — undo inside this dialog */
+.prks-modal-unsaved-confirm__actions .ribbon-btn,
+.prks-modal-unsaved-confirm__actions .add-new-btn {
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 0;
+    margin-top: 0;
+}
+.prks-modal-unsaved-confirm__actions .add-new-btn {
+    padding-inline: var(--space-lg);
 }
 
 .modal-grid-2 {

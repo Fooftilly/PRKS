@@ -179,10 +179,32 @@
     <!-- Modals -->
     <div id="modal-backdrop" class="modal-backdrop hidden"></div>
 
+    <div
+        id="prks-modal-unsaved-confirm"
+        class="prks-modal-unsaved-confirm hidden"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="prks-modal-unsaved-confirm-title"
+        aria-describedby="prks-modal-unsaved-confirm-desc"
+        aria-hidden="true"
+    >
+        <div class="prks-modal-unsaved-confirm__scrim" id="prks-modal-unsaved-confirm-scrim" aria-hidden="true"></div>
+        <div class="prks-modal-unsaved-confirm__panel">
+            <h3 id="prks-modal-unsaved-confirm-title" class="prks-modal-unsaved-confirm__title">Close without saving?</h3>
+            <p id="prks-modal-unsaved-confirm-desc" class="prks-modal-unsaved-confirm__desc">
+                Are you sure you want to close this window without saving the changes?
+            </p>
+            <div class="prks-modal-unsaved-confirm__actions">
+                <button type="button" class="ribbon-btn" id="prks-modal-unsaved-confirm-cancel">Cancel</button>
+                <button type="button" class="add-new-btn" id="prks-modal-unsaved-confirm-discard">Close without saving</button>
+            </div>
+        </div>
+    </div>
+
     <div id="settings-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Settings</h3>
-            <button class="close-btn" onclick="closeModals()">&times;</button>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <fieldset class="prks-theme-picker">
@@ -266,7 +288,7 @@
     <div id="master-add-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Create New Entity</h3>
-            <button class="close-btn" onclick="closeModals()">&times;</button>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body modal-grid-2">
             <button onclick="openModal('folder-modal')" class="add-new-btn create-entity-btn">📁 New
@@ -283,7 +305,7 @@
     <div id="work-modal" class="modal modal-wide hidden">
         <div class="modal-header">
             <h3>New File</h3>
-            <button class="close-btn" onclick="closeModals()">&times;</button>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="upload-grid">
@@ -524,7 +546,7 @@
     <div id="folder-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Add New Folder</h3>
-            <button class="close-btn" onclick="closeModals()">&times;</button>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -554,7 +576,7 @@
     <div id="playlist-modal" class="modal hidden">
         <div class="modal-header">
             <h3>New playlist</h3>
-            <button class="close-btn" onclick="closeModals()">&times;</button>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -572,7 +594,7 @@
     <div id="group-modal" class="modal hidden">
         <div class="modal-header">
             <h3>New people group</h3>
-            <button class="close-btn" onclick="closeModals()">&times;</button>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -601,7 +623,7 @@
     <div id="person-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Add New Person</h3>
-            <button class="close-btn" onclick="closeModals()">&times;</button>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -640,7 +662,7 @@
     <div id="person-template-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Edit Profile Using Template</h3>
-            <button class="close-btn" onclick="closeModals()">&times;</button>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -677,7 +699,7 @@
     <div id="role-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Link Person to Work</h3>
-            <button class="close-btn" onclick="closeModals()">&times;</button>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <p class="modal-helper">Search for someone already in your library, or type a name and choose <strong>Quick-create person</strong> in the list. Then click Create Link.</p>

@@ -15,6 +15,170 @@ const PRKS_AUTOSIZE_TEXTAREA_SELECTOR = [
     'textarea.prks-private-notes-input'
 ].join(', ');
 
+const PRKS_MODAL_UNSAVED_CONFIRM_IDS = new Set([
+    'work-modal',
+    'folder-modal',
+    'person-modal',
+    'group-modal',
+    'role-modal',
+]);
+
+function prksGetModalBaselineStore() {
+    if (!window.__prksModalFormBaseline || typeof window.__prksModalFormBaseline !== 'object') {
+        window.__prksModalFormBaseline = {};
+    }
+    return window.__prksModalFormBaseline;
+}
+
+function prksSerializeModalFormState(modalId) {
+    const modalEl = document.getElementById(modalId);
+    if (!modalEl) return '';
+    const fields = modalEl.querySelectorAll('input, textarea, select');
+    const parts = [];
+    fields.forEach((el, idx) => {
+        const tag = (el.tagName || '').toLowerCase();
+        const type = (el.type || '').toLowerCase();
+        const key = `${tag}:${type}:${el.id || el.name || idx}`;
+        if (tag === 'select') {
+            const opts = Array.from(el.options || []).map((opt) => `${opt.value}:${opt.selected ? '1' : '0'}`);
+            parts.push([key, opts.join('|')]);
+            return;
+        }
+        if (type === 'checkbox' || type === 'radio') {
+            parts.push([key, el.checked ? '1' : '0']);
+            return;
+        }
+        if (type === 'file') {
+            const files = Array.from(el.files || []).map((f) => `${f.name}:${f.size}:${f.lastModified}`);
+            parts.push([key, files.join('|')]);
+            return;
+        }
+        parts.push([key, String(el.value || '')]);
+    });
+    return JSON.stringify(parts);
+}
+
+function prksCaptureModalBaseline(modalId) {
+    if (!modalId) return;
+    const store = prksGetModalBaselineStore();
+    store[modalId] = prksSerializeModalFormState(modalId);
+}
+
+function prksScheduleModalBaselineCapture(modalId) {
+    if (!modalId) return;
+    requestAnimationFrame(() => {
+        if (document.getElementById(modalId)?.classList.contains('hidden')) return;
+        prksCaptureModalBaseline(modalId);
+    });
+    window.setTimeout(() => {
+        if (document.getElementById(modalId)?.classList.contains('hidden')) return;
+        prksCaptureModalBaseline(modalId);
+    }, 250);
+}
+
+function prksGetActiveModalId() {
+    const modal = document.querySelector('.modal:not(.hidden)');
+    return modal ? modal.id : '';
+}
+
+function prksModalNeedsUnsavedConfirm(modalId) {
+    return PRKS_MODAL_UNSAVED_CONFIRM_IDS.has(String(modalId || ''));
+}
+
+function prksModalHasUnsavedChanges(modalId) {
+    if (!modalId || !prksModalNeedsUnsavedConfirm(modalId)) return false;
+    const store = prksGetModalBaselineStore();
+    const baseline = Object.prototype.hasOwnProperty.call(store, modalId) ? store[modalId] : null;
+    if (baseline == null) return false;
+    const now = prksSerializeModalFormState(modalId);
+    return baseline !== now;
+}
+
+function prksResetModalBaselines() {
+    window.__prksModalFormBaseline = {};
+}
+
+function prksIsModalUnsavedConfirmOpen() {
+    const root = document.getElementById('prks-modal-unsaved-confirm');
+    return !!(root && !root.classList.contains('hidden'));
+}
+
+function prksHideModalUnsavedConfirm() {
+    const root = document.getElementById('prks-modal-unsaved-confirm');
+    if (root) {
+        root.classList.add('hidden');
+        root.setAttribute('aria-hidden', 'true');
+    }
+    window.__prksModalUnsavedConfirmOnDiscard = null;
+}
+
+function prksOpenModalUnsavedConfirm(onDiscard) {
+    window.__prksModalUnsavedConfirmOnDiscard = typeof onDiscard === 'function' ? onDiscard : null;
+    const root = document.getElementById('prks-modal-unsaved-confirm');
+    if (!root) {
+        const fn = window.__prksModalUnsavedConfirmOnDiscard;
+        prksHideModalUnsavedConfirm();
+        if (fn) fn();
+        return;
+    }
+    root.classList.remove('hidden');
+    root.setAttribute('aria-hidden', 'false');
+    const discard = document.getElementById('prks-modal-unsaved-confirm-discard');
+    if (discard && typeof discard.focus === 'function') {
+        requestAnimationFrame(() => discard.focus());
+    }
+}
+
+function prksDiscardConfirmedClose() {
+    const fn = window.__prksModalUnsavedConfirmOnDiscard;
+    prksHideModalUnsavedConfirm();
+    if (fn) fn();
+}
+
+function prksBindModalUnsavedConfirmOnce() {
+    const root = document.getElementById('prks-modal-unsaved-confirm');
+    if (!root || root.dataset.bound === '1') return;
+    root.dataset.bound = '1';
+    const cancel = document.getElementById('prks-modal-unsaved-confirm-cancel');
+    const discard = document.getElementById('prks-modal-unsaved-confirm-discard');
+    const scrim = document.getElementById('prks-modal-unsaved-confirm-scrim');
+    if (cancel) {
+        cancel.addEventListener('click', () => prksHideModalUnsavedConfirm());
+    }
+    if (discard) {
+        discard.addEventListener('click', () => prksDiscardConfirmedClose());
+    }
+    if (scrim) {
+        scrim.addEventListener('click', () => prksHideModalUnsavedConfirm());
+    }
+    if (!window.__prksModalUnsavedConfirmKeyBound) {
+        window.__prksModalUnsavedConfirmKeyBound = true;
+        document.addEventListener(
+            'keydown',
+            (e) => {
+                if (e.key !== 'Escape') return;
+                if (!prksIsModalUnsavedConfirmOpen()) return;
+                e.preventDefault();
+                e.stopPropagation();
+                prksHideModalUnsavedConfirm();
+            },
+            true
+        );
+    }
+}
+
+function requestModalClose(reason) {
+    const activeModalId = prksGetActiveModalId();
+    if (activeModalId && prksModalHasUnsavedChanges(activeModalId)) {
+        prksOpenModalUnsavedConfirm(() => {
+            closeModals();
+        });
+        return false;
+    }
+    closeModals();
+    return true;
+}
+
 function prksAutosizeTextarea(el) {
     if (!el || el.tagName !== 'TEXTAREA') return;
     if (el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
@@ -50,6 +214,7 @@ function openModal(id) {
     if (typeof window.prksCloseTagsAliasModal === 'function') {
         window.prksCloseTagsAliasModal();
     }
+    prksHideModalUnsavedConfirm();
     document.getElementById('modal-backdrop').classList.remove('hidden');
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     const modalEl = document.getElementById(id);
@@ -73,6 +238,7 @@ function openModal(id) {
         void window.prksInitNewGroupModal();
     }
     requestAnimationFrame(() => prksBindAutosizeTextareas(modalEl));
+    prksScheduleModalBaselineCapture(id);
 }
 
 // —— In-app help hints (popover + Settings toggle) ——
@@ -257,6 +423,19 @@ function prksAnyModalOpen() {
     return !!any;
 }
 
+function initModalCloseUi() {
+    prksBindModalUnsavedConfirmOnce();
+    const backdrop = document.getElementById('modal-backdrop');
+    if (!backdrop || backdrop.dataset.boundClose !== '1') {
+        if (!backdrop) return;
+        backdrop.dataset.boundClose = '1';
+        backdrop.addEventListener('click', (e) => {
+            if (e.target !== backdrop) return;
+            requestModalClose('backdrop');
+        });
+    }
+}
+
 function prksSetOverlayBackdropVisible(visible) {
     const el = document.getElementById('prks-overlay-backdrop');
     if (!el) return;
@@ -435,6 +614,7 @@ async function populateFolderDropdown() {
 }
 
 function closeModals() {
+    prksHideModalUnsavedConfirm();
     const playlistModal = document.getElementById('playlist-modal');
     const playlistWasOpen = playlistModal && !playlistModal.classList.contains('hidden');
     document.getElementById('modal-backdrop').classList.add('hidden');
@@ -453,7 +633,11 @@ function closeModals() {
             }
         }
     }
+    prksResetModalBaselines();
 }
+
+window.requestModalClose = requestModalClose;
+window.initModalCloseUi = initModalCloseUi;
 
 function personDisplayName(p) {
     return `${(p.first_name || '').trim()} ${p.last_name || ''}`.trim();

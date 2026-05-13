@@ -83,6 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initMobileWorkNotesRightSetting();
     if (typeof initPrksHintUi === 'function') initPrksHintUi();
     initPrksMiddleClickNavigation();
+    if (typeof initModalCloseUi === 'function') initModalCloseUi();
     if (typeof initMobileShell === 'function') initMobileShell();
     initRouter();
     initTabs();
