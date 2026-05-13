@@ -910,6 +910,48 @@ class TestDBManager(unittest.TestCase):
                 else:
                     os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
 
+    def test_import_processing_file_keeps_inbox_when_add_work_fails(self):
+        """Copy-then-commit: inbox PDF must survive add_work failure (no row + no ghost dest)."""
+        old_storage = os.environ.get("PRKS_STORAGE")
+        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
+        with tempfile.TemporaryDirectory(prefix="prks-import-fail-") as root:
+            processing_root = os.path.join(root, "for_processing")
+            os.makedirs(processing_root, exist_ok=True)
+            pdf_path = os.path.join(processing_root, "fragile.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4\n%FAILTEST\n%%EOF\n")
+            try:
+                os.environ["PRKS_STORAGE"] = root
+                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
+                staged = self.db.scan_processing_files()
+                self.assertEqual(len(staged), 1)
+                row = staged[0]
+                with patch.object(self.db, "add_work", side_effect=RuntimeError("simulated DB failure")):
+                    with self.assertRaises(ValueError) as ctx:
+                        self.db.import_processing_file(row["id"])
+                    self.assertIn("simulated DB failure", str(ctx.exception))
+                self.assertTrue(os.path.isfile(pdf_path), "inbox PDF must remain after failed import")
+                pdfs_dir = os.path.join(root, "pdfs")
+                if os.path.isdir(pdfs_dir):
+                    leftovers = [n for n in os.listdir(pdfs_dir) if n.lower().endswith(".pdf")]
+                    self.assertEqual(leftovers, [])
+                rows = self.db.execute_query(
+                    "SELECT status, last_error FROM processing_files WHERE id = ?",
+                    (row["id"],),
+                )
+                self.assertTrue(rows)
+                self.assertEqual(rows[0]["status"], "error")
+                self.assertIn("simulated DB failure", rows[0]["last_error"] or "")
+            finally:
+                if old_storage is None:
+                    os.environ.pop("PRKS_STORAGE", None)
+                else:
+                    os.environ["PRKS_STORAGE"] = old_storage
+                if old_processing is None:
+                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
+                else:
+                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+
     def test_processing_files_rescan_deletes_stale(self):
         old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
         old_storage = os.environ.get("PRKS_STORAGE")

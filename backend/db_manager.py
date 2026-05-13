@@ -1065,13 +1065,12 @@ class PRKSDatabase:
             )
             raise ValueError(msg)
 
+        # Copy first, remove inbox only after DB success. Moving before add_work could leave
+        # inbox empty while no work row exists; retry then deletes the processing_files row.
         try:
-            try:
-                os.replace(source_abs, destination_abs)
-            except OSError:
-                shutil.move(source_abs, destination_abs)
+            shutil.copy2(source_abs, destination_abs)
         except Exception as e:
-            msg = f"Could not move PDF into managed storage: {e}"
+            msg = f"Could not copy PDF into managed storage: {e}"
             self.execute_query(
                 """
                 UPDATE processing_files
@@ -1084,6 +1083,7 @@ class PRKSDatabase:
 
         title = (row.get("title") or "").strip() or os.path.splitext(row.get("filename") or "Untitled")[0]
         status_draft = (row.get("status_draft") or "Not Started").strip() or "Not Started"
+        work_id: Optional[str] = None
         try:
             work_id = self.add_work(
                 title=title,
@@ -1121,6 +1121,16 @@ class PRKSDatabase:
             if fid:
                 self.add_work_to_folder(fid, work_id)
         except Exception as e:
+            if work_id:
+                try:
+                    self.delete_work(work_id)
+                except Exception:
+                    pass
+            try:
+                if os.path.isfile(destination_abs):
+                    os.remove(destination_abs)
+            except OSError:
+                pass
             msg = f"Failed to insert imported file into works table: {e}"
             self.execute_query(
                 """
@@ -1132,19 +1142,36 @@ class PRKSDatabase:
             )
             raise ValueError(msg)
 
-        self.execute_query(
-            """
-            UPDATE processing_files
-            SET status = 'imported',
-                imported_work_id = ?,
-                imported_at = CURRENT_TIMESTAMP,
-                last_error = NULL,
-                abs_path = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (work_id, destination_abs, processing_file_id),
-        )
+        try:
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'imported',
+                    imported_work_id = ?,
+                    imported_at = CURRENT_TIMESTAMP,
+                    last_error = NULL,
+                    abs_path = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (work_id, destination_abs, processing_file_id),
+            )
+        except Exception as e:
+            msg = f"Could not finalize import metadata: {e}"
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
+
+        try:
+            os.remove(source_abs)
+        except OSError:
+            pass
         return {"processing_file_id": processing_file_id, "work_id": work_id}
 
     # --- Works ---
