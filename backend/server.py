@@ -10,6 +10,7 @@ import time
 import re
 from urllib.parse import urlparse, parse_qs, unquote
 from urllib.request import urlopen, Request
+from urllib.error import HTTPError, URLError
 
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,9 +23,13 @@ from backend.db_manager import (
     _resolve_thumbs_dir,
     prks_thumb_cache_safe_wid,
     prune_orphan_pdf_thumbnails,
+    resolve_people_images_dir,
+    prks_person_image_cache_safe_id,
 )
 
 PORT = 8080
+# Default for `python prks_app.py --testing`; non-testing bind refuses this port (see _validate_listen_port).
+PRKS_TESTING_DEFAULT_PORT = 8070
 
 # Minimum uncompressed JSON size before gzip (Accept-Encoding: gzip).
 _PRKS_JSON_GZIP_MIN_BYTES = 1024
@@ -66,6 +71,27 @@ def _resolve_pdfs_dir() -> str:
 def _is_testing_env() -> bool:
     v = os.environ.get("PRKS_TESTING", "")
     return str(v).strip().lower() in ("1", "true", "yes")
+
+
+def _validate_listen_port(port: int) -> None:
+    """Avoid non-testing server on port used by `prks_app.py --testing` default."""
+    if _is_testing_env():
+        return
+    if int(port) == int(PRKS_TESTING_DEFAULT_PORT):
+        raise RuntimeError(
+            f"Port {PRKS_TESTING_DEFAULT_PORT} is reserved for `python prks_app.py --testing` "
+            f"(PRKS_TESTING). Use a different --port, or run with --testing when you need that port."
+        )
+
+
+def _prks_detect_image_mime(header: bytes) -> str:
+    if header.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
 
 
 pdfs_dir = _resolve_pdfs_dir()
@@ -628,6 +654,71 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Vary", "Accept-Encoding")
         self.end_headers()
 
+    def _person_profile_image_cache_path(self, person_id: str) -> str:
+        d = resolve_people_images_dir()
+        safe = prks_person_image_cache_safe_id(person_id)
+        return os.path.join(d, safe + ".bin")
+
+    def _send_person_profile_image(self, person_id: str) -> None:
+        row = db.get_person(person_id)
+        if not row:
+            self.send_error(404, "Person not found")
+            return
+        url = (row.get("image_url") or "").strip()
+        cache_path = self._person_profile_image_cache_path(person_id)
+
+        fetched: bytes | None = None
+        if url.startswith("http://") or url.startswith("https://"):
+            try:
+                req = Request(url, headers={"User-Agent": "PRKS/1.0 (person portrait cache)"})
+                with urlopen(req, timeout=25) as resp:
+                    code = int(getattr(resp, "status", 0) or getattr(resp, "code", 0) or 0)
+                    if code == 200:
+                        blob = resp.read()
+                        if blob:
+                            fetched = blob
+            except (HTTPError, URLError, OSError, ValueError, TypeError, TimeoutError):
+                fetched = None
+            except Exception:
+                fetched = None
+
+        if fetched:
+            try:
+                parent = os.path.dirname(cache_path)
+                os.makedirs(parent, exist_ok=True)
+                tmp = cache_path + ".tmp"
+                with open(tmp, "wb") as fp:
+                    fp.write(fetched)
+                os.replace(tmp, cache_path)
+            except OSError:
+                pass
+            mime = _prks_detect_image_mime(fetched[:64])
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("Content-Length", str(len(fetched)))
+            self.end_headers()
+            self.wfile.write(fetched)
+            return
+
+        if os.path.isfile(cache_path) and os.path.getsize(cache_path) > 0:
+            try:
+                with open(cache_path, "rb") as fp:
+                    body = fp.read()
+            except OSError:
+                body = b""
+            if body:
+                mime = _prks_detect_image_mime(body[:64])
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Cache-Control", "private, max-age=86400")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+        self.send_error(404, "Profile image not available")
+
     def handle_api_get(self, parsed_path):
         query = parse_qs(parsed_path.query)
         path = parsed_path.path
@@ -847,11 +938,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, data)
                 else:
                     self.send_error(404, "Group not found")
+            elif path.startswith('/api/persons/') and path.endswith('/profile-image'):
+                parts = path.split('/')
+                if len(parts) != 5:
+                    self.send_error(404, "API endpoint not found")
+                    return
+                p_id = unquote(parts[3])
+                self._send_person_profile_image(p_id)
             elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
-                p_id = path.split('/')[-1]
+                p_id = unquote(path.split('/')[-1])
                 data = db.get_person(p_id)
-                if data: self.send_json(200, data)
-                else: self.send_error(404, "Person not found")
+                if data:
+                    self.send_json(200, data)
+                else:
+                    self.send_error(404, "Person not found")
             elif path == '/api/recent':
                 etag = db.etag_recent_works()
                 if self._prks_if_none_match(etag):
@@ -1059,10 +1159,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except Exception:
                         # best-effort: do not fail work creation if playlist link fails
                         pass
-                folder_id = data.get('folder_id')
-                if folder_id:
+                folder_id = data.get("folder_id")
+                raw_folder = str(folder_id).strip() if folder_id is not None else ""
+                if raw_folder:
                     try:
-                        db.add_work_to_folder(folder_id, w_id)
+                        db.add_work_to_folder(raw_folder, w_id)
+                    except ValueError as e:
+                        db.delete_work(w_id)
+                        self.send_json(409, {'error': str(e)})
+                        return
+                else:
+                    try:
+                        unc_id = db.ensure_default_uncategorized_folder_id()
+                        db.add_work_to_folder(unc_id, w_id)
                     except ValueError as e:
                         db.delete_work(w_id)
                         self.send_json(409, {'error': str(e)})
@@ -1380,6 +1489,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 def run_server(port=PORT):
+    _validate_listen_port(port)
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
     try:

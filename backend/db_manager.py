@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from urllib.parse import unquote
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
+from pathlib import Path
 
 PRKS_BIBTEX_DOC_TYPES = frozenset({
     "article",
@@ -258,9 +259,27 @@ def _resolve_thumbs_dir() -> str:
     return os.path.join(_REPO_ROOT, "data", "thumbs")
 
 
+def resolve_people_images_dir() -> str:
+    """On-disk cache for person profile images (same layout pattern as thumbs)."""
+    storage_root = _get_storage_root()
+    if storage_root:
+        return os.path.join(storage_root, "people")
+    if _is_testing_env():
+        return os.path.join(_REPO_ROOT, "data_testing", "people")
+    return os.path.join(_REPO_ROOT, "data", "people")
+
+
 def prks_thumb_cache_safe_wid(work_id: str) -> str:
     """Sanitize work id for thumbnail filenames (must match server thumbnail handler)."""
     return re.sub(r"[^A-Za-z0-9_-]+", "_", str(work_id))
+
+
+def prks_person_image_cache_safe_id(person_id: str) -> str:
+    """Sanitize person id for on-disk profile image cache filenames."""
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", str(person_id))
+
+
+_PRKS_UNCATEGORIZED_FOLDER_TITLE = "Uncategorized"
 
 
 _PRKS_THUMB_CACHE_FINAL_RE = re.compile(r"^(.+)_p(\d+)\.(webp|png)$")
@@ -366,6 +385,30 @@ def safe_processing_path_under_dir(processing_dir: str, relative_path: str) -> O
     if candidate != base and not candidate.startswith(base + os.sep):
         return None
     return candidate
+
+
+def prune_empty_processing_parent_dirs(processing_root: str, removed_inbox_file_abs: str) -> None:
+    """Remove empty directories from parent of removed file up to processing_root (root kept)."""
+    try:
+        root = Path(processing_root).resolve()
+        cur = Path(removed_inbox_file_abs).resolve().parent
+    except OSError:
+        return
+    try:
+        cur.relative_to(root)
+    except ValueError:
+        return
+    while cur != root:
+        try:
+            if not cur.is_dir():
+                break
+            if any(cur.iterdir()):
+                break
+            parent = cur.parent
+            cur.rmdir()
+            cur = parent
+        except OSError:
+            break
 
 
 def _processing_safe_dest_name(filename: str) -> str:
@@ -1118,8 +1161,8 @@ class PRKSDatabase:
                 except (TypeError, ValueError):
                     order_index = 0
                 self.add_role(person_id, work_id, role_type, order_index=order_index)
-            if fid:
-                self.add_work_to_folder(fid, work_id)
+            uncategorized_id = self.ensure_default_uncategorized_folder_id()
+            self.add_work_to_folder(fid if fid else uncategorized_id, work_id)
         except Exception as e:
             if work_id:
                 try:
@@ -1172,6 +1215,7 @@ class PRKSDatabase:
             os.remove(source_abs)
         except OSError:
             pass
+        prune_empty_processing_parent_dirs(processing_root, source_abs)
         return {"processing_file_id": processing_file_id, "work_id": work_id}
 
     # --- Works ---
@@ -2043,6 +2087,16 @@ class PRKSDatabase:
             if pid in descendants:
                 raise ValueError("Cannot set parent to a subfolder (cycle).")
         return pid
+
+    def ensure_default_uncategorized_folder_id(self) -> str:
+        """Top-level folder titled exactly 'Uncategorized'; create if missing."""
+        rows = self.execute_query(
+            "SELECT id FROM folders WHERE parent_id IS NULL AND title = ? LIMIT 1",
+            (_PRKS_UNCATEGORIZED_FOLDER_TITLE,),
+        )
+        if rows:
+            return str(rows[0]["id"])
+        return self.add_folder(_PRKS_UNCATEGORIZED_FOLDER_TITLE, "", None)
 
     def add_folder(
         self,

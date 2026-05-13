@@ -15,6 +15,7 @@ from backend.db_manager import (
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prune_orphan_pdf_thumbnails,
+    prune_empty_processing_parent_dirs,
 )
 
 class TestDBManager(unittest.TestCase):
@@ -910,6 +911,47 @@ class TestDBManager(unittest.TestCase):
                 else:
                     os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
 
+    def test_import_processing_prunes_empty_nested_dirs(self):
+        """After import removes inbox PDF, empty ancestor dirs under for_processing/ removed."""
+        old_storage = os.environ.get("PRKS_STORAGE")
+        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
+        with tempfile.TemporaryDirectory(prefix="prks-processing-prune-") as root:
+            processing_root = os.path.join(root, "for_processing")
+            nested = os.path.join(processing_root, "a", "b", "c")
+            os.makedirs(nested, exist_ok=True)
+            pdf_path = os.path.join(nested, "solo.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4\n%PRUNE\n%%EOF\n")
+            try:
+                os.environ["PRKS_STORAGE"] = root
+                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
+                folder_id = self.db.add_folder(title="PruneTarget", description="")
+                staged = self.db.scan_processing_files()
+                self.assertEqual(len(staged), 1)
+                row = staged[0]
+                self.db.update_processing_file(
+                    row["id"],
+                    {"title": "Pruned path work", "target_folder_id": folder_id},
+                )
+                self.db.import_processing_file(row["id"])
+                self.assertFalse(os.path.exists(pdf_path))
+                self.assertFalse(os.path.isdir(nested))
+                self.assertFalse(os.path.isdir(os.path.join(processing_root, "a", "b")))
+                self.assertFalse(os.path.isdir(os.path.join(processing_root, "a")))
+                self.assertTrue(os.path.isdir(processing_root))
+                # No-op if path escapes inbox (guard)
+                prune_empty_processing_parent_dirs(processing_root, "/tmp/definitely_not_under_inbox")
+                self.assertTrue(os.path.isdir(processing_root))
+            finally:
+                if old_storage is None:
+                    os.environ.pop("PRKS_STORAGE", None)
+                else:
+                    os.environ["PRKS_STORAGE"] = old_storage
+                if old_processing is None:
+                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
+                else:
+                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+
     def test_import_processing_file_keeps_inbox_when_add_work_fails(self):
         """Copy-then-commit: inbox PDF must survive add_work failure (no row + no ghost dest)."""
         old_storage = os.environ.get("PRKS_STORAGE")
@@ -978,6 +1020,48 @@ class TestDBManager(unittest.TestCase):
                     os.environ.pop("PRKS_STORAGE", None)
                 else:
                     os.environ["PRKS_STORAGE"] = old_storage
+
+    def test_ensure_default_uncategorized_folder_id_idempotent(self):
+        a1 = self.db.ensure_default_uncategorized_folder_id()
+        a2 = self.db.ensure_default_uncategorized_folder_id()
+        self.assertEqual(a1, a2)
+        row = self.db.execute_query("SELECT title, parent_id FROM folders WHERE id = ?", (a1,))
+        self.assertTrue(row)
+        self.assertEqual(row[0]["title"], "Uncategorized")
+        self.assertIsNone(row[0]["parent_id"])
+
+    def test_import_processing_without_target_folder_uses_uncategorized(self):
+        old_storage = os.environ.get("PRKS_STORAGE")
+        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
+        with tempfile.TemporaryDirectory(prefix="prks-import-uncat-") as root:
+            processing_root = os.path.join(root, "for_processing")
+            os.makedirs(processing_root, exist_ok=True)
+            pdf_path = os.path.join(processing_root, "free.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4\n%UNCAT\n%%EOF\n")
+            try:
+                os.environ["PRKS_STORAGE"] = root
+                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
+                staged = self.db.scan_processing_files()
+                self.assertEqual(len(staged), 1)
+                row = staged[0]
+                self.db.update_processing_file(
+                    row["id"],
+                    {"title": "No target folder import", "status_draft": "Planned"},
+                )
+                out = self.db.import_processing_file(row["id"])
+                w = self.db.get_work(out["work_id"])
+                self.assertEqual(w.get("folder_title"), "Uncategorized")
+            finally:
+                if old_storage is None:
+                    os.environ.pop("PRKS_STORAGE", None)
+                else:
+                    os.environ["PRKS_STORAGE"] = old_storage
+                if old_processing is None:
+                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
+                else:
+                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+
 
 if __name__ == '__main__':
     unittest.main()

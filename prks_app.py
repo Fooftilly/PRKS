@@ -21,7 +21,7 @@ if __name__ == "__main__":
         "--port",
         type=int,
         default=None,
-        help=f"Port to bind the server to (default: 8070 with --testing, else {PORT}).",
+        help=f"Port to bind the server to (default: {PORT}, or 8070 for --testing).",
     )
     args = parser.parse_args()
     if args.testing:

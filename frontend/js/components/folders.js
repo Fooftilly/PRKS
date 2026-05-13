@@ -394,6 +394,10 @@ async function mountFolderAttachControlsForWork(work) {
         if (status) status.textContent = message || 'Folder set.';
         if (typeof fetchWorkDetails === 'function') {
             window.currentWork = await fetchWorkDetails(wid);
+            if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
+                window.__prksWorkFolderEdit = {};
+            }
+            window.__prksWorkFolderEdit[wid] = false;
             if (typeof updatePanelContent === 'function') updatePanelContent('details');
         }
     }
@@ -489,6 +493,10 @@ async function mountFolderAttachControlsForWork(work) {
             if (status) status.textContent = 'Folder updated.';
             if (typeof fetchWorkDetails === 'function') {
                 window.currentWork = await fetchWorkDetails(wid);
+                if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
+                    window.__prksWorkFolderEdit = {};
+                }
+                window.__prksWorkFolderEdit[wid] = false;
                 if (typeof updatePanelContent === 'function') updatePanelContent('details');
             }
         } catch (e) {

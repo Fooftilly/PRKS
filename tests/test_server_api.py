@@ -10,6 +10,7 @@ import os
 import sys
 import base64
 import tempfile
+from unittest.mock import MagicMock, patch
 
 # Add the parent directory to sys.path so we can import 'backend'
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -729,7 +730,7 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req_w) as rw:
             w_id = json.loads(rw.read().decode())["id"]
 
-        self.__class__.test_db.add_work_to_folder(f_id, w_id)
+        self.__class__.test_db.move_work_to_folder(w_id, f_id)
         req_del = urllib.request.Request(f"{self._base_url}/api/folders/{f_id}", method="DELETE")
         with self.assertRaises(urllib.error.HTTPError) as cm:
             urllib.request.urlopen(req_del)
@@ -1004,6 +1005,15 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req_w) as rw:
             w_id = json.loads(rw.read().decode())["id"]
 
+        req_clear_unc = urllib.request.Request(
+            f"{self._base_url}/api/works/{urllib.parse.quote(w_id)}",
+            data=json.dumps({"folder_id": None}).encode(),
+            method="PATCH",
+        )
+        req_clear_unc.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_clear_unc) as rcu:
+            self.assertEqual(rcu.status, 200)
+
         req_add = urllib.request.Request(
             f"{self._base_url}/api/folders/{urllib.parse.quote(f1)}/works",
             data=json.dumps({"work_id": w_id}).encode(),
@@ -1266,6 +1276,62 @@ class TestServerAPI(unittest.TestCase):
                     os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
                 else:
                     os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+
+    def test_server_post_work_without_folder_id_uses_uncategorized(self):
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": "Default Folder Work", "status": "Planned"}).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            w_id = json.loads(res.read().decode())["id"]
+        req_g = urllib.request.Request(f"{self._base_url}/api/works/{urllib.parse.quote(w_id)}")
+        with urllib.request.urlopen(req_g) as rg:
+            work = json.loads(rg.read().decode())
+        self.assertEqual(work.get("folder_title"), "Uncategorized")
+        self.assertTrue(work.get("folder_id"))
+
+    @patch("backend.server.urlopen")
+    def test_server_person_profile_image_serves_cache_when_remote_fails(self, mock_urlopen):
+        tiny_jpg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
+        payload = {
+            "first_name": "Cache",
+            "last_name": "Portrait",
+            "image_url": "https://example.invalid/p.jpg",
+        }
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_p) as rp:
+            p_id = json.loads(rp.read().decode())["id"]
+
+        fake_resp = MagicMock()
+        fake_resp.status = 200
+        fake_resp.read.return_value = tiny_jpg
+        fake_ctx = MagicMock()
+        fake_ctx.__enter__.return_value = fake_resp
+        fake_ctx.__exit__.return_value = None
+        mock_urlopen.return_value = fake_ctx
+
+        img_url = f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}/profile-image"
+        req_img = urllib.request.Request(img_url)
+        with urllib.request.urlopen(req_img) as ri:
+            self.assertEqual(ri.status, 200)
+            body1 = ri.read()
+        self.assertTrue(body1.startswith(b"\xff\xd8\xff"))
+
+        mock_urlopen.return_value = None
+        mock_urlopen.side_effect = urllib.error.URLError("simulated offline")
+
+        with urllib.request.urlopen(req_img) as ri2:
+            self.assertEqual(ri2.status, 200)
+            body2 = ri2.read()
+        self.assertEqual(body1, body2)
+
 
 if __name__ == '__main__':
     unittest.main()

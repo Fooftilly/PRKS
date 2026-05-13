@@ -124,6 +124,14 @@ function safeHttpUrl(url) {
     return null;
 }
 
+/** Cached profile image via API (remote fetch + disk cache server-side). */
+function personProfileImageSrc(person) {
+    if (!person || !person.id) return null;
+    const raw = (person.image_url || '').trim();
+    if (!raw) return null;
+    return '/api/persons/' + encodeURIComponent(String(person.id)) + '/profile-image';
+}
+
 function parsePersonOtherLinkLine(line) {
     const trimmed = (line || '').trim();
     if (!trimmed) return null;
@@ -760,10 +768,10 @@ function renderPersonDetails(person, container) {
     }
     worksHtml += `</div>`;
 
-    const imgUrl = safeHttpUrl(person.image_url);
-    const heroNoPhotoClass = imgUrl ? '' : ' person-profile__hero--no-photo';
-    const portraitCol = imgUrl
-        ? `<div class="person-profile__portrait"><div class="person-portrait-wrap"><img class="person-portrait" src="${escapeHtmlPerson(imgUrl)}" alt=""></div></div>`
+    const portraitApi = personProfileImageSrc(person);
+    const heroNoPhotoClass = portraitApi ? '' : ' person-profile__hero--no-photo';
+    const portraitCol = portraitApi
+        ? `<div class="person-profile__portrait"><div class="person-portrait-wrap"><img class="person-portrait" src="${escapeHtmlPerson(portraitApi)}" alt=""></div></div>`
         : '';
 
     const linksBlock = renderPersonExternalLinksList(person);

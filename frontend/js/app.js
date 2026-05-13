@@ -1224,6 +1224,10 @@ function initForms() {
                 }
                 if (typeof fetchWorkDetails === 'function' && typeof updatePanelContent === 'function') {
                     window.currentWork = await fetchWorkDetails(attachWid);
+                    if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
+                        window.__prksWorkFolderEdit = {};
+                    }
+                    window.__prksWorkFolderEdit[attachWid] = false;
                     updatePanelContent('details');
                 }
                 return;
