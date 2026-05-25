@@ -152,18 +152,36 @@ function prksEnsurePublishersPageDelegated(container) {
             return;
         }
 
-        const delBtn = e.target.closest('[data-publisher-delete]');
-        if (delBtn) {
+        const deletePublisherBtn = e.target.closest('#publishers-page-delete-btn');
+        if (deletePublisherBtn) {
             e.preventDefault();
-            e.stopPropagation();
-            const id = delBtn.getAttribute('data-publisher-delete');
-            const pub = prksPublishersPageCtx.publishers.find((p) => p.id === id);
-            const label = pub ? pub.name || id : id;
-            if (!confirm(`Delete publisher “${label}” and its aliases? Works are not changed.`)) return;
+            const pub = prksPublishersPageSelected();
+            if (!pub) return;
+            const label = pub.name || pub.id;
+            const msg = 'Works are not changed. Alternate spellings (aliases) for this publisher group will be removed.';
+            const confirmFn =
+                typeof prksConfirmDialog === 'function'
+                    ? prksConfirmDialog
+                    : typeof window.prksConfirmDialog === 'function'
+                      ? window.prksConfirmDialog
+                      : null;
+            const confirmed = confirmFn
+                ? await confirmFn({
+                      title: `Delete publisher “${label}”?`,
+                      message: msg,
+                      confirmLabel: 'Delete publisher',
+                      cancelLabel: 'Cancel',
+                      danger: true,
+                  })
+                : window.confirm(`Delete publisher “${label}” and its aliases? ${msg}`);
+            if (!confirmed) return;
             try {
-                const res = await fetch('/api/publishers/' + encodeURIComponent(id), { method: 'DELETE' });
+                const res = await fetch('/api/publishers/' + encodeURIComponent(pub.id), {
+                    method: 'DELETE',
+                });
                 const errData = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(errData.error || 'Delete failed');
+                prksClosePublishersAliasModal();
                 if (typeof renderPublishersPage === 'function') {
                     await renderPublishersPage(container);
                 }
@@ -259,7 +277,6 @@ async function renderPublishersPage(container) {
                           `<span class="tag--page__nav" role="button" tabindex="0" data-publisher-nav="${navEnc}">${nm}</span>` +
                           `<span class="publishers-page__count" aria-hidden="true">${count}</span>` +
                           `<button type="button" class="tag-page-alias-btn" data-publisher-alias-edit="${idEsc}" title="Aliases" aria-label="Edit aliases for ${nm}">⋯</button>` +
-                          `<button type="button" class="publishers-page__delete-btn" data-publisher-delete="${idEsc}" title="Delete publisher group" aria-label="Delete ${nm}">×</button>` +
                           `</span>`
                       );
                   })
@@ -299,6 +316,9 @@ async function renderPublishersPage(container) {
                         <div class="tags-page-alias-add">
                             <input type="text" id="publishers-page-alias-input" class="tags-page-alias-input" maxlength="200" placeholder="New alias…" autocomplete="off" aria-label="New alias">
                             <button type="button" id="publishers-page-alias-add-btn" class="tags-page-alias-add__submit">Add alias</button>
+                        </div>
+                        <div class="tags-page-alias-delete">
+                            <button type="button" id="publishers-page-delete-btn" class="btn-danger-outline">Delete publisher</button>
                         </div>
                     </div>
                 </div>
