@@ -4759,6 +4759,8 @@ textarea[data-prks-autosize="1"] {
     min-height: 0;
     min-width: 0;
     gap: 0;
+    container-type: inline-size;
+    container-name: prks-work-main;
 }
 
 .document-view--work .work-workspace {
@@ -4781,8 +4783,10 @@ textarea[data-prks-autosize="1"] {
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
     background: transparent;
+    container-type: inline-size;
+    container-name: prks-pdf-pane;
 }
 
 /* Mockup-style gray chrome behind the PDF: light theme only */
@@ -4808,7 +4812,7 @@ textarea[data-prks-autosize="1"] {
 
 .document-view--work #pdf-viewer {
     flex: 1;
-    width: 75%;
+    width: 100%;
     min-width: 0;
     min-height: 0;
     height: 100% !important;
@@ -4818,13 +4822,12 @@ textarea[data-prks-autosize="1"] {
     background: transparent;
 }
 
-/* Flat shell for the viewer: border only */
+/* Flat shell for the viewer: border only (max-width mockup cap only on very wide panes below) */
 :root[data-theme="light"] .document-view--work #pdf-viewer {
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     box-shadow: none;
     overflow: hidden;
-    max-width: min(920px, 100%);
 }
 
 @media (prefers-color-scheme: light) {
@@ -4833,7 +4836,6 @@ textarea[data-prks-autosize="1"] {
         border: 1px solid var(--border);
         box-shadow: none;
         overflow: hidden;
-        max-width: min(920px, 100%);
     }
 }
 
@@ -4850,6 +4852,24 @@ textarea[data-prks-autosize="1"] {
         border: 1px solid var(--border);
         box-shadow: none;
         overflow: hidden;
+    }
+}
+
+/* Very wide PDF pane only: centered mockup card; otherwise viewer fills pane (100%) */
+@container prks-pdf-pane (min-width: 1400px) {
+    .work-pdf-pane {
+        align-items: center;
+    }
+
+    .document-view--work #pdf-viewer {
+        width: 75%;
+        max-width: min(920px, 100%);
+    }
+}
+
+@container prks-work-main (max-width: 720px) {
+    .work-pdf-pane {
+        align-items: stretch;
     }
 }
 
@@ -6373,6 +6393,10 @@ html.prks-force-mobile .project-card--work .project-card__rail {
     }
 
     /* Work detail: PDF should span full width. */
+    .document-view--work .work-pdf-pane {
+        align-items: stretch;
+    }
+
     .document-view--work #pdf-viewer {
         width: 100%;
         max-width: none;
