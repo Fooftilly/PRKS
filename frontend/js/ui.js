@@ -2802,7 +2802,9 @@ function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, va
                     : '';
                 return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio" aria-label="${prksEscapeAttr(l)}">${iconHtml}<span class="prks-segmented__btn-label">${escapeHtml(label)}</span></button>`;
             }
-            return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio">${escapeHtml(l)}</button>`;
+            const titleAttr =
+                variant === 'status' ? ` title="${prksEscapeAttr(l)}"` : '';
+            return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio"${titleAttr}>${escapeHtml(l)}</button>`;
         })
         .join('');
     let wrapMod = variant === 'status' ? ' prks-segmented-wrap--status-row' : '';
@@ -3363,8 +3365,10 @@ function renderWorkMetaEditTab(work) {
             <label for="meta-title">Title</label>
             <input type="text" id="meta-title" value="${safeStr(work.title)}">
             
-            <label for="meta-status">Status</label>
-            ${prksSegmentedControlHtml('meta-status', 'Status', PRKS_WORK_STATUS_LABELS, work.status, 'status')}
+            <div class="prks-work-upload-status-field">
+                <label for="meta-status">Status</label>
+                ${prksSegmentedControlHtml('meta-status', 'Status', PRKS_WORK_STATUS_LABELS, work.status, 'status')}
+            </div>
 
             <label for="meta-doc-type-trigger">Document type (BibLaTeX)</label>
             ${metaDocMenu}

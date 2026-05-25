@@ -3041,34 +3041,50 @@ a.tag.tag--sidebar-all:hover {
     margin-top: 14px;
 }
 
-/* New file modal + processing card: equal-width status row (5 options) */
-#work-modal .prks-work-upload-status-field .prks-segmented-wrap--status-row,
+/* Status field: one row; font scales with available width (container queries) */
 .prks-work-upload-status-field .prks-segmented-wrap--status-row {
     width: 100%;
+    container-type: inline-size;
+    container-name: prks-status-seg;
 }
 
-#work-modal .prks-work-upload-status-field .prks-segmented--status.prks-segmented--single-row {
+.prks-work-upload-status-field .prks-segmented--status.prks-segmented--single-row {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
-    flex-wrap: unset;
-    gap: 6px;
+    flex-wrap: nowrap;
+    gap: clamp(2px, 1.2cqi, 6px);
     width: 100%;
 }
 
-#work-modal .prks-work-upload-status-field .prks-segmented--status .prks-segmented__btn {
+.prks-work-upload-status-field .prks-segmented--status .prks-segmented__btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 100%;
     min-width: 0;
-    min-height: 36px;
-    padding: 8px 6px;
+    min-height: clamp(28px, 9cqi, 36px);
+    padding: clamp(4px, 1.4cqi, 8px) clamp(2px, 1cqi, 6px);
     text-align: center;
-    font-size: 0.72rem;
-    line-height: 1.2;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: clamp(0.52rem, 3.6cqi, 0.72rem);
+    line-height: 1.12;
+    white-space: normal;
+    overflow: visible;
+    border-radius: var(--radius-sm);
+    hyphens: auto;
+}
+
+@container prks-status-seg (min-width: 300px) {
+    .prks-work-upload-status-field .prks-segmented--status .prks-segmented__btn {
+        white-space: nowrap;
+    }
+}
+
+@container prks-status-seg (min-width: 400px) {
+    .prks-work-upload-status-field .prks-segmented--status .prks-segmented__btn {
+        font-size: 0.72rem;
+        min-height: 36px;
+        padding: 8px 6px;
+    }
 }
 .prks-segmented {
     display: flex;
@@ -3078,17 +3094,13 @@ a.tag.tag--sidebar-all:hover {
 .prks-segmented--compact {
     gap: 6px;
 }
-/* Progress status: tight row; wrap to next line if needed (no horizontal scroll) */
-.prks-segmented--single-row {
+/* Progress status: single-row only when not inside status-field grid */
+.prks-segmented--single-row:not(.prks-segmented--status) {
     flex-wrap: wrap;
     gap: 3px;
 }
-.prks-segmented--single-row .prks-segmented__btn {
+.prks-segmented--single-row:not(.prks-segmented--status) .prks-segmented__btn {
     white-space: nowrap;
-}
-.prks-segmented--status.prks-segmented--single-row .prks-segmented__btn {
-    padding: 5px 8px;
-    font-size: 0.72rem;
 }
 
 .prks-segmented__btn {
