@@ -2331,6 +2331,27 @@ function prksEscapeAttr(s) {
     return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
+function prksMountUploadRoleSegmented(selectedValue) {
+    const mount = document.getElementById('upload-role-seg-mount');
+    if (!mount || typeof prksSegmentedControlHtml !== 'function') return;
+    const labels = Array.isArray(PRKS_UPLOAD_ROLE_LABELS) ? PRKS_UPLOAD_ROLE_LABELS : [];
+    const fallback = labels[0] || 'Author';
+    const selRaw = selectedValue != null ? String(selectedValue) : '';
+    const sel = labels.includes(selRaw) ? selRaw : fallback;
+    mount.innerHTML = prksSegmentedControlHtml('upload-role-type', 'Role for linked person', labels, sel, 'roles', {
+        compact: true,
+        withRoleIcons: true,
+    });
+    const hidden = document.getElementById('upload-role-type');
+    if (hidden) delete hidden.dataset.prksSegBound;
+    if (typeof prksBindSegmentedHidden === 'function') {
+        prksBindSegmentedHidden('upload-role-type');
+    }
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(mount);
+}
+
+window.prksMountUploadRoleSegmented = prksMountUploadRoleSegmented;
+
 function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, variant, options) {
     const opts = options && typeof options === 'object' ? options : {};
     const labelsArr = Array.isArray(labels) ? labels : [];
@@ -2338,16 +2359,26 @@ function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, va
     const selRaw = selectedValue != null ? String(selectedValue) : '';
     const sel = labelsArr.includes(selRaw) ? selRaw : fallback;
     const compact = !!opts.compact;
+    const withRoleIcons = !!opts.withRoleIcons && variant === 'roles';
     const segMod =
         (variant === 'status'
             ? ' prks-segmented--status prks-segmented--single-row'
             : variant === 'roles'
-              ? ' prks-segmented--roles'
+              ? ' prks-segmented--roles' + (withRoleIcons ? ' prks-segmented--roles-icons' : '')
               : '') + (compact ? ' prks-segmented--compact' : '');
     const buttons = labelsArr
         .map((l) => {
             const active = l === sel ? ' prks-segmented__btn--active' : '';
             const pressed = l === sel ? 'true' : 'false';
+            if (withRoleIcons) {
+                const iconFn = typeof prksRoleTypeIconHtml === 'function' ? prksRoleTypeIconHtml : null;
+                const shortFn = typeof prksRoleTypeShortLabel === 'function' ? prksRoleTypeShortLabel : null;
+                const label = shortFn ? shortFn(l) : l;
+                const iconHtml = iconFn
+                    ? `<span class="prks-segmented__btn-icon">${iconFn(l, { size: 'sm' })}</span>`
+                    : '';
+                return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio" aria-label="${prksEscapeAttr(l)}">${iconHtml}<span class="prks-segmented__btn-label">${escapeHtml(label)}</span></button>`;
+            }
             return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio">${escapeHtml(l)}</button>`;
         })
         .join('');
@@ -3225,6 +3256,9 @@ function removeUploadPdfPreview() {
 function resetUploadModal() {
     uploadRoles = [];
     uploadTagsSelected = [];
+    if (typeof prksMountUploadRoleSegmented === 'function') {
+        prksMountUploadRoleSegmented('Author');
+    }
     renderUploadTagsChips();
     const tagSearch = document.getElementById('upload-tag-search');
     if (tagSearch) tagSearch.value = '';

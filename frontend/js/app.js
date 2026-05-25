@@ -630,6 +630,26 @@ function prksRenderRouteLoading(contentDiv, hash) {
     `;
 }
 
+function prksPlayPageEnterAnimation(contentDiv) {
+    if (!contentDiv) return;
+    if (
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+        return;
+    }
+    if (contentDiv.querySelector('.prks-route-loading')) return;
+    contentDiv.classList.remove('prks-page-enter');
+    void contentDiv.offsetWidth;
+    contentDiv.classList.add('prks-page-enter');
+    const onEnd = (e) => {
+        if (e.target !== contentDiv) return;
+        contentDiv.classList.remove('prks-page-enter');
+        contentDiv.removeEventListener('animationend', onEnd);
+    };
+    contentDiv.addEventListener('animationend', onEnd);
+}
+
 async function handleRoute() {
     if (typeof prksCloseOverlays === 'function') prksCloseOverlays();
     const prevResolvedHash = window.__prksLastResolvedHash || '';
@@ -882,6 +902,7 @@ async function handleRoute() {
     }
     window.__prksLastResolvedHash = hash;
     contentDiv.removeAttribute('aria-busy');
+    prksPlayPageEnterAnimation(contentDiv);
 }
 
 
@@ -889,9 +910,11 @@ function initForms() {
     if (typeof initPrksDocTypeMenu === 'function') {
         initPrksDocTypeMenu('work-doc-type', { selectedValue: 'article' });
     }
+    if (typeof prksMountUploadRoleSegmented === 'function') {
+        prksMountUploadRoleSegmented('Author');
+    }
     if (typeof prksBindSegmentedHidden === 'function') {
         prksBindSegmentedHidden('work-status');
-        prksBindSegmentedHidden('upload-role-type');
         prksBindSegmentedHidden('role-type');
     }
     if (typeof prksBindAutosizeTextareas === 'function') {

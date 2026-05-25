@@ -453,22 +453,8 @@
                             </div>
                             <button type="button" onclick="addRoleToUploadList()" class="ribbon-btn"><span class="ribbon-btn__icon"><i data-lucide="link" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="ribbon-btn__label">Link</span></button>
                         </div>
-                        <div class="prks-upload-person-stack__roles">
-                            <div class="prks-upload-person-stack__role-caption">Role</div>
-                            <div class="prks-upload-role-seg">
-                                <div class="prks-segmented-wrap prks-segmented-wrap--compact">
-                                    <input type="hidden" id="upload-role-type" value="Author">
-                                    <div class="prks-segmented prks-segmented--compact prks-segmented--roles" role="radiogroup" aria-label="Role for linked person">
-                                        <button type="button" class="prks-segmented__btn prks-segmented__btn--active" data-value="Author" aria-pressed="true" role="radio">Author</button>
-                                        <button type="button" class="prks-segmented__btn" data-value="Editor" aria-pressed="false" role="radio">Editor</button>
-                                        <button type="button" class="prks-segmented__btn" data-value="Reviewer" aria-pressed="false" role="radio">Reviewer</button>
-                                        <button type="button" class="prks-segmented__btn" data-value="Translator" aria-pressed="false" role="radio">Translator</button>
-                                        <button type="button" class="prks-segmented__btn" data-value="Introduction" aria-pressed="false" role="radio">Introduction</button>
-                                        <button type="button" class="prks-segmented__btn" data-value="Foreword" aria-pressed="false" role="radio">Foreword</button>
-                                        <button type="button" class="prks-segmented__btn" data-value="Afterword" aria-pressed="false" role="radio">Afterword</button>
-                                    </div>
-                                </div>
-                            </div>
+                        <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles">
+                            <div class="prks-upload-role-seg" id="upload-role-seg-mount"></div>
                         </div>
                     </div>
                     <div id="upload-roles-list" class="tag-cloud status-chip-list">

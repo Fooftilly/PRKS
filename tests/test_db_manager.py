@@ -934,6 +934,8 @@ class TestDBManager(unittest.TestCase):
                 os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
                 person_id = self.db.add_person(first_name="Role", last_name="Author")
                 folder_id = self.db.add_folder(title="Processing Target", description="")
+                tag_row = self.db.add_tag("Inbox Tag", "#6d6cf7")
+                tag_id = tag_row["id"] if isinstance(tag_row, dict) else tag_row
                 staged = self.db.scan_processing_files()
                 self.assertEqual(len(staged), 1)
                 row = staged[0]
@@ -947,8 +949,12 @@ class TestDBManager(unittest.TestCase):
                         "doc_type": "book",
                         "target_folder_id": folder_id,
                         "roles": [{"person_id": person_id, "role_type": "Author"}],
+                        "tags": [{"id": tag_id, "name": "Inbox Tag"}],
                     },
                 )
+                updated = self.db.get_processing_file(row["id"])
+                self.assertEqual(len(updated.get("tags") or []), 1)
+                self.assertEqual(updated["tags"][0]["id"], tag_id)
                 out = self.db.import_processing_file(row["id"])
                 self.assertIn("work_id", out)
                 self.assertFalse(os.path.exists(pdf_path))
@@ -958,6 +964,8 @@ class TestDBManager(unittest.TestCase):
                 self.assertEqual(imported_work["status"], "Planned")
                 self.assertEqual(imported_work["doc_type"], "book")
                 self.assertTrue(any(r.get("id") == person_id and r.get("role_type") == "Author" for r in imported_work.get("roles", [])))
+                work_tags = self.db.get_work_tags(out["work_id"])
+                self.assertTrue(any(t.get("id") == tag_id for t in work_tags))
                 self.assertTrue(str(imported_work.get("file_path") or "").startswith("/api/pdfs/"))
                 pdf_name = imported_work["file_path"].split("/")[-1]
                 moved_abs = os.path.join(root, "pdfs", pdf_name)

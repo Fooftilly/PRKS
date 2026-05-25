@@ -637,7 +637,21 @@ class PRKSDatabase:
             except sqlite3.OperationalError as e:
                 if "duplicate column" not in str(e).lower():
                     raise
-            _PRKS_SCHEMA_VERSION = 8
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS processing_file_tags (
+                        processing_file_id TEXT NOT NULL,
+                        tag_id TEXT NOT NULL,
+                        PRIMARY KEY (processing_file_id, tag_id),
+                        FOREIGN KEY (processing_file_id) REFERENCES processing_files(id) ON DELETE CASCADE,
+                        FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+            except sqlite3.OperationalError:
+                pass
+            _PRKS_SCHEMA_VERSION = 9
             existing_version = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
             if existing_version is None:
                 conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_PRKS_SCHEMA_VERSION,))
@@ -795,6 +809,48 @@ class PRKSDatabase:
             )
         return out
 
+    def _get_processing_tags(self, processing_file_id: str) -> List[dict]:
+        rows = self.execute_query(
+            """
+            SELECT t.id, t.name, t.color, t.created_at
+            FROM processing_file_tags pft
+            JOIN tags t ON t.id = pft.tag_id
+            WHERE pft.processing_file_id = ?
+            ORDER BY LOWER(t.name) ASC, t.id ASC
+            """,
+            (processing_file_id,),
+        )
+        return list(rows)
+
+    def _set_processing_tags(self, processing_file_id: str, tags: List[dict]) -> None:
+        if not isinstance(tags, list):
+            raise ValueError("tags must be an array.")
+        tag_ids: List[str] = []
+        seen = set()
+        for item in tags:
+            if not isinstance(item, dict):
+                continue
+            tid = str(item.get("id") or item.get("tag_id") or "").strip()
+            if not tid or tid in seen:
+                continue
+            exists = self.execute_query("SELECT 1 FROM tags WHERE id = ?", (tid,))
+            if not exists:
+                raise ValueError(f"Unknown tag id: {tid}")
+            seen.add(tid)
+            tag_ids.append(tid)
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM processing_file_tags WHERE processing_file_id = ?", (processing_file_id,))
+            for tid in tag_ids:
+                conn.execute(
+                    """
+                    INSERT INTO processing_file_tags (processing_file_id, tag_id)
+                    VALUES (?, ?)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (processing_file_id, tid),
+                )
+            conn.commit()
+
     def _set_processing_roles(self, processing_file_id: str, roles: List[dict]) -> None:
         if not isinstance(roles, list):
             raise ValueError("roles must be an array.")
@@ -869,6 +925,7 @@ class PRKSDatabase:
             "thumb_page": row.get("thumb_page"),
             "target_folder_id": row.get("target_folder_id") or "",
             "roles": self._get_processing_roles(str(row.get("id") or "")),
+            "tags": self._get_processing_tags(str(row.get("id") or "")),
         }
 
     def scan_processing_files(self) -> List[dict]:
@@ -998,6 +1055,7 @@ class PRKSDatabase:
         }
         updates = dict(fields)
         incoming_roles = updates.pop("roles", None)
+        incoming_tags = updates.pop("tags", None)
         if "status" in updates and "status_draft" not in updates:
             updates["status_draft"] = updates.pop("status")
         updates = {k: v for k, v in updates.items() if k in allowed}
@@ -1049,6 +1107,8 @@ class PRKSDatabase:
             )
         if incoming_roles is not None:
             self._set_processing_roles(processing_file_id, incoming_roles)
+        if incoming_tags is not None:
+            self._set_processing_tags(processing_file_id, incoming_tags)
         out = self.get_processing_file(processing_file_id)
         if not out:
             raise ValueError("Processing file not found.")
@@ -1181,6 +1241,10 @@ class PRKSDatabase:
                 except (TypeError, ValueError):
                     order_index = 0
                 self.add_role(person_id, work_id, role_type, order_index=order_index)
+            for tag in self._get_processing_tags(processing_file_id):
+                tag_id = str(tag.get("id") or "").strip()
+                if tag_id:
+                    self.add_tag_to_work(work_id, tag_id)
             uncategorized_id = self.ensure_default_uncategorized_folder_id()
             self.add_work_to_folder(fid if fid else uncategorized_id, work_id)
         except Exception as e:

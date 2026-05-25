@@ -61,6 +61,8 @@
     --z-dropdown: 2000;
     --z-autocomplete: 10050;
     --transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+    --transition-interactive: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.12s ease;
+    --ease-out-soft: cubic-bezier(0.33, 1, 0.68, 1);
     /* PDF work pane: mockup gray chrome (light theme only; see .document-view--work .work-pdf-pane) */
     --pdf-pane-chrome-light: #dfe3e9;
 }
@@ -1142,7 +1144,10 @@ a.tag.tag--sidebar-all:hover {
 #page-content {
     max-width: 1260px;
     margin: 0 auto;
-    animation: fadeIn 0.4s ease-out;
+}
+
+#page-content.prks-page-enter {
+    animation: prksPageEnter 0.22s var(--ease-out-soft);
 }
 
 /* Work detail uses the full main column; a fixed max-width left empty space before #right-panel */
@@ -1714,7 +1719,7 @@ a.tag.tag--sidebar-all:hover {
     padding: 10px 12px 10px 10px;
     border-bottom: 1px solid var(--border);
     position: relative;
-    transition: background-color 0.15s ease;
+    transition: background-color 0.15s ease, transform 0.12s ease;
 }
 
 .prks-people-list__row:last-child {
@@ -1894,12 +1899,20 @@ a.tag.tag--sidebar-all:hover {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    opacity: 1;
+    transition:
+        opacity 0.2s ease,
+        visibility 0s linear 0s;
 }
 
 .prks-folder-library__body > .prks-folder-library__pane.is-hidden {
     visibility: hidden;
     pointer-events: none;
     z-index: 0;
+    opacity: 0;
+    transition:
+        opacity 0.15s ease,
+        visibility 0s linear 0.15s;
 }
 
 .prks-folder-library__body > .prks-folder-library__pane:not(.is-hidden) {
@@ -1964,7 +1977,7 @@ a.tag.tag--sidebar-all:hover {
     gap: 6px;
     padding: 6px 10px 6px calc(10px + var(--depth, 0) * 16px);
     border-bottom: 1px solid var(--border);
-    transition: background-color 0.15s ease;
+    transition: background-color 0.15s ease, transform 0.12s ease;
 }
 
 .prks-folder-tree__row:last-child,
@@ -2645,6 +2658,11 @@ a.tag.tag--sidebar-all:hover {
     backdrop-filter: none;
     z-index: var(--z-modal-backdrop);
 }
+
+.modal-backdrop:not(.hidden) {
+    animation: prksBackdropIn 0.2s ease-out;
+}
+
 .modal {
     position: fixed; top: 50%; left: 50%; width: 500px; max-width: 90vw;
     transform: translate(-50%, -50%);
@@ -2654,6 +2672,10 @@ a.tag.tag--sidebar-all:hover {
     z-index: var(--z-modal);
     border: 1px solid var(--border);
     max-height: 95vh; overflow-y: auto;
+}
+
+.modal:not(.hidden) {
+    animation: prksModalIn 0.2s var(--ease-out-soft);
 }
 .modal-wide {
     width: 1200px !important;
@@ -2711,6 +2733,11 @@ a.tag.tag--sidebar-all:hover {
     border-radius: var(--radius-md);
     padding: var(--space-2xl);
     box-shadow: var(--shadow-sm);
+}
+
+.prks-modal-unsaved-confirm:not(.hidden) .prks-modal-unsaved-confirm__panel,
+.prks-modal-confirm:not(.hidden) .prks-modal-confirm__panel {
+    animation: prksConfirmPanelIn 0.2s var(--ease-out-soft);
 }
 .prks-modal-unsaved-confirm__title,
 .prks-modal-confirm__title {
@@ -2955,6 +2982,36 @@ a.tag.tag--sidebar-all:hover {
 }
 .prks-work-upload-status-field {
     margin-top: 14px;
+}
+
+/* New file modal + processing card: equal-width status row (5 options) */
+#work-modal .prks-work-upload-status-field .prks-segmented-wrap--status-row,
+.prks-work-upload-status-field .prks-segmented-wrap--status-row {
+    width: 100%;
+}
+
+#work-modal .prks-work-upload-status-field .prks-segmented--status.prks-segmented--single-row {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    flex-wrap: unset;
+    gap: 6px;
+    width: 100%;
+}
+
+#work-modal .prks-work-upload-status-field .prks-segmented--status .prks-segmented__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    padding: 8px 6px;
+    text-align: center;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .prks-segmented {
     display: flex;
@@ -3480,20 +3537,82 @@ a.tag.tag--sidebar-all:hover {
 }
 
 .prks-processing-card {
-    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    padding: 16px;
+    cursor: default;
+    transition: var(--transition);
+}
+
+.prks-processing-card:hover {
+    border-color: var(--border);
+    background: var(--surface);
+}
+
+.prks-processing-card:active {
+    transform: none;
+}
+
+.prks-processing-card__header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
 }
 
 .prks-processing-card__title {
-    margin-bottom: 2px;
+    margin: 0;
+    padding-right: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prks-processing-card__meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.prks-processing-card__meta .meta-row {
+    margin: 0;
+}
+
+.prks-processing-card__meta code {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    max-width: 100%;
+    vertical-align: bottom;
 }
 
 .prks-processing-card__core {
-    margin-top: 6px;
+    margin-top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    overflow: visible;
+    max-height: none;
+    padding-top: 0;
+    padding-right: 0;
+}
+
+.prks-processing-card__section {
     display: flex;
     flex-direction: column;
     gap: var(--space-sm);
-    overflow: visible;
-    max-height: none;
+    min-width: 0;
+}
+
+.prks-processing-card__section-title {
+    margin: 0 0 2px 0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.02em;
 }
 
 .prks-processing-card__title-row label,
@@ -3502,6 +3621,10 @@ a.tag.tag--sidebar-all:hover {
 }
 
 .prks-processing-card__status-field {
+    margin-top: 0;
+}
+
+.prks-processing-card .prks-work-upload-status-field {
     margin-top: 0;
 }
 
@@ -3521,10 +3644,17 @@ a.tag.tag--sidebar-all:hover {
 .prks-processing-card__core .prks-upload-person-stack__search > .add-new-btn,
 .prks-processing-card__core .prks-combobox-with-action > .ribbon-btn,
 .prks-processing-card__core .prks-combobox-with-action > .add-new-btn {
-    align-self: flex-start;
+    align-self: stretch;
+    flex-shrink: 0;
     height: 42px;
     min-height: 42px;
     max-height: 42px;
+    min-width: 42px;
+    box-sizing: border-box;
+}
+
+.prks-processing-card__core .prks-upload-person-stack__search > .ribbon-btn[data-action='add-role'] {
+    min-width: 4.5rem;
 }
 
 .form-pane .tag-add-shell.prks-inline-combobox-shell,
@@ -3558,12 +3688,122 @@ a.tag.tag--sidebar-all:hover {
     gap: 8px;
 }
 
-.prks-processing-card__actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
+.prks-processing-card__actions.form-actions {
+    margin-top: 0;
     flex-wrap: wrap;
+}
+
+.prks-processing-card__message {
+    margin: 0;
+    width: 100%;
+    flex: 1 1 100%;
+    font-size: 0.82rem;
+}
+
+/* Processing card: equal-width status + role segmented controls */
+.prks-processing-card .prks-segmented--status.prks-segmented--single-row {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    flex-wrap: unset;
+    gap: 6px;
+}
+
+.prks-processing-card .prks-segmented--status .prks-segmented__btn {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+    padding: 8px 4px;
+    font-size: 0.7rem;
+}
+
+/* Role picker tiles: processing inbox + new-file modal (7 roles, one row, sidebar icons) */
+.prks-upload-person-stack__roles--tiles {
+    margin-top: 2px;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+
+.prks-upload-person-stack__roles--tiles .prks-segmented--roles {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+}
+
+.prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn {
+    display: flex;
+    flex-direction: column;
     align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    min-height: 58px;
+    padding: 8px 3px;
+    border-radius: var(--radius-sm);
+    text-align: center;
+}
+
+.prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+    color: var(--text-secondary);
+}
+
+.prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn-icon .prks-icon,
+.prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn-icon .prks-icon svg {
+    --prks-icon-size: 18px;
+}
+
+.prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn-label {
+    font-size: 0.58rem;
+    font-weight: 600;
+    line-height: 1.1;
+    color: var(--text-secondary);
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn--active .prks-segmented__btn-icon,
+.prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn--active .prks-segmented__btn-label {
+    color: var(--text-primary);
+}
+
+.prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn--active {
+    border-color: var(--accent);
+    background: var(--surface);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.prks-upload-person-stack__roles--tiles .prks-segmented__btn {
+    transition: var(--transition-interactive);
+}
+
+.prks-upload-person-stack__roles--tiles .prks-segmented__btn:active {
+    transform: scale(0.98);
+}
+
+@media (max-width: 520px) {
+    .prks-processing-card .prks-segmented--status.prks-segmented--single-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .prks-upload-person-stack__roles--tiles .prks-segmented--roles {
+        grid-template-columns: repeat(7, minmax(52px, 1fr));
+        min-width: 364px;
+    }
+
+    .prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn {
+        min-height: 54px;
+    }
 }
 
 .prks-processing-main-layout {
@@ -6079,6 +6319,82 @@ html.prks-force-mobile #work-header-doc-type-slot {
     background: rgba(239, 68, 68, 0.08);
     color: var(--text-primary);
     font-size: 0.82rem;
+}
+
+/* Micro-interactions: click / press */
+.ribbon-btn:not(:disabled):not([disabled]),
+.tab-btn:not(:disabled):not([disabled]),
+.tab-link:not(:disabled):not([disabled]),
+.add-new-btn:not(:disabled):not([disabled]),
+.close-btn:not(:disabled):not([disabled]),
+.settings-btn:not(:disabled):not([disabled]),
+.nav-link,
+.prks-folder-tree__toggle:not(:disabled),
+.prks-group-tree__toggle:not(:disabled),
+#prks-folder-library-expand-toggle:not(:disabled),
+#prks-group-library-expand-toggle:not(:disabled),
+.tag-add-shell__clear:not(:disabled):not([disabled]),
+.prks-people-list__remove:not(:disabled):not([disabled]),
+.list-view .project-card:not(.prks-processing-card) {
+    transition: var(--transition-interactive);
+}
+
+.ribbon-btn:not(:disabled):not([disabled]):active,
+.tab-btn:not(:disabled):not([disabled]):active,
+.tab-link:not(:disabled):not([disabled]):active,
+.add-new-btn:not(:disabled):not([disabled]):active,
+.close-btn:not(:disabled):not([disabled]):active,
+.settings-btn:not(:disabled):not([disabled]):active,
+.nav-link:active,
+.prks-folder-tree__toggle:not(:disabled):active,
+.prks-group-tree__toggle:not(:disabled):active,
+#prks-folder-library-expand-toggle:not(:disabled):active,
+#prks-group-library-expand-toggle:not(:disabled):active,
+.tag-add-shell__clear:not(:disabled):not([disabled]):active,
+.prks-people-list__remove:not(:disabled):not([disabled]):active {
+    transform: scale(0.98);
+}
+
+.list-view .project-card:not(.prks-processing-card):active {
+    transform: scale(0.99);
+}
+
+@keyframes prksPageEnter {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@keyframes prksBackdropIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes prksModalIn {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+}
+
+@keyframes prksConfirmPanelIn {
+    from {
+        opacity: 0;
+        transform: scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {

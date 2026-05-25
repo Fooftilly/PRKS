@@ -188,6 +188,13 @@ CREATE TABLE IF NOT EXISTS processing_file_roles (
     FOREIGN KEY (processing_file_id) REFERENCES processing_files(id) ON DELETE CASCADE,
     FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS processing_file_tags (
+    processing_file_id TEXT NOT NULL,
+    tag_id TEXT NOT NULL,
+    PRIMARY KEY (processing_file_id, tag_id),
+    FOREIGN KEY (processing_file_id) REFERENCES processing_files(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
 
 -- FTS5 Indexing for semantic discovery of Works (includes free-text authors)
 CREATE VIRTUAL TABLE IF NOT EXISTS works_fts USING fts5(

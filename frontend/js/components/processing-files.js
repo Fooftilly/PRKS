@@ -189,6 +189,122 @@ async function prksProcessingQuickCreateFolder(card) {
     }
 }
 
+function prksProcessingRenderTagList(card) {
+    const listEl = card.querySelector('[data-role="tags-list"]');
+    if (!listEl) return;
+    const tags = Array.isArray(card.__processingTags) ? card.__processingTags : [];
+    if (!tags.length) {
+        listEl.innerHTML = '<span class="status-chip-list__empty">No tags selected</span>';
+        return;
+    }
+    listEl.innerHTML = tags
+        .map(
+            (t, idx) =>
+                `<span class="tag work-tag-chip">${prksProcessingEsc(t.name || '')} ` +
+                `<button type="button" class="work-tag-remove" data-action="remove-tag" data-remove-tag-index="${idx}" title="Remove" aria-label="Remove tag">&times;</button></span>`
+        )
+        .join('');
+}
+
+function prksProcessingGetTags() {
+    if (Array.isArray(window.__prksProcessingTagsCache)) return window.__prksProcessingTagsCache;
+    if (Array.isArray(window.__prksAllTagsCache)) return window.__prksAllTagsCache;
+    return [];
+}
+
+function prksProcessingAttachTagCombobox(card) {
+    const input = card.querySelector('[data-role="tag-search"]');
+    const results = card.querySelector('[data-role="tag-results"]');
+    if (!input || !results || input.dataset.bound === '1') return;
+    input.dataset.bound = '1';
+
+    const attachedIds = () => new Set((card.__processingTags || []).map((t) => String(t.id || '')));
+
+    const render = () => {
+        const all = prksProcessingGetTags();
+        const val = input.value.trim();
+        const valLower = val.toLowerCase();
+        const attached = attachedIds();
+        const available = all.filter((t) => !attached.has(String(t.id || '')));
+        const filtered = !val
+            ? available.slice(0, 40)
+            : available.filter((t) => typeof prksTagMatchesQuery === 'function' && prksTagMatchesQuery(t, valLower)).slice(0, 40);
+        const exactMatch =
+            val && available.some((t) => typeof prksTagExactMatch === 'function' && prksTagExactMatch(t, valLower));
+
+        results.innerHTML = '';
+        if (val && !exactMatch) {
+            const c = document.createElement('div');
+            c.className = 'result-item result-item--create';
+            c.textContent = 'Create tag "' + val + '"';
+            c.onmousedown = (ev) => {
+                ev.preventDefault();
+                void (async () => {
+                    try {
+                        const res = await fetch('/api/tags', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: val, color: '#6d6cf7' }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok || !data.id) throw new Error(data.error || 'no id');
+                        window.__prksAllTagsCache = null;
+                        window.__prksProcessingTagsCache = null;
+                        card.__processingTags = Array.isArray(card.__processingTags) ? card.__processingTags : [];
+                        if (!attachedIds().has(String(data.id))) {
+                            card.__processingTags.push({ id: data.id, name: data.name || val });
+                            prksProcessingRenderTagList(card);
+                        }
+                        input.value = '';
+                        prksHideInlineComboboxResults(results);
+                    } catch (e) {
+                        console.error(e);
+                        alert('Could not create tag.');
+                    }
+                })();
+            };
+            results.appendChild(c);
+        }
+        if (!filtered.length) {
+            if (results.childElementCount === 0) {
+                results.innerHTML = '<div class="result-item no-results">No tags found</div>';
+            }
+        } else {
+            filtered.forEach((tag) => {
+                const div = document.createElement('div');
+                div.className = 'result-item';
+                div.textContent =
+                    typeof prksTagComboboxLabel === 'function' ? prksTagComboboxLabel(tag, valLower) : String(tag.name || '');
+                div.onmousedown = (ev) => {
+                    ev.preventDefault();
+                    card.__processingTags = Array.isArray(card.__processingTags) ? card.__processingTags : [];
+                    if (!attachedIds().has(String(tag.id || ''))) {
+                        card.__processingTags.push({ id: tag.id, name: tag.name });
+                        prksProcessingRenderTagList(card);
+                    }
+                    input.value = '';
+                    prksHideInlineComboboxResults(results);
+                };
+                results.appendChild(div);
+            });
+        }
+        if (typeof prksShowInlineComboboxResults === 'function') {
+            prksShowInlineComboboxResults(input, results);
+        } else {
+            results.classList.remove('hidden');
+        }
+    };
+
+    const hideResults = () => {
+        prksHideInlineComboboxResults(results);
+    };
+    input.addEventListener('focus', render);
+    input.addEventListener('input', render);
+    input.addEventListener('blur', () => {
+        setTimeout(hideResults, 200);
+    });
+}
+
 function prksProcessingRenderRoleList(card) {
     const listEl = card.querySelector('[data-role="roles-list"]');
     if (!listEl) return;
@@ -332,6 +448,12 @@ function prksProcessingCollectDraft(card) {
                   role_type: String(r.role_type || '').trim(),
               }))
             : [],
+        tags: Array.isArray(card.__processingTags)
+            ? card.__processingTags.map((t) => ({
+                  id: String(t.id || '').trim(),
+                  name: String(t.name || '').trim(),
+              }))
+            : [],
     };
 }
 
@@ -364,104 +486,133 @@ function prksProcessingCardHtml(file) {
             ? prksSegmentedControlHtml(roleSegId, 'Role for linked person', PRKS_PROCESSING_ROLE_TYPES, 'Author', 'roles', {
                   compact: true,
                   dataRole: 'role-type',
+                  withRoleIcons: true,
               })
             : `<input type="hidden" data-role="role-type" value="Author">`;
-    let docTypeMoreHtml = '';
+    let docTypeFieldHtml = '';
     if (typeof prksDocTypeMenuShellHtml === 'function') {
         const shell = prksDocTypeMenuShellHtml(docDtPrefix, file.doc_type || 'article', false);
         const shellTagged = shell.replace(
             `id="${docDtPrefix}" name="${docDtPrefix}"`,
             `id="${docDtPrefix}" name="${docDtPrefix}" data-field="doc_type"`
         );
-        docTypeMoreHtml = `
-                            <div>
-                                <label for="${docDtPrefix}-trigger">Document type (BibLaTeX)</label>
-                                ${shellTagged}
-                            </div>`;
+        docTypeFieldHtml = `
+                    <div>
+                        <label for="${docDtPrefix}-trigger">Document type (BibLaTeX)</label>
+                        ${shellTagged}
+                    </div>`;
     } else {
-        docTypeMoreHtml = `
-                            <div>
-                                <label>Doc type</label>
-                                <input type="text" data-field="doc_type" value="${prksProcessingEsc(file.doc_type || 'article')}" placeholder="article, book, online...">
-                            </div>`;
+        docTypeFieldHtml = `
+                    <div>
+                        <label>Doc type</label>
+                        <input type="text" data-field="doc_type" value="${prksProcessingEsc(file.doc_type || 'article')}" placeholder="article, book, online...">
+                    </div>`;
     }
+    const publishedDateValue = prksProcessingEsc(
+        typeof prksIsoToDdMmYyyy === 'function' ? prksIsoToDdMmYyyy(file.published_date || '') : file.published_date || ''
+    );
+    const relPath = String(file.rel_path || '');
+    const pathTitleAttr = relPath ? ` title="${prksProcessingEsc(relPath)}"` : '';
     return `
         <article class="project-card prks-processing-card" data-processing-id="${prksProcessingEsc(file.id)}" data-processing-roles="${rolesPayload}">
-            <div class="card-title prks-processing-card__title">${prksProcessingEsc(file.filename || file.rel_path || 'PDF')}</div>
-            <p class="meta-row"><strong>Path:</strong> <code>${prksProcessingEsc(file.rel_path || '')}</code></p>
-            <p class="meta-row"><strong>State:</strong> ${prksProcessingEsc(statusLabel)} · ${prksProcessingEsc(sourceHint)}</p>
-            ${file.last_error ? `<p class="meta-row" style="color: var(--danger-color);"><strong>Error:</strong> ${prksProcessingEsc(file.last_error)}</p>` : ''}
+            <header class="prks-processing-card__header">
+                <div class="card-title prks-processing-card__title">${prksProcessingEsc(file.filename || file.rel_path || 'PDF')}</div>
+                <div class="prks-processing-card__meta">
+                    <p class="meta-row"><strong>Path:</strong> <code${pathTitleAttr}>${prksProcessingEsc(relPath)}</code></p>
+                    <p class="meta-row"><strong>State:</strong> ${prksProcessingEsc(statusLabel)} · ${prksProcessingEsc(sourceHint)}</p>
+                    ${file.last_error ? `<p class="meta-row" style="color: var(--danger-color);"><strong>Error:</strong> ${prksProcessingEsc(file.last_error)}</p>` : ''}
+                </div>
+            </header>
             <div class="form-pane form-pane--tight prks-processing-card__core">
-                <div class="prks-processing-card__title-row">
-                    <label>Title</label>
-                    <input type="text" data-field="title" value="${prksProcessingEsc(file.title || '')}" placeholder="Library title">
+                <div class="prks-processing-card__section">
+                    <div class="prks-processing-card__title-row">
+                        <label>Title</label>
+                        <input type="text" data-field="title" value="${prksProcessingEsc(file.title || '')}" placeholder="Library title">
+                    </div>
+                    <div class="prks-processing-card__status-field prks-work-upload-status-field">
+                        <label>Status</label>
+                        ${statusSegHtml}
+                    </div>
                 </div>
-                <div class="prks-processing-card__status-field prks-work-upload-status-field">
-                    <label>Status</label>
-                    ${statusSegHtml}
-                </div>
-                <label>Link person to roles</label>
-                <div class="prks-upload-person-stack">
-                    <div class="form-row prks-upload-person-stack__search">
-                        <div class="prks-combobox-with-action">
-                            <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
-                                <div class="tag-add-shell__field">
-                                    ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
-                                    <input type="text" class="tag-add-shell__input" data-role="person-search" placeholder="Search person from library…" autocomplete="off" aria-label="Search person">
+                <div class="prks-processing-card__section">
+                    <div class="prks-processing-card__section-title">Link person to roles</div>
+                    <div class="prks-upload-person-stack">
+                        <div class="form-row prks-upload-person-stack__search">
+                            <div class="prks-combobox-with-action">
+                                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                                    <div class="tag-add-shell__field">
+                                        ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
+                                        <input type="text" class="tag-add-shell__input" data-role="person-search" placeholder="Search person from library…" autocomplete="off" aria-label="Search person">
+                                    </div>
+                                    <input type="hidden" data-role="person-id" value="">
+                                    <div class="combobox-results combobox-results--tag-panel hidden" data-role="person-results"></div>
                                 </div>
-                                <input type="hidden" data-role="person-id" value="">
-                                <div class="combobox-results combobox-results--tag-panel hidden" data-role="person-results"></div>
+                            </div>
+                            <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="add-role"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('link', { size: 'sm' }) : ''}</span><span class="ribbon-btn__label">Link</span></button>
+                        </div>
+                        <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles">
+                            <div class="prks-upload-role-seg">
+                                ${roleSegHtml}
                             </div>
                         </div>
-                        <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="add-role"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('link', { size: 'sm' }) : ''}</span><span class="ribbon-btn__label">Link</span></button>
                     </div>
-                    <div class="prks-upload-person-stack__roles">
-                        <div class="prks-upload-person-stack__role-caption">Role</div>
-                        <div class="prks-upload-role-seg">
-                            ${roleSegHtml}
-                        </div>
-                    </div>
+                    <div class="tag-cloud status-chip-list" data-role="roles-list"></div>
                 </div>
-                <div class="tag-cloud status-chip-list" data-role="roles-list"></div>
-                <div>
-                    <label>Year</label>
-                    <input type="text" data-field="year" value="${prksProcessingEsc(file.year || '')}">
-                </div>
-                <label>Folder (optional)</label>
-                <p class="meta-row meta-row--hint" style="margin:0 0 6px 0;">Placed in this folder when you import.</p>
-                <div class="prks-combobox-with-action">
+                <div class="prks-processing-card__section">
+                    <p class="tag-add-field__caption">Tags (optional)</p>
                     <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                         <div class="tag-add-shell__field">
-                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
-                            <input type="text" class="tag-add-shell__input" data-role="folder-search" placeholder="Search folder…" autocomplete="off" aria-label="Search folder">
+                            ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : (typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : '')}
+                            <input type="text" class="tag-add-shell__input" data-role="tag-search" placeholder="Search or create tag…" maxlength="300" autocomplete="off" aria-label="Add tag for processing file">
                         </div>
-                        <input type="hidden" data-role="folder-id" value="">
-                        <div class="combobox-results combobox-results--tag-panel hidden" data-role="folder-results"></div>
+                        <div class="combobox-results combobox-results--tag-panel hidden" data-role="tag-results"></div>
                     </div>
-                    <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="quick-folder" title="Create new folder" aria-label="Create new folder"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''}</span></button>
+                    <div class="tag-cloud work-tags-list" data-role="tags-list"></div>
+                </div>
+                <div class="prks-processing-card__section">
+                    <div class="prks-processing-card__section-title">Bibliographic</div>
+                    <div class="form-grid-2">
+                        <div>
+                            <label>Year</label>
+                            <input type="text" data-field="year" value="${prksProcessingEsc(file.year || '')}">
+                        </div>
+                        <div>
+                            <label>Published date</label>
+                            <input type="text" data-field="published_date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" value="${publishedDateValue}">
+                        </div>
+                    </div>
+                    ${docTypeFieldHtml}
+                    <div class="form-grid-2">
+                        <div>
+                            <label>Publisher</label>
+                            <input type="text" data-field="publisher" value="${prksProcessingEsc(file.publisher || '')}">
+                        </div>
+                        <div>
+                            <label>Location</label>
+                            <input type="text" data-field="location" value="${prksProcessingEsc(file.location || '')}">
+                        </div>
+                    </div>
+                </div>
+                <div class="prks-processing-card__section">
+                    <label>Folder (optional)</label>
+                    <p class="meta-row meta-row--hint" style="margin:0 0 6px 0;">Placed in this folder when you import.</p>
+                    <div class="prks-combobox-with-action">
+                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                            <div class="tag-add-shell__field">
+                                ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
+                                <input type="text" class="tag-add-shell__input" data-role="folder-search" placeholder="Search folder…" autocomplete="off" aria-label="Search folder">
+                            </div>
+                            <input type="hidden" data-role="folder-id" value="">
+                            <div class="combobox-results combobox-results--tag-panel hidden" data-role="folder-results"></div>
+                        </div>
+                        <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="quick-folder" title="Create new folder" aria-label="Create new folder"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''}</span></button>
+                    </div>
                 </div>
                 <details class="prks-processing-card__more">
                     <summary>More metadata</summary>
                     <div class="prks-processing-card__more-body">
-                        <div class="form-grid-2">
-                            <div>
-                                <label>Published date</label>
-                                <input type="text" data-field="published_date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" value="${prksProcessingEsc(typeof prksIsoToDdMmYyyy === 'function' ? prksIsoToDdMmYyyy(file.published_date || '') : (file.published_date || ''))}">
-                            </div>
-                            ${docTypeMoreHtml}
-                        </div>
                         <label>Original URL</label>
                         <input type="url" data-field="source_url" value="${prksProcessingEsc(file.source_url || '')}" placeholder="https://...">
-                        <div class="form-grid-2">
-                            <div>
-                                <label>Publisher</label>
-                                <input type="text" data-field="publisher" value="${prksProcessingEsc(file.publisher || '')}">
-                            </div>
-                            <div>
-                                <label>Location</label>
-                                <input type="text" data-field="location" value="${prksProcessingEsc(file.location || '')}">
-                            </div>
-                        </div>
                         <div class="form-grid-2">
                             <div>
                                 <label>Edition</label>
@@ -509,24 +660,27 @@ function prksProcessingCardHtml(file) {
                     </div>
                 </details>
             </div>
-            <div class="prks-processing-card__actions">
-                <button type="button" class="ribbon-btn" data-action="preview"${canPreview ? '' : ' disabled'}>Preview</button>
-                <button type="button" class="ribbon-btn" data-action="save">Save metadata</button>
-                <button type="button" class="add-new-btn" data-action="import"${canImport ? '' : ' disabled'}>Import to library</button>
-                <span class="meta-row" data-role="message" aria-live="polite"></span>
+            <div class="form-actions prks-processing-card__actions">
+                <button type="button" class="ribbon-btn form-actions__btn form-actions__btn--secondary" data-action="preview"${canPreview ? '' : ' disabled'}>Preview</button>
+                <button type="button" class="ribbon-btn form-actions__btn form-actions__btn--secondary" data-action="save">Save metadata</button>
+                <button type="button" class="add-new-btn form-actions__btn form-actions__btn--primary" data-action="import"${canImport ? '' : ' disabled'}>Import to library</button>
             </div>
+            <p class="meta-row prks-processing-card__message" data-role="message" aria-live="polite"></p>
         </article>
     `;
 }
 
 async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
-    const [items, people, folders] = await Promise.all([
+    const [items, people, folders, tags] = await Promise.all([
         fetchProcessingFiles(options),
         fetchPersons(),
         fetchFolders(),
+        fetchTags({ used: false }),
     ]);
     window.__prksProcessingPeople = Array.isArray(people) ? people : [];
     window.__prksProcessingFolders = Array.isArray(folders) ? folders : [];
+    window.__prksProcessingTagsCache = Array.isArray(tags) ? tags : [];
+    window.__prksAllTagsCache = window.__prksProcessingTagsCache;
     try {
         allFolders = window.__prksProcessingFolders;
         window.allFolders = allFolders;
@@ -665,8 +819,15 @@ function renderProcessingFilesPage(items, container) {
             person_name: String(r.person_name || r.person_id || ''),
             role_type: String(r.role_type || 'Author'),
         }));
+        const sourceTags = fileRow && Array.isArray(fileRow.tags) ? fileRow.tags : [];
+        card.__processingTags = sourceTags.map((t) => ({
+            id: String(t.id || ''),
+            name: String(t.name || ''),
+        }));
         prksProcessingRenderRoleList(card);
+        prksProcessingRenderTagList(card);
         prksProcessingAttachPersonCombobox(card);
+        prksProcessingAttachTagCombobox(card);
         const folderHidden = card.querySelector('[data-role="folder-id"]');
         const folderSearch = card.querySelector('[data-role="folder-search"]');
         const tf = fileRow && String(fileRow.target_folder_id || '').trim();
@@ -711,14 +872,22 @@ function renderProcessingFilesPage(items, container) {
             });
         }
         card.addEventListener('click', (ev) => {
-            const btn = ev.target && ev.target.closest ? ev.target.closest('[data-action="remove-role"]') : null;
-            if (!btn) return;
-            const idxRaw = btn.getAttribute('data-remove-role-index');
-            const idx = Number(idxRaw);
-            if (!Number.isFinite(idx)) return;
-            card.__processingRoles = Array.isArray(card.__processingRoles) ? card.__processingRoles : [];
-            card.__processingRoles.splice(idx, 1);
-            prksProcessingRenderRoleList(card);
+            const roleBtn = ev.target && ev.target.closest ? ev.target.closest('[data-action="remove-role"]') : null;
+            if (roleBtn) {
+                const idx = Number(roleBtn.getAttribute('data-remove-role-index'));
+                if (!Number.isFinite(idx)) return;
+                card.__processingRoles = Array.isArray(card.__processingRoles) ? card.__processingRoles : [];
+                card.__processingRoles.splice(idx, 1);
+                prksProcessingRenderRoleList(card);
+                return;
+            }
+            const tagBtn = ev.target && ev.target.closest ? ev.target.closest('[data-action="remove-tag"]') : null;
+            if (!tagBtn) return;
+            const tagIdx = Number(tagBtn.getAttribute('data-remove-tag-index'));
+            if (!Number.isFinite(tagIdx)) return;
+            card.__processingTags = Array.isArray(card.__processingTags) ? card.__processingTags : [];
+            card.__processingTags.splice(tagIdx, 1);
+            prksProcessingRenderTagList(card);
         });
         if (previewBtn) {
             previewBtn.addEventListener('click', () => {

@@ -57,6 +57,27 @@
         return prksIcon(name, { size: 22, className: 'prks-page-header-icon' });
     }
 
+    /** Same Lucide keys as sidebar People role filters (index.html nav-link--sub). */
+    const PRKS_ROLE_TYPE_ICON = {
+        Author: 'penLine',
+        Editor: 'filePen',
+        Reviewer: 'clipboardList',
+        Translator: 'languages',
+        Introduction: 'bookMarked',
+        Foreword: 'bookOpen',
+        Afterword: 'book',
+        Mentioned: 'user',
+    };
+
+    function prksRoleTypeIconHtml(roleType, opts) {
+        const key = PRKS_ROLE_TYPE_ICON[String(roleType || '').trim()];
+        return key ? prksIcon(key, opts) : '';
+    }
+
+    function prksRoleTypeShortLabel(roleType) {
+        return String(roleType || '').trim();
+    }
+
     function prksResolveIconName(name) {
         if (!name) return '';
         if (PRKS_ICON[name] != null) return PRKS_ICON[name];
@@ -115,7 +136,10 @@
     }
 
     global.PRKS_ICON = PRKS_ICON;
+    global.PRKS_ROLE_TYPE_ICON = PRKS_ROLE_TYPE_ICON;
     global.prksIcon = prksIcon;
+    global.prksRoleTypeIconHtml = prksRoleTypeIconHtml;
+    global.prksRoleTypeShortLabel = prksRoleTypeShortLabel;
     global.prksRefreshIcons = prksRefreshIcons;
     global.prksTagSearchIconHtml = prksTagSearchIconHtml;
     global.prksTagPlusIconHtml = prksTagPlusIconHtml;
