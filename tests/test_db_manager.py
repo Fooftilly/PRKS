@@ -19,6 +19,7 @@ from backend.db_manager import (
     PRKS_BIBTEX_EXPORT_FIELD_IDS,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
+    prks_thumb_cache_stem,
     prune_orphan_pdf_thumbnails,
     prune_empty_processing_parent_dirs,
 )
@@ -180,10 +181,10 @@ class TestDBManager(unittest.TestCase):
                 "backend.db_manager._resolve_thumbs_dir", return_value=thumbs_dir
             ):
                 w_id = self.db.add_work(title="DelThumb", file_path=f"/api/pdfs/{fname}")
-                sw = prks_thumb_cache_safe_wid(w_id)
-                p1 = os.path.join(thumbs_dir, f"{sw}_p1.webp")
-                p2 = os.path.join(thumbs_dir, f"{sw}_p2.png")
-                tmp = os.path.join(thumbs_dir, f"{sw}_p1.webp.tmp")
+                stem = prks_thumb_cache_stem(w_id, 1)
+                p1 = os.path.join(thumbs_dir, f"{stem}.webp")
+                p2 = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 2)}.png")
+                tmp = os.path.join(thumbs_dir, f"{stem}.webp.tmp")
                 for p in (p1, p2, tmp):
                     with open(p, "wb") as f:
                         f.write(b"z")
@@ -207,10 +208,9 @@ class TestDBManager(unittest.TestCase):
                     file_path=f"/api/pdfs/{fname}",
                     thumb_page=2,
                 )
-                sw = prks_thumb_cache_safe_wid(w_id)
-                good = os.path.join(thumbs_dir, f"{sw}_p2.webp")
-                stale_page = os.path.join(thumbs_dir, f"{sw}_p9.png")
-                orphan = os.path.join(thumbs_dir, "zzzorphan_p1.webp")
+                good = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 2)}.webp")
+                stale_page = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 9)}.png")
+                orphan = os.path.join(thumbs_dir, "zzzorphan_p1_v2.webp")
                 for p in (good, stale_page, orphan):
                     with open(p, "wb") as f:
                         f.write(b"z")

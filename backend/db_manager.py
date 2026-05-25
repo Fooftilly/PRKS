@@ -294,6 +294,19 @@ def prks_thumb_cache_safe_wid(work_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", str(work_id))
 
 
+# Bump when thumbnail encode format changes (invalidates on-disk cache by filename).
+PRKS_THUMB_CACHE_REV = 2
+
+
+def prks_thumb_cache_stem(work_id: str, page: int) -> str:
+    """Cache filename stem for one PDF work page thumbnail (no extension)."""
+    safe = prks_thumb_cache_safe_wid(work_id)
+    p = int(page) if page is not None else 1
+    if p < 1:
+        p = 1
+    return f"{safe}_p{p}_v{PRKS_THUMB_CACHE_REV}"
+
+
 def prks_person_image_cache_safe_id(person_id: str) -> str:
     """Sanitize person id for on-disk profile image cache filenames."""
     return re.sub(r"[^A-Za-z0-9_-]+", "_", str(person_id))
@@ -302,8 +315,19 @@ def prks_person_image_cache_safe_id(person_id: str) -> str:
 _PRKS_UNCATEGORIZED_FOLDER_TITLE = "Uncategorized"
 
 
-_PRKS_THUMB_CACHE_FINAL_RE = re.compile(r"^(.+)_p(\d+)\.(webp|png)$")
-_PRKS_THUMB_CACHE_TMP_RE = re.compile(r"^(.+)_p(\d+)\.(webp|png)\.tmp$")
+_PRKS_THUMB_CACHE_FINAL_RE = re.compile(
+    r"^(.+)_p(\d+)_v(\d+)\.(webp|png|jpg|jpeg)$", re.IGNORECASE
+)
+_PRKS_THUMB_CACHE_TMP_RE = re.compile(
+    r"^(.+)_p(\d+)_v(\d+)\.(webp|png|jpg|jpeg)\.tmp$", re.IGNORECASE
+)
+# Pre-rev-2 filenames (no _vN suffix); pruned when not in allowed v2 stems.
+_PRKS_THUMB_CACHE_LEGACY_FINAL_RE = re.compile(
+    r"^(.+)_p(\d+)\.(webp|png)$", re.IGNORECASE
+)
+_PRKS_THUMB_CACHE_LEGACY_TMP_RE = re.compile(
+    r"^(.+)_p(\d+)\.(webp|png)\.tmp$", re.IGNORECASE
+)
 
 
 def prks_delete_pdf_thumbnails_for_work_id(work_id: str) -> None:
@@ -312,8 +336,13 @@ def prks_delete_pdf_thumbnails_for_work_id(work_id: str) -> None:
     td = _resolve_thumbs_dir()
     if not os.path.isdir(td):
         return
-    pat_final = re.compile(r"^" + re.escape(safe) + r"_p\d+\.(webp|png)$")
-    pat_tmp = re.compile(r"^" + re.escape(safe) + r"_p\d+\.(webp|png)\.tmp$")
+    pat_final = re.compile(
+        r"^" + re.escape(safe) + r"_p\d+(_v\d+)?\.(webp|png|jpg|jpeg)$", re.IGNORECASE
+    )
+    pat_tmp = re.compile(
+        r"^" + re.escape(safe) + r"_p\d+(_v\d+)?\.(webp|png|jpg|jpeg)\.tmp$",
+        re.IGNORECASE,
+    )
     try:
         names = os.listdir(td)
     except OSError:
@@ -344,8 +373,7 @@ def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
             page = 1
         if page < 1:
             page = 1
-        safe = prks_thumb_cache_safe_wid(str(wid))
-        allowed.add(f"{safe}_p{page}")
+        allowed.add(prks_thumb_cache_stem(str(wid), page))
     td = _resolve_thumbs_dir()
     if not os.path.isdir(td):
         return 0
@@ -358,11 +386,19 @@ def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
         stem: Optional[str] = None
         m = _PRKS_THUMB_CACHE_FINAL_RE.match(fname)
         if m:
-            stem = f"{m.group(1)}_p{m.group(2)}"
+            stem = f"{m.group(1)}_p{m.group(2)}_v{m.group(3)}"
         else:
             m = _PRKS_THUMB_CACHE_TMP_RE.match(fname)
             if m:
-                stem = f"{m.group(1)}_p{m.group(2)}"
+                stem = f"{m.group(1)}_p{m.group(2)}_v{m.group(3)}"
+            else:
+                m = _PRKS_THUMB_CACHE_LEGACY_FINAL_RE.match(fname)
+                if m:
+                    stem = f"{m.group(1)}_p{m.group(2)}"
+                else:
+                    m = _PRKS_THUMB_CACHE_LEGACY_TMP_RE.match(fname)
+                    if m:
+                        stem = f"{m.group(1)}_p{m.group(2)}"
         if stem is None or stem in allowed:
             continue
         try:

@@ -22,6 +22,7 @@ from backend.db_manager import (
     resolve_processing_dir,
     _resolve_thumbs_dir,
     prks_thumb_cache_safe_wid,
+    prks_thumb_cache_stem,
     prune_orphan_pdf_thumbnails,
     resolve_people_images_dir,
     prks_person_image_cache_safe_id,
@@ -126,6 +127,59 @@ def _prks_pixmap_to_pil(pix):
         return None
 
 
+def _prks_env_truthy(name: str) -> bool:
+    v = (os.environ.get(name) or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _prks_pixmap_to_card_webp_bytes(pix) -> bytes | None:
+    """Lossy WebP for library card thumbnails (quality 82, method 4)."""
+    from io import BytesIO
+
+    img = _prks_pixmap_to_pil(pix)
+    if img is None:
+        return None
+    try:
+        from PIL import Image
+
+        if img.mode == "RGBA":
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = BytesIO()
+        img.save(buf, format="WEBP", quality=82, method=4)
+        out = buf.getvalue()
+        return out if out else None
+    except Exception:
+        return None
+
+
+def _prks_pixmap_to_jpeg_bytes(pix, quality: int = 82) -> bytes | None:
+    """JPEG fallback when WebP encode is unavailable."""
+    from io import BytesIO
+
+    img = _prks_pixmap_to_pil(pix)
+    if img is None:
+        return None
+    try:
+        from PIL import Image
+
+        if img.mode == "RGBA":
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        out = buf.getvalue()
+        return out if out else None
+    except Exception:
+        return None
+
+
 def _prks_pixmap_to_lossless_webp_bytes(pix) -> bytes | None:
     """
     Lossless WebP from a PyMuPDF pixmap. Usually smaller than PNG for page renders.
@@ -166,13 +220,25 @@ def _prks_pixmap_to_lossless_png_bytes(pix) -> bytes | None:
 
 def _prks_thumbnail_bytes_from_pixmap(pix) -> tuple[bytes, str]:
     """
-    Encode extracted raster for caching/serving: lossless WebP first, then lossless optimized PNG,
-    then raw PyMuPDF PNG as last resort.
-    Returns (bytes, mime_subtype) — 'webp' or 'png' for Content-Type image/<subtype>.
+    Encode extracted raster for caching/serving.
+    Default: lossy WebP (card-sized), then JPEG, then PNG last resort.
+    PRKS_THUMB_LOSSLESS=1 restores lossless WebP → PNG chain for debugging.
+    Returns (bytes, mime_subtype) for Content-Type image/<subtype>.
     """
-    webp = _prks_pixmap_to_lossless_webp_bytes(pix)
+    if _prks_env_truthy("PRKS_THUMB_LOSSLESS"):
+        webp = _prks_pixmap_to_lossless_webp_bytes(pix)
+        if webp is not None:
+            return webp, "webp"
+        png = _prks_pixmap_to_lossless_png_bytes(pix)
+        if png is not None:
+            return png, "png"
+        return pix.tobytes("png"), "png"
+    webp = _prks_pixmap_to_card_webp_bytes(pix)
     if webp is not None:
         return webp, "webp"
+    jpeg = _prks_pixmap_to_jpeg_bytes(pix)
+    if jpeg is not None:
+        return jpeg, "jpeg"
     png = _prks_pixmap_to_lossless_png_bytes(pix)
     if png is not None:
         return png, "png"
@@ -800,33 +866,27 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except Exception:
                     pdf_mtime = 0.0
 
-                safe_wid = prks_thumb_cache_safe_wid(w_id)
-                cache_base = f"{safe_wid}_p{page}"
+                cache_base = prks_thumb_cache_stem(w_id, page)
                 path_webp = os.path.join(thumbs_dir, cache_base + ".webp")
-                path_png = os.path.join(thumbs_dir, cache_base + ".png")
 
                 cache_path: str | None = None
                 serve_mime = "image/webp"
-                for cand, mime in ((path_webp, "image/webp"), (path_png, "image/png")):
-                    if os.path.exists(cand):
-                        try:
-                            if os.path.getmtime(cand) >= pdf_mtime:
-                                cache_path = cand
-                                serve_mime = mime
-                                break
-                        except OSError:
-                            pass
+                if os.path.exists(path_webp):
+                    try:
+                        if os.path.getmtime(path_webp) >= pdf_mtime:
+                            cache_path = path_webp
+                    except OSError:
+                        pass
 
                 cache_hit = cache_path is not None
                 generated_bytes: bytes | None = None
 
                 if not cache_hit:
-                    for stale in (path_webp, path_png):
-                        if os.path.exists(stale):
-                            try:
-                                os.remove(stale)
-                            except OSError:
-                                pass
+                    if os.path.exists(path_webp):
+                        try:
+                            os.remove(path_webp)
+                        except OSError:
+                            pass
                     try:
                         import fitz  # PyMuPDF
                     except Exception as e:
@@ -859,7 +919,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             pix = pg.get_pixmap(matrix=mat, alpha=False)
                             generated_bytes, thumb_sub = _prks_thumbnail_bytes_from_pixmap(pix)
                             serve_mime = f"image/{thumb_sub}"
-                            cache_path = os.path.join(thumbs_dir, f"{cache_base}.{thumb_sub}")
+                            # v2 cache: WebP only (lossy default); fallbacks use matching ext.
+                            ext = "webp" if thumb_sub == "webp" else thumb_sub
+                            cache_path = os.path.join(thumbs_dir, f"{cache_base}.{ext}")
                         finally:
                             try:
                                 doc.close()
