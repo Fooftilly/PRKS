@@ -312,8 +312,9 @@ CREATE TABLE IF NOT EXISTS person_group_members (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_person_groups_name_nocase ON person_groups(name COLLATE NOCASE);
 
--- Folder title uniqueness (case-insensitive, mirrors app-level check in add_folder)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_title_nocase ON folders(title COLLATE NOCASE);
+-- Folder title uniqueness: parent-scoped index created in db_manager.init_db
+-- (idx_folders_parent_title_nocase). Do not add a global folders(title) unique index here;
+-- existing DBs may have the same title under different parents.
 
 -- Performance indexes for frequently queried FK columns
 CREATE INDEX IF NOT EXISTS idx_roles_work_id ON roles(work_id);

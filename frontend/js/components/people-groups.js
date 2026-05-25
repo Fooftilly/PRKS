@@ -776,24 +776,23 @@ function renderPersonGroupDetail(group, container) {
     let membersHtml = `<h3 style="margin-top:8px;color:var(--text-secondary);">Members</h3>`;
 
     if (g.members && g.members.length > 0) {
-        membersHtml += '<div class="list-view list-view--group-members">';
+        const rowFn =
+            typeof buildPersonListRowHtml === 'function'
+                ? buildPersonListRowHtml
+                : typeof window.buildPersonListRowHtml === 'function'
+                  ? window.buildPersonListRowHtml
+                  : null;
+        membersHtml +=
+            '<div class="prks-people-library__scroll prks-people-library__scroll--embedded" data-prks-group-members-host><div class="prks-people-list" role="list">';
         g.members.forEach((p) => {
-            const pid = escapeHtmlGroup(p.id);
-            const inner =
-                typeof buildPersonListCardContentHtml === 'function'
-                    ? buildPersonListCardContentHtml(p)
-                    : `<div class="card-title">${escapeHtmlGroup(
-                          `${p.first_name || ''} ${p.last_name || ''}`.trim()
-                      )}</div>`;
-            membersHtml += `
-                <div class="project-card project-card--person project-card--group-member">
-                    <button type="button" class="project-card--group-member__remove" data-remove-member="${pid}" aria-label="Remove from group" title="Remove from group">&times;</button>
-                    <div class="project-card--group-member__body" onclick="window.location.hash='#/people/${pid}'">
-                        ${inner}
-                    </div>
-                </div>`;
+            if (rowFn) {
+                membersHtml += rowFn(p, { showGroups: false, removeButton: true });
+            } else {
+                const pid = escapeHtmlGroup(p.id);
+                membersHtml += `<div class="prks-people-list__row"><a href="#/people/${pid}">${escapeHtmlGroup(`${p.first_name || ''} ${p.last_name || ''}`.trim())}</a></div>`;
+            }
         });
-        membersHtml += '</div>';
+        membersHtml += '</div></div>';
     } else {
         membersHtml += '<p class="meta-row">No members in this group yet.</p>';
     }

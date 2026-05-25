@@ -1610,6 +1610,224 @@ a.tag.tag--sidebar-all:hover {
     margin: 0;
 }
 
+/* People library (#/people, role lists) */
+#main-content:has(.prks-people-library) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#main-content:has(.prks-people-library) .top-ribbon {
+    flex-shrink: 0;
+}
+
+#main-content:has(.prks-people-library) #page-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#page-content:has(.prks-people-library) {
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+.prks-people-library {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    align-self: stretch;
+}
+
+.prks-people-library__header {
+    flex-shrink: 0;
+    margin-bottom: 8px;
+}
+
+.prks-people-library__toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.prks-people-library__search {
+    flex: 1 1 200px;
+    min-width: 0;
+    margin: 0;
+}
+
+.prks-people-library__scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+
+.prks-people-library__scroll::-webkit-scrollbar {
+    width: 8px;
+}
+
+.prks-people-library__scroll::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+
+.prks-people-library__scroll--embedded {
+    flex: 0 1 auto;
+    max-height: min(70vh, 640px);
+    margin-top: 8px;
+}
+
+.prks-people-library__empty {
+    padding: 12px 4px;
+    margin: 0;
+}
+
+.prks-people-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.prks-people-list__row {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    align-items: start;
+    gap: 6px;
+    padding: 10px 12px 10px 10px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    transition: background-color 0.15s ease;
+}
+
+.prks-people-list__row:last-child {
+    border-bottom: none;
+}
+
+.prks-people-list__row:hover {
+    background: var(--surface-muted);
+}
+
+.prks-people-list__row--removable .prks-people-list__body {
+    padding-right: 36px;
+}
+
+.prks-people-list__toggle-spacer {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    grid-column: 1;
+    grid-row: 1;
+}
+
+.prks-people-list__body {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+}
+
+.prks-people-list__link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--text-primary);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.prks-people-list__link:hover {
+    color: var(--accent);
+}
+
+.prks-people-list__icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+}
+
+.prks-people-list__icon .prks-icon,
+.prks-people-list__icon .prks-icon svg {
+    --prks-icon-size: 16px;
+}
+
+.prks-people-list__title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prks-people-list__details {
+    margin-top: 6px;
+    padding-left: 24px;
+}
+
+.prks-people-list__details .meta-row {
+    margin-bottom: 6px;
+}
+
+.prks-people-list__details .meta-row:last-child {
+    margin-bottom: 0;
+}
+
+.prks-people-list__remove {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    font-size: 1.15rem;
+    line-height: 1;
+    cursor: pointer;
+    font-family: inherit;
+    transition: var(--transition);
+}
+
+.document-view--group-detail.is-group-editing .prks-people-list__remove {
+    display: inline-flex;
+}
+
+.prks-people-list__remove:hover {
+    color: var(--danger, #dc2626);
+    border-color: color-mix(in srgb, var(--danger, #dc2626) 40%, var(--border));
+    background: color-mix(in srgb, var(--danger, #dc2626) 12%, var(--surface-muted));
+}
+
+.prks-people-list__remove:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
 .prks-folder-library .page-header.prks-folder-library__header {
     display: flex;
     align-items: center;
@@ -1919,10 +2137,6 @@ a.tag.tag--sidebar-all:hover {
     margin: 0;
     padding: 8px 8px 16px;
     gap: 8px;
-}
-
-.list-view--people .project-card--person {
-    padding-right: 18px;
 }
 
 .project-card--person .card-title {
@@ -3853,59 +4067,10 @@ textarea[data-prks-autosize="1"] {
     min-width: 0;
 }
 
-/* Group detail: member cards stay under elevated combobox in the rare case both overlap. */
-.document-view--person .list-view--group-members {
+/* Group detail: member list stays under elevated combobox when overlapping */
+.document-view--group-detail .prks-people-library__scroll--embedded {
     position: relative;
     z-index: 0;
-}
-
-.project-card--group-member {
-    position: relative;
-    display: block;
-}
-
-.project-card--group-member__body {
-    min-width: 0;
-    cursor: pointer;
-    padding-right: 36px;
-}
-
-.project-card--group-member__remove {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    z-index: 2;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    margin: 0;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-muted);
-    color: var(--text-secondary);
-    font-size: 1.15rem;
-    line-height: 1;
-    cursor: pointer;
-    font-family: inherit;
-    transition: var(--transition);
-}
-
-.document-view--group-detail.is-group-editing .project-card--group-member__remove {
-    display: inline-flex;
-}
-
-.project-card--group-member__remove:hover {
-    color: var(--danger, #dc2626);
-    border-color: color-mix(in srgb, var(--danger, #dc2626) 40%, var(--border));
-    background: color-mix(in srgb, var(--danger, #dc2626) 12%, var(--surface-muted));
-}
-
-.project-card--group-member__remove:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
 }
 .combobox-results.combobox-results--elevated {
     z-index: 50;
@@ -4885,6 +5050,10 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
 
 .tag-add-shell__input::placeholder {
     color: var(--text-tertiary);
+}
+
+.tag-add-shell__clear[hidden] {
+    display: none !important;
 }
 
 .tag-add-shell__clear {

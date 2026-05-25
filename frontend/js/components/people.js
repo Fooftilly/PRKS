@@ -416,17 +416,16 @@ function personExternalRefsSummary(person) {
     return bits.length ? bits.join(' · ') : '';
 }
 
-/** Inner HTML for a person list card (shared with People list and group member list). */
-function buildPersonListCardContentHtml(p) {
-    const name = `${p.first_name || ''} ${p.last_name || ''}`.trim();
+/** Metadata block for person list rows (no title). */
+function buildPersonListDetailsHtml(p, options = {}) {
+    const showGroups = options.showGroups !== false;
     const lifespan = personLifespanDisplay(p);
     const aliasesRaw = (p.aliases || '').trim();
     const aliasesPreview = truncatePersonPreviewText(aliasesRaw, 100);
     const aboutPreview = truncatePersonPreviewText(p.about || '', 220);
     const refsSummary = personExternalRefsSummary(p);
 
-    let body = `
-        <div class="card-title">${escapeHtmlPerson(name)}</div>`;
+    let body = '';
     if (lifespan) {
         body += `<p class="meta-row person-card-lifespan">${escapeHtmlPerson(lifespan)}</p>`;
     }
@@ -441,7 +440,7 @@ function buildPersonListCardContentHtml(p) {
     if (refsSummary) {
         body += `<p class="meta-row person-card-refs"><span class="person-card-label">References</span> ${escapeHtmlPerson(refsSummary)}</p>`;
     }
-    if (Array.isArray(p.groups) && p.groups.length > 0) {
+    if (showGroups && Array.isArray(p.groups) && p.groups.length > 0) {
         const tags = p.groups
             .map(
                 (g) =>
@@ -453,12 +452,45 @@ function buildPersonListCardContentHtml(p) {
     return body;
 }
 
-function renderPersonListCard(p) {
+/** Inner HTML for a person list card (legacy card layout). */
+function buildPersonListCardContentHtml(p) {
+    const name = `${p.first_name || ''} ${p.last_name || ''}`.trim();
+    return `<div class="card-title">${escapeHtmlPerson(name)}</div>${buildPersonListDetailsHtml(p, { showGroups: true })}`;
+}
+
+function buildPersonListRowHtml(p, options = {}) {
+    const showGroups = options.showGroups !== false;
+    const removeButton = options.removeButton === true;
+    const name = `${p.first_name || ''} ${p.last_name || ''}`.trim() || 'Person';
+    const pidEnc = encodeURIComponent(String(p.id || ''));
+    const hash = `#/people/${pidEnc}`;
+    const idAttr = escapeHtmlPerson(String(p.id || ''));
+    const removableClass = removeButton ? ' prks-people-list__row--removable' : '';
+    const removeHtml = removeButton
+        ? `<button type="button" class="prks-people-list__remove" data-remove-member="${escapeHtmlPerson(p.id)}" aria-label="Remove from group" title="Remove from group">&times;</button>`
+        : '';
+    const details = buildPersonListDetailsHtml(p, { showGroups });
+    const detailsBlock = details
+        ? `<div class="prks-people-list__details">${details}</div>`
+        : '';
+
     return `
-        <div class="project-card project-card--person" onclick="window.location.hash='#/people/${escapeHtmlPerson(p.id)}'">
-            ${buildPersonListCardContentHtml(p)}
+        <div class="prks-people-list__row${removableClass}" role="listitem" data-person-id="${idAttr}">
+            ${removeHtml}
+            <span class="prks-people-list__toggle-spacer" aria-hidden="true"></span>
+            <div class="prks-people-list__body">
+                <a class="prks-people-list__link" href="${hash}" data-prks-middleclick-nav="1" onauxclick="return typeof prksMaybeOpenHashInNewTab==='function'&&prksMaybeOpenHashInNewTab(event,'${hash}')">
+                    <span class="prks-people-list__icon">${typeof prksIcon === 'function' ? prksIcon('user', { size: 16 }) : ''}</span>
+                    <span class="prks-people-list__title">${escapeHtmlPerson(name)}</span>
+                </a>
+                ${detailsBlock}
+            </div>
         </div>`;
 }
+
+window.buildPersonListRowHtml = buildPersonListRowHtml;
+window.buildPersonListCardContentHtml = buildPersonListCardContentHtml;
+window.buildPersonListDetailsHtml = buildPersonListDetailsHtml;
 
 const PEOPLE_LIST_ROLE_LABELS = {
     Author: 'Authors',
@@ -477,22 +509,148 @@ function filterPersonsByAssignedRole(persons, roleType) {
     );
 }
 
+const PRKS_PEOPLE_LIBRARY_FILTER_KEY = 'prks-people-library-filter';
+
+function prksPeopleLibraryFilterFromStorage() {
+    try {
+        return sessionStorage.getItem(PRKS_PEOPLE_LIBRARY_FILTER_KEY) || '';
+    } catch (_e) {
+        return '';
+    }
+}
+
+function prksPeopleListMatchesQuery(p, query) {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q || !p) return true;
+    const name = `${p.first_name || ''} ${p.last_name || ''}`.trim().toLowerCase();
+    const hay = [
+        name,
+        p.aliases,
+        p.about,
+        ...(Array.isArray(p.assigned_roles) ? p.assigned_roles : []),
+        ...(Array.isArray(p.groups) ? p.groups.map((g) => g && g.name) : []),
+    ];
+    return hay.some((v) => v != null && String(v).toLowerCase().includes(q));
+}
+
+function prksPeopleListEmptyHtml(persons, filterQuery, roleFilter) {
+    const q = String(filterQuery || '').trim();
+    const all = Array.isArray(persons) ? persons : [];
+    const roleFiltered = filterPersonsByAssignedRole(all, roleFilter);
+    if (q) {
+        return '<p class="prks-inline-message prks-people-list__empty">No people match your search.</p>';
+    }
+    if (all.length > 0 && roleFilter && roleFiltered.length === 0) {
+        return `<p class="prks-inline-message prks-people-list__empty">No people with the <strong>${escapeHtmlPerson(roleFilter)}</strong> role yet. Use <strong>Link Person to Work</strong> in the ribbon to assign roles.</p>`;
+    }
+    return '<p class="prks-inline-message prks-people-list__empty">No people yet. Use <strong>New Person</strong> in the ribbon to add one.</p>';
+}
+
+function prksPeopleListInnerHtml(persons, filterQuery, roleFilter) {
+    const all = Array.isArray(persons) ? persons : [];
+    let list = filterPersonsByAssignedRole(all, roleFilter);
+    const q = String(filterQuery || '').trim();
+    if (q) {
+        list = list.filter((p) => prksPeopleListMatchesQuery(p, q));
+    }
+    if (!list.length) {
+        return prksPeopleListEmptyHtml(all, filterQuery, roleFilter);
+    }
+    return `<div class="prks-people-list" role="list">${list.map((p) => buildPersonListRowHtml(p)).join('')}</div>`;
+}
+
+function prksRerenderPeopleListOnly() {
+    const st = window.__prksPeopleLibraryState;
+    if (!st || !st.container) return;
+    const host = st.container.querySelector('[data-prks-people-list-host]');
+    if (host) {
+        host.innerHTML = prksPeopleListInnerHtml(st.persons, st.filterQuery, st.roleFilter);
+        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
+    }
+}
+
+function prksSyncPeopleLibrarySearchClear(input, clearBtn) {
+    if (!clearBtn) return;
+    const hasValue = Boolean(String((input && input.value) || '').trim());
+    clearBtn.hidden = !hasValue;
+    clearBtn.disabled = !hasValue;
+}
+
+function prksApplyPeopleLibrarySearchFilter(input) {
+    const st = window.__prksPeopleLibraryState;
+    if (!st || !input) return;
+    const q = String(input.value || '');
+    st.filterQuery = q;
+    try {
+        sessionStorage.setItem(PRKS_PEOPLE_LIBRARY_FILTER_KEY, q);
+    } catch (_e) {
+        /* ignore */
+    }
+    prksRerenderPeopleListOnly();
+}
+
+function prksBindPeopleLibrarySearch(root) {
+    if (!root) return;
+    const input = root.querySelector('#prks-people-library-search');
+    const clearBtn = root.querySelector('#prks-people-library-search-clear');
+    if (!input || input.dataset.bound === '1') return;
+    input.dataset.bound = '1';
+    let debounceTimer;
+    const scheduleFilter = () => {
+        window.clearTimeout(debounceTimer);
+        debounceTimer = window.setTimeout(() => prksApplyPeopleLibrarySearchFilter(input), 150);
+    };
+    input.addEventListener('input', () => {
+        prksSyncPeopleLibrarySearchClear(input, clearBtn);
+        scheduleFilter();
+    });
+    if (clearBtn && clearBtn.dataset.bound !== '1') {
+        clearBtn.dataset.bound = '1';
+        clearBtn.addEventListener('click', () => {
+            input.value = '';
+            prksSyncPeopleLibrarySearchClear(input, clearBtn);
+            input.focus();
+            prksApplyPeopleLibrarySearchFilter(input);
+        });
+    }
+    prksSyncPeopleLibrarySearchClear(input, clearBtn);
+}
+
 function renderPeopleList(persons, container, options = {}) {
     const roleFilter = options.roleFilter || null;
-    const filtered = filterPersonsByAssignedRole(persons, roleFilter);
+    const list = Array.isArray(persons) ? persons : [];
+    const filterQuery = prksPeopleLibraryFilterFromStorage();
+    const filterEsc = escapeHtmlPerson(filterQuery);
     const titleExtra = roleFilter ? ` — ${PEOPLE_LIST_ROLE_LABELS[roleFilter] || roleFilter}` : '';
-    let html = `<div class="page-header"><h2>People${escapeHtmlPerson(titleExtra)}</h2></div><div class="list-view list-view--people">`;
-    if (filtered && filtered.length > 0) {
-        filtered.forEach(p => {
-            html += renderPersonListCard(p);
-        });
-    } else if (persons && persons.length > 0 && roleFilter) {
-        html += `<p class="prks-inline-message">No people with the <strong>${escapeHtmlPerson(roleFilter)}</strong> role yet. Use <strong>Link Person to Work</strong> in the ribbon to assign roles.</p>`;
-    } else {
-        html += '<p class="prks-inline-message">No people yet. Use <strong>New Person</strong> in the ribbon to add one.</p>';
-    }
-    html += '</div>';
-    container.innerHTML = html;
+    const roleFiltered = filterPersonsByAssignedRole(list, roleFilter);
+    const hasPeople = roleFiltered.length > 0;
+    const searchToolbar = hasPeople
+        ? `<div class="prks-people-library__toolbar">
+            <div class="tag-add-shell tag-add-shell--flush prks-people-library__search">
+                <div class="tag-add-shell__field">
+                    ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
+                    <input type="text" id="prks-people-library-search" class="tag-add-shell__input" placeholder="Search people…" value="${filterEsc}" maxlength="300" autocomplete="off" aria-label="Filter people">
+                    <button type="button" class="tag-add-shell__clear" id="prks-people-library-search-clear" aria-label="Clear search" title="Clear search" hidden>&times;</button>
+                </div>
+            </div>
+        </div>`
+        : '';
+    const listHost = hasPeople
+        ? `<div class="prks-people-library__scroll" data-prks-people-list-host>${prksPeopleListInnerHtml(list, filterQuery, roleFilter)}</div>`
+        : `<div class="prks-people-library__empty">${prksPeopleListEmptyHtml(list, filterQuery, roleFilter)}</div>`;
+
+    container.innerHTML = `
+        <div class="prks-people-library">
+        <div class="page-header prks-people-library__header">
+            <h2>People${escapeHtmlPerson(titleExtra)}</h2>
+        </div>
+        ${searchToolbar}
+        ${listHost}
+        </div>`;
+
+    window.__prksPeopleLibraryState = { persons: list, container, filterQuery, roleFilter };
+    const root = container.querySelector('.prks-people-library');
+    if (root) prksBindPeopleLibrarySearch(root);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
