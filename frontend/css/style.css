@@ -6063,17 +6063,29 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
         margin-top: 0;
         margin-left: -18px;
         margin-right: -18px;
-        /* One row: avoid a dead zone between menu and actions (centered flex looked empty on tablets). */
         overflow: hidden;
         gap: 8px;
     }
 
-    .top-ribbon__center {
-        justify-content: flex-start;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+    .top-ribbon__left,
+    .top-ribbon__right {
+        flex: 1 1 0;
         min-width: 0;
-        flex: 1 1 0%;
+    }
+
+    .top-ribbon__left {
+        justify-content: flex-start;
+    }
+
+    .top-ribbon__right {
+        justify-content: flex-end;
+    }
+
+    .top-ribbon__center {
+        flex: 0 1 auto;
+        justify-content: center;
+        overflow-x: hidden;
+        min-width: 0;
         scrollbar-width: none;
     }
 
@@ -6164,12 +6176,25 @@ html.prks-force-mobile .top-ribbon {
     gap: 8px;
 }
 
-html.prks-force-mobile .top-ribbon__center {
-    justify-content: flex-start;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+html.prks-force-mobile .top-ribbon__left,
+html.prks-force-mobile .top-ribbon__right {
+    flex: 1 1 0;
     min-width: 0;
-    flex: 1 1 0%;
+}
+
+html.prks-force-mobile .top-ribbon__left {
+    justify-content: flex-start;
+}
+
+html.prks-force-mobile .top-ribbon__right {
+    justify-content: flex-end;
+}
+
+html.prks-force-mobile .top-ribbon__center {
+    flex: 0 1 auto;
+    justify-content: center;
+    overflow-x: hidden;
+    min-width: 0;
     scrollbar-width: none;
 }
 
@@ -6215,21 +6240,30 @@ html.prks-force-mobile .project-card--work .project-card__rail {
         margin-right: -10px;
     }
 
-    .top-ribbon__center {
-        justify-content: flex-start;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        min-width: 0;
-        flex: 1 1 0%;
-        scrollbar-width: none;
-    }
-    .top-ribbon__center::-webkit-scrollbar {
-        display: none;
-    }
-
     .top-ribbon__left,
     .top-ribbon__right {
-        flex: 0 0 auto;
+        flex: 1 1 0;
+        min-width: 0;
+    }
+
+    .top-ribbon__left {
+        justify-content: flex-start;
+    }
+
+    .top-ribbon__right {
+        justify-content: flex-end;
+    }
+
+    .top-ribbon__center {
+        flex: 0 1 auto;
+        justify-content: center;
+        overflow-x: hidden;
+        min-width: 0;
+        scrollbar-width: none;
+    }
+
+    .top-ribbon__center::-webkit-scrollbar {
+        display: none;
     }
 
     .ribbon-btn {
