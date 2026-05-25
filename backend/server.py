@@ -1195,8 +1195,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 roles = data.get('roles', [])
                 if isinstance(roles, list):
                     for idx, r in enumerate(roles):
-                        if isinstance(r, dict) and r.get('person_id') and r.get('role_type'):
-                            db.add_role(r['person_id'], w_id, r['role_type'], order_index=idx)
+                        if not isinstance(r, dict) or not r.get('person_id') or not r.get('role_type'):
+                            continue
+                        p_id = r['person_id']
+                        r_type = r['role_type']
+                        if db.has_work_role(p_id, w_id, r_type):
+                            continue
+                        try:
+                            db.add_role(p_id, w_id, r_type, order_index=idx)
+                        except ValueError:
+                            continue
                         
                 self.send_json(200, {'id': w_id})
             elif path == '/api/playlists':
@@ -1383,8 +1391,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if not p_id or not w_id or not r_type:
                     self.send_json(400, {'error': 'person_id, work_id, and role_type are required'})
                     return
-                oi = db.next_role_order_index(w_id)
-                db.add_role(p_id, w_id, r_type, order_index=oi)
+                try:
+                    oi = db.next_role_order_index(w_id)
+                    db.add_role(p_id, w_id, r_type, order_index=oi)
+                except ValueError as e:
+                    self.send_json(400, {'error': str(e)})
+                    return
                 self.send_json(200, {'status': 'success'})
             elif path == '/api/arguments':
                 a_id = db.add_argument(data.get('work_id'), data.get('premise'), data.get('conclusion'))

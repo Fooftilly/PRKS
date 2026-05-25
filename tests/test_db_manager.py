@@ -460,6 +460,16 @@ class TestDBManager(unittest.TestCase):
         child = self.db.get_person_group(cid)
         self.assertIsNotNone(child.get("parent_id"))
 
+    def test_add_role_rejects_duplicate_person_and_role(self):
+        w_id = self.db.add_work(title="Dup Role Work")
+        p_id = self.db.add_person(first_name="Ann", last_name="Author")
+        self.db.add_role(p_id, w_id, "Author", order_index=0)
+        with self.assertRaises(ValueError):
+            self.db.add_role(p_id, w_id, "Author", order_index=1)
+        self.assertTrue(self.db.has_work_role(p_id, w_id, "Author"))
+        roles = self.db.get_work_roles(w_id)
+        self.assertEqual(len(roles), 1)
+
     def test_person_and_role_operations(self):
         p_id = self.db.add_person(first_name="Jane", last_name="Smith", aliases="J. Smith")
         w_id = self.db.add_work(title="Jane's Book")

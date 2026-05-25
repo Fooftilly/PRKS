@@ -136,10 +136,22 @@ function prksDiscardConfirmedClose() {
 }
 
 let prksModalConfirmResolve = null;
+let prksModalConfirmAlertOnly = false;
 
 function prksIsModalConfirmOpen() {
     const root = document.getElementById('prks-modal-confirm');
     return !!(root && !root.classList.contains('hidden'));
+}
+
+function prksRestoreModalConfirmCancel() {
+    const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
+    if (cancelBtn) {
+        cancelBtn.classList.remove('hidden');
+        cancelBtn.setAttribute('aria-hidden', 'false');
+    }
+    const actions = document.querySelector('.prks-modal-confirm__actions');
+    if (actions) actions.classList.remove('prks-modal-confirm__actions--alertOnly');
+    prksModalConfirmAlertOnly = false;
 }
 
 function prksHideModalConfirm() {
@@ -148,6 +160,7 @@ function prksHideModalConfirm() {
         root.classList.add('hidden');
         root.setAttribute('aria-hidden', 'true');
     }
+    prksRestoreModalConfirmCancel();
     prksModalConfirmResolve = null;
 }
 
@@ -179,10 +192,25 @@ function prksConfirmDialog(options = {}) {
         const cancelLabel =
             options.cancelLabel != null ? String(options.cancelLabel) : 'Cancel';
         const danger = options.danger === true;
+        const alertOnly = options.alertOnly === true;
+        prksModalConfirmAlertOnly = alertOnly;
+        const actions = document.querySelector('.prks-modal-confirm__actions');
 
         if (titleEl) titleEl.textContent = title;
         if (descEl) descEl.textContent = message;
-        if (cancelBtn) cancelBtn.textContent = cancelLabel;
+        if (cancelBtn) {
+            if (alertOnly) {
+                cancelBtn.classList.add('hidden');
+                cancelBtn.setAttribute('aria-hidden', 'true');
+            } else {
+                cancelBtn.classList.remove('hidden');
+                cancelBtn.setAttribute('aria-hidden', 'false');
+                cancelBtn.textContent = cancelLabel;
+            }
+        }
+        if (actions) {
+            actions.classList.toggle('prks-modal-confirm__actions--alertOnly', alertOnly);
+        }
         if (okBtn) {
             okBtn.textContent = confirmLabel;
             okBtn.classList.remove('add-new-btn', 'btn-danger-outline');
@@ -192,10 +220,49 @@ function prksConfirmDialog(options = {}) {
         prksModalConfirmResolve = resolve;
         root.classList.remove('hidden');
         root.setAttribute('aria-hidden', 'false');
-        const focusEl = danger && cancelBtn ? cancelBtn : okBtn || cancelBtn;
+        const focusEl =
+            alertOnly || !(danger && cancelBtn && !cancelBtn.classList.contains('hidden'))
+                ? okBtn || cancelBtn
+                : cancelBtn;
         if (focusEl && typeof focusEl.focus === 'function') {
             requestAnimationFrame(() => focusEl.focus());
         }
+    });
+}
+
+/**
+ * Single-button in-app alert (reuses #prks-modal-confirm).
+ * @returns {Promise<void>}
+ */
+function prksAlertDialog(options = {}) {
+    return prksConfirmDialog({
+        title: options.title != null ? String(options.title) : 'Notice',
+        message: options.message != null ? String(options.message) : '',
+        confirmLabel: options.okLabel != null ? String(options.okLabel) : 'OK',
+        alertOnly: true,
+    }).then(() => {});
+}
+
+function prksIsDuplicateRoleLinkError(msg) {
+    return typeof msg === 'string' && /already linked/i.test(msg);
+}
+
+function prksShowDuplicateRoleLinkAlert(roleType) {
+    const rt = String(roleType || 'Linked').trim() || 'Linked';
+    return prksAlertDialog({
+        title: 'Already linked',
+        message: `This person is already linked as ${rt}.`,
+    });
+}
+
+async function prksNotifyRoleLinkFailure(errorMsg, roleType) {
+    if (prksIsDuplicateRoleLinkError(errorMsg)) {
+        await prksShowDuplicateRoleLinkAlert(roleType);
+        return;
+    }
+    await prksAlertDialog({
+        title: 'Could not link',
+        message: errorMsg || 'Could not create link.',
     });
 }
 
@@ -207,13 +274,17 @@ function prksBindModalConfirmOnce() {
     const ok = document.getElementById('prks-modal-confirm-ok');
     const scrim = document.getElementById('prks-modal-confirm-scrim');
     if (cancel) {
-        cancel.addEventListener('click', () => prksFinishModalConfirm(false));
+        cancel.addEventListener('click', () =>
+            prksFinishModalConfirm(prksModalConfirmAlertOnly)
+        );
     }
     if (ok) {
         ok.addEventListener('click', () => prksFinishModalConfirm(true));
     }
     if (scrim) {
-        scrim.addEventListener('click', () => prksFinishModalConfirm(false));
+        scrim.addEventListener('click', () =>
+            prksFinishModalConfirm(prksModalConfirmAlertOnly)
+        );
     }
     if (!window.__prksModalConfirmKeyBound) {
         window.__prksModalConfirmKeyBound = true;
@@ -224,7 +295,7 @@ function prksBindModalConfirmOnce() {
                 if (!prksIsModalConfirmOpen()) return;
                 e.preventDefault();
                 e.stopPropagation();
-                prksFinishModalConfirm(false);
+                prksFinishModalConfirm(prksModalConfirmAlertOnly);
             },
             true
         );
@@ -739,6 +810,10 @@ function closeModals() {
 window.requestModalClose = requestModalClose;
 window.initModalCloseUi = initModalCloseUi;
 window.prksConfirmDialog = prksConfirmDialog;
+window.prksAlertDialog = prksAlertDialog;
+window.prksShowDuplicateRoleLinkAlert = prksShowDuplicateRoleLinkAlert;
+window.prksIsDuplicateRoleLinkError = prksIsDuplicateRoleLinkError;
+window.prksNotifyRoleLinkFailure = prksNotifyRoleLinkFailure;
 
 function personDisplayName(p) {
     return `${(p.first_name || '').trim()} ${p.last_name || ''}`.trim();
@@ -830,6 +905,11 @@ async function initWorkMetaRoleLinker(workId) {
     });
     const workHidden = document.getElementById('meta-role-work-id');
     if (workHidden) workHidden.value = String(workId);
+    const roleHidden = document.getElementById('meta-role-type');
+    const roleSel = roleHidden && roleHidden.value ? roleHidden.value : 'Author';
+    if (typeof prksMountMetaRoleSegmented === 'function') {
+        prksMountMetaRoleSegmented(roleSel);
+    }
 }
 
 async function addRoleToWorkFromMetaEditor(workId) {
@@ -844,6 +924,14 @@ async function addRoleToWorkFromMetaEditor(workId) {
     const roleType = roleHidden ? String(roleHidden.value || '').trim() : '';
     if (!resolvedWorkId || !personId || !roleType) {
         alert('Select a person and role first.');
+        return;
+    }
+    const existingRoles =
+        window.currentWork && String(window.currentWork.id) === resolvedWorkId
+            ? window.currentWork.roles
+            : [];
+    if (prksWorkHasRoleLink(existingRoles, personId, roleType)) {
+        await prksShowDuplicateRoleLinkAlert(roleType);
         return;
     }
 
@@ -863,7 +951,7 @@ async function addRoleToWorkFromMetaEditor(workId) {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-            alert(data.error || 'Could not create link.');
+            await prksNotifyRoleLinkFailure(data.error, roleType);
             return;
         }
         if (typeof fetchWorkDetails === 'function') {
@@ -876,7 +964,10 @@ async function addRoleToWorkFromMetaEditor(workId) {
         if (personSearch) personSearch.value = '';
     } catch (e) {
         console.error(e);
-        alert('Could not create link.');
+        await prksAlertDialog({
+            title: 'Could not link',
+            message: 'Could not create link.',
+        });
     } finally {
         if (addBtn) {
             addBtn.disabled = false;
@@ -1883,7 +1974,6 @@ function toggleWorkMetaEdit(isEditing) {
             }
             if (isEditing) {
                 prksBindSegmentedHidden('meta-status');
-                prksBindSegmentedHidden('meta-role-type');
                 void initWorkMetaRoleLinker(window.currentWork.id);
                 if (typeof initPrksDocTypeMenu === 'function') {
                     const inf =
@@ -1985,6 +2075,17 @@ async function submitWorkMetaEdit(workId) {
             saveBtn.disabled = false;
         }
     }
+}
+
+function prksWorkHasRoleLink(roles, personId, roleType) {
+    const pid = String(personId || '').trim();
+    const rt = String(roleType || '').trim();
+    if (!pid || !rt || !Array.isArray(roles)) return false;
+    return roles.some(
+        (r) =>
+            String(r.person_id || r.id || '').trim() === pid &&
+            String(r.role_type || '').trim() === rt
+    );
 }
 
 /** Linked persons on the work details panel, grouped by role (order follows DB order_index). */
@@ -2331,26 +2432,35 @@ function prksEscapeAttr(s) {
     return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-function prksMountUploadRoleSegmented(selectedValue) {
-    const mount = document.getElementById('upload-role-seg-mount');
+function prksMountRoleSegmented(mountId, hiddenId, selectedValue) {
+    const mount = document.getElementById(mountId);
     if (!mount || typeof prksSegmentedControlHtml !== 'function') return;
     const labels = Array.isArray(PRKS_UPLOAD_ROLE_LABELS) ? PRKS_UPLOAD_ROLE_LABELS : [];
     const fallback = labels[0] || 'Author';
     const selRaw = selectedValue != null ? String(selectedValue) : '';
     const sel = labels.includes(selRaw) ? selRaw : fallback;
-    mount.innerHTML = prksSegmentedControlHtml('upload-role-type', 'Role for linked person', labels, sel, 'roles', {
+    mount.innerHTML = prksSegmentedControlHtml(hiddenId, 'Role for linked person', labels, sel, 'roles', {
         compact: true,
         withRoleIcons: true,
     });
-    const hidden = document.getElementById('upload-role-type');
+    const hidden = document.getElementById(hiddenId);
     if (hidden) delete hidden.dataset.prksSegBound;
     if (typeof prksBindSegmentedHidden === 'function') {
-        prksBindSegmentedHidden('upload-role-type');
+        prksBindSegmentedHidden(hiddenId);
     }
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(mount);
 }
 
+function prksMountUploadRoleSegmented(selectedValue) {
+    prksMountRoleSegmented('upload-role-seg-mount', 'upload-role-type', selectedValue);
+}
+
+function prksMountMetaRoleSegmented(selectedValue) {
+    prksMountRoleSegmented('meta-role-seg-mount', 'meta-role-type', selectedValue);
+}
+
 window.prksMountUploadRoleSegmented = prksMountUploadRoleSegmented;
+window.prksMountMetaRoleSegmented = prksMountMetaRoleSegmented;
 
 function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, variant, options) {
     const opts = options && typeof options === 'object' ? options : {};
@@ -2981,11 +3091,8 @@ function renderWorkMetaEditTab(work) {
                     </div>
                     <button type="button" id="meta-role-add-btn" onclick="addRoleToWorkFromMetaEditor('${work.id}')" class="ribbon-btn">+ Link</button>
                 </div>
-                <div class="prks-upload-person-stack__roles">
-                    <div class="prks-upload-person-stack__role-caption">Role</div>
-                    <div class="prks-upload-role-seg">
-                        ${prksSegmentedControlHtml('meta-role-type', 'Role for linked person', PRKS_UPLOAD_ROLE_LABELS, 'Author', 'roles')}
-                    </div>
+                <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles prks-upload-person-stack__roles--tiles-2row">
+                    <div class="prks-upload-role-seg" id="meta-role-seg-mount"></div>
                 </div>
             </div>
             <div id="meta-linked-persons-list" class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work)}</div>
@@ -3589,7 +3696,11 @@ function addRoleToUploadList() {
     
     const pName = input.value;
     const rType = rSelect.value;
-    
+    if (prksWorkHasRoleLink(uploadRoles, hidden.value, rType)) {
+        void prksShowDuplicateRoleLinkAlert(rType);
+        return;
+    }
+
     uploadRoles.push({ person_id: hidden.value, person_name: pName, role_type: rType });
     renderUploadRoles();
     

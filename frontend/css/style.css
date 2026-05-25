@@ -2777,6 +2777,10 @@ a.tag.tag--sidebar-all:hover {
     padding-inline: var(--space-lg);
 }
 
+.prks-modal-confirm__actions--alertOnly {
+    justify-content: center;
+}
+
 .modal-grid-2 {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -3791,17 +3795,59 @@ a.tag.tag--sidebar-all:hover {
     transform: scale(0.98);
 }
 
+/* Narrow panels (work metadata edit): 7 roles in 4+3 rows */
+.prks-upload-person-stack__roles--tiles-2row {
+    overflow-x: visible;
+    overflow-y: visible;
+}
+
+.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(52px, auto));
+    min-width: 0;
+}
+
+.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn:first-child {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    align-self: stretch;
+    min-height: 0;
+}
+
+.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn:first-child .prks-segmented__btn-icon .prks-icon,
+.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn:first-child .prks-segmented__btn-icon .prks-icon svg {
+    --prks-icon-size: 20px;
+}
+
+.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn:first-child .prks-segmented__btn-label {
+    font-size: 0.68rem;
+}
+
+.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn {
+    min-height: 52px;
+    padding: 6px 4px;
+}
+
+.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn-label {
+    font-size: 0.62rem;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+    line-height: 1.15;
+    hyphens: auto;
+}
+
 @media (max-width: 520px) {
     .prks-processing-card .prks-segmented--status.prks-segmented--single-row {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .prks-upload-person-stack__roles--tiles .prks-segmented--roles {
+    .prks-upload-person-stack__roles--tiles:not(.prks-upload-person-stack__roles--tiles-2row) .prks-segmented--roles {
         grid-template-columns: repeat(7, minmax(52px, 1fr));
         min-width: 364px;
     }
 
-    .prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn {
+    .prks-upload-person-stack__roles--tiles:not(.prks-upload-person-stack__roles--tiles-2row) .prks-segmented--roles-icons .prks-segmented__btn {
         min-height: 54px;
     }
 }

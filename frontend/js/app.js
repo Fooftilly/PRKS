@@ -1460,11 +1460,23 @@ function initForms() {
         if (!person_id || !work_id) {
             return alert('Please select both a person and a file.');
         }
+        const role_type = document.getElementById('role-type').value;
         const payload = {
             person_id,
             work_id,
-            role_type: document.getElementById('role-type').value
+            role_type,
         };
+        if (
+            typeof prksWorkHasRoleLink === 'function' &&
+            window.currentWork &&
+            String(window.currentWork.id) === String(work_id) &&
+            prksWorkHasRoleLink(window.currentWork.roles, person_id, role_type)
+        ) {
+            if (typeof prksShowDuplicateRoleLinkAlert === 'function') {
+                await prksShowDuplicateRoleLinkAlert(role_type);
+            }
+            return;
+        }
         try {
             const res = await fetch('/api/roles', {
                 method: 'POST',
@@ -1473,12 +1485,19 @@ function initForms() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                alert(data.error || 'Could not create link.');
+                if (typeof prksNotifyRoleLinkFailure === 'function') {
+                    await prksNotifyRoleLinkFailure(data.error, role_type);
+                }
                 return;
             }
         } catch (e) {
             console.error(e);
-            alert('Could not create link.');
+            if (typeof prksAlertDialog === 'function') {
+                await prksAlertDialog({
+                    title: 'Could not link',
+                    message: 'Could not create link.',
+                });
+            }
             return;
         }
         closeModals();

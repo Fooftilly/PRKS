@@ -864,6 +864,18 @@ function renderProcessingFilesPage(items, container) {
                 const person = prksProcessingGetPeople().find((p) => String(p.id || '') === personId);
                 const personName = person ? prksProcessingPersonDisplayName(person) : String(personSearchEl.value || personId).trim();
                 card.__processingRoles = Array.isArray(card.__processingRoles) ? card.__processingRoles : [];
+                const hasDup =
+                    typeof prksWorkHasRoleLink === 'function'
+                        ? prksWorkHasRoleLink(card.__processingRoles, personId, roleType)
+                        : card.__processingRoles.some(
+                              (r) =>
+                                  String(r.person_id || '') === personId &&
+                                  String(r.role_type || '') === roleType
+                          );
+                if (hasDup) {
+                    if (msgEl) msgEl.textContent = `Already linked as ${roleType}.`;
+                    return;
+                }
                 card.__processingRoles.push({ person_id: personId, person_name: personName, role_type: roleType });
                 prksProcessingRenderRoleList(card);
                 personIdEl.value = '';

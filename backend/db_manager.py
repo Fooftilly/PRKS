@@ -868,7 +868,7 @@ class PRKSDatabase:
             exists = self.execute_query("SELECT 1 FROM persons WHERE id = ?", (person_id,))
             if not exists:
                 raise ValueError(f"Unknown person id: {person_id}")
-            key = (person_id, role_type, idx)
+            key = (person_id, role_type)
             if key in seen:
                 continue
             seen.add(key)
@@ -1235,6 +1235,8 @@ class PRKSDatabase:
                 person_id = str(role.get("person_id") or "").strip()
                 role_type = str(role.get("role_type") or "").strip()
                 if not person_id or not role_type:
+                    continue
+                if self.has_work_role(person_id, work_id, role_type):
                     continue
                 try:
                     order_index = int(role.get("order_index") or 0)
@@ -2738,7 +2740,22 @@ class PRKSDatabase:
             conn.commit()
 
     # --- Roles (Linking) ---
+    def has_work_role(self, person_id: str, work_id: str, role_type: str) -> bool:
+        rows = self.execute_query(
+            """
+            SELECT 1 FROM roles
+            WHERE person_id = ? AND work_id = ? AND role_type = ?
+            LIMIT 1
+            """,
+            (person_id, work_id, role_type),
+        )
+        return bool(rows)
+
     def add_role(self, person_id: str, work_id: str, role_type: str, order_index: int = 0):
+        if self.has_work_role(person_id, work_id, role_type):
+            raise ValueError(
+                f"This person is already linked to this file as {role_type}."
+            )
         query = """
         INSERT INTO roles (person_id, work_id, role_type, order_index)
         VALUES (?, ?, ?, ?)
