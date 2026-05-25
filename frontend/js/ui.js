@@ -1402,6 +1402,10 @@ async function prepareRoleModal() {
     });
     initSearchableCombobox('role-work-search', 'role-work-results', 'role-work-id', 'work');
     prksBindRoleCreditPicker('role-link');
+    if (typeof prksMountLinkRoleSegmented === 'function') {
+        const roleHidden = document.getElementById('role-type');
+        prksMountLinkRoleSegmented(roleHidden ? roleHidden.value : 'Author');
+    }
 
     const hash = window.location.hash || '';
     const personSearch = document.getElementById('role-person-search');
@@ -2812,17 +2816,29 @@ function prksEscapeAttr(s) {
     return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-function prksMountRoleSegmented(mountId, hiddenId, selectedValue) {
+function prksMountRoleSegmented(mountId, hiddenId, selectedValue, labels, ariaLabel) {
     const mount = document.getElementById(mountId);
     if (!mount || typeof prksSegmentedControlHtml !== 'function') return;
-    const labels = Array.isArray(PRKS_UPLOAD_ROLE_LABELS) ? PRKS_UPLOAD_ROLE_LABELS : [];
-    const fallback = labels[0] || 'Author';
+    const labelsArr =
+        Array.isArray(labels) && labels.length
+            ? labels
+            : Array.isArray(PRKS_UPLOAD_ROLE_LABELS)
+              ? PRKS_UPLOAD_ROLE_LABELS
+              : [];
+    const fallback = labelsArr[0] || 'Author';
     const selRaw = selectedValue != null ? String(selectedValue) : '';
-    const sel = labels.includes(selRaw) ? selRaw : fallback;
-    mount.innerHTML = prksSegmentedControlHtml(hiddenId, 'Role for linked person', labels, sel, 'roles', {
-        compact: true,
-        withRoleIcons: true,
-    });
+    const sel = labelsArr.includes(selRaw) ? selRaw : fallback;
+    mount.innerHTML = prksSegmentedControlHtml(
+        hiddenId,
+        ariaLabel || 'Role for linked person',
+        labelsArr,
+        sel,
+        'roles',
+        {
+            compact: true,
+            withRoleIcons: true,
+        },
+    );
     const hidden = document.getElementById(hiddenId);
     if (hidden) delete hidden.dataset.prksSegBound;
     if (typeof prksBindSegmentedHidden === 'function') {
@@ -2835,11 +2851,22 @@ function prksMountUploadRoleSegmented(selectedValue) {
     prksMountRoleSegmented('upload-role-seg-mount', 'upload-role-type', selectedValue);
 }
 
+function prksMountLinkRoleSegmented(selectedValue) {
+    prksMountRoleSegmented(
+        'role-role-seg-mount',
+        'role-type',
+        selectedValue,
+        PRKS_LINK_ROLE_LABELS,
+        'Link role',
+    );
+}
+
 function prksMountMetaRoleSegmented(selectedValue) {
     prksMountRoleSegmented('meta-role-seg-mount', 'meta-role-type', selectedValue);
 }
 
 window.prksMountUploadRoleSegmented = prksMountUploadRoleSegmented;
+window.prksMountLinkRoleSegmented = prksMountLinkRoleSegmented;
 window.prksMountMetaRoleSegmented = prksMountMetaRoleSegmented;
 
 function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, variant, options) {

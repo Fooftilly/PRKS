@@ -1105,6 +1105,8 @@ a.tag.tag--sidebar-all:hover {
     overflow-y: auto;
     padding: var(--space-sm) var(--space-md) var(--space-xl) var(--space-md);
     background: var(--bg-color);
+    container-type: inline-size;
+    container-name: prks-main;
 }
 
 .prks-overlay-backdrop {
@@ -1139,7 +1141,7 @@ a.tag.tag--sidebar-all:hover {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     box-shadow: var(--shadow-sm);
-    overflow-x: auto;
+    overflow-x: hidden;
     align-items: center;
 }
 
@@ -1254,6 +1256,28 @@ a.tag.tag--sidebar-all:hover {
 
 .ribbon-btn__label {
     display: inline;
+}
+
+/* Narrow main column (sidebar + details): icon-only quick actions, no horizontal scroll */
+@container prks-main (max-width: 720px) {
+    .top-ribbon {
+        overflow-x: hidden;
+    }
+
+    .top-ribbon__center {
+        flex-wrap: nowrap;
+        justify-content: center;
+        overflow-x: hidden;
+    }
+
+    .top-ribbon__center .ribbon-btn__label {
+        display: none;
+    }
+
+    .top-ribbon__center .ribbon-btn {
+        padding: 7px 9px;
+        gap: 0;
+    }
 }
 
 .ribbon-btn:hover {
@@ -4059,6 +4083,23 @@ a.tag.tag--sidebar-all:hover {
     text-overflow: unset;
     line-height: 1.15;
     hyphens: auto;
+}
+
+/* Link Person modal: 8 roles in 4×2 icon tiles (no tall Author column) */
+.prks-upload-person-stack__roles--tiles-link.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn:first-child {
+    grid-column: auto;
+    grid-row: auto;
+    align-self: stretch;
+    min-height: 52px;
+}
+
+.prks-upload-person-stack__roles--tiles-link.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn:first-child .prks-segmented__btn-icon .prks-icon,
+.prks-upload-person-stack__roles--tiles-link.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn:first-child .prks-segmented__btn-icon .prks-icon svg {
+    --prks-icon-size: 18px;
+}
+
+.prks-upload-person-stack__roles--tiles-link.prks-upload-person-stack__roles--tiles-2row .prks-segmented--roles-icons .prks-segmented__btn:first-child .prks-segmented__btn-label {
+    font-size: 0.62rem;
 }
 
 @media (max-width: 520px) {

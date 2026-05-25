@@ -913,9 +913,11 @@ function initForms() {
     if (typeof prksMountUploadRoleSegmented === 'function') {
         prksMountUploadRoleSegmented('Author');
     }
+    if (typeof prksMountLinkRoleSegmented === 'function') {
+        prksMountLinkRoleSegmented('Author');
+    }
     if (typeof prksBindSegmentedHidden === 'function') {
         prksBindSegmentedHidden('work-status');
-        prksBindSegmentedHidden('role-type');
     }
     if (typeof prksBindAutosizeTextareas === 'function') {
         prksBindAutosizeTextareas(document);
