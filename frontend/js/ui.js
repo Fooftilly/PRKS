@@ -243,6 +243,46 @@ function prksAlertDialog(options = {}) {
     }).then(() => {});
 }
 
+const PRKS_INLINE_COPY_FLASH_MS = 1500;
+const _prksInlineCopyFlashTimers = new WeakMap();
+
+/**
+ * Brief check/error flash on small inline copy icon buttons.
+ * @param {HTMLElement|null|undefined} btn
+ * @param {boolean} ok
+ */
+function prksFlashInlineCopyButton(btn, ok = true) {
+    if (!btn || !(btn instanceof HTMLElement)) return;
+    const prev = _prksInlineCopyFlashTimers.get(btn);
+    if (prev) clearTimeout(prev);
+    if (!btn.dataset.prksFlashRestore) {
+        btn.dataset.prksFlashRestore = btn.innerHTML;
+        btn.dataset.prksFlashTitle = btn.getAttribute('title') || '';
+        btn.dataset.prksFlashAria = btn.getAttribute('aria-label') || '';
+    }
+    const label = ok ? 'Copied' : 'Copy failed';
+    btn.classList.remove('inline-action-btn--copied', 'inline-action-btn--error');
+    btn.classList.add(ok ? 'inline-action-btn--copied' : 'inline-action-btn--error');
+    btn.setAttribute('title', label);
+    btn.setAttribute('aria-label', label);
+    const iconName = ok ? 'check' : 'x';
+    btn.innerHTML =
+        typeof prksIcon === 'function' ? prksIcon(iconName, { size: 'sm' }) : label;
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
+    const t = setTimeout(() => {
+        btn.innerHTML = btn.dataset.prksFlashRestore || '';
+        btn.setAttribute('title', btn.dataset.prksFlashTitle || '');
+        btn.setAttribute('aria-label', btn.dataset.prksFlashAria || '');
+        delete btn.dataset.prksFlashRestore;
+        delete btn.dataset.prksFlashTitle;
+        delete btn.dataset.prksFlashAria;
+        btn.classList.remove('inline-action-btn--copied', 'inline-action-btn--error');
+        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
+        _prksInlineCopyFlashTimers.delete(btn);
+    }, PRKS_INLINE_COPY_FLASH_MS);
+    _prksInlineCopyFlashTimers.set(btn, t);
+}
+
 function prksIsDuplicateRoleLinkError(msg) {
     return typeof msg === 'string' && /already linked/i.test(msg);
 }

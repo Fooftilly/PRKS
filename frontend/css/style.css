@@ -3452,6 +3452,14 @@ a.tag.tag--sidebar-all:hover {
     --prks-icon-size: 16px;
 }
 
+.inline-action-btn--copied {
+    color: var(--status-completed-border);
+}
+
+.inline-action-btn--error {
+    color: #ef4444;
+}
+
 .prks-doc-type-menu__caret {
     display: inline-flex;
     align-items: center;
@@ -3989,6 +3997,14 @@ textarea[data-prks-autosize="1"] {
 
 .inline-action-btn--close:hover {
     color: var(--text-primary);
+}
+
+.inline-action-btn--copied {
+    color: var(--status-completed-border);
+}
+
+.inline-action-btn--error {
+    color: #ef4444;
 }
 
 .card-heading-row {

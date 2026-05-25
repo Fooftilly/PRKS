@@ -160,12 +160,14 @@ const PERSON_STANDARD_TEMPLATE_FIELDS = [
 const PERSON_TEMPLATE_HELP_TEXT = [
     'Fill this template according to the provided rules:',
     '',
-    '- first_name, last_name, aliases, about: plain text strings. Middle names should be placed in first_name field.',
-    '- birth_date, death_date: use dd/mm/yyyy, yyyy, or -yyyy (BC).',
-    '- image_url, link_wikipedia, link_stanford_encyclopedia, link_iep: full URL strings (prefer https://). For image_url, use Wikipedia (or Wikimedia related) profile photo URL if it exists; otherwise other reliable sources are allowed.',
-    "- links_other: one entry per line inside single JSON string. MUST USE [Title](https://...) format for links in this field. DO NOT use free-text notes. This field meant for links such as personal website of person, or other reputable links about this person. Don't include links to papers discussing this person or papers by this person. Acceptable links in this field are links to encyclopedias, profile pages...",
-    '- empty fields should stay empty; do not fill them with values such as N/A',
-    '- aliases: free text; comma-separated aliases recommended. Include Serbian Latin (not Cyrillic) variation of the name if it exists. If the person has a middle name, the variation with only first and last name should be added to the aliases field (if it was used anywhere).',
+    '- first_name, last_name, aliases: plain text strings. Middle names should be placed in first_name field.',
+    '- about: MUST review and update when filling this template; DO NOT leave unchanged or empty if you are enriching other fields and reliable sources exist. Short encyclopedic biography for person cards and search (About / expertise). Include who they are, time period, field/domain, 2-4 main ideas/works/contributions, and why they are notable. DO NOT put birth year, death year, or lifespan dates in about; use birth_date and death_date only. Neutral third-person prose, complete sentences, plain text only (JSON string; optional blank line between paragraphs as \\n\\n). No Markdown, bullet lists, or URLs (use link_* and links_other). Target ~80-500 words (~400-2500 characters); avoid one-liners and essay-length dumps. Synthesize from Wikipedia, SEP, IEP, or provided links; do not invent facts. If existing text is present, improve or expand it rather than skipping this field.',
+    '- birth_date, death_date: plain date strings only — never prose, never "BC", "BCE", or "AD" suffixes. Allowed: (1) AD year-only positive yyyy, e.g. "1903". (2) BC year-only: leading minus + BC year digits, e.g. source says 428 BC → "-428" (same for 384 BC → "-384"). (3) Full date dd/mm/yyyy; BC uses negative year in last segment, e.g. 15 March 384 BC → "15/03/-384"; AD e.g. "20/02/2001". Wrong: "384 BC", "428 BCE", "-384 BC", "born 428 BC". Use day and month only if source states them; else year-only. Unknown date → "".',
+    '- image_url: direct portrait image URL only (https preferred). MUST verify the link works before filling: it should return HTTP 200 and show an image (use GET or HEAD, or open in browser). If 404, 403, login wall, HTML error page, redirect to missing file, or broken hotlink, set image_url to "". Prefer current stable upload.wikimedia.org (or equivalent direct file) URLs taken from the person\'s verified Wikimedia/Wikipedia file page — not guessed filenames, not old revision URLs, not search-result or temporary CDN/signed links. Do not invent URLs from memory. If no working portrait URL is confirmed, leave empty.',
+    '- link_wikipedia, link_stanford_encyclopedia, link_iep: bare URL string only (starts with https://). Wrong: [Title](https://...), Markdown, or labels — [Title](url) format is ONLY for links_other. One direct entry URL per field; prefer https; not homepage/search URL. Do not repeat in links_other. Example link_wikipedia: "https://en.wikipedia.org/wiki/Example_Name".',
+    "- links_other: one entry per line inside single JSON string. MUST USE [Title](https://...) Markdown link format per line (this is the only field that uses brackets). Only additional references not already in link_wikipedia, link_stanford_encyclopedia, or link_iep. DO NOT duplicate Wikipedia, Stanford Encyclopedia of Philosophy, or IEP links here. DO NOT add free-text notes, DOI links, paper links, or links by this person unless biographical.",
+    '- empty fields should stay empty strings; do not fill placeholders such as N/A, unknown, none, -, or TBD.',
+    '- aliases: free text; comma-separated aliases recommended. Include Serbian Latin (not Cyrillic) variation if it exists. Include common spelling/transliteration variants and first+last version when middle name exists. Do not include titles/honorifics (Dr., Prof., Sir) as aliases.',
     '- Keep exact keys; do not add/remove keys.',
     '- Keep all values as JSON strings.',
 ].join('\n');
@@ -239,12 +241,20 @@ function openPersonProfileTemplateModal() {
     if (typeof prksAutosizeTextarea === 'function') prksAutosizeTextarea(templateArea);
 }
 
-async function copyPersonTemplateGuideText() {
+function _personTemplateCopyBtn(ev) {
+    if (!ev) return null;
+    const t = ev.currentTarget || ev.target;
+    return t && typeof t.closest === 'function' ? t.closest('.inline-action-btn') : null;
+}
+
+async function copyPersonTemplateGuideText(ev) {
+    const btn = _personTemplateCopyBtn(ev);
     const s = PERSON_TEMPLATE_HELP_TEXT;
     try {
         if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
             await navigator.clipboard.writeText(s);
             setPersonTemplateFeedback('Template field guide copied.', false);
+            if (typeof prksFlashInlineCopyButton === 'function') prksFlashInlineCopyButton(btn, true);
             return;
         }
     } catch (_e) {}
@@ -266,12 +276,15 @@ async function copyPersonTemplateGuideText() {
     }
     if (ok) {
         setPersonTemplateFeedback('Template field guide copied.', false);
+        if (typeof prksFlashInlineCopyButton === 'function') prksFlashInlineCopyButton(btn, true);
     } else {
         setPersonTemplateFeedback('Could not copy guide. Copy manually.', true);
+        if (typeof prksFlashInlineCopyButton === 'function') prksFlashInlineCopyButton(btn, false);
     }
 }
 
-async function copyPersonTemplateAndGuideText() {
+async function copyPersonTemplateAndGuideText(ev) {
+    const btn = _personTemplateCopyBtn(ev);
     const templateArea = document.getElementById('person-template-json');
     const rawTemplate = templateArea ? String(templateArea.value || '') : '';
     const template =
@@ -282,6 +295,7 @@ async function copyPersonTemplateAndGuideText() {
         if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
             await navigator.clipboard.writeText(s);
             setPersonTemplateFeedback('Template + field guide copied.', false);
+            if (typeof prksFlashInlineCopyButton === 'function') prksFlashInlineCopyButton(btn, true);
             return;
         }
     } catch (_e) {}
@@ -303,8 +317,10 @@ async function copyPersonTemplateAndGuideText() {
     }
     if (ok) {
         setPersonTemplateFeedback('Template + field guide copied.', false);
+        if (typeof prksFlashInlineCopyButton === 'function') prksFlashInlineCopyButton(btn, true);
     } else {
         setPersonTemplateFeedback('Could not copy template + guide. Copy manually.', true);
+        if (typeof prksFlashInlineCopyButton === 'function') prksFlashInlineCopyButton(btn, false);
     }
 }
 
@@ -313,7 +329,7 @@ function insertPersonProfileTemplateFromCurrentData() {
     if (!templateArea) return;
     const tpl = buildPersonStandardTemplateFromProfile();
     templateArea.value = JSON.stringify(tpl, null, 2);
-    setPersonTemplateFeedback('Template refreshed from current profile values.', false);
+    setPersonTemplateFeedback('Template loaded from current profile values.', false);
     if (typeof prksAutosizeTextarea === 'function') prksAutosizeTextarea(templateArea);
 }
 
