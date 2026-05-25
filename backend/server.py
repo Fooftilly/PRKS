@@ -1090,15 +1090,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, data)
             elif path == '/api/tags':
                 used_only = query.get('used', [''])[0] in ('1', 'true', 'yes')
-                recent_only = query.get('recent', [''])[0] in ('1', 'true', 'yes')
-                try:
-                    lim = int(query.get('limit', ['8'])[0])
-                except ValueError:
-                    lim = 8
-                if recent_only:
-                    data = db.get_recent_tags_in_use(lim)
-                    self.send_json(200, data)
-                elif used_only:
+                if used_only:
                     data = db.get_tags_in_use()
                     self.send_json(200, data)
                 else:

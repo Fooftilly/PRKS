@@ -298,17 +298,6 @@ body {
     margin-bottom: 1px;
 }
 
-.sidebar-tags-wrap {
-    list-style: none;
-    margin: 0 0 4px 0;
-    padding: 0 2px 0 4px;
-}
-
-/* Tighten gap between “Tags” section label and chip row */
-.nav-section + .sidebar-tags-wrap {
-    margin-top: -4px;
-}
-
 .nav-section + .sidebar-progress-block {
     margin-top: -2px;
 }
@@ -319,38 +308,6 @@ body {
     margin-top: var(--space-lg);
     padding-top: var(--space-md);
     list-style: none;
-}
-
-.sidebar-tag-cloud-empty {
-    color: var(--text-tertiary);
-    font-size: 0.72rem;
-    line-height: 1.35;
-    display: inline;
-    padding: 0;
-}
-
-.tag-cloud--sidebar {
-    margin-bottom: 6px;
-    align-items: center;
-}
-
-a.tag.tag--sidebar-all {
-    border: none;
-    background: transparent;
-    color: var(--accent);
-    font-size: 0.68rem;
-    font-weight: 600;
-    padding: 3px 2px 3px 4px;
-    margin-left: 2px;
-    text-decoration: none;
-    white-space: nowrap;
-    cursor: pointer;
-    box-shadow: none;
-}
-
-a.tag.tag--sidebar-all:hover {
-    text-decoration: underline;
-    color: var(--accent-hover);
 }
 
 .tag-cloud {
@@ -4407,11 +4364,6 @@ textarea[data-prks-autosize="1"] {
 
 .work-tag-chip--colored {
     border-left: 3px solid var(--tag-accent, var(--accent));
-}
-
-.tag--sidebar-colored {
-    border-left: 3px solid var(--tag-accent, var(--accent));
-    cursor: pointer;
 }
 
 .person-groups-fieldset__legend {

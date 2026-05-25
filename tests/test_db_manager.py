@@ -875,29 +875,6 @@ class TestDBManager(unittest.TestCase):
         rows = self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
         self.assertEqual(len(rows), 0)
 
-    def test_get_recent_tags_in_use(self):
-        w1 = self.db.add_work(title="W1")
-        w2 = self.db.add_work(title="W2")
-        ta = self.db.add_tag("older", "#111")["id"]
-        tb = self.db.add_tag("newer", "#222")["id"]
-        self.db.add_tag_to_work(w1, ta)
-        self.db.add_tag_to_work(w2, tb)
-        self.db.execute_query(
-            "UPDATE works SET last_opened_at = '2020-01-01' WHERE id = ?", (w1,)
-        )
-        self.db.execute_query(
-            "UPDATE works SET last_opened_at = '2025-06-01' WHERE id = ?", (w2,)
-        )
-        # Tag created_at is set at insert time (often “now”); pin it so sort reflects work activity.
-        self.db.execute_query(
-            "UPDATE tags SET created_at = '2000-01-01' WHERE id IN (?, ?)", (ta, tb)
-        )
-        recent = self.db.get_recent_tags_in_use(limit=5)
-        names = [t["name"] for t in recent]
-        self.assertIn("newer", names)
-        self.assertIn("older", names)
-        self.assertEqual(names[0], "newer")
-
     def test_get_recently_added_works_order(self):
         w_old = self.db.add_work(title="Older added")
         w_new = self.db.add_work(title="Newer added")

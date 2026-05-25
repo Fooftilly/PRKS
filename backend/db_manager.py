@@ -3227,50 +3227,6 @@ class PRKSDatabase:
         self._enrich_tag_rows_with_aliases(rows)
         return rows
 
-    def get_recent_tags_in_use(self, limit: int = 8) -> List[dict]:
-        """Tags in use, ordered by latest activity (opened work, folder update, or tag creation)."""
-        lim = max(1, min(int(limit), 50))
-        query = """
-        SELECT t.id, t.name, t.color, t.created_at,
-            (SELECT MAX(w.last_opened_at) FROM works w
-             INNER JOIN work_tags wt ON w.id = wt.work_id WHERE wt.tag_id = t.id) AS last_open,
-            (SELECT MAX(f.updated_at) FROM folders f
-             INNER JOIN folder_tags ft ON f.id = ft.folder_id WHERE ft.tag_id = t.id) AS last_folder
-        FROM tags t
-        WHERE EXISTS (SELECT 1 FROM work_tags wt WHERE wt.tag_id = t.id)
-           OR EXISTS (SELECT 1 FROM folder_tags ft WHERE ft.tag_id = t.id)
-        """
-
-        def _ts(val: Any) -> float:
-            if val is None or val == "":
-                return 0.0
-            s = str(val).strip().replace("T", " ")[:19]
-            try:
-                return datetime.fromisoformat(s).timestamp()
-            except ValueError:
-                try:
-                    return datetime.strptime(s[:10], "%Y-%m-%d").timestamp()
-                except ValueError:
-                    return 0.0
-
-        def rec_key(row: dict) -> float:
-            return max(_ts(row["last_open"]), _ts(row["last_folder"]), _ts(row["created_at"]))
-
-        rows = list(self.execute_query(query, ()))
-        rows.sort(key=rec_key, reverse=True)
-        out: List[dict] = []
-        for r in rows[:lim]:
-            out.append(
-                {
-                    "id": r["id"],
-                    "name": r["name"],
-                    "color": r["color"],
-                    "created_at": r["created_at"],
-                }
-            )
-        self._enrich_tag_rows_with_aliases(out)
-        return out
-
     def delete_tag(self, tag_id: str) -> Dict[str, Any]:
         tid = (tag_id or "").strip()
         if not tid:

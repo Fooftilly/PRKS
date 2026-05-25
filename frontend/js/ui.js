@@ -2986,7 +2986,6 @@ async function prksReloadEntityTagsUI(entityType, entityId) {
             }
         }
     }
-    refreshSidebarTags();
 }
 
 async function prksAttachExistingTag(entityType, entityId, tagId) {
@@ -3561,52 +3560,6 @@ function renderWorkAnnotationsTab(work) {
             </section>
         </div>
     `;
-}
-
-// Side-bar Tag Cloud (only tags attached to at least one work or folder)
-async function refreshSidebarTags() {
-    let tags;
-    try {
-        tags = await fetchTags({ recent: true, limit: 8 });
-    } catch (err) {
-        console.error('refreshSidebarTags: could not load tags', err);
-        return;
-    }
-    const cloud = document.getElementById('sidebar-tag-cloud');
-    if (!cloud) return;
-
-    const allTagsLink =
-        '<a href="#/tags" class="tag tag--sidebar tag--sidebar-all" aria-label="View all tags">…all tags</a>';
-
-    if (tags.length === 0) {
-        cloud.innerHTML =
-            '<span class="sidebar-tag-cloud-empty">No recent tags.</span> ' + allTagsLink;
-        return;
-    }
-
-    cloud.innerHTML =
-        tags
-            .map(
-                (t) =>
-                    `<span class="tag tag--sidebar tag--sidebar-colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};" ` +
-                    `role="button" tabindex="0" data-sidebar-tag-q="${encodeURIComponent(t.name)}">${escapeHtml(t.name)}</span>`
-            )
-            .join('') + allTagsLink;
-
-    cloud.onclick = (e) => {
-        const el = e.target.closest('[data-sidebar-tag-q]');
-        if (!el) return;
-        const q = el.getAttribute('data-sidebar-tag-q');
-        if (q != null) window.location.hash = '#/search?tag=' + q;
-    };
-    cloud.onkeydown = (e) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        const el = e.target.closest('[data-sidebar-tag-q]');
-        if (!el) return;
-        e.preventDefault();
-        const q = el.getAttribute('data-sidebar-tag-q');
-        if (q != null) window.location.hash = '#/search?tag=' + q;
-    };
 }
 
 // Advanced Upload Logic

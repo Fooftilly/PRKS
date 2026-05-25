@@ -90,7 +90,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initForms();
     initSearch();
     initUploadDragAndDrop();
-    refreshSidebarTags();
 });
 
 function prksAbsoluteUrlForHash(hash) {

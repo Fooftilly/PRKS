@@ -195,10 +195,7 @@ async function fetchPublishersInUse() {
 
 async function fetchTags(options = {}) {
     const params = new URLSearchParams();
-    if (options.recent) {
-        params.set('recent', '1');
-        params.set('limit', String(options.limit != null ? options.limit : 8));
-    } else if (options.used) {
+    if (options.used) {
         params.set('used', '1');
     }
     const q = params.toString() ? '?' + params.toString() : '';

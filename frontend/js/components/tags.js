@@ -306,7 +306,6 @@ function prksWireTagsPageMergePanel() {
                 if (wrap && typeof renderTagsPage === 'function') {
                     await renderTagsPage(wrap);
                 }
-                if (typeof refreshSidebarTags === 'function') void refreshSidebarTags();
             } catch (err) {
                 console.error(err);
                 await prksAlertMessage(err.message || 'Could not merge tags.', 'Error');
@@ -365,7 +364,6 @@ function prksWireTagsPageAliasPanel(container) {
                 if (container && typeof renderTagsPage === 'function') {
                     await renderTagsPage(container);
                 }
-                if (typeof refreshSidebarTags === 'function') void refreshSidebarTags();
             } catch (err) {
                 console.error(err);
                 await prksAlertMessage(err.message || 'Could not delete tag.', 'Error');
@@ -393,7 +391,6 @@ function prksWireTagsPageAliasPanel(container) {
                 const tags = await fetchTags({ used: true });
                 prksTagsPageCtx.tags = tags;
                 prksRenderTagsPageAliasModal();
-                if (typeof refreshSidebarTags === 'function') void refreshSidebarTags();
             } catch (err) {
                 console.error(err);
                 await prksAlertMessage(err.message || 'Could not add alias.', 'Error');
@@ -421,7 +418,6 @@ function prksWireTagsPageAliasPanel(container) {
                 const tags = await fetchTags({ used: true });
                 prksTagsPageCtx.tags = tags;
                 prksRenderTagsPageAliasModal();
-                if (typeof refreshSidebarTags === 'function') void refreshSidebarTags();
             } catch (err) {
                 console.error(err);
                 await prksAlertMessage(err.message || 'Could not remove alias.', 'Error');
