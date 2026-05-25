@@ -876,6 +876,270 @@ function personDisplayName(p) {
     return `${(p.first_name || '').trim()} ${p.last_name || ''}`.trim();
 }
 
+function prksPersonCanonicalName(p) {
+    return personDisplayName(p);
+}
+
+function prksParsePersonAliases(p) {
+    const raw = p && p.aliases != null ? String(p.aliases) : '';
+    return raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+}
+
+/** Display name for a role row: per-file credit_name override or profile name. */
+function prksRoleDisplayName(role) {
+    const credit = role && role.credit_name != null ? String(role.credit_name).trim() : '';
+    if (credit) return credit;
+    return personDisplayName(role);
+}
+
+function prksRoleCreditPickerHtml(prefix) {
+    const p = String(prefix || 'role');
+    return `
+        <div class="prks-role-credit-picker" id="${p}-credit-wrap" hidden>
+            <label for="${p}-credit-select">Name on this file</label>
+            <select id="${p}-credit-select" class="prks-role-credit-picker__select" aria-label="Name shown on this file">
+                <option value="">Full profile name</option>
+            </select>
+            <input type="text" id="${p}-credit-custom" class="prks-role-credit-picker__custom hidden" placeholder="Custom name on this file" autocomplete="off" aria-label="Custom name on this file">
+            <p class="meta-row meta-row--hint">Optional. Pick how this person is credited on this file only.</p>
+        </div>`;
+}
+
+function prksRefreshRoleCreditPicker(prefix, person) {
+    const wrap = document.getElementById(`${prefix}-credit-wrap`);
+    const sel = document.getElementById(`${prefix}-credit-select`);
+    const custom = document.getElementById(`${prefix}-credit-custom`);
+    if (!wrap || !sel) return;
+    if (!person || !person.id) {
+        wrap.hidden = true;
+        sel.innerHTML = '<option value="">Full profile name</option>';
+        if (custom) {
+            custom.value = '';
+            custom.classList.add('hidden');
+        }
+        return;
+    }
+    wrap.hidden = false;
+    const canonical = prksPersonCanonicalName(person);
+    const aliases = prksParsePersonAliases(person);
+    sel.innerHTML = '';
+    const optCanon = document.createElement('option');
+    optCanon.value = '';
+    optCanon.textContent = canonical ? `Full profile name (${canonical})` : 'Full profile name';
+    sel.appendChild(optCanon);
+    aliases.forEach((alias) => {
+        const o = document.createElement('option');
+        o.value = alias;
+        o.textContent = alias;
+        sel.appendChild(o);
+    });
+    const optCustom = document.createElement('option');
+    optCustom.value = '__custom__';
+    optCustom.textContent = 'Custom…';
+    sel.appendChild(optCustom);
+    sel.value = '';
+    if (custom) {
+        custom.value = '';
+        custom.classList.add('hidden');
+    }
+}
+
+function prksBindRoleCreditPicker(prefix) {
+    const sel = document.getElementById(`${prefix}-credit-select`);
+    const custom = document.getElementById(`${prefix}-credit-custom`);
+    if (!sel || sel.dataset.bound === '1') return;
+    sel.dataset.bound = '1';
+    sel.addEventListener('change', () => {
+        if (!custom) return;
+        if (sel.value === '__custom__') {
+            custom.classList.remove('hidden');
+            custom.focus();
+        } else {
+            custom.classList.add('hidden');
+            custom.value = '';
+        }
+    });
+}
+
+function prksCreditPickerPrefixForHiddenId(hiddenId) {
+    const map = {
+        'meta-role-person-id': 'meta-role',
+        'role-person-id': 'role-link',
+        'upload-person-id': 'upload-role',
+    };
+    return map[String(hiddenId || '').trim()] || '';
+}
+
+/** Credit from picker; optional fallback when search label differs from profile name. */
+function prksResolveRoleCreditNameForLink(prefix, personId, searchInputId) {
+    const sel = document.getElementById(`${prefix}-credit-select`);
+    const custom = document.getElementById(`${prefix}-credit-custom`);
+    let credit = '';
+    if (sel) {
+        const customVal = custom ? String(custom.value || '').trim() : '';
+        if (sel.value === '__custom__') {
+            credit = customVal;
+        } else if (customVal) {
+            credit = customVal;
+        } else {
+            credit = String(sel.value || '').trim();
+        }
+    }
+    if (credit) return credit;
+    const person = prksFindPersonInCache(personId);
+    const canonical = person ? prksPersonCanonicalName(person) : '';
+    const searchEl =
+        typeof searchInputId === 'string' ? document.getElementById(searchInputId) : searchInputId;
+    const searchLabel = searchEl ? String(searchEl.value || '').trim() : '';
+    if (searchLabel && canonical && searchLabel.toLowerCase() !== canonical.toLowerCase()) {
+        return searchLabel;
+    }
+    return '';
+}
+
+function prksReadRoleCreditName(prefix) {
+    const sel = document.getElementById(`${prefix}-credit-select`);
+    const custom = document.getElementById(`${prefix}-credit-custom`);
+    if (!sel) return '';
+    const customVal = custom ? String(custom.value || '').trim() : '';
+    let out = '';
+    if (sel.value === '__custom__') {
+        out = customVal;
+    } else if (customVal) {
+        out = customVal;
+    } else {
+        out = String(sel.value || '').trim();
+    }
+    return out;
+}
+
+function prksFindPersonInCache(personId) {
+    const id = String(personId || '').trim();
+    if (!id) return null;
+    const lists = [
+        window.allPersons,
+        typeof allPersons !== 'undefined' ? allPersons : null,
+    ];
+    for (const list of lists) {
+        if (!Array.isArray(list)) continue;
+        const hit = list.find((p) => String(p.id) === id);
+        if (hit) return hit;
+    }
+    return null;
+}
+
+/** Text prompt using confirm shell. Resolves trimmed string on OK, null on cancel. */
+function prksPromptTextDialog(options = {}) {
+    return new Promise((resolve) => {
+        const root = document.getElementById('prks-modal-confirm');
+        const titleEl = document.getElementById('prks-modal-confirm-title');
+        const descEl = document.getElementById('prks-modal-confirm-desc');
+        const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
+        const okBtn = document.getElementById('prks-modal-confirm-ok');
+        if (!root || !descEl || !okBtn || !cancelBtn) {
+            resolve(null);
+            return;
+        }
+        const title = options.title != null ? String(options.title) : 'Edit';
+        const message = options.message != null ? String(options.message) : '';
+        const defaultValue = options.defaultValue != null ? String(options.defaultValue) : '';
+        const okLabel = options.okLabel != null ? String(options.okLabel) : 'Save';
+        const cancelLabel = options.cancelLabel != null ? String(options.cancelLabel) : 'Cancel';
+
+        if (titleEl) titleEl.textContent = title;
+        descEl.textContent = '';
+        if (message) {
+            const p = document.createElement('p');
+            p.className = 'prks-modal-confirm__desc';
+            p.textContent = message;
+            descEl.appendChild(p);
+        }
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'prks-modal-prompt__input';
+        input.value = defaultValue;
+        input.setAttribute('aria-label', title);
+        descEl.appendChild(input);
+
+        cancelBtn.classList.remove('hidden');
+        cancelBtn.setAttribute('aria-hidden', 'false');
+        cancelBtn.textContent = cancelLabel;
+        okBtn.textContent = okLabel;
+        prksModalConfirmAlertOnly = false;
+
+        prksModalConfirmResolve = (confirmed) => {
+            const val = confirmed ? input.value.trim() : null;
+            descEl.textContent = '';
+            resolve(val);
+        };
+        root.classList.remove('hidden');
+        root.setAttribute('aria-hidden', 'false');
+        requestAnimationFrame(() => input.focus());
+    });
+}
+
+async function prksPatchRoleCreditName(workId, personId, roleType, orderIndex, creditName) {
+    const res = await fetch(`/api/works/${encodeURIComponent(workId)}/roles`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            person_id: personId,
+            role_type: roleType,
+            order_index: orderIndex,
+            credit_name: creditName || '',
+        }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data };
+}
+
+async function prksEditRoleCreditOnWork(btn) {
+    if (!btn) return;
+    const workId = (btn.getAttribute('data-work-id') || '').trim();
+    const personId = (btn.getAttribute('data-person-id') || '').trim();
+    const roleType = (btn.getAttribute('data-role-type') || '').trim();
+    const orderIndex = (btn.getAttribute('data-order-index') || '0').trim();
+    const canonical = (btn.getAttribute('data-canonical-name') || '').trim();
+    const currentDisplay = (btn.getAttribute('data-display-name') || '').trim();
+    if (!workId || !personId || !roleType) return;
+
+    let hint = canonical ? `Profile name: ${canonical}. Leave empty to use profile name.` : 'Leave empty to use profile name.';
+    const person = prksFindPersonInCache(personId);
+    const aliases = person ? prksParsePersonAliases(person) : [];
+    if (aliases.length) {
+        hint += ` Aliases: ${aliases.join(', ')}.`;
+    }
+    const initial =
+        currentDisplay && canonical && currentDisplay === canonical ? '' : currentDisplay;
+
+    const next = await prksPromptTextDialog({
+        title: 'Name on this file',
+        message: hint,
+        defaultValue: initial,
+        okLabel: 'Save',
+    });
+    if (next === null) return;
+
+    const { ok, data } = await prksPatchRoleCreditName(
+        workId,
+        personId,
+        roleType,
+        parseInt(orderIndex, 10) || 0,
+        next
+    );
+    if (!ok) {
+        await prksAlertMessage(data.error || 'Could not update name on file.', 'Could not save');
+        return;
+    }
+    await prksRefreshUiAfterWorkRoleRemoved(workId);
+}
+
+window.prksRoleDisplayName = prksRoleDisplayName;
+window.prksEditRoleCreditOnWork = prksEditRoleCreditOnWork;
+
 /** Split typed display name: mononym->last, otherwise all-but-last->first and last token->last. */
 function prksSplitTypedPersonName(name) {
     const parts = String(name || '')
@@ -929,6 +1193,22 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
         if (personSearch) {
             personSearch.value = newPerson ? personDisplayName(newPerson) : trimmed;
         }
+        const hiddenId =
+            typeof hiddenInputRef === 'string' ? hiddenInputRef : hiddenInputRef && hiddenInputRef.id;
+        const prefix = prksCreditPickerPrefixForHiddenId(hiddenId);
+        if (prefix && newPerson) {
+            prksRefreshRoleCreditPicker(prefix, newPerson);
+            const canonical = prksPersonCanonicalName(newPerson);
+            if (trimmed && canonical && trimmed.toLowerCase() !== canonical.toLowerCase()) {
+                const sel = document.getElementById(`${prefix}-credit-select`);
+                const custom = document.getElementById(`${prefix}-credit-custom`);
+                if (sel && custom) {
+                    sel.value = '__custom__';
+                    custom.classList.remove('hidden');
+                    custom.value = trimmed;
+                }
+            }
+        }
     } catch (e) {
         console.error(e);
         await prksAlertMessage('Could not create person.', 'Error');
@@ -959,7 +1239,9 @@ async function initWorkMetaRoleLinker(workId) {
                 'Quick-created from Edit Metadata'
             );
         },
+        onPersonPick: (person) => prksRefreshRoleCreditPicker('meta-role', person),
     });
+    prksBindRoleCreditPicker('meta-role');
     const workHidden = document.getElementById('meta-role-work-id');
     if (workHidden) workHidden.value = String(workId);
     const roleHidden = document.getElementById('meta-role-type');
@@ -997,6 +1279,11 @@ async function addRoleToWorkFromMetaEditor(workId) {
         addBtn.textContent = 'Linking...';
     }
     try {
+        const creditName = prksResolveRoleCreditNameForLink(
+            'meta-role',
+            personId,
+            'meta-role-person-search'
+        );
         const res = await fetch('/api/roles', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1004,6 +1291,7 @@ async function addRoleToWorkFromMetaEditor(workId) {
                 person_id: personId,
                 work_id: resolvedWorkId,
                 role_type: roleType,
+                credit_name: creditName,
             }),
         });
         const data = await res.json().catch(() => ({}));
@@ -1019,6 +1307,7 @@ async function addRoleToWorkFromMetaEditor(workId) {
         }
         if (personHidden) personHidden.value = '';
         if (personSearch) personSearch.value = '';
+        prksRefreshRoleCreditPicker('meta-role', null);
     } catch (e) {
         console.error(e);
         await prksAlertDialog({
@@ -1042,8 +1331,10 @@ async function prepareRoleModal() {
         onQuickCreate: (typedName) => {
             void prksQuickCreatePersonForRoleLink(typedName);
         },
+        onPersonPick: (person) => prksRefreshRoleCreditPicker('role-link', person),
     });
     initSearchableCombobox('role-work-search', 'role-work-results', 'role-work-id', 'work');
+    prksBindRoleCreditPicker('role-link');
 
     const hash = window.location.hash || '';
     const personSearch = document.getElementById('role-person-search');
@@ -1053,6 +1344,7 @@ async function prepareRoleModal() {
 
     personSearch.value = '';
     personHidden.value = '';
+    prksRefreshRoleCreditPicker('role-link', null);
     workSearch.value = '';
     workHidden.value = '';
 
@@ -1066,6 +1358,7 @@ async function prepareRoleModal() {
         if (p) {
             personHidden.value = p.id;
             personSearch.value = personDisplayName(p);
+            prksRefreshRoleCreditPicker('role-link', p);
         }
     }
 
@@ -2121,7 +2414,8 @@ function buildWorkLinkedPersonsHtml(work) {
         .map((rt) => {
             const chips = groups[rt]
                 .map((a) => {
-                    const name = `${a.first_name || ''} ${a.last_name || ''}`.trim() || 'Person';
+                    const display = prksRoleDisplayName(a) || 'Person';
+                    const canonical = prksPersonCanonicalName(a) || display;
                     const safePersonId = encodeURIComponent(String(a.id || ''));
                     const pid = String(a.id || '').trim();
                     const oi =
@@ -2129,7 +2423,11 @@ function buildWorkLinkedPersonsHtml(work) {
                             ? String(a.order_index)
                             : '0';
                     const roleAttr = escapeHtml(rt);
-                    return `<span class="work-linked-persons__chip tag"><a class="work-linked-persons__chip-link" href="#/people/${safePersonId}">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${escapeHtml(name)}</a><button type="button" class="work-linked-persons__unlink" aria-label="Remove link from this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></span>`;
+                    const titleAttr =
+                        display !== canonical
+                            ? ` title="Profile: ${escapeHtml(canonical)}"`
+                            : '';
+                    return `<span class="work-linked-persons__chip tag"><a class="work-linked-persons__chip-link" href="#/people/${safePersonId}"${titleAttr}>${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${escapeHtml(display)}</a><button type="button" class="work-linked-persons__edit-credit" aria-label="Edit name on this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" data-display-name="${escapeHtml(display)}" data-canonical-name="${escapeHtml(canonical)}" onclick="event.stopPropagation(); void prksEditRoleCreditOnWork(this);">${typeof prksIcon === 'function' ? prksIcon('pencil', { size: 'sm' }) : '✎'}</button><button type="button" class="work-linked-persons__unlink" aria-label="Remove link from this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></span>`;
                 })
                 .join(' ');
             return `<div class="work-linked-persons__role"><h4 class="work-linked-persons__role-title">${escapeHtml(rt)}</h4><div class="tag-cloud">${chips}</div></div>`;
@@ -3105,6 +3403,7 @@ function renderWorkMetaEditTab(work) {
                 <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles prks-upload-person-stack__roles--tiles-2row">
                     <div class="prks-upload-role-seg" id="meta-role-seg-mount"></div>
                 </div>
+                ${typeof prksRoleCreditPickerHtml === 'function' ? prksRoleCreditPickerHtml('meta-role') : ''}
             </div>
             <div id="meta-linked-persons-list" class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work)}</div>
             
@@ -3417,6 +3716,7 @@ function resetUploadModal() {
     document.getElementById('work-folder-search').value = '';
     document.getElementById('upload-person-id').value = '';
     document.getElementById('upload-person-search').value = '';
+    prksRefreshRoleCreditPicker('upload-role', null);
     removeUploadPdfPreview();
     document.getElementById('upload-roles-list').innerHTML = '<span class="status-chip-list__empty">No persons linked yet</span>';
     window.__prksUploadVideoMeta = null;
@@ -3454,7 +3754,9 @@ async function populateUploadComboboxes() {
                 'Quick-created from upload'
             );
         },
+        onPersonPick: (person) => prksRefreshRoleCreditPicker('upload-role', person),
     });
+    prksBindRoleCreditPicker('upload-role');
     initUploadTagCombobox();
 }
 
@@ -3668,6 +3970,9 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
                     e.preventDefault(); // Prevent input blur before click
                     input.value = label;
                     hidden.value = item.id;
+                    if (type === 'person' && typeof comboboxOptions.onPersonPick === 'function') {
+                        comboboxOptions.onPersonPick(item);
+                    }
                     prksHideInlineComboboxResults(results);
                 };
                 results.appendChild(div);
@@ -3718,12 +4023,19 @@ function addRoleToUploadList() {
         return;
     }
 
-    uploadRoles.push({ person_id: hidden.value, person_name: pName, role_type: rType });
+    const creditName = prksResolveRoleCreditNameForLink('upload-role', hidden.value, 'upload-person-search');
+    const displayName = creditName || pName;
+    uploadRoles.push({
+        person_id: hidden.value,
+        person_name: displayName,
+        role_type: rType,
+        credit_name: creditName,
+    });
     renderUploadRoles();
-    
-    // Clear person input for next author
-    hidden.value = "";
-    input.value = "";
+
+    hidden.value = '';
+    input.value = '';
+    prksRefreshRoleCreditPicker('upload-role', null);
 }
 
 

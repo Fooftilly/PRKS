@@ -416,6 +416,39 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': str(e)})
                     return
                 self.send_json(200, row)
+            elif path.startswith('/api/works/') and path.endswith('/roles'):
+                parts = path.split('/')
+                if len(parts) != 5 or parts[4] != 'roles':
+                    self.send_error(404, "API endpoint not found")
+                    return
+                w_id = parts[3]
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                person_id = (data.get('person_id') or '').strip()
+                role_type = (data.get('role_type') or '').strip()
+                oi_raw = data.get('order_index', 0)
+                try:
+                    order_index = int(oi_raw) if oi_raw is not None and str(oi_raw).strip() != '' else 0
+                except (TypeError, ValueError):
+                    self.send_json(400, {'error': 'order_index must be an integer'})
+                    return
+                if not person_id or not role_type:
+                    self.send_json(400, {'error': 'person_id and role_type are required'})
+                    return
+                credit_name = data.get('credit_name', '')
+                if credit_name is not None and not isinstance(credit_name, str):
+                    self.send_json(400, {'error': 'credit_name must be a string'})
+                    return
+                if db.update_role_credit_name(
+                    w_id, person_id, role_type, order_index, credit_name or ''
+                ):
+                    cn = (credit_name or '').strip()
+                    if cn:
+                        db.append_person_alias_if_new(person_id, cn)
+                    self.send_json(200, {'status': 'updated'})
+                else:
+                    self.send_json(404, {'error': 'role link not found'})
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 if not isinstance(data, dict):
@@ -1256,8 +1289,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         r_type = r['role_type']
                         if db.has_work_role(p_id, w_id, r_type):
                             continue
+                        credit_name = r.get('credit_name', '')
+                        if credit_name is not None and not isinstance(credit_name, str):
+                            credit_name = ''
                         try:
-                            db.add_role(p_id, w_id, r_type, order_index=idx)
+                            db.add_role(
+                                p_id,
+                                w_id,
+                                r_type,
+                                order_index=idx,
+                                credit_name=credit_name or '',
+                            )
+                            cn = (credit_name or '').strip()
+                            if cn:
+                                db.append_person_alias_if_new(p_id, cn)
                         except ValueError:
                             continue
                         
@@ -1446,9 +1491,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if not p_id or not w_id or not r_type:
                     self.send_json(400, {'error': 'person_id, work_id, and role_type are required'})
                     return
+                credit_name = data.get('credit_name', '')
+                if credit_name is not None and not isinstance(credit_name, str):
+                    self.send_json(400, {'error': 'credit_name must be a string'})
+                    return
                 try:
                     oi = db.next_role_order_index(w_id)
-                    db.add_role(p_id, w_id, r_type, order_index=oi)
+                    db.add_role(
+                        p_id,
+                        w_id,
+                        r_type,
+                        order_index=oi,
+                        credit_name=credit_name or '',
+                    )
+                    cn = (credit_name or '').strip()
+                    if cn:
+                        db.append_person_alias_if_new(p_id, cn)
                 except ValueError as e:
                     self.send_json(400, {'error': str(e)})
                     return

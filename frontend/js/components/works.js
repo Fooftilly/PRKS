@@ -339,16 +339,23 @@ async function renderWorkDetails(work, container, routeGen) {
         work.roles.forEach((r) => {
             if (r.role_type === 'Author') authorsList.push(r);
             else {
-                const nm = `${prksEscapeHtmlLite(r.first_name)} ${prksEscapeHtmlLite(r.last_name)} (${prksEscapeHtmlLite(r.role_type)})`;
+                const display =
+                    typeof prksRoleDisplayName === 'function'
+                        ? prksRoleDisplayName(r)
+                        : `${r.first_name || ''} ${r.last_name || ''}`.trim();
+                const nm = `${prksEscapeHtmlLite(display)} (${prksEscapeHtmlLite(r.role_type)})`;
                 authorsStr += `<span class="tag prks-person-chip" data-person-id="${prksEscapeAttr(String(r.id || ''))}">${nm}</span>`;
             }
         });
         if (authorsList.length > 0) {
             const authorChips = authorsList
-                .map(
-                    (a) =>
-                        `<span class="tag author-tag prks-person-chip" data-person-id="${prksEscapeAttr(String(a.id || ''))}">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${prksEscapeHtmlLite(a.first_name)} ${prksEscapeHtmlLite(a.last_name)}</span>`
-                )
+                .map((a) => {
+                    const display =
+                        typeof prksRoleDisplayName === 'function'
+                            ? prksRoleDisplayName(a)
+                            : `${a.first_name || ''} ${a.last_name || ''}`.trim();
+                    return `<span class="tag author-tag prks-person-chip" data-person-id="${prksEscapeAttr(String(a.id || ''))}">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${prksEscapeHtmlLite(display)}</span>`;
+                })
                 .join(' ');
             authorsStr = authorChips + authorsStr;
         }

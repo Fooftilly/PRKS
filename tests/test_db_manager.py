@@ -353,6 +353,54 @@ class TestDBManager(unittest.TestCase):
         self.assertIn("Ann Ayer", la)
         self.assertIn("Ben Boss", la)
 
+    def test_role_credit_name_stored_and_returned(self):
+        w_id = self.db.add_work(title="Credit Work")
+        p_id = self.db.add_person(first_name="Mark", last_name="Johnson")
+        self.db.add_role(p_id, w_id, "Author", credit_name="Mark S. Johnson")
+        roles = self.db.get_work_roles(w_id)
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(roles[0]["credit_name"], "Mark S. Johnson")
+
+    def test_linked_authors_uses_credit_name(self):
+        w_id = self.db.add_work(title="Alias Card")
+        p_id = self.db.add_person(first_name="Mark", last_name="Johnson")
+        self.db.add_role(p_id, w_id, "Author", credit_name="Mark Johnson")
+        row = next(r for r in self.db.get_all_works() if r["id"] == w_id)
+        self.assertEqual(row.get("primary_author"), "Mark Johnson")
+        self.assertEqual(row.get("linked_authors"), "Mark Johnson")
+
+    def test_bibtex_uses_credit_name_for_author(self):
+        w_id = self.db.add_work(title="Byline Book", year="2024", doc_type="book")
+        p_id = self.db.add_person(first_name="Mark", last_name="Johnson")
+        self.db.add_role(p_id, w_id, "Author", credit_name="Mark S. Johnson")
+        bibtex = self.db.generate_bibtex(w_id)
+        self.assertIn("author = {Mark S. Johnson}", bibtex)
+        self.assertNotIn("Johnson, Mark", bibtex)
+
+    def test_append_person_alias_if_new(self):
+        p_id = self.db.add_person(first_name="Mark", last_name="Johnson", aliases="Mark Johnson")
+        self.assertFalse(self.db.append_person_alias_if_new(p_id, "Mark Johnson"))
+        self.assertTrue(self.db.append_person_alias_if_new(p_id, "Mark S. Johnson"))
+        person = self.db.execute_query("SELECT aliases FROM persons WHERE id = ?", (p_id,))[0]
+        self.assertIn("Mark S. Johnson", person["aliases"])
+
+    def test_update_role_credit_name_clear_and_set(self):
+        w_id = self.db.add_work(title="Patch Credit")
+        p_id = self.db.add_person(first_name="Ann", last_name="Ayer")
+        self.db.add_role(p_id, w_id, "Author", order_index=0, credit_name="Ann A.")
+        self.assertTrue(
+            self.db.update_role_credit_name(w_id, p_id, "Author", 0, "Ann Ayer Alias")
+        )
+        roles = self.db.get_work_roles(w_id)
+        self.assertEqual(roles[0]["credit_name"], "Ann Ayer Alias")
+        row = next(r for r in self.db.get_all_works() if r["id"] == w_id)
+        self.assertEqual(row.get("linked_authors"), "Ann Ayer Alias")
+        self.assertTrue(self.db.update_role_credit_name(w_id, p_id, "Author", 0, ""))
+        roles2 = self.db.get_work_roles(w_id)
+        self.assertIsNone(roles2[0].get("credit_name"))
+        row2 = next(r for r in self.db.get_all_works() if r["id"] == w_id)
+        self.assertEqual(row2.get("linked_authors"), "Ann Ayer")
+
     def test_etag_works_catalog_updates_on_add_role(self):
         w_id = self.db.add_work(title="Etag Role Work")
         e1 = self.db.etag_works_catalog()

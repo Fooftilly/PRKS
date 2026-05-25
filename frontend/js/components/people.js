@@ -931,7 +931,13 @@ function renderPersonDetails(person, container) {
             uniqueWorks.forEach((w) => {
                 const workId = w && w.id != null ? String(w.id).trim() : '';
                 const roleList = rolesByWork.get(workId) || [];
-                const subtitle = roleList.join(', ');
+                const credit = (person.works || [])
+                    .filter((x) => x && String(x.id) === workId)
+                    .map((x) => (x.credit_name != null ? String(x.credit_name).trim() : ''))
+                    .find(Boolean) || '';
+                const subtitle = credit
+                    ? `${credit} (${roleList.join(', ')})`
+                    : roleList.join(', ');
                 const card =
                     typeof prksWorkCardHtml === 'function'
                         ? prksWorkCardHtml(w, subtitle ? { subtitle } : {})

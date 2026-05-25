@@ -965,6 +965,90 @@ class TestServerAPI(unittest.TestCase):
             urllib.request.urlopen(req_del)
         self.assertEqual(cm2.exception.code, 404)
 
+    def test_22b_role_credit_name_post_and_patch(self):
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps({"first_name": "Mark", "last_name": "Johnson"}).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_p) as rp:
+            p_id = json.loads(rp.read().decode())["id"]
+
+        req_w = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": "Credit API Work", "status": "Planned"}).encode(),
+            method="POST",
+        )
+        req_w.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_w) as rw:
+            w_id = json.loads(rw.read().decode())["id"]
+
+        req_role = urllib.request.Request(
+            f"{self._base_url}/api/roles",
+            data=json.dumps(
+                {
+                    "person_id": p_id,
+                    "work_id": w_id,
+                    "role_type": "Author",
+                    "credit_name": "Mark S. Johnson",
+                }
+            ).encode(),
+            method="POST",
+        )
+        req_role.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_role) as rr:
+            self.assertEqual(rr.status, 200)
+
+        with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/bibtex/{w_id}")) as br:
+            bib = br.read().decode("utf-8", errors="replace")
+        self.assertIn("author = {Mark S. Johnson}", bib)
+
+        req_patch = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}/roles",
+            data=json.dumps(
+                {
+                    "person_id": p_id,
+                    "role_type": "Author",
+                    "order_index": 0,
+                    "credit_name": "Mark Johnson",
+                }
+            ).encode(),
+            method="PATCH",
+        )
+        req_patch.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_patch) as rpatch:
+            self.assertEqual(rpatch.status, 200)
+            body = json.loads(rpatch.read().decode())
+        self.assertEqual(body.get("status"), "updated")
+
+        with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/bibtex/{w_id}")) as br2:
+            bib2 = br2.read().decode("utf-8", errors="replace")
+        self.assertIn("author = {Mark Johnson}", bib2)
+
+        req_clear = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}/roles",
+            data=json.dumps(
+                {
+                    "person_id": p_id,
+                    "role_type": "Author",
+                    "order_index": 0,
+                    "credit_name": "",
+                }
+            ).encode(),
+            method="PATCH",
+        )
+        req_clear.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_clear):
+            pass
+        with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/bibtex/{w_id}")) as br3:
+            bib3 = br3.read().decode("utf-8", errors="replace")
+        self.assertIn("author = {Johnson, Mark}", bib3)
+
+        with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/persons/{p_id}")) as pr:
+            person = json.loads(pr.read().decode())
+        self.assertIn("Mark S. Johnson", person.get("aliases") or "")
+
     def test_23_static_path_traversal_blocked(self):
         req = urllib.request.Request(f"{self._base_url}/../../backend/server.py")
         with self.assertRaises(urllib.error.HTTPError) as cm:

@@ -128,13 +128,22 @@ def _prks_work_summary_select_with_folder(alias: str) -> str:
     return f"{base}, (SELECT folder_id FROM folder_files WHERE work_id = {alias}.id LIMIT 1) AS folder_id"
 
 
+def _prks_sql_role_display_name_expr(person_alias: str = "p", role_alias: str = "r") -> str:
+    """Per-link credit_name when set, else canonical person name."""
+    return (
+        f"TRIM(COALESCE(NULLIF(TRIM({role_alias}.credit_name), ''), "
+        f"TRIM(COALESCE({person_alias}.first_name,'') || ' ' || COALESCE({person_alias}.last_name,''))))"
+    )
+
+
 def _prks_sql_first_linked_person_for_role(work_alias: str, role_type: str, column_alias: str) -> str:
     """Scalar subquery: display name of first linked person for role_type (BibTeX order)."""
     wid = f"{work_alias}.id"
     rt = (role_type or "").replace("'", "''")
     ca = (column_alias or "name").replace('"', "")
+    disp = _prks_sql_role_display_name_expr("p", "r")
     return (
-        "(SELECT TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')) "
+        f"(SELECT {disp} "
         "FROM roles r "
         "JOIN persons p ON p.id = r.person_id "
         f"WHERE r.work_id = {wid} AND r.role_type = '{rt}' "
@@ -147,8 +156,9 @@ def _prks_sql_linked_authors_concat(work_alias: str, column_alias: str = "linked
     """Scalar subquery: all Author display names, comma-separated, same order as roles."""
     wid = f"{work_alias}.id"
     ca = (column_alias or "linked_authors").replace('"', "")
+    disp = _prks_sql_role_display_name_expr("p", "r")
     return (
-        "(SELECT GROUP_CONCAT(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')), ', ' "
+        f"(SELECT GROUP_CONCAT({disp}, ', ' "
         "ORDER BY r.order_index ASC, r.rowid ASC) "
         "FROM roles r JOIN persons p ON p.id = r.person_id "
         f"WHERE r.work_id = {wid} AND r.role_type = 'Author') AS {ca}"
@@ -589,6 +599,7 @@ class PRKSDatabase:
                 "ALTER TABLE works ADD COLUMN location TEXT",
                 "ALTER TABLE folders ADD COLUMN parent_id TEXT",
                 "ALTER TABLE playlists ADD COLUMN original_url TEXT",
+                "ALTER TABLE roles ADD COLUMN credit_name TEXT",
             ]
             for sql in migrations:
                 try:
@@ -2463,6 +2474,34 @@ class PRKSDatabase:
             f"UPDATE persons SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             tuple(values),
         )
+
+    def append_person_alias_if_new(self, person_id: str, alias: str) -> bool:
+        """Append alias to persons.aliases when not already present (case-insensitive)."""
+        a = (alias or "").strip()
+        if not a:
+            return False
+        rows = self.execute_query("SELECT aliases FROM persons WHERE id = ?", (person_id,))
+        if not rows:
+            return False
+        existing = (rows[0].get("aliases") or "").strip()
+        parts = [x.strip() for x in existing.split(",") if x.strip()]
+        if any(p.lower() == a.lower() for p in parts):
+            return False
+        canonical_rows = self.execute_query(
+            "SELECT first_name, last_name FROM persons WHERE id = ?", (person_id,)
+        )
+        if canonical_rows:
+            fn = (canonical_rows[0].get("first_name") or "").strip()
+            ln = (canonical_rows[0].get("last_name") or "").strip()
+            canonical = f"{fn} {ln}".strip() if fn or ln else ""
+            if canonical and canonical.lower() == a.lower():
+                return False
+        parts.append(a)
+        self.execute_query(
+            "UPDATE persons SET aliases = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (", ".join(parts), person_id),
+        )
+        return True
     
     def get_all_persons(self) -> List[dict]:
         query = """
@@ -2487,7 +2526,7 @@ class PRKSDatabase:
         person = res[0]
         pex = _prks_sql_work_summary_person_extras("w")
         query = f"""
-        SELECT w.*, r.role_type, r.order_index, {pex}
+        SELECT w.*, r.role_type, r.order_index, r.credit_name, {pex}
         FROM roles r
         JOIN works w ON r.work_id = w.id
         WHERE r.person_id = ?
@@ -2780,16 +2819,24 @@ class PRKSDatabase:
         )
         return bool(rows)
 
-    def add_role(self, person_id: str, work_id: str, role_type: str, order_index: int = 0):
+    def add_role(
+        self,
+        person_id: str,
+        work_id: str,
+        role_type: str,
+        order_index: int = 0,
+        credit_name: str = "",
+    ):
         if self.has_work_role(person_id, work_id, role_type):
             raise ValueError(
                 f"This person is already linked to this file as {role_type}."
             )
+        cn = (credit_name or "").strip() or None
         query = """
-        INSERT INTO roles (person_id, work_id, role_type, order_index)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO roles (person_id, work_id, role_type, order_index, credit_name)
+        VALUES (?, ?, ?, ?, ?)
         """
-        self.execute_query(query, (person_id, work_id, role_type, order_index))
+        self.execute_query(query, (person_id, work_id, role_type, order_index, cn))
         # Bust /api/works ETag: catalog etag includes roles row count; also bump work row for clients/UI.
         self.execute_query(
             "UPDATE works SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -2808,13 +2855,40 @@ class PRKSDatabase:
 
     def get_work_roles(self, work_id: str) -> List[dict]:
         query = """
-        SELECT p.*, r.role_type, r.order_index 
+        SELECT p.*, r.role_type, r.order_index, r.credit_name
         FROM roles r
         JOIN persons p ON r.person_id = p.id
         WHERE r.work_id = ?
         ORDER BY r.order_index ASC, r.rowid ASC
         """
         return self.execute_query(query, (work_id,))
+
+    def update_role_credit_name(
+        self,
+        work_id: str,
+        person_id: str,
+        role_type: str,
+        order_index: int,
+        credit_name: str,
+    ) -> bool:
+        """Update credit_name on one role row. Empty string clears override."""
+        cn = (credit_name or "").strip() or None
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE roles SET credit_name = ?
+                WHERE work_id = ? AND person_id = ? AND role_type = ? AND order_index = ?
+                """,
+                (cn, work_id, person_id, role_type, int(order_index)),
+            )
+            updated = cur.rowcount > 0
+            conn.commit()
+        if updated:
+            self.execute_query(
+                "UPDATE works SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (work_id,),
+            )
+        return updated
 
     def delete_work_role(self, work_id: str, person_id: str, role_type: str, order_index: int) -> bool:
         """Remove one role row (composite PK). Returns True if a row was deleted."""
@@ -3300,6 +3374,10 @@ class PRKSDatabase:
         out: List[str] = []
         for p in roles:
             if p.get("role_type") != role_type:
+                continue
+            credit = (p.get("credit_name") or "").strip()
+            if credit:
+                out.append(credit)
                 continue
             nm = self._format_biblatex_person_name(p.get("last_name"), p.get("first_name"))
             if nm:

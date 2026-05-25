@@ -435,6 +435,59 @@ a.tag.tag--sidebar-all:hover {
     background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
 }
 
+.work-linked-persons__edit-credit {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    border-radius: 0;
+    font-family: inherit;
+    line-height: 1;
+    opacity: 0.75;
+}
+
+.work-linked-persons__edit-credit:hover {
+    color: var(--accent);
+    opacity: 1;
+}
+
+.prks-role-credit-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+}
+
+.prks-role-credit-picker label {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+}
+
+.prks-role-credit-picker__select {
+    width: 100%;
+    max-width: 100%;
+}
+
+.prks-role-credit-picker__custom {
+    width: 100%;
+}
+
+.prks-modal-prompt__input {
+    display: block;
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--surface);
+    box-sizing: border-box;
+}
+
 .person-profile__work-card-wrap {
     position: relative;
 }

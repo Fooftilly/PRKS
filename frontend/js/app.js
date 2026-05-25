@@ -1467,10 +1467,21 @@ function initForms() {
             return;
         }
         const role_type = document.getElementById('role-type').value;
+        const credit_name =
+            typeof prksResolveRoleCreditNameForLink === 'function'
+                ? prksResolveRoleCreditNameForLink(
+                      'role-link',
+                      person_id,
+                      'role-person-search'
+                  )
+                : typeof prksReadRoleCreditName === 'function'
+                  ? prksReadRoleCreditName('role-link')
+                  : '';
         const payload = {
             person_id,
             work_id,
             role_type,
+            credit_name,
         };
         if (
             typeof prksWorkHasRoleLink === 'function' &&

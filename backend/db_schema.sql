@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS roles (
     work_id TEXT NOT NULL,
     role_type TEXT NOT NULL,
     order_index INTEGER DEFAULT 0,
+    credit_name TEXT,
     PRIMARY KEY (person_id, work_id, role_type, order_index),
     FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE,
     FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE

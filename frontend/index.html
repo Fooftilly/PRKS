@@ -456,6 +456,14 @@
                         <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles">
                             <div class="prks-upload-role-seg" id="upload-role-seg-mount"></div>
                         </div>
+                        <div class="prks-role-credit-picker" id="upload-role-credit-wrap" hidden>
+                            <label for="upload-role-credit-select">Name on this file</label>
+                            <select id="upload-role-credit-select" class="prks-role-credit-picker__select" aria-label="Name shown on this file">
+                                <option value="">Full profile name</option>
+                            </select>
+                            <input type="text" id="upload-role-credit-custom" class="prks-role-credit-picker__custom hidden" placeholder="Custom name on this file" autocomplete="off" aria-label="Custom name on this file">
+                            <p class="meta-row meta-row--hint">Optional. Pick how this person is credited on this file only.</p>
+                        </div>
                     </div>
                     <div id="upload-roles-list" class="tag-cloud status-chip-list">
                         <span class="status-chip-list__empty">No persons linked yet</span>
@@ -732,6 +740,14 @@
                         <button type="button" class="prks-segmented__btn" data-value="Foreword" aria-pressed="false" role="radio">Foreword</button>
                         <button type="button" class="prks-segmented__btn" data-value="Afterword" aria-pressed="false" role="radio">Afterword</button>
                     </div>
+                </div>
+                <div class="prks-role-credit-picker" id="role-link-credit-wrap" hidden>
+                    <label for="role-link-credit-select">Name on this file</label>
+                    <select id="role-link-credit-select" class="prks-role-credit-picker__select" aria-label="Name shown on this file">
+                        <option value="">Full profile name</option>
+                    </select>
+                    <input type="text" id="role-link-credit-custom" class="prks-role-credit-picker__custom hidden" placeholder="Custom name on this file" autocomplete="off" aria-label="Custom name on this file">
+                    <p class="meta-row meta-row--hint">Optional. Pick how this person is credited on this file only.</p>
                 </div>
                 <button id="save-role-btn" class="add-new-btn">Create Link</button>
             </div>
