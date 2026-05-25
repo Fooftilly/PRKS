@@ -783,21 +783,27 @@ async function prksRemoveFolderTag(folderId, tagId) {
         await prksReloadEntityTagsUI('folder', folderId);
     } catch (e) {
         console.error(e);
-        alert('Could not remove tag.');
+        await prksAlertMessage('Could not remove tag.', 'Error');
     }
 }
 
 async function deleteFolder(f_id) {
-    if (confirm("Are you sure you want to delete this empty folder?")) {
-        try {
-            const res = await fetch('/api/folders/' + encodeURIComponent(f_id), { method: 'DELETE' });
-            if (res.ok) {
-                window.location.hash = '#/folders';
-            } else {
-                const text = await res.text();
-                alert("Error deleting folder: " + text);
-            }
-        } catch (e) { alert("Error deleting folder!"); }
+    const confirmed = await prksConfirmDestructive({
+        title: 'Delete folder?',
+        message: 'Are you sure you want to delete this empty folder?',
+        confirmLabel: 'Delete folder',
+    });
+    if (!confirmed) return;
+    try {
+        const res = await fetch('/api/folders/' + encodeURIComponent(f_id), { method: 'DELETE' });
+        if (res.ok) {
+            window.location.hash = '#/folders';
+        } else {
+            const text = await res.text();
+            await prksAlertMessage('Error deleting folder: ' + text, 'Error');
+        }
+    } catch (e) {
+        await prksAlertMessage('Error deleting folder!', 'Error');
     }
 }
 

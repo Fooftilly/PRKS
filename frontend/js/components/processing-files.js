@@ -160,7 +160,7 @@ async function prksProcessingQuickCreateFolder(card) {
     const results = card.querySelector('[data-role="folder-results"]');
     const title = String(input?.value || '').trim();
     if (!title) {
-        alert('Enter folder title in search field first.');
+        await prksAlertMessage('Enter folder title in search field first.', 'Validation');
         return;
     }
     try {
@@ -171,7 +171,7 @@ async function prksProcessingQuickCreateFolder(card) {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-            alert(data.error || 'Could not create folder.');
+            await prksAlertMessage(data.error || 'Could not create folder.', 'Could not save');
             return;
         }
         const folders = await fetchFolders();
@@ -185,7 +185,7 @@ async function prksProcessingQuickCreateFolder(card) {
         if (results) prksHideInlineComboboxResults(results);
     } catch (e) {
         console.error(e);
-        alert('Could not create folder.');
+        await prksAlertMessage('Could not create folder.', 'Error');
     }
 }
 
@@ -259,7 +259,7 @@ function prksProcessingAttachTagCombobox(card) {
                         prksHideInlineComboboxResults(results);
                     } catch (e) {
                         console.error(e);
-                        alert('Could not create tag.');
+                        await prksAlertMessage('Could not create tag.', 'Error');
                     }
                 })();
             };

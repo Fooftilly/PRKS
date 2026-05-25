@@ -1048,19 +1048,19 @@ function initForms() {
         }
 
         if (sourceKind === 'video' && !payload.source_url) {
-            alert('Please paste a video URL.');
+            await prksAlertMessage('Please paste a video URL.', 'Validation');
             return;
         }
         if (sourceKind === 'video' && publishedDate && !publishedIso) {
-            alert('Published date must be in dd/mm/yyyy.');
+            await prksAlertMessage('Published date must be in dd/mm/yyyy.', 'Validation');
             return;
         }
         if (sourceKind === 'pdf' && pdfPublishedRaw && !pdfPublished) {
-            alert('Published date must be in dd/mm/yyyy.');
+            await prksAlertMessage('Published date must be in dd/mm/yyyy.', 'Validation');
             return;
         }
         if (sourceKind === 'pdf' && !payload.file_b64) {
-            alert('Please select a PDF file.');
+            await prksAlertMessage('Please select a PDF file.', 'Validation');
             return;
         }
         if (sourceKind === 'video') {
@@ -1248,7 +1248,7 @@ function initForms() {
             const res = await fetch('/api/folders', { method: 'POST', body: JSON.stringify(payload) });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                alert(data.error || 'Could not create folder');
+                await prksAlertMessage(data.error || 'Could not create folder', 'Could not save');
                 return;
             }
             const pending = window.__prksPendingWorkFolderAttach;
@@ -1259,7 +1259,10 @@ function initForms() {
                 try {
                     await patchWorkFolder(attachWid, data.id);
                 } catch (e) {
-                    alert((e && e.message) || 'Folder created but could not assign this file.');
+                    await prksAlertMessage(
+                        (e && e.message) || 'Folder created but could not assign this file.',
+                        'Error'
+                    );
                 }
                 if (typeof fetchWorkDetails === 'function' && typeof updatePanelContent === 'function') {
                     window.currentWork = await fetchWorkDetails(attachWid);
@@ -1354,7 +1357,7 @@ function initForms() {
                     errEl.textContent = 'Could not create playlist.';
                     errEl.classList.remove('hidden');
                 } else {
-                    alert('Could not create playlist.');
+                    await prksAlertMessage('Could not create playlist.', 'Error');
                 }
             } finally {
                 playlistBtn.disabled = false;
@@ -1377,6 +1380,16 @@ function initForms() {
     const personBtn = document.getElementById('save-person-btn');
     if (personBtn) {
         personBtn.onclick = async () => {
+            const birthIso = parsePersonBirthDeathField(document.getElementById('person-birth-date').value);
+            if (birthIso === null) {
+                await prksAlertMessage(`Birth:\n${PERSON_DATE_HELP}`, 'Validation');
+                return;
+            }
+            const deathIso = parsePersonBirthDeathField(document.getElementById('person-death-date').value);
+            if (deathIso === null) {
+                await prksAlertMessage(`Date of death:\n${PERSON_DATE_HELP}`, 'Validation');
+                return;
+            }
             const payload = {
                 first_name: document.getElementById('person-fname').value,
                 last_name: document.getElementById('person-lname').value,
@@ -1387,25 +1400,13 @@ function initForms() {
                 link_stanford_encyclopedia: document.getElementById('person-link-stanford').value,
                 link_iep: document.getElementById('person-link-iep').value,
                 links_other: document.getElementById('person-links-other').value,
-                birth_date: (() => {
-                    const v = parsePersonBirthDeathField(document.getElementById('person-birth-date').value);
-                    if (v === null) {
-                        alert(`Birth:\n${PERSON_DATE_HELP}`);
-                        return null;
-                    }
-                    return v;
-                })(),
-                death_date: (() => {
-                    const v = parsePersonBirthDeathField(document.getElementById('person-death-date').value);
-                    if (v === null) {
-                        alert(`Date of death:\n${PERSON_DATE_HELP}`);
-                        return null;
-                    }
-                    return v;
-                })()
+                birth_date: birthIso,
+                death_date: deathIso,
             };
-            if (payload.birth_date === null || payload.death_date === null) return;
-            if (!payload.last_name) return alert("Last name is required");
+            if (!payload.last_name) {
+                await prksAlertMessage('Last name is required.', 'Validation');
+                return;
+            }
             try {
                 const res = await fetch('/api/persons', {
                     method: 'POST',
@@ -1413,9 +1414,12 @@ function initForms() {
                     body: JSON.stringify(payload),
                 });
                 const data = await res.json().catch(() => ({}));
-                if (!res.ok) { alert(data.error || `Could not save person (${res.status})`); return; }
+                if (!res.ok) {
+                    await prksAlertMessage(data.error || `Could not save person (${res.status})`, 'Could not save');
+                    return;
+                }
             } catch (e) {
-                alert('Network error — could not save person.');
+                await prksAlertMessage('Network error — could not save person.', 'Error');
                 return;
             }
             closeModals(); window.location.reload();
@@ -1434,7 +1438,8 @@ function initForms() {
                 description: description.trim()
             };
             if (!payload.name) {
-                return alert('Group name is required.');
+                await prksAlertMessage('Group name is required.', 'Validation');
+                return;
             }
             if (parentHid) payload.parent_id = parentHid;
             else if (parentSearch) payload.parent_name = parentSearch;
@@ -1445,7 +1450,7 @@ function initForms() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                alert(data.error || 'Could not create group.');
+                await prksAlertMessage(data.error || 'Could not create group.', 'Could not save');
                 return;
             }
             closeModals();
@@ -1458,7 +1463,8 @@ function initForms() {
         const person_id = document.getElementById('role-person-id').value;
         const work_id = document.getElementById('role-work-id').value;
         if (!person_id || !work_id) {
-            return alert('Please select both a person and a file.');
+            await prksAlertMessage('Please select both a person and a file.', 'Validation');
+            return;
         }
         const role_type = document.getElementById('role-type').value;
         const payload = {

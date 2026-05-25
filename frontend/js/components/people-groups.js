@@ -611,7 +611,7 @@ async function mountPersonGroupEditPanel(g) {
             else if (search.trim()) payload.parent_name = search.trim();
             else payload.parent_id = null;
             if (!name) {
-                alert('Name is required.');
+                await prksAlertMessage('Name is required.', 'Validation');
                 return;
             }
             btn.disabled = true;
@@ -623,7 +623,7 @@ async function mountPersonGroupEditPanel(g) {
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) {
-                    alert(data.error || 'Could not save group.');
+                    await prksAlertMessage(data.error || 'Could not save group.', 'Could not save');
                     return;
                 }
                 window.__prksPersonGroupDetailEditing = false;
@@ -631,7 +631,7 @@ async function mountPersonGroupEditPanel(g) {
                 window.location.reload();
             } catch (e) {
                 console.error(e);
-                alert('Could not save group.');
+                await prksAlertMessage('Could not save group.', 'Error');
             } finally {
                 btn.disabled = false;
             }
@@ -641,21 +641,25 @@ async function mountPersonGroupEditPanel(g) {
     const delBtn = document.getElementById('gd-delete-btn');
     if (delBtn) {
         delBtn.onclick = async () => {
-            if (!confirm(`Delete group “${g.name}”? Members stay in the database; subgroups become children of this group’s parent (or top-level).`)) {
-                return;
-            }
+            const confirmed = await prksConfirmDestructive({
+                title: `Delete group “${g.name}”?`,
+                message:
+                    'Members stay in the database; subgroups become children of this group’s parent (or top-level).',
+                confirmLabel: 'Delete group',
+            });
+            if (!confirmed) return;
             try {
                 const res = await fetch(`/api/person-groups/${encodeURIComponent(g.id)}`, { method: 'DELETE' });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) {
-                    alert(data.error || 'Could not delete.');
+                    await prksAlertMessage(data.error || 'Could not delete.', 'Error');
                     return;
                 }
                 window.location.hash = '#/people/groups';
                 window.location.reload();
             } catch (e) {
                 console.error(e);
-                alert('Could not delete group.');
+                await prksAlertMessage('Could not delete group.', 'Error');
             }
         };
     }
@@ -672,21 +676,11 @@ function mountPersonGroupMemberRemoveButtons(g) {
                 ? `${member.first_name || ''} ${member.last_name || ''}`.trim() || 'this person'
                 : 'this person';
             const groupName = g.name || 'this group';
-            const confirmFn =
-                typeof prksConfirmDialog === 'function'
-                    ? prksConfirmDialog
-                    : typeof window.prksConfirmDialog === 'function'
-                      ? window.prksConfirmDialog
-                      : null;
-            const confirmed = confirmFn
-                ? await confirmFn({
-                      title: `Remove ${personName} from group?`,
-                      message: `They will be removed from “${groupName}” only. Their person profile is not deleted.`,
-                      confirmLabel: 'Remove from group',
-                      cancelLabel: 'Cancel',
-                      danger: true,
-                  })
-                : window.confirm(`Remove ${personName} from “${groupName}”?`);
+            const confirmed = await prksConfirmDestructive({
+                title: `Remove ${personName} from group?`,
+                message: `They will be removed from “${groupName}” only. Their person profile is not deleted.`,
+                confirmLabel: 'Remove from group',
+            });
             if (!confirmed) return;
             try {
                 const res = await fetch(
@@ -695,14 +689,14 @@ function mountPersonGroupMemberRemoveButtons(g) {
                 );
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({}));
-                    alert(data.error || 'Could not remove member.');
+                    await prksAlertMessage(data.error || 'Could not remove member.', 'Error');
                     return;
                 }
                 window.location.hash = `#/people/groups/${g.id}`;
                 window.location.reload();
             } catch (e) {
                 console.error(e);
-                alert('Could not remove member.');
+                await prksAlertMessage('Could not remove member.', 'Error');
             }
         });
     });
@@ -723,7 +717,8 @@ async function mountPersonGroupAddMemberControls(g) {
         addBtn.onclick = async () => {
             const pid = document.getElementById('group-add-member-id').value;
             if (!pid) {
-                return alert('Choose a person from the search list.');
+                await prksAlertMessage('Choose a person from the search list.', 'Validation');
+                return;
             }
             try {
                 const res = await fetch(`/api/person-groups/${encodeURIComponent(g.id)}/members`, {
@@ -733,14 +728,14 @@ async function mountPersonGroupAddMemberControls(g) {
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) {
-                    alert(data.error || 'Could not add member.');
+                    await prksAlertMessage(data.error || 'Could not add member.', 'Error');
                     return;
                 }
                 window.location.hash = `#/people/groups/${g.id}`;
                 window.location.reload();
             } catch (e) {
                 console.error(e);
-                alert('Could not add member.');
+                await prksAlertMessage('Could not add member.', 'Error');
             }
         };
     }
@@ -883,7 +878,8 @@ async function prksMountPersonProfileGroupPicker(person) {
             return;
         }
         if (!typed) {
-            return alert('Search and pick a group, or type a new group name to create.');
+            await prksAlertMessage('Search and pick a group, or type a new group name to create.', 'Validation');
+            return;
         }
         const existing = prksPersonEditFindGroupByNameInsensitive(typed, window.allGroups);
         if (existing) {
@@ -906,14 +902,14 @@ async function prksMountPersonProfileGroupPicker(person) {
                         return;
                     }
                 }
-                alert(data.error || 'Could not create group.');
+                await prksAlertMessage(data.error || 'Could not create group.', 'Could not save');
                 return;
             }
             await prksEnsureAllGroupsCache();
             await addGroupId(data.id, typed);
         } catch (e) {
             console.error(e);
-            alert('Could not create group.');
+            await prksAlertMessage('Could not create group.', 'Error');
         }
     };
 

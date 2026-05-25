@@ -292,16 +292,21 @@ function prksPdfAnnLinkHint(cm) {
 }
 
 async function deleteWork(w_id) {
-    if (!confirm('Are you sure you want to delete this file?')) return;
+    const confirmed = await prksConfirmDestructive({
+        title: 'Delete file?',
+        message: 'Are you sure you want to delete this file?',
+        confirmLabel: 'Delete file',
+    });
+    if (!confirmed) return;
     try {
         const res = await fetch('/api/works/' + encodeURIComponent(w_id), { method: 'DELETE' });
         if (!res.ok) {
-            alert('Error deleting file!');
+            await prksAlertMessage('Error deleting file!', 'Error');
             return;
         }
         window.location.hash = '#/folders';
     } catch (_e) {
-        alert('Error deleting file!');
+        await prksAlertMessage('Error deleting file!', 'Error');
     }
 }
 

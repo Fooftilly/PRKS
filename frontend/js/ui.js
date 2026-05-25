@@ -266,6 +266,21 @@ async function prksNotifyRoleLinkFailure(errorMsg, roleType) {
     });
 }
 
+function prksAlertMessage(message, title = 'Notice') {
+    return prksAlertDialog({ title, message: String(message ?? '') });
+}
+
+function prksConfirmDestructive(options) {
+    const o = options && typeof options === 'object' ? options : {};
+    return prksConfirmDialog({
+        title: o.title ?? 'Confirm',
+        message: o.message ?? '',
+        confirmLabel: o.confirmLabel ?? 'Confirm',
+        cancelLabel: o.cancelLabel ?? 'Cancel',
+        danger: o.danger !== false,
+    });
+}
+
 function prksBindModalConfirmOnce() {
     const root = document.getElementById('prks-modal-confirm');
     if (!root || root.dataset.bound === '1') return;
@@ -814,6 +829,8 @@ window.prksAlertDialog = prksAlertDialog;
 window.prksShowDuplicateRoleLinkAlert = prksShowDuplicateRoleLinkAlert;
 window.prksIsDuplicateRoleLinkError = prksIsDuplicateRoleLinkError;
 window.prksNotifyRoleLinkFailure = prksNotifyRoleLinkFailure;
+window.prksAlertMessage = prksAlertMessage;
+window.prksConfirmDestructive = prksConfirmDestructive;
 
 function personDisplayName(p) {
     return `${(p.first_name || '').trim()} ${p.last_name || ''}`.trim();
@@ -840,7 +857,7 @@ function prksSplitTypedPersonName(name) {
 async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText) {
     const trimmed = String(typedName || '').trim();
     if (!trimmed) {
-        alert('Type a name in the Person field first.');
+        await prksAlertMessage('Type a name in the Person field first.', 'Validation');
         return;
     }
     const { first_name, last_name } = prksSplitTypedPersonName(trimmed);
@@ -857,7 +874,7 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-            alert(data.error || 'Could not create person.');
+            await prksAlertMessage(data.error || 'Could not create person.', 'Could not save');
             return;
         }
         allPersons = await fetchPersons();
@@ -874,7 +891,7 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
         }
     } catch (e) {
         console.error(e);
-        alert('Could not create person.');
+        await prksAlertMessage('Could not create person.', 'Error');
     }
 }
 
@@ -923,7 +940,7 @@ async function addRoleToWorkFromMetaEditor(workId) {
     const personId = personHidden ? String(personHidden.value || '').trim() : '';
     const roleType = roleHidden ? String(roleHidden.value || '').trim() : '';
     if (!resolvedWorkId || !personId || !roleType) {
-        alert('Select a person and role first.');
+        await prksAlertMessage('Select a person and role first.', 'Validation');
         return;
     }
     const existingRoles =
@@ -1957,7 +1974,7 @@ async function submitWorkMetaEdit(workId) {
             ? prksParsePublishedDateInput(metaDateRaw)
             : metaDateRaw;
     if (metaDateRaw && !metaDateIso) {
-        alert('Published date must be in dd/mm/yyyy.');
+        await prksAlertMessage('Published date must be in dd/mm/yyyy.', 'Validation');
         return;
     }
     const payload = {
@@ -2087,10 +2104,15 @@ async function prksRemoveWorkRoleLink(btn) {
     const roleType = (btn.getAttribute('data-role-type') || '').trim();
     const orderIndex = (btn.getAttribute('data-order-index') || '0').trim();
     if (!workId || !personId || !roleType) {
-        alert('Missing link data.');
+        await prksAlertMessage('Missing link data.', 'Error');
         return;
     }
-    if (!window.confirm('Remove this person from the file for this role?')) return;
+    const confirmed = await prksConfirmDestructive({
+        title: 'Remove link?',
+        message: 'Remove this person from the file for this role?',
+        confirmLabel: 'Remove',
+    });
+    if (!confirmed) return;
     const params = new URLSearchParams({
         person_id: personId,
         role_type: roleType,
@@ -2101,12 +2123,12 @@ async function prksRemoveWorkRoleLink(btn) {
         res = await fetch(`/api/works/${encodeURIComponent(workId)}/roles?${params}`, { method: 'DELETE' });
     } catch (e) {
         console.error(e);
-        alert('Could not remove link.');
+        await prksAlertMessage('Could not remove link.', 'Error');
         return;
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-        alert(data.error || 'Could not remove link.');
+        await prksAlertMessage(data.error || 'Could not remove link.', 'Could not save');
         return;
     }
     await prksRefreshUiAfterWorkRoleRemoved(workId);
@@ -2549,7 +2571,7 @@ async function prksAttachExistingTag(entityType, entityId, tagId) {
         await prksReloadEntityTagsUI(entityType, entityId);
     } catch (e) {
         console.error(e);
-        alert('Could not add tag.');
+        await prksAlertMessage('Could not add tag.', 'Error');
     }
 }
 
@@ -2594,7 +2616,7 @@ async function prksSubmitNewTag(entityType, entityId, name) {
         await prksAttachExistingTag(entityType, entityId, data.id);
     } catch (e) {
         console.error(e);
-        alert('Could not create tag.');
+        await prksAlertMessage('Could not create tag.', 'Error');
     }
 }
 
@@ -2916,7 +2938,7 @@ async function prksRemoveWorkTag(workId, tagId) {
         await prksReloadEntityTagsUI('work', workId);
     } catch (e) {
         console.error(e);
-        alert('Could not remove tag.');
+        await prksAlertMessage('Could not remove tag.', 'Error');
     }
 }
 
@@ -3225,7 +3247,7 @@ function initUploadTagCombobox() {
                         prksHideInlineComboboxResults(results);
                     } catch (e) {
                         console.error(e);
-                        alert('Could not create tag.');
+                        await prksAlertMessage('Could not create tag.', 'Error');
                     }
                 })();
             };
@@ -3617,13 +3639,16 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
 
 async function quickCreateFolder() {
     const title = document.getElementById('work-folder-search').value;
-    if (!title) return alert("Please enter a folder title first");
+    if (!title) {
+        await prksAlertMessage('Please enter a folder title first', 'Validation');
+        return;
+    }
     
     const payload = { title: title, description: "Quick created via upload" };
     const res = await fetch('/api/folders', { method: 'POST', body: JSON.stringify(payload) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-        alert(data.error || 'Could not create folder');
+        await prksAlertMessage(data.error || 'Could not create folder', 'Could not save');
         return;
     }
 
@@ -3639,7 +3664,10 @@ function addRoleToUploadList() {
     const rSelect = document.getElementById('upload-role-type');
     
     if (!hidden.value) {
-        alert("Please select a person from the search results or create a new one first.");
+        void prksAlertMessage(
+            'Please select a person from the search results or create a new one first.',
+            'Validation'
+        );
         return;
     }
     
@@ -4045,7 +4073,7 @@ function initUploadDragAndDrop() {
                                 prksHideInlineComboboxResults(results);
                             }
                         } catch (_e) {
-                            alert('Could not create playlist.');
+                            await prksAlertMessage('Could not create playlist.', 'Error');
                         }
                     };
                     results.appendChild(c);
@@ -4094,14 +4122,14 @@ function handleUploadFile(file) {
     const kindEl = document.getElementById('work-source-kind');
     const kind = kindEl ? String(kindEl.value || 'pdf') : 'pdf';
     if (kind === 'video') {
-        alert('In Video URL mode, paste the link on the right.');
+        void prksAlertMessage('In Video URL mode, paste the link on the right.', 'Notice');
         return;
     }
     if (!file) return;
     const name = String(file.name || '').toLowerCase();
     const isPdf = name.endsWith('.pdf') || file.type === 'application/pdf';
     if (kind === 'pdf' && !isPdf) {
-        alert("Please select a valid PDF file.");
+        void prksAlertMessage('Please select a valid PDF file.', 'Validation');
         return;
     }
     

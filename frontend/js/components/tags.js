@@ -309,7 +309,7 @@ function prksWireTagsPageMergePanel() {
                 if (typeof refreshSidebarTags === 'function') void refreshSidebarTags();
             } catch (err) {
                 console.error(err);
-                alert(err.message || 'Could not merge tags.');
+                await prksAlertMessage(err.message || 'Could not merge tags.', 'Error');
             }
         };
     }
@@ -349,21 +349,11 @@ function prksWireTagsPageAliasPanel(container) {
             const name = tag.name || tag.id;
             const msg =
                 'Files and folders will no longer have this tag. Alternate names (aliases) for this tag will be removed.';
-            const confirmFn =
-                typeof prksConfirmDialog === 'function'
-                    ? prksConfirmDialog
-                    : typeof window.prksConfirmDialog === 'function'
-                      ? window.prksConfirmDialog
-                      : null;
-            const confirmed = confirmFn
-                ? await confirmFn({
-                      title: `Delete tag “${name}”?`,
-                      message: msg,
-                      confirmLabel: 'Delete tag',
-                      cancelLabel: 'Cancel',
-                      danger: true,
-                  })
-                : window.confirm(`Delete tag “${name}”? ${msg}`);
+            const confirmed = await prksConfirmDestructive({
+                title: `Delete tag “${name}”?`,
+                message: msg,
+                confirmLabel: 'Delete tag',
+            });
             if (!confirmed) return;
             try {
                 const res = await fetch(`/api/tags/${encodeURIComponent(tag.id)}`, { method: 'DELETE' });
@@ -378,7 +368,7 @@ function prksWireTagsPageAliasPanel(container) {
                 if (typeof refreshSidebarTags === 'function') void refreshSidebarTags();
             } catch (err) {
                 console.error(err);
-                alert(err.message || 'Could not delete tag.');
+                await prksAlertMessage(err.message || 'Could not delete tag.', 'Error');
             }
         };
     }
@@ -406,7 +396,7 @@ function prksWireTagsPageAliasPanel(container) {
                 if (typeof refreshSidebarTags === 'function') void refreshSidebarTags();
             } catch (err) {
                 console.error(err);
-                alert(err.message || 'Could not add alias.');
+                await prksAlertMessage(err.message || 'Could not add alias.', 'Error');
             }
         };
     }
@@ -434,7 +424,7 @@ function prksWireTagsPageAliasPanel(container) {
                 if (typeof refreshSidebarTags === 'function') void refreshSidebarTags();
             } catch (err) {
                 console.error(err);
-                alert(err.message || 'Could not remove alias.');
+                await prksAlertMessage(err.message || 'Could not remove alias.', 'Error');
             }
         };
     }

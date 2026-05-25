@@ -137,7 +137,7 @@ function prksEnsurePublishersPageDelegated(container) {
                 }
             } catch (err) {
                 console.error(err);
-                alert(err.message || 'Could not add publisher.');
+                await prksAlertMessage(err.message || 'Could not add publisher.', 'Error');
             }
             return;
         }
@@ -159,21 +159,11 @@ function prksEnsurePublishersPageDelegated(container) {
             if (!pub) return;
             const label = pub.name || pub.id;
             const msg = 'Works are not changed. Alternate spellings (aliases) for this publisher group will be removed.';
-            const confirmFn =
-                typeof prksConfirmDialog === 'function'
-                    ? prksConfirmDialog
-                    : typeof window.prksConfirmDialog === 'function'
-                      ? window.prksConfirmDialog
-                      : null;
-            const confirmed = confirmFn
-                ? await confirmFn({
-                      title: `Delete publisher “${label}”?`,
-                      message: msg,
-                      confirmLabel: 'Delete publisher',
-                      cancelLabel: 'Cancel',
-                      danger: true,
-                  })
-                : window.confirm(`Delete publisher “${label}” and its aliases? ${msg}`);
+            const confirmed = await prksConfirmDestructive({
+                title: `Delete publisher “${label}”?`,
+                message: msg,
+                confirmLabel: 'Delete publisher',
+            });
             if (!confirmed) return;
             try {
                 const res = await fetch('/api/publishers/' + encodeURIComponent(pub.id), {
@@ -187,7 +177,7 @@ function prksEnsurePublishersPageDelegated(container) {
                 }
             } catch (err) {
                 console.error(err);
-                alert(err.message || 'Could not delete publisher.');
+                await prksAlertMessage(err.message || 'Could not delete publisher.', 'Error');
             }
             return;
         }
@@ -212,7 +202,7 @@ function prksEnsurePublishersPageDelegated(container) {
                 prksRenderPublishersAliasModal();
             } catch (err) {
                 console.error(err);
-                alert(err.message || 'Could not add alias.');
+                await prksAlertMessage(err.message || 'Could not add alias.', 'Error');
             }
             return;
         }
@@ -235,7 +225,7 @@ function prksEnsurePublishersPageDelegated(container) {
                 prksRenderPublishersAliasModal();
             } catch (err) {
                 console.error(err);
-                alert(err.message || 'Could not remove alias.');
+                await prksAlertMessage(err.message || 'Could not remove alias.', 'Error');
             }
         }
     });

@@ -250,7 +250,7 @@ function renderPlaylistDetail(pl, container) {
                     }
                 }
             } catch (_e) {
-                alert('Could not rename video.');
+                await prksAlertMessage('Could not rename video.', 'Error');
             }
             return;
         }
@@ -286,7 +286,7 @@ function renderPlaylistDetail(pl, container) {
                     }
                 }
             } catch (_e) {
-                alert('Could not remove item.');
+                await prksAlertMessage('Could not remove item.', 'Error');
             }
             return;
         }
@@ -305,7 +305,7 @@ function renderPlaylistDetail(pl, container) {
                 }
             }
         } catch (_e) {
-            alert('Could not reorder playlist.');
+            await prksAlertMessage('Could not reorder playlist.', 'Error');
         }
     };
 

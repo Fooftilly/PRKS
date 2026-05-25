@@ -800,11 +800,13 @@ function renderPersonProfileEditFormHtml(person) {
 async function savePersonProfile(personId) {
     const birthIso = parsePersonBirthDeathField(document.getElementById('pd-birth-date').value);
     if (birthIso === null) {
-        return alert(`Birth:\n${PERSON_DATE_HELP}`);
+        await prksAlertMessage(`Birth:\n${PERSON_DATE_HELP}`, 'Validation');
+        return;
     }
     const deathIso = parsePersonBirthDeathField(document.getElementById('pd-death-date').value);
     if (deathIso === null) {
-        return alert(`Date of death:\n${PERSON_DATE_HELP}`);
+        await prksAlertMessage(`Date of death:\n${PERSON_DATE_HELP}`, 'Validation');
+        return;
     }
     let group_ids =
         typeof prksGetPersonEditGroupIdsFromDom === 'function' ? prksGetPersonEditGroupIdsFromDom() : undefined;
@@ -829,7 +831,8 @@ async function savePersonProfile(personId) {
         group_ids
     };
     if (!payload.last_name.trim()) {
-        return alert('Last name is required.');
+        await prksAlertMessage('Last name is required.', 'Validation');
+        return;
     }
     const btn = document.getElementById('pd-save-btn');
     if (btn) {
@@ -844,7 +847,7 @@ async function savePersonProfile(personId) {
         });
         const patchBody = await res.json().catch(() => ({}));
         if (!res.ok) {
-            alert(patchBody.error || 'Could not save profile.');
+            await prksAlertMessage(patchBody.error || 'Could not save profile.', 'Could not save');
             return;
         }
         const person = await fetchPersonDetails(personId);
@@ -866,7 +869,7 @@ async function savePersonProfile(personId) {
         }
     } catch (e) {
         console.error(e);
-        alert('Could not save profile.');
+        await prksAlertMessage('Could not save profile.', 'Error');
     } finally {
         if (btn) {
             btn.disabled = false;
