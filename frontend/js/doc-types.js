@@ -84,7 +84,7 @@ function prksDocTypeMenuShellHtml(prefix, selectedValue, disabled) {
         `aria-haspopup="listbox" aria-expanded="false" aria-controls="${prefix}-listbox" ` +
         `aria-label="BibLaTeX document type">` +
         `<span class="prks-doc-type-menu__label">${prksEscapeDocTypeAttr(meta.label)}</span>` +
-        `<span class="prks-doc-type-menu__caret" aria-hidden="true">▾</span>` +
+        `<span class="prks-doc-type-menu__caret">${typeof prksIcon === 'function' ? prksIcon('chevronDown', { size: 12 }) : ''}</span>` +
         `</button>` +
         `<div id="${prefix}-listbox" class="prks-doc-type-menu__panel hidden" role="listbox"></div>` +
         `</div>`
@@ -125,6 +125,7 @@ function prksRefreshDocTypeMenu(wrap) {
             `<span class="prks-doc-type-menu__option-label">${prksEscapeDocTypeAttr(d.label)}</span>`;
         panel.appendChild(b);
     }
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(wrap);
 }
 
 function prksEnsureDocTypeMenuGlobals() {
@@ -162,6 +163,7 @@ function initPrksDocTypeMenu(hiddenInputId, opts) {
     if (!hidden.value) hidden.value = 'article';
 
     prksRefreshDocTypeMenu(wrap);
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(wrap);
 
     if (opts.disabled != null) {
         trigger.disabled = !!opts.disabled;

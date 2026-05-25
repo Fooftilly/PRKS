@@ -201,11 +201,12 @@ function prksProcessingRenderRoleList(card) {
         .map(
             (r, idx) => `
             <span class="tag author-tag">
-                👤 ${prksProcessingEsc(r.person_name || r.person_id)} (${prksProcessingEsc(r.role_type)})
+                ${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${prksProcessingEsc(r.person_name || r.person_id)} (${prksProcessingEsc(r.role_type)})
                 <button type="button" class="status-chip-remove" data-action="remove-role" data-remove-role-index="${idx}" aria-label="Remove role link">&times;</button>
             </span>`
         )
         .join(' ');
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(listEl);
 }
 
 function prksProcessingAttachPersonCombobox(card) {
@@ -405,14 +406,14 @@ function prksProcessingCardHtml(file) {
                         <div class="prks-combobox-with-action">
                             <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                                 <div class="tag-add-shell__field">
-                                    <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                    ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
                                     <input type="text" class="tag-add-shell__input" data-role="person-search" placeholder="Search person from library…" autocomplete="off" aria-label="Search person">
                                 </div>
                                 <input type="hidden" data-role="person-id" value="">
                                 <div class="combobox-results combobox-results--tag-panel hidden" data-role="person-results"></div>
                             </div>
                         </div>
-                        <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="add-role">+ Link</button>
+                        <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="add-role"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('link', { size: 'sm' }) : ''}</span><span class="ribbon-btn__label">Link</span></button>
                     </div>
                     <div class="prks-upload-person-stack__roles">
                         <div class="prks-upload-person-stack__role-caption">Role</div>
@@ -431,13 +432,13 @@ function prksProcessingCardHtml(file) {
                 <div class="prks-combobox-with-action">
                     <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                         <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
                             <input type="text" class="tag-add-shell__input" data-role="folder-search" placeholder="Search folder…" autocomplete="off" aria-label="Search folder">
                         </div>
                         <input type="hidden" data-role="folder-id" value="">
                         <div class="combobox-results combobox-results--tag-panel hidden" data-role="folder-results"></div>
                     </div>
-                    <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="quick-folder" title="Create new folder">+</button>
+                    <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="quick-folder" title="Create new folder" aria-label="Create new folder"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''}</span></button>
                 </div>
                 <details class="prks-processing-card__more">
                     <summary>More metadata</summary>
@@ -767,4 +768,5 @@ function renderProcessingFilesPage(items, container) {
             });
         }
     });
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }

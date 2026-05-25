@@ -120,6 +120,7 @@ function renderPlaylistsIndex(playlists, container) {
             }
         </div>
     `;
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 function renderPlaylistDetail(pl, container) {
@@ -165,15 +166,15 @@ function renderPlaylistDetail(pl, container) {
                             }
                         </div>
                         <div style="display:flex; gap:6px; flex: 0 0 auto;">
-                            <button class="ribbon-btn" data-pl-up="${idx}" title="Move up">↑</button>
-                            <button class="ribbon-btn" data-pl-down="${idx}" title="Move down">↓</button>
+                            <button class="ribbon-btn" data-pl-up="${idx}" title="Move up" aria-label="Move up">${typeof prksIcon === 'function' ? prksIcon('arrowUp', { size: 'sm' }) : '↑'}</button>
+                            <button class="ribbon-btn" data-pl-down="${idx}" title="Move down" aria-label="Move down">${typeof prksIcon === 'function' ? prksIcon('arrowDown', { size: 'sm' }) : '↓'}</button>
                             ${
                                 ren[String(w.id)] === true
                                     ? `
-                                <button class="ribbon-btn" data-pl-rename-save="${prksPlEsc(w.id)}" title="Save title">✓</button>
+                                <button class="ribbon-btn" data-pl-rename-save="${prksPlEsc(w.id)}" title="Save title" aria-label="Save title">${typeof prksIcon === 'function' ? prksIcon('check', { size: 'sm' }) : '✓'}</button>
                                 <button class="ribbon-btn" data-pl-rename-cancel="${prksPlEsc(w.id)}" title="Cancel">×</button>
                             `
-                                    : `<button class="ribbon-btn" data-pl-rename="${prksPlEsc(w.id)}" title="Rename title">✎</button>`
+                                    : `<button class="ribbon-btn" data-pl-rename="${prksPlEsc(w.id)}" title="Rename title" aria-label="Rename title">${typeof prksIcon === 'function' ? prksIcon('pencil', { size: 'sm' }) : '✎'}</button>`
                             }
                             <button class="ribbon-btn" data-pl-remove="${prksPlEsc(w.id)}" title="Remove">×</button>
                         </div>
@@ -309,6 +310,7 @@ function renderPlaylistDetail(pl, container) {
     };
 
     // Editing is done in the right panel (Details → Edit).
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 function renderPlaylistAttachControlsHtml(work) {
@@ -337,7 +339,7 @@ function renderPlaylistAttachControlsHtml(work) {
                     ? `
                 <div class="tag-add-shell combobox-container" style="margin:10px 0 0 0;">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                        ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : ''}
                         <input type="text" id="prks-work-playlist-search" class="tag-add-shell__input" placeholder="Search playlists…" maxlength="300" autocomplete="off" aria-label="Search playlists">
                         <input type="hidden" id="prks-work-playlist-id" value="${prksPlEsc(current)}">
                     </div>
@@ -393,12 +395,12 @@ async function mountPlaylistAttachControls(work) {
                     <div style="display:flex; gap:8px; align-items:center; justify-content:space-between;">
                         <div style="display:flex; gap:8px; align-items:center;">
                             <button type="button" class="ribbon-btn ribbon-btn--sm" id="prks-work-playlist-prev-btn" style="margin-top:0;" ${prevDisabled}>
-                                <span class="ribbon-btn__icon" aria-hidden="true">←</span>
+                                <span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('chevronLeft', { size: 'ribbon' }) : ''}</span>
                                 <span class="ribbon-btn__label">Prev</span>
                             </button>
                             <button type="button" class="ribbon-btn ribbon-btn--sm" id="prks-work-playlist-next-btn" style="margin-top:0;" ${nextDisabled}>
                                 <span class="ribbon-btn__label">Next</span>
-                                <span class="ribbon-btn__icon" aria-hidden="true">→</span>
+                                <span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 'ribbon' }) : ''}</span>
                             </button>
                         </div>
                         <div style="flex:1 1 auto;"></div>
@@ -417,6 +419,7 @@ async function mountPlaylistAttachControls(work) {
                         window.location.hash = '#/works/' + encodeURIComponent(next.id);
                     };
                 }
+                if (typeof prksRefreshIcons === 'function') prksRefreshIcons(navHost);
             } catch (_e) {
                 // If playlist fetch fails, skip nav silently.
                 navHost.innerHTML = '';

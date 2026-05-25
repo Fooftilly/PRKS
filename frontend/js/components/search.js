@@ -5,7 +5,7 @@ function searchEscapeHtml(s) {
 }
 
 function renderRecent(works, container) {
-    let html = `<div class="page-header"><h2>⏱ Recently Opened</h2></div><div class="card-grid">`;
+    let html = `<div class="page-header"><h2>${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('clock') : ''} Recently Opened</h2></div><div class="card-grid">`;
     if (works && works.length > 0) {
         works.forEach(w => {
             let dateStr = w.last_opened_at ? new Date(w.last_opened_at).toLocaleString() : 'Unknown';
@@ -17,6 +17,7 @@ function renderRecent(works, container) {
     }
     html += `</div>`;
     container.innerHTML = html;
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 function prksRunSearchFromForm() {
@@ -67,7 +68,7 @@ function renderSearch(results, query, container, options = {}) {
                     <label class="search-advanced__label" for="search-q-input">Keywords</label>
                     <div class="tag-add-shell">
                         <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
                             <input type="search" id="search-q-input" class="tag-add-shell__input" value="${qEsc}" placeholder="Title, notes, abstract, numbers…" maxlength="500" autocomplete="off" aria-label="Search keywords">
                         </div>
                     </div>
@@ -76,7 +77,7 @@ function renderSearch(results, query, container, options = {}) {
                     <label class="search-advanced__label" for="search-author-input">Author</label>
                     <div class="tag-add-shell">
                         <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
                             <input type="search" id="search-author-input" class="tag-add-shell__input" value="${aEsc}" placeholder="Name in metadata or linked person…" maxlength="200" autocomplete="off" aria-label="Search by author">
                         </div>
                     </div>
@@ -85,7 +86,7 @@ function renderSearch(results, query, container, options = {}) {
                     <label class="search-advanced__label" for="search-publisher-input">Publisher</label>
                     <div class="tag-add-shell">
                         <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
                             <input type="search" id="search-publisher-input" class="tag-add-shell__input" value="${pEsc}" placeholder="Publisher field; alternate names from Publishers page…" maxlength="200" autocomplete="off" aria-label="Search by publisher">
                         </div>
                     </div>
@@ -104,6 +105,7 @@ function renderSearch(results, query, container, options = {}) {
     }
     html += `</div>`;
     container.innerHTML = html;
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
     if (!tag) {
         const runBtn = document.getElementById('search-run-btn');
         const qIn = document.getElementById('search-q-input');

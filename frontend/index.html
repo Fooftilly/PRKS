@@ -35,13 +35,13 @@
                         <p class="sidebar-caption-sm">Knowledge System</p>
                     </div>
                 </a>
-                <button onclick="openModal('settings-modal')" class="ribbon-btn settings-btn" title="Settings">⚙️</button>
+                <button onclick="openModal('settings-modal')" class="ribbon-btn settings-btn" title="Settings" aria-label="Settings"><span class="ribbon-btn__icon"><i data-lucide="settings" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
             </div>
 
             <div class="search-bar">
                 <div class="tag-add-shell">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
                         <input type="text" id="global-search" class="tag-add-shell__input" placeholder="Search title, notes, authors…" autocomplete="off" aria-label="Search library">
                     </div>
                 </div>
@@ -49,27 +49,27 @@
 
             <ul class="nav-menu">
                 <li class="nav-section">Library</li>
-                <li><a href="#/folders" class="nav-link active">📁 All Folders</a></li>
-                <li><a href="#/recent" class="nav-link">⏱ Recent</a></li>
-                <li><a href="#/types" class="nav-link">📚 File Types</a></li>
-                <li><a href="#/playlists" class="nav-link">🎞 Playlists</a></li>
+                <li><a href="#/folders" class="nav-link active"><span class="nav-link__icon"><i data-lucide="folder" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">All Folders</span></a></li>
+                <li><a href="#/recent" class="nav-link"><span class="nav-link__icon"><i data-lucide="clock" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Recent</span></a></li>
+                <li><a href="#/types" class="nav-link"><span class="nav-link__icon"><i data-lucide="library" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">File Types</span></a></li>
+                <li><a href="#/playlists" class="nav-link"><span class="nav-link__icon"><i data-lucide="clapperboard" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Playlists</span></a></li>
 
                 <li class="nav-section">Tags</li>
                 <li class="sidebar-tags-wrap">
                     <div id="sidebar-tag-cloud" class="tag-cloud tag-cloud--sidebar"></div>
                 </li>
-                <li><a href="#/publishers" class="nav-link">📚 Publishers</a></li>
+                <li><a href="#/publishers" class="nav-link"><span class="nav-link__icon"><i data-lucide="library" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Publishers</span></a></li>
 
                 <li class="nav-section">People</li>
-                <li><a href="#/people" class="nav-link">👥 People</a></li>
-                <li><a href="#/people/role/Author" class="nav-link nav-link--sub">✍️ Authors</a></li>
-                <li><a href="#/people/role/Editor" class="nav-link nav-link--sub">📝 Editors</a></li>
-                <li><a href="#/people/role/Reviewer" class="nav-link nav-link--sub">📋 Reviewers</a></li>
-                <li><a href="#/people/role/Translator" class="nav-link nav-link--sub">🌐 Translators</a></li>
-                <li><a href="#/people/role/Introduction" class="nav-link nav-link--sub">📘 Introduction writers</a></li>
-                <li><a href="#/people/role/Foreword" class="nav-link nav-link--sub">📖 Foreword writers</a></li>
-                <li><a href="#/people/role/Afterword" class="nav-link nav-link--sub">📕 Afterword writers</a></li>
-                <li><a href="#/people/groups" class="nav-link nav-link--sub">📂 Groups</a></li>
+                <li><a href="#/people" class="nav-link"><span class="nav-link__icon"><i data-lucide="users" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">People</span></a></li>
+                <li><a href="#/people/role/Author" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="pen-line" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Authors</span></a></li>
+                <li><a href="#/people/role/Editor" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="file-pen" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Editors</span></a></li>
+                <li><a href="#/people/role/Reviewer" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="clipboard-list" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Reviewers</span></a></li>
+                <li><a href="#/people/role/Translator" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="languages" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Translators</span></a></li>
+                <li><a href="#/people/role/Introduction" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="book-marked" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Introduction writers</span></a></li>
+                <li><a href="#/people/role/Foreword" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="book-open" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Foreword writers</span></a></li>
+                <li><a href="#/people/role/Afterword" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="book" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Afterword writers</span></a></li>
+                <li><a href="#/people/groups" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="folders" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Groups</span></a></li>
 
                 <li class="nav-section">My Progress</li>
                 <li class="sidebar-progress-block">
@@ -107,7 +107,7 @@
                     </ul>
                 </li>
                 <li class="sidebar-nav-section-break">
-                    <a href="#/processing-files" class="nav-link">🗂 Files for Processing</a>
+                    <a href="#/processing-files" class="nav-link"><span class="nav-link__icon"><i data-lucide="inbox" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Files for Processing</span></a>
                 </li>
             </ul>
         </nav>
@@ -124,27 +124,27 @@
                         aria-expanded="false"
                         aria-controls="sidebar"
                         title="Menu"
-                    >☰ <span class="prks-sr-only">Menu</span></button>
+                    ><span class="ribbon-btn__icon"><i data-lucide="menu" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="prks-sr-only">Menu</span></button>
                 </div>
                 <div class="top-ribbon__center" aria-label="Quick actions">
                     <button class="ribbon-btn" onclick="openModal('work-modal')" title="New File">
-                        <span class="ribbon-btn__icon" aria-hidden="true">📝</span>
+                        <span class="ribbon-btn__icon"><i data-lucide="file-plus" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
                         <span class="ribbon-btn__label">New File</span>
                     </button>
                     <button class="ribbon-btn" onclick="openModal('folder-modal')" title="New Folder">
-                        <span class="ribbon-btn__icon" aria-hidden="true">📁</span>
+                        <span class="ribbon-btn__icon"><i data-lucide="folder" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
                         <span class="ribbon-btn__label">New Folder</span>
                     </button>
                     <button class="ribbon-btn" onclick="openModal('person-modal')" title="New Person">
-                        <span class="ribbon-btn__icon" aria-hidden="true">👤</span>
+                        <span class="ribbon-btn__icon"><i data-lucide="user" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
                         <span class="ribbon-btn__label">New Person</span>
                     </button>
                     <button class="ribbon-btn" onclick="openModal('group-modal')" title="New group">
-                        <span class="ribbon-btn__icon" aria-hidden="true">📂</span>
+                        <span class="ribbon-btn__icon"><i data-lucide="users" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
                         <span class="ribbon-btn__label">New group</span>
                     </button>
                     <button class="ribbon-btn" onclick="openModal('role-modal')" title="Link Person to Work">
-                        <span class="ribbon-btn__icon" aria-hidden="true">🔗</span>
+                        <span class="ribbon-btn__icon"><i data-lucide="link" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
                         <span class="ribbon-btn__label">Link Person to Work</span>
                     </button>
                 </div>
@@ -157,7 +157,7 @@
                         aria-expanded="false"
                         aria-controls="right-panel"
                         title="Details"
-                    >ⓘ <span class="prks-sr-only">Details</span></button>
+                    ><span class="ribbon-btn__icon"><i data-lucide="info" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="prks-sr-only">Details</span></button>
                 </div>
             </div>
             <div id="page-content"></div>
@@ -293,14 +293,10 @@
             <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body modal-grid-2">
-            <button onclick="openModal('folder-modal')" class="add-new-btn create-entity-btn">📁 New
-                Folder</button>
-            <button onclick="openModal('work-modal')" class="add-new-btn create-entity-btn">📝 New
-                File</button>
-            <button onclick="openModal('person-modal')" class="add-new-btn create-entity-btn">👥 New
-                Author</button>
-            <button onclick="openModal('role-modal')" class="add-new-btn create-entity-btn">🔗 Link
-                Person to Work</button>
+            <button onclick="openModal('folder-modal')" class="add-new-btn create-entity-btn"><i data-lucide="folder" class="prks-icon" aria-hidden="true"></i> New Folder</button>
+            <button onclick="openModal('work-modal')" class="add-new-btn create-entity-btn"><i data-lucide="file-plus" class="prks-icon" aria-hidden="true"></i> New File</button>
+            <button onclick="openModal('person-modal')" class="add-new-btn create-entity-btn"><i data-lucide="users" class="prks-icon" aria-hidden="true"></i> New Author</button>
+            <button onclick="openModal('role-modal')" class="add-new-btn create-entity-btn"><i data-lucide="link" class="prks-icon" aria-hidden="true"></i> Link Person to Work</button>
         </div>
     </div>
 
@@ -318,7 +314,7 @@
                     </div>
                     <div id="upload-viewer" class="hidden"></div>
                     <div id="drop-zone-prompt" class="drop-zone">
-                        <span class="drop-zone__icon">📄</span>
+                        <span class="drop-zone__icon"><i data-lucide="file-text" class="prks-icon" aria-hidden="true"></i></span>
                         <p id="drop-zone-label">Drag & Drop a PDF here<br><span class="drop-zone__label-sub">or click to browse</span></p>
                         <input type="file" id="work-file" accept=".pdf,application/pdf" class="file-input-hidden">
                     </div>
@@ -330,11 +326,11 @@
                     <input type="hidden" id="work-source-kind" value="pdf" autocomplete="off">
                     <div class="prks-kind-toggle" role="tablist" aria-labelledby="work-file-kind-label">
                         <button type="button" class="prks-kind-toggle__btn is-active" data-kind="pdf" role="tab" aria-selected="true">
-                            <span class="prks-kind-toggle__icon" aria-hidden="true">📄</span>
+                            <span class="prks-kind-toggle__icon"><i data-lucide="file-text" class="prks-icon" aria-hidden="true"></i></span>
                             <span class="prks-kind-toggle__label">PDF</span>
                         </button>
                         <button type="button" class="prks-kind-toggle__btn" data-kind="video" role="tab" aria-selected="false">
-                            <span class="prks-kind-toggle__icon" aria-hidden="true">▶</span>
+                            <span class="prks-kind-toggle__icon"><i data-lucide="play" class="prks-icon" aria-hidden="true"></i></span>
                             <span class="prks-kind-toggle__label">Video</span>
                         </button>
                     </div>
@@ -374,7 +370,7 @@
                             <label for="work-video-playlist-search">Playlist (optional)</label>
                             <div class="tag-add-shell combobox-container tag-add-shell--flush">
                                 <div class="tag-add-shell__field">
-                                    <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                                    <span class="tag-add-shell__icon"><i data-lucide="plus" class="prks-icon" aria-hidden="true"></i></span>
                                     <input type="text" id="work-video-playlist-search" class="tag-add-shell__input" placeholder="Search playlists…" maxlength="300" autocomplete="off" aria-label="Search playlists">
                                     <input type="hidden" id="work-video-playlist-id" value="">
                                 </div>
@@ -393,13 +389,13 @@
                     <div class="prks-combobox-with-action">
                         <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                             <div class="tag-add-shell__field">
-                                <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
                                 <input type="text" id="work-folder-search" class="tag-add-shell__input" placeholder="Search folder..." autocomplete="off" aria-label="Search folder">
                             </div>
                             <input type="hidden" id="work-folder-id">
                             <div id="folder-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                         </div>
-                        <button type="button" onclick="quickCreateFolder()" class="ribbon-btn ribbon-btn--sm" title="Create New Folder">+</button>
+                        <button type="button" onclick="quickCreateFolder()" class="ribbon-btn ribbon-btn--sm" title="Create New Folder" aria-label="Create New Folder"><span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span></button>
                     </div>
 
                     <label for="work-doc-type-trigger">Document type (BibLaTeX)</label>
@@ -407,7 +403,7 @@
                         <input type="hidden" id="work-doc-type" value="article">
                         <button type="button" class="prks-doc-type-menu__trigger" id="work-doc-type-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="work-doc-type-listbox" aria-label="BibLaTeX document type">
                             <span class="prks-doc-type-menu__label">Article</span>
-                            <span class="prks-doc-type-menu__caret" aria-hidden="true">▾</span>
+                            <span class="prks-doc-type-menu__caret"><i data-lucide="chevron-down" class="prks-icon" aria-hidden="true"></i></span>
                         </button>
                         <div id="work-doc-type-listbox" class="prks-doc-type-menu__panel hidden" role="listbox"></div>
                     </div>
@@ -429,14 +425,14 @@
                             <div class="prks-combobox-with-action">
                                 <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                                     <div class="tag-add-shell__field">
-                                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
                                         <input type="text" id="upload-person-search" class="tag-add-shell__input" placeholder="Search person..." autocomplete="off" aria-label="Search person">
                                     </div>
                                     <input type="hidden" id="upload-person-id">
                                     <div id="person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                                 </div>
                             </div>
-                            <button type="button" onclick="addRoleToUploadList()" class="ribbon-btn">+ Link</button>
+                            <button type="button" onclick="addRoleToUploadList()" class="ribbon-btn"><span class="ribbon-btn__icon"><i data-lucide="link" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="ribbon-btn__label">Link</span></button>
                         </div>
                         <div class="prks-upload-person-stack__roles">
                             <div class="prks-upload-person-stack__role-caption">Role</div>
@@ -506,7 +502,7 @@
                         <p class="tag-add-field__caption">Tags (optional)</p>
                         <div class="tag-add-shell combobox-container tag-add-shell--flush">
                             <div class="tag-add-shell__field">
-                                <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                                <span class="tag-add-shell__icon"><i data-lucide="plus" class="prks-icon" aria-hidden="true"></i></span>
                                 <input type="text" id="upload-tag-search" class="tag-add-shell__input" placeholder="Search or create tag…" maxlength="300" autocomplete="off" aria-label="Add tag for new file">
                             </div>
                             <div id="upload-tag-results" class="combobox-results combobox-results--tag-panel hidden"></div>
@@ -556,7 +552,7 @@
                 <p class="modal-helper meta-row--hint meta-row--compact">Search and choose a parent folder to create this one as a subfolder.</p>
                 <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
                         <input type="text" id="folder-parent-search" class="tag-add-shell__input" placeholder="Search parent folder…" autocomplete="off" aria-label="Search parent folder">
                     </div>
                     <input type="hidden" id="folder-parent-id" value="">
@@ -601,7 +597,7 @@
                 <p class="modal-helper meta-row--hint meta-row--compact">Search for an existing group or type a new name — it will be created as a top-level group when you save.</p>
                 <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
                         <input type="text" id="group-parent-search" class="tag-add-shell__input" placeholder="Search or type new parent name…" autocomplete="off" aria-label="Search or type parent group">
                     </div>
                     <input type="hidden" id="group-parent-id" value="">
@@ -664,8 +660,8 @@
                 <div class="prks-inline-message">
                     <p class="meta-row meta-row--compact" style="display:flex;align-items:center;gap:8px;">
                         <strong>How to fill template fields</strong>
-                        <button type="button" class="inline-action-btn" onclick="copyPersonTemplateGuideText()" title="Copy template field guide" aria-label="Copy template field guide">📋</button>
-                        <button type="button" class="inline-action-btn" onclick="copyPersonTemplateAndGuideText()" title="Copy template + field guide" aria-label="Copy template and field guide">📋＋</button>
+                        <button type="button" class="inline-action-btn" onclick="copyPersonTemplateGuideText()" title="Copy template field guide" aria-label="Copy template field guide"><i data-lucide="copy" class="prks-icon" aria-hidden="true"></i></button>
+                        <button type="button" class="inline-action-btn" onclick="copyPersonTemplateAndGuideText()" title="Copy template + field guide" aria-label="Copy template and field guide"><i data-lucide="copy" class="prks-icon" aria-hidden="true"></i><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></button>
                     </p>
                     <p>Fill this template according to the provided rules:</p>
                     <ul style="margin: 0 0 0 18px;">
@@ -701,7 +697,7 @@
                 <label for="role-person-search">Person</label>
                 <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
                         <input type="text" id="role-person-search" class="tag-add-shell__input" placeholder="Search person…" autocomplete="off" aria-label="Search person">
                     </div>
                     <input type="hidden" id="role-person-id">
@@ -710,7 +706,7 @@
                 <label for="role-work-search">File</label>
                 <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
                         <input type="text" id="role-work-search" class="tag-add-shell__input" placeholder="Search file…" autocomplete="off" aria-label="Search file">
                     </div>
                     <input type="hidden" id="role-work-id">
@@ -737,6 +733,8 @@
 
 
 
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.511.0/dist/umd/lucide.min.js"></script>
+    <script src="/js/icons.js"></script>
     <script src="/js/api.js"></script>
     <script src="/js/doc-types.js"></script>
     <script src="/js/embedpdf-theme.js"></script>

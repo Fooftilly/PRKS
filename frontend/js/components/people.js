@@ -493,6 +493,7 @@ function renderPeopleList(persons, container, options = {}) {
     }
     html += '</div>';
     container.innerHTML = html;
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 async function openPersonProfileEdit() {
@@ -625,7 +626,7 @@ function renderPersonProfileEditFormHtml(person) {
                     <label for="pd-group-search">Add group</label>
                     <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                         <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
                             <input type="text" id="pd-group-search" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add">
                         </div>
                         <input type="hidden" id="pd-group-pick-id" value="">
@@ -790,7 +791,7 @@ function renderPersonDetails(person, container) {
 
     container.innerHTML = `
         <div class="page-header page-header--split">
-            <h2>👤 ${escapeHtmlPerson(person.first_name || '')} ${escapeHtmlPerson(person.last_name)}</h2>
+            <h2>${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('user') : ''} ${escapeHtmlPerson(person.first_name || '')} ${escapeHtmlPerson(person.last_name)}</h2>
         </div>
         <div class="document-view document-view--person">
             <div class="doc-content person-profile">
@@ -817,4 +818,5 @@ function renderPersonDetails(person, container) {
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(container);
     }
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }

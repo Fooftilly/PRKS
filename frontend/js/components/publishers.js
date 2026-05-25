@@ -277,7 +277,7 @@ async function renderPublishersPage(container) {
                     <div class="publishers-page__add-row">
                         <div class="tag-add-shell combobox-container publishers-page__add-shell">
                             <div class="tag-add-shell__field">
-                                <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                                ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : ''}
                                 <input type="text" id="publishers-page-new-name" class="tag-add-shell__input" maxlength="200" placeholder="e.g. Oxford University Press" autocomplete="off" aria-label="New canonical publisher name">
                             </div>
                         </div>
@@ -307,6 +307,7 @@ async function renderPublishersPage(container) {
     `;
     wirePublisherCloudNavigation(document.getElementById('publishers-page-cloud'));
     prksEnsurePublishersPageDelegated(container);
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 window.prksClosePublishersAliasModal = prksClosePublishersAliasModal;

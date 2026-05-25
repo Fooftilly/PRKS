@@ -239,6 +239,7 @@ function openModal(id) {
     }
     requestAnimationFrame(() => prksBindAutosizeTextareas(modalEl));
     prksScheduleModalBaselineCapture(id);
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(modalEl);
 }
 
 // —— In-app help hints (popover + Settings toggle) ——
@@ -273,7 +274,7 @@ const PRKS_HINT_HTML = {
     'route-new-folder':
         '<p>Use <strong>New Folder</strong> in the top ribbon to add a folder.</p>',
     'route-new-playlist':
-        '<p>Use <strong>＋ New playlist</strong> in the right-hand panel on this page.</p>',
+        '<p>Use <strong>New playlist</strong> in the right-hand panel on this page.</p>',
     'route-new-person':
         '<p>Use <strong>New Person</strong> in the ribbon to add someone.</p>',
     'route-new-group':
@@ -1092,7 +1093,7 @@ function renderRouteContextSidebar(mode) {
                 ${prksRouteSidebarTitleRow('Playlists', 'route-new-playlist', 'How to create a playlist')}
                 <p class="route-sidebar__lede">Ordered collections of videos (courses, lecture series). Open a playlist to reorder items or add new videos.</p>
                 <p class="route-sidebar__action route-sidebar__action--block">
-                    <button type="button" class="add-new-btn route-sidebar__new-playlist-btn" id="prks-create-playlist-btn">＋ New playlist</button>
+                    <button type="button" class="add-new-btn route-sidebar__new-playlist-btn" id="prks-create-playlist-btn">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New playlist</button>
                 </p>
             </div>`;
     }
@@ -1366,8 +1367,12 @@ function initPrksPrivateNotesEditor(entityType, entityId) {
 function prksWorkPanelActionsHtml() {
     return (
         '<div class="right-panel-work-actions">' +
-        '<button type="button" class="tab-btn copy-bibtex-btn" aria-live="polite">📋 Copy BibTeX</button>' +
-        '<button type="button" class="ribbon-btn delete-work-btn" title="Delete this file">🗑 Delete File</button>' +
+        '<button type="button" class="tab-btn copy-bibtex-btn" aria-live="polite">' +
+        (typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : '') +
+        ' Copy BibTeX</button>' +
+        '<button type="button" class="ribbon-btn delete-work-btn" title="Delete this file">' +
+        (typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : '') +
+        ' Delete File</button>' +
         '</div>'
     );
 }
@@ -1557,7 +1562,7 @@ function updatePanelContent(tabId) {
 
     prksBindAutosizeTextareas(panel);
     prksSyncRightPanelTabStrip(tabId || 'details');
-
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
 }
 
 function renderPlaylistSummarySidebarHtml(pl) {
@@ -1615,7 +1620,7 @@ function renderPlaylistEditSidebarHtml(pl) {
                 <p class="meta-row meta-row--compact">Search for a video and click Add.</p>
                 <div class="tag-add-shell combobox-container tag-add-shell--flush">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                        ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : '<span class="tag-add-shell__icon"></span>'}
                         <input type="text" id="prks-playlist-add-search" class="tag-add-shell__input" placeholder="Search videos…" maxlength="300" autocomplete="off" aria-label="Search videos to add">
                     </div>
                     <div id="prks-playlist-add-results" class="combobox-results combobox-results--tag-panel hidden"></div>
@@ -1903,7 +1908,7 @@ function buildWorkLinkedPersonsHtml(work) {
                             ? String(a.order_index)
                             : '0';
                     const roleAttr = escapeHtml(rt);
-                    return `<span class="work-linked-persons__chip tag"><a class="work-linked-persons__chip-link" href="#/people/${safePersonId}">👤 ${escapeHtml(name)}</a><button type="button" class="work-linked-persons__unlink" aria-label="Remove link from this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></span>`;
+                    return `<span class="work-linked-persons__chip tag"><a class="work-linked-persons__chip-link" href="#/people/${safePersonId}">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${escapeHtml(name)}</a><button type="button" class="work-linked-persons__unlink" aria-label="Remove link from this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></span>`;
                 })
                 .join(' ');
             return `<div class="work-linked-persons__role"><h4 class="work-linked-persons__role-title">${escapeHtml(rt)}</h4><div class="tag-cloud">${chips}</div></div>`;
@@ -2077,7 +2082,7 @@ function renderWorkMetaTab(work, isEditing = false) {
             <p class="tag-add-field__caption">Add a tag</p>
             <div class="tag-add-shell combobox-container">
                 <div class="tag-add-shell__field">
-                    <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                    ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : '<span class="tag-add-shell__icon"></span>'}
                     <input type="text" id="work-tag-search" class="tag-add-shell__input" placeholder="Search tags or type a new name…" maxlength="120" autocomplete="off" aria-label="Search or add tag">
                 </div>
                 <div id="work-tag-search-results" class="combobox-results combobox-results--tag-panel hidden"></div>
@@ -2118,7 +2123,7 @@ function renderFolderDetailsPanel(folder) {
         ? `
             <div class="tag-add-shell combobox-container">
                 <div class="tag-add-shell__field">
-                    <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                    ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : '<span class="tag-add-shell__icon"></span>'}
                     <input type="text" id="prks-folder-library-search" class="tag-add-shell__input" placeholder="Search library files…" maxlength="300" autocomplete="off" aria-label="Search files to add">
                 </div>
                 <div id="prks-folder-library-results" class="combobox-results combobox-results--tag-panel hidden"></div>
@@ -2144,7 +2149,7 @@ function renderFolderDetailsPanel(folder) {
             <div id="prks-folder-parent-edit-wrap" class="${parentEditing ? '' : 'hidden'}">
                 <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : '<span class="tag-add-shell__icon"></span>'}
                         <input type="text" id="prks-folder-parent-search" class="tag-add-shell__input" placeholder="Search destination folder…" autocomplete="off" aria-label="Search destination folder">
                     </div>
                     <input type="hidden" id="prks-folder-parent-id" value="">
@@ -2176,7 +2181,7 @@ function renderFolderDetailsPanel(folder) {
             <p class="tag-add-field__caption">Add a tag</p>
             <div class="tag-add-shell combobox-container">
                 <div class="tag-add-shell__field">
-                    <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                    ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : '<span class="tag-add-shell__icon"></span>'}
                     <input type="text" id="folder-tag-search" class="tag-add-shell__input" placeholder="Search tags or type a new name…" maxlength="120" autocomplete="off" aria-label="Search or add tag">
                 </div>
                 <div id="folder-tag-search-results" class="combobox-results combobox-results--tag-panel hidden"></div>
@@ -2824,7 +2829,7 @@ function renderWorkMetaEditTab(work) {
                     <div class="prks-combobox-with-action">
                         <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                             <div class="tag-add-shell__field">
-                                <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : '<span class="tag-add-shell__icon"></span>'}
                                 <input type="text" id="meta-role-person-search" class="tag-add-shell__input" placeholder="Search person..." autocomplete="off" aria-label="Search person for role link">
                             </div>
                             <input type="hidden" id="meta-role-person-id">
@@ -3451,8 +3456,9 @@ function renderUploadRoles() {
         return;
     }
     container.innerHTML = uploadRoles.map((r, idx) => `
-        <span class="tag author-tag">👤 ${escapeHtml(r.person_name)} (${escapeHtml(r.role_type)}) <i onclick="removeUploadRole(${idx})" class="status-chip-remove">&times;</i></span>
+        <span class="tag author-tag">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${escapeHtml(r.person_name)} (${escapeHtml(r.role_type)}) <i onclick="removeUploadRole(${idx})" class="status-chip-remove">&times;</i></span>
     `).join(' ');
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 function removeUploadRole(idx) {

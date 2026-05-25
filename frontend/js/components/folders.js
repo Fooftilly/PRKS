@@ -87,6 +87,7 @@ function prksRerenderFolderTreeOnly() {
     const host = st.container.querySelector('[data-prks-folder-tree-host]');
     if (host) {
         host.innerHTML = prksFolderLibraryTreeInnerHtml(st.folders, st.filterQuery);
+        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
     }
 }
 
@@ -239,7 +240,9 @@ function renderFolderTreeRoots(folders, options = {}) {
             ? `<button type="button" class="prks-folder-tree__toggle" aria-expanded="${expanded ? 'true' : 'false'}" title="${
                   collapsed ? 'Expand subfolders' : 'Collapse subfolders'
               }" onclick="event.preventDefault(); event.stopPropagation(); prksToggleFolderNode('${fidEnc}');">${
-                  collapsed ? '▸' : '▾'
+                  collapsed
+                      ? (typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 14 }) : '▸')
+                      : (typeof prksIcon === 'function' ? prksIcon('chevronDown', { size: 14 }) : '▾')
               }</button>`
             : '<span class="prks-folder-tree__toggle-spacer" aria-hidden="true"></span>';
 
@@ -247,7 +250,7 @@ function renderFolderTreeRoots(folders, options = {}) {
             <div class="prks-folder-tree__row${matchClass}" role="treeitem" aria-expanded="${hasChildren ? (expanded ? 'true' : 'false') : 'false'}" style="--depth:${depth}">
                 ${toggleHtml}
                 <a class="prks-folder-tree__link" href="${hash}" data-prks-middleclick-nav="1" onauxclick="return typeof prksMaybeOpenHashInNewTab==='function'&&prksMaybeOpenHashInNewTab(event,'${hash}')">
-                    <span class="prks-folder-tree__icon" aria-hidden="true">📁</span>
+                    <span class="prks-folder-tree__icon">${typeof prksIcon === 'function' ? prksIcon('folder') : ''}</span>
                     <span class="prks-folder-tree__title">${prksFolderEsc(node.title || 'Folder')}</span>
                 </a>
                 ${metaHtml}
@@ -445,7 +448,7 @@ function renderDashboard(folders, container) {
         <div class="prks-folder-library__folders-toolbar${foldersActive ? '' : ' is-hidden'}">
             <div class="tag-add-shell tag-add-shell--flush prks-folder-library__search">
                 <div class="tag-add-shell__field">
-                    <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                    ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
                     <input type="text" id="prks-folder-library-search" class="tag-add-shell__input" placeholder="Search folders…" value="${filterEsc}" maxlength="300" autocomplete="off" aria-label="Filter folders">
                     <button type="button" class="tag-add-shell__clear" id="prks-folder-library-search-clear" aria-label="Clear search" title="Clear search" hidden>&times;</button>
                 </div>
@@ -485,6 +488,7 @@ function renderDashboard(folders, container) {
     if (activeTab === 'recently-added') {
         void prksLoadFolderLibraryRecentlyAdded(false);
     }
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 function renderFolderDetails(folder, container) {
@@ -532,8 +536,8 @@ function renderFolderDetails(folder, container) {
 
     container.innerHTML = `
         <div class="page-header page-header--split">
-            <h2>📁 ${prksFolderEsc(folder.title)}</h2>
-            ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="btn-danger-outline">🗑 Delete Folder</button>` : ''}
+            <h2>${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
+            ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="btn-danger-outline">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
         </div>
         <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
         ${subfoldersHtml}
@@ -554,6 +558,7 @@ function renderFolderDetails(folder, container) {
         const select = document.getElementById('work-folder-id');
         if (select) select.value = folder.id;
     }, 100);
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 async function prksRemoveFolderTag(folderId, tagId) {
@@ -644,7 +649,7 @@ function renderFolderAttachControlsHtml(work) {
             <p class="meta-row meta-row--spaced">${currentLineExpanded}</p>
             <div class="tag-add-shell combobox-container">
                 <div class="tag-add-shell__field">
-                    <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                    ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : ''}
                     <input type="text" id="prks-work-folder-search" class="tag-add-shell__input" placeholder="Search folders…" maxlength="300" autocomplete="off" aria-label="Search folders">
                     <input type="hidden" id="prks-work-folder-id" value="${prksWorkFolderEsc(current)}">
                 </div>

@@ -153,10 +153,11 @@ function renderPersonGroupsPage(groups, container) {
     container.innerHTML = `
         <div class="page-header" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
             <h2>People groups</h2>
-            <button type="button" class="ribbon-btn" onclick="openModal('group-modal')">➕ New group</button>
+            <button type="button" class="ribbon-btn" onclick="openModal('group-modal')">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New group</button>
         </div>
         <p class="meta-row" style="padding:4px 4px 16px;">Organize people under hierarchical groups (e.g. <em>Philosophy</em> → <em>Frankfurt School</em>). Group names are unique. A person can belong to several groups.</p>
         ${body}`;
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 function prksCollectDescendantIds(groupId, allList) {
@@ -219,7 +220,7 @@ function renderPersonGroupEditSidebarHtml(g) {
                 </div>
                 <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
                         <input type="text" id="gd-parent-search" class="tag-add-shell__input" placeholder="${escapeHtmlGroup(parentSearchPlaceholder)}" autocomplete="off" aria-label="Search parent group">
                     </div>
                     <input type="hidden" id="gd-parent-id" value="">
@@ -399,7 +400,7 @@ function renderPersonGroupAddMemberPanelHtml() {
             <div class="tag-add-shell combobox-container">
                 <input type="hidden" id="group-add-member-id" value="">
                 <div class="tag-add-shell__field">
-                    <span class="tag-add-shell__icon" aria-hidden="true">＋</span>
+                    ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : ''}
                     <input type="text" id="group-add-member-search" class="tag-add-shell__input" placeholder="Search by name, alias, group, or role…" maxlength="200" autocomplete="off" aria-label="Search person to add to group">
                 </div>
                 <div id="group-add-member-results" class="combobox-results combobox-results--tag-panel hidden"></div>
@@ -448,7 +449,7 @@ function renderPersonGroupDetail(group, container) {
 
     container.innerHTML = `
         <div class="page-header" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
-            <h2>📂 ${escapeHtmlGroup(g.name)}</h2>
+            <h2>${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folders') : ''} ${escapeHtmlGroup(g.name)}</h2>
         </div>
         ${breadcrumb}
         <div class="document-view document-view--person">
@@ -458,6 +459,7 @@ function renderPersonGroupDetail(group, container) {
         </div>`;
 
     mountPersonGroupMemberRemoveButtons(g);
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 function prksPersonEditFindGroupByNameInsensitive(name, list) {

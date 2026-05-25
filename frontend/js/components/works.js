@@ -342,7 +342,7 @@ async function renderWorkDetails(work, container, routeGen) {
             const authorChips = authorsList
                 .map(
                     (a) =>
-                        `<span class="tag author-tag prks-person-chip" data-person-id="${prksEscapeAttr(String(a.id || ''))}">👤 ${prksEscapeHtmlLite(a.first_name)} ${prksEscapeHtmlLite(a.last_name)}</span>`
+                        `<span class="tag author-tag prks-person-chip" data-person-id="${prksEscapeAttr(String(a.id || ''))}">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${prksEscapeHtmlLite(a.first_name)} ${prksEscapeHtmlLite(a.last_name)}</span>`
                 )
                 .join(' ');
             authorsStr = authorChips + authorsStr;
@@ -961,7 +961,9 @@ async function copyBibTeX(workId, btn) {
         const text = await res.text();
         await prksCopyBibTeXToClipboard(text);
         snapshotIfNeeded();
-        btn.innerHTML = '✓ BibTex copied!';
+        btn.innerHTML =
+            (typeof prksIcon === 'function' ? prksIcon('check', { size: 'sm' }) : '') + ' BibTeX copied!';
+        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
         btn.style.color = '#16a34a';
         btn.style.borderColor = '#16a34a';
         copyBibTeXResetTimer = setTimeout(() => {
@@ -970,7 +972,9 @@ async function copyBibTeX(workId, btn) {
         }, 2500);
     } catch (e) {
         snapshotIfNeeded();
-        btn.innerHTML = '✗ Copy failed';
+        btn.innerHTML =
+            (typeof prksIcon === 'function' ? prksIcon('x', { size: 'sm' }) : '') + ' Copy failed';
+        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
         btn.style.color = '#ef4444';
         btn.style.borderColor = '#ef4444';
         copyBibTeXResetTimer = setTimeout(() => {

@@ -435,7 +435,7 @@ async function renderTagsPage(container) {
                                   `<span class="tag tag--page tag--page-with-actions" style="--tag-scale:${scale.toFixed(3)};border-left: ${borderLeftPx.toFixed(2)}px solid ${color};">` +
                                   `<span class="tag--page__nav" role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}">${escapeHtmlTagPage(t.name)}</span>` +
                                   `<button type="button" class="tag-page-alias-btn" data-tag-alias-edit="${idEsc}" title="Aliases" aria-label="Edit aliases for ${escapeHtmlTagPage(t.name)}">⋯</button>` +
-                                  `<button type="button" class="tag-page-merge-btn" data-tag-merge="${idEsc}" title="Merge into another tag" aria-label="Merge ${escapeHtmlTagPage(t.name)} into another tag">→</button>` +
+                                  `<button type="button" class="tag-page-merge-btn" data-tag-merge="${idEsc}" title="Merge into another tag" aria-label="Merge ${escapeHtmlTagPage(t.name)} into another tag">${typeof prksIcon === 'function' ? prksIcon('arrowRight', { size: 'sm' }) : '→'}</button>` +
                                   `</span>`
                               );
                           })()
@@ -495,6 +495,7 @@ async function renderTagsPage(container) {
     wireTagCloudNavigation(document.getElementById('tags-page-cloud'));
     prksWireTagsPageAliasPanel(container);
     prksWireTagsPageMergePanel();
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 window.prksCloseTagsAliasModal = prksCloseTagsAliasModal;
