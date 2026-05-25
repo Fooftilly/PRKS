@@ -805,7 +805,7 @@ class TestServerAPI(unittest.TestCase):
         self.assertFalse(db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,)))
         self.assertEqual(len(db.get_work_tags(w)), 0)
 
-    def test_21_graph_recent_and_bibtex_smoke(self):
+    def test_21_recent_and_bibtex_smoke(self):
         req_w = urllib.request.Request(
             f"{self._base_url}/api/works",
             data=json.dumps({"title": "Graph Bib Work", "status": "Not Started", "author_text": "Ada"}).encode(),
@@ -827,12 +827,6 @@ class TestServerAPI(unittest.TestCase):
             recently_added = json.loads(ra.read().decode())
         self.assertIsInstance(recently_added, list)
         self.assertTrue(any(r.get("id") == w_id for r in recently_added))
-
-        with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/graph")) as gr:
-            graph = json.loads(gr.read().decode())
-        self.assertIsInstance(graph, dict)
-        self.assertIn("nodes", graph)
-        self.assertIn("edges", graph)
 
         with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/bibtex/{w_id}")) as br:
             txt = br.read().decode("utf-8", errors="replace")

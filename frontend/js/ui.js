@@ -1057,7 +1057,7 @@ function activateRightPanelDetailsTab() {
     rp.querySelector('.tab-btn[data-target="details"]')?.classList.add('active');
 }
 
-/** Match tab button selection to the panel content (e.g. after opening another work from the graph). */
+/** Match tab button selection to the panel content. */
 function prksSyncRightPanelTabStrip(tabId) {
     const rp = document.getElementById('right-panel');
     if (!rp || rp.classList.contains('right-panel--single-pane')) return;
@@ -1084,7 +1084,6 @@ function setRightPanelRouteContext(hash) {
     }
 
     rp.classList.remove(
-        'right-panel--graph-route',
         'right-panel--single-pane',
         'right-panel--mode-work',
         'right-panel--mode-folder',
@@ -1473,19 +1472,6 @@ function getActiveRightPanelTab() {
     return (active && active.getAttribute('data-target')) || 'details';
 }
 
-function prksContextGraphPanelHtml(ledeText) {
-    return `
-        <div class="context-graph-panel context-graph-panel--stacked">
-            <h3 class="context-graph-panel__title">Related graph</h3>
-            <p class="context-graph-panel__lede meta-row">${ledeText}</p>
-            <div id="prks-context-graph-network" class="context-graph-panel__canvas" role="img" aria-label="Graph of related files"></div>
-            <p id="prks-context-graph-status" class="context-graph-panel__status meta-row">Loading…</p>
-        </div>`;
-}
-
-const PRKS_WORK_CONTEXT_GRAPH_LEDE =
-    'This file and every file directly linked to it using (wiki <code>[[links]]</code>, shared tags, co-cited unresolved links).';
-
 function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
     const text = initialText == null ? '' : String(initialText);
     const hintKey = entityType === 'work' ? 'notes-private-file' : 'notes-private-folder';
@@ -1582,19 +1568,8 @@ function prksWorkRightPanelStackHtml(work, isEditing = false) {
         playlistCard +
         folderCard +
         renderWorkMetaTab(work, isEditing) +
-        prksContextGraphPanelHtml(PRKS_WORK_CONTEXT_GRAPH_LEDE) +
         '</div>'
     );
-}
-
-function prksRemountWorkContextGraph(work) {
-    if (typeof mountPrksContextGraphPanel === 'function' && work && work.id) {
-        void mountPrksContextGraphPanel({
-            mode: 'work',
-            centerWorkId: work.id,
-            workMeta: work,
-        });
-    }
 }
 
 function prksFolderRightPanelStackHtml(folder) {
@@ -1611,10 +1586,6 @@ function updatePanelContent(tabId) {
     const panel = document.getElementById('panel-content');
     if (!panel) return;
 
-    if (typeof destroyPrksContextGraph === 'function') {
-        destroyPrksContextGraph();
-    }
-
     setRightPanelRouteContext(window.location.hash || '');
 
     if (window.currentWork) {
@@ -1628,7 +1599,6 @@ function updatePanelContent(tabId) {
                 void mountFolderAttachControlsForWork(window.currentWork);
             }
             initWorkTagCombobox(window.currentWork.id);
-            prksRemountWorkContextGraph(window.currentWork);
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(window.currentWork);
             }
@@ -1681,17 +1651,7 @@ function updatePanelContent(tabId) {
             } else {
                 topHtml = '<p class="meta-row">Person panel unavailable.</p>';
             }
-            const ids = (window.currentPerson.works || []).map((w) => w.id).filter(Boolean);
-            panel.innerHTML =
-                '<div class="right-panel-stack">' +
-                topHtml +
-                prksContextGraphPanelHtml(
-                    'Files linked to this person and edges among them (wiki links, shared tags, co-citations). Click a node to open.'
-                ) +
-                '</div>';
-            if (typeof mountPrksContextGraphPanel === 'function') {
-                void mountPrksContextGraphPanel({ mode: 'person', workIds: ids });
-            }
+            panel.innerHTML = '<div class="right-panel-stack">' + topHtml + '</div>';
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';
         }
@@ -1954,9 +1914,6 @@ async function mountPlaylistEditSidebar(pl) {
 
 function toggleWorkMetaEdit(isEditing) {
     if (window.currentWork) {
-        if (typeof destroyPrksContextGraph === 'function') {
-            destroyPrksContextGraph();
-        }
         const panel = document.getElementById('panel-content');
         if (panel) {
             panel.innerHTML = prksWorkRightPanelStackHtml(window.currentWork, isEditing);
@@ -1968,7 +1925,6 @@ function toggleWorkMetaEdit(isEditing) {
             if (typeof mountFolderAttachControlsForWork === 'function') {
                 void mountFolderAttachControlsForWork(window.currentWork);
             }
-            prksRemountWorkContextGraph(window.currentWork);
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(window.currentWork);
             }
@@ -2180,9 +2136,6 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId) {
                 }
                 if (typeof mountFolderAttachControlsForWork === 'function') {
                     void mountFolderAttachControlsForWork(window.currentWork);
-                }
-                if (typeof prksRemountWorkContextGraph === 'function') {
-                    prksRemountWorkContextGraph(window.currentWork);
                 }
                 if (typeof initWorkDetailRightPanelActions === 'function') {
                     initWorkDetailRightPanelActions(window.currentWork);
@@ -2548,9 +2501,6 @@ async function prksReloadEntityTagsUI(entityType, entityId) {
         window.currentWork = await fetchWorkDetails(entityId);
         const panel = document.getElementById('panel-content');
         if (panel && getActiveRightPanelTab() === 'details' && window.currentWork && window.currentWork.id === entityId) {
-            if (typeof destroyPrksContextGraph === 'function') {
-                destroyPrksContextGraph();
-            }
             panel.innerHTML = prksWorkRightPanelStackHtml(window.currentWork, false);
             initPrksPrivateNotesEditor('work', entityId);
             initWorkTagCombobox(entityId);
@@ -2560,7 +2510,6 @@ async function prksReloadEntityTagsUI(entityType, entityId) {
             if (typeof mountFolderAttachControlsForWork === 'function') {
                 void mountFolderAttachControlsForWork(window.currentWork);
             }
-            prksRemountWorkContextGraph(window.currentWork);
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(window.currentWork);
             }

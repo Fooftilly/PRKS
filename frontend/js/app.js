@@ -1518,7 +1518,6 @@ function initForms() {
                     initPrksPrivateNotesEditor('work', window.currentWork.id);
                 }
                 if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(window.currentWork.id);
-                if (typeof prksRemountWorkContextGraph === 'function') prksRemountWorkContextGraph(window.currentWork);
                 if (typeof initWorkDetailRightPanelActions === 'function') {
                     initWorkDetailRightPanelActions(window.currentWork);
                 }

@@ -1020,13 +1020,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, data)
                 else:
                     self.send_json(200, [])
-            elif path == '/api/graph':
-                etag = db.etag_graph()
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                data = db.build_graph_data()
-                self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/pdfs/'):
                 filename = path.split('/')[-1]
                 pdf_path = _safe_pdf_path_in_pdfs_dir(filename)

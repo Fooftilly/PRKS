@@ -1,7 +1,7 @@
 {
   "name": "PRKS — Personal Research Knowledge System",
   "short_name": "PRKS",
-  "description": "Personal research library: works, folders, PDFs, tags, and graph.",
+  "description": "Personal research library: works, folders, PDFs, and tags.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

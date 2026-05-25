@@ -212,22 +212,6 @@ async function fetchTags(options = {}) {
     }
 }
 
-async function fetchGraph() {
-    const empty = { nodes: [], edges: [] };
-    try {
-        const res = await fetch('/api/graph');
-        const data = await prksParseJsonResponse(res, empty, 'graph');
-        if (!data || typeof data !== 'object') return empty;
-        return {
-            nodes: Array.isArray(data.nodes) ? data.nodes : [],
-            edges: Array.isArray(data.edges) ? data.edges : [],
-        };
-    } catch (e) {
-        prksSetApiError('graph', 'Could not load graph data.');
-        return empty;
-    }
-}
-
 async function fetchProcessingFiles(options = {}) {
     const params = new URLSearchParams();
     if (options && options.rescan) {

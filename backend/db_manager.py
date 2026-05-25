@@ -1373,13 +1373,6 @@ class PRKSDatabase:
         rc = (rr[0] if rr else {"c": 0})["c"]
         return f'W/"prks-works-{row["c"]}-{row["m"]}-ff{ffc}-r{rc}"'
 
-    def etag_graph(self) -> str:
-        w = self.execute_query("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM works")
-        wt = self.execute_query("SELECT COUNT(*) AS c FROM work_tags")
-        wr = w[0] if w else {"c": 0, "m": ""}
-        tr = wt[0] if wt else {"c": 0}
-        return f'W/"prks-graph-{wr["c"]}-{wr["m"]}-{tr["c"]}"'
-
     def etag_folders_catalog(self) -> str:
         r = self.execute_query("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM folders")
         ff = self.execute_query("SELECT COUNT(*) AS c FROM folder_files")
@@ -3167,104 +3160,6 @@ class PRKSDatabase:
             )
         self._enrich_tag_rows_with_aliases(out)
         return out
-
-    @staticmethod
-    def _parse_wiki_link_inner(inner: str) -> Tuple[str, str]:
-        inner = inner.strip()
-        if "|" in inner:
-            target, alias = inner.split("|", 1)
-            return target.strip(), alias.strip() or target.strip()
-        return inner, inner
-
-    @staticmethod
-    def _graph_norm_title(s: str) -> str:
-        """Lowercase + collapse internal whitespace for title / link matching."""
-        return " ".join((s or "").strip().lower().split())
-
-    def build_graph_data(self) -> Dict[str, Any]:
-        """Nodes = works; edges = resolved wiki links, co-cited unresolved [[links]], shared tags."""
-        works = list(
-            self.execute_query("SELECT id, title, text_content, abstract, doc_type FROM works")
-        )
-        title_lower_to_id: Dict[str, str] = {}
-        for w in sorted(works, key=lambda r: r["id"]):
-            t = self._graph_norm_title(w.get("title") or "")
-            if t and t not in title_lower_to_id:
-                title_lower_to_id[t] = w["id"]
-
-        title_norm_counts = Counter(
-            self._graph_norm_title((w.get("title") or "Untitled").strip() or "Untitled") for w in works
-        )
-        nodes: List[dict] = []
-        for w in works:
-            raw_title = (w.get("title") or "Untitled").strip() or "Untitled"
-            nt = self._graph_norm_title(raw_title)
-            label = raw_title
-            if title_norm_counts.get(nt, 0) > 1:
-                label = f"{raw_title}\n{w['id']}"
-            dt = normalize_doc_type(w.get("doc_type"))
-            nodes.append({"id": w["id"], "label": label, "doc_type": dt, "group": dt})
-        node_ids = {w["id"] for w in works}
-        edges: List[dict] = []
-        seen: set = set()
-
-        def add_edge(src: str, tgt: str, kind: str) -> None:
-            if src == tgt or src not in node_ids or tgt not in node_ids:
-                return
-            # Wiki links are directional (from = file containing [[link]], to = linked file).
-            # Co-citation and shared tags are symmetric; dedupe by unordered pair.
-            if kind == "wiki":
-                key = (src, tgt, kind)
-            else:
-                key = tuple(sorted((src, tgt))) + (kind,)
-            if key in seen:
-                return
-            seen.add(key)
-            edges.append({"from": src, "to": tgt, "kind": kind})
-
-        wiki_re = re.compile(r"\[\[([^\]]+)\]\]")
-        unresolved_bucket: Dict[str, List[str]] = defaultdict(list)
-
-        for w in works:
-            wid = w["id"]
-            blob = ((w.get("text_content") or "") + "\n" + (w.get("abstract") or ""))
-            inners_seen: set = set()
-            for m in wiki_re.finditer(blob):
-                target_title, _alias = self._parse_wiki_link_inner(m.group(1))
-                lk = self._graph_norm_title(target_title)
-                if not lk or len(lk) < 2:
-                    continue
-                if lk in inners_seen:
-                    continue
-                inners_seen.add(lk)
-                tid = title_lower_to_id.get(lk)
-                if tid:
-                    add_edge(wid, tid, "wiki")
-                else:
-                    unresolved_bucket[lk].append(wid)
-
-        for _lk, wids in unresolved_bucket.items():
-            uniq: List[str] = []
-            for x in wids:
-                if x not in uniq:
-                    uniq.append(x)
-            if len(uniq) < 2:
-                continue
-            for i in range(len(uniq)):
-                for j in range(i + 1, len(uniq)):
-                    add_edge(uniq[i], uniq[j], "wiki_cocite")
-
-        pair_rows = self.execute_query(
-            """
-            SELECT wt1.work_id AS a, wt2.work_id AS b
-            FROM work_tags wt1
-            JOIN work_tags wt2 ON wt1.tag_id = wt2.tag_id AND wt1.work_id < wt2.work_id
-            """
-        )
-        for row in pair_rows:
-            add_edge(row["a"], row["b"], "shared_tag")
-
-        return {"nodes": nodes, "edges": edges}
 
     def delete_tag(self, tag_id: str) -> Dict[str, Any]:
         tid = (tag_id or "").strip()

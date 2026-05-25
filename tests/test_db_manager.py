@@ -865,48 +865,6 @@ class TestDBManager(unittest.TestCase):
         self.assertEqual(ids[0], w_new)
         self.assertIn(w_old, ids)
 
-    def test_build_graph_wiki_cocite_unresolved(self):
-        w1 = self.db.add_work(title="Doc A", abstract="[[Ghost]]", text_content="")
-        w2 = self.db.add_work(title="Doc B", text_content="[[Ghost]]", abstract="")
-        g = self.db.build_graph_data()
-        cocite = [e for e in g["edges"] if e.get("kind") == "wiki_cocite"]
-        self.assertEqual(len(cocite), 1)
-        pair = {cocite[0]["from"], cocite[0]["to"]}
-        self.assertEqual(pair, {w1, w2})
-
-    def test_build_graph_disambiguates_duplicate_titles(self):
-        w1 = self.db.add_work(title="Same Title", text_content="")
-        w2 = self.db.add_work(title="Same Title", text_content="")
-        g = self.db.build_graph_data()
-        labels = {n["id"]: n["label"] for n in g["nodes"]}
-        self.assertIn("\n", labels[w1])
-        self.assertIn(w1, labels[w1])
-        self.assertIn("\n", labels[w2])
-        self.assertIn(w2, labels[w2])
-        self.assertNotEqual(labels[w1], labels[w2])
-
-    def test_build_graph_nodes_include_doc_type(self):
-        w1 = self.db.add_work(title="Graph Type A", doc_type="book")
-        w2 = self.db.add_work(title="Graph Type B", doc_type="phdthesis")
-        g = self.db.build_graph_data()
-        by_id = {n["id"]: n for n in g["nodes"]}
-        self.assertEqual(by_id[w1]["doc_type"], "book")
-        self.assertEqual(by_id[w1]["group"], "book")
-        self.assertEqual(by_id[w2]["doc_type"], "phdthesis")
-        self.assertEqual(by_id[w2]["group"], "phdthesis")
-
-    def test_build_graph_wiki_edges_keep_direction(self):
-        """Opposite wiki links A→B and B→A are two edges (from = source of [[link]])."""
-        w1 = self.db.add_work(title="Alpha", text_content="[[Beta]]")
-        w2 = self.db.add_work(title="Beta", text_content="[[Alpha]]")
-        g = self.db.build_graph_data()
-        wiki = [e for e in g["edges"] if e.get("kind") == "wiki"]
-        self.assertEqual(len(wiki), 2)
-        fwd = next(e for e in wiki if e["from"] == w1 and e["to"] == w2)
-        back = next(e for e in wiki if e["from"] == w2 and e["to"] == w1)
-        self.assertEqual(fwd["kind"], "wiki")
-        self.assertEqual(back["kind"], "wiki")
-
     def test_safe_pdf_path_rejects_traversal(self):
         pdfs = tempfile.mkdtemp()
         try:
