@@ -147,6 +147,14 @@ body {
     display: flex;
     align-items: center;
     gap: var(--space-md);
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+.sidebar-brand:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 .sidebar-logo {
@@ -1353,12 +1361,52 @@ a.tag.tag--sidebar-all:hover {
     margin-bottom: 4px;
 }
 
+/* Folder library (#/folders): full-width main column + stretch tab panes to bottom */
+#main-content:has(.prks-folder-library) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#main-content:has(.prks-folder-library) .top-ribbon {
+    flex-shrink: 0;
+}
+
+#main-content:has(.prks-folder-library) #page-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#page-content:has(.prks-folder-library) {
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+.prks-folder-library {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    align-self: stretch;
+}
+
 .prks-folder-library .page-header.prks-folder-library__header {
     display: flex;
     align-items: center;
     margin-bottom: 8px;
     padding-bottom: 6px;
     min-height: 38px;
+    flex-shrink: 0;
 }
 
 .prks-folder-library .page-header h2 {
@@ -1368,59 +1416,208 @@ a.tag.tag--sidebar-all:hover {
 
 .prks-folder-library__folders-toolbar {
     display: flex;
-    justify-content: flex-end;
-    margin-bottom: 6px;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+    flex-shrink: 0;
 }
 
-.prks-folder-library__list {
-    gap: 4px;
+.prks-folder-library__folders-toolbar.is-hidden {
+    visibility: hidden;
+    pointer-events: none;
 }
 
-.prks-folder-library__list .project-card.prks-folder-tree-card {
-    padding: 9px 12px 8px;
-    padding-right: 116px;
+.prks-folder-library__search {
+    flex: 1 1 200px;
+    min-width: 0;
+    margin: 0;
 }
 
-.prks-folder-library__list .project-card.prks-folder-tree-card .card-title {
-    margin-bottom: 2px;
-    font-size: 0.95rem;
-    line-height: 1.25;
-    padding-right: 52px;
+.prks-folder-library__toolbar-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
-.prks-folder-library__list .project-card.prks-folder-tree-card .status-badge {
-    top: 12px;
-    right: 12px;
-}
-
-.prks-folder-library__list .meta-row {
-    line-height: 1.35;
+.prks-folder-library__toolbar-btn {
+    margin-top: 0;
+    white-space: nowrap;
 }
 
 .prks-folder-library__tabs {
     margin-bottom: var(--space-sm);
     padding: 0 4px;
+    flex-shrink: 0;
 }
 
-/* Stack tab panes in one grid cell so height stays max(folders, recently-added). */
 .prks-folder-library__body {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .prks-folder-library__body > .prks-folder-library__pane {
-    grid-column: 1;
-    grid-row: 1;
+    position: absolute;
+    inset: 0;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .prks-folder-library__body > .prks-folder-library__pane.is-hidden {
     visibility: hidden;
     pointer-events: none;
+    z-index: 0;
+}
+
+.prks-folder-library__body > .prks-folder-library__pane:not(.is-hidden) {
+    z-index: 1;
+}
+
+.prks-folder-library__scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+
+.prks-folder-library__scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.prks-folder-library__scroll::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.prks-folder-library__scroll--added {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.prks-folder-tree {
+    display: flex;
+    flex-direction: column;
+}
+
+.prks-folder-tree__row {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px 6px calc(10px + var(--depth, 0) * 16px);
+    border-bottom: 1px solid var(--border);
+    transition: background-color 0.15s ease;
+}
+
+.prks-folder-tree__row:last-child {
+    border-bottom: none;
+}
+
+.prks-folder-tree__row:hover {
+    background: var(--surface-muted);
+}
+
+.prks-folder-tree__row--match {
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.prks-folder-tree__toggle {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.prks-folder-tree__toggle:hover {
+    background: var(--surface-muted);
+    color: var(--text-primary);
+}
+
+.prks-folder-tree__toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.prks-folder-tree__toggle-spacer {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+}
+
+.prks-folder-tree__link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--text-primary);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.prks-folder-tree__link:hover {
+    color: var(--accent);
+}
+
+.prks-folder-tree__icon {
+    flex-shrink: 0;
+    font-size: 0.95rem;
+    line-height: 1;
+}
+
+.prks-folder-tree__title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prks-folder-tree__meta {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    padding-left: 8px;
+}
+
+.prks-folder-tree__empty {
+    padding: 0;
+    margin: 0;
+}
+
+.prks-folder-tree__empty-state {
+    padding: 16px 14px;
+    text-align: center;
+}
+
+.prks-folder-tree__empty-state .prks-inline-message {
+    margin: 0;
+}
+
+.prks-folder-tree__create-btn {
+    margin-top: 12px;
 }
 
 .prks-folder-library__grid.card-grid {
-    margin-top: 0;
+    margin: 0;
+    padding: 8px 8px 16px;
+    gap: 8px;
 }
 
 .list-view--people .project-card--person {
@@ -4231,6 +4428,33 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
 
 .tag-add-shell__input::placeholder {
     color: var(--text-tertiary);
+}
+
+.tag-add-shell__clear {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin: 0 -4px 0 0;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 1.25rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.tag-add-shell__clear:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--surface-hover, rgba(255, 255, 255, 0.06));
+}
+
+.tag-add-shell__clear:disabled {
+    cursor: default;
 }
 
 .combobox-results.combobox-results--tag-panel {

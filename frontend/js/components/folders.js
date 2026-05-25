@@ -66,12 +66,36 @@ function prksRerenderFolderDashboard() {
     renderDashboard(st.folders || [], st.container);
 }
 
+function prksFolderLibraryFilterFromStorage() {
+    try {
+        return sessionStorage.getItem(PRKS_FOLDER_LIBRARY_FILTER_KEY) || '';
+    } catch (_e) {
+        return '';
+    }
+}
+
+function prksFolderLibraryTreeInnerHtml(list, filterQuery) {
+    if (!list || !list.length) {
+        return '<p class="prks-inline-message prks-folder-tree__empty">No folders yet. Use <strong>New folder</strong> to create one.</p>';
+    }
+    return `<div class="prks-folder-tree" role="tree">${renderFolderTreeRoots(list, { filterQuery })}</div>`;
+}
+
+function prksRerenderFolderTreeOnly() {
+    const st = window.__prksFolderDashboardState;
+    if (!st || !st.container) return;
+    const host = st.container.querySelector('[data-prks-folder-tree-host]');
+    if (host) {
+        host.innerHTML = prksFolderLibraryTreeInnerHtml(st.folders, st.filterQuery);
+    }
+}
+
 function prksToggleFolderNode(folderId) {
     const idRaw = String(folderId || '').trim();
     const id = idRaw ? decodeURIComponent(idRaw) : '';
     if (!id) return;
     prksSetFolderNodeCollapsed(id, !prksFolderNodeCollapsed(id));
-    prksRerenderFolderDashboard();
+    prksRerenderFolderTreeOnly();
 }
 
 function prksSetAllFolderNodesCollapsed(folders, collapsed) {
@@ -96,59 +120,156 @@ function prksFolderTreeAllCollapsed(folders) {
     return collapsible.every((f) => prksFolderNodeCollapsed(f.id));
 }
 
-function renderFolderTreeRoots(folders) {
+function prksFolderTreeMetaLabel(node) {
+    const workCount = Number(node.work_count || 0);
+    const childCount = Number(node.child_count || 0);
+    const bits = [];
+    if (workCount) bits.push(`${workCount} file${workCount === 1 ? '' : 's'}`);
+    if (childCount) bits.push(`${childCount} subfolder${childCount === 1 ? '' : 's'}`);
+    return bits.join(' · ');
+}
+
+function prksOpenFolderModalFromLibrarySearch(query) {
+    const pre = String(query || '').trim();
+    const titleEl = document.getElementById('folder-title');
+    const descEl = document.getElementById('folder-description');
+    const parentInputEl = document.getElementById('folder-parent-search');
+    const parentHiddenEl = document.getElementById('folder-parent-id');
+    if (titleEl) titleEl.value = pre;
+    if (descEl) descEl.value = '';
+    if (parentInputEl) parentInputEl.value = '';
+    if (parentHiddenEl) parentHiddenEl.value = '';
+    if (typeof openModal === 'function') openModal('folder-modal');
+    if (typeof window.prksRefreshFolderModalValidation === 'function') {
+        void window.prksRefreshFolderModalValidation();
+    }
+}
+
+window.prksOpenFolderModalFromLibrarySearch = prksOpenFolderModalFromLibrarySearch;
+
+function prksFolderTreeEmptySearchHtml(filterQuery) {
+    const q = String(filterQuery || '').trim();
+    if (!q) {
+        return '<p class="prks-inline-message prks-folder-tree__empty">No folders match your search.</p>';
+    }
+    const label = prksFolderEsc(q);
+    const attrQ = prksFolderEsc(q);
+    return (
+        '<div class="prks-folder-tree__empty-state">' +
+        '<p class="prks-inline-message prks-folder-tree__empty">No folders match your search.</p>' +
+        `<button type="button" class="add-new-btn prks-folder-tree__create-btn" data-prks-create-folder-query="${attrQ}">Create folder &quot;${label}&quot;</button>` +
+        '</div>'
+    );
+}
+
+function prksBindFolderLibraryCreateFromSearch(container) {
+    if (!container || container.dataset.prksCreateFromSearchBound === '1') return;
+    container.dataset.prksCreateFromSearchBound = '1';
+    container.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-prks-create-folder-query]');
+        if (!btn) return;
+        e.preventDefault();
+        const q = btn.getAttribute('data-prks-create-folder-query') || '';
+        prksOpenFolderModalFromLibrarySearch(q);
+    });
+}
+
+/** @returns {null|Set<string>} null = no filter; empty Set = no matches */
+function prksFolderTreeVisibleIds(list, query) {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) return null;
+    const rows = Array.isArray(list) ? list : [];
+    const byId = new Map(rows.map((f) => [f.id, f]));
+    const matchIds = new Set();
+    rows.forEach((f) => {
+        if (String(f.title || '').toLowerCase().includes(q)) matchIds.add(f.id);
+    });
+    if (matchIds.size === 0) return new Set();
+
+    const visible = new Set();
+    matchIds.forEach((id) => {
+        visible.add(id);
+        prksCollectFolderDescendantIds(id, rows).forEach((d) => visible.add(d));
+        let cur = byId.get(id);
+        while (cur && cur.parent_id) {
+            visible.add(cur.parent_id);
+            cur = byId.get(cur.parent_id);
+        }
+    });
+    return visible;
+}
+
+function renderFolderTreeRoots(folders, options = {}) {
     const list = Array.isArray(folders) ? folders : [];
-    const roots = list.filter((f) => !f.parent_id);
+    const filterQuery = options.filterQuery != null ? String(options.filterQuery) : '';
+    const visibleSet = prksFolderTreeVisibleIds(list, filterQuery);
+    const filtering = visibleSet !== null;
+    const matchIds = filtering
+        ? new Set(
+              list
+                  .filter((f) => String(f.title || '').toLowerCase().includes(filterQuery.trim().toLowerCase()))
+                  .map((f) => f.id)
+          )
+        : null;
+
+    if (filtering && visibleSet.size === 0) {
+        return prksFolderTreeEmptySearchHtml(filterQuery);
+    }
+
     function childrenOf(pid) {
         return list
-            .filter((f) => f.parent_id === pid)
+            .filter((f) => f.parent_id === pid && (!filtering || visibleSet.has(f.id)))
             .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
     }
+
     function renderNode(node, depth) {
-        const pad = depth ? ` style="margin-left:${Math.min(depth, 8) * 10}px"` : '';
-        const workCount = Number(node.work_count || 0);
         const childCount = Number(node.child_count || 0);
         const hasChildren = childCount > 0;
-        const collapsed = hasChildren ? prksFolderNodeCollapsed(node.id) : false;
-        const collapseBtn = hasChildren
-            ? `<button type="button" class="ribbon-btn form-actions__btn" style="margin-top:0;min-width:28px;padding-left:8px;padding-right:8px;" title="${
+        const collapsed = filtering ? false : hasChildren && prksFolderNodeCollapsed(node.id);
+        const expanded = hasChildren && !collapsed;
+        const fidEnc = encodeURIComponent(String(node.id || ''));
+        const hash = `#/folders/${fidEnc}`;
+        const meta = prksFolderTreeMetaLabel(node);
+        const metaHtml = meta
+            ? `<span class="prks-folder-tree__meta">${prksFolderEsc(meta)}</span>`
+            : '<span class="prks-folder-tree__meta" aria-hidden="true"></span>';
+        const matchClass =
+            filtering && matchIds && matchIds.has(node.id) ? ' prks-folder-tree__row--match' : '';
+        const toggleHtml = hasChildren
+            ? `<button type="button" class="prks-folder-tree__toggle" aria-expanded="${expanded ? 'true' : 'false'}" title="${
                   collapsed ? 'Expand subfolders' : 'Collapse subfolders'
-              }" onclick="event.stopPropagation(); prksToggleFolderNode('${encodeURIComponent(String(node.id || ''))}');">${
+              }" onclick="event.preventDefault(); event.stopPropagation(); prksToggleFolderNode('${fidEnc}');">${
                   collapsed ? '▸' : '▾'
               }</button>`
-            : '';
-        const bits = [];
-        if (workCount) bits.push(`${workCount} file${workCount === 1 ? '' : 's'}`);
-        if (childCount) bits.push(`${childCount} subfolder${childCount === 1 ? '' : 's'}`);
-        const meta = bits.length
-            ? `<p class="meta-row" style="font-size:0.8rem;">${prksFolderEsc(bits.join(' · '))}</p>`
-            : '';
+            : '<span class="prks-folder-tree__toggle-spacer" aria-hidden="true"></span>';
+
         let html = `
-            <div class="prks-folder-tree-row"${pad} style="display:flex;align-items:stretch;gap:6px;">
-                ${collapseBtn}
-                <div class="project-card prks-folder-tree-card" style="flex:1;" role="link" tabindex="0" data-prks-middleclick-nav="1"
-                onclick="window.location.hash='#/folders/${encodeURIComponent(String(node.id || ''))}'"
-                onkeydown="if(event && (event.key==='Enter' || event.key===' ')){event.preventDefault(); this.click();}">
-                <span class="status-badge Planned">Folder</span>
-                <div class="card-title">${prksFolderEsc(node.title || 'Folder')}</div>
-                ${meta}
-                </div>
-            </div>
-        `;
-        if (!collapsed) {
+            <div class="prks-folder-tree__row${matchClass}" role="treeitem" aria-expanded="${hasChildren ? (expanded ? 'true' : 'false') : 'false'}" style="--depth:${depth}">
+                ${toggleHtml}
+                <a class="prks-folder-tree__link" href="${hash}" data-prks-middleclick-nav="1" onauxclick="return typeof prksMaybeOpenHashInNewTab==='function'&&prksMaybeOpenHashInNewTab(event,'${hash}')">
+                    <span class="prks-folder-tree__icon" aria-hidden="true">📁</span>
+                    <span class="prks-folder-tree__title">${prksFolderEsc(node.title || 'Folder')}</span>
+                </a>
+                ${metaHtml}
+            </div>`;
+
+        if (expanded) {
             childrenOf(node.id).forEach((child) => {
                 html += renderNode(child, depth + 1);
             });
         }
         return html;
     }
-    return roots
-        .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }))
-        .map((r) => renderNode(r, 0))
-        .join('');
+
+    const roots = list
+        .filter((f) => !f.parent_id && (!filtering || visibleSet.has(f.id)))
+        .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
+
+    return roots.map((r) => renderNode(r, 0)).join('');
 }
 
 const PRKS_FOLDER_LIBRARY_TAB_KEY = 'prks-folder-library-tab';
+const PRKS_FOLDER_LIBRARY_FILTER_KEY = 'prks-folder-library-filter';
 
 function prksFolderLibraryActiveTabFromStorage() {
     try {
@@ -159,10 +280,55 @@ function prksFolderLibraryActiveTabFromStorage() {
     }
 }
 
-function prksFolderLibraryFoldersBodyHtml(list) {
-    return list.length
-        ? `<div class="list-view prks-folder-library__list">${renderFolderTreeRoots(list)}</div>`
-        : '<p class="meta-row" style="padding:12px 4px;">No folders yet. Use <strong>New folder</strong> to create one.</p>';
+function prksFolderLibraryFoldersBodyHtml(list, filterQuery) {
+    return `<div class="prks-folder-library__scroll" data-prks-folder-tree-host>${prksFolderLibraryTreeInnerHtml(list, filterQuery)}</div>`;
+}
+
+function prksSyncFolderLibrarySearchClear(input, clearBtn) {
+    if (!clearBtn) return;
+    const hasValue = Boolean(String(input && input.value || '').trim());
+    clearBtn.hidden = !hasValue;
+    clearBtn.disabled = !hasValue;
+}
+
+function prksApplyFolderLibrarySearchFilter(input) {
+    const st = window.__prksFolderDashboardState;
+    if (!st || !input) return;
+    const q = String(input.value || '');
+    st.filterQuery = q;
+    try {
+        sessionStorage.setItem(PRKS_FOLDER_LIBRARY_FILTER_KEY, q);
+    } catch (_e) {
+        /* ignore */
+    }
+    prksRerenderFolderTreeOnly();
+}
+
+function prksBindFolderLibrarySearch(root) {
+    if (!root) return;
+    const input = root.querySelector('#prks-folder-library-search');
+    const clearBtn = root.querySelector('#prks-folder-library-search-clear');
+    if (!input || input.dataset.bound === '1') return;
+    input.dataset.bound = '1';
+    let debounceTimer;
+    const scheduleFilter = () => {
+        window.clearTimeout(debounceTimer);
+        debounceTimer = window.setTimeout(() => prksApplyFolderLibrarySearchFilter(input), 150);
+    };
+    input.addEventListener('input', () => {
+        prksSyncFolderLibrarySearchClear(input, clearBtn);
+        scheduleFilter();
+    });
+    if (clearBtn && clearBtn.dataset.bound !== '1') {
+        clearBtn.dataset.bound = '1';
+        clearBtn.addEventListener('click', () => {
+            input.value = '';
+            prksSyncFolderLibrarySearchClear(input, clearBtn);
+            input.focus();
+            prksApplyFolderLibrarySearchFilter(input);
+        });
+    }
+    prksSyncFolderLibrarySearchClear(input, clearBtn);
 }
 
 function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
@@ -192,7 +358,6 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
         if (typeof window.prksInitLazyWorkThumbs === 'function') {
             window.prksInitLazyWorkThumbs(pane);
         }
-        prksScheduleFolderLibraryBodyHeightLock(st.container);
         return;
     }
     st.recentlyAddedLoading = true;
@@ -203,27 +368,10 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(pane);
     }
-    prksScheduleFolderLibraryBodyHeightLock(st.container);
 }
 
 function prksFolderLibraryScrollHost() {
     return document.getElementById('main-content') || document.getElementById('page-content');
-}
-
-function prksLockFolderLibraryBodyHeight(root) {
-    if (!root) return;
-    const body = root.querySelector('.prks-folder-library__body');
-    if (!body) return;
-    const h = body.offsetHeight;
-    const prev = parseInt(body.style.minHeight, 10) || 0;
-    if (h > 0) body.style.minHeight = `${Math.max(h, prev)}px`;
-}
-
-function prksScheduleFolderLibraryBodyHeightLock(hostEl) {
-    if (!hostEl) return;
-    const root = hostEl.querySelector('.prks-folder-library') || hostEl.closest('.prks-folder-library');
-    if (!root) return;
-    requestAnimationFrame(() => prksLockFolderLibraryBodyHeight(root));
 }
 
 function prksApplyFolderLibraryTabUi(root, tab) {
@@ -247,8 +395,9 @@ function prksApplyFolderLibraryTabUi(root, tab) {
         addedPane.classList.toggle('is-hidden', want !== 'recently-added');
         addedPane.setAttribute('aria-hidden', want === 'recently-added' ? 'false' : 'true');
     }
+    const toolbar = root.querySelector('.prks-folder-library__folders-toolbar');
+    if (toolbar) toolbar.classList.toggle('is-hidden', want !== 'folders');
     if (scrollHost) scrollHost.scrollTop = scrollTop;
-    prksScheduleFolderLibraryBodyHeightLock(root.parentElement);
 }
 
 function prksSwitchFolderLibraryTab(tab) {
@@ -272,15 +421,16 @@ function renderDashboard(folders, container) {
     const prev = window.__prksFolderDashboardState || {};
     const list = Array.isArray(folders) ? folders : [];
     const activeTab = prev.activeTab || prksFolderLibraryActiveTabFromStorage();
-    const foldersBody = prksFolderLibraryFoldersBodyHtml(list);
+    const filterQuery =
+        prev.filterQuery != null ? String(prev.filterQuery) : prksFolderLibraryFilterFromStorage();
+    const foldersBody = prksFolderLibraryFoldersBodyHtml(list, filterQuery);
     const hasCollapsible = prksFolderTreeHasCollapsibleNodes(list);
-    const allCollapsed = prksFolderTreeAllCollapsed(list);
-    const controls = hasCollapsible
-        ? `
-            <button type="button" class="ribbon-btn" style="margin-top:0;" onclick="prksSetAllFolderNodesCollapsed(window.__prksFolderDashboardState.folders, ${
-                allCollapsed ? 'false' : 'true'
-            }); prksRerenderFolderDashboard();">${allCollapsed ? 'Expand all subfolders' : 'Collapse all subfolders'}</button>
-        `
+    const filterEsc = prksFolderEsc(filterQuery);
+    const toolbarActions = hasCollapsible
+        ? `<div class="prks-folder-library__toolbar-actions">
+            <button type="button" class="ribbon-btn prks-folder-library__toolbar-btn" onclick="prksSetAllFolderNodesCollapsed(window.__prksFolderDashboardState.folders, false); prksRerenderFolderTreeOnly();">Expand all</button>
+            <button type="button" class="ribbon-btn prks-folder-library__toolbar-btn" onclick="prksSetAllFolderNodesCollapsed(window.__prksFolderDashboardState.folders, true); prksRerenderFolderTreeOnly();">Collapse all</button>
+           </div>`
         : '';
     const foldersActive = activeTab !== 'recently-added';
     container.innerHTML = `
@@ -292,13 +442,25 @@ function renderDashboard(folders, container) {
             <button type="button" class="tab-btn prks-folder-library__tab-btn${foldersActive ? ' active' : ''}" role="tab" data-tab="folders" aria-selected="${foldersActive ? 'true' : 'false'}">Folders</button>
             <button type="button" class="tab-btn prks-folder-library__tab-btn${foldersActive ? '' : ' active'}" role="tab" data-tab="recently-added" aria-selected="${foldersActive ? 'false' : 'true'}">Recently added</button>
         </div>
+        <div class="prks-folder-library__folders-toolbar${foldersActive ? '' : ' is-hidden'}">
+            <div class="tag-add-shell tag-add-shell--flush prks-folder-library__search">
+                <div class="tag-add-shell__field">
+                    <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                    <input type="text" id="prks-folder-library-search" class="tag-add-shell__input" placeholder="Search folders…" value="${filterEsc}" maxlength="300" autocomplete="off" aria-label="Filter folders">
+                    <button type="button" class="tag-add-shell__clear" id="prks-folder-library-search-clear" aria-label="Clear search" title="Clear search" hidden>&times;</button>
+                </div>
+            </div>
+            ${toolbarActions}
+        </div>
         <div class="prks-folder-library__body">
             <div class="prks-folder-library__pane${foldersActive ? '' : ' is-hidden'}" data-pane="folders" role="tabpanel" aria-hidden="${foldersActive ? 'false' : 'true'}">
-                ${controls ? `<div class="prks-folder-library__folders-toolbar">${controls}</div>` : ''}
-                <p class="meta-row prks-folder-library__lede-folders" style="padding:2px 4px 10px;">Folders can nest. Move folders under other folders or keep them top-level.</p>
                 ${foldersBody}
             </div>
-            <div id="prks-folder-library-recently-added" class="prks-folder-library__pane prks-folder-library__grid card-grid${foldersActive ? ' is-hidden' : ''}" data-pane="recently-added" role="tabpanel" aria-hidden="${foldersActive ? 'true' : 'false'}"></div>
+            <div class="prks-folder-library__pane prks-folder-library__pane--added${foldersActive ? ' is-hidden' : ''}" data-pane="recently-added" role="tabpanel" aria-hidden="${foldersActive ? 'true' : 'false'}">
+                <div class="prks-folder-library__scroll prks-folder-library__scroll--added">
+                    <div id="prks-folder-library-recently-added" class="prks-folder-library__grid card-grid"></div>
+                </div>
+            </div>
         </div>
         </div>
     `;
@@ -306,10 +468,13 @@ function renderDashboard(folders, container) {
         folders: list,
         container,
         activeTab,
+        filterQuery,
         recentlyAddedWorks: prev.recentlyAddedWorks,
         recentlyAddedLoading: false,
     };
     const root = container.querySelector('.prks-folder-library');
+    prksBindFolderLibrarySearch(root);
+    prksBindFolderLibraryCreateFromSearch(root);
     root.querySelectorAll('.prks-folder-library__tab-btn').forEach((btn) => {
         if (btn.dataset.bound === '1') return;
         btn.dataset.bound = '1';
@@ -320,7 +485,6 @@ function renderDashboard(folders, container) {
     if (activeTab === 'recently-added') {
         void prksLoadFolderLibraryRecentlyAdded(false);
     }
-    prksScheduleFolderLibraryBodyHeightLock(container);
 }
 
 function renderFolderDetails(folder, container) {
