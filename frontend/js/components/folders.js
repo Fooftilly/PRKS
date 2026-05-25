@@ -764,12 +764,16 @@ async function mountFolderAttachControlsForWork(work) {
                     ev.preventDefault();
                     input.value = prksFolderRowLabel(f, folderRows);
                     hidden.value = f.id;
-                    results.classList.add('hidden');
+                    prksHideInlineComboboxResults(results);
                 };
                 results.appendChild(div);
             }
         }
-        results.classList.remove('hidden');
+        if (typeof prksShowInlineComboboxResults === 'function') {
+            prksShowInlineComboboxResults(input, results);
+        } else {
+            results.classList.remove('hidden');
+        }
     }
 
     newBtn.onclick = () => {
@@ -794,7 +798,7 @@ async function mountFolderAttachControlsForWork(work) {
         hidden.value = '';
         renderDropdown();
     };
-    input.onblur = () => setTimeout(() => results.classList.add('hidden'), 180);
+    input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 
     setBtn.onclick = async () => {
         const pid = String(hidden.value || '').trim();

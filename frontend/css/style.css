@@ -24,6 +24,16 @@
     --status-progress: #fff1b8;
     --status-completed: #d3f5d7;
     --status-paused: #ffd9d6;
+    --status-not-started-border: #94a3b8;
+    --status-planned-border: #7c3aed;
+    --status-progress-border: #ca8a04;
+    --status-completed-border: #16a34a;
+    --status-paused-border: #dc2626;
+    --status-not-started-text: #1e293b;
+    --status-planned-text: #4c1d95;
+    --status-progress-text: #713f12;
+    --status-completed-text: #14532d;
+    --status-paused-text: #7f1d1d;
 
     --font-family: "Inter", sans-serif;
     /* Square corners app-wide; use these tokens only (no ad-hoc px radii). */
@@ -70,6 +80,8 @@
         --shadow-sm: none;
         --shadow-md: none;
         --status-not-started: #334155;
+        --status-not-started-border: #64748b;
+        --status-not-started-text: #e2e8f0;
     }
 }
 
@@ -87,12 +99,35 @@
     --shadow-sm: none;
     --shadow-md: none;
     --status-not-started: #334155;
+    --status-not-started-border: #64748b;
+    --status-not-started-text: #e2e8f0;
 }
 
 * {
     box-sizing: border-box;
     margin: 0;
     padding: 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+
+/* Chromium / Safari: match Firefox themed scrollbars (comboboxes, modals, panes, etc.) */
+*::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: var(--radius-sm);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--text-tertiary) 55%, var(--border));
 }
 
 body {
@@ -259,6 +294,14 @@ body {
 
 .nav-section + .sidebar-progress-block {
     margin-top: -2px;
+}
+
+/* Files for Processing — separate from My Progress status filters */
+.nav-menu > li.sidebar-nav-section-break {
+    border-top: 1px solid var(--border);
+    margin-top: var(--space-lg);
+    padding-top: var(--space-md);
+    list-style: none;
 }
 
 .sidebar-tag-cloud-empty {
@@ -805,7 +848,7 @@ a.tag.tag--sidebar-all:hover {
     text-transform: none;
     font-weight: 500;
 }
-.nav-link.progress-filter .dot {
+.nav-link.progress-filter .prks-status-swatch {
     flex-shrink: 0;
 }
 
@@ -814,16 +857,41 @@ a.tag.tag--sidebar-all:hover {
     font-size: 0.9rem;
 }
 
-.dot {
-    width: 8px;
-    height: 8px;
+/* Sidebar + badges: same fills/borders as status segmented controls (new file, processing) */
+.prks-status-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
     border-radius: var(--radius-sm);
+    box-sizing: border-box;
+    border: 1px solid transparent;
+    flex-shrink: 0;
 }
-.dot.planned { background-color: var(--status-planned); }
-.dot.in-progress { background-color: var(--status-progress); }
-.dot.not-started { background-color: var(--status-not-started); }
-.dot.completed { background-color: var(--status-completed); }
-.dot.paused { background-color: var(--status-paused); }
+
+.prks-status-swatch[data-status='Not Started'] {
+    background-color: var(--status-not-started);
+    border-color: var(--status-not-started-border);
+}
+
+.prks-status-swatch[data-status='Planned'] {
+    background-color: var(--status-planned);
+    border-color: var(--status-planned-border);
+}
+
+.prks-status-swatch[data-status='In Progress'] {
+    background-color: var(--status-progress);
+    border-color: var(--status-progress-border);
+}
+
+.prks-status-swatch[data-status='Completed'] {
+    background-color: var(--status-completed);
+    border-color: var(--status-completed-border);
+}
+
+.prks-status-swatch[data-status='Paused'] {
+    background-color: var(--status-paused);
+    border-color: var(--status-paused-border);
+}
 
 .add-new-btn {
     margin-top: auto;
@@ -1294,20 +1362,11 @@ a.tag.tag--sidebar-all:hover {
 .project-card--work .status-badge {
     position: static;
 }
-.status-badge.Not.Started { background-color: var(--status-not-started); color: #1e293b; }
-.status-badge.Planned { background-color: var(--status-planned); color: #4c1d95; }
-.status-badge.In.Progress { background-color: var(--status-progress); color: #713f12; }
-.status-badge.Completed { background-color: var(--status-completed); color: #14532d; }
-.status-badge.Paused { background-color: var(--status-paused); color: #7f1d1d; }
-
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .status-badge.Not.Started {
-        color: #e2e8f0;
-    }
-}
-:root[data-theme="dark"] .status-badge.Not.Started {
-    color: #e2e8f0;
-}
+.status-badge.Not.Started { background-color: var(--status-not-started); color: var(--status-not-started-text); }
+.status-badge.Planned { background-color: var(--status-planned); color: var(--status-planned-text); }
+.status-badge.In.Progress { background-color: var(--status-progress); color: var(--status-progress-text); }
+.status-badge.Completed { background-color: var(--status-completed); color: var(--status-completed-text); }
+.status-badge.Paused { background-color: var(--status-paused); color: var(--status-paused-text); }
 
 .graph-preview {
     height: 140px;
@@ -2509,42 +2568,31 @@ a.tag.tag--sidebar-all:hover {
 }
 .prks-segmented--status .prks-segmented__btn--active[data-value='Not Started'] {
     background: var(--status-not-started);
-    border-color: #94a3b8;
-    color: #1e293b;
+    border-color: var(--status-not-started-border);
+    color: var(--status-not-started-text);
 }
 .prks-segmented--status .prks-segmented__btn--active[data-value='Planned'] {
     background: var(--status-planned);
-    border-color: #7c3aed;
-    color: #4c1d95;
+    border-color: var(--status-planned-border);
+    color: var(--status-planned-text);
 }
 .prks-segmented--status .prks-segmented__btn--active[data-value='In Progress'] {
     background: var(--status-progress);
-    border-color: #ca8a04;
-    color: #713f12;
+    border-color: var(--status-progress-border);
+    color: var(--status-progress-text);
 }
 .prks-segmented--status .prks-segmented__btn--active[data-value='Completed'] {
     background: var(--status-completed);
-    border-color: #16a34a;
-    color: #14532d;
+    border-color: var(--status-completed-border);
+    color: var(--status-completed-text);
 }
 .prks-segmented--status .prks-segmented__btn--active[data-value='Paused'] {
     background: var(--status-paused);
-    border-color: #dc2626;
-    color: #7f1d1d;
+    border-color: var(--status-paused-border);
+    color: var(--status-paused-text);
 }
 .prks-segmented--status .prks-segmented__btn:focus-visible {
     box-shadow: 0 0 0 2px var(--card-bg, var(--surface-muted)), 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme='light']) .prks-segmented--status .prks-segmented__btn--active[data-value='Not Started'] {
-        color: #e2e8f0;
-        border-color: #64748b;
-    }
-}
-:root[data-theme='dark'] .prks-segmented--status .prks-segmented__btn--active[data-value='Not Started'] {
-    color: #e2e8f0;
-    border-color: #64748b;
 }
 
 .prks-upload-role-seg {
@@ -2566,8 +2614,18 @@ a.tag.tag--sidebar-all:hover {
     width: auto;
 }
 
-.prks-upload-person-stack__search > .ribbon-btn:last-child {
+.prks-upload-person-stack__search {
+    align-items: flex-start;
+}
+
+.prks-upload-person-stack__search > .ribbon-btn:last-child,
+.prks-upload-person-stack__search > .add-new-btn:last-child {
     flex-shrink: 0;
+    align-self: flex-start;
+    box-sizing: border-box;
+    height: 42px;
+    min-height: 42px;
+    max-height: 42px;
 }
 
 .prks-upload-person-stack__role-caption {
@@ -2904,6 +2962,55 @@ a.tag.tag--sidebar-all:hover {
 
 .prks-processing-card__core {
     margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    overflow: visible;
+    max-height: none;
+}
+
+.prks-processing-card__title-row label,
+.prks-processing-card__status-field label {
+    display: block;
+}
+
+.prks-processing-card__status-field {
+    margin-top: 0;
+}
+
+.prks-processing-card__core input[type='text'],
+.prks-processing-card__core input[type='url'],
+.prks-processing-card__core input[type='date'],
+.prks-processing-card__core input[type='number'] {
+    min-height: 42px;
+    box-sizing: border-box;
+}
+
+.prks-processing-card__core .tag-add-shell__field {
+    min-height: 42px;
+}
+
+.prks-processing-card__core .prks-upload-person-stack__search > .ribbon-btn,
+.prks-processing-card__core .prks-upload-person-stack__search > .add-new-btn,
+.prks-processing-card__core .prks-combobox-with-action > .ribbon-btn,
+.prks-processing-card__core .prks-combobox-with-action > .add-new-btn {
+    align-self: flex-start;
+    height: 42px;
+    min-height: 42px;
+    max-height: 42px;
+}
+
+.form-pane .tag-add-shell.prks-inline-combobox-shell,
+#panel-content .tag-add-shell.prks-inline-combobox-shell,
+.modal .tag-add-shell.prks-inline-combobox-shell,
+.prks-processing-card__core .tag-add-shell.prks-inline-combobox-shell {
+    width: 100%;
+    min-width: 0;
+}
+
+.prks-combobox-with-action .prks-inline-combobox-shell {
+    flex: 1;
+    min-width: 0;
 }
 
 .prks-processing-card__more {
@@ -2922,13 +3029,6 @@ a.tag.tag--sidebar-all:hover {
     margin-top: 8px;
     display: grid;
     gap: 8px;
-}
-
-.prks-processing-role-picker {
-    display: grid;
-    grid-template-columns: minmax(220px, 1fr) 170px auto;
-    gap: 8px;
-    align-items: end;
 }
 
 .prks-processing-card__actions {
@@ -3286,17 +3386,21 @@ textarea[data-prks-autosize="1"] {
 .prks-combobox-with-action {
     display: flex;
     gap: 4px;
-    align-items: stretch;
+    align-items: flex-start;
     width: 100%;
 }
 .prks-combobox-with-action .combobox-container {
     flex: 1;
     min-width: 0;
 }
-.prks-combobox-with-action > .ribbon-btn {
+.prks-combobox-with-action > .ribbon-btn,
+.prks-combobox-with-action > .add-new-btn {
     flex-shrink: 0;
-    align-self: stretch;
+    align-self: flex-start;
+    box-sizing: border-box;
+    height: 42px;
     min-height: 42px;
+    max-height: 42px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -3460,6 +3564,7 @@ textarea[data-prks-autosize="1"] {
 .combobox-results.combobox-results--elevated {
     z-index: 50;
 }
+
 .result-item {
     padding: 10px 14px;
     cursor: pointer;
@@ -4466,8 +4571,34 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     border-top: 1px solid var(--border);
     border-radius: 0;
     box-shadow: none;
-    max-height: 200px;
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
     background: var(--surface);
+    pointer-events: none;
+    /* Collapse (is-open removed): faster than expand */
+    transition:
+        max-height 200ms cubic-bezier(0.4, 0, 1, 1),
+        opacity 160ms ease,
+        border-color 160ms ease;
+}
+
+.combobox-results.combobox-results--tag-panel.is-open {
+    max-height: 200px;
+    opacity: 1;
+    overflow-y: auto;
+    pointer-events: auto;
+    /* Expand (is-open added): slower than collapse */
+    transition:
+        max-height 400ms cubic-bezier(0.33, 1, 0.68, 1),
+        opacity 300ms ease,
+        border-color 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .combobox-results.combobox-results--tag-panel {
+        transition: none;
+    }
 }
 
 .combobox-results.combobox-results--tag-panel .result-item {

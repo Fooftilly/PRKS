@@ -2,6 +2,13 @@ function prksProcessingDocTypeIdPrefix(processingId) {
     return `prks-pf-dt-${String(processingId || 'x').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 }
 
+function prksProcessingSegIdPrefix(processingId, kind) {
+    const safe = String(processingId || 'x').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `prks-pf-${String(kind || 'seg')}-${safe}`;
+}
+
+const PRKS_PROCESSING_STATUS_LABELS = ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'];
+
 function prksProcessingEsc(s) {
     if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
     if (s == null || s === '') return '';
@@ -76,19 +83,6 @@ const PRKS_PROCESSING_ROLE_TYPES = [
     'Afterword',
 ];
 
-function prksProcessingStatusOptions(selected) {
-    const statuses = ['Not Started', 'Planned', 'In Progress', 'Paused', 'Completed'];
-    return statuses
-        .map((s) => `<option value="${prksProcessingEsc(s)}"${s === selected ? ' selected' : ''}>${prksProcessingEsc(s)}</option>`)
-        .join('');
-}
-
-function prksProcessingRoleTypeOptions(selected) {
-    return PRKS_PROCESSING_ROLE_TYPES
-        .map((s) => `<option value="${prksProcessingEsc(s)}"${s === selected ? ' selected' : ''}>${prksProcessingEsc(s)}</option>`)
-        .join('');
-}
-
 function prksProcessingPersonDisplayName(person) {
     if (!person || typeof person !== 'object') return '';
     const first = String(person.first_name || '').trim();
@@ -136,12 +130,19 @@ function prksProcessingAttachFolderCombobox(card) {
                     e.preventDefault();
                     hidden.value = String(folder.id || '');
                     input.value = label;
-                    results.classList.add('hidden');
+                    prksHideInlineComboboxResults(results);
                 };
                 results.appendChild(div);
             });
         }
-        results.classList.remove('hidden');
+        if (typeof prksShowInlineComboboxResults === 'function') {
+            prksShowInlineComboboxResults(input, results);
+        } else {
+            results.classList.remove('hidden');
+        }
+    };
+    const hideResults = () => {
+        prksHideInlineComboboxResults(results);
     };
     input.addEventListener('focus', render);
     input.addEventListener('input', () => {
@@ -149,7 +150,7 @@ function prksProcessingAttachFolderCombobox(card) {
         render();
     });
     input.addEventListener('blur', () => {
-        setTimeout(() => results.classList.add('hidden'), 180);
+        setTimeout(hideResults, 200);
     });
 }
 
@@ -181,7 +182,7 @@ async function prksProcessingQuickCreateFolder(card) {
         } catch (_e) {}
         if (hidden) hidden.value = data.id;
         if (input) input.value = title;
-        if (results) results.classList.add('hidden');
+        if (results) prksHideInlineComboboxResults(results);
     } catch (e) {
         console.error(e);
         alert('Could not create folder.');
@@ -236,7 +237,7 @@ function prksProcessingAttachPersonCombobox(card) {
             create.textContent = `Quick-create person "${valRaw.trim()}"`;
             create.onmousedown = (e) => {
                 e.preventDefault();
-                results.classList.add('hidden');
+                prksHideInlineComboboxResults(results);
                 void prksQuickCreatePersonForSearchField(
                     valRaw.trim(),
                     input,
@@ -272,12 +273,19 @@ function prksProcessingAttachPersonCombobox(card) {
                     e.preventDefault();
                     hidden.value = String(person.id || '');
                     input.value = label || '(Unnamed)';
-                    results.classList.add('hidden');
+                    prksHideInlineComboboxResults(results);
                 };
                 results.appendChild(div);
             });
         }
-        results.classList.remove('hidden');
+        if (typeof prksShowInlineComboboxResults === 'function') {
+            prksShowInlineComboboxResults(input, results);
+        } else {
+            results.classList.remove('hidden');
+        }
+    };
+    const hideResults = () => {
+        prksHideInlineComboboxResults(results);
     };
     input.addEventListener('focus', render);
     input.addEventListener('input', () => {
@@ -285,7 +293,7 @@ function prksProcessingAttachPersonCombobox(card) {
         render();
     });
     input.addEventListener('blur', () => {
-        setTimeout(() => results.classList.add('hidden'), 180);
+        setTimeout(hideResults, 200);
     });
 }
 
@@ -336,6 +344,27 @@ function prksProcessingCardHtml(file) {
         : 'Source file missing from for_processing.';
     const rolesPayload = encodeURIComponent(JSON.stringify(Array.isArray(file.roles) ? file.roles : []));
     const docDtPrefix = prksProcessingDocTypeIdPrefix(file.id);
+    const statusSegId = prksProcessingSegIdPrefix(file.id, 'status');
+    const roleSegId = prksProcessingSegIdPrefix(file.id, 'role');
+    const statusDraft = file.status_draft || 'Not Started';
+    const statusSegHtml =
+        typeof prksSegmentedControlHtml === 'function'
+            ? prksSegmentedControlHtml(
+                  statusSegId,
+                  'File status',
+                  PRKS_PROCESSING_STATUS_LABELS,
+                  statusDraft,
+                  'status',
+                  { dataField: 'status_draft' }
+              )
+            : `<input type="hidden" data-field="status_draft" value="${prksProcessingEsc(statusDraft)}">`;
+    const roleSegHtml =
+        typeof prksSegmentedControlHtml === 'function'
+            ? prksSegmentedControlHtml(roleSegId, 'Role for linked person', PRKS_PROCESSING_ROLE_TYPES, 'Author', 'roles', {
+                  compact: true,
+                  dataRole: 'role-type',
+              })
+            : `<input type="hidden" data-role="role-type" value="Author">`;
     let docTypeMoreHtml = '';
     if (typeof prksDocTypeMenuShellHtml === 'function') {
         const shell = prksDocTypeMenuShellHtml(docDtPrefix, file.doc_type || 'article', false);
@@ -362,33 +391,34 @@ function prksProcessingCardHtml(file) {
             <p class="meta-row"><strong>State:</strong> ${prksProcessingEsc(statusLabel)} · ${prksProcessingEsc(sourceHint)}</p>
             ${file.last_error ? `<p class="meta-row" style="color: var(--danger-color);"><strong>Error:</strong> ${prksProcessingEsc(file.last_error)}</p>` : ''}
             <div class="form-pane form-pane--tight prks-processing-card__core">
-                <div class="form-grid-2">
-                    <div>
-                        <label>Title</label>
-                        <input type="text" data-field="title" value="${prksProcessingEsc(file.title || '')}" placeholder="Library title">
-                    </div>
-                    <div>
-                        <label>Status</label>
-                        <select data-field="status_draft">${prksProcessingStatusOptions(file.status_draft || 'Not Started')}</select>
-                    </div>
+                <div class="prks-processing-card__title-row">
+                    <label>Title</label>
+                    <input type="text" data-field="title" value="${prksProcessingEsc(file.title || '')}" placeholder="Library title">
+                </div>
+                <div class="prks-processing-card__status-field prks-work-upload-status-field">
+                    <label>Status</label>
+                    ${statusSegHtml}
                 </div>
                 <label>Link person to roles</label>
-                <div class="prks-processing-role-picker">
-                    <div class="combobox-container">
-                        <div class="tag-add-shell">
-                            <div class="tag-add-shell__field">
-                                <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                                <input type="text" class="tag-add-shell__input" data-role="person-search" placeholder="Search person from library…" autocomplete="off">
+                <div class="prks-upload-person-stack">
+                    <div class="form-row prks-upload-person-stack__search">
+                        <div class="prks-combobox-with-action">
+                            <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                                <div class="tag-add-shell__field">
+                                    <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                    <input type="text" class="tag-add-shell__input" data-role="person-search" placeholder="Search person from library…" autocomplete="off" aria-label="Search person">
+                                </div>
+                                <input type="hidden" data-role="person-id" value="">
+                                <div class="combobox-results combobox-results--tag-panel hidden" data-role="person-results"></div>
                             </div>
                         </div>
-                        <input type="hidden" data-role="person-id" value="">
-                        <div class="combobox-results hidden" data-role="person-results"></div>
+                        <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="add-role">+ Link</button>
                     </div>
-                    <div>
-                        <select data-role="role-type">${prksProcessingRoleTypeOptions('Author')}</select>
-                    </div>
-                    <div>
-                        <button type="button" class="add-new-btn ribbon-btn--sm" data-action="add-role">+ Link</button>
+                    <div class="prks-upload-person-stack__roles">
+                        <div class="prks-upload-person-stack__role-caption">Role</div>
+                        <div class="prks-upload-role-seg">
+                            ${roleSegHtml}
+                        </div>
                     </div>
                 </div>
                 <div class="tag-cloud status-chip-list" data-role="roles-list"></div>
@@ -399,15 +429,13 @@ function prksProcessingCardHtml(file) {
                 <label>Folder (optional)</label>
                 <p class="meta-row meta-row--hint" style="margin:0 0 6px 0;">Placed in this folder when you import.</p>
                 <div class="prks-combobox-with-action">
-                    <div class="combobox-container">
-                        <div class="tag-add-shell">
-                            <div class="tag-add-shell__field">
-                                <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                                <input type="text" class="tag-add-shell__input" data-role="folder-search" placeholder="Search folder…" autocomplete="off" aria-label="Search folder">
-                            </div>
+                    <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                        <div class="tag-add-shell__field">
+                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            <input type="text" class="tag-add-shell__input" data-role="folder-search" placeholder="Search folder…" autocomplete="off" aria-label="Search folder">
                         </div>
                         <input type="hidden" data-role="folder-id" value="">
-                        <div class="combobox-results hidden" data-role="folder-results"></div>
+                        <div class="combobox-results combobox-results--tag-panel hidden" data-role="folder-results"></div>
                     </div>
                     <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="quick-folder" title="Create new folder">+</button>
                 </div>
@@ -656,6 +684,12 @@ function renderProcessingFilesPage(items, container) {
         const dtPrefix = prksProcessingDocTypeIdPrefix(fileId);
         if (typeof initPrksDocTypeMenu === 'function' && document.getElementById(dtPrefix)) {
             initPrksDocTypeMenu(dtPrefix, {});
+        }
+        const statusSegId = prksProcessingSegIdPrefix(fileId, 'status');
+        const roleSegId = prksProcessingSegIdPrefix(fileId, 'role');
+        if (typeof prksBindSegmentedHidden === 'function') {
+            prksBindSegmentedHidden(statusSegId);
+            prksBindSegmentedHidden(roleSegId);
         }
         if (addRoleBtn && roleTypeEl && personIdEl && personSearchEl) {
             addRoleBtn.addEventListener('click', () => {

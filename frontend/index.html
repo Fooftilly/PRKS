@@ -76,37 +76,39 @@
                     <ul class="progress-legend">
                         <li>
                             <a href="#/progress?status=Not%20Started" class="nav-link progress-filter" data-status="Not Started">
-                                <span class="dot not-started" aria-hidden="true"></span>
+                                <span class="prks-status-swatch" data-status="Not Started" aria-hidden="true"></span>
                                 Not Started
                             </a>
                         </li>
                         <li>
                             <a href="#/progress?status=Planned" class="nav-link progress-filter" data-status="Planned">
-                                <span class="dot planned" aria-hidden="true"></span>
+                                <span class="prks-status-swatch" data-status="Planned" aria-hidden="true"></span>
                                 Planned
                             </a>
                         </li>
                         <li>
                             <a href="#/progress?status=In%20Progress" class="nav-link progress-filter" data-status="In Progress">
-                                <span class="dot in-progress" aria-hidden="true"></span>
+                                <span class="prks-status-swatch" data-status="In Progress" aria-hidden="true"></span>
                                 In Progress
                             </a>
                         </li>
                         <li>
                             <a href="#/progress?status=Paused" class="nav-link progress-filter" data-status="Paused">
-                                <span class="dot paused" aria-hidden="true"></span>
+                                <span class="prks-status-swatch" data-status="Paused" aria-hidden="true"></span>
                                 Paused
                             </a>
                         </li>
                         <li>
                             <a href="#/progress?status=Completed" class="nav-link progress-filter" data-status="Completed">
-                                <span class="dot completed" aria-hidden="true"></span>
+                                <span class="prks-status-swatch" data-status="Completed" aria-hidden="true"></span>
                                 Completed
                             </a>
                         </li>
                     </ul>
                 </li>
-                <li><a href="#/processing-files" class="nav-link">🗂 Files for Processing</a></li>
+                <li class="sidebar-nav-section-break">
+                    <a href="#/processing-files" class="nav-link">🗂 Files for Processing</a>
+                </li>
             </ul>
         </nav>
 
@@ -389,15 +391,13 @@
                     
                     <label for="work-folder-search">Folder</label>
                     <div class="prks-combobox-with-action">
-                        <div class="combobox-container">
-                            <div class="tag-add-shell">
-                                <div class="tag-add-shell__field">
-                                    <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                                    <input type="text" id="work-folder-search" class="tag-add-shell__input" placeholder="Search folder..." autocomplete="off" aria-label="Search folder">
-                                </div>
+                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                            <div class="tag-add-shell__field">
+                                <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                <input type="text" id="work-folder-search" class="tag-add-shell__input" placeholder="Search folder..." autocomplete="off" aria-label="Search folder">
                             </div>
                             <input type="hidden" id="work-folder-id">
-                            <div id="folder-results" class="combobox-results hidden"></div>
+                            <div id="folder-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                         </div>
                         <button type="button" onclick="quickCreateFolder()" class="ribbon-btn ribbon-btn--sm" title="Create New Folder">+</button>
                     </div>
@@ -427,15 +427,13 @@
                     <div class="prks-upload-person-stack">
                         <div class="form-row prks-upload-person-stack__search">
                             <div class="prks-combobox-with-action">
-                                <div class="combobox-container">
-                                    <div class="tag-add-shell">
-                                        <div class="tag-add-shell__field">
-                                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                                            <input type="text" id="upload-person-search" class="tag-add-shell__input" placeholder="Search person..." autocomplete="off" aria-label="Search person">
-                                        </div>
+                                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                                    <div class="tag-add-shell__field">
+                                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                        <input type="text" id="upload-person-search" class="tag-add-shell__input" placeholder="Search person..." autocomplete="off" aria-label="Search person">
                                     </div>
                                     <input type="hidden" id="upload-person-id">
-                                    <div id="person-results" class="combobox-results hidden"></div>
+                                    <div id="person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                                 </div>
                             </div>
                             <button type="button" onclick="addRoleToUploadList()" class="ribbon-btn">+ Link</button>
@@ -556,15 +554,13 @@
                 <p id="folder-title-error" class="folder-field-error hidden" role="alert" aria-live="polite"></p>
                 <label for="folder-parent-search">Parent folder (optional)</label>
                 <p class="modal-helper meta-row--hint meta-row--compact">Search and choose a parent folder to create this one as a subfolder.</p>
-                <div class="combobox-container">
-                    <div class="tag-add-shell">
-                        <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                            <input type="text" id="folder-parent-search" class="tag-add-shell__input" placeholder="Search parent folder…" autocomplete="off" aria-label="Search parent folder">
-                        </div>
+                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                    <div class="tag-add-shell__field">
+                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <input type="text" id="folder-parent-search" class="tag-add-shell__input" placeholder="Search parent folder…" autocomplete="off" aria-label="Search parent folder">
                     </div>
                     <input type="hidden" id="folder-parent-id" value="">
-                    <div id="folder-parent-results" class="combobox-results hidden"></div>
+                    <div id="folder-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
                 <label for="folder-description">Description</label>
                 <textarea id="folder-description" placeholder="Optional description…"></textarea>
@@ -603,15 +599,13 @@
                 <input type="text" id="group-name" placeholder="e.g. Frankfurt School" autocomplete="off">
                 <label for="group-parent-search">Parent group (optional)</label>
                 <p class="modal-helper meta-row--hint meta-row--compact">Search for an existing group or type a new name — it will be created as a top-level group when you save.</p>
-                <div class="combobox-container">
-                    <div class="tag-add-shell">
-                        <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                            <input type="text" id="group-parent-search" class="tag-add-shell__input" placeholder="Search or type new parent name…" autocomplete="off" aria-label="Search or type parent group">
-                        </div>
+                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                    <div class="tag-add-shell__field">
+                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <input type="text" id="group-parent-search" class="tag-add-shell__input" placeholder="Search or type new parent name…" autocomplete="off" aria-label="Search or type parent group">
                     </div>
                     <input type="hidden" id="group-parent-id" value="">
-                    <div id="group-parent-results" class="combobox-results hidden"></div>
+                    <div id="group-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
                 <label for="group-description">Description</label>
                 <textarea id="group-description" placeholder="Optional"></textarea>
@@ -705,26 +699,22 @@
             <p class="modal-helper">Search for someone already in your library, or type a name and choose <strong>Quick-create person</strong> in the list. Then click Create Link.</p>
             <div class="form-pane">
                 <label for="role-person-search">Person</label>
-                <div class="combobox-container">
-                    <div class="tag-add-shell">
-                        <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                            <input type="text" id="role-person-search" class="tag-add-shell__input" placeholder="Search person…" autocomplete="off" aria-label="Search person">
-                        </div>
+                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                    <div class="tag-add-shell__field">
+                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <input type="text" id="role-person-search" class="tag-add-shell__input" placeholder="Search person…" autocomplete="off" aria-label="Search person">
                     </div>
                     <input type="hidden" id="role-person-id">
-                    <div id="role-person-results" class="combobox-results hidden"></div>
+                    <div id="role-person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
                 <label for="role-work-search">File</label>
-                <div class="combobox-container">
-                    <div class="tag-add-shell">
-                        <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                            <input type="text" id="role-work-search" class="tag-add-shell__input" placeholder="Search file…" autocomplete="off" aria-label="Search file">
-                        </div>
+                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                    <div class="tag-add-shell__field">
+                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <input type="text" id="role-work-search" class="tag-add-shell__input" placeholder="Search file…" autocomplete="off" aria-label="Search file">
                     </div>
                     <input type="hidden" id="role-work-id">
-                    <div id="role-work-results" class="combobox-results hidden"></div>
+                    <div id="role-work-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
                 <label for="role-type">Role</label>
                 <div class="prks-segmented-wrap">

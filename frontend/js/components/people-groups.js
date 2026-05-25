@@ -67,12 +67,16 @@ function prksBindGroupSearchCombobox(inputId, resultsId, hiddenId, excludedIds) 
                     e.preventDefault();
                     hidden.value = g.id;
                     input.value = prksGroupRowLabel(g, list);
-                    results.classList.add('hidden');
+                    prksHideInlineComboboxResults(results);
                 };
                 results.appendChild(div);
             });
         }
-        results.classList.remove('hidden');
+        if (typeof prksShowInlineComboboxResults === 'function') {
+            prksShowInlineComboboxResults(input, results);
+        } else {
+            results.classList.remove('hidden');
+        }
     }
 
     input.onfocus = () => {
@@ -83,7 +87,7 @@ function prksBindGroupSearchCombobox(inputId, resultsId, hiddenId, excludedIds) 
         void prksEnsureAllGroupsCache().then(renderList);
     };
     input.onblur = () => {
-        setTimeout(() => results.classList.add('hidden'), 200);
+        setTimeout(() => prksHideInlineComboboxResults(results), 200);
     };
 }
 
@@ -213,15 +217,13 @@ function renderPersonGroupEditSidebarHtml(g) {
                     <label for="gd-parent-search" class="group-sidebar__label-text">Parent group</label>
                     ${prksHintBtnHtml('group-edit-parent', 'About parent group', 'group-sidebar__hint-btn')}
                 </div>
-                <div class="combobox-container">
-                    <div class="tag-add-shell">
-                        <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                            <input type="text" id="gd-parent-search" class="tag-add-shell__input" placeholder="${escapeHtmlGroup(parentSearchPlaceholder)}" autocomplete="off" aria-label="Search parent group">
-                        </div>
+                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                    <div class="tag-add-shell__field">
+                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <input type="text" id="gd-parent-search" class="tag-add-shell__input" placeholder="${escapeHtmlGroup(parentSearchPlaceholder)}" autocomplete="off" aria-label="Search parent group">
                     </div>
                     <input type="hidden" id="gd-parent-id" value="">
-                    <div id="gd-parent-results" class="combobox-results hidden"></div>
+                    <div id="gd-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
                 <label for="gd-description">Description</label>
                 <textarea id="gd-description" style="min-height:56px;">${escapeHtmlGroup(g.description || '')}</textarea>

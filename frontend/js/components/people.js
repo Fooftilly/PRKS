@@ -623,15 +623,13 @@ function renderPersonProfileEditFormHtml(person) {
                     <p class="meta-row">Search for a group, pick from the list, or type a new name and <strong>Add</strong> to create a top-level group. Names are unique. <a href="#/people/groups">Browse groups</a>.</p>
                     <div id="pd-group-chips" class="tag-cloud person-groups-fieldset__chips"></div>
                     <label for="pd-group-search">Add group</label>
-                    <div class="combobox-container">
-                        <div class="tag-add-shell">
-                            <div class="tag-add-shell__field">
-                                <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                                <input type="text" id="pd-group-search" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add">
-                            </div>
+                    <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                        <div class="tag-add-shell__field">
+                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                            <input type="text" id="pd-group-search" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add">
                         </div>
                         <input type="hidden" id="pd-group-pick-id" value="">
-                        <div id="pd-group-results" class="combobox-results hidden"></div>
+                        <div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                     </div>
                     <button type="button" class="add-new-btn person-groups-fieldset__action" id="pd-group-add-btn">Add group</button>
                 </fieldset>

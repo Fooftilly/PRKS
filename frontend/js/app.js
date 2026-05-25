@@ -1178,13 +1178,17 @@ function initForms() {
                         ev.preventDefault();
                         folderParentHidden.value = String(f.id || '');
                         folderParentInput.value = div.textContent || '';
-                        folderParentResults.classList.add('hidden');
+                        prksHideInlineComboboxResults(folderParentResults);
                         updateFolderTitleDuplicateUi();
                     };
                     folderParentResults.appendChild(div);
                 });
             }
-            folderParentResults.classList.remove('hidden');
+            if (typeof prksShowInlineComboboxResults === 'function') {
+                prksShowInlineComboboxResults(folderParentInput, folderParentResults);
+            } else {
+                folderParentResults.classList.remove('hidden');
+            }
         }
         function bindFolderParentCombobox() {
             if (
@@ -1203,7 +1207,7 @@ function initForms() {
                 updateFolderTitleDuplicateUi();
             });
             folderParentInput.addEventListener('blur', () =>
-                setTimeout(() => folderParentResults.classList.add('hidden'), 180)
+                setTimeout(() => prksHideInlineComboboxResults(folderParentResults), 200)
             );
         }
         window.prksRefreshFolderModalValidation = async function () {

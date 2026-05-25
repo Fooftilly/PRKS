@@ -1750,12 +1750,12 @@ async function mountPlaylistEditSidebar(pl) {
                 results.appendChild(row);
             }
         }
-        results.classList.remove('hidden');
+        prksShowInlineComboboxResults(input, results);
     }
 
     input.onfocus = () => renderDropdown();
     input.oninput = () => renderDropdown();
-    input.onblur = () => setTimeout(() => results.classList.add('hidden'), 180);
+    input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 }
 
 function toggleWorkMetaEdit(isEditing) {
@@ -2142,15 +2142,13 @@ function renderFolderDetailsPanel(folder) {
             <p class="meta-row">${parentLine}</p>
             ${childrenLine}
             <div id="prks-folder-parent-edit-wrap" class="${parentEditing ? '' : 'hidden'}">
-                <div class="combobox-container">
-                    <div class="tag-add-shell">
-                        <div class="tag-add-shell__field">
-                            <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                            <input type="text" id="prks-folder-parent-search" class="tag-add-shell__input" placeholder="Search destination folder…" autocomplete="off" aria-label="Search destination folder">
-                        </div>
+                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                    <div class="tag-add-shell__field">
+                        <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                        <input type="text" id="prks-folder-parent-search" class="tag-add-shell__input" placeholder="Search destination folder…" autocomplete="off" aria-label="Search destination folder">
                     </div>
                     <input type="hidden" id="prks-folder-parent-id" value="">
-                    <div id="prks-folder-parent-results" class="combobox-results hidden"></div>
+                    <div id="prks-folder-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
                 <div class="prks-work-folder-controls" style="margin-top:10px;">
                     <button type="button" class="add-new-btn" id="prks-folder-parent-save-btn">Move here</button>
@@ -2221,17 +2219,19 @@ function prksEscapeAttr(s) {
     return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, variant) {
+function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, variant, options) {
+    const opts = options && typeof options === 'object' ? options : {};
     const labelsArr = Array.isArray(labels) ? labels : [];
     const fallback = labelsArr[0] || '';
     const selRaw = selectedValue != null ? String(selectedValue) : '';
     const sel = labelsArr.includes(selRaw) ? selRaw : fallback;
+    const compact = !!opts.compact;
     const segMod =
-        variant === 'status'
+        (variant === 'status'
             ? ' prks-segmented--status prks-segmented--single-row'
             : variant === 'roles'
               ? ' prks-segmented--roles'
-              : '';
+              : '') + (compact ? ' prks-segmented--compact' : '');
     const buttons = labelsArr
         .map((l) => {
             const active = l === sel ? ' prks-segmented__btn--active' : '';
@@ -2239,9 +2239,14 @@ function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, va
             return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio">${escapeHtml(l)}</button>`;
         })
         .join('');
-    const wrapMod = variant === 'status' ? ' prks-segmented-wrap--status-row' : '';
+    let wrapMod = variant === 'status' ? ' prks-segmented-wrap--status-row' : '';
+    if (compact) wrapMod += ' prks-segmented-wrap--compact';
+    const hiddenExtra = [
+        opts.dataField ? ` data-field="${prksEscapeAttr(opts.dataField)}"` : '',
+        opts.dataRole ? ` data-role="${prksEscapeAttr(opts.dataRole)}"` : '',
+    ].join('');
     return `<div class="prks-segmented-wrap${wrapMod}">
-    <input type="hidden" id="${prksEscapeAttr(hiddenId)}" value="${prksEscapeAttr(sel)}">
+    <input type="hidden" id="${prksEscapeAttr(hiddenId)}" value="${prksEscapeAttr(sel)}"${hiddenExtra}>
     <div class="prks-segmented${segMod}" role="radiogroup" aria-label="${prksEscapeAttr(ariaLabel)}">${buttons}</div>
   </div>`;
 }
@@ -2447,7 +2452,7 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId) {
     input.oninput = () => renderDropdown();
     input.onblur = () =>
         setTimeout(() => {
-            results.classList.add('hidden');
+            prksHideInlineComboboxResults(results);
         }, 200);
 }
 
@@ -2542,12 +2547,12 @@ async function mountFolderHierarchyControls(folder) {
                     ev.preventDefault();
                     hidden.value = String(row.id || '');
                     input.value = div.textContent || '';
-                    results.classList.add('hidden');
+                    prksHideInlineComboboxResults(results);
                 };
                 results.appendChild(div);
             });
         }
-        results.classList.remove('hidden');
+        prksShowInlineComboboxResults(input, results);
     }
 
     input.onfocus = () => renderDropdown();
@@ -2557,7 +2562,7 @@ async function mountFolderHierarchyControls(folder) {
     };
     input.onblur = () =>
         setTimeout(() => {
-            results.classList.add('hidden');
+            prksHideInlineComboboxResults(results);
         }, 200);
 
     saveBtn.onclick = async () => {
@@ -2618,7 +2623,7 @@ async function mountFolderLibraryAttachControls(folder) {
         results.innerHTML = '';
         if (!q) {
             results.innerHTML = '<div class="result-item no-results">Type to search your library…</div>';
-            results.classList.remove('hidden');
+            prksShowInlineComboboxResults(input, results);
             return;
         }
         const rows = typeof fetchSearch === 'function' ? await fetchSearch(q) : [];
@@ -2684,7 +2689,7 @@ async function mountFolderLibraryAttachControls(folder) {
                 results.appendChild(row);
             }
         }
-        results.classList.remove('hidden');
+        prksShowInlineComboboxResults(input, results);
     }
 
     input.onfocus = () => void runSearch();
@@ -2692,7 +2697,7 @@ async function mountFolderLibraryAttachControls(folder) {
         window.clearTimeout(debounceTimer);
         debounceTimer = window.setTimeout(() => void runSearch(), 280);
     };
-    input.onblur = () => setTimeout(() => results.classList.add('hidden'), 180);
+    input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 }
 
 async function prksRemoveWorkTag(workId, tagId) {
@@ -2817,15 +2822,13 @@ function renderWorkMetaEditTab(work) {
             <div class="prks-upload-person-stack">
                 <div class="form-row prks-upload-person-stack__search">
                     <div class="prks-combobox-with-action">
-                        <div class="combobox-container">
-                            <div class="tag-add-shell">
-                                <div class="tag-add-shell__field">
-                                    <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
-                                    <input type="text" id="meta-role-person-search" class="tag-add-shell__input" placeholder="Search person..." autocomplete="off" aria-label="Search person for role link">
-                                </div>
+                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
+                            <div class="tag-add-shell__field">
+                                <span class="tag-add-shell__icon" aria-hidden="true">🔍</span>
+                                <input type="text" id="meta-role-person-search" class="tag-add-shell__input" placeholder="Search person..." autocomplete="off" aria-label="Search person for role link">
                             </div>
                             <input type="hidden" id="meta-role-person-id">
-                            <div id="meta-role-person-results" class="combobox-results hidden"></div>
+                            <div id="meta-role-person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                         </div>
                     </div>
                     <button type="button" id="meta-role-add-btn" onclick="addRoleToWorkFromMetaEditor('${work.id}')" class="ribbon-btn">+ Link</button>
@@ -3015,7 +3018,7 @@ function initUploadTagCombobox() {
                             renderUploadTagsChips();
                         }
                         input.value = '';
-                        results.classList.add('hidden');
+                        prksHideInlineComboboxResults(results);
                     } catch (e) {
                         console.error(e);
                         alert('Could not create tag.');
@@ -3035,7 +3038,7 @@ function initUploadTagCombobox() {
                     renderUploadTagsChips();
                 }
                 input.value = '';
-                results.classList.add('hidden');
+                prksHideInlineComboboxResults(results);
             };
             results.appendChild(div);
         });
@@ -3049,7 +3052,7 @@ function initUploadTagCombobox() {
     input.oninput = () => renderDropdown();
     input.onblur = () =>
         setTimeout(() => {
-            results.classList.add('hidden');
+            prksHideInlineComboboxResults(results);
         }, 200);
 }
 
@@ -3232,6 +3235,59 @@ function personMatchesComboboxQuery(p, q) {
     return false;
 }
 
+const PRKS_INLINE_COMBOBOX_COLLAPSE_MS = 220;
+
+function prksIsInlineComboboxPanel(results) {
+    return results && results.classList.contains('combobox-results--tag-panel');
+}
+
+function prksHideInlineComboboxResults(results) {
+    if (!results || results.classList.contains('hidden')) return;
+    if (!prksIsInlineComboboxPanel(results)) {
+        results.classList.add('hidden');
+        return;
+    }
+    if (results.__prksCollapseTimer) {
+        clearTimeout(results.__prksCollapseTimer);
+    }
+    results.classList.remove('is-open');
+    results.__prksCollapseTimer = window.setTimeout(() => {
+        results.classList.add('hidden');
+        results.__prksCollapseTimer = null;
+    }, PRKS_INLINE_COMBOBOX_COLLAPSE_MS);
+}
+
+function prksShowInlineComboboxResults(input, results) {
+    if (!results) return;
+    if (results.__prksCollapseTimer) {
+        clearTimeout(results.__prksCollapseTimer);
+        results.__prksCollapseTimer = null;
+    }
+    if (!prksIsInlineComboboxPanel(results)) {
+        results.classList.remove('hidden');
+    } else {
+        const needsOpenAnim =
+            results.classList.contains('hidden') || !results.classList.contains('is-open');
+        results.classList.remove('hidden');
+        if (needsOpenAnim) {
+            results.classList.remove('is-open');
+            void results.offsetHeight;
+            requestAnimationFrame(() => {
+                results.classList.add('is-open');
+            });
+        }
+    }
+    if (input && typeof input.scrollIntoView === 'function') {
+        window.setTimeout(() => {
+            try {
+                input.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            } catch (_e) {
+                input.scrollIntoView({ block: 'nearest' });
+            }
+        }, 40);
+    }
+}
+
 function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOptions = {}) {
     const input = document.getElementById(inputId);
     const results = document.getElementById(resultsId);
@@ -3251,7 +3307,7 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
     input.onblur = () => {
         // Delay hide to allow clicks on result items to fire first
         setTimeout(() => {
-            results.classList.add('hidden');
+            prksHideInlineComboboxResults(results);
         }, 200);
     };
 
@@ -3295,7 +3351,7 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
             create.textContent = `Quick-create person \"${valRaw.trim()}\"`;
             create.onmousedown = (ev) => {
                 ev.preventDefault();
-                results.classList.add('hidden');
+                prksHideInlineComboboxResults(results);
                 comboboxOptions.onQuickCreate(valRaw.trim());
             };
             results.appendChild(create);
@@ -3339,12 +3395,12 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
                     e.preventDefault(); // Prevent input blur before click
                     input.value = label;
                     hidden.value = item.id;
-                    results.classList.add('hidden');
+                    prksHideInlineComboboxResults(results);
                 };
                 results.appendChild(div);
             });
         }
-        results.classList.remove('hidden');
+        prksShowInlineComboboxResults(input, results);
     }
 }
 
@@ -3363,7 +3419,7 @@ async function quickCreateFolder() {
     allFolders = await fetchFolders(); // Refresh cache
     document.getElementById('work-folder-id').value = data.id;
     document.getElementById('work-folder-search').value = title;
-    document.getElementById('folder-results').classList.add('hidden');
+    prksHideInlineComboboxResults(document.getElementById('folder-results'));
 }
 
 function addRoleToUploadList() {
@@ -3770,7 +3826,7 @@ function initUploadDragAndDrop() {
                             if (created) {
                                 input.value = created.title;
                                 hidden.value = created.id;
-                                results.classList.add('hidden');
+                                prksHideInlineComboboxResults(results);
                             }
                         } catch (_e) {
                             alert('Could not create playlist.');
@@ -3792,7 +3848,7 @@ function initUploadDragAndDrop() {
                             ev.preventDefault();
                             input.value = p.title || '';
                             hidden.value = p.id;
-                            results.classList.add('hidden');
+                            prksHideInlineComboboxResults(results);
                         };
                         results.appendChild(div);
                     }
@@ -3809,7 +3865,7 @@ function initUploadDragAndDrop() {
                 hidden.value = '';
                 openDropdown();
             };
-            input.onblur = () => setTimeout(() => results.classList.add('hidden'), 180);
+            input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
         };
     }
 
