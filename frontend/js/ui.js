@@ -2045,6 +2045,7 @@ function updatePanelContent(tabId) {
                 btn.onclick = () => {
                     window.__prksPlaylistDetailEditing = true;
                     updatePanelContent('details');
+                    if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain();
                 };
             }
         }
@@ -2210,11 +2211,14 @@ async function mountPlaylistEditSidebar(pl) {
         editBtn.onclick = () => {
             window.__prksPlaylistDetailEditing = true;
             updatePanelContent('details');
+            if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain();
         };
     }
     const close = () => {
         window.__prksPlaylistDetailEditing = false;
+        if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState();
         updatePanelContent('details');
+        if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain();
     };
 
     document.getElementById('prks-playlist-edit-close')?.addEventListener('click', close);
@@ -2245,7 +2249,9 @@ async function mountPlaylistEditSidebar(pl) {
                     window.__prksRouteSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
                 }
                 window.__prksPlaylistDetailEditing = false;
+                if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState();
                 updatePanelContent('details');
+                if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain();
             } catch (_e) {
                 if (statusEl) statusEl.textContent = 'Could not save.';
             }

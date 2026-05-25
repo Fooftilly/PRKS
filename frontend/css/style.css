@@ -1646,6 +1646,95 @@ body {
     margin-bottom: 4px;
 }
 
+/* Playlist detail (#/playlists/:id) */
+.prks-playlist-detail__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.prks-playlist-detail__desc {
+    margin: 0 0 12px 0;
+}
+
+.prks-playlist-detail__hint {
+    margin: 0 0 10px 0;
+    color: var(--text-secondary);
+}
+
+.prks-playlist-detail__empty {
+    color: var(--text-secondary);
+}
+
+.prks-playlist-detail__list {
+    margin-top: 0;
+}
+
+.prks-playlist-item.project-card {
+    cursor: default;
+    padding: var(--space-md) 14px;
+}
+
+.prks-playlist-item.project-card:not(.prks-playlist-item--editing) {
+    cursor: pointer;
+}
+
+.prks-playlist-item.project-card:not(.prks-playlist-item--editing):hover {
+    border-color: var(--accent);
+    background: var(--surface-muted);
+}
+
+.prks-playlist-item__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+
+.prks-playlist-item__body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.prks-playlist-item__body--link {
+    cursor: pointer;
+}
+
+.prks-playlist-item__title.card-title {
+    margin-bottom: 4px;
+    padding-right: 0;
+    font-size: 1rem;
+    line-height: 1.35;
+}
+
+.prks-playlist-item__rename-input {
+    width: 100%;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    font-family: var(--font-family);
+}
+
+.prks-playlist-item__body--rename .meta-row {
+    margin-top: 6px;
+}
+
+.prks-playlist-item__actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
 /* Folder library (#/folders): full-width main column + stretch tab panes to bottom */
 #main-content:has(.prks-folder-library) {
     display: flex;

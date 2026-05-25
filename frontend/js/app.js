@@ -723,6 +723,7 @@ async function handleRoute() {
             if (routeGen !== window.__prksRouteGen) return;
             window.currentPlaylist = pl;
             window.__prksPlaylistDetailEditing = false;
+            window.__prksPlaylistRename = {};
             window.__prksRouteSidebar = pl
                 ? { playlistTitle: pl.title || 'Playlist', itemCount: Array.isArray(pl.items) ? pl.items.length : 0 }
                 : { playlistTitle: 'Playlist', itemCount: 0 };

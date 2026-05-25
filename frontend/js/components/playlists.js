@@ -123,70 +123,115 @@ function renderPlaylistsIndex(playlists, container) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
+function prksClearPlaylistRenameState() {
+    window.__prksPlaylistRename = {};
+}
+
+function prksRefreshPlaylistDetailMain() {
+    const page = document.getElementById('page-content');
+    const pl = window.currentPlaylist;
+    const hash = window.location.hash || '';
+    if (!page || !pl || !hash.startsWith('#/playlists/')) return;
+    renderPlaylistDetail(pl, page);
+}
+
+function prksPlPlaylistItemActionsHtml(w, idx, ren) {
+    const wid = prksPlEsc(w.id);
+    const icon = (name) => (typeof prksIcon === 'function' ? prksIcon(name, { size: 'sm' }) : '');
+    return `
+        <div class="prks-playlist-item__actions">
+            <button type="button" class="ribbon-btn ribbon-btn--sm" data-pl-up="${idx}" title="Move up" aria-label="Move up">${icon('arrowUp')}</button>
+            <button type="button" class="ribbon-btn ribbon-btn--sm" data-pl-down="${idx}" title="Move down" aria-label="Move down">${icon('arrowDown')}</button>
+            ${
+                ren[String(w.id)] === true
+                    ? `
+                <button type="button" class="ribbon-btn ribbon-btn--sm" data-pl-rename-save="${wid}" title="Save title" aria-label="Save title">${icon('check')}</button>
+                <button type="button" class="ribbon-btn ribbon-btn--sm" data-pl-rename-cancel="${wid}" title="Cancel rename" aria-label="Cancel rename">${icon('x')}</button>
+            `
+                    : `<button type="button" class="ribbon-btn ribbon-btn--sm" data-pl-rename="${wid}" title="Rename title" aria-label="Rename title">${icon('pencil')}</button>`
+            }
+            <button type="button" class="ribbon-btn ribbon-btn--sm" data-pl-remove="${wid}" title="Remove from playlist" aria-label="Remove from playlist">${icon('x')}</button>
+        </div>`;
+}
+
+function prksPlPlaylistItemBodyHtml(w, ren, editing) {
+    const wid = prksPlEsc(w.id);
+    const subtitle = prksPlEsc(prksPlWorkSubtitle(w));
+    if (editing && ren[String(w.id)] === true) {
+        return `
+            <div class="prks-playlist-item__body prks-playlist-item__body--rename">
+                <input type="text" id="prks-pl-rename-input-${wid}" class="prks-playlist-item__rename-input" value="${prksPlEsc(w.title || '')}" autocomplete="off" aria-label="Video title">
+                <div class="meta-row">${subtitle}</div>
+            </div>`;
+    }
+    const titleHtml = `<div class="card-title prks-playlist-item__title">${prksPlEsc(w.title || 'Untitled')}</div>`;
+    if (editing) {
+        return `
+            <div class="prks-playlist-item__body">
+                ${titleHtml}
+                <div class="meta-row">${subtitle}</div>
+            </div>`;
+    }
+    return `
+        <div class="prks-playlist-item__body prks-playlist-item__body--link" role="link" tabindex="0" data-pl-nav="${wid}">
+            ${titleHtml}
+            <div class="meta-row">${subtitle}</div>
+        </div>`;
+}
+
 function renderPlaylistDetail(pl, container) {
     if (!pl) {
         container.innerHTML = '<div class="page-header"><h2>Playlist not found</h2></div>';
         return;
     }
     const items = Array.isArray(pl.items) ? pl.items : [];
+    const editing = window.__prksPlaylistDetailEditing === true;
     const ren =
         window.__prksPlaylistRename && typeof window.__prksPlaylistRename === 'object'
             ? window.__prksPlaylistRename
             : {};
+    const editingClass = editing ? ' prks-playlist-detail--editing' : '';
     container.innerHTML = `
-        <div class="page-header" style="gap:12px;flex-wrap:wrap;">
-            <h2>${prksPlEsc(pl.title || 'Playlist')}</h2>
-            <div style="flex:1 1 auto;"></div>
-            <a class="route-sidebar__link" href="#/playlists">All playlists</a>
-        </div>
-        ${pl.description ? `<p class="meta-row" style="margin:0 0 12px 0;">${prksPlEsc(pl.description)}</p>` : ''}
-        <div class="list-view">
+        <div class="prks-playlist-detail${editingClass}">
+            <div class="page-header prks-playlist-detail__header">
+                <h2>${prksPlEsc(pl.title || 'Playlist')}</h2>
+                <a class="route-sidebar__link" href="#/playlists">All playlists</a>
+            </div>
+            ${pl.description ? `<p class="meta-row prks-playlist-detail__desc">${prksPlEsc(pl.description)}</p>` : ''}
+            ${
+                editing
+                    ? '<p class="meta-row meta-row--compact prks-playlist-detail__hint">Reorder, rename, or remove items. Open Details → Done when finished.</p>'
+                    : ''
+            }
+            <div class="list-view prks-playlist-detail__list">
             ${
                 items.length
                     ? items
                           .map(
                               (w, idx) => `
-                    <div class="list-item" style="display:flex;align-items:center;gap:10px;justify-content:space-between;">
-                        <div style="min-width:0; flex: 1 1 auto;">
-                            ${
-                                ren[String(w.id)] === true
-                                    ? `
-                                <div style="display:flex; gap:8px; align-items:center;">
-                                    <input type="text" id="prks-pl-rename-input-${prksPlEsc(w.id)}" value="${prksPlEsc(w.title || '')}" autocomplete="off"
-                                        style="flex:1; min-width:0; padding:8px 10px; border:1px solid var(--border); background:var(--surface-muted); color:var(--text-primary);">
-                                </div>
-                                <div class="meta-row" style="margin-top:6px;">${prksPlEsc(prksPlWorkSubtitle(w))}</div>
-                            `
-                                    : `
-                                <div style="cursor:pointer;" onclick="window.location.hash='#/works/${encodeURIComponent(w.id)}'">
-                                    <div style="font-weight:600;">${prksPlEsc(w.title || 'Untitled')}</div>
-                                    <div class="meta-row">${prksPlEsc(prksPlWorkSubtitle(w))}</div>
-                                </div>
-                            `
-                            }
-                        </div>
-                        <div style="display:flex; gap:6px; flex: 0 0 auto;">
-                            <button class="ribbon-btn" data-pl-up="${idx}" title="Move up" aria-label="Move up">${typeof prksIcon === 'function' ? prksIcon('arrowUp', { size: 'sm' }) : '↑'}</button>
-                            <button class="ribbon-btn" data-pl-down="${idx}" title="Move down" aria-label="Move down">${typeof prksIcon === 'function' ? prksIcon('arrowDown', { size: 'sm' }) : '↓'}</button>
-                            ${
-                                ren[String(w.id)] === true
-                                    ? `
-                                <button class="ribbon-btn" data-pl-rename-save="${prksPlEsc(w.id)}" title="Save title" aria-label="Save title">${typeof prksIcon === 'function' ? prksIcon('check', { size: 'sm' }) : '✓'}</button>
-                                <button class="ribbon-btn" data-pl-rename-cancel="${prksPlEsc(w.id)}" title="Cancel">×</button>
-                            `
-                                    : `<button class="ribbon-btn" data-pl-rename="${prksPlEsc(w.id)}" title="Rename title" aria-label="Rename title">${typeof prksIcon === 'function' ? prksIcon('pencil', { size: 'sm' }) : '✎'}</button>`
-                            }
-                            <button class="ribbon-btn" data-pl-remove="${prksPlEsc(w.id)}" title="Remove">×</button>
+                    <div class="prks-playlist-item project-card${editing ? ' prks-playlist-item--editing' : ''}">
+                        <div class="prks-playlist-item__row">
+                            ${prksPlPlaylistItemBodyHtml(w, ren, editing)}
+                            ${editing ? prksPlPlaylistItemActionsHtml(w, idx, ren) : ''}
                         </div>
                     </div>`
                           )
                           .join('')
-                    : `<p class="meta-row" style="color: var(--text-secondary);">No items yet.</p>`
+                    : `<p class="meta-row prks-playlist-detail__empty">No items yet. Use Details → Edit to add videos.</p>`
             }
+            </div>
         </div>
     `;
 
     container.onclick = async (ev) => {
+        const nav = ev.target.closest && ev.target.closest('[data-pl-nav]');
+        if (nav && !editing) {
+            const wid = String(nav.getAttribute('data-pl-nav') || '').trim();
+            if (wid) window.location.hash = '#/works/' + encodeURIComponent(wid);
+            return;
+        }
+        if (!editing) return;
+
         const up = ev.target.closest && ev.target.closest('[data-pl-up]');
         const down = ev.target.closest && ev.target.closest('[data-pl-down]');
         const rm = ev.target.closest && ev.target.closest('[data-pl-remove]');
@@ -544,6 +589,8 @@ window.fetchPlaylistDetails = fetchPlaylistDetails;
 window.prksBindPlaylistsIndexCreateBtn = prksBindPlaylistsIndexCreateBtn;
 window.renderPlaylistsIndex = renderPlaylistsIndex;
 window.renderPlaylistDetail = renderPlaylistDetail;
+window.prksRefreshPlaylistDetailMain = prksRefreshPlaylistDetailMain;
+window.prksClearPlaylistRenameState = prksClearPlaylistRenameState;
 window.renderPlaylistAttachControlsHtml = renderPlaylistAttachControlsHtml;
 window.mountPlaylistAttachControls = mountPlaylistAttachControls;
 
