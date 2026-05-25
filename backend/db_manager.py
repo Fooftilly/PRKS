@@ -1377,6 +1377,14 @@ class PRKSDatabase:
         row = r[0] if r else {"c": 0, "m": ""}
         return f'W/"prks-recent-{row["c"]}-{row["m"]}"'
 
+    def etag_recently_added_works(self) -> str:
+        """Revision for /api/recently-added (ordered by works.created_at)."""
+        r = self.execute_query(
+            "SELECT COUNT(*) AS c, COALESCE(MAX(created_at), '') AS m FROM works"
+        )
+        row = r[0] if r else {"c": 0, "m": ""}
+        return f'W/"prks-recently-added-{row["c"]}-{row["m"]}"'
+
     def delete_work(self, work_id: str):
         # Retrieve file_path if we want to delete the physical file
         res = self.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
@@ -1737,6 +1745,18 @@ class PRKSDatabase:
         rows = list(
             self.execute_query(
                 f"SELECT {sel}, {pex} FROM works WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC LIMIT ?",
+                (limit,),
+            )
+        )
+        enrich_work_rows_pdf_file_size(rows)
+        return rows
+
+    def get_recently_added_works(self, limit: int = 50) -> List[dict]:
+        sel = _prks_work_summary_select_with_folder("works")
+        pex = _prks_sql_work_summary_person_extras("works")
+        rows = list(
+            self.execute_query(
+                f"SELECT {sel}, {pex} FROM works ORDER BY works.created_at DESC LIMIT ?",
                 (limit,),
             )
         )

@@ -959,6 +959,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 data = db.get_recent_works()
                 self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path == '/api/recently-added':
+                etag = db.etag_recently_added_works()
+                if self._prks_if_none_match(etag):
+                    self._send_json_not_modified(etag)
+                    return
+                data = db.get_recently_added_works()
+                self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path == '/api/search':
                 q = query.get('q', [''])[0]
                 tag = query.get('tag', [''])[0]

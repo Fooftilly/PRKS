@@ -148,12 +148,131 @@ function renderFolderTreeRoots(folders) {
         .join('');
 }
 
-function renderDashboard(folders, container) {
-    const list = Array.isArray(folders) ? folders : [];
-    window.__prksFolderDashboardState = { folders: list, container };
-    const body = list.length
+const PRKS_FOLDER_LIBRARY_TAB_KEY = 'prks-folder-library-tab';
+
+function prksFolderLibraryActiveTabFromStorage() {
+    try {
+        const saved = sessionStorage.getItem(PRKS_FOLDER_LIBRARY_TAB_KEY);
+        return saved === 'recently-added' ? 'recently-added' : 'folders';
+    } catch (_e) {
+        return 'folders';
+    }
+}
+
+function prksFolderLibraryFoldersBodyHtml(list) {
+    return list.length
         ? `<div class="list-view prks-folder-library__list">${renderFolderTreeRoots(list)}</div>`
         : '<p class="meta-row" style="padding:12px 4px;">No folders yet. Use <strong>New folder</strong> to create one.</p>';
+}
+
+function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
+    if (!paneEl) return;
+    let html = '';
+    const list = Array.isArray(works) ? works : [];
+    if (list.length > 0) {
+        list.forEach((w) => {
+            const dateStr = w.created_at ? new Date(w.created_at).toLocaleString() : '';
+            const subtitle = dateStr ? `Added: ${dateStr}` : '';
+            html += typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { subtitle }) : '';
+        });
+    } else {
+        html = '<p class="prks-inline-message">No files in the library yet.</p>';
+    }
+    paneEl.innerHTML = html;
+}
+
+async function prksLoadFolderLibraryRecentlyAdded(force) {
+    const st = window.__prksFolderDashboardState;
+    if (!st || !st.container) return;
+    const pane = st.container.querySelector('#prks-folder-library-recently-added');
+    if (!pane) return;
+    if (st.recentlyAddedLoading) return;
+    if (!force && Array.isArray(st.recentlyAddedWorks)) {
+        prksRenderFolderLibraryRecentlyAdded(st.recentlyAddedWorks, pane);
+        if (typeof window.prksInitLazyWorkThumbs === 'function') {
+            window.prksInitLazyWorkThumbs(pane);
+        }
+        prksScheduleFolderLibraryBodyHeightLock(st.container);
+        return;
+    }
+    st.recentlyAddedLoading = true;
+    const works = typeof fetchRecentlyAdded === 'function' ? await fetchRecentlyAdded() : [];
+    st.recentlyAddedWorks = works;
+    st.recentlyAddedLoading = false;
+    prksRenderFolderLibraryRecentlyAdded(works, pane);
+    if (typeof window.prksInitLazyWorkThumbs === 'function') {
+        window.prksInitLazyWorkThumbs(pane);
+    }
+    prksScheduleFolderLibraryBodyHeightLock(st.container);
+}
+
+function prksFolderLibraryScrollHost() {
+    return document.getElementById('main-content') || document.getElementById('page-content');
+}
+
+function prksLockFolderLibraryBodyHeight(root) {
+    if (!root) return;
+    const body = root.querySelector('.prks-folder-library__body');
+    if (!body) return;
+    const h = body.offsetHeight;
+    const prev = parseInt(body.style.minHeight, 10) || 0;
+    if (h > 0) body.style.minHeight = `${Math.max(h, prev)}px`;
+}
+
+function prksScheduleFolderLibraryBodyHeightLock(hostEl) {
+    if (!hostEl) return;
+    const root = hostEl.querySelector('.prks-folder-library') || hostEl.closest('.prks-folder-library');
+    if (!root) return;
+    requestAnimationFrame(() => prksLockFolderLibraryBodyHeight(root));
+}
+
+function prksApplyFolderLibraryTabUi(root, tab) {
+    if (!root) return;
+    const scrollHost = prksFolderLibraryScrollHost();
+    const scrollTop = scrollHost ? scrollHost.scrollTop : 0;
+    const want = tab === 'recently-added' ? 'recently-added' : 'folders';
+    root.querySelectorAll('.prks-folder-library__tab-btn').forEach((btn) => {
+        const t = btn.getAttribute('data-tab');
+        const on = t === want;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    const foldersPane = root.querySelector('[data-pane="folders"]');
+    const addedPane = root.querySelector('[data-pane="recently-added"]');
+    if (foldersPane) {
+        foldersPane.classList.toggle('is-hidden', want !== 'folders');
+        foldersPane.setAttribute('aria-hidden', want === 'folders' ? 'false' : 'true');
+    }
+    if (addedPane) {
+        addedPane.classList.toggle('is-hidden', want !== 'recently-added');
+        addedPane.setAttribute('aria-hidden', want === 'recently-added' ? 'false' : 'true');
+    }
+    if (scrollHost) scrollHost.scrollTop = scrollTop;
+    prksScheduleFolderLibraryBodyHeightLock(root.parentElement);
+}
+
+function prksSwitchFolderLibraryTab(tab) {
+    const st = window.__prksFolderDashboardState;
+    if (!st || !st.container) return;
+    const want = tab === 'recently-added' ? 'recently-added' : 'folders';
+    st.activeTab = want;
+    try {
+        sessionStorage.setItem(PRKS_FOLDER_LIBRARY_TAB_KEY, want);
+    } catch (_e) {
+        /* ignore */
+    }
+    const root = st.container.querySelector('.prks-folder-library');
+    prksApplyFolderLibraryTabUi(root, want);
+    if (want === 'recently-added') {
+        void prksLoadFolderLibraryRecentlyAdded(false);
+    }
+}
+
+function renderDashboard(folders, container) {
+    const prev = window.__prksFolderDashboardState || {};
+    const list = Array.isArray(folders) ? folders : [];
+    const activeTab = prev.activeTab || prksFolderLibraryActiveTabFromStorage();
+    const foldersBody = prksFolderLibraryFoldersBodyHtml(list);
     const hasCollapsible = prksFolderTreeHasCollapsibleNodes(list);
     const allCollapsed = prksFolderTreeAllCollapsed(list);
     const controls = hasCollapsible
@@ -163,16 +282,45 @@ function renderDashboard(folders, container) {
             }); prksRerenderFolderDashboard();">${allCollapsed ? 'Expand all subfolders' : 'Collapse all subfolders'}</button>
         `
         : '';
+    const foldersActive = activeTab !== 'recently-added';
     container.innerHTML = `
         <div class="prks-folder-library">
-        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="page-header prks-folder-library__header">
             <h2>Folder Library</h2>
-            ${controls}
         </div>
-        <p class="meta-row" style="padding:2px 4px 10px;">Folders can nest. Move folders under other folders or keep them top-level.</p>
-        ${body}
+        <div class="tabs prks-folder-library__tabs" role="tablist" aria-label="Folder library views">
+            <button type="button" class="tab-btn prks-folder-library__tab-btn${foldersActive ? ' active' : ''}" role="tab" data-tab="folders" aria-selected="${foldersActive ? 'true' : 'false'}">Folders</button>
+            <button type="button" class="tab-btn prks-folder-library__tab-btn${foldersActive ? '' : ' active'}" role="tab" data-tab="recently-added" aria-selected="${foldersActive ? 'false' : 'true'}">Recently added</button>
+        </div>
+        <div class="prks-folder-library__body">
+            <div class="prks-folder-library__pane${foldersActive ? '' : ' is-hidden'}" data-pane="folders" role="tabpanel" aria-hidden="${foldersActive ? 'false' : 'true'}">
+                ${controls ? `<div class="prks-folder-library__folders-toolbar">${controls}</div>` : ''}
+                <p class="meta-row prks-folder-library__lede-folders" style="padding:2px 4px 10px;">Folders can nest. Move folders under other folders or keep them top-level.</p>
+                ${foldersBody}
+            </div>
+            <div id="prks-folder-library-recently-added" class="prks-folder-library__pane prks-folder-library__grid card-grid${foldersActive ? ' is-hidden' : ''}" data-pane="recently-added" role="tabpanel" aria-hidden="${foldersActive ? 'true' : 'false'}"></div>
+        </div>
         </div>
     `;
+    window.__prksFolderDashboardState = {
+        folders: list,
+        container,
+        activeTab,
+        recentlyAddedWorks: prev.recentlyAddedWorks,
+        recentlyAddedLoading: false,
+    };
+    const root = container.querySelector('.prks-folder-library');
+    root.querySelectorAll('.prks-folder-library__tab-btn').forEach((btn) => {
+        if (btn.dataset.bound === '1') return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', () => {
+            prksSwitchFolderLibraryTab(btn.getAttribute('data-tab'));
+        });
+    });
+    if (activeTab === 'recently-added') {
+        void prksLoadFolderLibraryRecentlyAdded(false);
+    }
+    prksScheduleFolderLibraryBodyHeightLock(container);
 }
 
 function renderFolderDetails(folder, container) {

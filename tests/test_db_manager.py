@@ -829,6 +829,21 @@ class TestDBManager(unittest.TestCase):
         self.assertIn("older", names)
         self.assertEqual(names[0], "newer")
 
+    def test_get_recently_added_works_order(self):
+        w_old = self.db.add_work(title="Older added")
+        w_new = self.db.add_work(title="Newer added")
+        self.db.execute_query(
+            "UPDATE works SET created_at = '2020-01-01 00:00:00' WHERE id = ?", (w_old,)
+        )
+        self.db.execute_query(
+            "UPDATE works SET created_at = '2025-06-01 00:00:00' WHERE id = ?", (w_new,)
+        )
+        rows = self.db.get_recently_added_works(limit=10)
+        ids = [r["id"] for r in rows]
+        self.assertGreaterEqual(len(ids), 2)
+        self.assertEqual(ids[0], w_new)
+        self.assertIn(w_old, ids)
+
     def test_build_graph_wiki_cocite_unresolved(self):
         w1 = self.db.add_work(title="Doc A", abstract="[[Ghost]]", text_content="")
         w2 = self.db.add_work(title="Doc B", text_content="[[Ghost]]", abstract="")

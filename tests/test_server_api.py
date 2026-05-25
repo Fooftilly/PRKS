@@ -806,6 +806,11 @@ class TestServerAPI(unittest.TestCase):
         self.assertIsInstance(recent, list)
         self.assertTrue(any(r.get("id") == w_id for r in recent))
 
+        with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/recently-added")) as ra:
+            recently_added = json.loads(ra.read().decode())
+        self.assertIsInstance(recently_added, list)
+        self.assertTrue(any(r.get("id") == w_id for r in recently_added))
+
         with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/graph")) as gr:
             graph = json.loads(gr.read().decode())
         self.assertIsInstance(graph, dict)

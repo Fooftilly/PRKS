@@ -1353,13 +1353,23 @@ a.tag.tag--sidebar-all:hover {
     margin-bottom: 4px;
 }
 
-.prks-folder-library .page-header {
+.prks-folder-library .page-header.prks-folder-library__header {
+    display: flex;
+    align-items: center;
     margin-bottom: 8px;
     padding-bottom: 6px;
+    min-height: 38px;
 }
 
 .prks-folder-library .page-header h2 {
     font-size: 1.05rem;
+    margin: 0;
+}
+
+.prks-folder-library__folders-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 6px;
 }
 
 .prks-folder-library__list {
@@ -1385,6 +1395,32 @@ a.tag.tag--sidebar-all:hover {
 
 .prks-folder-library__list .meta-row {
     line-height: 1.35;
+}
+
+.prks-folder-library__tabs {
+    margin-bottom: var(--space-sm);
+    padding: 0 4px;
+}
+
+/* Stack tab panes in one grid cell so height stays max(folders, recently-added). */
+.prks-folder-library__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.prks-folder-library__body > .prks-folder-library__pane {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+}
+
+.prks-folder-library__body > .prks-folder-library__pane.is-hidden {
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.prks-folder-library__grid.card-grid {
+    margin-top: 0;
 }
 
 .list-view--people .project-card--person {

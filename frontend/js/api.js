@@ -139,6 +139,16 @@ async function fetchRecent() {
         return [];
     }
 }
+async function fetchRecentlyAdded() {
+    try {
+        const res = await fetch('/api/recently-added');
+        const data = await prksParseJsonResponse(res, [], 'recently-added');
+        return Array.isArray(data) ? data : [];
+    } catch (e) {
+        prksSetApiError('recently-added', 'Could not load recently added files.');
+        return [];
+    }
+}
 async function fetchSearch(query, tagName, options = {}) {
     const author = options.author != null ? String(options.author).trim() : '';
     const publisher =
