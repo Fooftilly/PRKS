@@ -15,7 +15,12 @@ from unittest.mock import MagicMock, patch
 # Add the parent directory to sys.path so we can import 'backend'
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.db_manager import PRKSDatabase
+from backend.db_manager import (
+    PRKSDatabase,
+    prks_person_image_cache_path,
+    prks_person_image_url_hash,
+    PRKS_PERSON_IMAGE_CACHE_REV,
+)
 
 # Ensure imports/run never write to container storage (/data).
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,6 +30,18 @@ os.environ.setdefault("PRKS_STORAGE", os.path.join(_PROJECT_DIR, "data_testing")
 import backend.server as server_module
 
 unittest.defaultTestLoader.sortTestMethodsUsing = None
+
+
+def _tiny_test_portrait_png_bytes() -> bytes:
+    """Minimal decodable PNG for portrait encode/cache tests."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    img = Image.new("RGB", (64, 64), (120, 80, 200))
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _find_free_port() -> int:
@@ -1394,7 +1411,7 @@ class TestServerAPI(unittest.TestCase):
 
     @patch("backend.server.urlopen")
     def test_server_person_profile_image_serves_cache_when_remote_fails(self, mock_urlopen):
-        tiny_jpg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
+        portrait_png = _tiny_test_portrait_png_bytes()
         payload = {
             "first_name": "Cache",
             "last_name": "Portrait",
@@ -1411,7 +1428,7 @@ class TestServerAPI(unittest.TestCase):
 
         fake_resp = MagicMock()
         fake_resp.status = 200
-        fake_resp.read.return_value = tiny_jpg
+        fake_resp.read.return_value = portrait_png
         fake_ctx = MagicMock()
         fake_ctx.__enter__.return_value = fake_resp
         fake_ctx.__exit__.return_value = None
@@ -1422,7 +1439,14 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req_img) as ri:
             self.assertEqual(ri.status, 200)
             body1 = ri.read()
-        self.assertTrue(body1.startswith(b"\xff\xd8\xff"))
+            ctype = ri.headers.get("Content-Type", "")
+        self.assertIn("image/webp", ctype)
+        self.assertEqual(body1[:4], b"RIFF")
+        self.assertEqual(body1[8:12], b"WEBP")
+
+        cache_path = prks_person_image_cache_path(p_id, payload["image_url"])
+        self.assertTrue(os.path.isfile(cache_path))
+        self.assertTrue(cache_path.endswith(f"_v{PRKS_PERSON_IMAGE_CACHE_REV}.webp"))
 
         mock_urlopen.return_value = None
         mock_urlopen.side_effect = urllib.error.URLError("simulated offline")
@@ -1431,6 +1455,60 @@ class TestServerAPI(unittest.TestCase):
             self.assertEqual(ri2.status, 200)
             body2 = ri2.read()
         self.assertEqual(body1, body2)
+
+    @patch("backend.server.urlopen")
+    def test_server_person_profile_image_cache_purged_on_image_url_change(
+        self, mock_urlopen
+    ):
+        portrait_png = _tiny_test_portrait_png_bytes()
+        url_a = "https://example.invalid/a.jpg"
+        url_b = "https://example.invalid/b.jpg"
+        payload = {
+            "first_name": "Purge",
+            "last_name": "Portrait",
+            "image_url": url_a,
+        }
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_p) as rp:
+            p_id = json.loads(rp.read().decode())["id"]
+
+        fake_resp = MagicMock()
+        fake_resp.status = 200
+        fake_resp.read.return_value = portrait_png
+        fake_ctx = MagicMock()
+        fake_ctx.__enter__.return_value = fake_resp
+        fake_ctx.__exit__.return_value = None
+        mock_urlopen.return_value = fake_ctx
+
+        cache_a = prks_person_image_cache_path(p_id, url_a)
+        img_url = f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}/profile-image"
+        with urllib.request.urlopen(urllib.request.Request(img_url)) as ri:
+            ri.read()
+        self.assertTrue(os.path.isfile(cache_a))
+
+        req_patch = urllib.request.Request(
+            f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}",
+            data=json.dumps({"image_url": url_b}).encode(),
+            method="PATCH",
+        )
+        req_patch.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_patch) as rpatch:
+            self.assertEqual(rpatch.status, 200)
+
+        self.assertFalse(os.path.isfile(cache_a))
+        cache_b = prks_person_image_cache_path(p_id, url_b)
+        self.assertNotEqual(
+            prks_person_image_url_hash(url_a), prks_person_image_url_hash(url_b)
+        )
+
+        with urllib.request.urlopen(urllib.request.Request(img_url)) as ri2:
+            ri2.read()
+        self.assertTrue(os.path.isfile(cache_b))
 
 
 if __name__ == '__main__':

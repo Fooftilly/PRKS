@@ -56,7 +56,9 @@ This maps **8080:8080**, sets `PRKS_STORAGE=/data`, mounts **`./data` on the hos
 | `PRKS_TESTING` | When truthy (`1`, `true`, `yes`), uses testing paths and stricter checks (see testing mode above). |
 | `PRKS_THUMB_LOSSLESS` | When truthy, PDF card thumbnails use lossless WebP/PNG cache encoding (debugging). Default is card-optimized lossy WebP; cache filenames use rev `_v2`. |
 
-If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/prks_data.db`, `data/pdfs/`, and `data/thumbs/`.
+If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/prks_data.db`, `data/pdfs/`, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
+
+Person profile images (`GET /api/persons/{id}/profile-image`) are fetched from each person’s `image_url`, resized/transcoded like PDF card thumbnails (WebP quality 82), and cached under `$PRKS_STORAGE/people/` or `data/people/`. Updating `image_url` clears that person’s cached portraits.
 
 Backup your database by copying `/data` folder.
 

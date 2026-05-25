@@ -3,6 +3,7 @@ import os
 import re
 import uuid
 import json
+import hashlib
 import html
 import shutil
 from collections import Counter, defaultdict
@@ -320,6 +321,54 @@ def prks_thumb_cache_stem(work_id: str, page: int) -> str:
 def prks_person_image_cache_safe_id(person_id: str) -> str:
     """Sanitize person id for on-disk profile image cache filenames."""
     return re.sub(r"[^A-Za-z0-9_-]+", "_", str(person_id))
+
+
+# Bump when portrait encode format changes (invalidates on-disk cache by filename).
+PRKS_PERSON_IMAGE_CACHE_REV = 1
+
+
+def prks_person_image_url_hash(image_url: str) -> str:
+    """Stable short hash of normalized image_url for cache filenames."""
+    norm = (image_url or "").strip()
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:12]
+
+
+def prks_person_image_cache_path(person_id: str, image_url: str) -> str:
+    """On-disk path for one person's compressed portrait (WebP)."""
+    d = resolve_people_images_dir()
+    safe = prks_person_image_cache_safe_id(person_id)
+    h = prks_person_image_url_hash(image_url)
+    return os.path.join(
+        d, f"{safe}_{h}_v{PRKS_PERSON_IMAGE_CACHE_REV}.webp"
+    )
+
+
+def prks_person_image_legacy_bin_path(person_id: str) -> str:
+    """Pre-compression cache file (raw bytes); migrated lazily to WebP."""
+    d = resolve_people_images_dir()
+    safe = prks_person_image_cache_safe_id(person_id)
+    return os.path.join(d, safe + ".bin")
+
+
+def prks_delete_person_image_cache(person_id: str) -> None:
+    """Remove all cached portrait files for one person (best-effort)."""
+    d = resolve_people_images_dir()
+    safe = prks_person_image_cache_safe_id(person_id)
+    if not os.path.isdir(d):
+        return
+    legacy_bin = safe + ".bin"
+    prefix = safe + "_"
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return
+    for fname in names:
+        if fname != legacy_bin and not fname.startswith(prefix):
+            continue
+        try:
+            os.remove(os.path.join(d, fname))
+        except OSError:
+            pass
 
 
 _PRKS_UNCATEGORIZED_FOLDER_TITLE = "Uncategorized"
