@@ -702,12 +702,23 @@ class TestDBManager(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["id"], w1)
 
-    def test_delete_tag_removes_aliases(self):
+    def test_delete_tag_removes_tag_and_aliases(self):
+        w1 = self.db.add_work(title="DeleteTagWork")
         tid = self.db.add_tag("TaggedForDelete", "#000000")["id"]
         self.db.add_tag_alias(tid, "AltName")
-        self.db.delete_tag(tid)
+        self.db.add_tag_to_work(w1, tid)
+        result = self.db.delete_tag(tid)
+        self.assertEqual(result.get("status"), "deleted")
+        self.assertNotIn("promoted", result)
+        self.assertFalse(self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,)))
         al = self.db.execute_query("SELECT * FROM tag_aliases WHERE tag_id = ?", (tid,))
         self.assertEqual(len(al), 0)
+        self.assertEqual(len(self.db.get_work_tags(w1)), 0)
+        self.assertFalse(
+            self.db.execute_query(
+                "SELECT id FROM tags WHERE LOWER(name) = LOWER(?)", ("AltName",)
+            )
+        )
 
     def test_get_all_tags_includes_aliases_array(self):
         tid = self.db.add_tag("Canon", "#abc")["id"]

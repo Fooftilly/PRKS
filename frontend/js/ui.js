@@ -135,6 +135,102 @@ function prksDiscardConfirmedClose() {
     if (fn) fn();
 }
 
+let prksModalConfirmResolve = null;
+
+function prksIsModalConfirmOpen() {
+    const root = document.getElementById('prks-modal-confirm');
+    return !!(root && !root.classList.contains('hidden'));
+}
+
+function prksHideModalConfirm() {
+    const root = document.getElementById('prks-modal-confirm');
+    if (root) {
+        root.classList.add('hidden');
+        root.setAttribute('aria-hidden', 'true');
+    }
+    prksModalConfirmResolve = null;
+}
+
+function prksFinishModalConfirm(confirmed) {
+    const resolve = prksModalConfirmResolve;
+    prksHideModalConfirm();
+    if (typeof resolve === 'function') resolve(!!confirmed);
+}
+
+/**
+ * In-app confirm dialog (replaces window.confirm for destructive flows).
+ * @returns {Promise<boolean>}
+ */
+function prksConfirmDialog(options = {}) {
+    return new Promise((resolve) => {
+        const root = document.getElementById('prks-modal-confirm');
+        if (!root) {
+            resolve(false);
+            return;
+        }
+        const titleEl = document.getElementById('prks-modal-confirm-title');
+        const descEl = document.getElementById('prks-modal-confirm-desc');
+        const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
+        const okBtn = document.getElementById('prks-modal-confirm-ok');
+        const title = options.title != null ? String(options.title) : 'Confirm';
+        const message = options.message != null ? String(options.message) : '';
+        const confirmLabel =
+            options.confirmLabel != null ? String(options.confirmLabel) : 'OK';
+        const cancelLabel =
+            options.cancelLabel != null ? String(options.cancelLabel) : 'Cancel';
+        const danger = options.danger === true;
+
+        if (titleEl) titleEl.textContent = title;
+        if (descEl) descEl.textContent = message;
+        if (cancelBtn) cancelBtn.textContent = cancelLabel;
+        if (okBtn) {
+            okBtn.textContent = confirmLabel;
+            okBtn.classList.remove('add-new-btn', 'btn-danger-outline');
+            okBtn.classList.add(danger ? 'btn-danger-outline' : 'add-new-btn');
+        }
+
+        prksModalConfirmResolve = resolve;
+        root.classList.remove('hidden');
+        root.setAttribute('aria-hidden', 'false');
+        const focusEl = danger && cancelBtn ? cancelBtn : okBtn || cancelBtn;
+        if (focusEl && typeof focusEl.focus === 'function') {
+            requestAnimationFrame(() => focusEl.focus());
+        }
+    });
+}
+
+function prksBindModalConfirmOnce() {
+    const root = document.getElementById('prks-modal-confirm');
+    if (!root || root.dataset.bound === '1') return;
+    root.dataset.bound = '1';
+    const cancel = document.getElementById('prks-modal-confirm-cancel');
+    const ok = document.getElementById('prks-modal-confirm-ok');
+    const scrim = document.getElementById('prks-modal-confirm-scrim');
+    if (cancel) {
+        cancel.addEventListener('click', () => prksFinishModalConfirm(false));
+    }
+    if (ok) {
+        ok.addEventListener('click', () => prksFinishModalConfirm(true));
+    }
+    if (scrim) {
+        scrim.addEventListener('click', () => prksFinishModalConfirm(false));
+    }
+    if (!window.__prksModalConfirmKeyBound) {
+        window.__prksModalConfirmKeyBound = true;
+        document.addEventListener(
+            'keydown',
+            (e) => {
+                if (e.key !== 'Escape') return;
+                if (!prksIsModalConfirmOpen()) return;
+                e.preventDefault();
+                e.stopPropagation();
+                prksFinishModalConfirm(false);
+            },
+            true
+        );
+    }
+}
+
 function prksBindModalUnsavedConfirmOnce() {
     const root = document.getElementById('prks-modal-unsaved-confirm');
     if (!root || root.dataset.bound === '1') return;
@@ -426,6 +522,7 @@ function prksAnyModalOpen() {
 
 function initModalCloseUi() {
     prksBindModalUnsavedConfirmOnce();
+    prksBindModalConfirmOnce();
     const backdrop = document.getElementById('modal-backdrop');
     if (!backdrop || backdrop.dataset.boundClose !== '1') {
         if (!backdrop) return;
@@ -641,6 +738,7 @@ function closeModals() {
 
 window.requestModalClose = requestModalClose;
 window.initModalCloseUi = initModalCloseUi;
+window.prksConfirmDialog = prksConfirmDialog;
 
 function personDisplayName(p) {
     return `${(p.first_name || '').trim()} ${p.last_name || ''}`.trim();
@@ -2456,7 +2554,11 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId) {
             };
             results.appendChild(div);
         });
-        results.classList.toggle('hidden', results.childElementCount === 0);
+        if (results.childElementCount === 0) {
+            prksHideInlineComboboxResults(results);
+        } else {
+            prksShowInlineComboboxResults(input, results);
+        }
     }
 
     input.onfocus = async () => {
@@ -3057,7 +3159,11 @@ function initUploadTagCombobox() {
             };
             results.appendChild(div);
         });
-        results.classList.toggle('hidden', results.childElementCount === 0);
+        if (results.childElementCount === 0) {
+            prksHideInlineComboboxResults(results);
+        } else {
+            prksShowInlineComboboxResults(input, results);
+        }
     }
 
     input.onfocus = async () => {

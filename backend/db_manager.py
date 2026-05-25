@@ -3185,8 +3185,15 @@ class PRKSDatabase:
 
         return {"nodes": nodes, "edges": edges}
 
-    def delete_tag(self, tag_id: str):
-        self.execute_query("DELETE FROM tags WHERE id = ?", (tag_id,))
+    def delete_tag(self, tag_id: str) -> Dict[str, Any]:
+        tid = (tag_id or "").strip()
+        if not tid:
+            raise ValueError("tag_id is required")
+        row = self.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
+        if not row:
+            raise ValueError("tag not found")
+        self.execute_query("DELETE FROM tags WHERE id = ?", (tid,))
+        return {"status": "deleted"}
 
     def _prune_tag_if_unused(self, tag_id: str) -> None:
         """Remove tag row (and aliases via FK) when nothing links to it."""

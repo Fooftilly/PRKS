@@ -539,8 +539,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, {'status': 'deleted'})
             elif path.startswith('/api/tags/') and len(path.split('/')) == 4:
                 t_id = path.split('/')[-1]
-                db.delete_tag(t_id)
-                self.send_json(200, {'status': 'deleted'})
+                try:
+                    result = db.delete_tag(t_id)
+                    self.send_json(200, result)
+                except ValueError as e:
+                    msg = str(e)
+                    if 'not found' in msg.lower():
+                        self.send_json(404, {'error': msg})
+                    else:
+                        self.send_json(400, {'error': msg})
             elif path.startswith('/api/person-groups/'):
                 parts = path.split('/')
                 # /api/person-groups/{group_id}/members/{person_id}

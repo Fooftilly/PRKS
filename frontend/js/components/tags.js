@@ -341,6 +341,48 @@ function prksWireTagsPageAliasPanel(container) {
         closeBtn.onclick = () => prksCloseTagsAliasModal();
     }
 
+    const deleteBtn = document.getElementById('tags-page-alias-delete-btn');
+    if (deleteBtn) {
+        deleteBtn.onclick = async () => {
+            const tag = prksTagsPageSelectedTag();
+            if (!tag) return;
+            const name = tag.name || tag.id;
+            const msg =
+                'Files and folders will no longer have this tag. Alternate names (aliases) for this tag will be removed.';
+            const confirmFn =
+                typeof prksConfirmDialog === 'function'
+                    ? prksConfirmDialog
+                    : typeof window.prksConfirmDialog === 'function'
+                      ? window.prksConfirmDialog
+                      : null;
+            const confirmed = confirmFn
+                ? await confirmFn({
+                      title: `Delete tag “${name}”?`,
+                      message: msg,
+                      confirmLabel: 'Delete tag',
+                      cancelLabel: 'Cancel',
+                      danger: true,
+                  })
+                : window.confirm(`Delete tag “${name}”? ${msg}`);
+            if (!confirmed) return;
+            try {
+                const res = await fetch(`/api/tags/${encodeURIComponent(tag.id)}`, { method: 'DELETE' });
+                const errData = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(errData.error || 'Delete failed');
+                window.__prksAllTagsCache = null;
+                prksCloseTagsAliasModal();
+                const container = prksTagsPageCtx.containerEl;
+                if (container && typeof renderTagsPage === 'function') {
+                    await renderTagsPage(container);
+                }
+                if (typeof refreshSidebarTags === 'function') void refreshSidebarTags();
+            } catch (err) {
+                console.error(err);
+                alert(err.message || 'Could not delete tag.');
+            }
+        };
+    }
+
     const addBtn = document.getElementById('tags-page-alias-add-btn');
     if (addBtn) {
         addBtn.onclick = async () => {
@@ -462,6 +504,9 @@ async function renderTagsPage(container) {
                         <div class="tags-page-alias-add">
                             <input type="text" id="tags-page-alias-input" class="tags-page-alias-input" maxlength="120" placeholder="New alias…" autocomplete="off" aria-label="New alias">
                             <button type="button" id="tags-page-alias-add-btn" class="tags-page-alias-add__submit">Add alias</button>
+                        </div>
+                        <div class="tags-page-alias-delete">
+                            <button type="button" id="tags-page-alias-delete-btn" class="btn-danger-outline">Delete tag</button>
                         </div>
                     </div>
                 </div>

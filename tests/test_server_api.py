@@ -788,6 +788,23 @@ class TestServerAPI(unittest.TestCase):
             urllib.request.urlopen(req_self)
         self.assertEqual(cm.exception.code, 400)
 
+    def test_20c_delete_tag_endpoint(self):
+        db = self.__class__.test_db
+        w = db.add_work(title="API Delete Tag Work")
+        tid = db.add_tag("ApiDeleteCanon", "#d00")["id"]
+        db.add_tag_alias(tid, "ApiDeleteAlias")
+        db.add_tag_to_work(w, tid)
+        req = urllib.request.Request(
+            f"{self._base_url}/api/tags/{tid}",
+            method="DELETE",
+        )
+        with urllib.request.urlopen(req) as res:
+            body = json.loads(res.read().decode())
+        self.assertEqual(body.get("status"), "deleted")
+        self.assertNotIn("promoted", body)
+        self.assertFalse(db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,)))
+        self.assertEqual(len(db.get_work_tags(w)), 0)
+
     def test_21_graph_recent_and_bibtex_smoke(self):
         req_w = urllib.request.Request(
             f"{self._base_url}/api/works",

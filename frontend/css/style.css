@@ -825,6 +825,17 @@ a.tag.tag--sidebar-all:hover {
     border-color: var(--accent);
     color: var(--accent);
 }
+
+.tags-page-alias-delete {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+
+.tags-page-alias-delete .btn-danger-outline {
+    width: 100%;
+}
+
 .tag {
     background: var(--surface-muted);
     padding: 3px 8px;
@@ -2303,26 +2314,30 @@ a.tag.tag--sidebar-all:hover {
     margin: 0 0 12px 0;
 }
 
-/* Stacked confirm when closing modals with unsaved edits (above .modal, below dropdowns) */
-.prks-modal-unsaved-confirm {
+/* Stacked confirm dialogs (above .modal, below dropdowns) */
+.prks-modal-unsaved-confirm,
+.prks-modal-confirm {
     position: fixed;
     inset: 0;
     z-index: var(--z-modal-confirm);
     padding: var(--space-xl);
     box-sizing: border-box;
 }
-.prks-modal-unsaved-confirm:not(.hidden) {
+.prks-modal-unsaved-confirm:not(.hidden),
+.prks-modal-confirm:not(.hidden) {
     display: flex !important;
     align-items: center;
     justify-content: center;
 }
-.prks-modal-unsaved-confirm__scrim {
+.prks-modal-unsaved-confirm__scrim,
+.prks-modal-confirm__scrim {
     position: absolute;
     inset: 0;
     background: var(--overlay-scrim);
     cursor: default;
 }
-.prks-modal-unsaved-confirm__panel {
+.prks-modal-unsaved-confirm__panel,
+.prks-modal-confirm__panel {
     position: relative;
     z-index: 1;
     width: 100%;
@@ -2333,19 +2348,22 @@ a.tag.tag--sidebar-all:hover {
     padding: var(--space-2xl);
     box-shadow: var(--shadow-sm);
 }
-.prks-modal-unsaved-confirm__title {
+.prks-modal-unsaved-confirm__title,
+.prks-modal-confirm__title {
     margin: 0 0 var(--space-md);
     font-size: 1.15rem;
     font-weight: 600;
     color: var(--text-primary);
 }
-.prks-modal-unsaved-confirm__desc {
+.prks-modal-unsaved-confirm__desc,
+.prks-modal-confirm__desc {
     margin: 0 0 var(--space-xl);
     font-size: var(--text-sm);
     line-height: 1.5;
     color: var(--text-secondary);
 }
-.prks-modal-unsaved-confirm__actions {
+.prks-modal-unsaved-confirm__actions,
+.prks-modal-confirm__actions {
     display: flex;
     flex-wrap: nowrap;
     gap: var(--space-md);
@@ -2354,13 +2372,17 @@ a.tag.tag--sidebar-all:hover {
 }
 /* .add-new-btn defaults width:100% + margin-top:auto — undo inside this dialog */
 .prks-modal-unsaved-confirm__actions .ribbon-btn,
-.prks-modal-unsaved-confirm__actions .add-new-btn {
+.prks-modal-unsaved-confirm__actions .add-new-btn,
+.prks-modal-confirm__actions .ribbon-btn,
+.prks-modal-confirm__actions .add-new-btn,
+.prks-modal-confirm__actions .btn-danger-outline {
     flex: 0 1 auto;
     width: auto;
     min-width: 0;
     margin-top: 0;
 }
-.prks-modal-unsaved-confirm__actions .add-new-btn {
+.prks-modal-unsaved-confirm__actions .add-new-btn,
+.prks-modal-confirm__actions .add-new-btn {
     padding-inline: var(--space-lg);
 }
 
