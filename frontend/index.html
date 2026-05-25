@@ -415,7 +415,7 @@
                         </div>
                         <div id="work-upload-published-date-col">
                             <label for="work-date">Published date</label>
-                            <input type="date" id="work-date" autocomplete="off">
+                            <input type="text" id="work-date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-label="Published date">
                         </div>
                     </div>
 
@@ -628,11 +628,11 @@
                 <div class="form-grid-2">
                     <div>
                         <label for="person-birth-date">Birth date</label>
-                        <input type="text" id="person-birth-date" placeholder="dd-mm-yyyy, yyyy, or -428" autocomplete="off">
+                        <input type="text" id="person-birth-date" placeholder="dd/mm/yyyy, yyyy, or -428" autocomplete="off">
                     </div>
                     <div>
                         <label for="person-death-date">Date of death</label>
-                        <input type="text" id="person-death-date" placeholder="dd-mm-yyyy, yyyy, or -428" autocomplete="off">
+                        <input type="text" id="person-death-date" placeholder="dd/mm/yyyy, yyyy, or -428" autocomplete="off">
                     </div>
                 </div>
                 <label for="person-image-url">Portrait image URL</label>
@@ -666,7 +666,7 @@
                     <p>Fill this template according to the provided rules:</p>
                     <ul style="margin: 0 0 0 18px;">
                         <li><code>first_name</code>, <code>last_name</code>, <code>aliases</code>, <code>about</code>: plain text strings. Middle names should be placed in <code>first_name</code> field.</li>
-                        <li><code>birth_date</code>, <code>death_date</code>: use <code>dd-mm-yyyy</code>, <code>dd/mm/yyyy</code>, <code>yyyy</code>, or <code>-yyyy</code> (BC).</li>
+                        <li><code>birth_date</code>, <code>death_date</code>: use <code>dd/mm/yyyy</code>, <code>yyyy</code>, or <code>-yyyy</code> (BC).</li>
                         <li><code>image_url</code>, <code>link_wikipedia</code>, <code>link_stanford_encyclopedia</code>, <code>link_iep</code>: full URL strings (prefer <code>https://</code>). For <code>image_url</code>, use Wikipedia (or Wikimedia related) profile photo URL if it exists; otherwise other reliable sources are allowed.</li>
                         <li><code>links_other</code>: one entry per line inside single JSON string. MUST USE <code>[Title](https://...)</code> format for links in this field. DO NOT use free-text notes. This field meant for links such as personal website of person, or other reputable links about this person. Don't include links to papers discussing this person or papers by this person. Acceptable links in this field are links to encyclopedias, profile pages...</li>
                         <li>empty fields should stay empty; do not fill them with values such as N/A</li>
@@ -735,6 +735,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/lucide@0.511.0/dist/umd/lucide.min.js"></script>
     <script src="/js/icons.js"></script>
+    <script src="/js/date-format.js"></script>
     <script src="/js/api.js"></script>
     <script src="/js/doc-types.js"></script>
     <script src="/js/embedpdf-theme.js"></script>

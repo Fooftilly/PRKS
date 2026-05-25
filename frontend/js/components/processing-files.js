@@ -308,7 +308,7 @@ function prksProcessingCollectDraft(card) {
         status_draft: get('status_draft'),
         abstract: get('abstract'),
         source_url: get('source_url').trim(),
-        published_date: get('published_date').trim(),
+        published_date: prksParsePublishedDateInput(get('published_date')),
         year: get('year').trim(),
         publisher: get('publisher').trim(),
         location: get('location').trim(),
@@ -446,7 +446,7 @@ function prksProcessingCardHtml(file) {
                         <div class="form-grid-2">
                             <div>
                                 <label>Published date</label>
-                                <input type="date" data-field="published_date" value="${prksProcessingEsc(file.published_date || '')}">
+                                <input type="text" data-field="published_date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" value="${prksProcessingEsc(typeof prksIsoToDdMmYyyy === 'function' ? prksIsoToDdMmYyyy(file.published_date || '') : (file.published_date || ''))}">
                             </div>
                             ${docTypeMoreHtml}
                         </div>

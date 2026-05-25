@@ -1807,6 +1807,15 @@ async function submitWorkMetaEdit(workId) {
         const el = document.getElementById(id);
         return el ? el.value : '';
     };
+    const metaDateRaw = String(v('meta-date') || '').trim();
+    const metaDateIso =
+        typeof prksParsePublishedDateInput === 'function'
+            ? prksParsePublishedDateInput(metaDateRaw)
+            : metaDateRaw;
+    if (metaDateRaw && !metaDateIso) {
+        alert('Published date must be in dd/mm/yyyy.');
+        return;
+    }
     const payload = {
         title: v('meta-title'),
         status: v('meta-status'),
@@ -1822,7 +1831,7 @@ async function submitWorkMetaEdit(workId) {
             return i >= 1 ? i : null;
         })(),
         year: v('meta-year'),
-        published_date: v('meta-date'),
+        published_date: metaDateIso || null,
         publisher: v('meta-publisher'),
         location: (() => {
             const el = document.getElementById('meta-location');
@@ -2045,7 +2054,7 @@ function renderWorkMetaTab(work, isEditing = false) {
         <div class="doc-meta-card">
             <h3>Metadata</h3>
             ${renderRow('Year', work.year)}
-            ${showPublishedDate ? renderRow('Published', work.published_date) : ''}
+            ${showPublishedDate ? renderRow('Published', typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date) : ''}
             ${
                 work.publisher
                     ? `<p class="meta-row"><strong>Publisher:</strong> <a href="#/search?publisher=${encodeURIComponent(String(work.publisher).trim())}" class="route-sidebar__link">${escapeHtml(work.publisher)}</a></p>`
@@ -2742,9 +2751,10 @@ function renderWorkMetaEditTab(work) {
             ? prksDocTypeMenuShellHtml('meta-doc-type', metaDocNorm, isVideo)
             : '';
     const dateLabel = isVideo ? 'Published date' : 'Published Date';
-    const publishedType = isVideo ? 'text' : 'date';
-    const publishedPlaceholder = isVideo ? 'dd/mm/yyyy' : '';
-    const publishedInputMode = isVideo ? ' inputmode="numeric" autocomplete="off"' : '';
+    const publishedDateValue =
+        typeof prksIsoToDdMmYyyy === 'function'
+            ? prksIsoToDdMmYyyy(work.published_date)
+            : safeStr(work.published_date);
     const channelField = isVideo
         ? `
             <label for="meta-author-text">Channel name</label>
@@ -2809,7 +2819,7 @@ function renderWorkMetaEditTab(work) {
             
             <div class="form-grid-2 form-grid-2--compact">
                 <div><label for="meta-year">Year</label><input type="text" id="meta-year" value="${safeStr(work.year)}"></div>
-                <div><label for="meta-date">${dateLabel}</label><input type="${publishedType}" id="meta-date" value="${safeStr(work.published_date)}" placeholder="${publishedPlaceholder}"${publishedInputMode}></div>
+                <div><label for="meta-date">${dateLabel}</label><input type="text" id="meta-date" value="${safeStr(publishedDateValue)}" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off"></div>
             </div>
             ${channelField}
             

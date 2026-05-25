@@ -33,7 +33,7 @@ function isValidPersonYearToken(s) {
 /**
  * Stored value → display in the text field:
  * - year only: "1903" or "-428"
- * - full calendar date: "DD-MM-YYYY" (year may be negative, e.g. 15-03--384)
+ * - full calendar date: "DD/MM/YYYY" (year may be negative, e.g. 15/03/-384)
  */
 function personDateToDisplayFormat(stored) {
     if (!stored || typeof stored !== 'string') return '';
@@ -41,13 +41,13 @@ function personDateToDisplayFormat(stored) {
     if (/^-?\d+$/.test(t)) return t;
     const m = t.match(/^(-?\d+)-(\d{2})-(\d{2})$/);
     if (!m) return '';
-    return `${m[3]}-${m[2]}-${m[1]}`;
+    return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
 /**
  * Parse birth/death field for the API. Empty → ''.
  * - Year only: "-428", "1903"
- * - Full date: dd-mm-yyyy or dd/mm/yyyy (same separator twice), year last; e.g. 20-02-2001, 15/03/-384
+ * - Full date: dd/mm/yyyy (same separator twice), year last; e.g. 20/02/2001, 15/03/-384
  * - 8 digits: DDMMYYYY (Gregorian AD only)
  * Invalid → null.
  */
@@ -76,7 +76,7 @@ function parsePersonBirthDeathField(text) {
 }
 
 const PERSON_DATE_HELP =
-    'Use dd-mm-yyyy or dd/mm/yyyy (year last; may be negative, e.g. 15-03--384), yyyy or -yyyy for year only, or 8 digits ddmmyyyy.';
+    'Use dd/mm/yyyy (year last; may be negative, e.g. 15/03/-384), yyyy or -yyyy for year only, or 8 digits ddmmyyyy.';
 
 const PERSON_MONTH_NAMES = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -161,7 +161,7 @@ const PERSON_TEMPLATE_HELP_TEXT = [
     'Fill this template according to the provided rules:',
     '',
     '- first_name, last_name, aliases, about: plain text strings. Middle names should be placed in first_name field.',
-    '- birth_date, death_date: use dd-mm-yyyy, dd/mm/yyyy, yyyy, or -yyyy (BC).',
+    '- birth_date, death_date: use dd/mm/yyyy, yyyy, or -yyyy (BC).',
     '- image_url, link_wikipedia, link_stanford_encyclopedia, link_iep: full URL strings (prefer https://). For image_url, use Wikipedia (or Wikimedia related) profile photo URL if it exists; otherwise other reliable sources are allowed.',
     "- links_other: one entry per line inside single JSON string. MUST USE [Title](https://...) format for links in this field. DO NOT use free-text notes. This field meant for links such as personal website of person, or other reputable links about this person. Don't include links to papers discussing this person or papers by this person. Acceptable links in this field are links to encyclopedias, profile pages...",
     '- empty fields should stay empty; do not fill them with values such as N/A',
@@ -602,11 +602,11 @@ function renderPersonProfileEditFormHtml(person) {
                 <div class="form-grid-2 form-grid-2--compact">
                     <div>
                         <label for="pd-birth-date">Birth date</label>
-                        <input type="text" id="pd-birth-date" placeholder="dd-mm-yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.birth_date || ''))}">
+                        <input type="text" id="pd-birth-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.birth_date || ''))}">
                     </div>
                     <div>
                         <label for="pd-death-date">Date of death</label>
-                        <input type="text" id="pd-death-date" placeholder="dd-mm-yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.death_date || ''))}">
+                        <input type="text" id="pd-death-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.death_date || ''))}">
                     </div>
                 </div>
                 <label for="pd-image-url">Portrait image URL</label>

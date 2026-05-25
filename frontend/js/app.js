@@ -93,24 +93,6 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshSidebarTags();
 });
 
-function prksParseDdMmYyyyToIso(raw) {
-    const s = String(raw || '').trim();
-    if (!s) return '';
-    const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
-    if (!m) return '';
-    const dd = Number(m[1]);
-    const mm = Number(m[2]);
-    const yyyy = Number(m[3]);
-    if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return '';
-    if (yyyy < 0 || mm < 1 || mm > 12 || dd < 1 || dd > 31) return '';
-    // Basic day/month validation (no leap-year deep validation needed here).
-    const maxDay = [31, (yyyy % 4 === 0 && (yyyy % 100 !== 0 || yyyy % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mm - 1];
-    if (dd > maxDay) return '';
-    const d2 = String(dd).padStart(2, '0');
-    const m2 = String(mm).padStart(2, '0');
-    return `${yyyy}-${m2}-${d2}`;
-}
-
 function prksAbsoluteUrlForHash(hash) {
     const h = String(hash || '');
     const url = new URL(window.location.href);
@@ -976,10 +958,13 @@ function initForms() {
             sourceKind === 'video' && videoUrlDateEl ? String(videoUrlDateEl.value || '').trim() : '';
         const playlistId =
             sourceKind === 'video' && videoPlaylistEl ? String(videoPlaylistEl.value || '').trim() : '';
-        const publishedIso = sourceKind === 'video' ? prksParseDdMmYyyyToIso(publishedDate) : '';
+        const publishedIso =
+            sourceKind === 'video' ? prksParsePublishedDateInput(publishedDate) : '';
         const workDateEl = document.getElementById('work-date');
-        const pdfPublished =
+        const pdfPublishedRaw =
             sourceKind === 'pdf' && workDateEl ? String(workDateEl.value || '').trim() : '';
+        const pdfPublished =
+            sourceKind === 'pdf' ? prksParsePublishedDateInput(pdfPublishedRaw) : '';
 
         let thumb_page = null;
         if (sourceKind === 'pdf') {
@@ -1044,6 +1029,10 @@ function initForms() {
             return;
         }
         if (sourceKind === 'video' && publishedDate && !publishedIso) {
+            alert('Published date must be in dd/mm/yyyy.');
+            return;
+        }
+        if (sourceKind === 'pdf' && pdfPublishedRaw && !pdfPublished) {
             alert('Published date must be in dd/mm/yyyy.');
             return;
         }
