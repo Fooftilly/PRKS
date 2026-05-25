@@ -32,6 +32,7 @@
         fileText: 'file-text',
         play: 'play',
         chevronDown: 'chevron-down',
+        chevronUp: 'chevron-up',
         chevronRight: 'chevron-right',
         chevronLeft: 'chevron-left',
         copy: 'copy',
