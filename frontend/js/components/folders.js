@@ -214,6 +214,52 @@ function prksFolderTreeMetaLabel(node) {
     return bits.join(' · ');
 }
 
+/**
+ * One folder row (library tree or detail subfolder list).
+ * @param {object} node folder row with id, title, work_count, child_count
+ * @param {number} depth indent level for tree
+ * @param {{ expandable?: boolean, collapsed?: boolean, matchClass?: string, role?: string }} options
+ */
+function prksFolderTreeRowHtml(node, depth, options = {}) {
+    const opts = options && typeof options === 'object' ? options : {};
+    const childCount = Number(node.child_count || 0);
+    const hasChildren = childCount > 0;
+    const expandable = opts.expandable !== false && hasChildren;
+    const collapsed = !!opts.collapsed;
+    const expanded = expandable && !collapsed;
+    const matchClass = opts.matchClass || '';
+    const role = opts.role === 'listitem' ? 'listitem' : 'treeitem';
+    const fidEnc = encodeURIComponent(String(node.id || ''));
+    const hash = `#/folders/${fidEnc}`;
+    const meta = prksFolderTreeMetaLabel(node);
+    const metaHtml = meta
+        ? `<span class="prks-folder-tree__meta">${prksFolderEsc(meta)}</span>`
+        : '<span class="prks-folder-tree__meta" aria-hidden="true"></span>';
+    const nodeIdAttr = prksFolderEsc(String(node.id || ''));
+    const ariaExpandedAttr =
+        role === 'treeitem'
+            ? ` aria-expanded="${hasChildren ? (expanded ? 'true' : 'false') : 'false'}"`
+            : '';
+
+    const toggleHtml = expandable
+        ? `<button type="button" class="prks-folder-tree__toggle" aria-expanded="${expanded ? 'true' : 'false'}" title="${
+              collapsed ? 'Expand subfolders' : 'Collapse subfolders'
+          }" onclick="event.preventDefault(); event.stopPropagation(); prksToggleFolderNode('${fidEnc}');">${
+              typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 14 }) : '▸'
+          }</button>`
+        : '<span class="prks-folder-tree__toggle-spacer" aria-hidden="true"></span>';
+
+    return `
+            <div class="prks-folder-tree__row${matchClass}" data-folder-id="${nodeIdAttr}" role="${role}"${ariaExpandedAttr} style="--depth:${depth}">
+                ${toggleHtml}
+                <a class="prks-folder-tree__link" href="${hash}" data-prks-middleclick-nav="1" onauxclick="return typeof prksMaybeOpenHashInNewTab==='function'&&prksMaybeOpenHashInNewTab(event,'${hash}')">
+                    <span class="prks-folder-tree__icon">${typeof prksIcon === 'function' ? prksIcon('folder') : ''}</span>
+                    <span class="prks-folder-tree__title">${prksFolderEsc(node.title || 'Folder')}</span>
+                </a>
+                ${metaHtml}
+            </div>`;
+}
+
 function prksOpenFolderModalFromLibrarySearch(query) {
     const pre = String(query || '').trim();
     const titleEl = document.getElementById('folder-title');
@@ -311,34 +357,16 @@ function renderFolderTreeRoots(folders, options = {}) {
         const childCount = Number(node.child_count || 0);
         const hasChildren = childCount > 0;
         const collapsed = filtering ? false : hasChildren && prksFolderNodeCollapsed(node.id);
-        const expanded = hasChildren && !collapsed;
-        const fidEnc = encodeURIComponent(String(node.id || ''));
-        const hash = `#/folders/${fidEnc}`;
-        const meta = prksFolderTreeMetaLabel(node);
-        const metaHtml = meta
-            ? `<span class="prks-folder-tree__meta">${prksFolderEsc(meta)}</span>`
-            : '<span class="prks-folder-tree__meta" aria-hidden="true"></span>';
         const matchClass =
             filtering && matchIds && matchIds.has(node.id) ? ' prks-folder-tree__row--match' : '';
         const nodeIdAttr = prksFolderEsc(String(node.id || ''));
         const collapsedClass = collapsed ? ' is-collapsed' : '';
-        const toggleHtml = hasChildren
-            ? `<button type="button" class="prks-folder-tree__toggle" aria-expanded="${expanded ? 'true' : 'false'}" title="${
-                  collapsed ? 'Expand subfolders' : 'Collapse subfolders'
-              }" onclick="event.preventDefault(); event.stopPropagation(); prksToggleFolderNode('${fidEnc}');">${
-                  typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 14 }) : '▸'
-              }</button>`
-            : '<span class="prks-folder-tree__toggle-spacer" aria-hidden="true"></span>';
 
-        let html = `
-            <div class="prks-folder-tree__row${matchClass}" data-folder-id="${nodeIdAttr}" role="treeitem" aria-expanded="${hasChildren ? (expanded ? 'true' : 'false') : 'false'}" style="--depth:${depth}">
-                ${toggleHtml}
-                <a class="prks-folder-tree__link" href="${hash}" data-prks-middleclick-nav="1" onauxclick="return typeof prksMaybeOpenHashInNewTab==='function'&&prksMaybeOpenHashInNewTab(event,'${hash}')">
-                    <span class="prks-folder-tree__icon">${typeof prksIcon === 'function' ? prksIcon('folder') : ''}</span>
-                    <span class="prks-folder-tree__title">${prksFolderEsc(node.title || 'Folder')}</span>
-                </a>
-                ${metaHtml}
-            </div>`;
+        let html = prksFolderTreeRowHtml(node, depth, {
+            expandable: true,
+            collapsed,
+            matchClass,
+        });
 
         if (hasChildren) {
             let branchInner = '';
@@ -719,27 +747,15 @@ function renderFolderDetails(folder, container) {
     }
     worksHtml += `</div>`;
     const subfolders = Array.isArray(folder.children) ? folder.children : [];
-    const subfoldersHtml = subfolders.length
+    const subfoldersSorted = [...subfolders].sort((a, b) =>
+        String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' })
+    );
+    const subfoldersHtml = subfoldersSorted.length
         ? `
             <div class="page-header"><h3>Subfolders</h3></div>
-            <div class="list-view">
-                ${subfolders
-                    .map((ch) => {
-                        const workCount = Number(ch && ch.work_count ? ch.work_count : 0);
-                        const childCount = Number(ch && ch.child_count ? ch.child_count : 0);
-                        const bits = [];
-                        if (workCount) bits.push(`${workCount} file${workCount === 1 ? '' : 's'}`);
-                        if (childCount) bits.push(`${childCount} subfolder${childCount === 1 ? '' : 's'}`);
-                        return `
-                            <div class="project-card" role="link" tabindex="0" data-prks-middleclick-nav="1"
-                                onclick="window.location.hash='#/folders/${encodeURIComponent(String(ch.id || ''))}'"
-                                onkeydown="if(event && (event.key==='Enter' || event.key===' ')){event.preventDefault(); this.click();}">
-                                <span class="status-badge Planned">Subfolder</span>
-                                <div class="card-title">${prksFolderEsc(ch.title || 'Folder')}</div>
-                                <p class="meta-row">${prksFolderEsc(bits.join(' · '))}</p>
-                            </div>
-                        `;
-                    })
+            <div class="prks-folder-tree prks-folder-tree--detail-subfolders" role="list">
+                ${subfoldersSorted
+                    .map((ch) => prksFolderTreeRowHtml(ch, 0, { expandable: false, role: 'listitem' }))
                     .join('')}
             </div>
         `

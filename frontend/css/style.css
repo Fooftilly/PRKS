@@ -459,21 +459,159 @@ a.tag.tag--sidebar-all:hover {
     flex-direction: column;
     gap: 0.35rem;
     margin-top: 0.5rem;
+    width: 100%;
+    min-width: 0;
 }
 
-.prks-role-credit-picker label {
-    font-size: 0.8125rem;
+.form-pane .prks-role-credit-picker__heading {
+    display: block;
+    margin: 0;
+    font-size: 0.75rem;
+    font-weight: 600;
     color: var(--text-secondary);
 }
 
-.prks-role-credit-picker__select {
-    width: 100%;
-    max-width: 100%;
+.prks-role-credit-picker__profile {
+    margin: 0;
 }
 
-.prks-role-credit-picker__custom {
+.prks-role-credit-picker__shell {
     width: 100%;
 }
+
+.prks-role-credit-picker__field {
+    gap: 10px;
+}
+
+.prks-role-credit-picker__check {
+    display: inline-grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+}
+
+.prks-role-credit-picker__check::before,
+.prks-role-credit-picker__check::after {
+    grid-area: 1 / 1;
+    pointer-events: none;
+}
+
+.prks-role-credit-picker__check::before {
+    content: '';
+    width: 16px;
+    height: 16px;
+    border: 1px solid var(--text-tertiary);
+    border-radius: 4px;
+    background: var(--surface-muted);
+    box-sizing: border-box;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.prks-role-credit-picker__check:hover::before {
+    border-color: var(--text-secondary);
+}
+
+.prks-role-credit-picker__check:has(.prks-role-credit-picker__enable-input:checked)::before {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.prks-role-credit-picker__check::after {
+    content: '';
+    width: 4px;
+    height: 8px;
+    border: solid var(--text-inverse);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg) translate(-1px, -1px);
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.prks-role-credit-picker__check:has(.prks-role-credit-picker__enable-input:checked)::after {
+    opacity: 1;
+}
+
+.prks-role-credit-picker__check:has(.prks-role-credit-picker__enable-input:focus-visible) {
+    outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+    outline-offset: 2px;
+}
+
+.prks-role-credit-picker__enable-input {
+    grid-area: 1 / 1;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 1;
+}
+
+.prks-role-credit-picker__shell--off .prks-role-credit-picker__input:disabled {
+    opacity: 1;
+    color: var(--text-tertiary);
+    -webkit-text-fill-color: var(--text-tertiary);
+    cursor: default;
+}
+
+.prks-role-credit-picker__shell--off:focus-within {
+    border-color: var(--border);
+}
+
+.prks-role-credit-picker__aliases {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.15rem;
+}
+
+.prks-role-credit-picker__aliases-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.prks-role-credit-picker__alias-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.prks-role-credit-picker__alias-chip {
+    margin: 0;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.prks-role-credit-picker__alias-chip:hover {
+    border-color: var(--text-tertiary);
+    color: var(--text-primary);
+}
+
+.prks-role-credit-picker__alias-chip--active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--text-primary);
+}
+
+.meta-row--compact {
+    margin-top: 0.2rem;
+}
+
 
 .prks-modal-prompt__input {
     display: block;
@@ -2179,6 +2317,19 @@ a.tag.tag--sidebar-all:hover {
 
 .prks-folder-tree__create-btn {
     margin-top: 12px;
+}
+
+/* Folder detail page: subfolder list matches library tree rows */
+.prks-folder-tree--detail-subfolders {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    overflow: hidden;
+    margin-bottom: var(--space-md);
+}
+
+.prks-folder-tree--detail-subfolders .prks-folder-tree__row {
+    --depth: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

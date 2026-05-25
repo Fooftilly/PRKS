@@ -457,12 +457,18 @@
                             <div class="prks-upload-role-seg" id="upload-role-seg-mount"></div>
                         </div>
                         <div class="prks-role-credit-picker" id="upload-role-credit-wrap" hidden>
-                            <label for="upload-role-credit-select">Name on this file</label>
-                            <select id="upload-role-credit-select" class="prks-role-credit-picker__select" aria-label="Name shown on this file">
-                                <option value="">Full profile name</option>
-                            </select>
-                            <input type="text" id="upload-role-credit-custom" class="prks-role-credit-picker__custom hidden" placeholder="Custom name on this file" autocomplete="off" aria-label="Custom name on this file">
-                            <p class="meta-row meta-row--hint">Optional. Pick how this person is credited on this file only.</p>
+                            <label class="prks-role-credit-picker__heading" for="upload-role-credit-input">Name on this file</label>
+                            <p id="upload-role-credit-profile" class="prks-role-credit-picker__profile meta-row meta-row--hint"></p>
+                            <div id="upload-role-credit-shell" class="tag-add-shell tag-add-shell--flush prks-role-credit-picker__shell prks-role-credit-picker__shell--off">
+                                <div class="tag-add-shell__field prks-role-credit-picker__field">
+                                    <label class="prks-role-credit-picker__check" for="upload-role-credit-enable" title="Use a different name on this file">
+                                        <input type="checkbox" id="upload-role-credit-enable" class="prks-role-credit-picker__enable-input" aria-label="Use a different name on this file">
+                                    </label>
+                                    <input type="text" id="upload-role-credit-input" class="tag-add-shell__input prks-role-credit-picker__input" disabled placeholder="Uses profile name" autocomplete="off" aria-label="Name shown on this file">
+                                </div>
+                            </div>
+                            <div id="upload-role-credit-aliases" class="prks-role-credit-picker__aliases" hidden role="group" aria-label="Known aliases"></div>
+                            <p class="meta-row meta-row--hint meta-row--compact">Check the box to override; pick an alias or type a name.</p>
                         </div>
                     </div>
                     <div id="upload-roles-list" class="tag-cloud status-chip-list">
@@ -742,12 +748,18 @@
                     </div>
                 </div>
                 <div class="prks-role-credit-picker" id="role-link-credit-wrap" hidden>
-                    <label for="role-link-credit-select">Name on this file</label>
-                    <select id="role-link-credit-select" class="prks-role-credit-picker__select" aria-label="Name shown on this file">
-                        <option value="">Full profile name</option>
-                    </select>
-                    <input type="text" id="role-link-credit-custom" class="prks-role-credit-picker__custom hidden" placeholder="Custom name on this file" autocomplete="off" aria-label="Custom name on this file">
-                    <p class="meta-row meta-row--hint">Optional. Pick how this person is credited on this file only.</p>
+                    <label class="prks-role-credit-picker__heading" for="role-link-credit-input">Name on this file</label>
+                    <p id="role-link-credit-profile" class="prks-role-credit-picker__profile meta-row meta-row--hint"></p>
+                    <div id="role-link-credit-shell" class="tag-add-shell tag-add-shell--flush prks-role-credit-picker__shell prks-role-credit-picker__shell--off">
+                        <div class="tag-add-shell__field prks-role-credit-picker__field">
+                            <label class="prks-role-credit-picker__check" for="role-link-credit-enable" title="Use a different name on this file">
+                                <input type="checkbox" id="role-link-credit-enable" class="prks-role-credit-picker__enable-input" aria-label="Use a different name on this file">
+                            </label>
+                            <input type="text" id="role-link-credit-input" class="tag-add-shell__input prks-role-credit-picker__input" disabled placeholder="Uses profile name" autocomplete="off" aria-label="Name shown on this file">
+                        </div>
+                    </div>
+                    <div id="role-link-credit-aliases" class="prks-role-credit-picker__aliases" hidden role="group" aria-label="Known aliases"></div>
+                    <p class="meta-row meta-row--hint meta-row--compact">Check the box to override; pick an alias or type a name.</p>
                 </div>
                 <button id="save-role-btn" class="add-new-btn">Create Link</button>
             </div>

@@ -899,67 +899,161 @@ function prksRoleCreditPickerHtml(prefix) {
     const p = String(prefix || 'role');
     return `
         <div class="prks-role-credit-picker" id="${p}-credit-wrap" hidden>
-            <label for="${p}-credit-select">Name on this file</label>
-            <select id="${p}-credit-select" class="prks-role-credit-picker__select" aria-label="Name shown on this file">
-                <option value="">Full profile name</option>
-            </select>
-            <input type="text" id="${p}-credit-custom" class="prks-role-credit-picker__custom hidden" placeholder="Custom name on this file" autocomplete="off" aria-label="Custom name on this file">
-            <p class="meta-row meta-row--hint">Optional. Pick how this person is credited on this file only.</p>
+            <label class="prks-role-credit-picker__heading" for="${p}-credit-input">Name on this file</label>
+            <p id="${p}-credit-profile" class="prks-role-credit-picker__profile meta-row meta-row--hint"></p>
+            <div id="${p}-credit-shell" class="tag-add-shell tag-add-shell--flush prks-role-credit-picker__shell prks-role-credit-picker__shell--off">
+                <div class="tag-add-shell__field prks-role-credit-picker__field">
+                    <label class="prks-role-credit-picker__check" for="${p}-credit-enable" title="Use a different name on this file">
+                        <input type="checkbox" id="${p}-credit-enable" class="prks-role-credit-picker__enable-input" aria-label="Use a different name on this file">
+                    </label>
+                    <input type="text" id="${p}-credit-input" class="tag-add-shell__input prks-role-credit-picker__input" disabled placeholder="Uses profile name" autocomplete="off" aria-label="Name shown on this file">
+                </div>
+            </div>
+            <div id="${p}-credit-aliases" class="prks-role-credit-picker__aliases" hidden role="group" aria-label="Known aliases"></div>
+            <p class="meta-row meta-row--hint meta-row--compact">Check the box to override; pick an alias or type a name.</p>
         </div>`;
+}
+
+function prksSyncRoleCreditPickerEnabled(prefix) {
+    const enable = document.getElementById(`${prefix}-credit-enable`);
+    const input = document.getElementById(`${prefix}-credit-input`);
+    const shell = document.getElementById(`${prefix}-credit-shell`);
+    const on = !!(enable && enable.checked);
+    if (shell) {
+        shell.classList.toggle('prks-role-credit-picker__shell--off', !on);
+    }
+    if (input) {
+        input.disabled = !on;
+        input.placeholder = on ? 'Name on this file' : 'Uses profile name';
+        if (!on) input.value = '';
+    }
+}
+
+function prksResetRoleCreditPicker(prefix) {
+    const enable = document.getElementById(`${prefix}-credit-enable`);
+    const aliasesWrap = document.getElementById(`${prefix}-credit-aliases`);
+    const profileEl = document.getElementById(`${prefix}-credit-profile`);
+    if (enable) enable.checked = false;
+    prksSyncRoleCreditPickerEnabled(prefix);
+    if (profileEl) profileEl.textContent = '';
+    if (aliasesWrap) {
+        aliasesWrap.hidden = true;
+        aliasesWrap.innerHTML = '';
+    }
+}
+
+function prksSyncRoleCreditAliasChips(prefix, value) {
+    const aliasesWrap = document.getElementById(`${prefix}-credit-aliases`);
+    if (!aliasesWrap) return;
+    const v = String(value || '').trim().toLowerCase();
+    aliasesWrap.querySelectorAll('.prks-role-credit-picker__alias-chip').forEach((btn) => {
+        const alias = String(btn.getAttribute('data-alias') || '').trim().toLowerCase();
+        btn.classList.toggle('prks-role-credit-picker__alias-chip--active', !!v && alias === v);
+    });
+}
+
+function prksClearRoleCreditAliasChips(prefix) {
+    prksSyncRoleCreditAliasChips(prefix, '');
+}
+
+function prksSetRoleCreditPickerValue(prefix, creditName) {
+    const enable = document.getElementById(`${prefix}-credit-enable`);
+    const input = document.getElementById(`${prefix}-credit-input`);
+    const credit = String(creditName || '').trim();
+    if (!enable || !input) return;
+    if (!credit) {
+        enable.checked = false;
+        input.value = '';
+        input.disabled = true;
+        prksClearRoleCreditAliasChips(prefix);
+        prksSyncRoleCreditPickerEnabled(prefix);
+        return;
+    }
+    enable.checked = true;
+    input.value = credit;
+    prksSyncRoleCreditPickerEnabled(prefix);
+    prksSyncRoleCreditAliasChips(prefix, credit);
 }
 
 function prksRefreshRoleCreditPicker(prefix, person) {
     const wrap = document.getElementById(`${prefix}-credit-wrap`);
-    const sel = document.getElementById(`${prefix}-credit-select`);
-    const custom = document.getElementById(`${prefix}-credit-custom`);
-    if (!wrap || !sel) return;
+    if (!wrap) return;
     if (!person || !person.id) {
         wrap.hidden = true;
-        sel.innerHTML = '<option value="">Full profile name</option>';
-        if (custom) {
-            custom.value = '';
-            custom.classList.add('hidden');
-        }
+        prksResetRoleCreditPicker(prefix);
         return;
     }
     wrap.hidden = false;
+    const profileEl = document.getElementById(`${prefix}-credit-profile`);
+    const aliasesWrap = document.getElementById(`${prefix}-credit-aliases`);
     const canonical = prksPersonCanonicalName(person);
-    const aliases = prksParsePersonAliases(person);
-    sel.innerHTML = '';
-    const optCanon = document.createElement('option');
-    optCanon.value = '';
-    optCanon.textContent = canonical ? `Full profile name (${canonical})` : 'Full profile name';
-    sel.appendChild(optCanon);
-    aliases.forEach((alias) => {
-        const o = document.createElement('option');
-        o.value = alias;
-        o.textContent = alias;
-        sel.appendChild(o);
-    });
-    const optCustom = document.createElement('option');
-    optCustom.value = '__custom__';
-    optCustom.textContent = 'Custom…';
-    sel.appendChild(optCustom);
-    sel.value = '';
-    if (custom) {
-        custom.value = '';
-        custom.classList.add('hidden');
+    if (profileEl) {
+        profileEl.textContent = canonical ? `Profile name: ${canonical}` : '';
     }
+    prksResetRoleCreditPicker(prefix);
+
+    const aliases = prksParsePersonAliases(person);
+    if (aliasesWrap) {
+        if (aliases.length) {
+            aliasesWrap.hidden = false;
+            aliasesWrap.innerHTML = `<span class="prks-role-credit-picker__aliases-label">Aliases</span><div class="prks-role-credit-picker__alias-chips">${aliases
+                .map(
+                    (alias) =>
+                        `<button type="button" class="prks-role-credit-picker__alias-chip" data-alias="${prksEscapeAttr(alias)}">${escapeHtml(alias)}</button>`
+                )
+                .join('')}</div>`;
+        } else {
+            aliasesWrap.hidden = true;
+            aliasesWrap.innerHTML = '';
+        }
+    }
+    prksBindRoleCreditPicker(prefix);
 }
 
 function prksBindRoleCreditPicker(prefix) {
-    const sel = document.getElementById(`${prefix}-credit-select`);
-    const custom = document.getElementById(`${prefix}-credit-custom`);
-    if (!sel || sel.dataset.bound === '1') return;
-    sel.dataset.bound = '1';
-    sel.addEventListener('change', () => {
-        if (!custom) return;
-        if (sel.value === '__custom__') {
-            custom.classList.remove('hidden');
-            custom.focus();
+    const wrap = document.getElementById(`${prefix}-credit-wrap`);
+    if (!wrap || wrap.dataset.bound === '1') return;
+    wrap.dataset.bound = '1';
+    wrap.addEventListener('change', (e) => {
+        const enable = document.getElementById(`${prefix}-credit-enable`);
+        const input = document.getElementById(`${prefix}-credit-input`);
+        const t = e.target;
+        if (!enable || !input) return;
+
+        if (t.id === `${prefix}-credit-enable`) {
+            prksSyncRoleCreditPickerEnabled(prefix);
+            if (enable.checked) {
+                input.focus();
+            } else {
+                prksClearRoleCreditAliasChips(prefix);
+            }
+            return;
+        }
+    });
+    wrap.addEventListener('click', (e) => {
+        const chip = e.target.closest('.prks-role-credit-picker__alias-chip');
+        if (!chip || !wrap.contains(chip)) return;
+        const enable = document.getElementById(`${prefix}-credit-enable`);
+        const input = document.getElementById(`${prefix}-credit-input`);
+        const alias = String(chip.getAttribute('data-alias') || '').trim();
+        if (!alias || !enable || !input) return;
+        enable.checked = true;
+        input.value = alias;
+        prksSyncRoleCreditPickerEnabled(prefix);
+        prksSyncRoleCreditAliasChips(prefix, alias);
+        input.focus();
+    });
+    wrap.addEventListener('input', (e) => {
+        if (e.target.id !== `${prefix}-credit-input`) return;
+        const enable = document.getElementById(`${prefix}-credit-enable`);
+        const input = e.target;
+        const val = String(input.value || '').trim();
+        if (val) {
+            if (enable) enable.checked = true;
+            prksSyncRoleCreditPickerEnabled(prefix);
+            prksSyncRoleCreditAliasChips(prefix, val);
         } else {
-            custom.classList.add('hidden');
-            custom.value = '';
+            prksClearRoleCreditAliasChips(prefix);
         }
     });
 }
@@ -975,19 +1069,7 @@ function prksCreditPickerPrefixForHiddenId(hiddenId) {
 
 /** Credit from picker; optional fallback when search label differs from profile name. */
 function prksResolveRoleCreditNameForLink(prefix, personId, searchInputId) {
-    const sel = document.getElementById(`${prefix}-credit-select`);
-    const custom = document.getElementById(`${prefix}-credit-custom`);
-    let credit = '';
-    if (sel) {
-        const customVal = custom ? String(custom.value || '').trim() : '';
-        if (sel.value === '__custom__') {
-            credit = customVal;
-        } else if (customVal) {
-            credit = customVal;
-        } else {
-            credit = String(sel.value || '').trim();
-        }
-    }
+    const credit = prksReadRoleCreditName(prefix);
     if (credit) return credit;
     const person = prksFindPersonInCache(personId);
     const canonical = person ? prksPersonCanonicalName(person) : '';
@@ -1001,19 +1083,10 @@ function prksResolveRoleCreditNameForLink(prefix, personId, searchInputId) {
 }
 
 function prksReadRoleCreditName(prefix) {
-    const sel = document.getElementById(`${prefix}-credit-select`);
-    const custom = document.getElementById(`${prefix}-credit-custom`);
-    if (!sel) return '';
-    const customVal = custom ? String(custom.value || '').trim() : '';
-    let out = '';
-    if (sel.value === '__custom__') {
-        out = customVal;
-    } else if (customVal) {
-        out = customVal;
-    } else {
-        out = String(sel.value || '').trim();
-    }
-    return out;
+    const enable = document.getElementById(`${prefix}-credit-enable`);
+    const input = document.getElementById(`${prefix}-credit-input`);
+    if (!enable || !enable.checked || !input) return '';
+    return String(input.value || '').trim();
 }
 
 function prksFindPersonInCache(personId) {
@@ -1200,13 +1273,7 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
             prksRefreshRoleCreditPicker(prefix, newPerson);
             const canonical = prksPersonCanonicalName(newPerson);
             if (trimmed && canonical && trimmed.toLowerCase() !== canonical.toLowerCase()) {
-                const sel = document.getElementById(`${prefix}-credit-select`);
-                const custom = document.getElementById(`${prefix}-credit-custom`);
-                if (sel && custom) {
-                    sel.value = '__custom__';
-                    custom.classList.remove('hidden');
-                    custom.value = trimmed;
-                }
+                prksSetRoleCreditPickerValue(prefix, trimmed);
             }
         }
     } catch (e) {
