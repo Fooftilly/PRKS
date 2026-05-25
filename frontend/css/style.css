@@ -112,8 +112,12 @@ body {
     min-width: 0;
 }
 
-#app-container.app-container--processing-inline-preview #right-panel {
+#app-container.app-container--hide-right-panel #right-panel {
     display: none;
+}
+
+#app-container.app-container--hide-right-panel #prks-mobile-details-btn {
+    display: none !important;
 }
 
 /* Sidebar */

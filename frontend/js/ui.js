@@ -470,6 +470,8 @@ function prksOpenSidebarDrawer() {
 }
 
 function prksOpenRightPanelOverlay() {
+    const app = document.getElementById('app-container');
+    if (app && app.classList.contains('app-container--hide-right-panel')) return;
     document.body.classList.add('prks-right-panel-open', 'prks-overlay-open');
     document.body.classList.remove('prks-sidebar-open');
     prksSetOverlayBackdropVisible(true);
@@ -882,11 +884,14 @@ function prksSyncRightPanelTabStrip(tabId) {
  * Right column layout: full tabs (work), two tabs (folder, no annotations), or single contextual pane (everything else).
  */
 function setRightPanelRouteContext(hash) {
+    const h = hash || '';
     const rp = document.getElementById('right-panel');
-    const app = document.getElementById('app-container');
     const tabs = rp?.querySelector('.tabs');
     const annBtn = rp?.querySelector('.tab-btn[data-target="annotations"]');
-    if (!rp || !tabs) return;
+    if (!rp || !tabs) {
+        prksApplyRightPanelVisibility(h);
+        return;
+    }
 
     rp.classList.remove(
         'right-panel--graph-route',
@@ -899,11 +904,6 @@ function setRightPanelRouteContext(hash) {
     rp.removeAttribute('data-right-panel-mode');
 
     if (annBtn) annBtn.hidden = false;
-
-    const h = hash || '';
-    if (app) {
-        app.classList.toggle('app-container--processing-inline-preview', h === '#/processing-files');
-    }
 
     function hideTabStripIfAtMostOneVisible() {
         const visibleTabs = [...tabs.querySelectorAll('.tab-btn')].filter((b) => !b.hidden);
@@ -918,6 +918,7 @@ function setRightPanelRouteContext(hash) {
         rp.setAttribute('data-right-panel-mode', 'work');
         tabs.hidden = false;
         tabs.removeAttribute('aria-hidden');
+        prksApplyRightPanelVisibility(h);
         return;
     }
 
@@ -930,6 +931,7 @@ function setRightPanelRouteContext(hash) {
         const activeTarget = rp.querySelector('.tab-btn.active')?.getAttribute('data-target');
         if (activeTarget === 'annotations') activateRightPanelDetailsTab();
         hideTabStripIfAtMostOneVisible();
+        prksApplyRightPanelVisibility(h);
         return;
     }
 
@@ -942,6 +944,7 @@ function setRightPanelRouteContext(hash) {
         const activeTarget = rp.querySelector('.tab-btn.active')?.getAttribute('data-target');
         if (activeTarget === 'annotations') activateRightPanelDetailsTab();
         hideTabStripIfAtMostOneVisible();
+        prksApplyRightPanelVisibility(h);
         return;
     }
 
@@ -954,6 +957,7 @@ function setRightPanelRouteContext(hash) {
         const activeTarget = rp.querySelector('.tab-btn.active')?.getAttribute('data-target');
         if (activeTarget === 'annotations') activateRightPanelDetailsTab();
         hideTabStripIfAtMostOneVisible();
+        prksApplyRightPanelVisibility(h);
         return;
     }
 
@@ -963,6 +967,7 @@ function setRightPanelRouteContext(hash) {
         tabs.hidden = true;
         tabs.setAttribute('aria-hidden', 'true');
         activateRightPanelDetailsTab();
+        prksApplyRightPanelVisibility(h);
         return;
     }
 
@@ -972,6 +977,7 @@ function setRightPanelRouteContext(hash) {
     tabs.hidden = true;
     tabs.setAttribute('aria-hidden', 'true');
     activateRightPanelDetailsTab();
+    prksApplyRightPanelVisibility(h);
 }
 
 function isPersonGroupDetailHash(h) {
@@ -1006,6 +1012,50 @@ function inferRightPanelListMode(h) {
     if (h === '#/publishers') return 'publishers';
     if (h === '#/types' || h.startsWith('#/types/')) return 'types';
     return 'default';
+}
+
+/** List-route sidebar modes where #panel-content is static copy only (hide right column). */
+const PRKS_RIGHT_PANEL_HIDE_LIST_MODES = new Set([
+    'library',
+    'recent',
+    'progress',
+    'search',
+    'tags',
+    'publishers',
+    'types',
+    'people',
+    'people-role',
+    'people-groups',
+    'default'
+]);
+
+function prksRightPanelHasActionableContent(hash) {
+    const h = hash || '';
+    if (window.currentWork) return true;
+    if (window.currentFolder) return true;
+    if (window.currentPerson && isPersonDetailHash(h)) return true;
+    if (window.currentPersonGroup && isPersonGroupDetailHash(h)) return true;
+    if (window.currentPlaylist && (h.startsWith('#/playlists/') || h === '#/playlists')) return true;
+    return false;
+}
+
+function prksShouldHideRightPanel(hash) {
+    const h = hash || '';
+    if (h === '#/processing-files') return true;
+    if (prksRightPanelHasActionableContent(h)) return false;
+    const mode = inferRightPanelListMode(h);
+    return PRKS_RIGHT_PANEL_HIDE_LIST_MODES.has(mode);
+}
+
+function prksApplyRightPanelVisibility(hash) {
+    const app = document.getElementById('app-container');
+    if (!app) return;
+    const hide = prksShouldHideRightPanel(hash);
+    app.classList.toggle('app-container--hide-right-panel', hide);
+    app.classList.remove('app-container--processing-inline-preview');
+    if (hide && document.body.classList.contains('prks-right-panel-open')) {
+        prksCloseOverlays();
+    }
 }
 
 function renderRouteContextSidebar(mode) {
