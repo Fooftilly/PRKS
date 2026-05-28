@@ -119,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initTheme();
     void initAnnotationAuthorSetting();
     void initBibtexExportFieldsSetting();
+    initPrksPdfTextReindexAction();
     initPrksPdfRememberPageSetting();
     initPrksPdfLastPageVisibilityFlush();
     initPrksHintsSetting();
@@ -602,6 +603,36 @@ async function initBibtexExportFieldsSetting() {
             }
         });
     }
+}
+
+function initPrksPdfTextReindexAction() {
+    const btn = document.getElementById('prks-reindex-pdf-text-btn');
+    const statusEl = document.getElementById('prks-reindex-pdf-text-status');
+    if (!btn || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        const oldText = btn.textContent;
+        btn.textContent = 'Re-indexing…';
+        if (statusEl) statusEl.textContent = '';
+        try {
+            if (typeof prksReindexPdfText !== 'function') {
+                throw new Error('PDF re-index API unavailable.');
+            }
+            const out = await prksReindexPdfText();
+            if (statusEl) {
+                const processed = Number(out.processed || 0);
+                const indexed = Number(out.indexed || 0);
+                const failed = Number(out.failed || 0);
+                statusEl.textContent = `Done. Processed ${processed}, indexed ${indexed}, failed ${failed}.`;
+            }
+        } catch (e) {
+            if (statusEl) statusEl.textContent = (e && e.message) || 'Could not re-index PDF text.';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = oldText;
+        }
+    });
 }
 
 function applyTheme(theme) {

@@ -31,9 +31,11 @@ from backend.db_manager import (
     prks_delete_person_image_cache,
 )
 from backend.log_config import setup_logging
+from backend.text_index import get_text_index
 
 setup_logging()
 LOGGER = logging.getLogger("prks.server")
+text_index = get_text_index()
 
 PORT = 8080
 # Default for `python prks_app.py --testing`; non-testing bind refuses this port (see _validate_listen_port).
@@ -1337,6 +1339,27 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             author.strip() if author else '',
                             publisher.strip() if publisher else '',
                         )
+                    if q and str(q).strip():
+                        text_ids = text_index.search_work_ids(q)
+                        if text_ids:
+                            existing = {str(w.get('id')) for w in data if w.get('id')}
+                            author_allow = None
+                            publisher_allow = None
+                            if author and author.strip():
+                                author_allow = set(db.work_ids_matching_author(author.strip()))
+                            if publisher and publisher.strip():
+                                publisher_allow = set(db.work_ids_matching_publisher(publisher.strip()))
+
+                            def passes_filters(wid: str) -> bool:
+                                if author_allow is not None and wid not in author_allow:
+                                    return False
+                                if publisher_allow is not None and wid not in publisher_allow:
+                                    return False
+                                return True
+
+                            extra_ids = [wid for wid in text_ids if wid not in existing and passes_filters(wid)]
+                            if extra_ids:
+                                data.extend(db.get_work_summaries_by_ids_ordered(extra_ids))
                 self.send_json(200, data)
             elif path == '/api/tags':
                 used_only = query.get('used', [''])[0] in ('1', 'true', 'yes')
@@ -1418,6 +1441,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     payload["stack"],
                 )
                 self.send_json(200, {"status": "logged", "request_id": self._prks_request_id})
+            elif path == '/api/works/reindex-pdf-text':
+                summary = text_index.reindex_all(db)
+                self.send_json(200, {"status": "ok", **summary})
             elif path.startswith('/api/processing-files/') and path.endswith('/import'):
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'import':
@@ -1427,6 +1453,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except ValueError as e:
                         self.send_json(400, {'error': str(e)})
                         return
+                    try:
+                        work_id = str(out.get("work_id") or "").strip()
+                        if work_id:
+                            row = db.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
+                            fp = (row[0].get("file_path") or "").strip() if row else ""
+                            if fp.startswith("/api/pdfs/"):
+                                filename = fp.split("/")[-1]
+                                abs_path = _safe_pdf_path_in_pdfs_dir(filename)
+                                if abs_path and os.path.exists(abs_path):
+                                    text_index.upsert_from_pdf(work_id, abs_path)
+                    except Exception as e:
+                        LOGGER.warning("processing_import_text_index_failed processing_file_id=%s error=%s", pf_id, e)
                     self.send_json(200, out)
                 else:
                     self.send_error(404, "API endpoint not found")
@@ -1513,6 +1551,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     thumb_page=data.get('thumb_page'),
                     private_notes=data.get('private_notes', ''),
                 )
+                if file_path.startswith("/api/pdfs/"):
+                    try:
+                        filename = file_path.split("/")[-1]
+                        abs_path = _safe_pdf_path_in_pdfs_dir(filename)
+                        if abs_path and os.path.exists(abs_path):
+                            text_index.upsert_from_pdf(w_id, abs_path)
+                    except Exception as e:
+                        LOGGER.warning("work_create_text_index_failed work_id=%s error=%s", w_id, e)
                 # Optionally attach to playlist
                 playlist_id = (data.get('playlist_id') or '').strip()
                 if playlist_id:
@@ -1844,6 +1890,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             return
                         with open(pdf_path, 'wb') as f:
                             f.write(pdf_bytes)
+                        try:
+                            text_index.upsert_from_pdf(w_id, pdf_path)
+                        except Exception as e:
+                            LOGGER.warning("work_pdf_replace_text_index_failed work_id=%s error=%s", w_id, e)
                             
                     # 2. Extract annotations
                     byte_matches = re.findall(rb'\[\[(.*?)\]\]', pdf_bytes)

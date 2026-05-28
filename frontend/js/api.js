@@ -410,6 +410,17 @@ async function prksPatchAppSettings(partial) {
     return data;
 }
 
+async function prksReindexPdfText() {
+    const res = await fetch('/api/works/reindex-pdf-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not re-index PDF text.');
+    return data;
+}
+
 /**
  * Infer pdf vs video for UI. PDFs may have source_url (e.g. original article); explicit source_kind wins.
  */

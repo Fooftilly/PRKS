@@ -1570,8 +1570,31 @@ class PRKSDatabase:
         ]
         # Delete from DB (foreign keys cascade)
         self.execute_query("DELETE FROM works WHERE id = ?", (work_id,))
+        try:
+            from backend.text_index import get_text_index
+
+            get_text_index().remove_work(work_id)
+        except Exception as e:
+            LOGGER.warning("delete_work_text_index_cleanup_failed work_id=%s error=%s", work_id, e)
         for tid in tag_ids:
             self._prune_tag_if_unused(tid)
+
+    def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
+        ordered_ids = [str(wid).strip() for wid in (work_ids or []) if str(wid).strip()]
+        if not ordered_ids:
+            return []
+        placeholders = ",".join("?" * len(ordered_ids))
+        wsel = _prks_work_summary_select_with_folder("works")
+        pex = _prks_sql_work_summary_person_extras("works")
+        rows = list(
+            self.execute_query(
+                f"SELECT {wsel}, {pex} FROM works WHERE id IN ({placeholders})",
+                tuple(ordered_ids),
+            )
+        )
+        enrich_work_rows_pdf_file_size(rows)
+        by_id = {r["id"]: r for r in rows}
+        return [by_id[i] for i in ordered_ids if i in by_id]
 
     def delete_empty_folder(self, folder_id: str):
         exists = self.execute_query("SELECT 1 FROM folders WHERE id = ?", (folder_id,))

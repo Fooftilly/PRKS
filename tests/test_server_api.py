@@ -44,6 +44,17 @@ def _tiny_test_portrait_png_bytes() -> bytes:
     return buf.getvalue()
 
 
+def _pdf_with_text_bytes(text: str) -> bytes:
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text or "")
+    out = doc.tobytes()
+    doc.close()
+    return out
+
+
 def _find_free_port() -> int:
     """Return a free TCP port on localhost."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -587,7 +598,7 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(len(detail2["members"]), 0)
 
     def test_8_pdf_upload_and_fetch(self):
-        pdf_bytes = b"%PDF-1.4\n%PRKS\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
+        pdf_bytes = _pdf_with_text_bytes("PRKS upload fetch smoke")
         payload = {
             "title": "Upload API Work",
             "status": "Planned",
@@ -614,10 +625,33 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req3) as res3:
             self.assertEqual(res3.status, 200)
             got = res3.read()
-        self.assertIn(b"%PDF-1.4", got[:32])
+        self.assertIn(b"%PDF", got[:32])
+
+    def test_8b_search_indexes_pdf_text(self):
+        term = "UniqPdfSearchTermAlpha"
+        pdf_bytes = _pdf_with_text_bytes(f"Body contains {term} and extra words")
+        payload = {
+            "title": "PDF Text Search Work",
+            "status": "Planned",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "search_text_test.pdf",
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            w_id = json.loads(res.read().decode())["id"]
+
+        req_s = urllib.request.Request(f"{self._base_url}/api/search?q={urllib.parse.quote(term)}")
+        with urllib.request.urlopen(req_s) as rs:
+            rows = json.loads(rs.read().decode())
+        self.assertTrue(any(r.get("id") == w_id for r in rows))
 
     def test_9_pdf_overwrite_endpoint(self):
-        original = b"%PDF-1.4\n%ORIG\n%%EOF\n"
+        original = _pdf_with_text_bytes("oldtermreplacepdf")
         payload = {
             "title": "Overwrite Work",
             "status": "Planned",
@@ -639,7 +673,7 @@ class TestServerAPI(unittest.TestCase):
         file_path = (work.get("file_path") or "").strip()
         self.assertTrue(file_path.startswith("/api/pdfs/"))
 
-        updated = b"%PDF-1.4\n%NEW\n%%EOF\n"
+        updated = _pdf_with_text_bytes("newtermreplacepdf")
         overwrite_req = urllib.request.Request(
             f"{self._base_url}/api/works/{w_id}/pdf",
             data=json.dumps({"file_b64": base64.b64encode(updated).decode("utf-8")}).encode(),
@@ -652,7 +686,52 @@ class TestServerAPI(unittest.TestCase):
         fetch_req = urllib.request.Request(f"{self._base_url}{file_path}")
         with urllib.request.urlopen(fetch_req) as fres:
             got = fres.read()
-        self.assertIn(b"%NEW", got)
+        self.assertIn(b"%PDF", got[:32])
+
+        req_s = urllib.request.Request(f"{self._base_url}/api/search?q=newtermreplacepdf")
+        with urllib.request.urlopen(req_s) as rs:
+            rows = json.loads(rs.read().decode())
+        self.assertTrue(any(r.get("id") == w_id for r in rows))
+
+    def test_9b_manual_reindex_pdf_text(self):
+        term = "ManualReindexTermBeta"
+        pdf_bytes = _pdf_with_text_bytes(f"manual index text {term}")
+        filename = "manual_reindex_test.pdf"
+        abs_pdf = os.path.join(server_module.pdfs_dir, filename)
+        with open(abs_pdf, "wb") as f:
+            f.write(pdf_bytes)
+
+        w_id = self.__class__.test_db.add_work(
+            title="Manual Reindex Work",
+            status="Planned",
+            file_path=f"/api/pdfs/{filename}",
+        )
+        self.__class__.test_db.add_work_to_folder(
+            self.__class__.test_db.ensure_default_uncategorized_folder_id(),
+            w_id,
+        )
+
+        req_before = urllib.request.Request(f"{self._base_url}/api/search?q={urllib.parse.quote(term)}")
+        with urllib.request.urlopen(req_before) as rb:
+            rows_before = json.loads(rb.read().decode())
+        self.assertFalse(any(r.get("id") == w_id for r in rows_before))
+
+        req_reindex = urllib.request.Request(
+            f"{self._base_url}/api/works/reindex-pdf-text",
+            data=json.dumps({}).encode(),
+            method="POST",
+        )
+        req_reindex.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_reindex) as rr:
+            self.assertEqual(rr.status, 200)
+            body = json.loads(rr.read().decode())
+        self.assertEqual(body.get("status"), "ok")
+        self.assertGreaterEqual(int(body.get("processed", 0)), 1)
+
+        req_after = urllib.request.Request(f"{self._base_url}/api/search?q={urllib.parse.quote(term)}")
+        with urllib.request.urlopen(req_after) as ra:
+            rows_after = json.loads(ra.read().decode())
+        self.assertTrue(any(r.get("id") == w_id for r in rows_after))
 
     def test_10_thumbnail_endpoint_smoke(self):
         pdf_bytes = b"%PDF-1.4\n%THUMB\n%%EOF\n"
