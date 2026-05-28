@@ -694,8 +694,16 @@ async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
 
 function renderProcessingFilesPage(items, container) {
     const list = Array.isArray(items) ? items : [];
+    const DEFAULT_VISIBLE = 25;
+    const currentVisibleRaw = Number(container && container.dataset ? container.dataset.prksProcessingVisibleCount : 0);
+    const visibleCount = Number.isFinite(currentVisibleRaw) && currentVisibleRaw > 0
+        ? Math.min(list.length, Math.floor(currentVisibleRaw))
+        : Math.min(list.length, DEFAULT_VISIBLE);
+    if (container && container.dataset) container.dataset.prksProcessingVisibleCount = String(visibleCount);
+    const visibleList = list.slice(0, visibleCount);
+    const remainingCount = Math.max(0, list.length - visibleCount);
     const idToFile = new Map(list.map((f) => [String(f.id || ''), f]));
-    const cards = list.map(prksProcessingCardHtml).join('');
+    const cards = visibleList.map(prksProcessingCardHtml).join('');
     container.innerHTML = `
         <div class="page-header" style="gap:12px;flex-wrap:wrap;">
             <h2>Files for Processing</h2>
@@ -705,9 +713,11 @@ function renderProcessingFilesPage(items, container) {
         <p class="meta-row" style="margin:0 0 14px 0;">
             Inbox reads PDFs recursively from <code>/data/for_processing</code>. Files here stay out of library search and graph until imported.
         </p>
+        ${remainingCount > 0 ? `<p class="meta-row" id="prks-processing-visible-note">Showing first ${visibleCount} of ${list.length} files to keep page responsive.</p>` : ''}
         <div class="prks-processing-main-layout">
             <div class="list-view prks-processing-main-layout__list" id="prks-processing-list">
                 ${cards || '<p class="meta-row">No PDF files waiting for processing.</p>'}
+                ${remainingCount > 0 ? `<div class="prks-processing-load-more-row"><button type="button" class="ribbon-btn" id="prks-processing-load-more">Load ${Math.min(25, remainingCount)} more</button></div>` : ''}
             </div>
             <aside class="prks-processing-inline-preview" id="prks-processing-inline-preview">
                 <h3 class="prks-processing-inline-preview__title">PDF Preview</h3>
@@ -733,6 +743,15 @@ function renderProcessingFilesPage(items, container) {
                 refreshBtn.disabled = false;
                 refreshBtn.textContent = old;
             }
+        });
+    }
+    const loadMoreBtn = container.querySelector('#prks-processing-load-more');
+    if (loadMoreBtn) {
+        loadMoreBtn.addEventListener('click', () => {
+            const prevVisible = Number(container.dataset.prksProcessingVisibleCount || visibleCount);
+            const nextVisible = Math.min(list.length, (Number.isFinite(prevVisible) ? prevVisible : visibleCount) + 25);
+            container.dataset.prksProcessingVisibleCount = String(nextVisible);
+            renderProcessingFilesPage(list, container);
         });
     }
 
