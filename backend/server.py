@@ -813,6 +813,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(404, {'error': msg})
                     else:
                         self.send_json(400, {'error': msg})
+            elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
+                p_id = path.split('/')[-1]
+                try:
+                    db.delete_person_if_unlinked(p_id)
+                except ValueError as e:
+                    msg = str(e)
+                    if 'not found' in msg.lower():
+                        self.send_json(404, {'error': msg})
+                    elif 'linked works' in msg.lower():
+                        self.send_json(409, {'error': msg})
+                    else:
+                        self.send_json(400, {'error': msg})
+                    return
+                self.send_json(200, {'status': 'deleted'})
             elif path.startswith('/api/person-groups/'):
                 parts = path.split('/')
                 # /api/person-groups/{group_id}/members/{person_id}

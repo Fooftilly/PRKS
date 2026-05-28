@@ -685,6 +685,41 @@ function closePersonProfileEdit() {
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
 
+async function deletePerson() {
+    const p = window.currentPerson;
+    const personId = p && p.id ? String(p.id) : '';
+    if (!personId) return;
+    const linkedWorks = p ? prksUniquePersonWorks(p).length : 0;
+    if (linkedWorks > 0) {
+        await prksAlertMessage('Cannot delete person with linked files. Unlink all files first.', 'Not allowed');
+        return;
+    }
+    const confirmed = await prksConfirmDestructive({
+        title: 'Delete person?',
+        message: 'Delete this person permanently?',
+        confirmLabel: 'Delete person',
+    });
+    if (!confirmed) return;
+    try {
+        const res = await fetch(`/api/persons/${encodeURIComponent(personId)}`, { method: 'DELETE' });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            await prksAlertMessage(body.error || 'Could not delete person.', 'Could not delete');
+            return;
+        }
+        window.currentPerson = null;
+        window.__prksPersonDetailEditing = false;
+        window.__prksPersonWorksEditing = false;
+        const prev = window.location.hash || '';
+        window.location.hash = '#/people';
+        if (prev === '#/people' && typeof handleRoute === 'function') {
+            await handleRoute();
+        }
+    } catch (_e) {
+        await prksAlertMessage('Could not delete person.', 'Error');
+    }
+}
+
 function prksTogglePersonWorksEdit() {
     const p = window.currentPerson;
     if (!p) return;
@@ -743,6 +778,12 @@ function renderPersonProfileDetailsSidebarHtml(person) {
                   editingWorks ? 'Done' : 'Edit works'
               }</button>`
             : '';
+    const deleteBtn = nWorks === 0
+        ? `<button type="button" class="btn-danger-outline person-sidebar__cta" onclick="deletePerson()">Delete person</button>`
+        : `<button type="button" class="btn-danger-outline person-sidebar__cta" disabled title="Unlink all files first">Delete person</button>`;
+    const deleteHint = nWorks === 0
+        ? '<p class="meta-row">No linked files. Deletion allowed.</p>'
+        : '<p class="meta-row">Deletion blocked while linked files exist.</p>';
     return `
         <div class="doc-meta-card person-sidebar-summary">
             <h3>${name}</h3>
@@ -751,6 +792,8 @@ function renderPersonProfileDetailsSidebarHtml(person) {
             ${worksEditBtn}
             <button type="button" class="add-new-btn person-sidebar__cta" onclick="openPersonProfileEdit()">Edit profile</button>
             <button type="button" class="add-new-btn person-sidebar__cta" onclick="openPersonProfileTemplateModal()">Edit profile using template</button>
+            ${deleteBtn}
+            ${deleteHint}
             <p class="route-sidebar__action"><a href="#/people" class="route-sidebar__link">All people</a></p>
         </div>`;
 }

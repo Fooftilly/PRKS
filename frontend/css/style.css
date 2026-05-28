@@ -4504,6 +4504,14 @@ textarea[data-prks-autosize="1"] {
     background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
+.btn-danger-outline:disabled,
+.btn-danger-outline[disabled] {
+    opacity: 0.55;
+    filter: grayscale(1);
+    cursor: not-allowed;
+    background: transparent;
+}
+
 .mb-2xl {
     margin-bottom: var(--space-2xl);
 }

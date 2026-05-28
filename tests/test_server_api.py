@@ -463,6 +463,68 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(person["link_wikipedia"], "https://en.wikipedia.org/wiki/Test")
         self.assertEqual(person["link_iep"], "https://iep.utm.edu/test/")
 
+    def test_6b_delete_unlinked_person(self):
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps({"first_name": "Delete", "last_name": "Allowed"}).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_p) as rp:
+            p_id = json.loads(rp.read().decode())["id"]
+
+        req_del = urllib.request.Request(
+            f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}",
+            method="DELETE",
+        )
+        with urllib.request.urlopen(req_del) as rd:
+            self.assertEqual(rd.status, 200)
+            body = json.loads(rd.read().decode())
+        self.assertEqual(body.get("status"), "deleted")
+
+        req_get = urllib.request.Request(f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req_get)
+        self.assertEqual(cm.exception.code, 404)
+
+    def test_6c_delete_linked_person_conflict(self):
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps({"first_name": "Delete", "last_name": "Blocked"}).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_p) as rp:
+            p_id = json.loads(rp.read().decode())["id"]
+
+        req_w = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": "Linked Work", "status": "Not Started"}).encode(),
+            method="POST",
+        )
+        req_w.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_w) as rw:
+            w_id = json.loads(rw.read().decode())["id"]
+
+        req_role = urllib.request.Request(
+            f"{self._base_url}/api/roles",
+            data=json.dumps({"person_id": p_id, "work_id": w_id, "role_type": "Author"}).encode(),
+            method="POST",
+        )
+        req_role.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_role) as rr:
+            self.assertEqual(rr.status, 200)
+
+        req_del = urllib.request.Request(
+            f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}",
+            method="DELETE",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req_del)
+        self.assertEqual(cm.exception.code, 409)
+        body = json.loads(cm.exception.read().decode())
+        self.assertIn("error", body)
+
     def test_7_person_groups_api(self):
         req = urllib.request.Request(
             f"{self._base_url}/api/person-groups",

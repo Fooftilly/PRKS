@@ -2639,6 +2639,23 @@ class PRKSDatabase:
         person["groups"] = self.get_groups_for_person(person_id)
         return person
 
+    def delete_person_if_unlinked(self, person_id: str) -> None:
+        pid = (person_id or "").strip()
+        if not pid:
+            raise ValueError("Person not found.")
+        exists = self.execute_query("SELECT 1 FROM persons WHERE id = ?", (pid,))
+        if not exists:
+            raise ValueError("Person not found.")
+        linked = self.execute_query(
+            "SELECT COUNT(*) AS c FROM roles WHERE person_id = ?",
+            (pid,),
+        )
+        linked_count = int(linked[0].get("c") or 0) if linked else 0
+        if linked_count > 0:
+            raise ValueError("Cannot delete person with linked works.")
+        prks_delete_person_image_cache(pid)
+        self.execute_query("DELETE FROM persons WHERE id = ?", (pid,))
+
     def _attach_person_groups_batch(self, rows: List[dict]) -> None:
         if not rows:
             return
