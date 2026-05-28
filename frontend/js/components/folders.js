@@ -569,8 +569,9 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
     if (!st || !st.container) return;
     const pane = st.container.querySelector('#prks-folder-library-recently-added');
     if (!pane) return;
+    const shouldForce = !!force || window.__prksRecentlyAddedDirty === true;
     if (st.recentlyAddedLoading) return;
-    if (!force && Array.isArray(st.recentlyAddedWorks)) {
+    if (!shouldForce && Array.isArray(st.recentlyAddedWorks)) {
         prksRenderFolderLibraryRecentlyAdded(st.recentlyAddedWorks, pane);
         if (typeof window.prksInitLazyWorkThumbs === 'function') {
             window.prksInitLazyWorkThumbs(pane);
@@ -580,6 +581,7 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
     st.recentlyAddedLoading = true;
     const works = typeof fetchRecentlyAdded === 'function' ? await fetchRecentlyAdded() : [];
     st.recentlyAddedWorks = works;
+    window.__prksRecentlyAddedDirty = false;
     st.recentlyAddedLoading = false;
     prksRenderFolderLibraryRecentlyAdded(works, pane);
     if (typeof window.prksInitLazyWorkThumbs === 'function') {

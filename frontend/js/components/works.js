@@ -305,6 +305,7 @@ async function deleteWork(w_id) {
             await prksAlertMessage('Error deleting file!', 'Error');
             return;
         }
+        window.__prksRecentlyAddedDirty = true;
         window.location.hash = '#/folders';
     } catch (_e) {
         await prksAlertMessage('Error deleting file!', 'Error');
