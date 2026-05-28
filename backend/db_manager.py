@@ -6,11 +6,14 @@ import json
 import hashlib
 import html
 import shutil
+import logging
 from collections import Counter, defaultdict
 from urllib.parse import unquote
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
+
+LOGGER = logging.getLogger("prks.db")
 
 PRKS_BIBTEX_DOC_TYPES = frozenset({
     "article",
@@ -1554,11 +1557,11 @@ class PRKSDatabase:
                 if abs_path and os.path.exists(abs_path):
                     os.remove(abs_path)
             except Exception as e:
-                print("Error deleting file:", e)
+                LOGGER.warning("delete_work_file_failed work_id=%s error=%s", work_id, e)
         try:
             prks_delete_pdf_thumbnails_for_work_id(work_id)
         except Exception as e:
-            print("Error deleting thumbnails:", e)
+            LOGGER.warning("delete_work_thumbnails_failed work_id=%s error=%s", work_id, e)
         tag_ids = [
             r["tag_id"]
             for r in self.execute_query(

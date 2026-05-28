@@ -7,6 +7,8 @@ import sys
 if "--testing" in sys.argv:
     os.environ["PRKS_TESTING"] = "1"
 
+from backend.log_config import setup_logging
+setup_logging()
 from backend.server import run_server, PORT
 
 

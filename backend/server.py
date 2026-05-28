@@ -8,6 +8,8 @@ import base64
 import binascii
 import time
 import re
+import uuid
+import logging
 from urllib.parse import urlparse, parse_qs, unquote
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
@@ -28,6 +30,10 @@ from backend.db_manager import (
     prks_person_image_legacy_bin_path,
     prks_delete_person_image_cache,
 )
+from backend.log_config import setup_logging
+
+setup_logging()
+LOGGER = logging.getLogger("prks.server")
 
 PORT = 8080
 # Default for `python prks_app.py --testing`; non-testing bind refuses this port (see _validate_listen_port).
@@ -398,10 +404,40 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     )
 
     def __init__(self, *args, **kwargs):
+        self._prks_request_id = uuid.uuid4().hex[:12]
         super().__init__(*args, directory=frontend_dir, **kwargs)
 
-    def _send_internal_error(self):
-        self.send_json(500, {"error": "internal_error"})
+    def _request_context(self) -> dict:
+        parsed = urlparse(getattr(self, "path", ""))
+        return {
+            "method": getattr(self, "command", ""),
+            "path": parsed.path,
+            "query": parsed.query,
+            "client": getattr(self, "client_address", ("", 0))[0],
+            "request_id": self._prks_request_id,
+        }
+
+    def _send_internal_error(self, exc: Exception | None = None):
+        ctx = self._request_context()
+        if exc is not None:
+            LOGGER.exception(
+                "unhandled_api_error method=%s path=%s query=%s client=%s request_id=%s",
+                ctx["method"],
+                ctx["path"],
+                ctx["query"],
+                ctx["client"],
+                ctx["request_id"],
+            )
+        else:
+            LOGGER.error(
+                "internal_error method=%s path=%s query=%s client=%s request_id=%s",
+                ctx["method"],
+                ctx["path"],
+                ctx["query"],
+                ctx["client"],
+                ctx["request_id"],
+            )
+        self.send_json(500, {"error": "internal_error", "request_id": self._prks_request_id})
 
     def _read_json_body(self):
         raw_length = self.headers.get("Content-Length")
@@ -431,6 +467,33 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(400, {"error": "invalid_json"})
             return None
 
+    @staticmethod
+    def _sanitize_client_error_text(value, limit=500):
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if len(text) > limit:
+            return text[:limit]
+        return text
+
+    def _parse_client_error_payload(self, data):
+        if not isinstance(data, dict):
+            raise ValueError("JSON object body required")
+        message = self._sanitize_client_error_text(data.get("message"), limit=2000)
+        if not message:
+            raise ValueError("message is required")
+        payload = {
+            "kind": self._sanitize_client_error_text(data.get("kind"), limit=64) or "client_error",
+            "message": message,
+            "stack": self._sanitize_client_error_text(data.get("stack"), limit=8000),
+            "route": self._sanitize_client_error_text(data.get("route"), limit=512),
+            "source": self._sanitize_client_error_text(data.get("source"), limit=512),
+            "request_id": self._sanitize_client_error_text(data.get("request_id"), limit=64),
+            "client_time": self._sanitize_client_error_text(data.get("client_time"), limit=64),
+            "user_agent": self._sanitize_client_error_text(self.headers.get("User-Agent"), limit=512),
+        }
+        return payload
+
     def end_headers(self):
         # Avoid hammering the server: browsers and embedded viewers may revalidate small assets often
         # if Cache-Control is missing (default was heuristic / no-store in some cases).
@@ -455,7 +518,17 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_header("Cache-Control", "public, max-age=604800, immutable")
         except Exception:
             pass
+        if self._prks_request_id:
+            self.send_header("X-Request-ID", self._prks_request_id)
         super().end_headers()
+
+    def log_message(self, format, *args):
+        LOGGER.info(
+            "request_access client=%s request_id=%s message=%s",
+            self.address_string(),
+            self._prks_request_id,
+            format % args,
+        )
 
     def do_GET(self):
         parsed_path = urlparse(self.path)
@@ -618,8 +691,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, db.get_app_settings_response())
             else:
                 self.send_error(404, "API endpoint not found")
-        except Exception:
-            self._send_internal_error()
+        except Exception as exc:
+            self._send_internal_error(exc)
 
     def do_DELETE(self):
         parsed_path = urlparse(self.path)
@@ -757,8 +830,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "API endpoint not found")
             else:
                 self.send_error(404, "API endpoint not found")
-        except Exception:
-            self._send_internal_error()
+        except Exception as exc:
+            self._send_internal_error(exc)
 
     def _send_pdf_bytes(self, pdf_path: str) -> None:
         """Serve PDF with Content-Length and Range support (required for HTTP/1.1 + WASM PDF engines)."""
@@ -1054,11 +1127,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         import fitz  # PyMuPDF
                     except Exception as e:
                         # Common when the image/venv omits `pip install -r requirements.txt` (see Dockerfile).
-                        print(
-                            "[PRKS] PDF thumbnails need PyMuPDF (pip install -r requirements.txt). "
-                            "import fitz failed:",
+                        LOGGER.warning(
+                            "thumbnail_fitz_import_failed error=%s request_id=%s",
                             e,
-                            file=sys.stderr,
+                            self._prks_request_id,
                         )
                         self.send_error(404, "Thumbnail unavailable")
                         return
@@ -1104,8 +1176,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                     os.remove(tmp_path)
                             except Exception:
                                 pass
-                    except Exception:
+                    except Exception as exc:
                         # If a particular PDF can't be rendered, don't take down the whole request path.
+                        LOGGER.warning(
+                            "thumbnail_render_failed work_id=%s page=%s request_id=%s",
+                            w_id,
+                            page,
+                            self._prks_request_id,
+                            exc_info=exc,
+                        )
                         self.send_error(404, "Thumbnail unavailable")
                         return
 
@@ -1122,8 +1201,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             self.wfile.write(f.read())
                     else:
                         self.wfile.write(generated_bytes)
-                except Exception:
-                    self._send_internal_error()
+                except Exception as exc:
+                    self._send_internal_error(exc)
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 data = db.get_work(w_id)
@@ -1297,8 +1376,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "API endpoint not found")
             else:
                 self.send_error(404, "API endpoint not found")
-        except Exception:
-            self._send_internal_error()
+        except Exception as exc:
+            self._send_internal_error(exc)
 
     def handle_api_post(self, parsed_path):
         path = parsed_path.path
@@ -1307,7 +1386,25 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if data is None:
                 return
 
-            if path.startswith('/api/processing-files/') and path.endswith('/import'):
+            if path == '/api/client-errors':
+                try:
+                    payload = self._parse_client_error_payload(data)
+                except ValueError as e:
+                    self.send_json(400, {"error": str(e)})
+                    return
+                LOGGER.error(
+                    "client_error kind=%s message=%s route=%s source=%s client_request_id=%s request_id=%s user_agent=%s stack=%s",
+                    payload["kind"],
+                    payload["message"],
+                    payload["route"],
+                    payload["source"],
+                    payload["request_id"],
+                    self._prks_request_id,
+                    payload["user_agent"],
+                    payload["stack"],
+                )
+                self.send_json(200, {"status": "logged", "request_id": self._prks_request_id})
+            elif path.startswith('/api/processing-files/') and path.endswith('/import'):
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'import':
                     pf_id = parts[3]
@@ -1407,9 +1504,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if playlist_id:
                     try:
                         db.add_work_to_playlist(playlist_id, w_id, None)
-                    except Exception:
+                    except Exception as exc:
                         # best-effort: do not fail work creation if playlist link fails
-                        pass
+                        LOGGER.warning(
+                            "work_playlist_attach_failed playlist_id=%s work_id=%s request_id=%s",
+                            playlist_id,
+                            w_id,
+                            self._prks_request_id,
+                            exc_info=exc,
+                        )
                 folder_id = data.get("folder_id")
                 raw_folder = str(folder_id).strip() if folder_id is not None else ""
                 if raw_folder:
@@ -1758,8 +1861,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, {'status': 'saved'})
             else:
                 self.send_error(404, "API endpoint not found")
-        except Exception:
-            self._send_internal_error()
+        except Exception as exc:
+            self._send_internal_error(exc)
 
     def send_json(self, status, context, etag=None, precondition_checked=False):
         if etag and status == 200 and not precondition_checked and self._prks_if_none_match(etag):
@@ -1789,11 +1892,11 @@ def run_server(port=PORT):
     try:
         n = prune_orphan_pdf_thumbnails(db)
         if n:
-            print(f"[PRKS] Pruned {n} orphan PDF thumbnail(s)", file=sys.stderr)
+            LOGGER.info("thumbnail_prune_complete pruned=%s", n)
     except Exception as e:
-        print("[PRKS] Thumbnail prune skipped:", e, file=sys.stderr)
+        LOGGER.warning("thumbnail_prune_skipped error=%s", e)
     with socketserver.TCPServer(("", port), PRKSHandler) as httpd:
-        print(f"Serving PRKS internal API and frontend at http://localhost:{port}")
+        LOGGER.info("server_starting url=http://localhost:%s", port)
         httpd.serve_forever()
 
 if __name__ == "__main__":

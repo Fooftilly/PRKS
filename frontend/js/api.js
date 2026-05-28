@@ -12,13 +12,20 @@ function prksEscapeHtml(s) {
 
 window.prksEscapeHtml = prksEscapeHtml;
 
-function prksSetApiError(context, message) {
+function prksSetApiError(context, message, requestId = '') {
     const payload = {
         context: String(context || 'request'),
         message: String(message || 'Request failed'),
+        requestId: String(requestId || ''),
         at: Date.now(),
     };
     window.__prksLastApiError = payload;
+    prksReportClientError({
+        kind: 'api_client_error',
+        message: payload.message,
+        source: String(context || 'request'),
+        request_id: payload.requestId,
+    });
 }
 
 function prksConsumeApiError() {
@@ -29,16 +36,88 @@ function prksConsumeApiError() {
 
 window.prksConsumeApiError = prksConsumeApiError;
 
+const PRKS_CLIENT_ERROR_DEDUPE_MS = 15000;
+const PRKS_CLIENT_ERROR_MAX_QUEUE = 100;
+const __prksRecentClientErrors = new Map();
+
+function prksTrimClientErrorText(value, maxLen) {
+    if (value == null) return '';
+    const text = String(value);
+    return text.length > maxLen ? text.slice(0, maxLen) : text;
+}
+
+function prksShouldReportClientError(payload) {
+    const key = [
+        payload.kind || '',
+        payload.message || '',
+        payload.route || '',
+        payload.source || '',
+    ].join('|');
+    const now = Date.now();
+    const prev = __prksRecentClientErrors.get(key) || 0;
+    if ((now - prev) < PRKS_CLIENT_ERROR_DEDUPE_MS) {
+        return false;
+    }
+    __prksRecentClientErrors.set(key, now);
+    if (__prksRecentClientErrors.size > PRKS_CLIENT_ERROR_MAX_QUEUE) {
+        const oldestKey = __prksRecentClientErrors.keys().next().value;
+        __prksRecentClientErrors.delete(oldestKey);
+    }
+    return true;
+}
+
+function prksBuildClientErrorPayload(input) {
+    const payload = input && typeof input === 'object' ? input : {};
+    return {
+        kind: prksTrimClientErrorText(payload.kind || 'client_error', 64),
+        message: prksTrimClientErrorText(payload.message || 'Unknown client error', 2000),
+        stack: prksTrimClientErrorText(payload.stack || '', 8000),
+        route: prksTrimClientErrorText(payload.route || window.location.hash || '', 512),
+        source: prksTrimClientErrorText(payload.source || '', 512),
+        request_id: prksTrimClientErrorText(payload.request_id || '', 64),
+        client_time: new Date().toISOString(),
+    };
+}
+
+function prksReportClientError(input) {
+    const payload = prksBuildClientErrorPayload(input);
+    if (!payload.message || !prksShouldReportClientError(payload)) {
+        return;
+    }
+    fetch('/api/client-errors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+    }).catch(() => {});
+}
+
+window.prksReportClientError = prksReportClientError;
+
 /** Parse JSON body when response is OK; otherwise return fallback (same shape callers expect). */
 async function prksParseJsonResponse(res, fallback, context = 'request') {
+    const requestId = (res && res.headers && res.headers.get('X-Request-ID')) || '';
     if (!res.ok) {
-        prksSetApiError(context, `Request failed (${res.status})`);
+        prksSetApiError(context, `Request failed (${res.status})`, requestId);
+        prksReportClientError({
+            kind: 'api_http_error',
+            message: `HTTP ${res.status} while loading ${context}`,
+            source: '/api',
+            request_id: requestId,
+        });
         return fallback;
     }
     try {
         return await res.json();
-    } catch (_e) {
-        prksSetApiError(context, 'Received invalid server response.');
+    } catch (e) {
+        prksSetApiError(context, 'Received invalid server response.', requestId);
+        prksReportClientError({
+            kind: 'api_parse_error',
+            message: `Invalid JSON response while loading ${context}`,
+            source: '/api',
+            stack: e && e.stack ? String(e.stack) : '',
+            request_id: requestId,
+        });
         return fallback;
     }
 }

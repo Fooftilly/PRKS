@@ -109,9 +109,57 @@ class TestServerAPI(unittest.TestCase):
         req = urllib.request.Request(f"{self._base_url}/api/works")
         with urllib.request.urlopen(req) as res:
             self.assertEqual(res.status, 200)
+            self.assertTrue((res.headers.get("X-Request-ID") or "").strip())
             data = json.loads(res.read().decode())
             # Depending on test order, it might not be empty, so we just check it's a list
             self.assertIsInstance(data, list)
+
+    def test_1a_internal_error_has_request_id(self):
+        with patch.object(server_module.db, "get_all_works", side_effect=RuntimeError("boom")):
+            req = urllib.request.Request(f"{self._base_url}/api/works")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 500)
+        req_id_header = (cm.exception.headers.get("X-Request-ID") or "").strip()
+        self.assertTrue(req_id_header)
+        body = json.loads(cm.exception.read().decode())
+        self.assertEqual(body.get("error"), "internal_error")
+        self.assertEqual(body.get("request_id"), req_id_header)
+
+    def test_1aa_client_errors_endpoint_accepts_payload(self):
+        payload = {
+            "kind": "window_error",
+            "message": "Test client-side failure",
+            "stack": "stack-line-1",
+            "route": "#/folders",
+            "source": "app.js",
+            "request_id": "abc123",
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/client-errors",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+            self.assertTrue((res.headers.get("X-Request-ID") or "").strip())
+            body = json.loads(res.read().decode())
+        self.assertEqual(body.get("status"), "logged")
+        self.assertTrue((body.get("request_id") or "").strip())
+
+    def test_1ab_client_errors_endpoint_rejects_invalid_payload(self):
+        req = urllib.request.Request(
+            f"{self._base_url}/api/client-errors",
+            data=json.dumps({"kind": "window_error"}).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 400)
+        body = json.loads(cm.exception.read().decode())
+        self.assertIn("error", body)
 
     def test_1b_settings_get_and_patch_annotation_author(self):
         req = urllib.request.Request(f"{self._base_url}/api/settings")

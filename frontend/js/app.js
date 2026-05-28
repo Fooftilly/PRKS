@@ -51,6 +51,48 @@ if ('serviceWorker' in navigator) {
     });
 }
 
+function initPrksGlobalErrorReporting() {
+    if (window.__prksGlobalErrorReportingBound) return;
+    window.__prksGlobalErrorReportingBound = true;
+    window.addEventListener('error', (event) => {
+        const err = event && event.error;
+        const message = err && err.message ? String(err.message) : String(event && event.message ? event.message : 'Unhandled error');
+        if (typeof window.prksReportClientError === 'function') {
+            window.prksReportClientError({
+                kind: 'window_error',
+                message,
+                stack: err && err.stack ? String(err.stack) : '',
+                source: event && event.filename ? String(event.filename) : 'window',
+            });
+        }
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+        const reason = event ? event.reason : null;
+        let message = 'Unhandled promise rejection';
+        let stack = '';
+        if (reason instanceof Error) {
+            message = reason.message || message;
+            stack = reason.stack || '';
+        } else if (typeof reason === 'string') {
+            message = reason;
+        } else if (reason != null) {
+            try {
+                message = JSON.stringify(reason);
+            } catch (_e) {
+                message = String(reason);
+            }
+        }
+        if (typeof window.prksReportClientError === 'function') {
+            window.prksReportClientError({
+                kind: 'unhandled_rejection',
+                message,
+                stack,
+                source: 'promise',
+            });
+        }
+    });
+}
+
 const PRKS_BIBTEX_EXPORT_FIELD_DEFS = [
     ['author', 'Author'],
     ['editor', 'Editor'],
@@ -73,6 +115,7 @@ const PRKS_BIBTEX_EXPORT_FIELD_DEFS = [
 ];
 
 document.addEventListener('DOMContentLoaded', () => {
+    initPrksGlobalErrorReporting();
     initTheme();
     void initAnnotationAuthorSetting();
     void initBibtexExportFieldsSetting();
