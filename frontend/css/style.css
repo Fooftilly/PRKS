@@ -1790,6 +1790,57 @@ body {
     gap: 12px;
 }
 
+.playlists-page__sub {
+    margin: 0;
+}
+
+.playlists-page__list {
+    margin-top: 10px;
+}
+
+.playlists-page__list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.playlists-page__list-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.playlists-page__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.playlists-page__list-stats {
+    display: inline-flex;
+    align-items: center;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.playlists-page__list-arrow {
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+
+.playlists-page__empty {
+    color: var(--text-secondary);
+}
+
 .prks-playlist-detail__desc {
     margin: 0 0 12px 0;
 }

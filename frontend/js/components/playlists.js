@@ -99,25 +99,36 @@ function prksBindPlaylistsIndexCreateBtn() {
 
 function renderPlaylistsIndex(playlists, container) {
     const list = Array.isArray(playlists) ? playlists : [];
+    const rowsHtml = list.length
+        ? list
+              .map((p) => {
+                  const id = String(p && p.id ? p.id : '').trim();
+                  const path = '#/playlists/' + encodeURIComponent(id);
+                  const title = prksPlEsc(p.title || 'Playlist');
+                  const itemCount = Number(p.item_count || 0);
+                  const icon = typeof prksIcon === 'function' ? prksIcon('clapperboard', { size: 'sm' }) : '';
+                  return `
+                        <div class="project-card playlists-page__list-item" data-prks-middleclick-nav="1"
+                            onclick="window.location.hash='${path}'"
+                            onauxclick="return prksMaybeOpenHashInNewTab(event,'${path}')">
+                            <div class="playlists-page__list-main">
+                                <span class="playlists-page__badge">${icon}<span>${title}</span></span>
+                                <p class="meta-row playlists-page__list-stats">${itemCount} item${itemCount === 1 ? '' : 's'}</p>
+                            </div>
+                            <span class="playlists-page__list-arrow" aria-hidden="true">${typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 'sm' }) : '→'}</span>
+                        </div>`;
+              })
+              .join('')
+        : `<p class="meta-row playlists-page__empty">No playlists yet.</p>`;
     container.innerHTML = `
-        <div class="page-header">
-            <h2>Playlists</h2>
-        </div>
-        <div class="card-grid">
-            ${
-                list.length
-                    ? list
-                          .map(
-                              (p) => `
-                        <div class="project-card" data-prks-middleclick-nav="1"
-                            onclick="window.location.hash='#/playlists/${encodeURIComponent(p.id)}'">
-                            <div class="card-title">${prksPlEsc(p.title || 'Playlist')}</div>
-                            <div class="meta-row">${Number(p.item_count || 0)} item${Number(p.item_count || 0) === 1 ? '' : 's'}</div>
-                        </div>`
-                          )
-                          .join('')
-                    : `<p class="meta-row" style="color: var(--text-secondary);">No playlists yet.</p>`
-            }
+        <div class="playlists-page">
+            <div class="page-header tags-page__header">
+                <h2>Playlists</h2>
+                <p class="tags-page__sub playlists-page__sub">Open playlist row to view or edit ordered items.</p>
+            </div>
+            <div class="list-view playlists-page__list">
+                ${rowsHtml}
+            </div>
         </div>
     `;
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
