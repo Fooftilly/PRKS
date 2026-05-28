@@ -1395,6 +1395,28 @@ async function collectAnnotationsViaGetAllAnnotations(engine, docObj, docIdHint)
     }
 }
 
+function prksFormatSyncClock(tsMs) {
+    if (!Number.isFinite(tsMs) || tsMs <= 0) return '';
+    try {
+        return new Date(tsMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (_e) {
+        return '';
+    }
+}
+
+function prksEnsureAnnotationBeforeUnloadGuard() {
+    if (window.__prksAnnotationBeforeUnloadBound) return;
+    window.__prksAnnotationBeforeUnloadBound = true;
+    window.addEventListener('beforeunload', (e) => {
+        try {
+            if (typeof window.prksHasPendingWorkAnnotationSync !== 'function') return;
+            if (!window.prksHasPendingWorkAnnotationSync()) return;
+            e.preventDefault();
+            e.returnValue = '';
+        } catch (_err) {}
+    });
+}
+
 async function setupAnnotationPersistence(viewer, workId) {
     if (!viewer || !viewer.registry || typeof viewer.registry.then !== 'function') {
         return;
@@ -1405,6 +1427,47 @@ async function setupAnnotationPersistence(viewer, workId) {
         return;
     }
 
+    const syncState = {
+        workId: String(workId),
+        pendingChanges: false,
+        inFlight: false,
+        lastError: '',
+        lastSuccessAt: 0,
+        lastConfirmedToken: '',
+        activeToken: '',
+        localMutationSeen: false,
+    };
+    window.__prksWorkAnnotationSyncState = syncState;
+    window.prksHasPendingWorkAnnotationSync = function () {
+        const st = window.__prksWorkAnnotationSyncState;
+        return !!(st && st.workId && (st.pendingChanges || st.inFlight));
+    };
+    prksEnsureAnnotationBeforeUnloadGuard();
+
+    function renderSyncIndicator() {
+        const el = document.getElementById('annotation-sync-status');
+        if (!el) return;
+        el.classList.remove(
+            'work-annotation-sync-status--hidden',
+            'work-annotation-sync-status--saving',
+            'work-annotation-sync-status--saved',
+            'work-annotation-sync-status--error'
+        );
+        if (syncState.inFlight || syncState.pendingChanges) {
+            el.classList.add('work-annotation-sync-status--saving');
+            el.textContent = syncState.lastError ? 'Sync retry pending...' : 'PDF annotations syncing...';
+            return;
+        }
+        if (syncState.lastError) {
+            el.classList.add('work-annotation-sync-status--error');
+            el.textContent = 'PDF annotations sync failed';
+            return;
+        }
+        el.classList.add('work-annotation-sync-status--saved');
+        const t = prksFormatSyncClock(syncState.lastSuccessAt);
+        el.textContent = t ? `PDF annotations saved at ${t}` : 'PDF annotations saved';
+    }
+
     window.__prksAnnotationListCache = {
         allItems: [],
         rawItems: [],
@@ -1413,13 +1476,14 @@ async function setupAnnotationPersistence(viewer, workId) {
         workId: String(workId),
     };
     try {
-        const savedRes = await fetch(`/api/works/${workId}/annotations`);
+        const savedRes = await fetch(`/api/works/${workId}/annotations`, { cache: 'no-store' });
         const savedData = await savedRes.json();
         const saved = JSON.parse(savedData.annotations_json || '[]');
         if (Array.isArray(saved) && saved.length > 0) {
             renderAnnotationFallbackList(saved, 'DB', workId);
         }
-    } catch (_e) { }
+    } catch (_e) {}
+    renderSyncIndicator();
 
     function resolveDocHandle() {
         if (!registry || !registry.store || typeof registry.store.getState !== 'function') return null;
@@ -1434,7 +1498,7 @@ async function setupAnnotationPersistence(viewer, workId) {
         }
     }
 
-    async function exportAndPersistPdfCopy() {
+    async function exportAndPersistPdfCopy(saveToken) {
         if (!engine || typeof engine.saveAsCopy !== 'function') return;
         const rawDoc = resolveDocHandle();
         if (!rawDoc) return;
@@ -1448,7 +1512,6 @@ async function setupAnnotationPersistence(viewer, workId) {
                 if (scope && typeof scope.commit === 'function') scope.commit();
             } catch (_c) {}
 
-            // saveAsCopy expects the same document handle as the viewer store (wrapper), not an inner PdfDocumentObject.
             let saveResult = engine.saveAsCopy(rawDoc);
             let buffer = null;
             if (saveResult && typeof saveResult.toPromise === 'function') {
@@ -1460,21 +1523,24 @@ async function setupAnnotationPersistence(viewer, workId) {
             }
             if (!buffer || !buffer.byteLength) return;
             const b64 = arrayBufferToBase64(buffer);
-            await fetch(`/api/works/${workId}/pdf`, {
+            const pdfRes = await fetch(`/api/works/${workId}/pdf`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file_b64: b64 })
+                body: JSON.stringify({ file_b64: b64, save_token: saveToken }),
             });
-        } catch (_e) { }
+            if (!pdfRes.ok) {
+                throw new Error(`PDF save failed (${pdfRes.status})`);
+            }
+        } catch (_e) {
+            throw _e;
+        }
     }
 
-    let lastSerialized = '';
-
-    async function runWorkAnnotationAndPdfPersistencePass() {
+    async function runWorkAnnotationAndPdfPersistencePass(saveToken) {
         const state = registry.store.getState();
         const currentDocId = findDocumentIdFromState(state);
 
-        await exportAndPersistPdfCopy();
+        await exportAndPersistPdfCopy(saveToken);
 
         let itemsFound = [];
         let trustEmpty = false;
@@ -1526,25 +1592,103 @@ async function setupAnnotationPersistence(viewer, workId) {
         }
 
         const userItems = sortAnnotationsByPage(itemsFound.filter(prksIsUserMarkupAnnotation));
-
         if (userItems.length === 0 && !trustEmpty) {
             return;
         }
 
-        // When user deleted all markup, itemsFound may still contain PDF links — userItems=[] but we must re-render + POST [] to clear DB/sidebar.
         const serialized = JSON.stringify(userItems);
         renderAnnotationFallbackList(itemsFound, currentDocId, workId);
 
-        await fetch(`/api/works/${workId}/annotations`, {
+        const annRes = await fetch(`/api/works/${workId}/annotations`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ annotations_json: serialized }),
+            body: JSON.stringify({ annotations_json: serialized, save_token: saveToken }),
         });
+        if (!annRes.ok) {
+            throw new Error(`Annotation save failed (${annRes.status})`);
+        }
+    }
+
+    async function confirmPersistedToken(saveToken) {
+        const tries = 8;
+        for (let attempt = 0; attempt < tries; attempt++) {
+            try {
+                const probe = await fetch(
+                    `/api/works/${workId}/save-confirm?token=${encodeURIComponent(saveToken)}&t=${Date.now()}`,
+                    { cache: 'no-store' }
+                );
+                if (probe.ok) {
+                    const body = await probe.json().catch(() => ({}));
+                    if (body && body.saved === true) return true;
+                }
+            } catch (_e) {}
+            const wait = attempt < 2 ? 250 : attempt < 5 ? 450 : 800;
+            await new Promise((r) => setTimeout(r, wait));
+        }
+        return false;
+    }
+
+    let lastSerialized = '';
+    let queueRequested = false;
+    let queueRunning = false;
+    let queueDrainPromise = Promise.resolve();
+    let retryTimer = null;
+
+    function scheduleRetry() {
+        if (retryTimer != null) return;
+        retryTimer = setTimeout(() => {
+            retryTimer = null;
+            void requestFlush('retry');
+        }, 2200);
+    }
+
+    async function drainFlushQueue() {
+        while (queueRequested) {
+            queueRequested = false;
+            syncState.inFlight = true;
+            syncState.lastError = '';
+            renderSyncIndicator();
+            const saveToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            syncState.activeToken = saveToken;
+            try {
+                await runWorkAnnotationAndPdfPersistencePass(saveToken);
+                const confirmed = await confirmPersistedToken(saveToken);
+                if (!confirmed) throw new Error('Server confirmation timeout');
+                syncState.lastConfirmedToken = saveToken;
+                syncState.lastSuccessAt = Date.now();
+                syncState.pendingChanges = queueRequested;
+                syncState.lastError = '';
+            } catch (err) {
+                syncState.pendingChanges = true;
+                syncState.lastError = err && err.message ? String(err.message) : 'Save failed';
+                scheduleRetry();
+            } finally {
+                syncState.inFlight = false;
+                renderSyncIndicator();
+            }
+        }
+    }
+
+    function requestFlush(_reason = 'manual') {
+        if (_reason === 'state-change' && !syncState.localMutationSeen) {
+            return queueDrainPromise;
+        }
+        syncState.pendingChanges = true;
+        queueRequested = true;
+        renderSyncIndicator();
+        if (queueRunning) return queueDrainPromise;
+        queueRunning = true;
+        queueDrainPromise = drainFlushQueue().finally(() => {
+            queueRunning = false;
+            renderSyncIndicator();
+        });
+        return queueDrainPromise;
     }
 
     window.__prksFlushWorkAnnotationPersistence = async function () {
         try {
-            await runWorkAnnotationAndPdfPersistencePass();
+            syncState.localMutationSeen = true;
+            await requestFlush('manual');
         } catch (_e) {}
     };
 
@@ -1553,7 +1697,6 @@ async function setupAnnotationPersistence(viewer, workId) {
             if (document.hidden) return;
             if (!registry || !registry.store || typeof registry.store.getState !== 'function') return;
             const state = registry.store.getState();
-
             const currentDocId = findDocumentIdFromState(state);
             const annPluginState =
                 state && state.plugins && Object.prototype.hasOwnProperty.call(state.plugins, 'annotation-engine')
@@ -1571,10 +1714,9 @@ async function setupAnnotationPersistence(viewer, workId) {
             });
             if (serializedState === lastSerialized) return;
             lastSerialized = serializedState;
-
-            await runWorkAnnotationAndPdfPersistencePass();
+            await requestFlush('state-change');
         } catch (_e) {}
-    }, 4000);
+    }, 3000);
 }
 
 /** Load-error card uses alert icon wrapper `.bg-state-error-light`; password UI uses `.bg-accent-light` and different button layout. */
@@ -1815,7 +1957,11 @@ export function initPdfViewerForWork(work) {
                 const initResult = EmbedPDF.init({
                     type: 'container',
                     target: targetNode,
-                    src: work.file_path,
+                    src:
+                        String(work.file_path || '') +
+                        (String(work.file_path || '').includes('?') ? '&' : '?') +
+                        'prksv=' +
+                        Date.now(),
                     disabledCategories,
                     annotations: { annotationAuthor: getPrksAnnotationAuthor() },
                     zoom: ZoomMode

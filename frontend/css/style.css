@@ -5092,6 +5092,55 @@ html.prks-work-notes-mobile-side .document-view--work .work-notes-toggle-btn[ari
     color: var(--text-secondary);
 }
 
+.document-view--work .work-annotation-sync-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.document-view--work .work-annotation-sync-status::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+    flex: 0 0 7px;
+}
+
+.document-view--work .work-annotation-sync-status--hidden {
+    display: none;
+}
+
+.document-view--work .work-annotation-sync-status--saving::before {
+    background: var(--accent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+    animation: prks-ann-sync-pulse 1.2s ease-in-out infinite;
+}
+
+.document-view--work .work-annotation-sync-status--saved::before {
+    background: #16a34a;
+}
+
+.document-view--work .work-annotation-sync-status--error::before {
+    background: #dc2626;
+}
+
+@keyframes prks-ann-sync-pulse {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+    70% {
+        box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 0%, transparent);
+    }
+    100% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+    }
+}
+
 .document-view--work .work-workspace--notes-collapsed .work-split-handle {
     display: none;
 }

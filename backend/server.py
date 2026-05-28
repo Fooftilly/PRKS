@@ -335,6 +335,8 @@ def _prks_thumbnail_bytes_from_pixmap(pix) -> tuple[bytes, str]:
 
 
 db = PRKSDatabase(db_path=_resolve_db_path(), schema_path="backend/db_schema.sql")
+_PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
+_PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 
 def _youtube_video_id(url: str) -> str | None:
     try:
@@ -801,6 +803,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(206)
             self.send_header("Content-Type", "application/pdf")
             self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store, max-age=0, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.send_header("Content-Length", str(length))
             self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
             self.end_headers()
@@ -818,6 +823,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
         self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store, max-age=0, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.send_header("Content-Length", str(file_size))
         self.end_headers()
         with open(pdf_path, "rb") as f:
@@ -1125,6 +1133,28 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 w_id = path.split('/')[3]
                 data = {"work_id": w_id, "annotations_json": db.get_work_annotations(w_id)}
                 self.send_json(200, data)
+            elif path.startswith('/api/works/') and path.endswith('/save-confirm'):
+                parts = path.split('/')
+                if len(parts) == 5 and parts[4] == 'save-confirm':
+                    w_id = parts[3]
+                    token = (query.get('token', [''])[0] or '').strip()
+                    if not token:
+                        self.send_json(400, {'error': 'token is required'})
+                        return
+                    pdf_saved = _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK.get(w_id) == token
+                    ann_saved = _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK.get(w_id) == token
+                    self.send_json(
+                        200,
+                        {
+                            'work_id': w_id,
+                            'token': token,
+                            'pdf_saved': pdf_saved,
+                            'annotations_saved': ann_saved,
+                            'saved': bool(pdf_saved and ann_saved),
+                        },
+                    )
+                else:
+                    self.send_error(404, "API endpoint not found")
             elif path == '/api/folders':
                 etag = db.etag_folders_catalog()
                 if self._prks_if_none_match(etag):
@@ -1674,6 +1704,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/works/') and path.endswith('/pdf'):
                 w_id = path.split('/')[3]
                 file_b64 = data.get('file_b64', '')
+                save_token = str(data.get('save_token', '') or '').strip()
                 if file_b64:
                     try:
                         pdf_bytes = base64.b64decode(file_b64, validate=True)
@@ -1707,13 +1738,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                         db.add_role(p_id, w_id, 'Mentioned')
                         except Exception:
                             continue
+                    if save_token:
+                        _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
                     self.send_json(200, {'status': 'success'})
                 else:
                     self.send_error(400, "No file_b64 provided")
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
                 w_id = path.split('/')[3]
                 annotations_json = data.get('annotations_json', '[]')
+                save_token = str(data.get('save_token', '') or '').strip()
                 db.save_work_annotations(w_id, annotations_json)
+                if save_token:
+                    _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token
                 self.send_json(200, {'status': 'saved'})
             else:
                 self.send_error(404, "API endpoint not found")

@@ -651,8 +651,27 @@ function prksPlayPageEnterAnimation(contentDiv) {
 
 async function handleRoute() {
     if (typeof prksCloseOverlays === 'function') prksCloseOverlays();
+    if (window.__prksRouteRevertDueToPendingSync === true) {
+        window.__prksRouteRevertDueToPendingSync = false;
+        return;
+    }
     const prevResolvedHash = window.__prksLastResolvedHash || '';
     let hash = window.location.hash || '#/folders';
+    const leavingWorkPage = !!prevResolvedHash && prevResolvedHash.startsWith('#/works/') && hash !== prevResolvedHash;
+    if (
+        leavingWorkPage &&
+        typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
+        window.prksHasPendingWorkAnnotationSync()
+    ) {
+        const ok = window.confirm(
+            'PDF annotation sync still running. Leave page before all changes save to server?'
+        );
+        if (!ok) {
+            window.__prksRouteRevertDueToPendingSync = true;
+            window.location.hash = prevResolvedHash;
+            return;
+        }
+    }
     prksMaybeFlushPdfLastPageOnRouteChange(prevResolvedHash, hash);
     if (hash === '#/graph') {
         window.location.hash = '#/folders';
