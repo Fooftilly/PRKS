@@ -120,6 +120,7 @@ document.addEventListener('DOMContentLoaded', () => {
     void initAnnotationAuthorSetting();
     void initBibtexExportFieldsSetting();
     initPrksPdfTextReindexAction();
+    initPrksExistingPdfLinearizeAction();
     initPrksPdfRememberPageSetting();
     initPrksPdfLastPageVisibilityFlush();
     initPrksHintsSetting();
@@ -628,6 +629,38 @@ function initPrksPdfTextReindexAction() {
             }
         } catch (e) {
             if (statusEl) statusEl.textContent = (e && e.message) || 'Could not re-index PDF text.';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = oldText;
+        }
+    });
+}
+
+function initPrksExistingPdfLinearizeAction() {
+    const btn = document.getElementById('prks-linearize-existing-pdfs-btn');
+    const statusEl = document.getElementById('prks-linearize-existing-pdfs-status');
+    if (!btn || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        const oldText = btn.textContent;
+        btn.textContent = 'Linearizing…';
+        if (statusEl) statusEl.textContent = '';
+        try {
+            if (typeof prksLinearizeExistingPdfs !== 'function') {
+                throw new Error('PDF linearization API unavailable.');
+            }
+            const out = await prksLinearizeExistingPdfs(true);
+            if (statusEl) {
+                const processed = Number(out.processed || 0);
+                const changed = Number(out.changed || 0);
+                const already = Number(out.already_linearized || 0);
+                const skipped = Number(out.skipped || 0);
+                const failed = Number(out.failed || 0);
+                statusEl.textContent = `Done. Processed ${processed}, linearized ${changed}, already linearized ${already}, skipped ${skipped}, failed ${failed}.`;
+            }
+        } catch (e) {
+            if (statusEl) statusEl.textContent = (e && e.message) || 'Could not linearize existing PDFs.';
         } finally {
             btn.disabled = false;
             btn.textContent = oldText;

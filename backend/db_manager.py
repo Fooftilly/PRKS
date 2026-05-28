@@ -12,6 +12,7 @@ from urllib.parse import unquote
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
+from backend.pdf_linearize import maybe_linearize_pdf_in_place
 
 LOGGER = logging.getLogger("prks.db")
 
@@ -1302,6 +1303,16 @@ class PRKSDatabase:
                 (msg, processing_file_id),
             )
             raise ValueError(msg)
+        try:
+            changed, reason = maybe_linearize_pdf_in_place(destination_abs, context="processing-import")
+            LOGGER.info(
+                "pdf_linearize_result context=processing-import changed=%s reason=%s path=%s",
+                changed,
+                reason,
+                destination_abs,
+            )
+        except Exception as e:
+            LOGGER.warning("pdf_linearize_result context=processing-import error=%s", e)
 
         title = (row.get("title") or "").strip() or os.path.splitext(row.get("filename") or "Untitled")[0]
         status_draft = (row.get("status_draft") or "Not Started").strip() or "Not Started"

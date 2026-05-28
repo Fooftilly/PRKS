@@ -693,7 +693,7 @@ class TestServerAPI(unittest.TestCase):
             got = fres.read()
         self.assertIn(b"%PDF", got[:32])
 
-        req_s = urllib.request.Request(f"{self._base_url}/api/search?q=newtermreplacepdf")
+        req_s = urllib.request.Request(f"{self._base_url}/api/search?any=1&q=newtermreplacepdf")
         with urllib.request.urlopen(req_s) as rs:
             rows = json.loads(rs.read().decode())
         self.assertTrue(any(r.get("id") == w_id for r in rows))
@@ -737,6 +737,42 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req_after) as ra:
             rows_after = json.loads(ra.read().decode())
         self.assertTrue(any(r.get("id") == w_id for r in rows_after))
+
+    def test_9c_linearize_existing_pdfs_endpoint(self):
+        pdf_bytes = _pdf_with_text_bytes("linearize me")
+        filename = "manual_linearize_existing.pdf"
+        abs_pdf = os.path.join(server_module.pdfs_dir, filename)
+        with open(abs_pdf, "wb") as f:
+            f.write(pdf_bytes)
+
+        w_id = self.__class__.test_db.add_work(
+            title="Manual Linearize Existing Work",
+            status="Planned",
+            file_path=f"/api/pdfs/{filename}",
+        )
+        self.__class__.test_db.add_work_to_folder(
+            self.__class__.test_db.ensure_default_uncategorized_folder_id(),
+            w_id,
+        )
+
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/linearize-existing-pdfs",
+            data=json.dumps({"unlinearized_only": True}).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+            body = json.loads(res.read().decode())
+
+        self.assertEqual(body.get("status"), "ok")
+        self.assertGreaterEqual(int(body.get("processed", 0)), 1)
+        changed = int(body.get("changed", 0))
+        already_linearized = int(body.get("already_linearized", 0))
+        skipped = int(body.get("skipped", 0))
+        failed = int(body.get("failed", 0))
+        self.assertGreaterEqual(changed + already_linearized + skipped, 1)
+        self.assertGreaterEqual(failed, 0)
 
     def test_10_thumbnail_endpoint_smoke(self):
         pdf_bytes = b"%PDF-1.4\n%THUMB\n%%EOF\n"

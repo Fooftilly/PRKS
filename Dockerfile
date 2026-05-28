@@ -2,6 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends qpdf \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN mkdir -p /app /data/pdfs /app/data/pdfs \
     && chmod -R a+rX /app
 

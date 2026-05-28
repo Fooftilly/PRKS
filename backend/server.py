@@ -32,6 +32,7 @@ from backend.db_manager import (
 )
 from backend.log_config import setup_logging
 from backend.text_index import get_text_index
+from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 
 setup_logging()
 LOGGER = logging.getLogger("prks.server")
@@ -551,6 +552,24 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.path = parsed_path.path
             super().do_GET()
 
+    def do_HEAD(self):
+        parsed_path = urlparse(self.path)
+        if parsed_path.path.startswith('/api/'):
+            self.handle_api_head(parsed_path)
+        else:
+            requested = unquote(parsed_path.path or '/')
+            safe_rel = requested.lstrip('/')
+            frontend_root = os.path.realpath(frontend_dir)
+            candidate = os.path.realpath(os.path.join(frontend_root, safe_rel))
+            if not (candidate == frontend_root or candidate.startswith(frontend_root + os.sep)):
+                self.send_error(404, "Not Found")
+                return
+            if not os.path.exists(candidate):
+                self.path = '/index.html'
+            else:
+                self.path = parsed_path.path
+            super().do_HEAD()
+
     def do_POST(self):
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
@@ -849,7 +868,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_internal_error(exc)
 
-    def _send_pdf_bytes(self, pdf_path: str) -> None:
+    def _send_pdf_bytes(self, pdf_path: str, *, head_only: bool = False) -> None:
         """Serve PDF with Content-Length and Range support (required for HTTP/1.1 + WASM PDF engines)."""
         try:
             file_size = os.path.getsize(pdf_path)
@@ -889,6 +908,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
         if use_partial and (start > 0 or end < file_size - 1):
             length = end - start + 1
+            LOGGER.info(
+                "pdf_stream mode=partial method=%s head_only=%s request_id=%s path=%s start=%s end=%s file_size=%s",
+                self.command,
+                head_only,
+                self._prks_request_id,
+                self.path,
+                start,
+                end,
+                file_size,
+            )
             self.send_response(206)
             self.send_header("Content-Type", "application/pdf")
             self.send_header("Accept-Ranges", "bytes")
@@ -898,6 +927,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(length))
             self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
             self.end_headers()
+            if head_only:
+                return
             with open(pdf_path, "rb") as f:
                 f.seek(start)
                 remaining = length
@@ -909,6 +940,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     remaining -= len(chunk)
             return
 
+        LOGGER.info(
+            "pdf_stream mode=full method=%s head_only=%s request_id=%s path=%s file_size=%s",
+            self.command,
+            head_only,
+            self._prks_request_id,
+            self.path,
+            file_size,
+        )
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
         self.send_header("Accept-Ranges", "bytes")
@@ -917,8 +956,40 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Expires", "0")
         self.send_header("Content-Length", str(file_size))
         self.end_headers()
+        if head_only:
+            return
         with open(pdf_path, "rb") as f:
-            self.wfile.write(f.read())
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
+    def handle_api_head(self, parsed_path):
+        path = parsed_path.path
+        try:
+            if path.startswith('/api/pdfs/'):
+                filename = path.split('/')[-1]
+                pdf_path = _safe_pdf_path_in_pdfs_dir(filename)
+                if pdf_path and os.path.exists(pdf_path):
+                    self._send_pdf_bytes(pdf_path, head_only=True)
+                else:
+                    self.send_error(404, "PDF not found")
+            elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
+                parts = path.split('/')
+                if len(parts) == 5 and parts[4] == 'pdf':
+                    pf_id = parts[3]
+                    pdf_path = db.get_processing_file_pdf_path(pf_id)
+                    if pdf_path and os.path.exists(pdf_path):
+                        self._send_pdf_bytes(pdf_path, head_only=True)
+                    else:
+                        self.send_error(404, "PDF not found")
+                else:
+                    self.send_error(404, "API endpoint not found")
+            else:
+                self.send_error(405, "Method Not Allowed")
+        except Exception as exc:
+            self._send_internal_error(exc)
 
     @staticmethod
     def _prks_etag_value_for_compare(raw: str) -> str:
@@ -1444,6 +1515,60 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path == '/api/works/reindex-pdf-text':
                 summary = text_index.reindex_all(db)
                 self.send_json(200, {"status": "ok", **summary})
+            elif path == '/api/works/linearize-existing-pdfs':
+                unlinearized_only = bool(data.get("unlinearized_only", True))
+                rows = db.execute_query("SELECT id, file_path FROM works WHERE file_path LIKE '/api/pdfs/%'")
+                unique_paths = {}
+                for row in rows:
+                    fp = str(row.get("file_path") or "").strip()
+                    if not fp.startswith("/api/pdfs/"):
+                        continue
+                    filename = fp.split("/")[-1]
+                    abs_path = _safe_pdf_path_in_pdfs_dir(filename)
+                    if not abs_path:
+                        continue
+                    unique_paths[abs_path] = True
+
+                processed = 0
+                changed = 0
+                already_linearized = 0
+                skipped = 0
+                failed = 0
+                for abs_path in sorted(unique_paths.keys()):
+                    processed += 1
+                    if not os.path.exists(abs_path):
+                        skipped += 1
+                        continue
+                    if unlinearized_only and is_pdf_linearized(abs_path):
+                        already_linearized += 1
+                        continue
+                    did_change, reason = maybe_linearize_pdf_in_place(abs_path, context="settings-bulk")
+                    LOGGER.info(
+                        "pdf_linearize_result context=settings-bulk changed=%s reason=%s path=%s",
+                        did_change,
+                        reason,
+                        abs_path,
+                    )
+                    if did_change:
+                        changed += 1
+                    elif reason in ("disabled", "missing-qpdf", "missing-file"):
+                        skipped += 1
+                    elif reason == "ok":
+                        changed += 1
+                    else:
+                        failed += 1
+                self.send_json(
+                    200,
+                    {
+                        "status": "ok",
+                        "processed": processed,
+                        "changed": changed,
+                        "already_linearized": already_linearized,
+                        "skipped": skipped,
+                        "failed": failed,
+                        "unlinearized_only": unlinearized_only,
+                    },
+                )
             elif path.startswith('/api/processing-files/') and path.endswith('/import'):
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'import':
@@ -1485,6 +1610,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         return
                     with open(os.path.join(pdfs_dir, local_filename), "wb") as f:
                         f.write(decoded_pdf)
+                    abs_uploaded_path = safe_pdf_path_under_dir(pdfs_dir, local_filename)
+                    if abs_uploaded_path:
+                        changed, reason = maybe_linearize_pdf_in_place(abs_uploaded_path, context="work-create-upload")
+                        LOGGER.info(
+                            "pdf_linearize_result context=work-create-upload changed=%s reason=%s path=%s",
+                            changed,
+                            reason,
+                            abs_uploaded_path,
+                        )
                     file_path = f"/api/pdfs/{local_filename}"
 
                 provider = (data.get('provider') or '').strip().lower()
@@ -1890,6 +2024,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             return
                         with open(pdf_path, 'wb') as f:
                             f.write(pdf_bytes)
+                        changed, reason = maybe_linearize_pdf_in_place(pdf_path, context="work-pdf-overwrite")
+                        LOGGER.info(
+                            "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s path=%s",
+                            changed,
+                            reason,
+                            pdf_path,
+                        )
                         try:
                             text_index.upsert_from_pdf(w_id, pdf_path)
                         except Exception as e:

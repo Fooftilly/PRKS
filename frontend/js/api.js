@@ -421,6 +421,17 @@ async function prksReindexPdfText() {
     return data;
 }
 
+async function prksLinearizeExistingPdfs(unlinearizedOnly = true) {
+    const res = await fetch('/api/works/linearize-existing-pdfs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unlinearized_only: !!unlinearizedOnly }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not linearize existing PDFs.');
+    return data;
+}
+
 /**
  * Infer pdf vs video for UI. PDFs may have source_url (e.g. original article); explicit source_kind wins.
  */
