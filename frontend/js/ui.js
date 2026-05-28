@@ -2574,6 +2574,9 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId) {
                 typeof getActiveRightPanelTab === 'function' ? getActiveRightPanelTab() : 'details';
             if (panel && tab === 'details' && typeof prksWorkRightPanelStackHtml === 'function') {
                 panel.innerHTML = prksWorkRightPanelStackHtml(window.currentWork, false);
+                if (typeof prksRefreshIcons === 'function') {
+                    prksRefreshIcons(panel);
+                }
                 if (typeof initPrksPrivateNotesEditor === 'function') {
                     initPrksPrivateNotesEditor('work', window.currentWork.id);
                 }
@@ -2691,7 +2694,7 @@ function renderWorkMetaTab(work, isEditing = false) {
             <div class="tag-add-shell combobox-container">
                 <div class="tag-add-shell__field">
                     ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : '<span class="tag-add-shell__icon"></span>'}
-                    <input type="text" id="work-tag-search" class="tag-add-shell__input" placeholder="Search tags or type a new name…" maxlength="120" autocomplete="off" aria-label="Search or add tag">
+                    <input type="text" id="work-tag-search" class="tag-add-shell__input" placeholder="Search tags or add…" maxlength="120" autocomplete="off" aria-label="Search or add tag">
                 </div>
                 <div id="work-tag-search-results" class="combobox-results combobox-results--tag-panel hidden"></div>
             </div>
