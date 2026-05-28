@@ -75,31 +75,41 @@
                     <ul class="progress-legend">
                         <li>
                             <a href="#/progress?status=Not%20Started" class="nav-link progress-filter" data-status="Not Started">
-                                <span class="prks-status-swatch" data-status="Not Started" aria-hidden="true"></span>
+                                <span class="nav-link__icon" aria-hidden="true">
+                                    <i data-lucide="circle" class="prks-status-icon prks-icon"></i>
+                                </span>
                                 Not Started
                             </a>
                         </li>
                         <li>
                             <a href="#/progress?status=Planned" class="nav-link progress-filter" data-status="Planned">
-                                <span class="prks-status-swatch" data-status="Planned" aria-hidden="true"></span>
+                                <span class="nav-link__icon" aria-hidden="true">
+                                    <i data-lucide="clipboard-list" class="prks-status-icon prks-icon"></i>
+                                </span>
                                 Planned
                             </a>
                         </li>
                         <li>
                             <a href="#/progress?status=In%20Progress" class="nav-link progress-filter" data-status="In Progress">
-                                <span class="prks-status-swatch" data-status="In Progress" aria-hidden="true"></span>
+                                <span class="nav-link__icon" aria-hidden="true">
+                                    <i data-lucide="play" class="prks-status-icon prks-icon"></i>
+                                </span>
                                 In Progress
                             </a>
                         </li>
                         <li>
                             <a href="#/progress?status=Paused" class="nav-link progress-filter" data-status="Paused">
-                                <span class="prks-status-swatch" data-status="Paused" aria-hidden="true"></span>
+                                <span class="nav-link__icon" aria-hidden="true">
+                                    <i data-lucide="pause" class="prks-status-icon prks-icon"></i>
+                                </span>
                                 Paused
                             </a>
                         </li>
                         <li>
                             <a href="#/progress?status=Completed" class="nav-link progress-filter" data-status="Completed">
-                                <span class="prks-status-swatch" data-status="Completed" aria-hidden="true"></span>
+                                <span class="nav-link__icon" aria-hidden="true">
+                                    <i data-lucide="check" class="prks-status-icon prks-icon"></i>
+                                </span>
                                 Completed
                             </a>
                         </li>
@@ -540,11 +550,11 @@
                         <div class="prks-segmented-wrap prks-segmented-wrap--status-row">
                             <input type="hidden" id="work-status" value="Not Started">
                             <div class="prks-segmented prks-segmented--status prks-segmented--single-row" role="radiogroup" aria-label="File status">
-                                <button type="button" class="prks-segmented__btn prks-segmented__btn--active" data-value="Not Started" aria-pressed="true" role="radio">Not Started</button>
-                                <button type="button" class="prks-segmented__btn" data-value="Planned" aria-pressed="false" role="radio">Planned</button>
-                                <button type="button" class="prks-segmented__btn" data-value="In Progress" aria-pressed="false" role="radio">In Progress</button>
-                                <button type="button" class="prks-segmented__btn" data-value="Completed" aria-pressed="false" role="radio">Completed</button>
-                                <button type="button" class="prks-segmented__btn" data-value="Paused" aria-pressed="false" role="radio">Paused</button>
+                                <button type="button" class="prks-segmented__btn prks-segmented__btn--active" data-value="Not Started" aria-pressed="true" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="circle" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Not Started</span></button>
+                                <button type="button" class="prks-segmented__btn" data-value="Planned" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="clipboard-list" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Planned</span></button>
+                                <button type="button" class="prks-segmented__btn" data-value="In Progress" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="play" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">In Progress</span></button>
+                                <button type="button" class="prks-segmented__btn" data-value="Completed" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="check" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Completed</span></button>
+                                <button type="button" class="prks-segmented__btn" data-value="Paused" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="pause" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Paused</span></button>
                             </div>
                         </div>
                     </div>

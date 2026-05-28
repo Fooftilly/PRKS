@@ -115,8 +115,12 @@ function prksWorkCardHtml(w, options = {}) {
     const wid = prksWorkCardsEscapeHtml(w.id || '');
     const status = w.status ? String(w.status) : '';
     const statusClass = status ? status.replace(/ /g, '.') : '';
+    const statusIcon =
+        typeof prksProgressStatusIconHtml === 'function'
+            ? prksProgressStatusIconHtml(status, { className: 'status-badge__icon', size: 'sm' })
+            : '';
     const statusHtml = status
-        ? `<span class="status-badge ${prksWorkCardsEscapeHtml(statusClass)}">${prksWorkCardsEscapeHtml(status)}</span>`
+        ? `<span class="status-badge ${prksWorkCardsEscapeHtml(statusClass)}">${statusIcon}${prksWorkCardsEscapeHtml(status)}</span>`
         : '';
     const typeBadge = typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(w.doc_type) : '';
     const subtitleRaw = options.subtitle != null ? String(options.subtitle) : '';

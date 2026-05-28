@@ -1068,7 +1068,7 @@ body {
     text-transform: none;
     font-weight: 500;
 }
-.nav-link.progress-filter .prks-status-swatch {
+.nav-link.progress-filter .nav-link__icon {
     flex-shrink: 0;
 }
 
@@ -1077,40 +1077,31 @@ body {
     font-size: 0.9rem;
 }
 
-/* Sidebar + badges: same fills/borders as status segmented controls (new file, processing) */
-.prks-status-swatch {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: var(--radius-sm);
-    box-sizing: border-box;
-    border: 1px solid transparent;
-    flex-shrink: 0;
+/* Sidebar progress: icon style + same status colors as segmented controls */
+.prks-status-icon,
+.prks-status-icon svg {
+    --prks-icon-size: 14px;
+    stroke-width: 2.25;
 }
 
-.prks-status-swatch[data-status='Not Started'] {
-    background-color: var(--status-not-started);
-    border-color: var(--status-not-started-border);
+.progress-filter[data-status='Not Started'] .prks-status-icon {
+    color: var(--status-not-started-border);
 }
 
-.prks-status-swatch[data-status='Planned'] {
-    background-color: var(--status-planned);
-    border-color: var(--status-planned-border);
+.progress-filter[data-status='Planned'] .prks-status-icon {
+    color: var(--status-planned-border);
 }
 
-.prks-status-swatch[data-status='In Progress'] {
-    background-color: var(--status-progress);
-    border-color: var(--status-progress-border);
+.progress-filter[data-status='In Progress'] .prks-status-icon {
+    color: var(--status-progress-border);
 }
 
-.prks-status-swatch[data-status='Completed'] {
-    background-color: var(--status-completed);
-    border-color: var(--status-completed-border);
+.progress-filter[data-status='Completed'] .prks-status-icon {
+    color: var(--status-completed-border);
 }
 
-.prks-status-swatch[data-status='Paused'] {
-    background-color: var(--status-paused);
-    border-color: var(--status-paused-border);
+.progress-filter[data-status='Paused'] .prks-status-icon {
+    color: var(--status-paused-border);
 }
 
 .add-new-btn {
@@ -1628,7 +1619,15 @@ body {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.status-badge__icon,
+.status-badge__icon svg {
+    --prks-icon-size: 12px;
+    stroke-width: 2.2;
 }
 
 .project-card:not(.project-card--work) .status-badge {
@@ -3491,6 +3490,20 @@ body {
     font-weight: 500;
     color: var(--text-secondary);
     background: var(--surface-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+.prks-segmented--status .prks-segmented__btn-icon,
+.prks-segmented--status .prks-segmented__btn-label {
+    display: inline-flex;
+    align-items: center;
+}
+.prks-segmented--status .prks-segmented__btn-icon .prks-icon,
+.prks-segmented--status .prks-segmented__btn-icon .prks-icon svg {
+    --prks-icon-size: 13px;
+    stroke-width: 2.2;
 }
 .prks-segmented--status .prks-segmented__btn:hover {
     border-color: var(--text-tertiary);
@@ -4457,6 +4470,21 @@ textarea[data-prks-autosize="1"] {
 .doc-meta-card--editing > h3,
 .doc-meta-card--editing .doc-meta-card__accent-title {
     color: var(--accent);
+}
+
+/* Right panel edit card: status control is icon-only to fit narrow panel width */
+.doc-meta-card--editing .prks-work-upload-status-field .prks-segmented--status .prks-segmented__btn {
+    gap: 0;
+    padding-inline: 0;
+}
+
+.doc-meta-card--editing .prks-work-upload-status-field .prks-segmented--status .prks-segmented__btn-label {
+    display: none;
+}
+
+.doc-meta-card--editing .prks-work-upload-status-field .prks-segmented--status .prks-segmented__btn-icon .prks-icon,
+.doc-meta-card--editing .prks-work-upload-status-field .prks-segmented--status .prks-segmented__btn-icon .prks-icon svg {
+    --prks-icon-size: 14px;
 }
 
 .form-actions {

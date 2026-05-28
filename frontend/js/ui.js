@@ -2622,6 +2622,10 @@ function renderWorkMetaTab(work, isEditing = false) {
     const statusRaw = String(work.status || '').trim();
     const statusText = statusRaw || 'Not Started';
     const statusClass = statusText.replace(/[^A-Za-z0-9 ]+/g, ' ').trim().replace(/\s+/g, ' ');
+    const statusIconHtml =
+        typeof prksProgressStatusIconHtml === 'function'
+            ? prksProgressStatusIconHtml(statusText, { className: 'status-badge__icon', size: 'sm' })
+            : '';
     const hasMetadata =
         work.year ||
         (showPublishedDate && work.published_date) ||
@@ -2646,7 +2650,7 @@ function renderWorkMetaTab(work, isEditing = false) {
             <p class="card-title">${escapeHtml(work.title)}</p>
             <div class="card-heading-row card-heading-row--wrap">
                 <span class="meta-row">Status</span>
-                <span class="status-badge ${statusClass}">${escapeHtml(statusText)}</span>
+                <span class="status-badge ${statusClass}">${statusIconHtml}${escapeHtml(statusText)}</span>
             </div>
             <div class="card-heading-row card-heading-row--wrap">
                 <span class="meta-row">Document type</span>
@@ -2915,8 +2919,17 @@ function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, va
                     : '';
                 return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio" aria-label="${prksEscapeAttr(l)}">${iconHtml}<span class="prks-segmented__btn-label">${escapeHtml(label)}</span></button>`;
             }
-            const titleAttr =
-                variant === 'status' ? ` title="${prksEscapeAttr(l)}"` : '';
+            const titleAttr = variant === 'status' ? ` title="${prksEscapeAttr(l)}"` : '';
+            if (variant === 'status') {
+                const statusIcon =
+                    typeof prksProgressStatusIconHtml === 'function'
+                        ? prksProgressStatusIconHtml(l, { size: 'sm' })
+                        : '';
+                const iconWrap = statusIcon
+                    ? `<span class="prks-segmented__btn-icon">${statusIcon}</span>`
+                    : '';
+                return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio" aria-label="${prksEscapeAttr(l)}"${titleAttr}>${iconWrap}<span class="prks-segmented__btn-label">${escapeHtml(l)}</span></button>`;
+            }
             return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio"${titleAttr}>${escapeHtml(l)}</button>`;
         })
         .join('');

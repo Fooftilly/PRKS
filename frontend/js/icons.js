@@ -69,6 +69,15 @@
         Mentioned: 'user',
     };
 
+    /** Progress/status icon mapping used in sidebar, badges, segmented controls. */
+    const PRKS_PROGRESS_STATUS_ICON = {
+        'Not Started': 'circle',
+        Planned: 'clipboard-list',
+        'In Progress': 'play',
+        Paused: 'pause',
+        Completed: 'check',
+    };
+
     function prksRoleTypeIconHtml(roleType, opts) {
         const key = PRKS_ROLE_TYPE_ICON[String(roleType || '').trim()];
         return key ? prksIcon(key, opts) : '';
@@ -76,6 +85,13 @@
 
     function prksRoleTypeShortLabel(roleType) {
         return String(roleType || '').trim();
+    }
+
+    function prksProgressStatusIconHtml(status, opts) {
+        const key = String(status || '').trim();
+        const iconName = PRKS_PROGRESS_STATUS_ICON[key];
+        if (!iconName) return '';
+        return prksIcon(iconName, opts);
     }
 
     function prksResolveIconName(name) {
@@ -137,9 +153,11 @@
 
     global.PRKS_ICON = PRKS_ICON;
     global.PRKS_ROLE_TYPE_ICON = PRKS_ROLE_TYPE_ICON;
+    global.PRKS_PROGRESS_STATUS_ICON = PRKS_PROGRESS_STATUS_ICON;
     global.prksIcon = prksIcon;
     global.prksRoleTypeIconHtml = prksRoleTypeIconHtml;
     global.prksRoleTypeShortLabel = prksRoleTypeShortLabel;
+    global.prksProgressStatusIconHtml = prksProgressStatusIconHtml;
     global.prksRefreshIcons = prksRefreshIcons;
     global.prksTagSearchIconHtml = prksTagSearchIconHtml;
     global.prksTagPlusIconHtml = prksTagPlusIconHtml;
