@@ -1,10 +1,11 @@
 import logging
 import os
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 
 
-_DEFAULT_MAX_BYTES = 5 * 1024 * 1024
-_DEFAULT_BACKUP_COUNT = 5
+_DEFAULT_ROTATE_WHEN = "midnight"
+_DEFAULT_ROTATE_INTERVAL = 1
+_DEFAULT_RETENTION_DAYS = 7
 
 
 def _is_testing_env() -> bool:
@@ -32,6 +33,17 @@ def _resolve_log_level() -> int:
     return getattr(logging, raw, logging.INFO)
 
 
+def _resolve_retention_days() -> int:
+    raw = (os.environ.get("PRKS_LOG_RETENTION_DAYS") or "").strip()
+    if not raw:
+        return _DEFAULT_RETENTION_DAYS
+    try:
+        days = int(raw)
+    except ValueError:
+        return _DEFAULT_RETENTION_DAYS
+    return max(1, days)
+
+
 def setup_logging() -> None:
     root = logging.getLogger()
     if getattr(root, "_prks_logging_configured", False):
@@ -39,6 +51,7 @@ def setup_logging() -> None:
 
     level = _resolve_log_level()
     log_file = _resolve_log_file_path()
+    retention_days = _resolve_retention_days()
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
     formatter = logging.Formatter(
@@ -46,10 +59,11 @@ def setup_logging() -> None:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
-    file_handler = RotatingFileHandler(
+    file_handler = TimedRotatingFileHandler(
         log_file,
-        maxBytes=_DEFAULT_MAX_BYTES,
-        backupCount=_DEFAULT_BACKUP_COUNT,
+        when=_DEFAULT_ROTATE_WHEN,
+        interval=_DEFAULT_ROTATE_INTERVAL,
+        backupCount=retention_days,
         encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
@@ -62,4 +76,10 @@ def setup_logging() -> None:
     root.addHandler(stderr_handler)
     root._prks_logging_configured = True
 
-    logging.getLogger(__name__).info("logging_initialized log_file=%s level=%s", log_file, logging.getLevelName(level))
+    logging.getLogger(__name__).info(
+        "logging_initialized log_file=%s level=%s rotate_when=%s retention_days=%s",
+        log_file,
+        logging.getLevelName(level),
+        _DEFAULT_ROTATE_WHEN,
+        retention_days,
+    )
