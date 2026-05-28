@@ -309,10 +309,23 @@ async function applyEmbedPdfUiCustomization(viewer) {
             }
         }
 
-        // Main toolbar: keep Search only on the right group (remove comment sidebar).
+        // Main toolbar right group: remove comment + search controls.
         const rightGroup = mainItems.find((i) => i.type === 'group' && i.id === 'right-group');
         if (rightGroup && Array.isArray(rightGroup.items)) {
-            rightGroup.items = rightGroup.items.filter((x) => x && x.id !== 'comment-button');
+            const blockedIds = new Set([
+                'comment-button',
+                'search',
+                'search-button',
+                'search-toggle',
+                'search-panel',
+            ]);
+            rightGroup.items = rightGroup.items.filter((x) => {
+                if (!x || !x.id) return false;
+                const id = String(x.id).toLowerCase();
+                if (blockedIds.has(id)) return false;
+                if (id.startsWith('search-')) return false;
+                return true;
+            });
         }
 
         // Main toolbar: inject markup tools into the center group, near pointer/pan.
@@ -406,6 +419,19 @@ async function applyEmbedPdfUiCustomization(viewer) {
                 },
             },
         });
+        if (!window.__prksDebugCtrlFBound) {
+            window.__prksDebugCtrlFBound = true;
+            document.addEventListener('keydown', (e) => {
+                if (!(e && e.ctrlKey && String(e.key || '').toLowerCase() === 'f')) return;
+                const viewerHost = document.getElementById('pdf-viewer');
+                const inWorkRoute = String(window.location && window.location.hash ? window.location.hash : '').startsWith('#/works/');
+                const viewerActive = !!(window.currentPdfViewer && viewerHost && !viewerHost.classList.contains('hidden') && inWorkRoute);
+                if (!viewerActive) return;
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+            }, true);
+        }
         const hostForModeFix = document.getElementById(viewer === window.uploadViewer ? 'upload-viewer' : 'pdf-viewer');
         if (hostForModeFix && !viewer.__prksToolbarModeFixBound) {
             viewer.__prksToolbarModeFixBound = true;
@@ -461,10 +487,12 @@ async function applyEmbedPdfUiCustomization(viewer) {
         }
 
         const live = ui.getSchema();
-        // Floating bar for selected markup: remove comment + style (PRKS uses sidebar comments).
+        // Floating bar for selected markup: remove comment + style + link actions (PRKS uses sidebar comments).
         const PRKS_SELECTION_POPUP_STRIP_IDS = new Set([
             'add-comment',
             'comment-button',
+            'add-link',
+            'link-button',
             'toggle-annotation-style',
             'create-stamp-from-annotation',
             'create-stamp-from-group',
@@ -473,6 +501,7 @@ async function applyEmbedPdfUiCustomization(viewer) {
         ]);
         const PRKS_SELECTION_POPUP_STRIP_COMMAND_IDS = new Set([
             'annotation:toggle-comment',
+            'annotation:add-link',
             'stamp:create-from-selected',
             'stamp:create-from-group',
             'annotation:add-strikeout',
@@ -485,8 +514,11 @@ async function applyEmbedPdfUiCustomization(viewer) {
                 if (!menu || !Array.isArray(menu.items)) continue;
                 menu.items = menu.items.filter((it) => {
                     if (!it || typeof it !== 'object') return true;
+                    const itemId = String(it.id || '').toLowerCase();
+                    const commandId = String(it.commandId || '').toLowerCase();
                     if (PRKS_SELECTION_POPUP_STRIP_IDS.has(it.id)) return false;
                     if (it.commandId && PRKS_SELECTION_POPUP_STRIP_COMMAND_IDS.has(it.commandId)) return false;
+                    if (itemId.includes('link') || commandId.includes('link')) return false;
                     if (
                         typeof it.commandId === 'string' &&
                         it.commandId.startsWith('stamp:')
@@ -498,7 +530,12 @@ async function applyEmbedPdfUiCustomization(viewer) {
                 });
                 if (menu.visibilityDependsOn && Array.isArray(menu.visibilityDependsOn.itemIds)) {
                     const stripIds = PRKS_SELECTION_POPUP_STRIP_IDS;
-                    menu.visibilityDependsOn.itemIds = menu.visibilityDependsOn.itemIds.filter((id) => !stripIds.has(id));
+                    menu.visibilityDependsOn.itemIds = menu.visibilityDependsOn.itemIds.filter((id) => {
+                        const sid = String(id || '').toLowerCase();
+                        if (stripIds.has(id)) return false;
+                        if (sid.includes('link')) return false;
+                        return true;
+                    });
                 }
             }
         }
