@@ -825,6 +825,64 @@ body {
     flex-shrink: 0;
 }
 
+.publishers-page__list {
+    margin-top: 10px;
+}
+
+.publishers-page__list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+}
+
+.publishers-page__list-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.publishers-page__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.publishers-page__list-stats {
+    display: block;
+    margin: 0;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+.publishers-page__list-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.publishers-page__alias-btn {
+    margin-top: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.publishers-page__alias-btn .prks-icon {
+    flex-shrink: 0;
+}
+
 .tag--page {
     font-size: calc(0.8rem * var(--tag-scale, 1));
     padding: calc(6px * var(--tag-scale, 1)) calc(12px * var(--tag-scale, 1));

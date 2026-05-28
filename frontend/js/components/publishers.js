@@ -237,37 +237,27 @@ async function renderPublishersPage(container) {
     prksPublishersPageCtx.publishers = publishers;
     prksPublishersPageCtx.selectedId = null;
 
-    const totals = publishers.map((p) => Number(p.work_count) || 0);
-    const minTotal = totals.length ? Math.min(...totals) : 0;
-    const maxTotal = totals.length ? Math.max(...totals) : 0;
-    const minScale = 0.85;
-    const maxScale = 1.85;
-    const logMin = Math.log10(minTotal + 1);
-    const logMax = Math.log10(maxTotal + 1);
-    const scaleForTotal = (total) => {
-        const log = Math.log10((total || 0) + 1);
-        if (logMax === logMin) return 1;
-        const t = (log - logMin) / (logMax - logMin);
-        return minScale + t * (maxScale - minScale);
-    };
-
-    let chips =
+    const rowsHtml =
         publishers.length === 0
             ? '<p class="tags-page__empty publishers-page__empty">No publisher groups yet. Add a canonical name below, then add alternate spellings that appear on your files (⋯).</p>'
             : publishers
                   .map((p) => {
                       const count = Number(p.work_count) || 0;
-                      const scale = scaleForTotal(count);
-                      const borderLeftPx = 4 * scale;
                       const idEsc = escapeHtmlPublishersPage(p.id);
                       const navEnc = encodeURIComponent(p.name || '');
                       const nm = escapeHtmlPublishersPage(p.name || '');
+                      const aliases = Array.isArray(p.aliases) ? p.aliases.length : 0;
+                      const icon = typeof prksIcon === 'function' ? prksIcon('building-2', { size: 'sm' }) : '';
                       return (
-                          `<span class="tag tag--page tag--page-with-actions publishers-page__chip" style="--tag-scale:${scale.toFixed(3)};border-left: ${borderLeftPx.toFixed(2)}px solid var(--accent-muted, #6d6cf7);">` +
-                          `<span class="tag--page__nav" role="button" tabindex="0" data-publisher-nav="${navEnc}">${nm}</span>` +
-                          `<span class="publishers-page__count" aria-hidden="true">${count}</span>` +
-                          `<button type="button" class="tag-page-alias-btn" data-publisher-alias-edit="${idEsc}" title="Aliases" aria-label="Edit aliases for ${nm}">⋯</button>` +
-                          `</span>`
+                          `<div class="project-card publishers-page__list-item" role="button" tabindex="0" data-publisher-nav="${navEnc}" aria-label="View files for publisher ${nm}">` +
+                          `<div class="publishers-page__list-main">` +
+                          `<span class="publishers-page__badge">${icon}<span>${nm}</span></span>` +
+                          `<p class="meta-row publishers-page__list-stats">${count} file${count === 1 ? '' : 's'}${aliases ? ` · ${aliases} alias${aliases === 1 ? '' : 'es'}` : ''}</p>` +
+                          `</div>` +
+                          `<div class="publishers-page__list-actions">` +
+                          `<button type="button" class="ribbon-btn ribbon-btn--sm publishers-page__alias-btn" data-publisher-alias-edit="${idEsc}" title="Aliases" aria-label="Edit aliases for ${nm}">⋯<span>Aliases</span></button>` +
+                          `</div>` +
+                          `</div>`
                       );
                   })
                   .join('');
@@ -277,7 +267,7 @@ async function renderPublishersPage(container) {
             <div class="page-header tags-page__header publishers-page__header">
                 <div class="publishers-page__header-lede">
                     <h2>Publishers</h2>
-                    <p class="tags-page__sub publishers-page__sub">Canonical names and alternate spellings for search. Files still store whatever publisher string each book has; search matches a substring on that field, or treats exact matches as the same publisher when you define aliases (e.g. “OUP” and “Oxford University Press”). Click a name to list matching files.</p>
+                    <p class="tags-page__sub publishers-page__sub">Canonical names and alternate spellings for search. Files still store whatever publisher string each book has; search matches a substring on that field, or treats exact matches as the same publisher when you define aliases (e.g. “OUP” and “Oxford University Press”). Click row to view files; use <strong>Aliases</strong> to edit variants.</p>
                 </div>
                 <div class="publishers-page__add">
                     <label class="search-advanced__label" for="publishers-page-new-name">New canonical publisher</label>
@@ -292,7 +282,7 @@ async function renderPublishersPage(container) {
                     </div>
                 </div>
             </div>
-            <div id="publishers-page-cloud" class="tag-cloud tag-cloud--page">${chips}</div>
+            <div id="publishers-page-cloud" class="list-view publishers-page__list">${rowsHtml}</div>
             <div id="publishers-page-alias-backdrop" class="modal-backdrop hidden tags-page-alias-backdrop" role="presentation">
                 <div id="publishers-page-alias-modal" class="modal tags-page-alias-modal hidden" role="dialog" aria-modal="true" aria-labelledby="publishers-page-alias-heading" tabindex="-1">
                     <div class="modal-header">
