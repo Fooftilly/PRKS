@@ -77,6 +77,14 @@ class TestServerAPI(unittest.TestCase):
 
         # Create a test database
         cls._tmpdir = tempfile.mkdtemp(prefix="prks-server-tests-")
+        cls._old_storage = os.environ.get("PRKS_STORAGE")
+        cls._old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
+        cls._storage_root = os.path.join(cls._tmpdir, "storage")
+        cls._processing_root = os.path.join(cls._tmpdir, "processing")
+        os.makedirs(cls._storage_root, exist_ok=True)
+        os.makedirs(cls._processing_root, exist_ok=True)
+        os.environ["PRKS_STORAGE"] = cls._storage_root
+        os.environ["PRKS_FOR_PROCESSING_DIR"] = cls._processing_root
         cls.test_db_path = os.path.join(cls._tmpdir, "test_server_prks_data.db")
             
         schema_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend", "db_schema.sql")
@@ -84,6 +92,12 @@ class TestServerAPI(unittest.TestCase):
         
         # Patch the server's db instance
         server_module.db = cls.test_db
+        server_module.pdfs_dir = os.path.join(cls._storage_root, "pdfs")
+        server_module.thumbs_dir = os.path.join(cls._storage_root, "thumbs")
+        server_module.processing_dir = cls._processing_root
+        os.makedirs(server_module.pdfs_dir, exist_ok=True)
+        os.makedirs(server_module.thumbs_dir, exist_ok=True)
+        os.makedirs(server_module.processing_dir, exist_ok=True)
 
         # Start server in a background daemon thread
         cls.server_thread = threading.Thread(target=server_module.run_server, args=(cls._test_port,), daemon=True)
@@ -93,6 +107,14 @@ class TestServerAPI(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        if getattr(cls, "_old_storage", None) is None:
+            os.environ.pop("PRKS_STORAGE", None)
+        else:
+            os.environ["PRKS_STORAGE"] = cls._old_storage
+        if getattr(cls, "_old_processing", None) is None:
+            os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
+        else:
+            os.environ["PRKS_FOR_PROCESSING_DIR"] = cls._old_processing
         if getattr(cls, "_tmpdir", None):
             try:
                 import shutil

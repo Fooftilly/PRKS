@@ -1897,7 +1897,10 @@ def run_server(port=PORT):
         LOGGER.warning("thumbnail_prune_skipped error=%s", e)
     with socketserver.TCPServer(("", port), PRKSHandler) as httpd:
         LOGGER.info("server_starting url=http://localhost:%s", port)
-        httpd.serve_forever()
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            LOGGER.info("server_stopping reason=keyboard_interrupt")
 
 if __name__ == "__main__":
     run_server()
