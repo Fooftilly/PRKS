@@ -33,6 +33,11 @@ def _resolve_log_level() -> int:
     return getattr(logging, raw, logging.INFO)
 
 
+def _resolve_file_log_level() -> int:
+    raw = (os.environ.get("PRKS_LOG_FILE_LEVEL") or "ERROR").strip().upper()
+    return getattr(logging, raw, logging.ERROR)
+
+
 def _resolve_retention_days() -> int:
     raw = (os.environ.get("PRKS_LOG_RETENTION_DAYS") or "").strip()
     if not raw:
@@ -50,6 +55,7 @@ def setup_logging() -> None:
         return
 
     level = _resolve_log_level()
+    file_level = _resolve_file_log_level()
     log_file = _resolve_log_file_path()
     retention_days = _resolve_retention_days()
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
@@ -66,6 +72,7 @@ def setup_logging() -> None:
         backupCount=retention_days,
         encoding="utf-8",
     )
+    file_handler.setLevel(file_level)
     file_handler.setFormatter(formatter)
 
     stderr_handler = logging.StreamHandler()
@@ -77,9 +84,10 @@ def setup_logging() -> None:
     root._prks_logging_configured = True
 
     logging.getLogger(__name__).info(
-        "logging_initialized log_file=%s level=%s rotate_when=%s retention_days=%s",
+        "logging_initialized log_file=%s level=%s file_level=%s rotate_when=%s retention_days=%s",
         log_file,
         logging.getLevelName(level),
+        logging.getLevelName(file_level),
         _DEFAULT_ROTATE_WHEN,
         retention_days,
     )
