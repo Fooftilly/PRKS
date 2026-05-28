@@ -722,6 +722,62 @@ body {
     margin-top: 8px;
 }
 
+.types-page__sub {
+    margin: 0;
+}
+
+.types-page__list {
+    margin-top: 10px;
+}
+
+.types-page__list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.types-page__list-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.types-page__list-main .doc-type-badge {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.types-page__list-stats {
+    display: inline-flex;
+    align-items: center;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.types-page__list-arrow {
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+
+.types-page__detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.types-page__detail-type {
+    display: inline-flex;
+    align-items: center;
+}
+
+.types-page__detail-type .doc-type-badge {
+    font-size: 0.68rem;
+    padding: 3px 8px;
+}
+
 /* Publishers page: header + add row aligned with tag-add-shell and alias modal controls */
 .publishers-page__header {
     flex-wrap: wrap;

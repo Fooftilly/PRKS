@@ -1694,13 +1694,35 @@ function renderRouteContextSidebar(mode) {
             </div>`;
     }
     if (mode === 'types') {
-        const dtLabel = prksSidebarEsc(ctx.docTypeLabel || ctx.docType || 'File types');
+        const isDetail = !!(ctx.docTypeLabel || ctx.docType);
+        if (!isDetail) {
+            const typeCount = ctx.typeCount != null ? Number(ctx.typeCount) : null;
+            const fileCount = ctx.totalFiles != null ? Number(ctx.totalFiles) : null;
+            const typeCountLine =
+                typeCount != null && !Number.isNaN(typeCount)
+                    ? `<p class="route-sidebar__meta">${typeCount} type${typeCount === 1 ? '' : 's'} in use.</p>`
+                    : '';
+            const fileCountLine =
+                fileCount != null && !Number.isNaN(fileCount)
+                    ? `<p class="route-sidebar__meta">${fileCount} file${fileCount === 1 ? '' : 's'} grouped by type.</p>`
+                    : '';
+            return `
+                <div class="route-sidebar">
+                    <h2 class="route-sidebar__title">File types</h2>
+                    <p class="route-sidebar__lede">Open any type row to list matching files.</p>
+                    ${typeCountLine}
+                    ${fileCountLine}
+                    ${link('#/folders', 'Folder library')}
+                    ${link('#/tags', 'All tags')}
+                </div>`;
+        }
+        const dtLabel = prksSidebarEsc(ctx.docTypeLabel || ctx.docType || 'File type');
         const n = ctx.workCount != null ? Number(ctx.workCount) : null;
         const extra = n != null && !Number.isNaN(n) ? `<p class="route-sidebar__meta">${n} file${n === 1 ? '' : 's'} in this type.</p>` : '';
         return `
             <div class="route-sidebar">
                 <h2 class="route-sidebar__title">${dtLabel}</h2>
-                <p class="route-sidebar__lede">Browse files by BibTeX document type, regardless of folder.</p>
+                <p class="route-sidebar__lede">Files classified as this BibTeX type.</p>
                 ${extra}
                 ${link('#/types', 'All file types')}
                 ${link('#/folders', 'Folder library')}

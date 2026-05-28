@@ -122,7 +122,12 @@ function prksWorkCardHtml(w, options = {}) {
     const statusHtml = status
         ? `<span class="status-badge ${prksWorkCardsEscapeHtml(statusClass)}">${statusIcon}${prksWorkCardsEscapeHtml(status)}</span>`
         : '';
-    const typeBadge = typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(w.doc_type) : '';
+    const typeBadge =
+        options.hideDocTypeBadge
+            ? ''
+            : typeof prksDocTypeBadgeHtml === 'function'
+              ? prksDocTypeBadgeHtml(w.doc_type)
+              : '';
     const subtitleRaw = options.subtitle != null ? String(options.subtitle) : '';
     const subtitle = prksWorkCardsEscapeHtml(subtitleRaw);
 

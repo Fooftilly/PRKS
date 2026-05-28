@@ -35,37 +35,47 @@ function renderTypesIndex(works, container) {
         .filter((r) => r.count > 0)
         .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
 
-    window.__prksRouteSidebar = { typeCount: rows.length };
+    const totals = rows.map((r) => Number(r.count) || 0);
+    const totalFiles = totals.reduce((acc, n) => acc + n, 0);
+
+    window.__prksRouteSidebar = { typeCount: rows.length, totalFiles };
+
+    const rowsHtml = rows.length
+        ? rows
+              .map((r) => {
+                  const count = Number(r.count) || 0;
+                  const typePath = '#/types/' + encodeURIComponent(r.value);
+                  const badge =
+                      typeof prksDocTypeBadgeHtml === 'function'
+                          ? prksDocTypeBadgeHtml(r.value)
+                          : `<span class="status-badge Planned">${prksTypesEsc(r.label)}</span>`;
+                  return (
+                      `<div class="project-card types-page__list-item" data-prks-middleclick-nav="1"` +
+                      ` onclick="window.location.hash='${typePath}'"` +
+                      ` onauxclick="return prksMaybeOpenHashInNewTab(event,'${typePath}')">` +
+                      `<div class="types-page__list-main">` +
+                      `${badge}` +
+                      `<p class="meta-row types-page__list-stats">${count} file${count === 1 ? '' : 's'}</p>` +
+                      `</div>` +
+                      `<span class="types-page__list-arrow" aria-hidden="true">${typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 'sm' }) : '→'}</span>` +
+                      `</div>`
+                  );
+              })
+              .join('')
+        : '<p class="tags-page__empty types-page__empty">No files in library yet. Add file to start grouping by BibTeX type.</p>';
 
     container.innerHTML = `
-        <div class="page-header">
-            <h2>File types</h2>
-        </div>
-        <p class="meta-row" style="margin: 0 0 14px 0;">
-            Browse all files by BibTeX document type (independent of folders).
-        </p>
-        <div class="list-view">
-            ${
-                rows.length
-                    ? rows
-                          .map((r) => {
-                              const badge =
-                                  typeof prksDocTypeBadgeHtml === 'function'
-                                      ? prksDocTypeBadgeHtml(r.value)
-                                      : `<span class="status-badge Planned">${prksTypesEsc(r.value)}</span>`;
-                              return `
-                                <div class="project-card" data-prks-middleclick-nav="1"
-                                    onclick="window.location.hash='#/types/${encodeURIComponent(r.value)}'">
-                                    ${badge}
-                                    <div class="card-title">${prksTypesEsc(r.label)}</div>
-                                    <div class="meta-row">${r.count} file${r.count === 1 ? '' : 's'}</div>
-                                </div>`;
-                          })
-                          .join('')
-                    : `<p class="meta-row" style="color: var(--text-secondary);">No files yet.</p>`
-            }
+        <div class="types-page">
+            <div class="page-header tags-page__header">
+                <h2>File types</h2>
+                <p class="tags-page__sub types-page__sub">Browse files by BibTeX document type. Click row to open matching files.</p>
+            </div>
+            <div class="list-view types-page__list">
+                ${rowsHtml}
+            </div>
         </div>
     `;
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 function renderWorksByDocType(works, docType, container) {
@@ -77,25 +87,31 @@ function renderWorksByDocType(works, docType, container) {
         .sort((a, b) => String(a?.title || '').localeCompare(String(b?.title || ''), undefined, { sensitivity: 'base' }));
 
     window.__prksRouteSidebar = { docType: dt, docTypeLabel: label, workCount: filtered.length };
+    const typeBadge =
+        typeof prksDocTypeBadgeHtml === 'function'
+            ? prksDocTypeBadgeHtml(dt)
+            : `<span class="status-badge Planned">${prksTypesEsc(label)}</span>`;
 
     container.innerHTML = `
-        <div class="page-header" style="gap: 12px; flex-wrap: wrap;">
-            <h2>${prksTypesEsc(label)}</h2>
-            <div style="flex: 1 1 auto;"></div>
-            <a class="route-sidebar__link" href="#/types">All types</a>
-        </div>
-        <div class="card-grid">
+        <div class="types-page types-page--detail">
+            <div class="page-header types-page__detail-header">
+                <h2>Files</h2>
+                <div class="types-page__detail-type">${typeBadge}</div>
+            </div>
+        <div class="card-grid types-page__detail-grid">
             ${
                 filtered.length
                     ? filtered
                           .map((w) => {
-                              const subtitle = w.abstract ? String(w.abstract).slice(0, 90) + '…' : '';
-                              return typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { subtitle }) : '';
+                              return typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { hideDocTypeBadge: true }) : '';
                           })
                           .join('')
-                    : `<p class="meta-row" style="color: var(--text-secondary);">No files of this type yet.</p>`
+                    : `<p class="tags-page__empty types-page__empty">No files in this type yet.</p>`
             }
         </div>
+        </div>
     `;
+    if (typeof prksInitLazyWorkThumbs === 'function') prksInitLazyWorkThumbs(container);
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
