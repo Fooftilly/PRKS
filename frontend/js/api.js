@@ -153,12 +153,16 @@ async function fetchSearch(query, tagName, options = {}) {
     const author = options.author != null ? String(options.author).trim() : '';
     const publisher =
         options.publisher != null ? String(options.publisher).trim() : '';
+    const any = options.any != null ? String(options.any).trim() : '';
     if (tagName) {
         try {
             const params = new URLSearchParams();
             params.set('tag', tagName);
             if (author) params.set('author', author);
             if (publisher) params.set('publisher', publisher);
+            if (any && (any === '1' || any.toLowerCase() === 'true' || any.toLowerCase() === 'yes')) {
+                params.set('any', '1');
+            }
             const res = await fetch('/api/search?' + params.toString());
             const data = await prksParseJsonResponse(res, [], 'search');
             return Array.isArray(data) ? data : [];
@@ -174,7 +178,11 @@ async function fetchSearch(query, tagName, options = {}) {
         if (q) params.set('q', q);
         if (author) params.set('author', author);
         if (publisher) params.set('publisher', publisher);
-        const res = await fetch('/api/search?' + params.toString());
+        if (any && (any === '1' || any.toLowerCase() === 'true' || any.toLowerCase() === 'yes')) {
+            params.set('any', '1');
+        }
+        const url = '/api/search?' + params.toString();
+        const res = await fetch(url);
         const data = await prksParseJsonResponse(res, [], 'search');
         return Array.isArray(data) ? data : [];
     } catch (e) {

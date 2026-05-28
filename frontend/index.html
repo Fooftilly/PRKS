@@ -39,9 +39,12 @@
             </div>
 
             <div class="search-bar">
-                <div class="tag-add-shell">
+                <div class="tag-add-shell prks-global-search" id="prks-global-search">
                     <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
+                        <button type="button" id="prks-global-search-run" class="tag-add-shell__icon prks-global-search__run" aria-label="Run search">
+                            <i data-lucide="search" class="prks-icon" aria-hidden="true"></i>
+                        </button>
+                        <button type="button" id="prks-global-search-mode" class="prks-global-search__chip" aria-label="Search mode" aria-haspopup="false"></button>
                         <input type="text" id="global-search" class="tag-add-shell__input" placeholder="Search title, notes, authors…" autocomplete="off" aria-label="Search library">
                     </div>
                 </div>

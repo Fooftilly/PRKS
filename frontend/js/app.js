@@ -838,7 +838,8 @@ async function handleRoute() {
         const tag = urlParams.get('tag') || '';
         const author = urlParams.get('author') || '';
         const publisher = urlParams.get('publisher') || '';
-        const results = await fetchSearch(query, tag, { author, publisher });
+        const any = urlParams.get('any') || '';
+        const results = await fetchSearch(query, tag, { author, publisher, any });
         if (routeGen !== window.__prksRouteGen) return;
         window.__prksRouteSidebar = {
             query,
@@ -847,7 +848,7 @@ async function handleRoute() {
             publisher,
             resultCount: Array.isArray(results) ? results.length : 0
         };
-        renderSearch(results, query, contentDiv, { tag, author, publisher });
+        renderSearch(results, query, contentDiv, { tag, author, publisher, any });
     } else if (hash === '#/tags') {
         if (typeof renderTagsPage === 'function') {
             await renderTagsPage(contentDiv);
@@ -1568,14 +1569,108 @@ function initForms() {
 
 function initSearch() {
     const searchInput = document.getElementById('global-search');
-    if (searchInput) {
-        searchInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                const query = searchInput.value.trim();
-                if (query) {
-                    window.location.hash = '#/search?q=' + encodeURIComponent(query);
-                }
-            }
-        });
-    }
+    const root = document.getElementById('prks-global-search');
+    const chip = document.getElementById('prks-global-search-mode');
+    const runBtn = document.getElementById('prks-global-search-run');
+    if (!searchInput || !root || !chip || !runBtn || root.dataset.bound === '1') return;
+    root.dataset.bound = '1';
+
+    const LS_KEY = 'prks.search.mode';
+    const VALID = new Set(['keywords', 'people', 'published', 'all']);
+    const ORDER = ['all', 'keywords', 'people', 'published'];
+
+    const readMode = () => {
+        try {
+            const raw = String(localStorage.getItem(LS_KEY) || '').trim();
+            return VALID.has(raw) ? raw : 'all';
+        } catch (_e) {
+            return 'all';
+        }
+    };
+    const writeMode = (m) => {
+        const mode = VALID.has(m) ? m : 'all';
+        try {
+            localStorage.setItem(LS_KEY, mode);
+        } catch (_e) {}
+        return mode;
+    };
+
+    const modeLabel = (mode) => {
+        if (mode === 'people') return 'People';
+        if (mode === 'published') return 'Publisher';
+        if (mode === 'keywords') return 'Keywords';
+        return 'All';
+    };
+
+    const placeholderForMode = (mode) => {
+        if (mode === 'people') return 'People…';
+        if (mode === 'published') return 'Publisher…';
+        if (mode === 'all') return 'Search…';
+        return 'Keywords…';
+    };
+
+    const applyMode = (mode) => {
+        const m = writeMode(mode);
+        chip.textContent = modeLabel(m);
+        chip.setAttribute('aria-label', `Search mode: ${modeLabel(m)}`);
+        searchInput.setAttribute('placeholder', placeholderForMode(m));
+    };
+
+    const cycleMode = () => {
+        const cur = readMode();
+        const idx = ORDER.indexOf(cur);
+        const next = ORDER[(idx >= 0 ? idx + 1 : 0) % ORDER.length];
+        applyMode(next);
+    };
+
+    const run = () => {
+        const query = String(searchInput.value || '').trim();
+        if (!query) return;
+        const mode = readMode();
+        const p = new URLSearchParams();
+        if (mode === 'keywords') {
+            p.set('q', query);
+        } else if (mode === 'people') {
+            p.set('author', query);
+        } else if (mode === 'published') {
+            p.set('publisher', query);
+        } else {
+            // "All" should be OR across keyword/author/publisher.
+            // Backend supports this via /api/search?any=1&q=...
+            p.set('any', '1');
+            p.set('q', query);
+        }
+        const targetHash = '#/search?' + p.toString();
+        const prevHash = window.location.hash || '';
+        window.location.hash = targetHash;
+        if (prevHash === targetHash && typeof handleRoute === 'function') {
+            void handleRoute();
+        }
+    };
+
+    applyMode(readMode());
+
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            run();
+        }
+    });
+
+    runBtn.addEventListener('click', () => {
+        run();
+        searchInput.focus();
+    });
+
+    chip.addEventListener('click', () => {
+        cycleMode();
+        searchInput.focus();
+    });
+    chip.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            cycleMode();
+            searchInput.focus();
+        }
+    });
 }

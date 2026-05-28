@@ -1816,6 +1816,56 @@ class PRKSDatabase:
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ordered_ids if i in by_id]
 
+    def search_works_any(self, term: str) -> List[dict]:
+        """
+        OR-mode search for single term across:
+        - keyword index (FTS/LIKE/linked persons)
+        - author match
+        - publisher match (including aliases)
+        """
+        t = (term or "").strip()
+        if not t:
+            return []
+
+        seen: set = set()
+        ordered: List[dict] = []
+        extra_ids: set = set()
+
+        kw_rows = self.search_works(t, "", "")
+        for r in kw_rows:
+            wid = r.get("id")
+            if not wid or wid in seen:
+                continue
+            seen.add(wid)
+            ordered.append(r)
+
+        try:
+            extra_ids.update(self.work_ids_matching_author(t))
+        except Exception:
+            pass
+        try:
+            extra_ids.update(self.work_ids_matching_publisher(t))
+        except Exception:
+            pass
+
+        extra_ids = {wid for wid in extra_ids if wid and wid not in seen}
+        if not extra_ids:
+            return ordered
+
+        id_list = list(extra_ids)
+        ph = ",".join("?" * len(id_list))
+        wsel = _prks_work_summary_select_with_folder("works")
+        pex = _prks_sql_work_summary_person_extras("works")
+        rows = list(
+            self.execute_query(
+                f"SELECT {wsel}, {pex} FROM works WHERE id IN ({ph}) ORDER BY updated_at DESC, created_at DESC",
+                tuple(id_list),
+            )
+        )
+        enrich_work_rows_pdf_file_size(rows)
+        ordered.extend(rows)
+        return ordered
+
     def get_works_by_tag_name(self, tag_name: str) -> List[dict]:
         """Works tagged with the canonical tag matching this name or a tag alias (case-insensitive)."""
         name = (tag_name or "").strip()

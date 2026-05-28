@@ -1225,6 +1225,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 tag = query.get('tag', [''])[0]
                 author = query.get('author', [''])[0]
                 publisher = query.get('publisher', [''])[0]
+                any_mode = query.get('any', [''])[0] in ('1', 'true', 'yes')
                 if tag:
                     data = db.get_works_by_tag_name(tag)
                     if author and author.strip():
@@ -1234,11 +1235,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         allow_pub = set(db.work_ids_matching_publisher(publisher.strip()))
                         data = [w for w in data if w.get('id') in allow_pub]
                 else:
-                    data = db.search_works(
-                        q,
-                        author.strip() if author else '',
-                        publisher.strip() if publisher else '',
-                    )
+                    if any_mode:
+                        term = (q or author or publisher or '').strip()
+                        data = db.search_works_any(term)
+                    else:
+                        data = db.search_works(
+                            q,
+                            author.strip() if author else '',
+                            publisher.strip() if publisher else '',
+                        )
                 self.send_json(200, data)
             elif path == '/api/tags':
                 used_only = query.get('used', [''])[0] in ('1', 'true', 'yes')

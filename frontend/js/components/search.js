@@ -21,6 +21,16 @@ function renderRecent(works, container) {
 }
 
 function prksRunSearchFromForm() {
+    const anyIn = document.getElementById('search-any-input');
+    if (anyIn) {
+        const v = (anyIn.value || '').trim();
+        if (!v) return;
+        const p = new URLSearchParams();
+        p.set('any', '1');
+        p.set('q', v);
+        window.location.hash = '#/search?' + p.toString();
+        return;
+    }
     const qv = (document.getElementById('search-q-input') || {}).value.trim() || '';
     const av = (document.getElementById('search-author-input') || {}).value.trim() || '';
     const pv = (document.getElementById('search-publisher-input') || {}).value.trim() || '';
@@ -36,6 +46,11 @@ function renderSearch(results, query, container, options = {}) {
     const tag = options.tag || '';
     const author = options.author || '';
     const publisher = options.publisher || '';
+    const anyRaw = options.any || '';
+    const any =
+        anyRaw === '1' ||
+        String(anyRaw).trim().toLowerCase() === 'true' ||
+        String(anyRaw).trim().toLowerCase() === 'yes';
     let title;
     if (tag) {
         title = `Files tagged “${searchEscapeHtml(tag)}”`;
@@ -62,37 +77,53 @@ function renderSearch(results, query, container, options = {}) {
         const qEsc = searchEscapeHtml(query);
         const aEsc = searchEscapeHtml(author);
         const pEsc = searchEscapeHtml(publisher);
-        html += `
-            <div class="search-advanced" role="search">
-                <div class="search-advanced__row">
-                    <label class="search-advanced__label" for="search-q-input">Keywords</label>
-                    <div class="tag-add-shell">
-                        <div class="tag-add-shell__field">
-                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
-                            <input type="search" id="search-q-input" class="tag-add-shell__input" value="${qEsc}" placeholder="Title, notes, abstract, numbers…" maxlength="500" autocomplete="off" aria-label="Search keywords">
+        if (any) {
+            html += `
+                <div class="search-advanced" role="search">
+                    <div class="search-advanced__row">
+                        <label class="search-advanced__label" for="search-any-input">All</label>
+                        <div class="tag-add-shell">
+                            <div class="tag-add-shell__field">
+                                ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
+                                <input type="search" id="search-any-input" class="tag-add-shell__input" value="${qEsc}" placeholder="Title, notes, people, publisher…" maxlength="500" autocomplete="off" aria-label="Search all fields">
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="search-advanced__row">
-                    <label class="search-advanced__label" for="search-author-input">Author</label>
-                    <div class="tag-add-shell">
-                        <div class="tag-add-shell__field">
-                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
-                            <input type="search" id="search-author-input" class="tag-add-shell__input" value="${aEsc}" placeholder="Name in metadata or linked person…" maxlength="200" autocomplete="off" aria-label="Search by author">
+                    <button type="button" class="ribbon-btn search-advanced__submit" id="search-run-btn">Search</button>
+                </div>`;
+        } else {
+            html += `
+                <div class="search-advanced" role="search">
+                    <div class="search-advanced__row">
+                        <label class="search-advanced__label" for="search-q-input">Keywords</label>
+                        <div class="tag-add-shell">
+                            <div class="tag-add-shell__field">
+                                ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
+                                <input type="search" id="search-q-input" class="tag-add-shell__input" value="${qEsc}" placeholder="Title, notes, abstract, numbers…" maxlength="500" autocomplete="off" aria-label="Search keywords">
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="search-advanced__row">
-                    <label class="search-advanced__label" for="search-publisher-input">Publisher</label>
-                    <div class="tag-add-shell">
-                        <div class="tag-add-shell__field">
-                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
-                            <input type="search" id="search-publisher-input" class="tag-add-shell__input" value="${pEsc}" placeholder="Publisher field; alternate names from Publishers page…" maxlength="200" autocomplete="off" aria-label="Search by publisher">
+                    <div class="search-advanced__row">
+                        <label class="search-advanced__label" for="search-author-input">Author</label>
+                        <div class="tag-add-shell">
+                            <div class="tag-add-shell__field">
+                                ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
+                                <input type="search" id="search-author-input" class="tag-add-shell__input" value="${aEsc}" placeholder="Name in metadata or linked person…" maxlength="200" autocomplete="off" aria-label="Search by author">
+                            </div>
                         </div>
                     </div>
-                </div>
-                <button type="button" class="ribbon-btn search-advanced__submit" id="search-run-btn">Search</button>
-            </div>`;
+                    <div class="search-advanced__row">
+                        <label class="search-advanced__label" for="search-publisher-input">Publisher</label>
+                        <div class="tag-add-shell">
+                            <div class="tag-add-shell__field">
+                                ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
+                                <input type="search" id="search-publisher-input" class="tag-add-shell__input" value="${pEsc}" placeholder="Publisher field; alternate names from Publishers page…" maxlength="200" autocomplete="off" aria-label="Search by publisher">
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="ribbon-btn search-advanced__submit" id="search-run-btn">Search</button>
+                </div>`;
+        }
     }
     html += `</div><div class="card-grid">`;
     if (results && results.length > 0) {
@@ -109,12 +140,14 @@ function renderSearch(results, query, container, options = {}) {
     if (!tag) {
         const runBtn = document.getElementById('search-run-btn');
         const qIn = document.getElementById('search-q-input');
+        const anyIn = document.getElementById('search-any-input');
         const aIn = document.getElementById('search-author-input');
         const pIn = document.getElementById('search-publisher-input');
         if (runBtn) runBtn.onclick = () => prksRunSearchFromForm();
         const onEnter = (e) => {
             if (e.key === 'Enter') prksRunSearchFromForm();
         };
+        if (anyIn) anyIn.onkeydown = onEnter;
         if (qIn) qIn.onkeydown = onEnter;
         if (aIn) aIn.onkeydown = onEnter;
         if (pIn) pIn.onkeydown = onEnter;
