@@ -156,7 +156,8 @@ function prksAttachWikiLinkAutocomplete(cm) {
     cm.setOption(
         'extraKeys',
         Object.assign({}, keys, {
-            'Ctrl-Space': openWikiHint,
+            // Manual trigger removed (Ctrl-Space conflicts in many browsers / IME).
+            // Keep autocomplete via typing `[[` and `[[pdf:` only.
         })
     );
 }
@@ -495,6 +496,36 @@ async function renderWorkDetails(work, container, routeGen) {
 
 function initEasyMDE(work) {
     const titleLowerToId = window.__prksWikiTitleMap || {};
+    const prksNotesHelpHtml = `
+<div class="prks-help-section">
+  <div class="prks-help-title">Work links</div>
+  <ul>
+    <li><code>[[Work Title]]</code> open work</li>
+    <li><code>[[Work Title|Label]]</code> open work with label</li>
+  </ul>
+</div>
+<div class="prks-help-section">
+  <div class="prks-help-title">PDF annotation links</div>
+  <ul>
+    <li><code>[[pdf:&lt;annotationId&gt;]]</code> jump inside PDF viewer</li>
+    <li><code>[[pdf:&lt;annotationId&gt;|Label]]</code> jump with label</li>
+  </ul>
+</div>
+<div class="prks-help-section">
+  <div class="prks-help-title">Autocomplete</div>
+  <ul>
+    <li>Type <code>[[</code> then suggestions</li>
+    <li>Type <code>[[pdf:</code> then annotation suggestions</li>
+  </ul>
+</div>
+<div class="prks-help-section">
+  <div class="prks-help-title">Preview</div>
+  <ul>
+    <li>Click work link to open that work</li>
+    <li>Click pdf link to jump to annotation</li>
+  </ul>
+</div>
+`.trim();
     try {
         localStorage.removeItem('smde_work-notes-' + work.id);
     } catch (_e) {
@@ -505,7 +536,39 @@ function initEasyMDE(work) {
         spellChecker: false,
         /* Server PATCH below is the source of truth; EasyMDE localStorage autosave would restore stale drafts after reload (autosave delay > PATCH delay). */
         autosave: { enabled: false },
-        toolbar: ["bold", "italic", "heading", "|", "quote", "unordered-list", "ordered-list", "|", "link", "image", "|", "preview", "side-by-side", "fullscreen", "|", "guide"],
+        toolbar: [
+            "bold",
+            "italic",
+            "heading",
+            "|",
+            "quote",
+            "unordered-list",
+            "ordered-list",
+            "|",
+            "link",
+            "image",
+            "|",
+            "preview",
+            "side-by-side",
+            "fullscreen",
+            "|",
+            {
+                name: "prks-notes-help",
+                className: "fa fa-question-circle prks-notes-help",
+                title: "PRKS Notes Help",
+                action: () => {
+                    if (typeof prksAlertDialog === 'function') {
+                        void prksAlertDialog({
+                            title: 'Notes help',
+                            messageHtml: prksNotesHelpHtml,
+                            okLabel: 'Close',
+                        });
+                        return;
+                    }
+                    window.alert('Notes help: see wiki links [[...]] and [[pdf:...]].');
+                },
+            },
+        ],
         status: ["lines", "words", "cursor"],
         minHeight: "120px",
         previewRender: (plainText) => {

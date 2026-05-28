@@ -187,6 +187,7 @@ function prksConfirmDialog(options = {}) {
         const okBtn = document.getElementById('prks-modal-confirm-ok');
         const title = options.title != null ? String(options.title) : 'Confirm';
         const message = options.message != null ? String(options.message) : '';
+        const messageHtml = options.messageHtml != null ? String(options.messageHtml) : '';
         const confirmLabel =
             options.confirmLabel != null ? String(options.confirmLabel) : 'OK';
         const cancelLabel =
@@ -197,7 +198,15 @@ function prksConfirmDialog(options = {}) {
         const actions = document.querySelector('.prks-modal-confirm__actions');
 
         if (titleEl) titleEl.textContent = title;
-        if (descEl) descEl.textContent = message;
+        if (descEl) {
+            if (messageHtml) {
+                descEl.classList.add('prks-modal-confirm__desc--rich');
+                descEl.innerHTML = messageHtml;
+            } else {
+                descEl.classList.remove('prks-modal-confirm__desc--rich');
+                descEl.textContent = message;
+            }
+        }
         if (cancelBtn) {
             if (alertOnly) {
                 cancelBtn.classList.add('hidden');
@@ -238,6 +247,7 @@ function prksAlertDialog(options = {}) {
     return prksConfirmDialog({
         title: options.title != null ? String(options.title) : 'Notice',
         message: options.message != null ? String(options.message) : '',
+        messageHtml: options.messageHtml != null ? String(options.messageHtml) : '',
         confirmLabel: options.okLabel != null ? String(options.okLabel) : 'OK',
         alertOnly: true,
     }).then(() => {});
