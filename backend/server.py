@@ -1339,7 +1339,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             author.strip() if author else '',
                             publisher.strip() if publisher else '',
                         )
-                    if q and str(q).strip():
+                    if any_mode and q and str(q).strip():
                         text_ids = text_index.search_work_ids(q)
                         if text_ids:
                             existing = {str(w.get('id')) for w in data if w.get('id')}

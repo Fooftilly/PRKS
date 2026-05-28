@@ -627,7 +627,7 @@ class TestServerAPI(unittest.TestCase):
             got = res3.read()
         self.assertIn(b"%PDF", got[:32])
 
-    def test_8b_search_indexes_pdf_text(self):
+    def test_8b_search_indexes_pdf_text_all_mode_only(self):
         term = "UniqPdfSearchTermAlpha"
         pdf_bytes = _pdf_with_text_bytes(f"Body contains {term} and extra words")
         payload = {
@@ -645,10 +645,15 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req) as res:
             w_id = json.loads(res.read().decode())["id"]
 
-        req_s = urllib.request.Request(f"{self._base_url}/api/search?q={urllib.parse.quote(term)}")
-        with urllib.request.urlopen(req_s) as rs:
-            rows = json.loads(rs.read().decode())
-        self.assertTrue(any(r.get("id") == w_id for r in rows))
+        req_keywords = urllib.request.Request(f"{self._base_url}/api/search?q={urllib.parse.quote(term)}")
+        with urllib.request.urlopen(req_keywords) as rk:
+            rows_keywords = json.loads(rk.read().decode())
+        self.assertFalse(any(r.get("id") == w_id for r in rows_keywords))
+
+        req_all = urllib.request.Request(f"{self._base_url}/api/search?any=1&q={urllib.parse.quote(term)}")
+        with urllib.request.urlopen(req_all) as ra:
+            rows_all = json.loads(ra.read().decode())
+        self.assertTrue(any(r.get("id") == w_id for r in rows_all))
 
     def test_9_pdf_overwrite_endpoint(self):
         original = _pdf_with_text_bytes("oldtermreplacepdf")
@@ -728,7 +733,7 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(body.get("status"), "ok")
         self.assertGreaterEqual(int(body.get("processed", 0)), 1)
 
-        req_after = urllib.request.Request(f"{self._base_url}/api/search?q={urllib.parse.quote(term)}")
+        req_after = urllib.request.Request(f"{self._base_url}/api/search?any=1&q={urllib.parse.quote(term)}")
         with urllib.request.urlopen(req_after) as ra:
             rows_after = json.loads(ra.read().decode())
         self.assertTrue(any(r.get("id") == w_id for r in rows_after))
