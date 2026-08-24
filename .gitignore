@@ -1,6 +1,7 @@
 # --- PRKS runtime storage (generated) ---
 /data/
 /data_testing/
+/data_screenshots/
 
 # --- Python bytecode / caches ---
 __pycache__/

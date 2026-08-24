@@ -2,6 +2,12 @@
 
 PRKS is a self-hosted web application for organizing research materials: PDFs, Markdown notes, and online video references. It stores everything in a SQLite database and on-disk files on your machine—no separate database server. The UI supports folders, tags, reading progress, people and bibliographic metadata, PDF annotations, and playlists for videos.
 
+![Folder of public-domain books](docs/screenshots/folders.png)
+
+![Origin of Species open in the PDF reader](docs/screenshots/work.png)
+
+![People in the library](docs/screenshots/people.png)
+
 ## Requirements
 
 - **Python 3.12+**
