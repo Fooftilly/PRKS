@@ -40,6 +40,9 @@ htmlcov/
 .vscode/
 .idea/
 .cursor/*.log
+/.cursor/*
+!/.cursor/rules/
+!/.cursor/rules/**
 
 # --- Logs ---
 *.log
@@ -49,4 +52,3 @@ htmlcov/
 Thumbs.db
 log.txt
 to-do.md
-/.cursor

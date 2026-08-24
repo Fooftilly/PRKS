@@ -1,0 +1,12 @@
+---
+description: Destructive storage invariant. Default is --testing. Run-real is not a destroy grant.
+alwaysApply: true
+---
+
+# Production storage
+
+Default path is `python prks_app.py --testing`. Do not write `data/` or a live `PRKS_STORAGE` tree unless the user gave run-real authorization.
+
+Run-real authorizes normal application writes only. It does not authorize deleting PDFs, deleting, resetting, or replacing the production DB, or clearing production storage.
+
+Those destructive actions need a separate explicit confirmation that names the action.
