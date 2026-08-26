@@ -401,11 +401,44 @@ def safe_pdf_path_under_dir(pdfs_dir: str, url_last_segment: str) -> Optional[st
     base = os.path.realpath(pdfs_dir)
     try:
         candidate = os.path.realpath(os.path.join(base, name))
-    except OSError:
+    except (OSError, ValueError):
         return None
     if candidate != base and not candidate.startswith(base + os.sep):
         return None
     return candidate
+
+
+def managed_pdf_filename(file_path: str) -> Optional[str]:
+    """Return the filename only for an exact literal /api/pdfs/<filename> ownership path."""
+    prefix = "/api/pdfs/"
+    if not file_path.startswith(prefix):
+        return None
+    remainder = file_path[len(prefix):]
+    if not remainder:
+        return None
+    if "/" in remainder or "\\" in remainder:
+        return None
+    if remainder in (".", ".."):
+        return None
+    if "\x00" in remainder:
+        return None
+    if unquote(remainder) != remainder:
+        return None
+    if prefix + remainder != file_path:
+        return None
+    return remainder
+
+
+def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
+    """Managed filename a stored file_path can resolve to, matching current serving identity."""
+    fp = str(file_path or "").strip()
+    if not fp.startswith("/api/pdfs/"):
+        return None
+    segment = fp.split("/")[-1]
+    name = os.path.basename(unquote(segment))
+    if not name or name in (".", ".."):
+        return None
+    return name
 
 
 def safe_processing_path_under_dir(processing_dir: str, relative_path: str) -> Optional[str]:
@@ -485,6 +518,7 @@ def enrich_work_rows_pdf_file_size(rows: Optional[List[dict]], pdfs_dir: str) ->
 class DeletedWorkRecord:
     work_id: str
     file_path: str
+    managed_pdf_still_referenced: bool
 
 
 class PRKSDatabase:
@@ -1510,6 +1544,7 @@ class PRKSDatabase:
             if row is None:
                 return None
             file_path = "" if row["file_path"] is None else str(row["file_path"])
+            deleted_filename = managed_pdf_filename(file_path)
             tag_ids = [
                 r["tag_id"]
                 for r in conn.execute(
@@ -1533,7 +1568,20 @@ class PRKSDatabase:
                 if in_use and in_use["in_use"]:
                     continue
                 conn.execute("DELETE FROM tags WHERE id = ?", (tid,))
-            return DeletedWorkRecord(work_id=work_id, file_path=file_path)
+            still_referenced = False
+            if deleted_filename is not None:
+                survivors = conn.execute(
+                    "SELECT file_path FROM works WHERE file_path IS NOT NULL"
+                ).fetchall()
+                still_referenced = any(
+                    referenced_managed_pdf_filename(r["file_path"]) == deleted_filename
+                    for r in survivors
+                )
+            return DeletedWorkRecord(
+                work_id=work_id,
+                file_path=file_path,
+                managed_pdf_still_referenced=still_referenced,
+            )
 
     def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
         ordered_ids = [str(wid).strip() for wid in (work_ids or []) if str(wid).strip()]

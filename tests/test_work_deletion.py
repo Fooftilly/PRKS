@@ -16,8 +16,11 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import (
     PRKSDatabase,
+    managed_pdf_filename,
     prks_delete_pdf_thumbnails_for_work_id,
     prks_thumb_cache_stem,
+    referenced_managed_pdf_filename,
+    safe_pdf_path_under_dir,
 )
 from backend.storage.config import StorageConfig
 from backend.text_index import PRKSTextIndex
@@ -84,6 +87,28 @@ class TestWorkDeletion(unittest.TestCase):
             f.write(b"t")
         self.index.upsert_text(w_id, f"indexed body for {title}")
         return w_id, pdf_abs, thumb
+
+    def _write_pdf(self, filename: str) -> str:
+        pdf_abs = os.path.join(self.storage.pdfs_dir, filename)
+        with open(pdf_abs, "wb") as f:
+            f.write(b"%PDF-1.4\n%DEL\n%%EOF\n")
+        return pdf_abs
+
+    def _delete_capturing(self, work_id: str):
+        captured = []
+        real = self.db.delete_work_record
+
+        def wrap(wid):
+            rec = real(wid)
+            captured.append(rec)
+            return rec
+
+        self.db.delete_work_record = wrap
+        try:
+            result = delete_work(self.db, self.index, work_id)
+        finally:
+            self.db.delete_work_record = real
+        return result, captured[0] if captured else None
 
     def test_db_abort_preserves_work_pdf_thumb_and_index(self):
         w_id, pdf_abs, thumb = self._add_managed_work("AbortKeep")
@@ -281,6 +306,162 @@ class TestWorkDeletion(unittest.TestCase):
             (row["id"],),
         )
         self.assertEqual(pf[0]["status"], "error")
+
+    def test_duplicate_canonical_pdf_kept_until_last_work(self):
+        pdf_abs = self._write_pdf("shared.pdf")
+        a_id = self.db.add_work(title="ShareA", file_path="/api/pdfs/shared.pdf")
+        b_id = self.db.add_work(title="ShareB", file_path="/api/pdfs/shared.pdf")
+        result, rec = self._delete_capturing(b_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertTrue(rec.managed_pdf_still_referenced)
+        self.assertIsNone(self.db.get_work(b_id))
+        self.assertIsNotNone(self.db.get_work(a_id))
+        self.assertTrue(os.path.isfile(pdf_abs))
+        result_a = delete_work(self.db, self.index, a_id)
+        self.assertTrue(result_a.existed)
+        self.assertEqual(result_a.cleanup_failures, ())
+        self.assertFalse(os.path.isfile(pdf_abs))
+
+    def test_surviving_nested_legacy_alias_keeps_pdf(self):
+        pdf_abs = self._write_pdf("victim.pdf")
+        a_id = self.db.add_work(title="Canon", file_path="/api/pdfs/victim.pdf")
+        b_id = self.db.add_work(title="Nested", file_path="/api/pdfs/subdir/victim.pdf")
+        result, rec = self._delete_capturing(a_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertTrue(rec.managed_pdf_still_referenced)
+        self.assertIsNone(self.db.get_work(a_id))
+        self.assertIsNotNone(self.db.get_work(b_id))
+        self.assertTrue(os.path.isfile(pdf_abs))
+
+    def test_surviving_traversal_legacy_alias_keeps_pdf(self):
+        pdf_abs = self._write_pdf("victim.pdf")
+        a_id = self.db.add_work(title="Canon", file_path="/api/pdfs/victim.pdf")
+        b_id = self.db.add_work(title="Traversal", file_path="/api/pdfs/../victim.pdf")
+        result, rec = self._delete_capturing(a_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertTrue(rec.managed_pdf_still_referenced)
+        self.assertIsNone(self.db.get_work(a_id))
+        self.assertIsNotNone(self.db.get_work(b_id))
+        self.assertTrue(os.path.isfile(pdf_abs))
+
+    def test_surviving_encoded_alias_keeps_pdf(self):
+        pdf_abs = self._write_pdf("victim.pdf")
+        a_id = self.db.add_work(title="Canon", file_path="/api/pdfs/victim.pdf")
+        b_id = self.db.add_work(title="Encoded", file_path="/api/pdfs/foo%2Fvictim.pdf")
+        result, rec = self._delete_capturing(a_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertTrue(rec.managed_pdf_still_referenced)
+        self.assertIsNone(self.db.get_work(a_id))
+        self.assertIsNotNone(self.db.get_work(b_id))
+        self.assertTrue(os.path.isfile(pdf_abs))
+
+    def test_malformed_deleted_row_cannot_claim_owned_pdf(self):
+        pdf_abs = self._write_pdf("victim.pdf")
+        owner_id = self.db.add_work(title="Owner", file_path="/api/pdfs/victim.pdf")
+        malformed = (
+            "/api/pdfs/../victim.pdf",
+            "/api/pdfs/subdir/victim.pdf",
+            "/api/pdfs/foo%2Fvictim.pdf",
+            "/api/pdfs/foo%5Cvictim.pdf",
+        )
+        for i, path in enumerate(malformed):
+            w_id = self.db.add_work(title=f"Bad{i}", file_path=path)
+            result, rec = self._delete_capturing(w_id)
+            self.assertTrue(result.existed)
+            self.assertEqual(result.cleanup_failures, ())
+            self.assertFalse(rec.managed_pdf_still_referenced)
+            self.assertIsNone(self.db.get_work(w_id))
+            self.assertIsNotNone(self.db.get_work(owner_id))
+            self.assertTrue(os.path.isfile(pdf_abs))
+
+    def test_nul_file_path_row_deletes_without_pdf_failure(self):
+        pdf_abs = self._write_pdf("victim.pdf")
+        owner_id = self.db.add_work(title="Owner", file_path="/api/pdfs/victim.pdf")
+        try:
+            w_id = self.db.add_work(title="NulPath", file_path="/api/pdfs/bad\x00name.pdf")
+        except (ValueError, sqlite3.Error):
+            self.skipTest("SQLite rejected embedded NUL in file_path")
+        stored = self.db.execute_query(
+            "SELECT file_path FROM works WHERE id = ?",
+            (w_id,),
+        )
+        if not stored or "\x00" not in (stored[0]["file_path"] or ""):
+            self.db.delete_work_record(w_id)
+            self.skipTest("SQLite did not store embedded NUL in file_path")
+        result, rec = self._delete_capturing(w_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertFalse(rec.managed_pdf_still_referenced)
+        self.assertIsNone(self.db.get_work(w_id))
+        self.assertIsNotNone(self.db.get_work(owner_id))
+        self.assertTrue(os.path.isfile(pdf_abs))
+
+    def test_unique_canonical_path_still_cleans_pdf_index_and_thumbs(self):
+        w_id, pdf_abs, thumb = self._add_managed_work("UniquePdf")
+        result, rec = self._delete_capturing(w_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertFalse(rec.managed_pdf_still_referenced)
+        self.assertIsNone(self.db.get_work(w_id))
+        self.assertFalse(_index_has(self.index, w_id))
+        self.assertFalse(os.path.isfile(thumb))
+        self.assertFalse(os.path.isfile(pdf_abs))
+
+    def test_surviving_whitespace_alias_keeps_pdf(self):
+        pdf_abs = self._write_pdf("victim.pdf")
+        a_id = self.db.add_work(title="Canon", file_path="/api/pdfs/victim.pdf")
+        b_id = self.db.add_work(title="Padded", file_path=" /api/pdfs/victim.pdf ")
+        result, rec = self._delete_capturing(a_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertTrue(rec.managed_pdf_still_referenced)
+        self.assertIsNone(self.db.get_work(a_id))
+        self.assertIsNotNone(self.db.get_work(b_id))
+        self.assertTrue(os.path.isfile(pdf_abs))
+
+
+class TestManagedPdfPathHelpers(unittest.TestCase):
+    def test_managed_pdf_filename_canonical_success(self):
+        self.assertEqual(managed_pdf_filename("/api/pdfs/example.pdf"), "example.pdf")
+
+    def test_managed_pdf_filename_rejects_noncanonical(self):
+        rejected = (
+            "/api/pdfs/../example.pdf",
+            "/api/pdfs/sub/example.pdf",
+            "/api/pdfs/foo%2Fexample.pdf",
+            "/api/pdfs/foo%5Cexample.pdf",
+            "/api/pdfs/..",
+            "/api/pdfs/%2e%2e",
+            " /api/pdfs/victim.pdf ",
+            "/api/pdfs/bad\x00name.pdf",
+        )
+        for path in rejected:
+            with self.subTest(path=path):
+                self.assertIsNone(managed_pdf_filename(path))
+
+    def test_referenced_managed_pdf_filename_pins(self):
+        pinned = (
+            "/api/pdfs/victim.pdf",
+            "/api/pdfs/subdir/victim.pdf",
+            "/api/pdfs/../victim.pdf",
+            "/api/pdfs/foo%2Fvictim.pdf",
+            " /api/pdfs/victim.pdf ",
+            "\t/api/pdfs/victim.pdf\n",
+        )
+        for path in pinned:
+            with self.subTest(path=path):
+                self.assertEqual(referenced_managed_pdf_filename(path), "victim.pdf")
+
+    def test_safe_pdf_path_under_dir_rejects_nul(self):
+        pdfs = tempfile.mkdtemp()
+        try:
+            self.assertIsNone(safe_pdf_path_under_dir(pdfs, "bad\x00name.pdf"))
+        finally:
+            shutil.rmtree(pdfs)
 
 
 if __name__ == "__main__":

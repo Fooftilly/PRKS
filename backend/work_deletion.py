@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from backend.db_manager import (
     PRKSDatabase,
+    managed_pdf_filename,
     prks_delete_pdf_thumbnails_for_work_id,
     safe_pdf_path_under_dir,
 )
@@ -18,11 +19,10 @@ class WorkDeletionResult:
     cleanup_failures: tuple[str, ...] = ()
 
 
-def _remove_managed_pdf(file_path: str, pdfs_dir: str) -> None:
-    fp = (file_path or "").strip()
-    if not fp.startswith("/api/pdfs/"):
+def _remove_managed_pdf(file_path: str, pdfs_dir: str, still_referenced: bool) -> None:
+    filename = managed_pdf_filename(file_path)
+    if filename is None or still_referenced:
         return
-    filename = fp.split("/")[-1]
     abs_path = safe_pdf_path_under_dir(pdfs_dir, filename)
     if not abs_path:
         return
@@ -65,7 +65,11 @@ def delete_work(db: PRKSDatabase, text_index: PRKSTextIndex, work_id: str) -> Wo
         )
     if record is not None:
         try:
-            _remove_managed_pdf(record.file_path, db.storage.pdfs_dir)
+            _remove_managed_pdf(
+                record.file_path,
+                db.storage.pdfs_dir,
+                record.managed_pdf_still_referenced,
+            )
         except OSError as e:
             failures.append("pdf")
             LOGGER.warning(
