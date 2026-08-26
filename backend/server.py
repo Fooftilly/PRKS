@@ -18,8 +18,6 @@ from urllib.error import HTTPError, URLError
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.db_manager import (
     PRKSDatabase,
-    default_prks_db_path,
-    default_local_pdfs_dir,
     safe_pdf_path_under_dir,
     resolve_processing_dir,
     _resolve_thumbs_dir,
@@ -33,6 +31,7 @@ from backend.db_manager import (
 from backend.log_config import setup_logging
 from backend.text_index import get_text_index
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
+from backend.storage import paths
 
 setup_logging()
 LOGGER = logging.getLogger("prks.server")
@@ -54,34 +53,10 @@ frontend_dir = os.path.join(base_dir, "frontend")
 os.makedirs(frontend_dir, exist_ok=True)
 
 
-def _get_storage_root() -> str | None:
-    raw = os.environ.get("PRKS_STORAGE")
-    if raw is None:
-        return None
-    root = str(raw).strip()
-    if not root:
-        return None
-    if _is_testing_env() and (root == "/data" or root.startswith("/data/")):
-        raise RuntimeError("PRKS_TESTING is set: refusing to use PRKS_STORAGE under /data")
-    return root
-
-
-def _resolve_db_path() -> str:
-    storage_root = _get_storage_root()
-    if storage_root:
-        return os.path.join(storage_root, "prks_data.db")
-    return default_prks_db_path()
-
-
-def _resolve_pdfs_dir() -> str:
-    storage_root = _get_storage_root()
-    if storage_root:
-        return os.path.join(storage_root, "pdfs")
-    return default_local_pdfs_dir()
-
-def _is_testing_env() -> bool:
-    v = os.environ.get("PRKS_TESTING", "")
-    return str(v).strip().lower() in ("1", "true", "yes")
+_get_storage_root = paths.resolve_storage_root
+_resolve_db_path = paths.resolve_db_path
+_resolve_pdfs_dir = paths.resolve_pdfs_dir
+_is_testing_env = paths.is_testing
 
 
 def _validate_listen_port(port: int) -> None:

@@ -1,0 +1,19 @@
+---
+description: Keep server.py as HTTP adapter. Put domain work in focused modules.
+alwaysApply: true
+---
+
+# HTTP adapter
+
+`backend/server.py` is the HTTP adapter: request parsing, dispatch, status/headers, JSON, ETags, static files.
+
+Judge by responsibility, not line count. Substantial SQL, filesystem mutation, PDF processing, indexing, imports, and domain workflows live outside the handler.
+
+Placement, in order:
+
+1. Extend an existing focused module when the behavior belongs there (`text_index` for indexing, `pdf_linearize` for linearization, `storage.paths` only for storage-path resolution).
+2. Otherwise create a focused feature or domain module.
+3. Use `backend/services/` when an operation coordinates multiple concerns such as DB + filesystem + PDF + indexing.
+4. Do not create `routes/`, `services/`, or other architectural layers ahead of real behavior.
+
+Do not split `server.py`. Do not introduce a framework.

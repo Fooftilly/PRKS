@@ -3,32 +3,15 @@ import re
 import sqlite3
 from typing import Any, Dict, List
 
+from backend.storage import paths
+
 
 _MAX_EXTRACTED_CHARS = 2_000_000
-_TEXT_INDEX_DB_NAME = "prks_text_index.db"
 
-
-def _is_testing_env() -> bool:
-    v = (os.environ.get("PRKS_TESTING") or "").strip().lower()
-    return v in ("1", "true", "yes")
-
-
-def _resolve_storage_root() -> str:
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    storage_root = (os.environ.get("PRKS_STORAGE") or "").strip()
-    if storage_root and not (_is_testing_env() and (storage_root == "/data" or storage_root.startswith("/data/"))):
-        return storage_root
-    if _is_testing_env():
-        return os.path.join(project_root, "data_testing")
-    return os.path.join(project_root, "data")
-
-
-def _resolve_index_db_path() -> str:
-    return os.path.join(_resolve_storage_root(), _TEXT_INDEX_DB_NAME)
-
-
-def _resolve_pdfs_dir() -> str:
-    return os.path.join(_resolve_storage_root(), "pdfs")
+_is_testing_env = paths.is_testing
+_resolve_storage_root = paths.resolve_defaulted_storage_root
+_resolve_index_db_path = paths.resolve_index_db_path
+_resolve_pdfs_dir = paths.resolve_pdfs_dir
 
 
 def _safe_pdf_path(filename: str) -> str | None:

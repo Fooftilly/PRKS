@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
+from backend.storage import paths
 
 LOGGER = logging.getLogger("prks.db")
 
@@ -217,91 +218,19 @@ def normalize_doc_type(value: Any) -> str:
     return "misc"
 
 
-def _get_storage_root() -> Optional[str]:
-    raw = os.environ.get("PRKS_STORAGE")
-    if raw is None:
-        return None
-    root = str(raw).strip()
-    if not root:
-        return None
-    if _is_testing_env() and (root == "/data" or root.startswith("/data/")):
-        raise RuntimeError("PRKS_TESTING is set: refusing to use PRKS_STORAGE under /data")
-    return root
-
-
-def _resolve_pdfs_dir() -> str:
-    storage_root = _get_storage_root()
-    if storage_root:
-        return os.path.join(storage_root, "pdfs")
-    return default_local_pdfs_dir()
-
-
-def _resolve_processing_dir() -> str:
-    configured = (os.environ.get("PRKS_FOR_PROCESSING_DIR") or "").strip()
-    if configured:
-        if _is_testing_env() and (configured == "/data" or configured.startswith("/data/")):
-            raise RuntimeError("PRKS_TESTING is set: refusing to use PRKS_FOR_PROCESSING_DIR under /data")
-        return configured
-    storage_root = _get_storage_root()
-    if storage_root:
-        return os.path.join(storage_root, "for_processing")
-    if _is_testing_env():
-        return os.path.join(_REPO_ROOT, "data_testing", "for_processing")
-    preferred = "/data/for_processing"
-    fallback = os.path.join(_REPO_ROOT, "data", "for_processing")
-    try:
-        os.makedirs(preferred, exist_ok=True)
-        return preferred
-    except OSError:
-        os.makedirs(fallback, exist_ok=True)
-        return fallback
+_get_storage_root = paths.resolve_storage_root
+_resolve_pdfs_dir = paths.resolve_pdfs_dir
+_resolve_processing_dir = paths.resolve_processing_dir
+_resolve_thumbs_dir = paths.resolve_thumbs_dir
+_is_testing_env = paths.is_testing
+default_prks_db_path = paths.default_prks_db_path
+default_local_pdfs_dir = paths.default_local_pdfs_dir
+resolve_people_images_dir = paths.resolve_people_images_dir
 
 
 def resolve_processing_dir() -> str:
     """Public resolver for processing inbox root directory."""
     return _resolve_processing_dir()
-
-
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _is_testing_env() -> bool:
-    v = os.environ.get("PRKS_TESTING", "")
-    return str(v).strip().lower() in ("1", "true", "yes")
-
-
-def default_prks_db_path() -> str:
-    """SQLite file under repo data/ or data_testing/ when PRKS_TESTING is set."""
-    if _is_testing_env():
-        return os.path.join(_REPO_ROOT, "data_testing", "prks_data_testing.db")
-    return os.path.join(_REPO_ROOT, "data", "prks_data.db")
-
-
-def default_local_pdfs_dir() -> str:
-    """PDF directory when PRKS_STORAGE is unset (prod vs testing)."""
-    if _is_testing_env():
-        return os.path.join(_REPO_ROOT, "data_testing", "pdfs")
-    return os.path.join(_REPO_ROOT, "data", "pdfs")
-
-
-def _resolve_thumbs_dir() -> str:
-    """On-disk PDF thumbnail cache (mirrors backend/server.py layout)."""
-    storage_root = _get_storage_root()
-    if storage_root:
-        return os.path.join(storage_root, "thumbs")
-    if _is_testing_env():
-        return os.path.join(_REPO_ROOT, "data_testing", "thumbs")
-    return os.path.join(_REPO_ROOT, "data", "thumbs")
-
-
-def resolve_people_images_dir() -> str:
-    """On-disk cache for person profile images (same layout pattern as thumbs)."""
-    storage_root = _get_storage_root()
-    if storage_root:
-        return os.path.join(storage_root, "people")
-    if _is_testing_env():
-        return os.path.join(_REPO_ROOT, "data_testing", "people")
-    return os.path.join(_REPO_ROOT, "data", "people")
 
 
 def prks_thumb_cache_safe_wid(work_id: str) -> str:

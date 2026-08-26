@@ -21,7 +21,17 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 ## Layout
 
 - `prks_app.py` CLI
-- `backend/server.py` HTTP
+- `backend/server.py` HTTP adapter: parsing, dispatch, status/headers, JSON, ETags, static files
+- `backend/storage/paths.py` storage-path resolution
 - `backend/db_manager.py` SQLite
 - `frontend/` UI
 - `tests/` unittest
+
+New substantial behavior, in order:
+
+1. Extend an existing focused module when the behavior belongs there (`text_index` for indexing, `pdf_linearize` for linearization, `storage.paths` only for storage-path resolution).
+2. Otherwise create a focused feature or domain module.
+3. Use `backend/services/` when an operation coordinates multiple concerns such as DB + filesystem + PDF + indexing.
+4. Do not create `routes/`, `services/`, or other layers ahead of real behavior.
+
+`server.py` keeps HTTP concerns. Substantial SQL, filesystem mutation, PDF processing, indexing, imports, and domain workflows live outside the handler. Do not split `server.py` or introduce a framework.
