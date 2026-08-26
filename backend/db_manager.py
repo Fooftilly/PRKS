@@ -14,6 +14,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.storage import paths
+from backend.storage.config import StorageConfig
 
 LOGGER = logging.getLogger("prks.db")
 
@@ -218,21 +219,6 @@ def normalize_doc_type(value: Any) -> str:
     return "misc"
 
 
-_get_storage_root = paths.resolve_storage_root
-_resolve_pdfs_dir = paths.resolve_pdfs_dir
-_resolve_processing_dir = paths.resolve_processing_dir
-_resolve_thumbs_dir = paths.resolve_thumbs_dir
-_is_testing_env = paths.is_testing
-default_prks_db_path = paths.default_prks_db_path
-default_local_pdfs_dir = paths.default_local_pdfs_dir
-resolve_people_images_dir = paths.resolve_people_images_dir
-
-
-def resolve_processing_dir() -> str:
-    """Public resolver for processing inbox root directory."""
-    return _resolve_processing_dir()
-
-
 def prks_thumb_cache_safe_wid(work_id: str) -> str:
     """Sanitize work id for thumbnail filenames (must match server thumbnail handler)."""
     return re.sub(r"[^A-Za-z0-9_-]+", "_", str(work_id))
@@ -266,9 +252,9 @@ def prks_person_image_url_hash(image_url: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:12]
 
 
-def prks_person_image_cache_path(person_id: str, image_url: str) -> str:
+def prks_person_image_cache_path(person_id: str, image_url: str, people_dir: str) -> str:
     """On-disk path for one person's compressed portrait (WebP)."""
-    d = resolve_people_images_dir()
+    d = people_dir
     safe = prks_person_image_cache_safe_id(person_id)
     h = prks_person_image_url_hash(image_url)
     return os.path.join(
@@ -276,16 +262,16 @@ def prks_person_image_cache_path(person_id: str, image_url: str) -> str:
     )
 
 
-def prks_person_image_legacy_bin_path(person_id: str) -> str:
+def prks_person_image_legacy_bin_path(person_id: str, people_dir: str) -> str:
     """Pre-compression cache file (raw bytes); migrated lazily to WebP."""
-    d = resolve_people_images_dir()
+    d = people_dir
     safe = prks_person_image_cache_safe_id(person_id)
     return os.path.join(d, safe + ".bin")
 
 
-def prks_delete_person_image_cache(person_id: str) -> None:
+def prks_delete_person_image_cache(person_id: str, people_dir: str) -> None:
     """Remove all cached portrait files for one person (best-effort)."""
-    d = resolve_people_images_dir()
+    d = people_dir
     safe = prks_person_image_cache_safe_id(person_id)
     if not os.path.isdir(d):
         return
@@ -322,10 +308,10 @@ _PRKS_THUMB_CACHE_LEGACY_TMP_RE = re.compile(
 )
 
 
-def prks_delete_pdf_thumbnails_for_work_id(work_id: str) -> None:
+def prks_delete_pdf_thumbnails_for_work_id(work_id: str, thumbs_dir: str) -> None:
     """Remove cached PDF thumbnails for one work (best-effort)."""
     safe = prks_thumb_cache_safe_wid(work_id)
-    td = _resolve_thumbs_dir()
+    td = thumbs_dir
     if not os.path.isdir(td):
         return
     pat_final = re.compile(
@@ -366,7 +352,7 @@ def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
         if page < 1:
             page = 1
         allowed.add(prks_thumb_cache_stem(str(wid), page))
-    td = _resolve_thumbs_dir()
+    td = db.storage.thumbs_dir
     if not os.path.isdir(td):
         return 0
     try:
@@ -469,11 +455,10 @@ def _processing_safe_dest_name(filename: str) -> str:
     return safe
 
 
-def enrich_work_rows_pdf_file_size(rows: Optional[List[dict]]) -> None:
+def enrich_work_rows_pdf_file_size(rows: Optional[List[dict]], pdfs_dir: str) -> None:
     """Set file_size_bytes on each row for on-disk PDFs under the PDF storage dir; else None."""
     if not rows:
         return
-    pdfs_dir = _resolve_pdfs_dir()
     for row in rows:
         if not row or not isinstance(row, dict):
             continue
@@ -493,10 +478,29 @@ def enrich_work_rows_pdf_file_size(rows: Optional[List[dict]]) -> None:
 
 
 class PRKSDatabase:
-    def __init__(self, db_path: Optional[str] = None, schema_path: str = "backend/db_schema.sql"):
-        if db_path is None:
-            db_path = default_prks_db_path()
-        self.db_path = db_path
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        schema_path: str = "backend/db_schema.sql",
+        *,
+        storage: Optional[StorageConfig] = None,
+    ):
+        if storage is not None and db_path is not None:
+            if db_path != storage.db_path:
+                raise ValueError("db_path conflicts with storage.db_path")
+            self.storage = storage
+            self.db_path = db_path
+        elif storage is not None:
+            self.storage = storage
+            self.db_path = storage.db_path
+        elif db_path is not None:
+            self.storage = StorageConfig.from_env()
+            self.db_path = db_path
+        else:
+            self.storage = StorageConfig.from_env()
+            self.db_path = paths.default_prks_db_path_for_mode(
+                self.storage.mode == "testing"
+            )
         self.schema_path = schema_path
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)) or ".", exist_ok=True)
         self.init_db()
@@ -958,7 +962,7 @@ class PRKSDatabase:
         }
 
     def scan_processing_files(self) -> List[dict]:
-        root = _resolve_processing_dir()
+        root = self.storage.processing_dir
         os.makedirs(root, exist_ok=True)
         root_real = os.path.realpath(root)
         discovered_rel_paths: set[str] = set()
@@ -1048,7 +1052,7 @@ class PRKSDatabase:
         rel_path = (row.get("rel_path") or "").strip()
         if not rel_path.lower().endswith(".pdf"):
             return None
-        processing_root = _resolve_processing_dir()
+        processing_root = self.storage.processing_dir
         abs_path = safe_processing_path_under_dir(processing_root, rel_path)
         if not abs_path or not os.path.isfile(abs_path):
             return None
@@ -1155,7 +1159,7 @@ class PRKSDatabase:
         if fid and not self.get_folder(fid):
             raise ValueError("Unknown folder.")
 
-        processing_root = _resolve_processing_dir()
+        processing_root = self.storage.processing_dir
         os.makedirs(processing_root, exist_ok=True)
         source_abs = safe_processing_path_under_dir(processing_root, row.get("rel_path") or "")
         if not source_abs or not os.path.isfile(source_abs):
@@ -1202,7 +1206,7 @@ class PRKSDatabase:
 
         safe_name = _processing_safe_dest_name(row.get("filename") or os.path.basename(source_abs))
         local_filename = f"{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}_{safe_name}"
-        pdfs_dir = _resolve_pdfs_dir()
+        pdfs_dir = self.storage.pdfs_dir
         os.makedirs(pdfs_dir, exist_ok=True)
         destination_abs = safe_pdf_path_under_dir(pdfs_dir, local_filename)
         if not destination_abs:
@@ -1400,7 +1404,7 @@ class PRKSDatabase:
         sel = _prks_work_summary_select_with_folder("works")
         pex = _prks_sql_work_summary_person_extras("works")
         rows = list(self.execute_query(f"SELECT {sel}, {pex} FROM works ORDER BY created_at DESC"))
-        enrich_work_rows_pdf_file_size(rows)
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
         return rows
 
     def etag_works_catalog(self) -> str:
@@ -1490,7 +1494,7 @@ class PRKSDatabase:
             fp = res[0].get('file_path') or ''
             if fp.startswith('/api/pdfs/'):
                 filename = fp.split('/')[-1]
-                abs_path = safe_pdf_path_under_dir(_resolve_pdfs_dir(), filename)
+                abs_path = safe_pdf_path_under_dir(self.storage.pdfs_dir, filename)
             else:
                 abs_path = None
             try:
@@ -1499,7 +1503,7 @@ class PRKSDatabase:
             except Exception as e:
                 LOGGER.warning("delete_work_file_failed work_id=%s error=%s", work_id, e)
         try:
-            prks_delete_pdf_thumbnails_for_work_id(work_id)
+            prks_delete_pdf_thumbnails_for_work_id(work_id, self.storage.thumbs_dir)
         except Exception as e:
             LOGGER.warning("delete_work_thumbnails_failed work_id=%s error=%s", work_id, e)
         tag_ids = [
@@ -1514,6 +1518,8 @@ class PRKSDatabase:
             from backend.text_index import get_text_index
 
             get_text_index().remove_work(work_id)
+        except RuntimeError:
+            pass
         except Exception as e:
             LOGGER.warning("delete_work_text_index_cleanup_failed work_id=%s error=%s", work_id, e)
         for tid in tag_ids:
@@ -1532,7 +1538,7 @@ class PRKSDatabase:
                 tuple(ordered_ids),
             )
         )
-        enrich_work_rows_pdf_file_size(rows)
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ordered_ids if i in by_id]
 
@@ -1764,7 +1770,7 @@ class PRKSDatabase:
                     tuple(id_list),
                 )
             )
-            enrich_work_rows_pdf_file_size(rows)
+            enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
             return rows
 
         if not ordered_ids:
@@ -1778,7 +1784,7 @@ class PRKSDatabase:
                 tuple(ordered_ids),
             )
         )
-        enrich_work_rows_pdf_file_size(rows)
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ordered_ids if i in by_id]
 
@@ -1828,7 +1834,7 @@ class PRKSDatabase:
                 tuple(id_list),
             )
         )
-        enrich_work_rows_pdf_file_size(rows)
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
         ordered.extend(rows)
         return ordered
 
@@ -1849,7 +1855,7 @@ class PRKSDatabase:
         ORDER BY w.created_at DESC
         """
         rows = list(self.execute_query(query, (tid,)))
-        enrich_work_rows_pdf_file_size(rows)
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
         return rows
 
     def get_work(self, work_id: str) -> Optional[dict]:
@@ -1907,7 +1913,7 @@ class PRKSDatabase:
         self.execute_query(
             "UPDATE works SET last_opened_at = CURRENT_TIMESTAMP WHERE id = ?", (work_id,)
         )
-        enrich_work_rows_pdf_file_size([work])
+        enrich_work_rows_pdf_file_size([work], self.storage.pdfs_dir)
         return work
 
     def get_recent_works(self, limit: int = 30) -> List[dict]:
@@ -1919,7 +1925,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        enrich_work_rows_pdf_file_size(rows)
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
         return rows
 
     def get_recently_added_works(self, limit: int = 50) -> List[dict]:
@@ -1931,7 +1937,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        enrich_work_rows_pdf_file_size(rows)
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
         return rows
 
     def update_work_metadata(self, work_id: str, fields: dict):
@@ -2032,7 +2038,7 @@ class PRKSDatabase:
             """.format(wsel=wsel, pex=pex),
             (playlist_id,),
         )
-        enrich_work_rows_pdf_file_size(p["items"])
+        enrich_work_rows_pdf_file_size(p["items"], self.storage.pdfs_dir)
         return p
 
     def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
@@ -2376,7 +2382,7 @@ class PRKSDatabase:
         ORDER BY w.created_at DESC
         """
         folder["works"] = list(self.execute_query(query, (folder_id,)))
-        enrich_work_rows_pdf_file_size(folder["works"])
+        enrich_work_rows_pdf_file_size(folder["works"], self.storage.pdfs_dir)
         folder['tags'] = self.get_folder_tags(folder_id)
         return folder
 
@@ -2598,7 +2604,7 @@ class PRKSDatabase:
         ORDER BY r.order_index ASC, r.rowid ASC
         """
         person["works"] = list(self.execute_query(query, (person_id,)))
-        enrich_work_rows_pdf_file_size(person["works"])
+        enrich_work_rows_pdf_file_size(person["works"], self.storage.pdfs_dir)
         person["groups"] = self.get_groups_for_person(person_id)
         return person
 
@@ -2616,7 +2622,7 @@ class PRKSDatabase:
         linked_count = int(linked[0].get("c") or 0) if linked else 0
         if linked_count > 0:
             raise ValueError("Cannot delete person with linked works.")
-        prks_delete_person_image_cache(pid)
+        prks_delete_person_image_cache(pid, self.storage.people_dir)
         self.execute_query("DELETE FROM persons WHERE id = ?", (pid,))
 
     def _attach_person_groups_batch(self, rows: List[dict]) -> None:

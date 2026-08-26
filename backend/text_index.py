@@ -1,25 +1,12 @@
 import os
 import re
 import sqlite3
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from backend.storage import paths
+from backend.storage.config import StorageConfig
 
 
 _MAX_EXTRACTED_CHARS = 2_000_000
-
-_is_testing_env = paths.is_testing
-_resolve_storage_root = paths.resolve_defaulted_storage_root
-_resolve_index_db_path = paths.resolve_index_db_path
-_resolve_pdfs_dir = paths.resolve_pdfs_dir
-
-
-def _safe_pdf_path(filename: str) -> str | None:
-    root = os.path.realpath(_resolve_pdfs_dir())
-    candidate = os.path.realpath(os.path.join(root, filename))
-    if candidate == root or not candidate.startswith(root + os.sep):
-        return None
-    return candidate
 
 
 def _search_tokens(raw: str) -> List[str]:
@@ -40,10 +27,36 @@ def _fts_prefix_clause(tokens: List[str]) -> str:
 
 
 class PRKSTextIndex:
-    def __init__(self, db_path: str | None = None):
-        self.db_path = db_path or _resolve_index_db_path()
+    def __init__(
+        self,
+        db_path: str | None = None,
+        *,
+        storage: Optional[StorageConfig] = None,
+    ):
+        if storage is not None and db_path is not None:
+            if db_path != storage.index_db_path:
+                raise ValueError("db_path conflicts with storage.index_db_path")
+            self.storage = storage
+            self.db_path = db_path
+        elif storage is not None:
+            self.storage = storage
+            self.db_path = storage.index_db_path
+        elif db_path is not None:
+            self.storage = StorageConfig.from_env()
+            self.db_path = db_path
+        else:
+            self.storage = StorageConfig.from_env()
+            self.db_path = self.storage.index_db_path
+        self.pdfs_dir = self.storage.pdfs_dir
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._ensure_schema()
+
+    def _safe_pdf_path(self, filename: str) -> str | None:
+        root = os.path.realpath(self.pdfs_dir)
+        candidate = os.path.realpath(os.path.join(root, filename))
+        if candidate == root or not candidate.startswith(root + os.sep):
+            return None
+        return candidate
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -176,7 +189,7 @@ class PRKSTextIndex:
             wid = (row.get("id") or "").strip()
             fp = (row.get("file_path") or "").strip()
             filename = fp.split("/")[-1] if fp.startswith("/api/pdfs/") else ""
-            abs_path = _safe_pdf_path(filename) if filename else None
+            abs_path = self._safe_pdf_path(filename) if filename else None
             if not abs_path or not os.path.exists(abs_path):
                 failed += 1
                 continue
@@ -191,7 +204,18 @@ _TEXT_INDEX_SINGLETON: PRKSTextIndex | None = None
 
 
 def get_text_index() -> PRKSTextIndex:
-    global _TEXT_INDEX_SINGLETON
     if _TEXT_INDEX_SINGLETON is None:
-        _TEXT_INDEX_SINGLETON = PRKSTextIndex()
+        raise RuntimeError("text index is not bound; call replace_text_index() first")
     return _TEXT_INDEX_SINGLETON
+
+
+def replace_text_index(index: PRKSTextIndex) -> PRKSTextIndex | None:
+    global _TEXT_INDEX_SINGLETON
+    previous = _TEXT_INDEX_SINGLETON
+    _TEXT_INDEX_SINGLETON = index
+    return previous
+
+
+def reset_text_index() -> None:
+    global _TEXT_INDEX_SINGLETON
+    _TEXT_INDEX_SINGLETON = None

@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import os
-import sys
-
-# Must run before importing backend.server (module-level DB and paths).
-if "--testing" in sys.argv:
-    os.environ["PRKS_TESTING"] = "1"
 
 from backend.log_config import setup_logging
-setup_logging()
-from backend.server import run_server, PORT
+from backend.server import PORT, bind_storage, run_server
+from backend.storage.config import StorageConfig
 
 
 if __name__ == "__main__":
@@ -28,6 +23,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.testing:
         os.environ["PRKS_TESTING"] = "1"
+
+    config = StorageConfig.from_env()
+    config = bind_storage(config)
+    setup_logging(config)
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
     run_server(port=port)

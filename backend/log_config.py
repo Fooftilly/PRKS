@@ -2,30 +2,12 @@ import logging
 import os
 from logging.handlers import TimedRotatingFileHandler
 
+from backend.storage.config import StorageConfig
+
 
 _DEFAULT_ROTATE_WHEN = "midnight"
 _DEFAULT_ROTATE_INTERVAL = 1
 _DEFAULT_RETENTION_DAYS = 7
-
-
-def _is_testing_env() -> bool:
-    v = (os.environ.get("PRKS_TESTING") or "").strip().lower()
-    return v in ("1", "true", "yes")
-
-
-def _resolve_log_file_path() -> str:
-    configured = (os.environ.get("PRKS_LOG_FILE") or "").strip()
-    if configured:
-        return configured
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    storage_root = (os.environ.get("PRKS_STORAGE") or "").strip()
-    if _is_testing_env():
-        if storage_root and not (storage_root == "/data" or storage_root.startswith("/data/")):
-            return os.path.join(storage_root, "prks-errors.log")
-        return os.path.join(project_root, "data_testing", "prks-errors.log")
-    if storage_root:
-        return os.path.join(storage_root, "prks-errors.log")
-    return os.path.join(project_root, "data", "prks-errors.log")
 
 
 def _resolve_log_level() -> int:
@@ -49,14 +31,14 @@ def _resolve_retention_days() -> int:
     return max(1, days)
 
 
-def setup_logging() -> None:
+def setup_logging(config: StorageConfig) -> None:
     root = logging.getLogger()
     if getattr(root, "_prks_logging_configured", False):
         return
 
     level = _resolve_log_level()
     file_level = _resolve_file_log_level()
-    log_file = _resolve_log_file_path()
+    log_file = config.log_file
     retention_days = _resolve_retention_days()
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
 

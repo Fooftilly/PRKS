@@ -10,17 +10,18 @@ import os
 import sys
 import base64
 import tempfile
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 # Add the parent directory to sys.path so we can import 'backend'
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.db_manager import (
-    PRKSDatabase,
     prks_person_image_cache_path,
     prks_person_image_url_hash,
     PRKS_PERSON_IMAGE_CACHE_REV,
 )
+from backend.storage.config import StorageConfig
 
 # Ensure imports/run never write to container storage (/data).
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -88,27 +89,17 @@ class TestServerAPI(unittest.TestCase):
 
         # Create a test database
         cls._tmpdir = tempfile.mkdtemp(prefix="prks-server-tests-")
-        cls._old_storage = os.environ.get("PRKS_STORAGE")
-        cls._old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
         cls._storage_root = os.path.join(cls._tmpdir, "storage")
         cls._processing_root = os.path.join(cls._tmpdir, "processing")
         os.makedirs(cls._storage_root, exist_ok=True)
         os.makedirs(cls._processing_root, exist_ok=True)
-        os.environ["PRKS_STORAGE"] = cls._storage_root
-        os.environ["PRKS_FOR_PROCESSING_DIR"] = cls._processing_root
-        cls.test_db_path = os.path.join(cls._tmpdir, "test_server_prks_data.db")
-            
-        schema_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend", "db_schema.sql")
-        cls.test_db = PRKSDatabase(db_path=cls.test_db_path, schema_path=schema_path)
-        
-        # Patch the server's db instance
-        server_module.db = cls.test_db
-        server_module.pdfs_dir = os.path.join(cls._storage_root, "pdfs")
-        server_module.thumbs_dir = os.path.join(cls._storage_root, "thumbs")
-        server_module.processing_dir = cls._processing_root
-        os.makedirs(server_module.pdfs_dir, exist_ok=True)
-        os.makedirs(server_module.thumbs_dir, exist_ok=True)
-        os.makedirs(server_module.processing_dir, exist_ok=True)
+        cfg = replace(
+            StorageConfig.for_testing(cls._storage_root),
+            processing_dir=cls._processing_root,
+        )
+        server_module.bind_storage(cfg)
+        cls.test_db = server_module.db
+        cls.test_db_path = server_module.db.db_path
 
         # Start server in a background daemon thread
         cls.server_thread = threading.Thread(target=server_module.run_server, args=(cls._test_port,), daemon=True)
@@ -118,14 +109,6 @@ class TestServerAPI(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if getattr(cls, "_old_storage", None) is None:
-            os.environ.pop("PRKS_STORAGE", None)
-        else:
-            os.environ["PRKS_STORAGE"] = cls._old_storage
-        if getattr(cls, "_old_processing", None) is None:
-            os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
-        else:
-            os.environ["PRKS_FOR_PROCESSING_DIR"] = cls._old_processing
         if getattr(cls, "_tmpdir", None):
             try:
                 import shutil
@@ -1512,139 +1495,107 @@ class TestServerAPI(unittest.TestCase):
             self.assertEqual(rdp.status, 200)
 
     def test_processing_files_api_scan_patch_and_import(self):
-        old_storage = os.environ.get("PRKS_STORAGE")
-        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
-        with tempfile.TemporaryDirectory(prefix="prks-processing-api-") as root:
-            storage_root = os.path.join(root, "storage")
-            processing_root = os.path.join(root, "processing")
-            nested = os.path.join(processing_root, "alpha", "beta")
-            os.makedirs(nested, exist_ok=True)
-            source_pdf = os.path.join(nested, "api_inbox.pdf")
-            with open(source_pdf, "wb") as f:
-                f.write(b"%PDF-1.4\n%API-INBOX\n%%EOF\n")
-            with open(os.path.join(nested, "ignore.txt"), "w", encoding="utf-8") as f:
-                f.write("not a pdf")
-            try:
-                os.environ["PRKS_STORAGE"] = storage_root
-                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
-                req_person = urllib.request.Request(
-                    f"{self._base_url}/api/persons",
-                    data=json.dumps({"first_name": "Api", "last_name": "Author"}).encode(),
-                    method="POST",
-                )
-                req_person.add_header("Content-Type", "application/json")
-                with urllib.request.urlopen(req_person) as rperson:
-                    person_id = json.loads(rperson.read().decode())["id"]
+        processing_root = server_module.processing_dir
+        nested = os.path.join(processing_root, "alpha", "beta")
+        os.makedirs(nested, exist_ok=True)
+        source_pdf = os.path.join(nested, "api_inbox.pdf")
+        with open(source_pdf, "wb") as f:
+            f.write(b"%PDF-1.4\n%API-INBOX\n%%EOF\n")
+        with open(os.path.join(nested, "ignore.txt"), "w", encoding="utf-8") as f:
+            f.write("not a pdf")
+        req_person = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps({"first_name": "Api", "last_name": "Author"}).encode(),
+            method="POST",
+        )
+        req_person.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_person) as rperson:
+            person_id = json.loads(rperson.read().decode())["id"]
 
-                req_folder = urllib.request.Request(
-                    f"{self._base_url}/api/folders",
-                    data=json.dumps({"title": "API Processing Folder", "description": ""}).encode(),
-                    method="POST",
-                )
-                req_folder.add_header("Content-Type", "application/json")
-                with urllib.request.urlopen(req_folder) as rf:
-                    folder_id = json.loads(rf.read().decode())["id"]
+        req_folder = urllib.request.Request(
+            f"{self._base_url}/api/folders",
+            data=json.dumps({"title": "API Processing Folder", "description": ""}).encode(),
+            method="POST",
+        )
+        req_folder.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_folder) as rf:
+            folder_id = json.loads(rf.read().decode())["id"]
 
-                req_scan = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=1")
-                with urllib.request.urlopen(req_scan) as rs:
-                    self.assertEqual(rs.status, 200)
-                    rows = json.loads(rs.read().decode())
-                self.assertEqual(len(rows), 1)
-                row = rows[0]
-                self.assertEqual(row.get("rel_path"), "alpha/beta/api_inbox.pdf")
+        req_scan = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=1")
+        with urllib.request.urlopen(req_scan) as rs:
+            self.assertEqual(rs.status, 200)
+            rows = json.loads(rs.read().decode())
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row.get("rel_path"), "alpha/beta/api_inbox.pdf")
 
-                req_patch = urllib.request.Request(
-                    f"{self._base_url}/api/processing-files/{urllib.parse.quote(row['id'])}",
-                    data=json.dumps(
-                        {
-                            "title": "API Imported Inbox File",
-                            "status_draft": "In Progress",
-                            "target_folder_id": folder_id,
-                            "roles": [{"person_id": person_id, "role_type": "Author"}],
-                        }
-                    ).encode(),
-                    method="PATCH",
-                )
-                req_patch.add_header("Content-Type", "application/json")
-                with urllib.request.urlopen(req_patch) as rp:
-                    self.assertEqual(rp.status, 200)
-                    patched = json.loads(rp.read().decode())
-                self.assertEqual(patched.get("title"), "API Imported Inbox File")
-                self.assertEqual(patched.get("status_draft"), "In Progress")
+        req_patch = urllib.request.Request(
+            f"{self._base_url}/api/processing-files/{urllib.parse.quote(row['id'])}",
+            data=json.dumps(
+                {
+                    "title": "API Imported Inbox File",
+                    "status_draft": "In Progress",
+                    "target_folder_id": folder_id,
+                    "roles": [{"person_id": person_id, "role_type": "Author"}],
+                }
+            ).encode(),
+            method="PATCH",
+        )
+        req_patch.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_patch) as rp:
+            self.assertEqual(rp.status, 200)
+            patched = json.loads(rp.read().decode())
+        self.assertEqual(patched.get("title"), "API Imported Inbox File")
+        self.assertEqual(patched.get("status_draft"), "In Progress")
 
-                req_import = urllib.request.Request(
-                    f"{self._base_url}/api/processing-files/{urllib.parse.quote(row['id'])}/import",
-                    data=json.dumps({}).encode(),
-                    method="POST",
-                )
-                req_import.add_header("Content-Type", "application/json")
-                with urllib.request.urlopen(req_import) as ri:
-                    self.assertEqual(ri.status, 200)
-                    imported = json.loads(ri.read().decode())
-                self.assertIn("work_id", imported)
-                self.assertFalse(os.path.exists(source_pdf))
+        req_import = urllib.request.Request(
+            f"{self._base_url}/api/processing-files/{urllib.parse.quote(row['id'])}/import",
+            data=json.dumps({}).encode(),
+            method="POST",
+        )
+        req_import.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_import) as ri:
+            self.assertEqual(ri.status, 200)
+            imported = json.loads(ri.read().decode())
+        self.assertIn("work_id", imported)
+        self.assertFalse(os.path.exists(source_pdf))
 
-                req_work = urllib.request.Request(
-                    f"{self._base_url}/api/works/{urllib.parse.quote(imported['work_id'])}"
-                )
-                with urllib.request.urlopen(req_work) as rw:
-                    work = json.loads(rw.read().decode())
-                self.assertEqual(work.get("title"), "API Imported Inbox File")
-                self.assertEqual(work.get("status"), "In Progress")
-                self.assertEqual(work.get("folder_id"), folder_id)
-                self.assertTrue(
-                    any(r.get("id") == person_id and r.get("role_type") == "Author" for r in work.get("roles", []))
-                )
+        req_work = urllib.request.Request(
+            f"{self._base_url}/api/works/{urllib.parse.quote(imported['work_id'])}"
+        )
+        with urllib.request.urlopen(req_work) as rw:
+            work = json.loads(rw.read().decode())
+        self.assertEqual(work.get("title"), "API Imported Inbox File")
+        self.assertEqual(work.get("status"), "In Progress")
+        self.assertEqual(work.get("folder_id"), folder_id)
+        self.assertTrue(
+            any(r.get("id") == person_id and r.get("role_type") == "Author" for r in work.get("roles", []))
+        )
 
-                req_scan_again = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=1")
-                with urllib.request.urlopen(req_scan_again) as rsa:
-                    after = json.loads(rsa.read().decode())
-                self.assertEqual(after, [])
-            finally:
-                if old_storage is None:
-                    os.environ.pop("PRKS_STORAGE", None)
-                else:
-                    os.environ["PRKS_STORAGE"] = old_storage
-                if old_processing is None:
-                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
-                else:
-                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+        req_scan_again = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=1")
+        with urllib.request.urlopen(req_scan_again) as rsa:
+            after = json.loads(rsa.read().decode())
+        self.assertEqual(after, [])
 
     def test_processing_files_pdf_preview_endpoint(self):
-        old_storage = os.environ.get("PRKS_STORAGE")
-        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
-        with tempfile.TemporaryDirectory(prefix="prks-processing-preview-") as root:
-            processing_root = os.path.join(root, "processing")
-            os.makedirs(processing_root, exist_ok=True)
-            source_pdf = os.path.join(processing_root, "preview_me.pdf")
-            with open(source_pdf, "wb") as f:
-                f.write(b"%PDF-1.4\n%PREVIEW\n%%EOF\n")
-            try:
-                os.environ["PRKS_STORAGE"] = os.path.join(root, "storage")
-                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
-                req_scan = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=1")
-                with urllib.request.urlopen(req_scan) as rs:
-                    rows = json.loads(rs.read().decode())
-                self.assertEqual(len(rows), 1)
-                file_id = rows[0]["id"]
-                req_preview = urllib.request.Request(
-                    f"{self._base_url}/api/processing-files/{urllib.parse.quote(file_id)}/pdf"
-                )
-                with urllib.request.urlopen(req_preview) as rp:
-                    self.assertEqual(rp.status, 200)
-                    ctype = (rp.headers.get("Content-Type") or "").lower()
-                    self.assertIn("application/pdf", ctype)
-                    head = rp.read(16)
-                self.assertIn(b"%PDF-1.4", head)
-            finally:
-                if old_storage is None:
-                    os.environ.pop("PRKS_STORAGE", None)
-                else:
-                    os.environ["PRKS_STORAGE"] = old_storage
-                if old_processing is None:
-                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
-                else:
-                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+        processing_root = server_module.processing_dir
+        source_pdf = os.path.join(processing_root, "preview_me.pdf")
+        with open(source_pdf, "wb") as f:
+            f.write(b"%PDF-1.4\n%PREVIEW\n%%EOF\n")
+        req_scan = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=1")
+        with urllib.request.urlopen(req_scan) as rs:
+            rows = json.loads(rs.read().decode())
+        self.assertEqual(len(rows), 1)
+        file_id = rows[0]["id"]
+        req_preview = urllib.request.Request(
+            f"{self._base_url}/api/processing-files/{urllib.parse.quote(file_id)}/pdf"
+        )
+        with urllib.request.urlopen(req_preview) as rp:
+            self.assertEqual(rp.status, 200)
+            ctype = (rp.headers.get("Content-Type") or "").lower()
+            self.assertIn("application/pdf", ctype)
+            head = rp.read(16)
+        self.assertIn(b"%PDF-1.4", head)
 
     def test_server_post_work_without_folder_id_uses_uncategorized(self):
         req = urllib.request.Request(
@@ -1696,7 +1647,9 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(body1[:4], b"RIFF")
         self.assertEqual(body1[8:12], b"WEBP")
 
-        cache_path = prks_person_image_cache_path(p_id, payload["image_url"])
+        cache_path = prks_person_image_cache_path(
+            p_id, payload["image_url"], server_module._bound_storage.people_dir
+        )
         self.assertTrue(os.path.isfile(cache_path))
         self.assertTrue(cache_path.endswith(f"_v{PRKS_PERSON_IMAGE_CACHE_REV}.webp"))
 
@@ -1737,7 +1690,9 @@ class TestServerAPI(unittest.TestCase):
         fake_ctx.__exit__.return_value = None
         mock_urlopen.return_value = fake_ctx
 
-        cache_a = prks_person_image_cache_path(p_id, url_a)
+        cache_a = prks_person_image_cache_path(
+            p_id, url_a, server_module._bound_storage.people_dir
+        )
         img_url = f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}/profile-image"
         with urllib.request.urlopen(urllib.request.Request(img_url)) as ri:
             ri.read()
@@ -1753,7 +1708,9 @@ class TestServerAPI(unittest.TestCase):
             self.assertEqual(rpatch.status, 200)
 
         self.assertFalse(os.path.isfile(cache_a))
-        cache_b = prks_person_image_cache_path(p_id, url_b)
+        cache_b = prks_person_image_cache_path(
+            p_id, url_b, server_module._bound_storage.people_dir
+        )
         self.assertNotEqual(
             prks_person_image_url_hash(url_a), prks_person_image_url_hash(url_b)
         )

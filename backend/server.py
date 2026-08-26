@@ -10,6 +10,7 @@ import time
 import re
 import uuid
 import logging
+from dataclasses import replace
 from urllib.parse import urlparse, parse_qs, unquote
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
@@ -19,8 +20,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.db_manager import (
     PRKSDatabase,
     safe_pdf_path_under_dir,
-    resolve_processing_dir,
-    _resolve_thumbs_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
     prune_orphan_pdf_thumbnails,
@@ -29,13 +28,17 @@ from backend.db_manager import (
     prks_delete_person_image_cache,
 )
 from backend.log_config import setup_logging
-from backend.text_index import get_text_index
+from backend.text_index import (
+    PRKSTextIndex,
+    get_text_index,
+    replace_text_index,
+    reset_text_index,
+)
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 from backend.storage import paths
+from backend.storage.config import StorageConfig
 
-setup_logging()
 LOGGER = logging.getLogger("prks.server")
-text_index = get_text_index()
 
 PORT = 8080
 # Default for `python prks_app.py --testing`; non-testing bind refuses this port (see _validate_listen_port).
@@ -52,22 +55,79 @@ frontend_dir = os.path.join(base_dir, "frontend")
 # Ensure frontend dir exists so http.server doesn't crash on startup
 os.makedirs(frontend_dir, exist_ok=True)
 
-
-_get_storage_root = paths.resolve_storage_root
-_resolve_db_path = paths.resolve_db_path
-_resolve_pdfs_dir = paths.resolve_pdfs_dir
-_is_testing_env = paths.is_testing
+_bound_storage: StorageConfig | None = None
+pdfs_dir: str | None = None
+thumbs_dir: str | None = None
+processing_dir: str | None = None
+db: PRKSDatabase | None = None
+text_index: PRKSTextIndex | None = None
 
 
 def _validate_listen_port(port: int) -> None:
     """Avoid non-testing server on port used by `prks_app.py --testing` default."""
-    if _is_testing_env():
+    if _bound_storage is not None and _bound_storage.mode == "testing":
         return
     if int(port) == int(PRKS_TESTING_DEFAULT_PORT):
         raise RuntimeError(
             f"Port {PRKS_TESTING_DEFAULT_PORT} is reserved for `python prks_app.py --testing` "
             f"(PRKS_TESTING). Use a different --port, or run with --testing when you need that port."
         )
+
+
+def bind_storage(config: StorageConfig) -> StorageConfig:
+    processing_local = config.processing_dir
+    try:
+        os.makedirs(processing_local, exist_ok=True)
+    except OSError:
+        if processing_local != paths.PROCESSING_PROD_PREFERRED:
+            raise
+        processing_local = paths.processing_prod_fallback()
+        os.makedirs(processing_local, exist_ok=True)
+    if processing_local != config.processing_dir:
+        config = replace(config, processing_dir=processing_local)
+
+    os.makedirs(config.pdfs_dir, exist_ok=True)
+    os.makedirs(config.thumbs_dir, exist_ok=True)
+
+    db_local = PRKSDatabase(storage=config, schema_path="backend/db_schema.sql")
+    candidate = PRKSTextIndex(storage=config)
+
+    global _bound_storage, pdfs_dir, thumbs_dir, processing_dir, db, text_index
+    previous_published = (
+        _bound_storage,
+        pdfs_dir,
+        thumbs_dir,
+        processing_dir,
+        db,
+        text_index,
+    )
+    try:
+        previous_index = get_text_index()
+    except RuntimeError:
+        previous_index = None
+    try:
+        replace_text_index(candidate)
+        _bound_storage = config
+        pdfs_dir = config.pdfs_dir
+        thumbs_dir = config.thumbs_dir
+        processing_dir = config.processing_dir
+        db = db_local
+        text_index = candidate
+    except Exception:
+        if previous_index is not None:
+            replace_text_index(previous_index)
+        else:
+            reset_text_index()
+        (
+            _bound_storage,
+            pdfs_dir,
+            thumbs_dir,
+            processing_dir,
+            db,
+            text_index,
+        ) = previous_published
+        raise
+    return config
 
 
 def _prks_detect_image_mime(header: bytes) -> str:
@@ -78,14 +138,6 @@ def _prks_detect_image_mime(header: bytes) -> str:
     if len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP":
         return "image/webp"
     return "application/octet-stream"
-
-
-pdfs_dir = _resolve_pdfs_dir()
-os.makedirs(pdfs_dir, exist_ok=True)
-thumbs_dir = _resolve_thumbs_dir()
-os.makedirs(thumbs_dir, exist_ok=True)
-processing_dir = resolve_processing_dir()
-os.makedirs(processing_dir, exist_ok=True)
 
 
 def _safe_pdf_path_in_pdfs_dir(url_last_segment: str) -> str | None:
@@ -318,7 +370,6 @@ def _prks_thumbnail_bytes_from_pixmap(pix) -> tuple[bytes, str]:
     return pix.tobytes("png"), "png"
 
 
-db = PRKSDatabase(db_path=_resolve_db_path(), schema_path="backend/db_schema.sql")
 _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 
@@ -633,7 +684,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 p_id = path.split('/')[-1]
                 group_ids = data.pop('group_ids', None)
                 if 'image_url' in data:
-                    prks_delete_person_image_cache(p_id)
+                    prks_delete_person_image_cache(p_id, _bound_storage.people_dir)
                 db.update_person_metadata(p_id, data)
                 if group_ids is not None:
                     if not isinstance(group_ids, list):
@@ -1015,8 +1066,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404, "Profile image not available")
             return
 
-        cache_path = prks_person_image_cache_path(person_id, url)
-        legacy_bin = prks_person_image_legacy_bin_path(person_id)
+        cache_path = prks_person_image_cache_path(
+            person_id, url, _bound_storage.people_dir
+        )
+        legacy_bin = prks_person_image_legacy_bin_path(
+            person_id, _bound_storage.people_dir
+        )
 
         def read_cache_file(path: str) -> bytes:
             try:
@@ -2066,6 +2121,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 def run_server(port=PORT):
+    if _bound_storage is None:
+        raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
     _validate_listen_port(port)
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
@@ -2083,4 +2140,9 @@ def run_server(port=PORT):
             LOGGER.info("server_stopping reason=keyboard_interrupt")
 
 if __name__ == "__main__":
+    if "--testing" in sys.argv:
+        os.environ["PRKS_TESTING"] = "1"
+    config = StorageConfig.from_env()
+    config = bind_storage(config)
+    setup_logging(config)
     run_server()

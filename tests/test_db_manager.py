@@ -23,38 +23,36 @@ from backend.db_manager import (
     prune_orphan_pdf_thumbnails,
     prune_empty_processing_parent_dirs,
 )
+from backend.storage.config import StorageConfig
+
+_SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")
 
 class TestDBManager(unittest.TestCase):
     def setUp(self):
-        fd, path = tempfile.mkstemp(prefix="prks-db-tests-", suffix=".db")
-        os.close(fd)
-        self.test_db_path = path
-            
-        # Resolve the schema path relative to the test file
-        schema_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend", "db_schema.sql")
-        self.db = PRKSDatabase(db_path=self.test_db_path, schema_path=schema_path)
+        self._tmpdir = tempfile.mkdtemp(prefix="prks-db-tests-")
+        self.storage = StorageConfig.for_testing(self._tmpdir)
+        os.makedirs(self.storage.pdfs_dir, exist_ok=True)
+        os.makedirs(self.storage.thumbs_dir, exist_ok=True)
+        os.makedirs(self.storage.processing_dir, exist_ok=True)
+        self.db = PRKSDatabase(storage=self.storage, schema_path=_SCHEMA_PATH)
+        self.test_db_path = self.storage.db_path
 
     def tearDown(self):
-        if hasattr(self, 'test_db_path') and os.path.exists(self.test_db_path):
-            try:
-                os.remove(self.test_db_path)
-            except Exception:
-                pass
+        if getattr(self, "_tmpdir", None):
+            shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_get_all_works_sets_file_size_bytes_for_local_pdf(self):
         payload = b"0123456789abcdef"
         fname = f"test_prks_size_{uuid.uuid4().hex}.pdf"
-        with tempfile.TemporaryDirectory(prefix="prks-pdf-test-") as pdfs_dir:
-            path = os.path.join(pdfs_dir, fname)
-            with open(path, "wb") as f:
-                f.write(payload)
-            with patch('backend.db_manager._resolve_pdfs_dir', return_value=pdfs_dir):
-                w_id = self.db.add_work(title="Sized PDF", file_path=f"/api/pdfs/{fname}")
-                rows = self.db.get_all_works()
-                row = next(r for r in rows if r["id"] == w_id)
-                self.assertEqual(row.get("file_size_bytes"), len(payload))
-                work = self.db.get_work(w_id)
-                self.assertEqual(work.get("file_size_bytes"), len(payload))
+        path = os.path.join(self.storage.pdfs_dir, fname)
+        with open(path, "wb") as f:
+            f.write(payload)
+        w_id = self.db.add_work(title="Sized PDF", file_path=f"/api/pdfs/{fname}")
+        rows = self.db.get_all_works()
+        row = next(r for r in rows if r["id"] == w_id)
+        self.assertEqual(row.get("file_size_bytes"), len(payload))
+        work = self.db.get_work(w_id)
+        self.assertEqual(work.get("file_size_bytes"), len(payload))
 
     def test_add_and_get_work(self):
         w_id = self.db.add_work(title="Test Work", status="Completed", author_text="John Doe", year="2023")
@@ -172,53 +170,45 @@ class TestDBManager(unittest.TestCase):
 
     def test_delete_work_removes_pdf_thumbnail_cache_files(self):
         fname = f"td_{uuid.uuid4().hex}.pdf"
-        with tempfile.TemporaryDirectory(prefix="prks-pdf-del-") as pdfs_dir, tempfile.TemporaryDirectory(
-            prefix="prks-thumb-del-"
-        ) as thumbs_dir:
-            with open(os.path.join(pdfs_dir, fname), "wb") as f:
-                f.write(b"x")
-            with patch("backend.db_manager._resolve_pdfs_dir", return_value=pdfs_dir), patch(
-                "backend.db_manager._resolve_thumbs_dir", return_value=thumbs_dir
-            ):
-                w_id = self.db.add_work(title="DelThumb", file_path=f"/api/pdfs/{fname}")
-                stem = prks_thumb_cache_stem(w_id, 1)
-                p1 = os.path.join(thumbs_dir, f"{stem}.webp")
-                p2 = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 2)}.png")
-                tmp = os.path.join(thumbs_dir, f"{stem}.webp.tmp")
-                for p in (p1, p2, tmp):
-                    with open(p, "wb") as f:
-                        f.write(b"z")
-                self.db.delete_work(w_id)
-                self.assertFalse(os.path.exists(p1))
-                self.assertFalse(os.path.exists(p2))
-                self.assertFalse(os.path.exists(tmp))
+        pdfs_dir = self.storage.pdfs_dir
+        thumbs_dir = self.storage.thumbs_dir
+        with open(os.path.join(pdfs_dir, fname), "wb") as f:
+            f.write(b"x")
+        w_id = self.db.add_work(title="DelThumb", file_path=f"/api/pdfs/{fname}")
+        stem = prks_thumb_cache_stem(w_id, 1)
+        p1 = os.path.join(thumbs_dir, f"{stem}.webp")
+        p2 = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 2)}.png")
+        tmp = os.path.join(thumbs_dir, f"{stem}.webp.tmp")
+        for p in (p1, p2, tmp):
+            with open(p, "wb") as f:
+                f.write(b"z")
+        self.db.delete_work(w_id)
+        self.assertFalse(os.path.exists(p1))
+        self.assertFalse(os.path.exists(p2))
+        self.assertFalse(os.path.exists(tmp))
 
     def test_prune_orphan_pdf_thumbnails(self):
         fname = f"tp_{uuid.uuid4().hex}.pdf"
-        with tempfile.TemporaryDirectory(prefix="prks-pdf-prune-") as pdfs_dir, tempfile.TemporaryDirectory(
-            prefix="prks-thumb-prune-"
-        ) as thumbs_dir:
-            with open(os.path.join(pdfs_dir, fname), "wb") as f:
-                f.write(b"x")
-            with patch("backend.db_manager._resolve_pdfs_dir", return_value=pdfs_dir), patch(
-                "backend.db_manager._resolve_thumbs_dir", return_value=thumbs_dir
-            ):
-                w_id = self.db.add_work(
-                    title="KeepThumb",
-                    file_path=f"/api/pdfs/{fname}",
-                    thumb_page=2,
-                )
-                good = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 2)}.webp")
-                stale_page = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 9)}.png")
-                orphan = os.path.join(thumbs_dir, "zzzorphan_p1_v2.webp")
-                for p in (good, stale_page, orphan):
-                    with open(p, "wb") as f:
-                        f.write(b"z")
-                n = prune_orphan_pdf_thumbnails(self.db)
-                self.assertEqual(n, 2)
-                self.assertTrue(os.path.isfile(good))
-                self.assertFalse(os.path.exists(stale_page))
-                self.assertFalse(os.path.exists(orphan))
+        pdfs_dir = self.storage.pdfs_dir
+        thumbs_dir = self.storage.thumbs_dir
+        with open(os.path.join(pdfs_dir, fname), "wb") as f:
+            f.write(b"x")
+        w_id = self.db.add_work(
+            title="KeepThumb",
+            file_path=f"/api/pdfs/{fname}",
+            thumb_page=2,
+        )
+        good = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 2)}.webp")
+        stale_page = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 9)}.png")
+        orphan = os.path.join(thumbs_dir, "zzzorphan_p1_v2.webp")
+        for p in (good, stale_page, orphan):
+            with open(p, "wb") as f:
+                f.write(b"z")
+        n = prune_orphan_pdf_thumbnails(self.db)
+        self.assertEqual(n, 2)
+        self.assertTrue(os.path.isfile(good))
+        self.assertFalse(os.path.exists(stale_page))
+        self.assertFalse(os.path.exists(orphan))
 
     def test_get_all_works_omits_text_and_private_notes(self):
         w_id = self.db.add_work(title="Heavy", text_content="x" * 5000, abstract="Short abs")
@@ -910,180 +900,115 @@ class TestDBManager(unittest.TestCase):
         self.assertIsNone(self.db.get_work(w_id))
 
     def test_processing_files_scan_update_and_import_move_flow(self):
-        old_storage = os.environ.get("PRKS_STORAGE")
-        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
-        with tempfile.TemporaryDirectory(prefix="prks-processing-db-") as root:
-            processing_root = os.path.join(root, "for_processing")
-            nested = os.path.join(processing_root, "batch_a", "batch_b")
-            os.makedirs(nested, exist_ok=True)
-            pdf_path = os.path.join(nested, "sample.pdf")
-            txt_path = os.path.join(nested, "skip.txt")
-            with open(pdf_path, "wb") as f:
-                f.write(b"%PDF-1.4\n%DBTEST\n%%EOF\n")
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write("ignore")
-            try:
-                os.environ["PRKS_STORAGE"] = root
-                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
-                person_id = self.db.add_person(first_name="Role", last_name="Author")
-                folder_id = self.db.add_folder(title="Processing Target", description="")
-                tag_row = self.db.add_tag("Inbox Tag", "#6d6cf7")
-                tag_id = tag_row["id"] if isinstance(tag_row, dict) else tag_row
-                staged = self.db.scan_processing_files()
-                self.assertEqual(len(staged), 1)
-                row = staged[0]
-                self.assertEqual(row["rel_path"], "batch_a/batch_b/sample.pdf")
-                self.assertEqual(self.db.search_works("Imported from inbox"), [])
-                self.db.update_processing_file(
-                    row["id"],
-                    {
-                        "title": "Imported from inbox",
-                        "status_draft": "Planned",
-                        "doc_type": "book",
-                        "target_folder_id": folder_id,
-                        "roles": [{"person_id": person_id, "role_type": "Author"}],
-                        "tags": [{"id": tag_id, "name": "Inbox Tag"}],
-                    },
-                )
-                updated = self.db.get_processing_file(row["id"])
-                self.assertEqual(len(updated.get("tags") or []), 1)
-                self.assertEqual(updated["tags"][0]["id"], tag_id)
-                out = self.db.import_processing_file(row["id"])
-                self.assertIn("work_id", out)
-                self.assertFalse(os.path.exists(pdf_path))
-                imported_work = self.db.get_work(out["work_id"])
-                self.assertEqual(imported_work.get("folder_id"), folder_id)
-                self.assertEqual(imported_work["title"], "Imported from inbox")
-                self.assertEqual(imported_work["status"], "Planned")
-                self.assertEqual(imported_work["doc_type"], "book")
-                self.assertTrue(any(r.get("id") == person_id and r.get("role_type") == "Author" for r in imported_work.get("roles", [])))
-                work_tags = self.db.get_work_tags(out["work_id"])
-                self.assertTrue(any(t.get("id") == tag_id for t in work_tags))
-                self.assertTrue(str(imported_work.get("file_path") or "").startswith("/api/pdfs/"))
-                pdf_name = imported_work["file_path"].split("/")[-1]
-                moved_abs = os.path.join(root, "pdfs", pdf_name)
-                self.assertTrue(os.path.isfile(moved_abs))
-                self.assertTrue(any(r["id"] == out["work_id"] for r in self.db.search_works("Imported from inbox")))
-                self.assertEqual(self.db.get_processing_files(), [])
-            finally:
-                if old_storage is None:
-                    os.environ.pop("PRKS_STORAGE", None)
-                else:
-                    os.environ["PRKS_STORAGE"] = old_storage
-                if old_processing is None:
-                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
-                else:
-                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+        processing_root = self.storage.processing_dir
+        nested = os.path.join(processing_root, "batch_a", "batch_b")
+        os.makedirs(nested, exist_ok=True)
+        pdf_path = os.path.join(nested, "sample.pdf")
+        txt_path = os.path.join(nested, "skip.txt")
+        with open(pdf_path, "wb") as f:
+            f.write(b"%PDF-1.4\n%DBTEST\n%%EOF\n")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write("ignore")
+        person_id = self.db.add_person(first_name="Role", last_name="Author")
+        folder_id = self.db.add_folder(title="Processing Target", description="")
+        tag_row = self.db.add_tag("Inbox Tag", "#6d6cf7")
+        tag_id = tag_row["id"] if isinstance(tag_row, dict) else tag_row
+        staged = self.db.scan_processing_files()
+        self.assertEqual(len(staged), 1)
+        row = staged[0]
+        self.assertEqual(row["rel_path"], "batch_a/batch_b/sample.pdf")
+        self.assertEqual(self.db.search_works("Imported from inbox"), [])
+        self.db.update_processing_file(
+            row["id"],
+            {
+                "title": "Imported from inbox",
+                "status_draft": "Planned",
+                "doc_type": "book",
+                "target_folder_id": folder_id,
+                "roles": [{"person_id": person_id, "role_type": "Author"}],
+                "tags": [{"id": tag_id, "name": "Inbox Tag"}],
+            },
+        )
+        updated = self.db.get_processing_file(row["id"])
+        self.assertEqual(len(updated.get("tags") or []), 1)
+        self.assertEqual(updated["tags"][0]["id"], tag_id)
+        out = self.db.import_processing_file(row["id"])
+        self.assertIn("work_id", out)
+        self.assertFalse(os.path.exists(pdf_path))
+        imported_work = self.db.get_work(out["work_id"])
+        self.assertEqual(imported_work.get("folder_id"), folder_id)
+        self.assertEqual(imported_work["title"], "Imported from inbox")
+        self.assertEqual(imported_work["status"], "Planned")
+        self.assertEqual(imported_work["doc_type"], "book")
+        self.assertTrue(any(r.get("id") == person_id and r.get("role_type") == "Author" for r in imported_work.get("roles", [])))
+        work_tags = self.db.get_work_tags(out["work_id"])
+        self.assertTrue(any(t.get("id") == tag_id for t in work_tags))
+        self.assertTrue(str(imported_work.get("file_path") or "").startswith("/api/pdfs/"))
+        pdf_name = imported_work["file_path"].split("/")[-1]
+        moved_abs = os.path.join(self.storage.pdfs_dir, pdf_name)
+        self.assertTrue(os.path.isfile(moved_abs))
+        self.assertTrue(any(r["id"] == out["work_id"] for r in self.db.search_works("Imported from inbox")))
+        self.assertEqual(self.db.get_processing_files(), [])
 
     def test_import_processing_prunes_empty_nested_dirs(self):
         """After import removes inbox PDF, empty ancestor dirs under for_processing/ removed."""
-        old_storage = os.environ.get("PRKS_STORAGE")
-        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
-        with tempfile.TemporaryDirectory(prefix="prks-processing-prune-") as root:
-            processing_root = os.path.join(root, "for_processing")
-            nested = os.path.join(processing_root, "a", "b", "c")
-            os.makedirs(nested, exist_ok=True)
-            pdf_path = os.path.join(nested, "solo.pdf")
-            with open(pdf_path, "wb") as f:
-                f.write(b"%PDF-1.4\n%PRUNE\n%%EOF\n")
-            try:
-                os.environ["PRKS_STORAGE"] = root
-                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
-                folder_id = self.db.add_folder(title="PruneTarget", description="")
-                staged = self.db.scan_processing_files()
-                self.assertEqual(len(staged), 1)
-                row = staged[0]
-                self.db.update_processing_file(
-                    row["id"],
-                    {"title": "Pruned path work", "target_folder_id": folder_id},
-                )
-                self.db.import_processing_file(row["id"])
-                self.assertFalse(os.path.exists(pdf_path))
-                self.assertFalse(os.path.isdir(nested))
-                self.assertFalse(os.path.isdir(os.path.join(processing_root, "a", "b")))
-                self.assertFalse(os.path.isdir(os.path.join(processing_root, "a")))
-                self.assertTrue(os.path.isdir(processing_root))
-                # No-op if path escapes inbox (guard)
-                prune_empty_processing_parent_dirs(processing_root, "/tmp/definitely_not_under_inbox")
-                self.assertTrue(os.path.isdir(processing_root))
-            finally:
-                if old_storage is None:
-                    os.environ.pop("PRKS_STORAGE", None)
-                else:
-                    os.environ["PRKS_STORAGE"] = old_storage
-                if old_processing is None:
-                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
-                else:
-                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+        processing_root = self.storage.processing_dir
+        nested = os.path.join(processing_root, "a", "b", "c")
+        os.makedirs(nested, exist_ok=True)
+        pdf_path = os.path.join(nested, "solo.pdf")
+        with open(pdf_path, "wb") as f:
+            f.write(b"%PDF-1.4\n%PRUNE\n%%EOF\n")
+        folder_id = self.db.add_folder(title="PruneTarget", description="")
+        staged = self.db.scan_processing_files()
+        self.assertEqual(len(staged), 1)
+        row = staged[0]
+        self.db.update_processing_file(
+            row["id"],
+            {"title": "Pruned path work", "target_folder_id": folder_id},
+        )
+        self.db.import_processing_file(row["id"])
+        self.assertFalse(os.path.exists(pdf_path))
+        self.assertFalse(os.path.isdir(nested))
+        self.assertFalse(os.path.isdir(os.path.join(processing_root, "a", "b")))
+        self.assertFalse(os.path.isdir(os.path.join(processing_root, "a")))
+        self.assertTrue(os.path.isdir(processing_root))
+        prune_empty_processing_parent_dirs(processing_root, "/tmp/definitely_not_under_inbox")
+        self.assertTrue(os.path.isdir(processing_root))
 
     def test_import_processing_file_keeps_inbox_when_add_work_fails(self):
         """Copy-then-commit: inbox PDF must survive add_work failure (no row + no ghost dest)."""
-        old_storage = os.environ.get("PRKS_STORAGE")
-        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
-        with tempfile.TemporaryDirectory(prefix="prks-import-fail-") as root:
-            processing_root = os.path.join(root, "for_processing")
-            os.makedirs(processing_root, exist_ok=True)
-            pdf_path = os.path.join(processing_root, "fragile.pdf")
-            with open(pdf_path, "wb") as f:
-                f.write(b"%PDF-1.4\n%FAILTEST\n%%EOF\n")
-            try:
-                os.environ["PRKS_STORAGE"] = root
-                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
-                staged = self.db.scan_processing_files()
-                self.assertEqual(len(staged), 1)
-                row = staged[0]
-                with patch.object(self.db, "add_work", side_effect=RuntimeError("simulated DB failure")):
-                    with self.assertRaises(ValueError) as ctx:
-                        self.db.import_processing_file(row["id"])
-                    self.assertIn("simulated DB failure", str(ctx.exception))
-                self.assertTrue(os.path.isfile(pdf_path), "inbox PDF must remain after failed import")
-                pdfs_dir = os.path.join(root, "pdfs")
-                if os.path.isdir(pdfs_dir):
-                    leftovers = [n for n in os.listdir(pdfs_dir) if n.lower().endswith(".pdf")]
-                    self.assertEqual(leftovers, [])
-                rows = self.db.execute_query(
-                    "SELECT status, last_error FROM processing_files WHERE id = ?",
-                    (row["id"],),
-                )
-                self.assertTrue(rows)
-                self.assertEqual(rows[0]["status"], "error")
-                self.assertIn("simulated DB failure", rows[0]["last_error"] or "")
-            finally:
-                if old_storage is None:
-                    os.environ.pop("PRKS_STORAGE", None)
-                else:
-                    os.environ["PRKS_STORAGE"] = old_storage
-                if old_processing is None:
-                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
-                else:
-                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+        processing_root = self.storage.processing_dir
+        pdf_path = os.path.join(processing_root, "fragile.pdf")
+        with open(pdf_path, "wb") as f:
+            f.write(b"%PDF-1.4\n%FAILTEST\n%%EOF\n")
+        staged = self.db.scan_processing_files()
+        self.assertEqual(len(staged), 1)
+        row = staged[0]
+        with patch.object(self.db, "add_work", side_effect=RuntimeError("simulated DB failure")):
+            with self.assertRaises(ValueError) as ctx:
+                self.db.import_processing_file(row["id"])
+            self.assertIn("simulated DB failure", str(ctx.exception))
+        self.assertTrue(os.path.isfile(pdf_path), "inbox PDF must remain after failed import")
+        leftovers = [n for n in os.listdir(self.storage.pdfs_dir) if n.lower().endswith(".pdf")]
+        self.assertEqual(leftovers, [])
+        rows = self.db.execute_query(
+            "SELECT status, last_error FROM processing_files WHERE id = ?",
+            (row["id"],),
+        )
+        self.assertTrue(rows)
+        self.assertEqual(rows[0]["status"], "error")
+        self.assertIn("simulated DB failure", rows[0]["last_error"] or "")
 
     def test_processing_files_rescan_deletes_stale(self):
-        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
-        old_storage = os.environ.get("PRKS_STORAGE")
-        with tempfile.TemporaryDirectory(prefix="prks-processing-missing-") as root:
-            processing_root = os.path.join(root, "for_processing")
-            os.makedirs(processing_root, exist_ok=True)
-            pdf_path = os.path.join(processing_root, "gone.pdf")
-            with open(pdf_path, "wb") as f:
-                f.write(b"%PDF-1.4\n%MISSING\n%%EOF\n")
-            try:
-                os.environ["PRKS_STORAGE"] = root
-                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
-                staged = self.db.scan_processing_files()
-                self.assertEqual(len(staged), 1)
-                os.remove(pdf_path)
-                staged2 = self.db.scan_processing_files()
-                self.assertEqual(staged2, [])
-            finally:
-                if old_processing is None:
-                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
-                else:
-                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
-                if old_storage is None:
-                    os.environ.pop("PRKS_STORAGE", None)
-                else:
-                    os.environ["PRKS_STORAGE"] = old_storage
+        processing_root = self.storage.processing_dir
+        pdf_path = os.path.join(processing_root, "gone.pdf")
+        with open(pdf_path, "wb") as f:
+            f.write(b"%PDF-1.4\n%MISSING\n%%EOF\n")
+        staged = self.db.scan_processing_files()
+        self.assertEqual(len(staged), 1)
+        os.remove(pdf_path)
+        staged2 = self.db.scan_processing_files()
+        self.assertEqual(staged2, [])
 
     def test_ensure_default_uncategorized_folder_id_idempotent(self):
         a1 = self.db.ensure_default_uncategorized_folder_id()
@@ -1105,36 +1030,20 @@ class TestDBManager(unittest.TestCase):
         self.assertIn("Uncategorized", titles2)
 
     def test_import_processing_without_target_folder_uses_uncategorized(self):
-        old_storage = os.environ.get("PRKS_STORAGE")
-        old_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
-        with tempfile.TemporaryDirectory(prefix="prks-import-uncat-") as root:
-            processing_root = os.path.join(root, "for_processing")
-            os.makedirs(processing_root, exist_ok=True)
-            pdf_path = os.path.join(processing_root, "free.pdf")
-            with open(pdf_path, "wb") as f:
-                f.write(b"%PDF-1.4\n%UNCAT\n%%EOF\n")
-            try:
-                os.environ["PRKS_STORAGE"] = root
-                os.environ["PRKS_FOR_PROCESSING_DIR"] = processing_root
-                staged = self.db.scan_processing_files()
-                self.assertEqual(len(staged), 1)
-                row = staged[0]
-                self.db.update_processing_file(
-                    row["id"],
-                    {"title": "No target folder import", "status_draft": "Planned"},
-                )
-                out = self.db.import_processing_file(row["id"])
-                w = self.db.get_work(out["work_id"])
-                self.assertEqual(w.get("folder_title"), "Uncategorized")
-            finally:
-                if old_storage is None:
-                    os.environ.pop("PRKS_STORAGE", None)
-                else:
-                    os.environ["PRKS_STORAGE"] = old_storage
-                if old_processing is None:
-                    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
-                else:
-                    os.environ["PRKS_FOR_PROCESSING_DIR"] = old_processing
+        processing_root = self.storage.processing_dir
+        pdf_path = os.path.join(processing_root, "free.pdf")
+        with open(pdf_path, "wb") as f:
+            f.write(b"%PDF-1.4\n%UNCAT\n%%EOF\n")
+        staged = self.db.scan_processing_files()
+        self.assertEqual(len(staged), 1)
+        row = staged[0]
+        self.db.update_processing_file(
+            row["id"],
+            {"title": "No target folder import", "status_draft": "Planned"},
+        )
+        out = self.db.import_processing_file(row["id"])
+        w = self.db.get_work(out["work_id"])
+        self.assertEqual(w.get("folder_title"), "Uncategorized")
 
 
 if __name__ == '__main__':
