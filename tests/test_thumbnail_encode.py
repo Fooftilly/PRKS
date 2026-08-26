@@ -5,8 +5,9 @@ import unittest
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PROJECT_DIR)
 
-os.environ.setdefault("PRKS_TESTING", "1")
-os.environ.setdefault("PRKS_STORAGE", os.path.join(_PROJECT_DIR, "data_testing"))
+from run_tests import apply_isolated_test_env
+
+apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.server import (  # noqa: E402
     _prks_pixmap_to_card_webp_bytes,

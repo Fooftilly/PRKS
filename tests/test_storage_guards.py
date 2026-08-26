@@ -5,13 +5,13 @@ import subprocess
 import shutil
 
 
-# Ensure the repo root is importable as a module root.
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
-os.environ.setdefault("PRKS_TESTING", "1")
-os.environ.setdefault("PRKS_STORAGE", os.path.join(_PROJECT_DIR, "data_testing"))
+from run_tests import apply_isolated_test_env
+
+apply_isolated_test_env(_PROJECT_DIR)
 
 
 class TestStorageGuards(unittest.TestCase):

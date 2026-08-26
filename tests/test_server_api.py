@@ -13,8 +13,12 @@ import tempfile
 from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
-# Add the parent directory to sys.path so we can import 'backend'
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from run_tests import apply_isolated_test_env
+
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import (
     prks_person_image_cache_path,
@@ -22,11 +26,6 @@ from backend.db_manager import (
     PRKS_PERSON_IMAGE_CACHE_REV,
 )
 from backend.storage.config import StorageConfig
-
-# Ensure imports/run never write to container storage (/data).
-_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ.setdefault("PRKS_TESTING", "1")
-os.environ.setdefault("PRKS_STORAGE", os.path.join(_PROJECT_DIR, "data_testing"))
 
 import backend.server as server_module
 

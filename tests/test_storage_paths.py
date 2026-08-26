@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -227,6 +228,30 @@ class TestStorageConfig(unittest.TestCase):
         self.assertEqual(cfg.processing_dir, "/tmp/inbox")
         self.assertEqual(cfg.log_file, "/tmp/custom.log")
         self.assertEqual(cfg.root, os.path.join(_PROJECT_DIR, "data_testing"))
+        self.assertFalse(cfg.processing_fallback_allowed)
+
+    def test_default_production_processing_allows_fallback(self):
+        from backend.storage.config import StorageConfig
+
+        with _env(testing=None, storage=None):
+            cfg = StorageConfig.from_env()
+        self.assertEqual(cfg.mode, "production")
+        self.assertIsNone(cfg.configured_root)
+        self.assertEqual(cfg.processing_dir, paths.PROCESSING_PROD_PREFERRED)
+        self.assertTrue(cfg.processing_fallback_allowed)
+
+    def test_explicit_processing_override_disallows_fallback(self):
+        from backend.storage.config import StorageConfig
+
+        with _env(
+            testing=None,
+            storage=None,
+            processing=paths.PROCESSING_PROD_PREFERRED,
+        ):
+            cfg = StorageConfig.from_env()
+        self.assertEqual(cfg.mode, "production")
+        self.assertEqual(cfg.processing_dir, paths.PROCESSING_PROD_PREFERRED)
+        self.assertFalse(cfg.processing_fallback_allowed)
 
     def test_snapshot_ignores_later_env_changes(self):
         from backend.storage.config import StorageConfig
@@ -246,6 +271,189 @@ class TestStorageConfig(unittest.TestCase):
                 cfg.processing_dir, os.path.join("data_testing", "for_processing")
             )
             self.assertEqual(cfg.log_file, os.path.join("data_testing", "prks-errors.log"))
+
+    def test_testing_refuses_repo_data_root(self):
+        repo_data = os.path.join(_PROJECT_DIR, "data")
+        repo_data_child = os.path.join(repo_data, "subdir")
+        with _env(testing="1", storage=repo_data):
+            with self.assertRaises(RuntimeError) as ctx:
+                StorageConfig.from_env()
+            self.assertIn("refusing to use PRKS_STORAGE", str(ctx.exception))
+            self.assertIn("repository data directory", str(ctx.exception))
+        with _env(testing="1", storage=repo_data_child):
+            with self.assertRaises(RuntimeError) as ctx:
+                StorageConfig.from_env()
+            self.assertIn("refusing to use PRKS_STORAGE", str(ctx.exception))
+        with self.assertRaises(RuntimeError) as ctx:
+            StorageConfig.for_testing(repo_data)
+        self.assertIn("refusing to use PRKS_STORAGE", str(ctx.exception))
+        self.assertIn("repository data directory", str(ctx.exception))
+
+    def test_testing_allows_repo_data2(self):
+        repo_data2 = os.path.join(_PROJECT_DIR, "data2")
+        with _env(testing="1", storage=repo_data2):
+            cfg = StorageConfig.from_env()
+        self.assertEqual(cfg.configured_root, repo_data2)
+        cfg = StorageConfig.for_testing(repo_data2)
+        self.assertEqual(cfg.root, repo_data2)
+
+    def test_testing_processing_override_cannot_use_production_trees(self):
+        repo_data_proc = os.path.join(_PROJECT_DIR, "data", "for_processing")
+        with _env(testing="1", storage=None, processing=repo_data_proc):
+            with self.assertRaises(RuntimeError) as ctx:
+                StorageConfig.from_env()
+            self.assertIn("PRKS_FOR_PROCESSING_DIR", str(ctx.exception))
+        with _env(testing="1", storage=None, processing="/data/for_processing"):
+            with self.assertRaises(RuntimeError) as ctx:
+                StorageConfig.from_env()
+            self.assertIn("PRKS_FOR_PROCESSING_DIR", str(ctx.exception))
+            self.assertIn("under /data", str(ctx.exception))
+
+    def test_testing_log_override_cannot_use_production_trees(self):
+        cases = (
+            ("/data/log.txt", "/data"),
+            ("/data/sub/log.txt", "/data"),
+            (os.path.join(_PROJECT_DIR, "data", "x.log"), "repository data directory"),
+        )
+        for log_file, marker in cases:
+            with self.subTest(log_file=log_file):
+                with _env(testing="1", storage=None, log_file=log_file):
+                    with self.assertRaises(RuntimeError) as ctx:
+                        StorageConfig.from_env()
+                    self.assertIn("PRKS_LOG_FILE", str(ctx.exception))
+                    self.assertIn(marker, str(ctx.exception))
+
+    def test_testing_log_override_allows_data2_trees(self):
+        with _env(testing="1", storage=None, log_file="/data2/log.txt"):
+            cfg = StorageConfig.from_env()
+        self.assertEqual(cfg.log_file, "/data2/log.txt")
+        allowed = os.path.join(_PROJECT_DIR, "data2", "x.log")
+        with _env(testing="1", storage=None, log_file=allowed):
+            cfg = StorageConfig.from_env()
+        self.assertEqual(cfg.log_file, allowed)
+
+    def test_explicit_symlink_into_repo_data_is_rejected(self):
+        repo_data = os.path.join(_PROJECT_DIR, "data")
+        try:
+            with tempfile.TemporaryDirectory(prefix="prks-safe-looking-") as tmp:
+                link = os.path.join(tmp, "prks-safe-looking")
+                os.symlink(repo_data, link)
+                with self.assertRaises(RuntimeError) as ctx:
+                    StorageConfig.for_testing(link)
+                self.assertIn("refusing to use", str(ctx.exception))
+                with _env(testing="1", storage=link):
+                    with self.assertRaises(RuntimeError) as ctx:
+                        StorageConfig.from_env()
+                    self.assertIn("refusing to use PRKS_STORAGE", str(ctx.exception))
+        except OSError as exc:
+            self.skipTest(f"symlink containment test unavailable: {exc}")
+
+    def test_defaulted_testing_root_symlink_into_repo_data_is_rejected(self):
+        try:
+            with tempfile.TemporaryDirectory(prefix="prks-fake-repo-") as fake_repo:
+                prod_data = os.path.join(fake_repo, "data")
+                os.makedirs(prod_data)
+                testing_root = os.path.join(fake_repo, "data_testing")
+                os.symlink(prod_data, testing_root)
+                with patch.object(paths, "_REPO_ROOT", fake_repo):
+                    with _env(testing="1", storage=None):
+                        with self.assertRaises(RuntimeError) as ctx:
+                            StorageConfig.from_env()
+                        self.assertIn("refusing to use", str(ctx.exception))
+                        self.assertIn("testing storage root", str(ctx.exception))
+        except OSError as exc:
+            self.skipTest(f"symlink containment test unavailable: {exc}")
+
+    def test_derived_log_symlink_into_fake_repo_data_is_rejected(self):
+        try:
+            with tempfile.TemporaryDirectory(prefix="prks-fake-prod-") as fake_repo:
+                prod_data = os.path.join(fake_repo, "data")
+                os.makedirs(prod_data)
+                prod_log = os.path.join(prod_data, "log")
+                with open(prod_log, "w", encoding="utf-8") as fh:
+                    fh.write("prod")
+                with tempfile.TemporaryDirectory(prefix="prks-safe-root-") as safe_root:
+                    os.symlink(prod_log, os.path.join(safe_root, "prks-errors.log"))
+                    with patch.object(paths, "_REPO_ROOT", fake_repo):
+                        with self.assertRaises(RuntimeError) as ctx:
+                            StorageConfig.for_testing(safe_root)
+                        self.assertIn("refusing to use", str(ctx.exception))
+                        self.assertIn("log_file", str(ctx.exception))
+        except OSError as exc:
+            self.skipTest(f"symlink containment test unavailable: {exc}")
+
+    def test_derived_pdfs_symlink_into_fake_repo_data_is_rejected(self):
+        try:
+            with tempfile.TemporaryDirectory(prefix="prks-fake-prod-") as fake_repo:
+                prod_pdfs = os.path.join(fake_repo, "data", "pdfs")
+                os.makedirs(prod_pdfs)
+                with tempfile.TemporaryDirectory(prefix="prks-safe-root-") as safe_root:
+                    os.symlink(prod_pdfs, os.path.join(safe_root, "pdfs"))
+                    with patch.object(paths, "_REPO_ROOT", fake_repo):
+                        with self.assertRaises(RuntimeError) as ctx:
+                            StorageConfig.for_testing(safe_root)
+                        self.assertIn("refusing to use", str(ctx.exception))
+                        self.assertIn("pdfs_dir", str(ctx.exception))
+        except OSError as exc:
+            self.skipTest(f"symlink containment test unavailable: {exc}")
+
+    def test_derived_db_and_index_symlinks_into_fake_repo_data_are_rejected(self):
+        try:
+            with tempfile.TemporaryDirectory(prefix="prks-fake-prod-") as fake_repo:
+                prod_data = os.path.join(fake_repo, "data")
+                os.makedirs(prod_data)
+                prod_db = os.path.join(prod_data, "prks_data.db")
+                prod_index = os.path.join(prod_data, "prks_text_index.db")
+                for path in (prod_db, prod_index):
+                    with open(path, "wb") as fh:
+                        fh.write(b"")
+                with tempfile.TemporaryDirectory(prefix="prks-safe-root-") as safe_root:
+                    os.symlink(prod_db, os.path.join(safe_root, "prks_data.db"))
+                    with patch.object(paths, "_REPO_ROOT", fake_repo):
+                        with self.assertRaises(RuntimeError) as ctx:
+                            StorageConfig.for_testing(safe_root)
+                        self.assertIn("refusing to use", str(ctx.exception))
+                        self.assertIn("db_path", str(ctx.exception))
+                    os.remove(os.path.join(safe_root, "prks_data.db"))
+                    os.symlink(prod_index, os.path.join(safe_root, "prks_text_index.db"))
+                    with patch.object(paths, "_REPO_ROOT", fake_repo):
+                        with self.assertRaises(RuntimeError) as ctx:
+                            StorageConfig.for_testing(safe_root)
+                        self.assertIn("refusing to use", str(ctx.exception))
+                        self.assertIn("index_db_path", str(ctx.exception))
+        except OSError as exc:
+            self.skipTest(f"symlink containment test unavailable: {exc}")
+
+    def test_derived_child_symlink_is_rejected_before_write(self):
+        def boom_mkdir(*_a, **_k):
+            raise AssertionError("mkdir")
+
+        real_open = open
+
+        def guarded_open(file, mode="r", *args, **kwargs):
+            if any(flag in str(mode) for flag in "wax+"):
+                raise AssertionError("write-open")
+            return real_open(file, mode, *args, **kwargs)
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="prks-fake-prod-") as fake_repo:
+                prod_data = os.path.join(fake_repo, "data")
+                os.makedirs(prod_data)
+                prod_log = os.path.join(prod_data, "log")
+                with open(prod_log, "w", encoding="utf-8") as fh:
+                    fh.write("prod")
+                with tempfile.TemporaryDirectory(prefix="prks-safe-root-") as safe_root:
+                    os.symlink(prod_log, os.path.join(safe_root, "prks-errors.log"))
+                    with (
+                        patch.object(paths, "_REPO_ROOT", fake_repo),
+                        patch("os.makedirs", boom_mkdir),
+                        patch("builtins.open", guarded_open),
+                    ):
+                        with self.assertRaises(RuntimeError) as ctx:
+                            StorageConfig.for_testing(safe_root)
+                        self.assertIn("refusing to use", str(ctx.exception))
+        except OSError as exc:
+            self.skipTest(f"symlink containment test unavailable: {exc}")
 
     def test_from_env_and_for_testing_do_not_write(self):
         from backend.storage.config import StorageConfig

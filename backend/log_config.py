@@ -40,7 +40,8 @@ def setup_logging(config: StorageConfig) -> None:
     file_level = _resolve_file_log_level()
     log_file = config.log_file
     retention_days = _resolve_retention_days()
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    parent = os.path.dirname(log_file) or "."
+    os.makedirs(parent, exist_ok=True)
 
     formatter = logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s %(message)s",

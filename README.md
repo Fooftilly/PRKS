@@ -38,7 +38,7 @@ python prks_app.py --port 9000
 python prks_app.py --testing
 ```
 
-This sets `PRKS_TESTING=1`, uses port **8070** by default (unless you pass `--port`), and uses `data_testing/` for the database and PDFs so normal `./data` is untouched. If `PRKS_STORAGE` points at `/data` (or under it), the server refuses to start in testing mode to avoid mixing container storage with tests.
+This sets `PRKS_TESTING=1` and uses port **8070** by default (unless you pass `--port`). With `PRKS_STORAGE` unset it defaults to `data_testing/` so repo `data/` is untouched. You may set `PRKS_STORAGE` to an explicit safe testing root. Testing mode refuses `/data` and the repository `data/` directory (and descendants), including via symlinks. `prks_app.py` is the only process entry.
 
 ## Docker
 
@@ -74,14 +74,16 @@ Backup your database by copying `/data` folder.
 python run_tests.py
 ```
 
-This discovers tests under `tests/`, sets `PRKS_TESTING=1` and `PRKS_STORAGE` to the repo’s `data_testing/` directory so tests do not use `./data` or container `/data`.
+This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=1` and `PRKS_STORAGE` to the repo’s `data_testing/` directory and clears `PRKS_FOR_PROCESSING_DIR` and `PRKS_LOG_FILE`. That is stricter than `python prks_app.py --testing`, which may honor an explicit safe `PRKS_STORAGE`. Neither path uses `./data` or container `/data`.
 
 ## Project layout
 
 | Path | Role |
 | ---- | ---- |
-| `prks_app.py` | CLI entry: parses `--testing`, `--port`, starts the server. |
+| `prks_app.py` | Only process entry: parses `--testing`, `--port`, starts the server. |
 | `backend/server.py` | HTTP handler: static frontend, REST-style `/api/...` routes. |
+| `backend/storage/config.py` | Frozen storage snapshot and env parser. |
+| `backend/storage/paths.py` | Path derivation and testing-mode containment. |
 | `backend/db_manager.py` | SQLite access and business logic. |
 | `backend/db_schema.sql` | Schema and FTS triggers. |
 | `frontend/` | Static SPA (HTML, CSS, JS), PWA assets. |

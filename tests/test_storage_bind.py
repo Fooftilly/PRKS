@@ -2,15 +2,15 @@ import os
 import sys
 import tempfile
 import unittest
-from dataclasses import replace
 from unittest.mock import patch
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
-os.environ.setdefault("PRKS_TESTING", "1")
-os.environ.setdefault("PRKS_STORAGE", os.path.join(_PROJECT_DIR, "data_testing"))
+from run_tests import apply_isolated_test_env
+
+apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import PRKSDatabase
 from backend.server import bind_storage, run_server
@@ -101,12 +101,20 @@ class TestStorageBind(unittest.TestCase):
 
     def test_processing_fallback_updates_returned_and_published_config(self):
         root = self._tmpdir()
-        preferred = paths.PROCESSING_PROD_PREFERRED
         fallback = os.path.join(root, "fallback_processing")
-        cfg = replace(
-            StorageConfig.for_testing(root),
+        preferred = paths.PROCESSING_PROD_PREFERRED
+        cfg = StorageConfig(
             mode="production",
+            configured_root=None,
+            root=root,
+            db_path=os.path.join(root, "prks_data.db"),
+            pdfs_dir=os.path.join(root, "pdfs"),
+            thumbs_dir=os.path.join(root, "thumbs"),
+            people_dir=os.path.join(root, "people"),
             processing_dir=preferred,
+            index_db_path=os.path.join(root, "prks_text_index.db"),
+            log_file=os.path.join(root, "prks-errors.log"),
+            processing_fallback_allowed=True,
         )
         real_makedirs = os.makedirs
 
@@ -121,8 +129,45 @@ class TestStorageBind(unittest.TestCase):
         ):
             bound = bind_storage(cfg)
         self.assertEqual(bound.processing_dir, fallback)
+        self.assertFalse(bound.processing_fallback_allowed)
         self.assertEqual(server_module.processing_dir, fallback)
         self.assertEqual(server_module._bound_storage.processing_dir, fallback)
+        self.assertFalse(server_module._bound_storage.processing_fallback_allowed)
+
+    def test_explicit_processing_override_does_not_fall_back(self):
+        root = self._tmpdir()
+        preferred = paths.PROCESSING_PROD_PREFERRED
+        cfg = StorageConfig(
+            mode="production",
+            configured_root=None,
+            root=root,
+            db_path=os.path.join(root, "prks_data.db"),
+            pdfs_dir=os.path.join(root, "pdfs"),
+            thumbs_dir=os.path.join(root, "thumbs"),
+            people_dir=os.path.join(root, "people"),
+            processing_dir=preferred,
+            index_db_path=os.path.join(root, "prks_text_index.db"),
+            log_file=os.path.join(root, "prks-errors.log"),
+            processing_fallback_allowed=False,
+        )
+        real_makedirs = os.makedirs
+
+        def fake_makedirs(path, exist_ok=True):
+            if os.path.normpath(str(path)) == os.path.normpath(preferred):
+                raise OSError("preferred processing dir unavailable")
+            return real_makedirs(path, exist_ok=exist_ok)
+
+        with (
+            patch.object(
+                paths,
+                "processing_prod_fallback",
+                side_effect=AssertionError("must not fall back"),
+            ),
+            patch("os.makedirs", fake_makedirs),
+        ):
+            with self.assertRaises(OSError):
+                bind_storage(cfg)
+        self.assertIs(server_module._bound_storage, self._prev[0])
 
     def test_failed_rebind_keeps_previous_published_state(self):
         root_a = self._tmpdir()

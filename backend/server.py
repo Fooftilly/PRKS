@@ -27,7 +27,6 @@ from backend.db_manager import (
     prks_person_image_legacy_bin_path,
     prks_delete_person_image_cache,
 )
-from backend.log_config import setup_logging
 from backend.text_index import (
     PRKSTextIndex,
     get_text_index,
@@ -79,12 +78,16 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
     try:
         os.makedirs(processing_local, exist_ok=True)
     except OSError:
-        if processing_local != paths.PROCESSING_PROD_PREFERRED:
+        if not config.processing_fallback_allowed:
             raise
         processing_local = paths.processing_prod_fallback()
         os.makedirs(processing_local, exist_ok=True)
     if processing_local != config.processing_dir:
-        config = replace(config, processing_dir=processing_local)
+        config = replace(
+            config,
+            processing_dir=processing_local,
+            processing_fallback_allowed=False,
+        )
 
     os.makedirs(config.pdfs_dir, exist_ok=True)
     os.makedirs(config.thumbs_dir, exist_ok=True)
@@ -2138,11 +2141,3 @@ def run_server(port=PORT):
             httpd.serve_forever()
         except KeyboardInterrupt:
             LOGGER.info("server_stopping reason=keyboard_interrupt")
-
-if __name__ == "__main__":
-    if "--testing" in sys.argv:
-        os.environ["PRKS_TESTING"] = "1"
-    config = StorageConfig.from_env()
-    config = bind_storage(config)
-    setup_logging(config)
-    run_server()

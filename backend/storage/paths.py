@@ -1,8 +1,3 @@
-"""Pure storage-path derivation. Path is only for the /data guard.
-
-Env parsing lives in backend.storage.config. This module does not read env.
-"""
-
 import os
 from pathlib import Path
 from typing import Optional
@@ -30,16 +25,21 @@ def parse_configured_root(raw: Optional[str]) -> Optional[str]:
     return root
 
 
-def assert_safe_testing_root(
-    root: str, *, testing: bool, what: str = "PRKS_STORAGE"
+def assert_safe_testing_path(
+    path: str, *, testing: bool, what: str = "PRKS_STORAGE"
 ) -> None:
     if not testing:
         return
-    canonical = Path(root).resolve(strict=False)
+    canonical = Path(path).resolve(strict=False)
     production = Path(_PRODUCTION_STORAGE).resolve(strict=False)
     if canonical == production or canonical.is_relative_to(production):
         raise RuntimeError(
             f"PRKS_TESTING is set: refusing to use {what} under /data"
+        )
+    repo_data = Path(os.path.join(_REPO_ROOT, "data")).resolve(strict=False)
+    if canonical == repo_data or canonical.is_relative_to(repo_data):
+        raise RuntimeError(
+            f"PRKS_TESTING is set: refusing to use {what} under the repository data directory"
         )
 
 
@@ -99,9 +99,6 @@ def derive_processing_dir(
 ) -> str:
     configured = (processing_override or "").strip()
     if configured:
-        assert_safe_testing_root(
-            configured, testing=testing, what="PRKS_FOR_PROCESSING_DIR"
-        )
         return configured
     if configured_root:
         return os.path.join(configured_root, "for_processing")

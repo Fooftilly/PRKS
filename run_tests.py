@@ -3,20 +3,23 @@ import unittest
 import sys
 import os
 
+
+def apply_isolated_test_env(project_dir: str) -> None:
+    os.environ["PRKS_TESTING"] = "1"
+    os.environ["PRKS_STORAGE"] = os.path.join(project_dir, "data_testing")
+    os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
+    os.environ.pop("PRKS_LOG_FILE", None)
+
+
 def main():
-    # Ensure the PRKS directory is in sys.path
     project_dir = os.path.dirname(os.path.abspath(__file__))
     if project_dir not in sys.path:
         sys.path.insert(0, project_dir)
 
-    # Tests must never touch container storage (/data). Force test mode and
-    # redirect any PRKS_STORAGE-based paths into data_testing/.
-    os.environ.setdefault("PRKS_TESTING", "1")
-    os.environ.setdefault("PRKS_STORAGE", os.path.join(project_dir, "data_testing"))
-        
+    apply_isolated_test_env(project_dir)
+
     print("Discovering and running tests...")
     
-    # Discover tests in the 'tests' directory
     loader = unittest.TestLoader()
     suite = loader.discover(start_dir=os.path.join(project_dir, 'tests'), pattern='test_*.py')
     

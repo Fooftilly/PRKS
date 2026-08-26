@@ -12,7 +12,7 @@ If the user says only "run the app", your first application execution path is `p
 
 ## Storage
 
-Default. Do not write `data/` or a live `PRKS_STORAGE` tree. `python run_tests.py` already sets `PRKS_TESTING=1` and `PRKS_STORAGE` to `data_testing/`.
+Default. Do not write `data/` or a live `PRKS_STORAGE` tree. `python run_tests.py` assigns `PRKS_TESTING=1` and `PRKS_STORAGE` to `data_testing/`, and clears `PRKS_FOR_PROCESSING_DIR` and `PRKS_LOG_FILE`. Tests never target repo `data/` or `/data`.
 
 Run-real. An instruction to run the real app or Compose authorizes normal application writes only. Creating or updating records the way the app does.
 
@@ -20,9 +20,10 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 
 ## Layout
 
-- `prks_app.py` CLI
+- `prks_app.py` CLI (the only process entry)
 - `backend/server.py` HTTP adapter: parsing, dispatch, status/headers, JSON, ETags, static files
-- `backend/storage/paths.py` storage-path resolution
+- `backend/storage/config.py` frozen storage snapshot and env parser
+- `backend/storage/paths.py` storage-path derivation and testing-mode containment
 - `backend/db_manager.py` SQLite
 - `frontend/` UI
 - `tests/` unittest
