@@ -430,6 +430,50 @@ class TestServerAPI(unittest.TestCase):
             urllib.request.urlopen(req3)
         self.assertEqual(cm.exception.code, 404)
 
+    def test_5b_delete_missing_work_returns_200(self):
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/W-DOESNOTEXIST",
+            method="DELETE",
+        )
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+            body = json.loads(res.read().decode())
+        self.assertEqual(body.get("status"), "deleted")
+
+    def test_5c_post_work_folder_rollback_removes_partial_work(self):
+        term = "RollbackPartialWorkTextZed"
+        pdf_bytes = _pdf_with_text_bytes(f"Body contains {term}")
+        payload = {
+            "title": "Rollback Partial Work",
+            "status": "Planned",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "rollback_partial.pdf",
+        }
+        pdfs_before = set(os.listdir(server_module.pdfs_dir))
+        with patch.object(
+            server_module.db,
+            "add_work_to_folder",
+            side_effect=ValueError("This file is already in another folder."),
+        ):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works",
+                data=json.dumps(payload).encode(),
+                method="POST",
+            )
+            req.add_header("Content-Type", "application/json")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 409)
+        pdfs_after = set(os.listdir(server_module.pdfs_dir))
+        self.assertEqual(pdfs_before, pdfs_after)
+        req_list = urllib.request.Request(f"{self._base_url}/api/works")
+        with urllib.request.urlopen(req_list) as res:
+            works = json.loads(res.read().decode())
+        titles = [w.get("title") for w in works]
+        self.assertNotIn("Rollback Partial Work", titles)
+        leftover_ids = server_module.text_index.search_work_ids(term)
+        self.assertEqual(leftover_ids, [])
+
     def test_6_patch_person(self):
         payload = {"first_name": "Test", "last_name": "Philosopher"}
         req = urllib.request.Request(f"{self._base_url}/api/persons", data=json.dumps(payload).encode(), method="POST")

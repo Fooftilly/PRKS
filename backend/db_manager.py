@@ -10,6 +10,7 @@ import logging
 from collections import Counter, defaultdict
 from urllib.parse import unquote
 from datetime import datetime
+from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
@@ -308,12 +309,12 @@ _PRKS_THUMB_CACHE_LEGACY_TMP_RE = re.compile(
 )
 
 
-def prks_delete_pdf_thumbnails_for_work_id(work_id: str, thumbs_dir: str) -> None:
-    """Remove cached PDF thumbnails for one work (best-effort)."""
+def prks_delete_pdf_thumbnails_for_work_id(work_id: str, thumbs_dir: str) -> tuple[str, ...]:
+    """Remove cached PDF thumbnails for one work (best-effort). Returns paths that could not be removed."""
     safe = prks_thumb_cache_safe_wid(work_id)
     td = thumbs_dir
     if not os.path.isdir(td):
-        return
+        return ()
     pat_final = re.compile(
         r"^" + re.escape(safe) + r"_p\d+(_v\d+)?\.(webp|png|jpg|jpeg)$", re.IGNORECASE
     )
@@ -324,14 +325,17 @@ def prks_delete_pdf_thumbnails_for_work_id(work_id: str, thumbs_dir: str) -> Non
     try:
         names = os.listdir(td)
     except OSError:
-        return
+        return (td,)
+    failed: list[str] = []
     for fname in names:
         if not pat_final.match(fname) and not pat_tmp.match(fname):
             continue
+        path = os.path.join(td, fname)
         try:
-            os.remove(os.path.join(td, fname))
+            os.remove(path)
         except OSError:
-            pass
+            failed.append(path)
+    return tuple(failed)
 
 
 def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
@@ -475,6 +479,12 @@ def enrich_work_rows_pdf_file_size(rows: Optional[List[dict]], pdfs_dir: str) ->
             row["file_size_bytes"] = os.path.getsize(path)
         except OSError:
             row["file_size_bytes"] = None
+
+
+@dataclass(frozen=True)
+class DeletedWorkRecord:
+    work_id: str
+    file_path: str
 
 
 class PRKSDatabase:
@@ -1293,16 +1303,20 @@ class PRKSDatabase:
             uncategorized_id = self.ensure_default_uncategorized_folder_id()
             self.add_work_to_folder(fid if fid else uncategorized_id, work_id)
         except Exception as e:
+            can_remove_destination = work_id is None
             if work_id:
                 try:
-                    self.delete_work(work_id)
+                    self.delete_work_record(work_id)
+                    can_remove_destination = True
                 except Exception:
-                    pass
-            try:
-                if os.path.isfile(destination_abs):
+                    can_remove_destination = False
+            if can_remove_destination:
+                try:
                     os.remove(destination_abs)
-            except OSError:
-                pass
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
             msg = f"Failed to insert imported file into works table: {e}"
             self.execute_query(
                 """
@@ -1487,43 +1501,39 @@ class PRKSDatabase:
         row = r[0] if r else {"c": 0, "m": ""}
         return f'W/"prks-recently-added-{row["c"]}-{row["m"]}"'
 
-    def delete_work(self, work_id: str):
-        # Retrieve file_path if we want to delete the physical file
-        res = self.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
-        if res and res[0].get('file_path'):
-            fp = res[0].get('file_path') or ''
-            if fp.startswith('/api/pdfs/'):
-                filename = fp.split('/')[-1]
-                abs_path = safe_pdf_path_under_dir(self.storage.pdfs_dir, filename)
-            else:
-                abs_path = None
-            try:
-                if abs_path and os.path.exists(abs_path):
-                    os.remove(abs_path)
-            except Exception as e:
-                LOGGER.warning("delete_work_file_failed work_id=%s error=%s", work_id, e)
-        try:
-            prks_delete_pdf_thumbnails_for_work_id(work_id, self.storage.thumbs_dir)
-        except Exception as e:
-            LOGGER.warning("delete_work_thumbnails_failed work_id=%s error=%s", work_id, e)
-        tag_ids = [
-            r["tag_id"]
-            for r in self.execute_query(
-                "SELECT DISTINCT tag_id FROM work_tags WHERE work_id = ?", (work_id,)
-            )
-        ]
-        # Delete from DB (foreign keys cascade)
-        self.execute_query("DELETE FROM works WHERE id = ?", (work_id,))
-        try:
-            from backend.text_index import get_text_index
-
-            get_text_index().remove_work(work_id)
-        except RuntimeError:
-            pass
-        except Exception as e:
-            LOGGER.warning("delete_work_text_index_cleanup_failed work_id=%s error=%s", work_id, e)
-        for tid in tag_ids:
-            self._prune_tag_if_unused(tid)
+    def delete_work_record(self, work_id: str) -> Optional[DeletedWorkRecord]:
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT file_path FROM works WHERE id = ?",
+                (work_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            file_path = "" if row["file_path"] is None else str(row["file_path"])
+            tag_ids = [
+                r["tag_id"]
+                for r in conn.execute(
+                    "SELECT DISTINCT tag_id FROM work_tags WHERE work_id = ?",
+                    (work_id,),
+                ).fetchall()
+            ]
+            conn.execute("DELETE FROM works WHERE id = ?", (work_id,))
+            for tid in tag_ids:
+                if not tid:
+                    continue
+                in_use = conn.execute(
+                    """
+                    SELECT (
+                        EXISTS(SELECT 1 FROM work_tags WHERE tag_id = ?)
+                        OR EXISTS(SELECT 1 FROM folder_tags WHERE tag_id = ?)
+                    ) AS in_use
+                    """,
+                    (tid, tid),
+                ).fetchone()
+                if in_use and in_use["in_use"]:
+                    continue
+                conn.execute("DELETE FROM tags WHERE id = ?", (tid,))
+            return DeletedWorkRecord(work_id=work_id, file_path=file_path)
 
     def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
         ordered_ids = [str(wid).strip() for wid in (work_ids or []) if str(wid).strip()]

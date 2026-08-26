@@ -36,6 +36,7 @@ from backend.text_index import (
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 from backend.storage import paths
 from backend.storage.config import StorageConfig
+from backend.work_deletion import delete_work as delete_library_work
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -779,7 +780,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "API endpoint not found")
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
-                db.delete_work(w_id)
+                delete_library_work(db, text_index, w_id)
                 self.send_json(200, {'status': 'deleted'})
             elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
                 pl_id = path.split('/')[-1]
@@ -1746,7 +1747,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     try:
                         db.add_work_to_folder(raw_folder, w_id)
                     except ValueError as e:
-                        db.delete_work(w_id)
+                        delete_library_work(db, text_index, w_id)
                         self.send_json(409, {'error': str(e)})
                         return
                 else:
@@ -1754,7 +1755,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         unc_id = db.ensure_default_uncategorized_folder_id()
                         db.add_work_to_folder(unc_id, w_id)
                     except ValueError as e:
-                        db.delete_work(w_id)
+                        delete_library_work(db, text_index, w_id)
                         self.send_json(409, {'error': str(e)})
                         return
                 

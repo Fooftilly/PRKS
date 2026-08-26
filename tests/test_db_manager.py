@@ -23,6 +23,8 @@ from backend.db_manager import (
     prune_empty_processing_parent_dirs,
 )
 from backend.storage.config import StorageConfig
+from backend.text_index import PRKSTextIndex
+from backend.work_deletion import delete_work
 
 _SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")
 
@@ -163,7 +165,7 @@ class TestDBManager(unittest.TestCase):
 
     def test_delete_work(self):
         w_id = self.db.add_work(title="To be deleted")
-        self.db.delete_work(w_id)
+        self.db.delete_work_record(w_id)
         work = self.db.get_work(w_id)
         self.assertIsNone(work)
 
@@ -181,7 +183,7 @@ class TestDBManager(unittest.TestCase):
         for p in (p1, p2, tmp):
             with open(p, "wb") as f:
                 f.write(b"z")
-        self.db.delete_work(w_id)
+        delete_work(self.db, PRKSTextIndex(storage=self.storage), w_id)
         self.assertFalse(os.path.exists(p1))
         self.assertFalse(os.path.exists(p2))
         self.assertFalse(os.path.exists(tmp))
@@ -860,7 +862,7 @@ class TestDBManager(unittest.TestCase):
         w = self.db.add_work(title="Gone")
         tid = self.db.add_tag("OnlyHere", "#333")["id"]
         self.db.add_tag_to_work(w, tid)
-        self.db.delete_work(w)
+        self.db.delete_work_record(w)
         rows = self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
         self.assertEqual(len(rows), 0)
 
@@ -895,7 +897,7 @@ class TestDBManager(unittest.TestCase):
 
     def test_delete_work_with_unsafe_pdf_path_still_removes_row(self):
         w_id = self.db.add_work(title="Unsafe fp", file_path="/api/pdfs/..")
-        self.db.delete_work(w_id)
+        self.db.delete_work_record(w_id)
         self.assertIsNone(self.db.get_work(w_id))
 
     def test_processing_files_scan_update_and_import_move_flow(self):
