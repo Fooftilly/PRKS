@@ -24,13 +24,21 @@ pip install -r requirements.txt
 python prks_app.py
 ```
 
-Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. The default listen port is **8080** (`backend/server.py`).
+The process listens on **127.0.0.1:8080** only. Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. No extra firewall or network setup is required for this case.
 
-Optional port:
+Optional port (still loopback):
 
 ```bash
 python prks_app.py --port 9000
 ```
+
+To listen on every local interface (LAN, reverse proxy, VPN), pass an explicit host:
+
+```bash
+python prks_app.py --host 0.0.0.0
+```
+
+`--host localhost` also works and binds that name. The default is the literal address `127.0.0.1`, not `localhost`.
 
 ### Testing mode (Creates seperate testing database)
 
@@ -52,7 +60,17 @@ And run with Compose (from the repo root):
 docker compose up -d
 ```
 
-This maps **8080:8080**, sets `PRKS_STORAGE=/data`, mounts **`./data` on the host to `/data` in the container**, and runs the process as **`${UID:-1000}:${GID:-1000}`** so files on the bind mount match your user. The entrypoint creates `/data/pdfs` if needed and runs `python /app/prks_app.py`.
+The container process binds **0.0.0.0:8080** so Docker port forwarding can reach it. Compose then publishes that port on the **host loopback** only (`127.0.0.1:8080:8080`). Container `0.0.0.0` is not the same as exposing PRKS on every host interface.
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080) on the machine that runs Compose. This also sets `PRKS_STORAGE=/data`, mounts **`./data` on the host to `/data` in the container**, and runs the process as **`${UID:-1000}:${GID:-1000}`** so files on the bind mount match your user. The entrypoint creates `/data/pdfs` if needed and runs `python /app/prks_app.py --host 0.0.0.0`.
+
+To publish the host port on every interface (LAN access):
+
+```bash
+PRKS_PUBLISH_HOST=0.0.0.0 docker compose up -d
+```
+
+PRKS has no application-level authentication. Use that override only on a network you already trust, or behind an access layer you control.
 
 ## Configuration and data layout
 
@@ -80,7 +98,7 @@ This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=
 
 | Path | Role |
 | ---- | ---- |
-| `prks_app.py` | Only process entry: parses `--testing`, `--port`, starts the server. |
+| `prks_app.py` | Only process entry: parses `--testing`, `--port`, `--host`, starts the server. |
 | `backend/server.py` | HTTP handler: static frontend, REST-style `/api/...` routes. |
 | `backend/storage/config.py` | Frozen storage snapshot and env parser. |
 | `backend/storage/paths.py` | Path derivation and testing-mode containment. |
@@ -93,4 +111,4 @@ This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=
 
 ## Security note
 
-PRKS is aimed at **local or trusted network** use. There is **no built-in authentication** in the application. If you expose it beyond localhost, put it behind a reverse proxy or custom VPN and enforce access control yourself.
+PRKS is a single-user app with **no built-in authentication**. Direct runs bind **127.0.0.1** by default. Docker Compose publishes the host port on **127.0.0.1** by default. Reaching it from another machine requires an explicit `--host` or `PRKS_PUBLISH_HOST` override. Do that only on a trusted network.

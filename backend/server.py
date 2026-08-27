@@ -41,6 +41,7 @@ from backend.work_deletion import delete_work as delete_library_work
 LOGGER = logging.getLogger("prks.server")
 
 PORT = 8080
+DEFAULT_HOST = "127.0.0.1"
 # Default for `python prks_app.py --testing`; non-testing bind refuses this port (see _validate_listen_port).
 PRKS_TESTING_DEFAULT_PORT = 8070
 
@@ -61,6 +62,13 @@ thumbs_dir: str | None = None
 processing_dir: str | None = None
 db: PRKSDatabase | None = None
 text_index: PRKSTextIndex | None = None
+
+
+def normalize_listen_host(host: str) -> str:
+    host = host.strip()
+    if not host:
+        raise ValueError("host must not be empty")
+    return host
 
 
 def _validate_listen_port(port: int) -> None:
@@ -2124,9 +2132,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-def run_server(port=PORT):
+def run_server(port=PORT, host=DEFAULT_HOST):
     if _bound_storage is None:
         raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
+    host = normalize_listen_host(host)
     _validate_listen_port(port)
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
@@ -2136,8 +2145,11 @@ def run_server(port=PORT):
             LOGGER.info("thumbnail_prune_complete pruned=%s", n)
     except Exception as e:
         LOGGER.warning("thumbnail_prune_skipped error=%s", e)
-    with socketserver.TCPServer(("", port), PRKSHandler) as httpd:
-        LOGGER.info("server_starting url=http://localhost:%s", port)
+    with socketserver.TCPServer((host, port), PRKSHandler) as httpd:
+        if host == "0.0.0.0":
+            LOGGER.info("server_starting bind=%s:%s", host, port)
+        else:
+            LOGGER.info("server_starting url=http://%s:%s", host, port)
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
