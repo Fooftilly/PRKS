@@ -10,7 +10,9 @@ import time
 import re
 import uuid
 import logging
+import ipaddress
 from dataclasses import replace
+from email.message import Message
 from urllib.parse import urlparse, parse_qs, unquote
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
@@ -69,6 +71,193 @@ def normalize_listen_host(host: str) -> str:
     if not host:
         raise ValueError("host must not be empty")
     return host
+
+
+_TRUSTED_HOST_NAME_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$"
+)
+
+
+def _strip_one_trailing_dot(name: str) -> str:
+    if name.endswith("."):
+        return name[:-1]
+    return name
+
+
+def _normalize_hostname_label(name: str) -> str | None:
+    if name != name.strip() or not name:
+        return None
+    name = _strip_one_trailing_dot(name)
+    if not name or name.endswith("."):
+        return None
+    return name.lower()
+
+
+def _parse_tcp_port(raw: str) -> int | None:
+    if not raw.isdigit():
+        return None
+    if len(raw) > 1 and raw.startswith("0"):
+        return None
+    try:
+        port = int(raw, 10)
+    except ValueError:
+        return None
+    if port < 0 or port > 65535:
+        return None
+    return port
+
+
+def parse_request_host(value: str) -> tuple[str, int | None] | None:
+    if value is None or value != value.strip() or not value:
+        return None
+    if any(ch in value for ch in (",", "/", "@", " ", "\t")):
+        return None
+    if value.startswith("["):
+        close = value.find("]")
+        if close < 1:
+            return None
+        inner = value[1:close]
+        rest = value[close + 1 :]
+        try:
+            ip = ipaddress.ip_address(inner)
+        except ValueError:
+            return None
+        hostname = str(ip)
+        if not rest:
+            return (hostname, None)
+        if not rest.startswith(":") or len(rest) < 2:
+            return None
+        port = _parse_tcp_port(rest[1:])
+        if port is None:
+            return None
+        return (hostname, port)
+    if value.count(":") > 1:
+        return None
+    if ":" in value:
+        hostpart, portpart = value.rsplit(":", 1)
+        port = _parse_tcp_port(portpart)
+        if port is None:
+            return None
+    else:
+        hostpart = value
+        port = None
+    try:
+        ip = ipaddress.ip_address(hostpart)
+        return (str(ip), port)
+    except ValueError:
+        pass
+    hostname = _normalize_hostname_label(hostpart)
+    if hostname is None or not _TRUSTED_HOST_NAME_RE.match(hostname):
+        return None
+    return (hostname, port)
+
+
+def parse_trusted_hosts(raw: str | None) -> frozenset[str]:
+    if not raw:
+        return frozenset()
+    names = []
+    for part in raw.split(","):
+        entry = part.strip()
+        if not entry:
+            continue
+        name = _parse_trusted_host_entry(entry)
+        if name is None:
+            raise ValueError("invalid PRKS_TRUSTED_HOSTS entry")
+        names.append(name)
+    return frozenset(names)
+
+
+def _parse_trusted_host_entry(entry: str) -> str | None:
+    if any(ch in entry for ch in (":", "/", "@", "*", "?", "#", " ", "\t", "\\")):
+        return None
+    name = _normalize_hostname_label(entry)
+    if name is None or not _TRUSTED_HOST_NAME_RE.match(name):
+        return None
+    return name
+
+
+def _is_unspecified_ip(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_unspecified
+    except ValueError:
+        return False
+
+
+def _normalized_bind_hostname(bind_host: str) -> str | None:
+    if _is_unspecified_ip(bind_host):
+        return None
+    try:
+        return str(ipaddress.ip_address(bind_host))
+    except ValueError:
+        pass
+    return _normalize_hostname_label(bind_host)
+
+
+def is_trusted_request_host(
+    hostname: str, *, bind_host: str, extra_hosts: frozenset[str]
+) -> bool:
+    if hostname == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if not ip.is_unspecified:
+            return True
+    except ValueError:
+        pass
+    bind_name = _normalized_bind_hostname(bind_host)
+    if bind_name is not None and hostname == bind_name:
+        return True
+    return hostname in extra_hosts
+
+
+def parse_request_origin(value: str) -> tuple[str, str, int | None] | None:
+    if value is None or value != value.strip() or not value:
+        return None
+    if value == "null":
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https"):
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    _, _, rest = value.partition("://")
+    if any(ch in rest for ch in "/?#"):
+        return None
+    if parsed.path or parsed.params or parsed.query or parsed.fragment:
+        return None
+    hostname = parsed.hostname
+    if not hostname:
+        return None
+    try:
+        hostname = str(ipaddress.ip_address(hostname))
+    except ValueError:
+        hostname = _normalize_hostname_label(hostname)
+        if hostname is None:
+            return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    return (parsed.scheme, hostname, port)
+
+
+def origin_matches_request(
+    origin: tuple[str, str, int | None], req_hostname: str, req_port: int | None
+) -> bool:
+    scheme, hostname, port = origin
+    if scheme != "http":
+        return False
+    if hostname != req_hostname:
+        return False
+    origin_port = 80 if port is None else port
+    request_port = 80 if req_port is None else req_port
+    return origin_port == request_port
+
+
+def json_content_type_allowed(header_value: str) -> bool:
+    msg = Message()
+    msg["content-type"] = header_value
+    return msg.get_content_type() == "application/json"
 
 
 def _validate_listen_port(port: int) -> None:
@@ -480,7 +669,52 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             )
         self.send_json(500, {"error": "internal_error", "request_id": self._prks_request_id})
 
+    def _reject_request(self, status: int, error: str, reason: str) -> None:
+        LOGGER.info("request_rejected reason=%s", reason)
+        self.send_json(status, {"error": error})
+
+    def _validate_request_host(self) -> bool:
+        hosts = self.headers.get_all("Host") or []
+        if len(hosts) != 1:
+            self._reject_request(400, "invalid_host", "invalid_host")
+            return False
+        parsed = parse_request_host(hosts[0])
+        if parsed is None:
+            self._reject_request(400, "invalid_host", "invalid_host")
+            return False
+        hostname, port = parsed
+        bind_host = getattr(self.server, "prks_bind_host", DEFAULT_HOST)
+        extra_hosts = getattr(self.server, "prks_trusted_hosts", frozenset())
+        if not is_trusted_request_host(
+            hostname, bind_host=bind_host, extra_hosts=extra_hosts
+        ):
+            self._reject_request(421, "untrusted_host", "untrusted_host")
+            return False
+        self._prks_request_host = (hostname, port)
+        return True
+
+    def _validate_mutation_origin(self) -> bool:
+        origins = self.headers.get_all("Origin") or []
+        if not origins:
+            return True
+        if len(origins) != 1:
+            self._reject_request(403, "origin_not_allowed", "origin_not_allowed")
+            return False
+        parsed = parse_request_origin(origins[0])
+        if parsed is None:
+            self._reject_request(403, "origin_not_allowed", "origin_not_allowed")
+            return False
+        hostname, port = self._prks_request_host
+        if not origin_matches_request(parsed, hostname, port):
+            self._reject_request(403, "origin_not_allowed", "origin_not_allowed")
+            return False
+        return True
+
     def _read_json_body(self):
+        types = self.headers.get_all("Content-Type") or []
+        if len(types) != 1 or not json_content_type_allowed(types[0]):
+            self._reject_request(415, "unsupported_media_type", "unsupported_media_type")
+            return None
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
             return {}
@@ -572,6 +806,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         )
 
     def do_GET(self):
+        if not self._validate_request_host():
+            return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
             self.handle_api_get(parsed_path)
@@ -591,6 +827,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_HEAD(self):
+        if not self._validate_request_host():
+            return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
             self.handle_api_head(parsed_path)
@@ -609,15 +847,23 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             super().do_HEAD()
 
     def do_POST(self):
+        if not self._validate_request_host():
+            return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
+            if not self._validate_mutation_origin():
+                return
             self.handle_api_post(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
 
     def do_PATCH(self):
+        if not self._validate_request_host():
+            return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
+            if not self._validate_mutation_origin():
+                return
             self.handle_api_patch(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -754,8 +1000,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self._send_internal_error(exc)
 
     def do_DELETE(self):
+        if not self._validate_request_host():
+            return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
+            if not self._validate_mutation_origin():
+                return
             self.handle_api_delete(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -2136,6 +2386,7 @@ def run_server(port=PORT, host=DEFAULT_HOST):
     if _bound_storage is None:
         raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
     host = normalize_listen_host(host)
+    trusted_hosts = parse_trusted_hosts(os.environ.get("PRKS_TRUSTED_HOSTS", ""))
     _validate_listen_port(port)
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
@@ -2146,6 +2397,8 @@ def run_server(port=PORT, host=DEFAULT_HOST):
     except Exception as e:
         LOGGER.warning("thumbnail_prune_skipped error=%s", e)
     with socketserver.TCPServer((host, port), PRKSHandler) as httpd:
+        httpd.prks_bind_host = host
+        httpd.prks_trusted_hosts = trusted_hosts
         if host == "0.0.0.0":
             LOGGER.info("server_starting bind=%s:%s", host, port)
         else:

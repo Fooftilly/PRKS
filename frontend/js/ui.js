@@ -2466,7 +2466,11 @@ async function submitWorkMetaEdit(workId) {
     }
 
     try {
-        const saveRes = await fetch(`/api/works/${workId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+        const saveRes = await fetch(`/api/works/${workId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
         if (!saveRes.ok) {
             const errData = await saveRes.json().catch(() => ({}));
             throw new Error(errData.error || `Server error ${saveRes.status}`);
@@ -4095,7 +4099,11 @@ async function quickCreateFolder() {
     }
     
     const payload = { title: title, description: "Quick created via upload" };
-    const res = await fetch('/api/folders', { method: 'POST', body: JSON.stringify(payload) });
+    const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
         await prksAlertMessage(data.error || 'Could not create folder', 'Could not save');

@@ -2,6 +2,7 @@ import unittest
 import threading
 import time
 import socket
+import http.client
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -297,12 +298,14 @@ class TestServerAPI(unittest.TestCase):
         # Create
         payload = {"title": "Patch Work"}
         req = urllib.request.Request(f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST")
+        req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req) as res:
             w_id = json.loads(res.read().decode())["id"]
         
         # Patch
         patch_payload = {"title": "Patched Status", "status": "Completed"}
         req2 = urllib.request.Request(f"{self._base_url}/api/works/{w_id}", data=json.dumps(patch_payload).encode(), method="PATCH")
+        req2.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req2) as res2:
             self.assertEqual(res2.status, 200)
             
@@ -319,6 +322,7 @@ class TestServerAPI(unittest.TestCase):
             data=json.dumps({"title": "Notes Work"}).encode(),
             method="POST",
         )
+        req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req) as res:
             w_id = json.loads(res.read().decode())["id"]
 
@@ -328,6 +332,7 @@ class TestServerAPI(unittest.TestCase):
             data=json.dumps(patch_payload).encode(),
             method="PATCH",
         )
+        req2.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req2) as res2:
             self.assertEqual(res2.status, 200)
 
@@ -416,6 +421,7 @@ class TestServerAPI(unittest.TestCase):
         # Create
         payload = {"title": "To Delete"}
         req = urllib.request.Request(f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST")
+        req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req) as res:
             w_id = json.loads(res.read().decode())["id"]
             
@@ -1761,6 +1767,325 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(urllib.request.Request(img_url)) as ri2:
             ri2.read()
         self.assertTrue(os.path.isfile(cache_b))
+
+    def _raw_http(self, method, path, header_pairs, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self._test_port, timeout=5)
+        skip_host = any(name.lower() == "host" for name, _ in header_pairs)
+        conn.putrequest(method, path, skip_host=skip_host, skip_accept_encoding=True)
+        headers = list(header_pairs)
+        if body is not None and not any(name.lower() == "content-length" for name, _ in headers):
+            headers.append(("Content-Length", str(len(body))))
+        for name, value in headers:
+            conn.putheader(name, value)
+        if body is not None:
+            conn.endheaders(body)
+        else:
+            conn.endheaders()
+        response = conn.getresponse()
+        payload = response.read()
+        status = response.status
+        conn.close()
+        return status, payload
+
+    def _json_error(self, payload):
+        return json.loads(payload.decode("utf-8")).get("error")
+
+    def test_trust_localhost_host_allowed(self):
+        status, body = self._raw_http(
+            "GET",
+            "/api/works",
+            [("Host", f"localhost:{self._test_port}")],
+        )
+        self.assertEqual(status, 200)
+        json.loads(body.decode("utf-8"))
+
+    def test_trust_loopback_ip_host_allowed(self):
+        status, body = self._raw_http(
+            "GET",
+            "/api/works",
+            [("Host", f"127.0.0.1:{self._test_port}")],
+        )
+        self.assertEqual(status, 200)
+        json.loads(body.decode("utf-8"))
+
+    def test_trust_untrusted_host_rejected(self):
+        before = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        status, payload = self._raw_http(
+            "GET",
+            "/api/works",
+            [("Host", "attacker.example")],
+        )
+        self.assertEqual(status, 421)
+        self.assertEqual(self._json_error(payload), "untrusted_host")
+        after = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        self.assertEqual(len(after), len(before))
+
+    def test_trust_duplicate_host_rejected(self):
+        status, payload = self._raw_http(
+            "GET",
+            "/api/works",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Host", "evil.example"),
+            ],
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(self._json_error(payload), "invalid_host")
+
+    def test_trust_same_origin_json_post_allowed(self):
+        body = json.dumps({"title": "Trust Same Origin"}).encode()
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", f"http://localhost:{self._test_port}"),
+                ("Content-Type", "application/json"),
+            ],
+            body,
+        )
+        self.assertEqual(status, 200)
+        created = json.loads(payload.decode("utf-8"))
+        self.assertTrue(created.get("id"))
+
+    def test_trust_cross_origin_post_forbidden(self):
+        before = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", "https://evil.example"),
+                ("Content-Type", "application/json"),
+            ],
+            json.dumps({"title": "Trust Cross Origin"}).encode(),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self._json_error(payload), "origin_not_allowed")
+        after = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        self.assertEqual(len(after), len(before))
+
+    def test_trust_origin_null_forbidden(self):
+        before = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", "null"),
+                ("Content-Type", "application/json"),
+            ],
+            json.dumps({"title": "Trust Null Origin"}).encode(),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self._json_error(payload), "origin_not_allowed")
+        after = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        self.assertEqual(len(after), len(before))
+
+    def test_trust_duplicate_origin_forbidden(self):
+        before = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", f"http://localhost:{self._test_port}"),
+                ("Origin", "https://evil.example"),
+                ("Content-Type", "application/json"),
+            ],
+            json.dumps({"title": "Trust Dup Origin"}).encode(),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self._json_error(payload), "origin_not_allowed")
+        after = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        self.assertEqual(len(after), len(before))
+
+    def test_trust_missing_origin_json_allowed(self):
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Content-Type", "application/json"),
+            ],
+            json.dumps({"title": "Trust Missing Origin"}).encode(),
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(payload.decode("utf-8")).get("id"))
+
+    def test_trust_missing_content_type_rejected(self):
+        before = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [("Host", f"localhost:{self._test_port}")],
+            json.dumps({"title": "Trust Missing CT"}).encode(),
+        )
+        self.assertEqual(status, 415)
+        self.assertEqual(self._json_error(payload), "unsupported_media_type")
+        after = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        self.assertEqual(len(after), len(before))
+
+    def test_trust_empty_body_missing_content_type_rejected(self):
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [("Host", f"localhost:{self._test_port}")],
+        )
+        self.assertEqual(status, 415)
+        self.assertEqual(self._json_error(payload), "unsupported_media_type")
+
+    def test_trust_text_plain_rejected(self):
+        before = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Content-Type", "text/plain"),
+            ],
+            json.dumps({"title": "Trust Text Plain"}).encode(),
+        )
+        self.assertEqual(status, 415)
+        self.assertEqual(self._json_error(payload), "unsupported_media_type")
+        after = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        self.assertEqual(len(after), len(before))
+
+    def test_trust_form_urlencoded_rejected(self):
+        before = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Content-Type", "application/x-www-form-urlencoded"),
+            ],
+            b"title=TrustForm",
+        )
+        self.assertEqual(status, 415)
+        self.assertEqual(self._json_error(payload), "unsupported_media_type")
+        after = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        self.assertEqual(len(after), len(before))
+
+    def test_trust_duplicate_content_type_rejected(self):
+        before = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Content-Type", "application/json"),
+                ("Content-Type", "text/plain"),
+            ],
+            json.dumps({"title": "Trust Dup CT"}).encode(),
+        )
+        self.assertEqual(status, 415)
+        self.assertEqual(self._json_error(payload), "unsupported_media_type")
+        after = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
+        )
+        self.assertEqual(len(after), len(before))
+
+    def test_trust_empty_json_body_keeps_object_semantics(self):
+        status, payload = self._raw_http(
+            "PATCH",
+            "/api/settings",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Content-Type", "application/json"),
+            ],
+        )
+        self.assertEqual(status, 200)
+        settings = json.loads(payload.decode("utf-8"))
+        self.assertIsInstance(settings, dict)
+
+    def test_trust_json_charset_patch_allowed(self):
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": "Trust Charset"}).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            work_id = json.loads(res.read().decode())["id"]
+        status, payload = self._raw_http(
+            "PATCH",
+            f"/api/works/{work_id}",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Content-Type", "application/json; charset=utf-8"),
+            ],
+            json.dumps({"title": "Trust Charset Patched"}).encode(),
+        )
+        self.assertEqual(status, 200)
+        with urllib.request.urlopen(f"{self._base_url}/api/works/{work_id}") as res:
+            self.assertEqual(json.loads(res.read().decode())["title"], "Trust Charset Patched")
+
+    def test_trust_cross_origin_delete_leaves_work(self):
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": "Trust Delete Keep"}).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            work_id = json.loads(res.read().decode())["id"]
+        status, payload = self._raw_http(
+            "DELETE",
+            f"/api/works/{work_id}",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", "https://evil.example"),
+            ],
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self._json_error(payload), "origin_not_allowed")
+        with urllib.request.urlopen(f"{self._base_url}/api/works/{work_id}") as res:
+            self.assertEqual(res.status, 200)
+
+    def test_trust_attacker_host_and_origin_rejected_as_untrusted_host(self):
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works",
+            [
+                ("Host", "attacker.example"),
+                ("Origin", "http://attacker.example"),
+                ("Content-Type", "application/json"),
+            ],
+            json.dumps({"title": "Trust Rebind"}).encode(),
+        )
+        self.assertEqual(status, 421)
+        self.assertEqual(self._json_error(payload), "untrusted_host")
 
 
 if __name__ == '__main__':

@@ -32,7 +32,7 @@ Optional port (still loopback):
 python prks_app.py --port 9000
 ```
 
-To listen on every local interface (LAN, reverse proxy, VPN), pass an explicit host:
+To listen on every local interface (LAN or VPN), pass an explicit host:
 
 ```bash
 python prks_app.py --host 0.0.0.0
@@ -112,3 +112,19 @@ This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=
 ## Security note
 
 PRKS is a single-user app with **no built-in authentication**. Direct runs bind **127.0.0.1** by default. Docker Compose publishes the host port on **127.0.0.1** by default. Reaching it from another machine requires an explicit `--host` or `PRKS_PUBLISH_HOST` override. Do that only on a trusted network.
+
+Local browser use through `http://127.0.0.1:8080` or `http://localhost:8080` works without extra Host configuration. LAN access by IP literal (after `PRKS_PUBLISH_HOST=0.0.0.0`) also needs no `PRKS_TRUSTED_HOSTS` setting.
+
+Custom LAN DNS names must be listed exactly:
+
+```bash
+PRKS_PUBLISH_HOST=0.0.0.0 \
+PRKS_TRUSTED_HOSTS=prks.home.arpa \
+docker compose up -d
+```
+
+Malformed `PRKS_TRUSTED_HOSTS` entries refuse to start the server. This variable is for extra DNS hostnames on direct HTTP/LAN access, not reverse-proxy or HTTPS termination.
+
+The HTTP adapter validates `Host` on every request, rejects cross-origin state-changing `/api/` requests when `Origin` is supplied (`Origin: null` included), and requires `application/json` for JSON POST/PATCH bodies. Missing `Origin` remains allowed for local scripts and non-browser clients. PRKS does not send CORS headers and does not allow cross-origin API access.
+
+These controls reduce accidental/cross-origin access and DNS-rebinding risk. They are not authentication. Public Internet exposure is still unsafe.

@@ -9,6 +9,7 @@ services:
     environment:
       PRKS_STORAGE: /data
       PRKS_PDF_LINEARIZE: "1"
+      PRKS_TRUSTED_HOSTS: "${PRKS_TRUSTED_HOSTS:-}"
     volumes:
       - ./data:/data
     restart: unless-stopped

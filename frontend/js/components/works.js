@@ -631,6 +631,7 @@ function initEasyMDE(work) {
             try {
                 const res = await fetch('/api/works/' + encodeURIComponent(work.id), {
                     method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text_content: content })
                 });
                 if (statusEl) {

@@ -164,6 +164,7 @@ class TestListenDockerConfig(unittest.TestCase):
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
         self.assertIn("${PRKS_PUBLISH_HOST:-127.0.0.1}:8080:8080", text)
+        self.assertIn('PRKS_TRUSTED_HOSTS: "${PRKS_TRUSTED_HOSTS:-}"', text)
 
 
 if __name__ == "__main__":

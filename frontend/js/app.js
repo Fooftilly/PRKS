@@ -1374,7 +1374,11 @@ function initForms() {
                     return raw || null;
                 })()
             };
-            const res = await fetch('/api/folders', { method: 'POST', body: JSON.stringify(payload) });
+            const res = await fetch('/api/folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 await prksAlertMessage(data.error || 'Could not create folder', 'Could not save');
