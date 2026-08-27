@@ -128,3 +128,13 @@ Malformed `PRKS_TRUSTED_HOSTS` entries refuse to start the server. This variable
 The HTTP adapter validates `Host` on every request, rejects cross-origin state-changing `/api/` requests when `Origin` is supplied (`Origin: null` included), and requires `application/json` for JSON POST/PATCH bodies. Missing `Origin` remains allowed for local scripts and non-browser clients. PRKS does not send CORS headers and does not allow cross-origin API access.
 
 These controls reduce accidental/cross-origin access and DNS-rebinding risk. They are not authentication. Public Internet exposure is still unsafe.
+
+Research notes (`works.text_content`) are stored as raw Markdown. Preview HTML is produced by EasyMDE/Marked and then sanitized with a pinned local DOMPurify allowlist (`frontend/vendor/dompurify`, `frontend/js/markdown-sanitize.js`). Arbitrary or active HTML is not a supported contract: unsafe tags, attributes, and URL schemes are stripped from the preview only. Sanitization never rewrites saved Markdown.
+
+The sanitizer-boundary browser fixture is not served by the app. From the repo root:
+
+```bash
+python tests/browser/serve.py
+```
+
+Open the printed `127.0.0.1` URL (and the `?dompurify=absent` / `?dompurify=unsupported` variants). The fixture must report PASS. Do not use production `data/` or a live `PRKS_STORAGE` tree for this check.

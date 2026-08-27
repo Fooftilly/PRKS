@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PRKS Markdown sanitizer fixture</title>
+    <style>
+        body { font-family: sans-serif; margin: 1.5rem; }
+        #summary { font-weight: 700; margin: 1rem 0; }
+        .pass { color: #047857; }
+        .fail { color: #b91c1c; }
+        pre { background: #f4f4f5; padding: 0.75rem; overflow: auto; }
+        nav a { margin-right: 1rem; }
+    </style>
+</head>
+<body>
+    <h1>PRKS Markdown sanitizer fixture</h1>
+    <p>
+        Sanitizer-boundary test. Loads production
+        <code>frontend/vendor/dompurify/purify.min.js</code> and
+        <code>frontend/js/markdown-sanitize.js</code>. Does not load EasyMDE/Marked.
+        Serve with <code>python tests/browser/serve.py</code> (binds 127.0.0.1, ephemeral port).
+    </p>
+    <nav>
+        <a href="?">present</a>
+        <a href="?dompurify=absent">absent</a>
+        <a href="?dompurify=unsupported">unsupported</a>
+    </nav>
+    <p id="mode"></p>
+    <p id="summary">Running…</p>
+    <ol id="results"></ol>
+
+    <script>
+(function () {
+    'use strict';
+
+    var UNAVAILABLE =
+        '<p class="prks-inline-message prks-inline-message--error">Markdown preview unavailable.</p>';
+    var params = new URLSearchParams(location.search);
+    var mode = params.get('dompurify') || 'present';
+    window.__prksFixtureMode = mode;
+    window.__prksUnsupportedSanitizeCalls = 0;
+    window.__prksUnsupportedAddHookCalls = 0;
+
+    document.getElementById('mode').textContent = 'mode=' + mode;
+
+    function loadScript(src) {
+        return new Promise(function (resolve, reject) {
+            var s = document.createElement('script');
+            s.src = src;
+            s.onload = function () { resolve(); };
+            s.onerror = function () { reject(new Error('failed to load ' + src)); };
+            document.head.appendChild(s);
+        });
+    }
+
+    function asDom(html) {
+        var d = document.createElement('div');
+        d.innerHTML = html;
+        return d;
+    }
+
+    var resultsEl = document.getElementById('results');
+    var passed = 0;
+    var failed = 0;
+    var rows = [];
+
+    function record(name, ok, detail) {
+        var li = document.createElement('li');
+        li.className = ok ? 'pass' : 'fail';
+        li.textContent = (ok ? 'PASS' : 'FAIL') + '  ' + name + (detail ? ' — ' + detail : '');
+        resultsEl.appendChild(li);
+        rows.push({ name: name, ok: ok, detail: detail || '' });
+        if (ok) passed += 1;
+        else failed += 1;
+    }
+
+    function assert(name, cond, detail) {
+        record(name, !!cond, detail);
+    }
+
+    function sanitize(html) {
+        return window.prksSanitizeMarkdownPreviewHtml(html);
+    }
+
+    function runFailClosedAbsent() {
+        assert(
+            'module defined sanitizer without throwing',
+            typeof window.prksSanitizeMarkdownPreviewHtml === 'function'
+        );
+        var dirty = '<script>alert(1)</' + 'script><p>keep</p>';
+        var out;
+        var threw = false;
+        try {
+            out = sanitize(dirty);
+        } catch (e) {
+            threw = true;
+            out = String(e);
+        }
+        assert('sanitize callable when DOMPurify absent', !threw && typeof out === 'string');
+        assert('returns static unavailable HTML', out === UNAVAILABLE, out);
+        assert('does not return input HTML', out !== dirty);
+        assert('does not contain script payload', String(out).indexOf('alert(1)') === -1);
+    }
+
+    function runFailClosedUnsupported() {
+        assert(
+            'module defined sanitizer without throwing',
+            typeof window.prksSanitizeMarkdownPreviewHtml === 'function'
+        );
+        assert('addHook not called', window.__prksUnsupportedAddHookCalls === 0);
+        var dirty = '<p onclick="alert(1)">x</p>';
+        var out = sanitize(dirty);
+        assert('returns static unavailable HTML', out === UNAVAILABLE, out);
+        assert('does not return input HTML', out !== dirty);
+        assert('sanitize not called', window.__prksUnsupportedSanitizeCalls === 0);
+        assert('addHook still not called after sanitize', window.__prksUnsupportedAddHookCalls === 0);
+    }
+
+    function runMatrix() {
+        assert('sanitizer function exists', typeof window.prksSanitizeMarkdownPreviewHtml === 'function');
+        assert('window.DOMPurify.isSupported', window.DOMPurify && window.DOMPurify.isSupported === true);
+
+        var markedLike =
+            '<h1>H1</h1><h2>H2</h2><h3>H3</h3><h4>H4</h4><h5>H5</h5><h6>H6</h6>' +
+            '<p><strong>bold</strong> <em>italic</em> <del>strike</del></p>' +
+            '<ul><li>u</li></ul><ol><li>o</li></ol>' +
+            '<blockquote><p>q</p></blockquote>' +
+            '<pre><code>code</code></pre>' +
+            '<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>D</td></tr></tbody></table>' +
+            '<p><a href="https://example.com">link</a></p>' +
+            '<p><img src="https://example.com/image.png" alt="Image"></p>' +
+            '<hr><p>line<br>break</p>';
+        var markedDom = asDom(sanitize(markedLike));
+        ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].forEach(function (tag, i) {
+            var el = markedDom.querySelector('h' + (i + 1));
+            assert('keeps ' + tag, el && el.textContent === tag);
+        });
+        assert('keeps strong', markedDom.querySelector('strong') && markedDom.querySelector('strong').textContent === 'bold');
+        assert('keeps em', markedDom.querySelector('em') && markedDom.querySelector('em').textContent === 'italic');
+        assert('keeps del', markedDom.querySelector('del') && markedDom.querySelector('del').textContent === 'strike');
+        assert('keeps ul/li', markedDom.querySelector('ul li') && markedDom.querySelector('ul li').textContent === 'u');
+        assert('keeps ol/li', markedDom.querySelector('ol li') && markedDom.querySelector('ol li').textContent === 'o');
+        assert('keeps blockquote', markedDom.querySelector('blockquote p') && markedDom.querySelector('blockquote p').textContent === 'q');
+        assert('keeps pre/code', markedDom.querySelector('pre code') && markedDom.querySelector('pre code').textContent === 'code');
+        assert('keeps table', markedDom.querySelector('table thead th') && markedDom.querySelector('table tbody td'));
+        assert('keeps https link', markedDom.querySelector('a[href="https://example.com"]'));
+        assert('keeps https image', markedDom.querySelector('img[src="https://example.com/image.png"][alt="Image"]'));
+        assert('keeps hr', markedDom.querySelector('hr'));
+        assert('keeps br', markedDom.querySelector('br'));
+
+        var active = sanitize(
+            '<script>alert(1)</' + 'script>' +
+            '<style>body{}</style><iframe src="https://evil"></iframe>' +
+            '<object></object><embed src="x"><meta http-equiv="refresh">' +
+            '<link rel="stylesheet" href="x"><base href="https://evil">' +
+            '<form action="x"><input></form><template><p>t</p></template>' +
+            '<p>safe</p>'
+        );
+        var activeDom = asDom(active);
+        ['script', 'style', 'iframe', 'object', 'embed', 'meta', 'link', 'base', 'form', 'input', 'template']
+            .forEach(function (tag) {
+                assert('removes ' + tag, activeDom.querySelector(tag) === null);
+            });
+        assert('keeps surrounding paragraph', activeDom.querySelector('p') && activeDom.querySelector('p').textContent === 'safe');
+
+        var evImg = asDom(sanitize('<img src="https://example.com/x.png" alt="x" onerror="alert(1)">'));
+        assert('img onerror removed', evImg.querySelector('img') && !evImg.querySelector('img').hasAttribute('onerror'));
+        var evA = asDom(sanitize('<a href="#" onclick="alert(1)">x</a>'));
+        assert('a onclick removed', evA.querySelector('a') && !evA.querySelector('a').hasAttribute('onclick'));
+        assert('a text remains', evA.querySelector('a') && evA.querySelector('a').textContent === 'x');
+
+        function hrefKept(href) {
+            var d = asDom(sanitize('<a href="' + href + '">x</a>'));
+            var a = d.querySelector('a');
+            return a && a.getAttribute('href') === href;
+        }
+        function hrefGone(htmlHref) {
+            var d = asDom(sanitize('<a href="' + htmlHref + '">x</a>'));
+            var a = d.querySelector('a');
+            return a && !a.getAttribute('href');
+        }
+
+        assert('keeps http href', hrefKept('http://example.com/'));
+        assert('keeps https href', hrefKept('https://example.com/'));
+        assert('keeps mailto href', hrefKept('mailto:user@example.com'));
+        assert('keeps hash work href', hrefKept('#/works/1'));
+        assert('keeps root-relative href', hrefKept('/x'));
+        assert('keeps ./ href', hrefKept('./x'));
+        assert('keeps ../ href', hrefKept('../x'));
+        assert('keeps fragment href', hrefKept('#frag'));
+
+        ['javascript:alert(1)', 'vbscript:msgbox(1)', 'data:text/html,x', 'file:///etc/passwd',
+            'blob:https://example.com/1', 'ftp://example.com/', 'tel:123', 'foo:bar']
+            .forEach(function (u) {
+                assert('strips ' + u.split(':')[0] + ' href', hrefGone(u));
+            });
+        assert('strips mixed-case javascript href', hrefGone('JaVaScRiPt:alert(1)'));
+        assert('strips HTML charref javascript href', hrefGone('java&#115;cript:alert(1)'));
+        assert('strips tab-in-scheme javascript href', hrefGone('jav&#9;ascript:alert(1)'));
+        assert('strips //evil.example', hrefGone('//evil.example'));
+        assert('strips \\\\evil.example', hrefGone('\\\\evil.example'));
+        assert('strips /\\evil.example', hrefGone('/\\evil.example'));
+        assert('strips \\/evil.example', hrefGone('\\/evil.example'));
+
+        var imgOk = asDom(sanitize('<img src="https://example.com/image.png" alt="n">'));
+        assert('keeps https img src', imgOk.querySelector('img[src="https://example.com/image.png"]'));
+        ['data:image/png,aaaa', 'blob:https://example.com/1', 'file:///x.png',
+            'javascript:alert(1)', '//evil.example/x.png']
+            .forEach(function (u) {
+                var d = asDom(sanitize('<img alt="n" src="' + u + '">'));
+                var img = d.querySelector('img');
+                assert('strips unsafe img src ' + u.split(':')[0], img && !img.getAttribute('src'));
+            });
+
+        var ns = asDom(sanitize(
+            '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><circle r="1"></circle></svg>' +
+            '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math><p>ns</p>'
+        ));
+        assert('removes svg', ns.querySelector('svg') === null);
+        assert('removes math', ns.querySelector('math') === null);
+        assert('namespace neighbors remain', ns.querySelector('p') && ns.querySelector('p').textContent === 'ns');
+
+        var styled = asDom(sanitize('<p style="color:red" id="x" name="y">z</p>'));
+        var p = styled.querySelector('p');
+        assert('strips style', p && !p.hasAttribute('style'));
+        assert('strips id', p && !p.hasAttribute('id'));
+        assert('strips name', p && !p.hasAttribute('name'));
+        assert('styled text remains', p && p.textContent === 'z');
+
+        var classA = asDom(sanitize('<a href="#/works/1" class="wiki-link-internal extra">T</a>'));
+        assert('keeps wiki-link-internal on a', classA.querySelector('a.wiki-link-internal'));
+        assert('strips extra class on a', classA.querySelector('a') && classA.querySelector('a').className === 'wiki-link-internal');
+
+        var classSpan = asDom(sanitize('<span class="wiki-link-unresolved" title="Unresolved link">[[Missing]]</span>'));
+        assert('keeps wiki-link-unresolved on span', classSpan.querySelector('span.wiki-link-unresolved'));
+        assert('keeps unresolved title', classSpan.querySelector('span[title="Unresolved link"]'));
+
+        var classWrong = asDom(sanitize(
+            '<a href="#" class="wiki-link-unresolved">no</a>' +
+            '<span class="wiki-link-internal">no</span>' +
+            '<p class="wiki-link-pdf-ann">no</p>'
+        ));
+        assert('unresolved class not kept on a', !classWrong.querySelector('a.wiki-link-unresolved'));
+        assert('internal class not kept on span', !classWrong.querySelector('span.wiki-link-internal'));
+        assert('pdf-ann class not kept on p', !classWrong.querySelector('p.wiki-link-pdf-ann'));
+
+        var pdfOk = asDom(sanitize(
+            '<a href="#" class="wiki-link-pdf-ann" data-pdf-ann-id="ann-1">Note</a>'
+        ));
+        assert('keeps pdf-ann class on a', pdfOk.querySelector('a.wiki-link-pdf-ann'));
+        assert('keeps data-pdf-ann-id on pdf-ann a', pdfOk.querySelector('a[data-pdf-ann-id="ann-1"]'));
+
+        var pdfWrong = asDom(sanitize(
+            '<span data-pdf-ann-id="ann-1">x</span>' +
+            '<a href="#" class="wiki-link-internal" data-pdf-ann-id="ann-1">y</a>'
+        ));
+        assert('strips data-pdf-ann-id on span', pdfWrong.querySelector('span') && !pdfWrong.querySelector('span').hasAttribute('data-pdf-ann-id'));
+        assert('strips data-pdf-ann-id on non-pdf a', pdfWrong.querySelector('a.wiki-link-internal') && !pdfWrong.querySelector('a').hasAttribute('data-pdf-ann-id'));
+
+        var blank = asDom(sanitize('<a href="https://example.com" target="_blank">x</a>'));
+        assert('keeps target=_blank', blank.querySelector('a[target="_blank"]'));
+        assert('forces rel=noopener noreferrer', blank.querySelector('a[rel="noopener noreferrer"]'));
+        var topT = asDom(sanitize('<a href="https://example.com" target="_top">x</a>'));
+        assert('strips target=_top', topT.querySelector('a') && !topT.querySelector('a').hasAttribute('target'));
+
+        var hrefOnImg = asDom(sanitize('<img alt="n" src="https://example.com/x.png" href="https://evil.example/">'));
+        assert('href only on a', hrefOnImg.querySelector('img') && !hrefOnImg.querySelector('img').hasAttribute('href'));
+        var srcOnA = asDom(sanitize('<a href="https://example.com" src="https://evil.example/x.png">x</a>'));
+        assert('src only on img', srcOnA.querySelector('a') && !srcOnA.querySelector('a').hasAttribute('src'));
+        var relOnP = asDom(sanitize('<p rel="noopener" target="_blank">x</p>'));
+        assert('rel/target not on p', relOnP.querySelector('p') && !relOnP.querySelector('p').hasAttribute('rel') && !relOnP.querySelector('p').hasAttribute('target'));
+
+        var wikiResolved = asDom(sanitize('<a href="#/works/42" class="wiki-link-internal">Work Title</a>'));
+        assert('PRKS resolved wiki link href', wikiResolved.querySelector('a.wiki-link-internal[href="#/works/42"]'));
+        assert('PRKS resolved wiki link label', wikiResolved.querySelector('a').textContent === 'Work Title');
+
+        var wikiLabel = asDom(sanitize('<a href="#/works/42" class="wiki-link-internal">Label</a>'));
+        assert('PRKS wiki |Label variant', wikiLabel.querySelector('a.wiki-link-internal') && wikiLabel.querySelector('a').textContent === 'Label');
+
+        var wikiUnresolved = asDom(sanitize(
+            '<span class="wiki-link-unresolved" title="Unresolved link">[[Missing]]</span>'
+        ));
+        assert('PRKS unresolved wiki span', wikiUnresolved.querySelector('span.wiki-link-unresolved[title="Unresolved link"]'));
+        assert('PRKS unresolved wiki text', wikiUnresolved.querySelector('span').textContent === '[[Missing]]');
+
+        var wikiPdf = asDom(sanitize(
+            '<a href="#" class="wiki-link-pdf-ann" data-pdf-ann-id="ann-9">Note</a>'
+        ));
+        assert('PRKS pdf wiki href', wikiPdf.querySelector('a.wiki-link-pdf-ann[href="#"]'));
+        assert('PRKS pdf wiki data-pdf-ann-id', wikiPdf.querySelector('a[data-pdf-ann-id="ann-9"]'));
+        assert('PRKS pdf wiki label', wikiPdf.querySelector('a').textContent === 'Note');
+    }
+
+    function finish() {
+        var summary = document.getElementById('summary');
+        summary.className = failed ? 'fail' : 'pass';
+        summary.textContent = (failed ? 'FAIL' : 'PASS') + '  ' + passed + ' passed, ' + failed + ' failed';
+        document.title = summary.textContent;
+    }
+
+    function boot() {
+        var chain = Promise.resolve();
+        if (mode === 'absent') {
+            chain = loadScript('/frontend/js/markdown-sanitize.js').then(runFailClosedAbsent);
+        } else if (mode === 'unsupported') {
+            window.DOMPurify = {
+                isSupported: false,
+                sanitize: function () {
+                    window.__prksUnsupportedSanitizeCalls += 1;
+                    return arguments[0];
+                },
+                addHook: function () {
+                    window.__prksUnsupportedAddHookCalls += 1;
+                }
+            };
+            chain = loadScript('/frontend/js/markdown-sanitize.js').then(runFailClosedUnsupported);
+        } else {
+            chain = loadScript('/frontend/vendor/dompurify/purify.min.js')
+                .then(function () { return loadScript('/frontend/js/markdown-sanitize.js'); })
+                .then(runMatrix);
+        }
+        return chain.then(finish).catch(function (err) {
+            record('fixture load', false, String(err && err.message ? err.message : err));
+            finish();
+        });
+    }
+
+    boot();
+})();
+    </script>
+</body>
+</html>

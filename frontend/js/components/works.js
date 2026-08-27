@@ -9,24 +9,6 @@ function prksEscapeHtmlLite(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/**
- * Markdown preview allows raw HTML via marked; a &lt;style&gt; block with @import not first
- * triggers Chrome "An @import rule was ignored…" and is an XSS footgun. Drop active document hooks.
- */
-function prksSanitizeMarkdownPreviewHtml(html) {
-    if (html == null || html === '') return '';
-    try {
-        const wrapped = '<div class="prks-md-preview-root">' + html + '</div>';
-        const doc = new DOMParser().parseFromString(wrapped, 'text/html');
-        const root = doc.body.querySelector('.prks-md-preview-root');
-        if (!root) return html;
-        root.querySelectorAll('script, style, link, meta, iframe, object, embed').forEach((el) => el.remove());
-        return root.innerHTML;
-    } catch (_e) {
-        return '';
-    }
-}
-
 function prksBuildWorkTitleLowerToIdMap(works) {
     const map = {};
     const sorted = [...(works || [])].sort((a, b) => String(a.id).localeCompare(String(b.id)));
