@@ -15,7 +15,6 @@ from dataclasses import replace
 from email.message import Message
 from urllib.parse import urlparse, parse_qs, unquote
 from urllib.request import urlopen, Request
-from urllib.error import HTTPError, URLError
 
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,6 +38,14 @@ from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearize
 from backend.storage import paths
 from backend.storage.config import StorageConfig
 from backend.work_deletion import delete_work as delete_library_work
+from backend.person_image import (
+    PersonImageUrlError,
+    decode_and_transcode,
+    fetch_and_prepare,
+    identify_cached_portrait_subtype,
+    normalize_person_image_url,
+    read_legacy_portrait_bytes,
+)
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -331,16 +338,6 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
     return config
 
 
-def _prks_detect_image_mime(header: bytes) -> str:
-    if header.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if header.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP":
-        return "image/webp"
-    return "application/octet-stream"
-
-
 def _safe_pdf_path_in_pdfs_dir(url_last_segment: str) -> str | None:
     return safe_pdf_path_under_dir(pdfs_dir, url_last_segment)
 
@@ -424,45 +421,6 @@ def _prks_pil_to_jpeg_bytes(img, quality: int = 82) -> bytes | None:
         return None
 
 
-def _prks_portrait_cache_bytes(
-    raw: bytes, max_edge: int = 512
-) -> tuple[bytes, str] | None:
-    """
-    Resize/transcode remote portrait bytes for on-disk cache + API serve.
-    Returns (bytes, mime_subtype) e.g. (..., 'webp'), or None if not decodable.
-    """
-    from io import BytesIO
-
-    try:
-        from PIL import Image, ImageOps
-    except Exception:
-        return None
-    try:
-        img = Image.open(BytesIO(raw))
-        img.load()
-        try:
-            img = ImageOps.exif_transpose(img)
-        except Exception:
-            pass
-        w, h = img.size
-        m = max(w, h)
-        if m > max_edge:
-            scale = max_edge / float(m)
-            nw = max(1, int(w * scale))
-            nh = max(1, int(h * scale))
-            resample = getattr(Image, "Resampling", Image).LANCZOS
-            img = img.resize((nw, nh), resample)
-        webp = _prks_pil_to_card_webp_bytes(img)
-        if webp is not None:
-            return webp, "webp"
-        jpeg = _prks_pil_to_jpeg_bytes(img)
-        if jpeg is not None:
-            return jpeg, "jpeg"
-        return None
-    except Exception:
-        return None
-
-
 def _prks_write_person_image_cache(cache_path: str, body: bytes) -> None:
     parent = os.path.dirname(cache_path)
     os.makedirs(parent, exist_ok=True)
@@ -470,16 +428,6 @@ def _prks_write_person_image_cache(cache_path: str, body: bytes) -> None:
     with open(tmp, "wb") as fp:
         fp.write(body)
     os.replace(tmp, cache_path)
-
-
-def _prks_image_content_type(subtype: str, body: bytes) -> str:
-    if subtype == "webp":
-        return "image/webp"
-    if subtype == "jpeg":
-        return "image/jpeg"
-    if subtype == "png":
-        return "image/png"
-    return _prks_detect_image_mime(body[:64])
 
 
 def _prks_pixmap_to_jpeg_bytes(pix, quality: int = 82) -> bytes | None:
@@ -942,6 +890,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 p_id = path.split('/')[-1]
                 group_ids = data.pop('group_ids', None)
                 if 'image_url' in data:
+                    try:
+                        data['image_url'] = normalize_person_image_url(data.get('image_url'))
+                    except PersonImageUrlError:
+                        self.send_json(400, {'error': 'Invalid image_url'})
+                        return
                     prks_delete_person_image_cache(p_id, _bound_storage.people_dir)
                 db.update_person_metadata(p_id, data)
                 if group_ids is not None:
@@ -1310,7 +1263,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def _send_person_profile_image_bytes(
         self, body: bytes, subtype: str, max_age: int = 86400
     ) -> None:
-        mime = _prks_image_content_type(subtype, body)
+        actual = identify_cached_portrait_subtype(body) or subtype
+        if actual == "webp":
+            mime = "image/webp"
+        elif actual == "jpeg":
+            mime = "image/jpeg"
+        else:
+            mime = "image/jpeg"
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Cache-Control", f"private, max-age={max_age}")
@@ -1342,70 +1301,48 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             except OSError:
                 return b""
 
-        body = read_cache_file(cache_path)
-        if body:
-            self._send_person_profile_image_bytes(body, "webp")
-            return
-
-        legacy_body = read_cache_file(legacy_bin)
-        if legacy_body:
-            encoded = _prks_portrait_cache_bytes(legacy_body)
-            if encoded is not None:
-                out, subtype = encoded
-                try:
-                    _prks_write_person_image_cache(cache_path, out)
-                    try:
-                        os.remove(legacy_bin)
-                    except OSError:
-                        pass
-                except OSError:
-                    pass
-                self._send_person_profile_image_bytes(out, subtype, max_age=3600)
-                return
-            self._send_person_profile_image_bytes(
-                legacy_body, _prks_detect_image_mime(legacy_body[:64]).split("/")[-1]
-            )
-            return
-
-        fetched: bytes | None = None
-        if url.startswith("http://") or url.startswith("https://"):
+        def drop_file(path: str) -> None:
             try:
-                req = Request(url, headers={"User-Agent": "PRKS/1.0 (person portrait cache)"})
-                with urlopen(req, timeout=25) as resp:
-                    code = int(getattr(resp, "status", 0) or getattr(resp, "code", 0) or 0)
-                    if code == 200:
-                        blob = resp.read()
-                        if blob:
-                            fetched = blob
-            except (HTTPError, URLError, OSError, ValueError, TypeError, TimeoutError):
-                fetched = None
-            except Exception:
-                fetched = None
-
-        if fetched:
-            encoded = _prks_portrait_cache_bytes(fetched)
-            if encoded is not None:
-                out, subtype = encoded
-                try:
-                    _prks_write_person_image_cache(cache_path, out)
-                except OSError:
-                    pass
-                self._send_person_profile_image_bytes(out, subtype, max_age=3600)
-                return
-            try:
-                parent = os.path.dirname(legacy_bin)
-                os.makedirs(parent, exist_ok=True)
-                tmp = legacy_bin + ".tmp"
-                with open(tmp, "wb") as fp:
-                    fp.write(fetched)
-                os.replace(tmp, legacy_bin)
+                os.remove(path)
             except OSError:
                 pass
-            raw_sub = _prks_detect_image_mime(fetched[:64]).split("/")[-1]
-            self._send_person_profile_image_bytes(fetched, raw_sub, max_age=3600)
-            return
 
-        self.send_error(404, "Profile image not available")
+        body = read_cache_file(cache_path)
+        if body:
+            subtype = identify_cached_portrait_subtype(body)
+            if subtype:
+                self._send_person_profile_image_bytes(body, subtype)
+                return
+            drop_file(cache_path)
+
+        if os.path.isfile(legacy_bin):
+            legacy_body = read_legacy_portrait_bytes(legacy_bin)
+            encoded = (
+                decode_and_transcode(legacy_body, None) if legacy_body else None
+            )
+            if encoded is not None:
+                out, subtype = encoded
+                try:
+                    _prks_write_person_image_cache(cache_path, out)
+                    drop_file(legacy_bin)
+                except OSError:
+                    pass
+                self._send_person_profile_image_bytes(out, subtype, max_age=3600)
+                return
+            drop_file(legacy_bin)
+
+        prepared = fetch_and_prepare(url)
+        if prepared is None:
+            LOGGER.info("portrait_fetch_failed")
+            self.send_error(404, "Profile image not available")
+            return
+        try:
+            _prks_write_person_image_cache(cache_path, prepared.body)
+        except OSError:
+            pass
+        self._send_person_profile_image_bytes(
+            prepared.body, prepared.subtype, max_age=3600
+        )
 
     def handle_api_get(self, parsed_path):
         query = parse_qs(parsed_path.query)
@@ -2129,12 +2066,17 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     self.send_error(404, "API endpoint not found")
             elif path == '/api/persons':
+                try:
+                    image_url = normalize_person_image_url(data.get('image_url', '') or '')
+                except PersonImageUrlError:
+                    self.send_json(400, {'error': 'Invalid image_url'})
+                    return
                 p_id = db.add_person(
                     first_name=data.get('first_name', ''),
                     last_name=data.get('last_name', ''),
                     aliases=data.get('aliases', ''),
                     about=data.get('about', ''),
-                    image_url=data.get('image_url', '') or '',
+                    image_url=image_url,
                     link_wikipedia=data.get('link_wikipedia', '') or '',
                     link_stanford_encyclopedia=data.get('link_stanford_encyclopedia', '') or '',
                     link_iep=data.get('link_iep', '') or '',

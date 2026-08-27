@@ -12,7 +12,7 @@ import sys
 import base64
 import tempfile
 from dataclasses import replace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -23,9 +23,11 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import (
     prks_person_image_cache_path,
+    prks_person_image_legacy_bin_path,
     prks_person_image_url_hash,
     PRKS_PERSON_IMAGE_CACHE_REV,
 )
+from backend.person_image import PortraitImage, decode_and_transcode
 from backend.storage.config import StorageConfig
 
 import backend.server as server_module
@@ -1661,9 +1663,13 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(work.get("folder_title"), "Uncategorized")
         self.assertTrue(work.get("folder_id"))
 
-    @patch("backend.server.urlopen")
-    def test_server_person_profile_image_serves_cache_when_remote_fails(self, mock_urlopen):
-        portrait_png = _tiny_test_portrait_png_bytes()
+    @patch("backend.server.fetch_and_prepare")
+    def test_server_person_profile_image_serves_cache_when_remote_fails(self, mock_fetch):
+        encoded = decode_and_transcode(_tiny_test_portrait_png_bytes())
+        if encoded is None:
+            self.skipTest("Pillow/WebP encode not available")
+        out, subtype = encoded
+        mock_fetch.return_value = PortraitImage(body=out, subtype=subtype)
         payload = {
             "first_name": "Cache",
             "last_name": "Portrait",
@@ -1677,14 +1683,6 @@ class TestServerAPI(unittest.TestCase):
         req_p.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req_p) as rp:
             p_id = json.loads(rp.read().decode())["id"]
-
-        fake_resp = MagicMock()
-        fake_resp.status = 200
-        fake_resp.read.return_value = portrait_png
-        fake_ctx = MagicMock()
-        fake_ctx.__enter__.return_value = fake_resp
-        fake_ctx.__exit__.return_value = None
-        mock_urlopen.return_value = fake_ctx
 
         img_url = f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}/profile-image"
         req_img = urllib.request.Request(img_url)
@@ -1702,19 +1700,22 @@ class TestServerAPI(unittest.TestCase):
         self.assertTrue(os.path.isfile(cache_path))
         self.assertTrue(cache_path.endswith(f"_v{PRKS_PERSON_IMAGE_CACHE_REV}.webp"))
 
-        mock_urlopen.return_value = None
-        mock_urlopen.side_effect = urllib.error.URLError("simulated offline")
+        mock_fetch.return_value = None
 
         with urllib.request.urlopen(req_img) as ri2:
             self.assertEqual(ri2.status, 200)
             body2 = ri2.read()
         self.assertEqual(body1, body2)
 
-    @patch("backend.server.urlopen")
+    @patch("backend.server.fetch_and_prepare")
     def test_server_person_profile_image_cache_purged_on_image_url_change(
-        self, mock_urlopen
+        self, mock_fetch
     ):
-        portrait_png = _tiny_test_portrait_png_bytes()
+        encoded = decode_and_transcode(_tiny_test_portrait_png_bytes())
+        if encoded is None:
+            self.skipTest("Pillow/WebP encode not available")
+        out, subtype = encoded
+        mock_fetch.return_value = PortraitImage(body=out, subtype=subtype)
         url_a = "https://example.invalid/a.jpg"
         url_b = "https://example.invalid/b.jpg"
         payload = {
@@ -1730,14 +1731,6 @@ class TestServerAPI(unittest.TestCase):
         req_p.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req_p) as rp:
             p_id = json.loads(rp.read().decode())["id"]
-
-        fake_resp = MagicMock()
-        fake_resp.status = 200
-        fake_resp.read.return_value = portrait_png
-        fake_ctx = MagicMock()
-        fake_ctx.__enter__.return_value = fake_resp
-        fake_ctx.__exit__.return_value = None
-        mock_urlopen.return_value = fake_ctx
 
         cache_a = prks_person_image_cache_path(
             p_id, url_a, server_module._bound_storage.people_dir
@@ -1767,6 +1760,200 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(urllib.request.Request(img_url)) as ri2:
             ri2.read()
         self.assertTrue(os.path.isfile(cache_b))
+
+    def test_server_invalid_image_url_post_rejected(self):
+        payload = {
+            "first_name": "Bad",
+            "last_name": "Url",
+            "image_url": "http://127.0.0.1/x.jpg",
+        }
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req_p)
+        self.assertEqual(cm.exception.code, 400)
+        body = json.loads(cm.exception.read().decode())
+        self.assertEqual(body.get("error"), "Invalid image_url")
+        people = json.loads(
+            urllib.request.urlopen(f"{self._base_url}/api/persons").read().decode()
+        )
+        self.assertFalse(
+            any(p.get("first_name") == "Bad" and p.get("last_name") == "Url" for p in people)
+        )
+
+    @patch("backend.server.fetch_and_prepare")
+    def test_server_invalid_image_url_patch_does_not_purge_cache(self, mock_fetch):
+        encoded = decode_and_transcode(_tiny_test_portrait_png_bytes())
+        if encoded is None:
+            self.skipTest("Pillow/WebP encode not available")
+        out, subtype = encoded
+        mock_fetch.return_value = PortraitImage(body=out, subtype=subtype)
+        url_ok = "https://example.invalid/ok.jpg"
+        payload = {
+            "first_name": "Keep",
+            "last_name": "Cache",
+            "image_url": url_ok,
+        }
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_p) as rp:
+            p_id = json.loads(rp.read().decode())["id"]
+        img_url = f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}/profile-image"
+        with urllib.request.urlopen(urllib.request.Request(img_url)) as ri:
+            ri.read()
+        cache_path = prks_person_image_cache_path(
+            p_id, url_ok, server_module._bound_storage.people_dir
+        )
+        self.assertTrue(os.path.isfile(cache_path))
+
+        req_patch = urllib.request.Request(
+            f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}",
+            data=json.dumps({"image_url": "http://192.168.1.10/x.jpg"}).encode(),
+            method="PATCH",
+        )
+        req_patch.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req_patch)
+        self.assertEqual(cm.exception.code, 400)
+        person = json.loads(
+            urllib.request.urlopen(
+                f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}"
+            ).read().decode()
+        )
+        self.assertEqual(person.get("image_url"), url_ok)
+        self.assertTrue(os.path.isfile(cache_path))
+
+    def test_server_stale_loopback_image_url_never_connects(self):
+        p_id = server_module.db.add_person(
+            first_name="Legacy",
+            last_name="Loopback",
+            image_url="http://127.0.0.1/image",
+        )
+        img_url = f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}/profile-image"
+        with patch("backend.person_image._getaddrinfo") as mock_dns:
+            with patch("backend.person_image._create_socket") as mock_sock:
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    urllib.request.urlopen(urllib.request.Request(img_url))
+        self.assertEqual(cm.exception.code, 404)
+        mock_dns.assert_not_called()
+        mock_sock.assert_not_called()
+
+    def test_server_invalid_remote_bytes_not_cached(self):
+        payload = {
+            "first_name": "Html",
+            "last_name": "Remote",
+            "image_url": "https://example.invalid/not-image",
+        }
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_p) as rp:
+            p_id = json.loads(rp.read().decode())["id"]
+        with patch(
+            "backend.person_image._fetch_remote_response",
+            return_value=(b"<html>nope</html>", "text/html"),
+        ):
+            img_url = f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}/profile-image"
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(urllib.request.Request(img_url))
+        self.assertEqual(cm.exception.code, 404)
+        people_dir = server_module._bound_storage.people_dir
+        cache_path = prks_person_image_cache_path(p_id, payload["image_url"], people_dir)
+        legacy = prks_person_image_legacy_bin_path(p_id, people_dir)
+        self.assertFalse(os.path.isfile(cache_path))
+        self.assertFalse(os.path.isfile(legacy))
+
+    def test_server_legacy_bin_migrated_and_invalid_not_served(self):
+        encoded = decode_and_transcode(_tiny_test_portrait_png_bytes())
+        if encoded is None:
+            self.skipTest("Pillow/WebP encode not available")
+        people_dir = server_module._bound_storage.people_dir
+        os.makedirs(people_dir, exist_ok=True)
+
+        p_ok = server_module.db.add_person(
+            first_name="Legacy",
+            last_name="Good",
+            image_url="https://example.invalid/legacy-ok.jpg",
+        )
+        legacy_ok = prks_person_image_legacy_bin_path(p_ok, people_dir)
+        with open(legacy_ok, "wb") as fp:
+            fp.write(_tiny_test_portrait_png_bytes())
+        img_ok = f"{self._base_url}/api/persons/{urllib.parse.quote(p_ok)}/profile-image"
+        with patch("backend.server.fetch_and_prepare") as mock_fetch:
+            mock_fetch.side_effect = AssertionError("must not fetch when legacy migrates")
+            with urllib.request.urlopen(urllib.request.Request(img_ok)) as ri:
+                self.assertEqual(ri.status, 200)
+                body = ri.read()
+                ctype = ri.headers.get("Content-Type", "")
+        self.assertIn("image/webp", ctype)
+        self.assertEqual(body[:4], b"RIFF")
+        cache_ok = prks_person_image_cache_path(
+            p_ok, "https://example.invalid/legacy-ok.jpg", people_dir
+        )
+        self.assertTrue(os.path.isfile(cache_ok))
+        self.assertFalse(os.path.isfile(legacy_ok))
+
+        p_bad = server_module.db.add_person(
+            first_name="Legacy",
+            last_name="Bad",
+            image_url="https://example.invalid/legacy-bad.jpg",
+        )
+        legacy_bad = prks_person_image_legacy_bin_path(p_bad, people_dir)
+        with open(legacy_bad, "wb") as fp:
+            fp.write(b"not-an-image")
+        img_bad = f"{self._base_url}/api/persons/{urllib.parse.quote(p_bad)}/profile-image"
+        with patch("backend.server.fetch_and_prepare", return_value=None):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(urllib.request.Request(img_bad))
+        self.assertEqual(cm.exception.code, 404)
+        self.assertFalse(os.path.isfile(legacy_bad))
+
+    def test_server_cached_jpeg_served_as_jpeg(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        img = Image.new("RGB", (12, 12), (9, 8, 7))
+        buf = BytesIO()
+        img.save(buf, format="JPEG")
+        jpeg = buf.getvalue()
+        payload = {
+            "first_name": "Jpeg",
+            "last_name": "Cache",
+            "image_url": "https://example.invalid/jpeg-cache.jpg",
+        }
+        req_p = urllib.request.Request(
+            f"{self._base_url}/api/persons",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req_p.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_p) as rp:
+            p_id = json.loads(rp.read().decode())["id"]
+        cache_path = prks_person_image_cache_path(
+            p_id, payload["image_url"], server_module._bound_storage.people_dir
+        )
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "wb") as fp:
+            fp.write(jpeg)
+        img_url = f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}/profile-image"
+        with patch("backend.server.fetch_and_prepare") as mock_fetch:
+            mock_fetch.side_effect = AssertionError("must use cache")
+            with urllib.request.urlopen(urllib.request.Request(img_url)) as ri:
+                self.assertEqual(ri.status, 200)
+                self.assertEqual(ri.headers.get("Content-Type"), "image/jpeg")
+                self.assertEqual(ri.read()[:2], b"\xff\xd8")
 
     def _raw_http(self, method, path, header_pairs, body=None):
         conn = http.client.HTTPConnection("127.0.0.1", self._test_port, timeout=5)

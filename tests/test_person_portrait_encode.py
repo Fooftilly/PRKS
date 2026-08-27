@@ -10,7 +10,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.server import _prks_portrait_cache_bytes  # noqa: E402
+from backend.person_image import decode_and_transcode  # noqa: E402
 
 
 def _large_test_png_bytes(width: int = 1200, height: int = 900) -> bytes:
@@ -28,7 +28,7 @@ def _large_test_png_bytes(width: int = 1200, height: int = 900) -> bytes:
 class TestPersonPortraitEncode(unittest.TestCase):
     def test_portrait_webp_smaller_than_source_and_valid_header(self):
         raw = _large_test_png_bytes()
-        encoded = _prks_portrait_cache_bytes(raw, max_edge=512)
+        encoded = decode_and_transcode(raw, None, max_edge=512)
         if encoded is None:
             self.skipTest("Pillow/WebP encode not available")
         out, subtype = encoded
@@ -44,7 +44,7 @@ class TestPersonPortraitEncode(unittest.TestCase):
         except ImportError:
             self.skipTest("Pillow not installed")
         raw = _large_test_png_bytes(800, 600)
-        encoded = _prks_portrait_cache_bytes(raw, max_edge=256)
+        encoded = decode_and_transcode(raw, None, max_edge=256)
         if encoded is None:
             self.skipTest("Pillow/WebP encode not available")
         out, _ = encoded

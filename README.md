@@ -82,7 +82,7 @@ PRKS has no application-level authentication. Use that override only on a networ
 
 If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/prks_data.db`, `data/pdfs/`, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
 
-Person profile images (`GET /api/persons/{id}/profile-image`) are fetched from each person’s `image_url`, resized/transcoded like PDF card thumbnails (WebP quality 82), and cached under `$PRKS_STORAGE/people/` or `data/people/`. Updating `image_url` clears that person’s cached portraits.
+Person profile images (`GET /api/persons/{id}/profile-image`) are optional. `image_url` must be a direct public HTTP/HTTPS URL (HTTPS preferred) that itself returns HTTP 200. PRKS does not follow redirects, and private/local/link-local targets are refused. Only static JPEG/PNG/WebP/GIF rasters are accepted. The download is size- and time-bounded; the image is decoded and transcoded (max 512px edge, usually WebP) before anything is cached. Original remote bytes are not kept. Local portrait upload is not part of this feature. Updating a valid `image_url` clears that person’s cached portraits.
 
 Backup your database by copying `/data` folder.
 
