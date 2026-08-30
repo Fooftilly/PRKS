@@ -506,6 +506,28 @@ async function prksLinearizeExistingPdfs(unlinearizedOnly = true) {
     return data;
 }
 
+async function prksStageBackup(file) {
+    const res = await fetch('/api/backups/stage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Backup could not be verified. Current PRKS data was not changed.');
+    return data;
+}
+
+async function prksRestoreBackup(token) {
+    const res = await fetch('/api/backups/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, confirm: 'RESTORE' }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Restore failed. Current PRKS data was not changed.');
+    return data;
+}
+
 /**
  * Infer pdf vs video for UI. PDFs may have source_url (e.g. original article); explicit source_kind wins.
  */

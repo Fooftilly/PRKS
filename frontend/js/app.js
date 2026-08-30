@@ -104,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initTheme();
     void initAnnotationAuthorSetting();
     void initBibtexExportFieldsSetting();
+    initPrksBackupRestoreAction();
     initPrksPdfTextReindexAction();
     initPrksExistingPdfLinearizeAction();
     initPrksPdfRememberPageSetting();
@@ -590,6 +591,179 @@ async function initBibtexExportFieldsSetting() {
                 }
             } catch (e) {
                 console.warn(e);
+            }
+        });
+    }
+}
+
+function initPrksBackupRestoreAction() {
+    const downloadBtn = document.getElementById('prks-backup-download-btn');
+    const downloadStatus = document.getElementById('prks-backup-download-status');
+    const fileInput = document.getElementById('prks-backup-file-input');
+    const chooseBtn = document.getElementById('prks-backup-choose-btn');
+    const fileLabel = document.getElementById('prks-backup-file-label');
+    const verifyBtn = document.getElementById('prks-backup-verify-btn');
+    const restoreStatus = document.getElementById('prks-backup-restore-status');
+    const verifiedPanel = document.getElementById('prks-backup-verified-panel');
+    const summaryEl = document.getElementById('prks-backup-summary');
+    const restoreBtn = document.getElementById('prks-backup-restore-btn');
+    const confirmInput = document.getElementById('prks-restore-confirm-input');
+    const confirmSubmit = document.getElementById('prks-restore-confirm-submit');
+    const confirmStatus = document.getElementById('prks-restore-confirm-status');
+    if (!downloadBtn || downloadBtn.dataset.bound === '1') return;
+    downloadBtn.dataset.bound = '1';
+
+    let stagedToken = '';
+    let restoreBusy = false;
+
+    const setRestoreBusy = (busy) => {
+        restoreBusy = !!busy;
+        if (chooseBtn) chooseBtn.disabled = restoreBusy;
+        if (fileInput) fileInput.disabled = restoreBusy;
+        if (verifyBtn) verifyBtn.disabled = restoreBusy;
+        if (restoreBtn) restoreBtn.disabled = restoreBusy;
+        if (confirmSubmit) {
+            const typed = confirmInput && confirmInput.value.trim() === 'RESTORE';
+            confirmSubmit.disabled = restoreBusy || !typed;
+        }
+        if (confirmInput) confirmInput.disabled = restoreBusy;
+    };
+
+    const hideVerified = () => {
+        stagedToken = '';
+        if (verifiedPanel) verifiedPanel.classList.add('hidden');
+        if (summaryEl) summaryEl.innerHTML = '';
+    };
+
+    const formatCreated = (iso) => {
+        const raw = String(iso || '').trim();
+        if (!raw) return '';
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) return raw;
+        try {
+            return d.toLocaleString(undefined, {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+            });
+        } catch (_e) {
+            return raw;
+        }
+    };
+
+    downloadBtn.addEventListener('click', () => {
+        if (downloadStatus) downloadStatus.textContent = 'Preparing backup… Verifying backup… Download starting…';
+        const a = document.createElement('a');
+        a.href = '/api/backups/download';
+        a.setAttribute('download', '');
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    });
+
+    if (chooseBtn && fileInput) {
+        chooseBtn.addEventListener('click', () => {
+            if (restoreBusy) return;
+            fileInput.click();
+        });
+    }
+    if (fileInput) {
+        fileInput.addEventListener('change', () => {
+            hideVerified();
+            const file = fileInput.files && fileInput.files[0];
+            if (fileLabel) fileLabel.textContent = file ? file.name : 'No file selected';
+            if (restoreStatus) restoreStatus.textContent = '';
+        });
+    }
+    if (verifyBtn) {
+        verifyBtn.addEventListener('click', async () => {
+            const file = fileInput && fileInput.files && fileInput.files[0];
+            if (!file) {
+                if (restoreStatus) restoreStatus.textContent = 'Choose a backup file first.';
+                return;
+            }
+            setRestoreBusy(true);
+            hideVerified();
+            if (restoreStatus) restoreStatus.textContent = 'Uploading backup… Verifying backup…';
+            try {
+                if (typeof prksStageBackup !== 'function') {
+                    throw new Error('Backup API unavailable.');
+                }
+                const out = await prksStageBackup(file);
+                stagedToken = String(out.token || '');
+                const summary = out.summary && typeof out.summary === 'object' ? out.summary : {};
+                if (summaryEl) {
+                    summaryEl.innerHTML = '';
+                    const rows = [
+                        ['Created', formatCreated(summary.created_at)],
+                        ['Works', String(summary.works ?? '')],
+                        ['PDFs', String(summary.pdf_files ?? summary.managed_pdfs ?? '')],
+                        ['Persons', String(summary.persons ?? '')],
+                        ['Annotations', String(summary.annotations ?? '')],
+                    ];
+                    for (const [label, value] of rows) {
+                        if (!value && value !== '0') continue;
+                        const li = document.createElement('li');
+                        li.textContent = `${label}: ${value}`;
+                        summaryEl.appendChild(li);
+                    }
+                }
+                if (verifiedPanel) verifiedPanel.classList.remove('hidden');
+                const warnings = Array.isArray(out.warnings) ? out.warnings : [];
+                if (restoreStatus) {
+                    restoreStatus.textContent = warnings.length
+                        ? `Backup verified. ${warnings.join(' ')}`
+                        : 'Backup verified';
+                }
+            } catch (e) {
+                hideVerified();
+                if (restoreStatus) {
+                    restoreStatus.textContent =
+                        (e && e.message) || 'Backup could not be verified. Current PRKS data was not changed.';
+                }
+            } finally {
+                setRestoreBusy(false);
+            }
+        });
+    }
+    if (restoreBtn) {
+        restoreBtn.addEventListener('click', () => {
+            if (!stagedToken || restoreBusy) return;
+            if (confirmInput) confirmInput.value = '';
+            if (confirmStatus) confirmStatus.textContent = '';
+            if (confirmSubmit) confirmSubmit.disabled = true;
+            if (typeof openModal === 'function') openModal('prks-restore-confirm-modal');
+        });
+    }
+    if (confirmInput && confirmSubmit) {
+        const syncConfirm = () => {
+            confirmSubmit.disabled = restoreBusy || confirmInput.value.trim() !== 'RESTORE';
+        };
+        confirmInput.addEventListener('input', syncConfirm);
+        confirmSubmit.addEventListener('click', async () => {
+            if (confirmInput.value.trim() !== 'RESTORE' || !stagedToken || restoreBusy) return;
+            setRestoreBusy(true);
+            if (confirmStatus) confirmStatus.textContent = 'Restoring library… Rebuilding search index…';
+            if (restoreStatus) restoreStatus.textContent = 'Restoring library… Rebuilding search index…';
+            try {
+                if (typeof prksRestoreBackup !== 'function') {
+                    throw new Error('Backup API unavailable.');
+                }
+                const out = await prksRestoreBackup(stagedToken);
+                stagedToken = '';
+                const extra = Array.isArray(out.warnings) && out.warnings.length ? ` ${out.warnings.join(' ')}` : '';
+                if (confirmStatus) confirmStatus.textContent = 'Restore complete — reloading…' + extra;
+                if (restoreStatus) restoreStatus.textContent = 'Restore complete — reloading…' + extra;
+                window.location.reload();
+            } catch (e) {
+                const msg =
+                    (e && e.message) || 'Restore failed. Current PRKS data was not changed.';
+                if (confirmStatus) confirmStatus.textContent = msg;
+                if (restoreStatus) restoreStatus.textContent = msg;
+                setRestoreBusy(false);
             }
         });
     }

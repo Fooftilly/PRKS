@@ -25,6 +25,7 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/storage/config.py` frozen storage snapshot and env parser
 - `backend/storage/paths.py` storage-path derivation and testing-mode containment
 - `backend/db_manager.py` SQLite
+- `backend/backup_restore.py` verified backup/restore
 - `frontend/` UI
 - `tests/` unittest
 
@@ -46,4 +47,20 @@ raw browser messages/stacks, qpdf stderr, or str/repr(exception).
 Use `backend/log_safety.py` for route/id/error normalization.
 Unexpected traceback logging must go through the privacy-safe formatter.
 Lowering `PRKS_LOG_LEVEL` / `PRKS_LOG_FILE_LEVEL` must never unlock raw data.
+
+## Backup and restore
+
+Backup/restore code must never operate on production storage during tests.
+
+Do not add a persistent storage component without classifying it as canonical,
+derived, operational, or conditional in backup inventory.
+
+`thumbs/` and `prks_text_index.db` (including WAL/SHM) are derived. They are not
+required backup state and must be rebuilt after restore.
+
+Restore validation must complete before live canonical state is modified.
+
+Do not use `ZipFile.extractall()` on unvalidated backup input.
+
+Do not log archive paths, PDF names, manifest contents, or raw restore errors.
 

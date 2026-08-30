@@ -277,6 +277,26 @@
                 <div class="prks-bibtex-export-toggles" id="prks-bibtex-export-fields" role="group" aria-label="Fields to include in BibTeX export"></div>
                 <button type="button" class="ribbon-btn prks-bibtex-export-reset" id="prks-bibtex-export-reset">Restore export defaults</button>
             </section>
+            <section class="prks-settings-section" aria-labelledby="prks-settings-backup-heading">
+                <h4 id="prks-settings-backup-heading" class="prks-settings-section__title">Backup &amp; restore</h4>
+                <p class="prks-settings-hint">Create a verified backup of your PRKS library. Includes database, PDFs and managed person files. Search index and thumbnails are rebuilt automatically.</p>
+                <button type="button" class="ribbon-btn" id="prks-backup-download-btn">Download backup</button>
+                <p class="prks-settings-hint" id="prks-backup-download-status" aria-live="polite"></p>
+                <p class="prks-settings-hint prks-backup-restore-heading">Restore a PRKS backup</p>
+                <p class="prks-settings-hint">Before restoring, download a backup of the current library if you may want to return to it.</p>
+                <div class="prks-backup-restore-row">
+                    <input type="file" id="prks-backup-file-input" class="prks-backup-file-input" accept=".prks-backup,application/octet-stream,application/zip">
+                    <button type="button" class="ribbon-btn" id="prks-backup-choose-btn">Choose backup…</button>
+                    <span class="prks-settings-hint" id="prks-backup-file-label">No file selected</span>
+                </div>
+                <button type="button" class="ribbon-btn" id="prks-backup-verify-btn">Verify backup</button>
+                <p class="prks-settings-hint" id="prks-backup-restore-status" aria-live="polite"></p>
+                <div id="prks-backup-verified-panel" class="prks-backup-verified-panel hidden">
+                    <p class="prks-backup-verified-title">Backup verified</p>
+                    <ul class="prks-backup-summary" id="prks-backup-summary"></ul>
+                    <button type="button" class="ribbon-btn" id="prks-backup-restore-btn">Restore this backup</button>
+                </div>
+            </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-pdf-index-heading">
                 <h4 id="prks-settings-pdf-index-heading" class="prks-settings-section__title">PDF text index</h4>
                 <p class="prks-settings-hint">Rebuild searchable text index for all PDFs in library.</p>
@@ -327,6 +347,21 @@
                     </button>
                 </div>
             </section>
+        </div>
+    </div>
+
+    <div id="prks-restore-confirm-modal" class="modal hidden">
+        <div class="modal-header">
+            <h3>Replace library?</h3>
+            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="prks-settings-hint">Restoring will replace the current PRKS library with the contents of this backup.</p>
+            <p class="prks-settings-hint">Before restoring, download a backup of the current library if you may want to return to it.</p>
+            <label for="prks-restore-confirm-input" class="prks-settings-section__title">Type RESTORE to confirm</label>
+            <input type="text" id="prks-restore-confirm-input" class="prks-settings-text-input" autocomplete="off" spellcheck="false" placeholder="RESTORE">
+            <p class="prks-settings-hint" id="prks-restore-confirm-status" aria-live="polite"></p>
+            <button type="button" class="ribbon-btn" id="prks-restore-confirm-submit" disabled>Restore this backup</button>
         </div>
     </div>
 

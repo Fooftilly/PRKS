@@ -20,6 +20,9 @@ from backend.storage.config import StorageConfig
 
 LOGGER = logging.getLogger("prks.db")
 
+# Bump when init_db finishes a schema change. Restore refuses backups newer than this.
+PRKS_SCHEMA_VERSION = 9
+
 PRKS_BIBTEX_DOC_TYPES = frozenset({
     "article",
     "book",
@@ -729,12 +732,11 @@ class PRKSDatabase:
                 )
             except sqlite3.OperationalError:
                 pass
-            _PRKS_SCHEMA_VERSION = 9
             existing_version = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
             if existing_version is None:
-                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_PRKS_SCHEMA_VERSION,))
-            elif existing_version[0] < _PRKS_SCHEMA_VERSION:
-                conn.execute("UPDATE schema_version SET version = ?", (_PRKS_SCHEMA_VERSION,))
+                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (PRKS_SCHEMA_VERSION,))
+            elif existing_version[0] < PRKS_SCHEMA_VERSION:
+                conn.execute("UPDATE schema_version SET version = ?", (PRKS_SCHEMA_VERSION,))
             conn.commit()
         self._migrate_works_fts_author_text()
 

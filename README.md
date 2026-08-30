@@ -83,12 +83,44 @@ PRKS has no application-level authentication. Use that override only on a networ
 | `PRKS_LOG_FILE_LEVEL` | Persistent file log level. Default `ERROR`. |
 | `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep. Default `7`. |
 | `PRKS_LOG_FILE` | Override path for the rotating error log. Default `$PRKS_STORAGE/prks-errors.log`. |
+| `PRKS_BACKUP_MAX_UPLOAD_BYTES` | Maximum size of an uploaded `.prks-backup` restore archive. Default 64 GiB. A valid `Content-Length` is required. |
 
 If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/prks_data.db`, `data/pdfs/`, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
 
 Person profile images (`GET /api/persons/{id}/profile-image`) are optional. `image_url` must be a direct public HTTP/HTTPS URL (HTTPS preferred) that itself returns HTTP 200. PRKS does not follow redirects, and private/local/link-local targets are refused. Only static JPEG/PNG/WebP/GIF rasters are accepted. The download is size- and time-bounded; the image is decoded and transcoded (max 512px edge, usually WebP) before anything is cached. Original remote bytes are not kept. Local portrait upload is not part of this feature. Updating a valid `image_url` clears that person’s cached portraits.
 
-Backup your database by copying `/data` folder.
+## Backup and restore
+
+Use **Settings → Backup & restore → Download backup**. That is the supported way to preserve a PRKS library.
+
+A verified `.prks-backup` archive contains:
+
+- a consistent SQLite snapshot of the main database (works, people, roles, tags, folders, playlists, annotations, PDF annotation metadata, relationships, and app settings stored in the database)
+- managed PDFs
+- managed person files
+- the processing queue, when that directory lives under the configured PRKS storage root
+
+It does **not** include thumbnail cache, the PDF text-search index (`prks_text_index.db` and WAL/SHM files), logs, or temporary maintenance files. After restore, thumbnails are discarded and the text index is rebuilt.
+
+`.prks-backup` files hold private research data. Store them as carefully as the live library. The archive is ZIP-based, but restore it through PRKS (**Settings → Backup & restore**) rather than unzipping it into `/data` by hand.
+
+Restore uploads the archive into a staging area, verifies structure, hashes, SQLite integrity, and schema compatibility, then asks you to type `RESTORE` before replacing the current library. A malformed or corrupt backup cannot change live data.
+
+The backup does not include machine-specific deployment settings (`PRKS_STORAGE`, `PRKS_FOR_PROCESSING_DIR`, bind host, Docker UID/GID, and similar). A backup made under Docker `/data` can be restored to `./data` or another `PRKS_STORAGE`. Browser `localStorage` preferences (theme, force-mobile layout, and other device-only settings) are not part of the server backup.
+
+There is no cloud backup, schedule, or encryption in this release. If you copy a `.prks-backup` off a trusted disk, use filesystem or container encryption, or wait for a later encrypted-backup feature.
+
+### Emergency cold copy
+
+If you cannot use Settings backup, stop PRKS first, copy the entire storage root, then start it again. Do not copy a live SQLite directory as the primary backup method.
+
+Docker:
+
+```bash
+docker compose stop prks
+# copy ./data to your backup location
+docker compose start prks
+```
 
 ## Logging and privacy
 
@@ -141,6 +173,7 @@ This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=
 | `backend/storage/config.py` | Frozen storage snapshot and env parser. |
 | `backend/storage/paths.py` | Path derivation and testing-mode containment. |
 | `backend/db_manager.py` | SQLite access and business logic. |
+| `backend/backup_restore.py` | Verified library backup and restore. |
 | `backend/db_schema.sql` | Schema and FTS triggers. |
 | `frontend/` | Static SPA (HTML, CSS, JS), PWA assets. |
 | `data/` | Default production database and files (gitignored as appropriate). |

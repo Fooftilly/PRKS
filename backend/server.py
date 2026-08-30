@@ -47,6 +47,18 @@ from backend.log_safety import (
     safe_route,
 )
 from backend.work_deletion import delete_work as delete_library_work
+from backend.backup_restore import (
+    BackupError,
+    RestoreError,
+    backup_max_upload_bytes,
+    cleanup_stale_staging,
+    create_backup,
+    discard_temp_path,
+    new_staging_upload_path,
+    stage_restore,
+    stream_upload_to_file,
+    apply_restore,
+)
 from backend.person_image import (
     PersonImageUrlError,
     decode_and_transcode,
@@ -274,6 +286,16 @@ def json_content_type_allowed(header_value: str) -> bool:
     msg = Message()
     msg["content-type"] = header_value
     return msg.get_content_type() == "application/json"
+
+
+def octet_stream_content_type_allowed(header_value: str) -> bool:
+    msg = Message()
+    msg["content-type"] = header_value
+    return msg.get_content_type() in (
+        "application/octet-stream",
+        "application/zip",
+        "application/x-zip-compressed",
+    )
 
 
 def _validate_listen_port(port: int) -> None:
@@ -1699,6 +1721,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(bibtex.encode())
             elif path == '/api/settings':
                 self.send_json(200, db.get_app_settings_response())
+            elif path == '/api/backups/download':
+                self._handle_backup_download()
             elif path == '/api/processing-files':
                 db.scan_processing_files()
                 data = db.get_processing_files(include_imported=False)
@@ -1722,6 +1746,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def handle_api_post(self, parsed_path):
         path = parsed_path.path
         try:
+            if path == '/api/backups/stage':
+                self._handle_backup_stage()
+                return
+            if path == '/api/backups/restore':
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._handle_backup_restore(data)
+                return
+
             data = self._read_json_body()
             if data is None:
                 return
@@ -2310,6 +2344,138 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_internal_error(exc)
 
+    def _handle_backup_download(self) -> None:
+        if _bound_storage is None:
+            self._send_internal_error()
+            return
+        archive_path = None
+        try:
+            result = create_backup(_bound_storage)
+            archive_path = result.archive_path
+            file_size = os.path.getsize(archive_path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{result.filename}"',
+            )
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(file_size))
+            missing = 0
+            audit = (result.summary or {}).get("audit") or {}
+            try:
+                missing = int(audit.get("managed_pdfs_missing") or 0)
+            except (TypeError, ValueError):
+                missing = 0
+            if missing:
+                self.send_header("X-PRKS-Backup-Missing-Pdfs", str(missing))
+            self.end_headers()
+            with open(archive_path, "rb") as handle:
+                while True:
+                    chunk = handle.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except BackupError as exc:
+            self.send_json(
+                exc.http_status,
+                {
+                    "error": exc.message,
+                    "reason": exc.reason,
+                    "request_id": self._prks_request_id,
+                },
+            )
+        finally:
+            if archive_path:
+                try:
+                    os.remove(archive_path)
+                except OSError:
+                    pass
+
+    def _handle_backup_stage(self) -> None:
+        if _bound_storage is None:
+            self._send_internal_error()
+            return
+        types = self.headers.get_all("Content-Type") or []
+        if len(types) != 1 or not octet_stream_content_type_allowed(types[0]):
+            self._reject_request(415, "unsupported_media_type", "unsupported_media_type")
+            return
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            self.send_json(400, {"error": "invalid Content-Length"})
+            return
+        try:
+            content_length = int(raw_length)
+        except (TypeError, ValueError):
+            self.send_json(400, {"error": "invalid Content-Length"})
+            return
+        if content_length < 0:
+            self.send_json(400, {"error": "invalid Content-Length"})
+            return
+        max_bytes = backup_max_upload_bytes()
+        if content_length > max_bytes:
+            self.send_json(413, {"error": "request_too_large"})
+            return
+        upload_path = new_staging_upload_path(_bound_storage)
+        try:
+            stream_upload_to_file(
+                self.rfile,
+                upload_path,
+                expected_length=content_length,
+                max_bytes=max_bytes,
+            )
+            staged = stage_restore(_bound_storage, upload_path)
+            self.send_json(
+                200,
+                {
+                    "token": staged.token,
+                    "verified": True,
+                    "summary": staged.summary,
+                    "warnings": staged.warnings,
+                },
+            )
+        except RestoreError as exc:
+            self.send_json(
+                exc.http_status,
+                {
+                    "error": exc.message,
+                    "reason": exc.reason,
+                    "request_id": self._prks_request_id,
+                },
+            )
+        finally:
+            discard_temp_path(upload_path)
+
+    def _handle_backup_restore(self, data) -> None:
+        if _bound_storage is None:
+            self._send_internal_error()
+            return
+        if not isinstance(data, dict):
+            self.send_json(400, {"error": "JSON object body required"})
+            return
+        token = data.get("token")
+        confirm = data.get("confirm")
+        if not isinstance(token, str) or not token.strip():
+            self.send_json(400, {"error": "token is required"})
+            return
+        try:
+            out = apply_restore(
+                _bound_storage,
+                token.strip(),
+                confirm if isinstance(confirm, str) else "",
+                rebind=bind_storage,
+            )
+            self.send_json(200, out)
+        except RestoreError as exc:
+            self.send_json(
+                exc.http_status,
+                {
+                    "error": exc.message,
+                    "reason": exc.reason,
+                    "request_id": self._prks_request_id,
+                },
+            )
+
     def send_json(self, status, context, etag=None, precondition_checked=False):
         if etag and status == 200 and not precondition_checked and self._prks_if_none_match(etag):
             self._send_json_not_modified(etag)
@@ -2345,6 +2511,10 @@ def run_server(port=PORT, host=DEFAULT_HOST):
             LOGGER.info("thumbnail_prune_complete pruned=%s", n)
     except Exception as e:
         LOGGER.warning("thumbnail_prune_skipped error_type=%s", safe_error_type(e))
+    try:
+        cleanup_stale_staging(_bound_storage)
+    except Exception as e:
+        LOGGER.warning("restore_staging_cleanup_skipped error_type=%s", safe_error_type(e))
     with socketserver.TCPServer((host, port), PRKSHandler) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts

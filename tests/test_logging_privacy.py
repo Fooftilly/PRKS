@@ -129,6 +129,9 @@ class TestSafeRoute(unittest.TestCase):
             safe_route("/api/playlists/private-playlist/items/work-id"),
             "/api/playlists/:id/items/:id",
         )
+        self.assertEqual(safe_route("/api/backups/download"), "/api/backups/download")
+        self.assertEqual(safe_route("/api/backups/stage"), "/api/backups/stage")
+        self.assertEqual(safe_route("/api/backups/restore"), "/api/backups/restore")
 
     def test_unknown_api_fails_closed(self):
         self.assertEqual(safe_route("/api/not-a-real-family/secret"), "/api/:unknown")
