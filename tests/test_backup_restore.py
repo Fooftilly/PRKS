@@ -46,6 +46,7 @@ from backend.backup_restore import (
     verify_backup,
 )
 from backend.db_manager import PRKS_SCHEMA_VERSION, PRKSDatabase
+from backend.db_migrations import Migration
 from backend.server import bind_storage
 from backend.storage.config import StorageConfig
 from backend.text_index import get_text_index, reset_text_index
@@ -425,8 +426,81 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
             self._stage_copy(fresh, backup.archive_path)
         self.assertEqual(ctx.exception.reason, "schema_newer")
         staged = self._stage_copy(lib["cfg"], backup.archive_path)
-        out = apply_restore(lib["cfg"], staged.token, "RESTORE", rebind=bind_storage)
+        with self.assertRaises(RestoreError) as ctx:
+            apply_restore(lib["cfg"], staged.token, "RESTORE", rebind=bind_storage)
+        self.assertEqual(ctx.exception.reason, "restore_failed")
+        self.assertTrue(os.path.isfile(os.path.join(lib["cfg"].pdfs_dir, lib["pdf_name"])))
+        live = sqlite3.connect(lib["cfg"].db_path)
+        try:
+            self.assertEqual(
+                live.execute("SELECT version FROM schema_version").fetchone()[0],
+                ahead,
+            )
+        finally:
+            live.close()
+
+    def test_schema_9_backup_migrates_on_restore(self):
+        source = self._bind_library(title="Incoming V9", pdf_name="v9.pdf")
+        conn = sqlite3.connect(source["cfg"].db_path)
+        conn.execute("UPDATE schema_version SET version = 9")
+        conn.commit()
+        conn.close()
+        backup = create_backup(source["cfg"])
+        dest = bind_storage(self._cfg(self._tmpdir()))
+        staged = self._stage_copy(dest, backup.archive_path)
+        out = apply_restore(dest, staged.token, "RESTORE", rebind=bind_storage)
         self.assertTrue(out["restored"])
+        live = server_module.db
+        versions = live.execute_query("SELECT version FROM schema_version")
+        self.assertEqual([row["version"] for row in versions], [PRKS_SCHEMA_VERSION])
+        titles = [row["title"] for row in live.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Incoming V9"])
+        self.assertTrue(os.path.isfile(os.path.join(dest.pdfs_dir, "v9.pdf")))
+
+    def test_restore_migration_failure_restores_previous_library(self):
+        lib = self._bind_library(
+            title="Keep Me",
+            pdf_name="keep.pdf",
+            person_bytes=b"KEEP-PORTRAIT",
+        )
+        source = self._bind_library(
+            title="Incoming",
+            pdf_name="new.pdf",
+            person_bytes=b"NEW-PORTRAIT",
+        )
+        conn = sqlite3.connect(source["cfg"].db_path)
+        conn.execute("UPDATE schema_version SET version = 9")
+        conn.commit()
+        conn.close()
+        backup = create_backup(source["cfg"])
+        bind_storage(lib["cfg"])
+        staged = self._stage_copy(lib["cfg"], backup.archive_path)
+
+        def exploding(_conn):
+            raise RuntimeError("injected_migration_failure")
+
+        with patch(
+            "backend.db_migrations.MIGRATIONS",
+            (Migration(10, "ordered_migration_baseline", exploding),),
+        ):
+            with self.assertRaises(RestoreError) as ctx:
+                apply_restore(lib["cfg"], staged.token, "RESTORE", rebind=bind_storage)
+        self.assertEqual(ctx.exception.reason, "restore_failed")
+        live = sqlite3.connect(lib["cfg"].db_path)
+        try:
+            titles = [row[0] for row in live.execute("SELECT title FROM works")]
+            version = live.execute("SELECT version FROM schema_version").fetchone()[0]
+        finally:
+            live.close()
+        self.assertEqual(titles, ["Keep Me"])
+        self.assertEqual(version, PRKS_SCHEMA_VERSION)
+        self.assertTrue(os.path.isfile(os.path.join(lib["cfg"].pdfs_dir, "keep.pdf")))
+        self.assertFalse(os.path.isfile(os.path.join(lib["cfg"].pdfs_dir, "new.pdf")))
+        with open(os.path.join(lib["cfg"].people_dir, "portrait.webp"), "rb") as handle:
+            self.assertEqual(handle.read(), b"KEEP-PORTRAIT")
+        self.assertFalse(
+            os.path.isfile(os.path.join(lib["cfg"].root, ".prks-maintenance", "restore-journal.json"))
+        )
 
 
 class TestBackupCorruption(BackupRestoreTestCase):

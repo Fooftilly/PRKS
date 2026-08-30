@@ -122,6 +122,16 @@ docker compose stop prks
 docker compose start prks
 ```
 
+## Database migrations
+
+PRKS automatically upgrades supported older databases at startup.
+
+Current schema version: **10**.
+
+Schema migrations are transactional and version-ordered. A database marked version N has passed every migration through N.
+
+Databases created by a newer PRKS version are refused rather than downgraded. Download a verified backup before installing a PRKS revision that announces a database schema upgrade.
+
 ## Logging and privacy
 
 Persistent log: `<storage>/prks-errors.log`. Default persistent threshold is **ERROR**. Rotation is daily at midnight. Retention is **7 days**.
@@ -173,8 +183,9 @@ This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=
 | `backend/storage/config.py` | Frozen storage snapshot and env parser. |
 | `backend/storage/paths.py` | Path derivation and testing-mode containment. |
 | `backend/db_manager.py` | SQLite access and business logic. |
+| `backend/db_migrations.py` | Ordered schema migrations and current-schema validation. |
 | `backend/backup_restore.py` | Verified library backup and restore. |
-| `backend/db_schema.sql` | Schema and FTS triggers. |
+| `backend/db_schema.sql` | Complete latest schema for fresh databases. |
 | `frontend/` | Static SPA (HTML, CSS, JS), PWA assets. |
 | `data/` | Default production database and files (gitignored as appropriate). |
 | `data_testing/` | Test fixtures and isolated DB/PDFs for automated tests. |

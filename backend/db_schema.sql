@@ -2,7 +2,8 @@
 
 PRAGMA foreign_keys = ON;
 
--- Schema version tracking: a single-row table updated by init_db after all migrations run.
+-- Schema version tracking: a single-row table. Fresh DBs insert LATEST_SCHEMA_VERSION
+-- after this file is applied. Existing DBs are upgraded by backend/db_migrations.py.
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
@@ -320,9 +321,13 @@ CREATE TABLE IF NOT EXISTS person_group_members (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_person_groups_name_nocase ON person_groups(name COLLATE NOCASE);
 
--- Folder title uniqueness: parent-scoped index created in db_manager.init_db
--- (idx_folders_parent_title_nocase). Do not add a global folders(title) unique index here;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_nocase ON tags(name COLLATE NOCASE);
+
+-- Folder title uniqueness is parent-scoped. Do not add a global folders(title) unique index;
 -- existing DBs may have the same title under different parents.
+CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_parent_title_nocase
+    ON folders(COALESCE(parent_id, ''), LOWER(TRIM(title)));
 
 -- Performance indexes for frequently queried FK columns
 CREATE INDEX IF NOT EXISTS idx_roles_work_id ON roles(work_id);

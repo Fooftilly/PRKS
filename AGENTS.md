@@ -25,6 +25,7 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/storage/config.py` frozen storage snapshot and env parser
 - `backend/storage/paths.py` storage-path derivation and testing-mode containment
 - `backend/db_manager.py` SQLite
+- `backend/db_migrations.py` ordered schema migrations
 - `backend/backup_restore.py` verified backup/restore
 - `frontend/` UI
 - `tests/` unittest
@@ -66,4 +67,21 @@ the restored library.
 Do not use `ZipFile.extractall()` on unvalidated backup input.
 
 Do not log archive paths, PDF names, manifest contents, or raw restore errors.
+
+## Database schema changes
+
+`backend/db_schema.sql` describes the complete latest schema for fresh databases.
+
+Any schema/data change needed by an existing database requires:
+
+1. bump `LATEST_SCHEMA_VERSION`;
+2. add exactly one ordered migration;
+3. update `db_schema.sql` to the same final state;
+4. add fresh-DB and upgraded-DB tests.
+
+Never change schema only in `db_schema.sql`.
+Never ALTER/CREATE/DROP schema objects from feature/request code.
+Never swallow migration DDL failures.
+Never manually bump `schema_version` before migration success.
+Migrations may modify SQLite state only, not managed filesystem data.
 

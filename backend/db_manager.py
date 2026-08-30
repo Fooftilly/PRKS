@@ -13,6 +13,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
+from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.storage import paths
@@ -20,8 +21,8 @@ from backend.storage.config import StorageConfig
 
 LOGGER = logging.getLogger("prks.db")
 
-# Bump when init_db finishes a schema change. Restore refuses backups newer than this.
-PRKS_SCHEMA_VERSION = 9
+# Current schema ceiling. Restore refuses backups newer than this.
+PRKS_SCHEMA_VERSION = LATEST_SCHEMA_VERSION
 
 PRKS_BIBTEX_DOC_TYPES = frozenset({
     "article",
@@ -559,235 +560,13 @@ class PRKSDatabase:
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
 
-    @staticmethod
-    def _migrate_tags_case_dedupe(conn: sqlite3.Connection) -> None:
-        """Merge tags that differ only by letter case; keep earliest created_at then smallest id."""
-        cur = conn.execute("SELECT id, name, created_at FROM tags")
-        rows = cur.fetchall()
-        groups: Dict[str, List[Tuple[str, str, str]]] = defaultdict(list)
-        for r in rows:
-            rid, name, cat = r["id"], r["name"], r["created_at"]
-            key = (name or "").strip().lower()
-            if not key:
-                continue
-            groups[key].append((rid, name or "", str(cat or "")))
-        for members in groups.values():
-            if len(members) < 2:
-                continue
-            members.sort(key=lambda m: (m[2], m[0]))
-            keeper = members[0][0]
-            for loser_id, _n, _c in members[1:]:
-                conn.execute(
-                    "INSERT OR IGNORE INTO work_tags (work_id, tag_id) "
-                    "SELECT work_id, ? FROM work_tags WHERE tag_id = ?",
-                    (keeper, loser_id),
-                )
-                conn.execute("DELETE FROM work_tags WHERE tag_id = ?", (loser_id,))
-                conn.execute(
-                    "INSERT OR IGNORE INTO folder_tags (folder_id, tag_id) "
-                    "SELECT folder_id, ? FROM folder_tags WHERE tag_id = ?",
-                    (keeper, loser_id),
-                )
-                conn.execute("DELETE FROM folder_tags WHERE tag_id = ?", (loser_id,))
-                conn.execute("DELETE FROM tags WHERE id = ?", (loser_id,))
-
     def init_db(self):
-        """Initializes the database schema if it's new."""
-        with self.get_connection() as conn:
-            # Always run schema (IF NOT EXISTS prevents overrides)
-            with open(self.schema_path, 'r', encoding='utf-8') as f:
-                conn.executescript(f.read())
-            # Run migrations for columns added after initial schema
-            migrations = [
-                "ALTER TABLE works ADD COLUMN author_text TEXT",
-                "ALTER TABLE works ADD COLUMN year TEXT",
-                "ALTER TABLE works ADD COLUMN publisher TEXT",
-                "ALTER TABLE works ADD COLUMN journal TEXT",
-                "ALTER TABLE works ADD COLUMN volume TEXT",
-                "ALTER TABLE works ADD COLUMN issue TEXT",
-                "ALTER TABLE works ADD COLUMN pages TEXT",
-                "ALTER TABLE works ADD COLUMN isbn TEXT",
-                "ALTER TABLE works ADD COLUMN doi TEXT",
-                "ALTER TABLE works ADD COLUMN last_opened_at TIMESTAMP",
-                "ALTER TABLE works ADD COLUMN updated_at TIMESTAMP",
-                "ALTER TABLE persons ADD COLUMN image_url TEXT",
-                "ALTER TABLE persons ADD COLUMN link_wikipedia TEXT",
-                "ALTER TABLE persons ADD COLUMN link_stanford_encyclopedia TEXT",
-                "ALTER TABLE persons ADD COLUMN link_iep TEXT",
-                "ALTER TABLE persons ADD COLUMN links_other TEXT",
-                "ALTER TABLE persons ADD COLUMN birth_date TEXT",
-                "ALTER TABLE persons ADD COLUMN death_date TEXT",
-                "ALTER TABLE works ADD COLUMN doc_type TEXT",
-                "ALTER TABLE works ADD COLUMN private_notes TEXT",
-                "ALTER TABLE works ADD COLUMN thumb_page INTEGER",
-                "ALTER TABLE folders ADD COLUMN private_notes TEXT",
-                "ALTER TABLE works ADD COLUMN source_kind TEXT",
-                "ALTER TABLE works ADD COLUMN source_url TEXT",
-                "ALTER TABLE works ADD COLUMN source_mime TEXT",
-                "ALTER TABLE works ADD COLUMN thumb_url TEXT",
-                "ALTER TABLE works ADD COLUMN provider TEXT",
-                "ALTER TABLE works ADD COLUMN provider_id TEXT",
-                "ALTER TABLE works ADD COLUMN urldate TEXT",
-                "ALTER TABLE works ADD COLUMN edition TEXT",
-                "ALTER TABLE works ADD COLUMN hide_pdf_link_annotations INTEGER DEFAULT 0",
-                "ALTER TABLE works ADD COLUMN location TEXT",
-                "ALTER TABLE folders ADD COLUMN parent_id TEXT",
-                "ALTER TABLE playlists ADD COLUMN original_url TEXT",
-                "ALTER TABLE roles ADD COLUMN credit_name TEXT",
-            ]
-            for sql in migrations:
-                try:
-                    conn.execute(sql)
-                except sqlite3.OperationalError as e:
-                    if 'duplicate column' not in str(e).lower():
-                        raise
-            try:
-                conn.execute(
-                    "UPDATE works SET doc_type = 'article' WHERE doc_type IS NULL OR TRIM(doc_type) = ''"
-                )
-            except Exception:
-                pass
-            try:
-                conn.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_person_groups_name_nocase "
-                    "ON person_groups(name COLLATE NOCASE)"
-                )
-            except Exception:
-                pass
-            try:
-                conn.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_playlist_items_work_unique "
-                    "ON playlist_items(work_id)"
-                )
-            except Exception:
-                pass
-            self._migrate_tags_case_dedupe(conn)
-            try:
-                conn.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_nocase "
-                    "ON tags(name COLLATE NOCASE)"
-                )
-            except Exception:
-                pass
-            try:
-                conn.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS publishers (
-                        id TEXT PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_publishers_name_nocase
-                        ON publishers(name COLLATE NOCASE);
-                    CREATE TABLE IF NOT EXISTS publisher_aliases (
-                        id TEXT PRIMARY KEY,
-                        publisher_id TEXT NOT NULL,
-                        alias TEXT NOT NULL,
-                        FOREIGN KEY (publisher_id) REFERENCES publishers(id) ON DELETE CASCADE
-                    );
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_publisher_aliases_alias_nocase
-                        ON publisher_aliases(alias COLLATE NOCASE);
-                    """
-                )
-            except Exception:
-                pass
-            # Performance and constraint indexes (idempotent: IF NOT EXISTS)
-            try:
-                conn.execute("DROP INDEX IF EXISTS idx_folders_title_nocase")
-            except sqlite3.OperationalError:
-                pass
-            index_migrations = [
-                "CREATE INDEX IF NOT EXISTS idx_roles_work_id ON roles(work_id)",
-                "CREATE INDEX IF NOT EXISTS idx_roles_person_id ON roles(person_id)",
-                "CREATE INDEX IF NOT EXISTS idx_annotations_work_id ON annotations(work_id)",
-                "CREATE INDEX IF NOT EXISTS idx_arguments_work_id ON arguments(work_id)",
-                "CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist_id ON playlist_items(playlist_id)",
-                "CREATE INDEX IF NOT EXISTS idx_works_last_opened_at ON works(last_opened_at)",
-                "CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id)",
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_parent_title_nocase "
-                "ON folders(COALESCE(parent_id, ''), LOWER(TRIM(title)))",
-            ]
-            for sql in index_migrations:
-                try:
-                    conn.execute(sql)
-                except sqlite3.OperationalError:
-                    pass
-            # Record schema version so the DB file is auditable.
-            try:
-                conn.execute("ALTER TABLE processing_files ADD COLUMN target_folder_id TEXT")
-            except sqlite3.OperationalError as e:
-                if "duplicate column" not in str(e).lower():
-                    raise
-            try:
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS processing_file_tags (
-                        processing_file_id TEXT NOT NULL,
-                        tag_id TEXT NOT NULL,
-                        PRIMARY KEY (processing_file_id, tag_id),
-                        FOREIGN KEY (processing_file_id) REFERENCES processing_files(id) ON DELETE CASCADE,
-                        FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
-                    )
-                    """
-                )
-            except sqlite3.OperationalError:
-                pass
-            existing_version = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
-            if existing_version is None:
-                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (PRKS_SCHEMA_VERSION,))
-            elif existing_version[0] < PRKS_SCHEMA_VERSION:
-                conn.execute("UPDATE schema_version SET version = ?", (PRKS_SCHEMA_VERSION,))
-            conn.commit()
-        self._migrate_works_fts_author_text()
-
-    def _migrate_works_fts_author_text(self) -> None:
-        """Rebuild works_fts when an older DB has no author_text column in the FTS index."""
-        with self.get_connection() as conn:
-            try:
-                rows = conn.execute("PRAGMA table_info(works_fts)").fetchall()
-            except sqlite3.OperationalError:
-                return
-            cols = [r[1] for r in rows]
-            if "author_text" in cols:
-                return
-            conn.executescript(
-                """
-                DROP TRIGGER IF EXISTS works_ai;
-                DROP TRIGGER IF EXISTS works_ad;
-                DROP TRIGGER IF EXISTS works_au;
-                DROP TABLE IF EXISTS works_fts;
-                """
-            )
-            conn.commit()
-        fts_sql = """
-            CREATE VIRTUAL TABLE works_fts USING fts5(
-                title,
-                abstract,
-                text_content,
-                author_text,
-                content='works',
-                content_rowid='rowid'
-            );
-            CREATE TRIGGER works_ai AFTER INSERT ON works BEGIN
-              INSERT INTO works_fts(rowid, title, abstract, text_content, author_text)
-              VALUES (new.rowid, new.title, new.abstract, new.text_content, COALESCE(new.author_text, ''));
-            END;
-            CREATE TRIGGER works_ad AFTER DELETE ON works BEGIN
-              INSERT INTO works_fts(works_fts, rowid, title, abstract, text_content, author_text)
-              VALUES ('delete', old.rowid, old.title, old.abstract, old.text_content, COALESCE(old.author_text, ''));
-            END;
-            CREATE TRIGGER works_au AFTER UPDATE ON works BEGIN
-              INSERT INTO works_fts(works_fts, rowid, title, abstract, text_content, author_text)
-              VALUES ('delete', old.rowid, old.title, old.abstract, old.text_content, COALESCE(old.author_text, ''));
-              INSERT INTO works_fts(rowid, title, abstract, text_content, author_text)
-              VALUES (new.rowid, new.title, new.abstract, new.text_content, COALESCE(new.author_text, ''));
-            END;
-            INSERT INTO works_fts(rowid, title, abstract, text_content, author_text)
-            SELECT rowid, title, abstract, text_content, COALESCE(author_text, '') FROM works;
-        """
-        with self.get_connection() as conn:
-            conn.executescript(fts_sql)
-            conn.commit()
+        """Create or upgrade the database through the ordered migration system."""
+        conn = self.get_connection()
+        try:
+            ensure_database_schema(conn, self.schema_path)
+        finally:
+            conn.close()
 
     def generate_id(self, prefix: str) -> str:
         """Generates a short, readable persistent unique ID, e.g., W-A1B2C3D4"""
