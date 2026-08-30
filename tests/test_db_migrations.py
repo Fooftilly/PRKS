@@ -636,6 +636,35 @@ class TestFtsAndTags(MigrationTestCase):
             conn.close()
 
 
+class TestClassification(MigrationTestCase):
+    def test_unrelated_sqlite_db_is_refused_without_mutation(self):
+        conn = _raw(self.storage.db_path)
+        conn.execute("CREATE TABLE unrelated_table (id INTEGER PRIMARY KEY, label TEXT)")
+        conn.execute("INSERT INTO unrelated_table (id, label) VALUES (1, 'keep')")
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "not_prks_database")
+        check = _raw(self.storage.db_path)
+        try:
+            tables = {
+                row[0]
+                for row in check.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+            self.assertEqual(tables, {"unrelated_table"})
+            self.assertEqual(
+                check.execute("SELECT label FROM unrelated_table").fetchone()[0],
+                "keep",
+            )
+            self.assertFalse(table_exists(check, "schema_version"))
+            self.assertFalse(table_exists(check, "works"))
+        finally:
+            check.close()
+
+
 class TestConstraintAndDrift(MigrationTestCase):
     def test_playlist_unique_conflict_rolls_back_without_deleting(self):
         conn = _raw(self.storage.db_path)
@@ -680,6 +709,110 @@ class TestConstraintAndDrift(MigrationTestCase):
         try:
             self.assertEqual(read_schema_version(check), 10)
             self.assertFalse(index_exists(check, "idx_playlist_items_work_unique"))
+        finally:
+            check.close()
+
+    def test_v10_wrong_index_definition_is_schema_drift(self):
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("DROP INDEX idx_playlist_items_work_unique")
+        conn.execute(
+            "CREATE INDEX idx_playlist_items_work_unique ON playlist_items(playlist_id)"
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "idx_playlist_items_work_unique")
+        check = _raw(db.db_path)
+        try:
+            self.assertEqual(
+                check.execute("SELECT version FROM schema_version").fetchone()[0],
+                10,
+            )
+            unique = None
+            for row in check.execute("PRAGMA index_list(playlist_items)"):
+                if row[1] == "idx_playlist_items_work_unique":
+                    unique = int(row[2])
+            self.assertEqual(unique, 0)
+            cols = [
+                row[2]
+                for row in check.execute("PRAGMA index_xinfo(idx_playlist_items_work_unique)")
+                if row[2] and int(row[5] if row[5] is not None else 1) != 0
+            ]
+            self.assertEqual(cols, ["playlist_id"])
+        finally:
+            check.close()
+
+    def test_v10_missing_nocase_collation_is_schema_drift(self):
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("DROP INDEX idx_tags_name_nocase")
+        conn.execute("CREATE UNIQUE INDEX idx_tags_name_nocase ON tags(name)")
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "idx_tags_name_nocase")
+
+    def test_v9_wrong_named_index_is_reconciled(self):
+        conn = _raw(self.storage.db_path)
+        self._seed_legacy_core(conn)
+        conn.execute(
+            "CREATE INDEX idx_playlist_items_work_unique ON playlist_items(playlist_id)"
+        )
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_version (version) VALUES (9)")
+        conn.commit()
+        conn.close()
+        db = self._open()
+        self.assertEqual(_version(db.db_path), 10)
+        check = db.get_connection()
+        try:
+            unique = None
+            for row in check.execute("PRAGMA index_list(playlist_items)"):
+                if row[1] == "idx_playlist_items_work_unique":
+                    unique = int(row[2])
+            self.assertEqual(unique, 1)
+            cols = [
+                row[2]
+                for row in check.execute("PRAGMA index_xinfo(idx_playlist_items_work_unique)")
+                if row[2] and int(row[5] if row[5] is not None else 1) != 0
+            ]
+            self.assertEqual(cols, ["work_id"])
+        finally:
+            check.close()
+
+    def test_v9_compatibility_table_missing_fk_is_refused(self):
+        conn = _raw(self.storage.db_path)
+        self._seed_legacy_core(conn)
+        conn.execute(
+            "CREATE TABLE publishers (id TEXT PRIMARY KEY, name TEXT NOT NULL)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE publisher_aliases (
+                id TEXT PRIMARY KEY,
+                publisher_id TEXT NOT NULL,
+                alias TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_version (version) VALUES (9)")
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "incompatible_table")
+        self.assertEqual(ctx.exception.details.get("object"), "publisher_aliases")
+        check = _raw(self.storage.db_path)
+        try:
+            self.assertEqual(read_schema_version(check), 9)
+            fks = list(check.execute("PRAGMA foreign_key_list(publisher_aliases)"))
+            self.assertEqual(fks, [])
         finally:
             check.close()
 

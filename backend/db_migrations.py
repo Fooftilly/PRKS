@@ -27,6 +27,27 @@ LOGGER = logging.getLogger("prks.db")
 LATEST_SCHEMA_VERSION = 10
 LEGACY_BASELINE_VERSION = 9
 
+# Unversioned files count as PRKS only with works plus another established table.
+# Do not treat an arbitrary SQLite DB as a legacy library.
+_LEGACY_MARKER_CORE = "works"
+_LEGACY_MARKER_COMPANIONS = frozenset(
+    {
+        "persons",
+        "roles",
+        "folders",
+        "tags",
+        "annotations",
+        "work_annotations",
+        "arguments",
+        "concepts",
+        "playlists",
+        "app_settings",
+        "folder_files",
+        "work_tags",
+        "works_fts",
+    }
+)
+
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MIGRATION_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _CREATE_TABLE_RE = re.compile(
@@ -180,23 +201,112 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "playlist_items": ("playlist_id", "work_id", "position"),
 }
 
-REQUIRED_INDEXES = (
-    "idx_playlist_items_work_unique",
-    "idx_person_groups_name_nocase",
-    "idx_tags_name_nocase",
-    "idx_publishers_name_nocase",
-    "idx_publisher_aliases_alias_nocase",
-    "idx_roles_work_id",
-    "idx_roles_person_id",
-    "idx_annotations_work_id",
-    "idx_arguments_work_id",
-    "idx_playlist_items_playlist_id",
-    "idx_works_last_opened_at",
-    "idx_folders_parent_id",
-    "idx_folders_parent_title_nocase",
-    "idx_processing_files_status",
-    "idx_tag_aliases_alias_nocase",
+@dataclass(frozen=True)
+class IndexSpec:
+    name: str
+    table: str
+    unique: bool
+    columns: Tuple[str, ...] = ()
+    collations: Tuple[str, ...] = ()
+    expression_tokens: Tuple[str, ...] = ()
+
+
+INDEX_SPECS: Tuple[IndexSpec, ...] = (
+    IndexSpec(
+        "idx_playlist_items_work_unique",
+        "playlist_items",
+        True,
+        columns=("work_id",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_person_groups_name_nocase",
+        "person_groups",
+        True,
+        columns=("name",),
+        collations=("NOCASE",),
+    ),
+    IndexSpec(
+        "idx_tags_name_nocase",
+        "tags",
+        True,
+        columns=("name",),
+        collations=("NOCASE",),
+    ),
+    IndexSpec(
+        "idx_publishers_name_nocase",
+        "publishers",
+        True,
+        columns=("name",),
+        collations=("NOCASE",),
+    ),
+    IndexSpec(
+        "idx_publisher_aliases_alias_nocase",
+        "publisher_aliases",
+        True,
+        columns=("alias",),
+        collations=("NOCASE",),
+    ),
+    IndexSpec(
+        "idx_tag_aliases_alias_nocase",
+        "tag_aliases",
+        True,
+        columns=("alias",),
+        collations=("NOCASE",),
+    ),
+    IndexSpec("idx_roles_work_id", "roles", False, columns=("work_id",), collations=("BINARY",)),
+    IndexSpec("idx_roles_person_id", "roles", False, columns=("person_id",), collations=("BINARY",)),
+    IndexSpec(
+        "idx_annotations_work_id",
+        "annotations",
+        False,
+        columns=("work_id",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_arguments_work_id",
+        "arguments",
+        False,
+        columns=("work_id",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_playlist_items_playlist_id",
+        "playlist_items",
+        False,
+        columns=("playlist_id",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_works_last_opened_at",
+        "works",
+        False,
+        columns=("last_opened_at",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_folders_parent_id",
+        "folders",
+        False,
+        columns=("parent_id",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_processing_files_status",
+        "processing_files",
+        False,
+        columns=("status",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_folders_parent_title_nocase",
+        "folders",
+        True,
+        expression_tokens=("COALESCE(parent_id, '')", "LOWER(TRIM(title))"),
+    ),
 )
+
+REQUIRED_INDEXES = tuple(spec.name for spec in INDEX_SPECS)
 
 REQUIRED_FTS_COLUMNS = ("title", "abstract", "text_content", "author_text")
 REQUIRED_FTS_TRIGGERS = ("works_ai", "works_ad", "works_au")
@@ -354,6 +464,15 @@ _TABLE_PKS: Dict[str, Tuple[str, ...]] = {
     "processing_file_tags": ("processing_file_id", "tag_id"),
 }
 
+# (from_column, parent_table, to_column, on_delete)
+_TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
+    "publisher_aliases": (("publisher_id", "publishers", "id", "CASCADE"),),
+    "processing_file_tags": (
+        ("processing_file_id", "processing_files", "id", "CASCADE"),
+        ("tag_id", "tags", "id", "CASCADE"),
+    ),
+}
+
 _ACTIVE_SCHEMA_SQL: Optional[str] = None
 
 
@@ -406,6 +525,14 @@ def column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
 
 def is_fresh_database(conn: sqlite3.Connection) -> bool:
     return not _user_table_names(conn)
+
+
+def is_legacy_prks_database(conn: sqlite3.Connection) -> bool:
+    """Unversioned file is PRKS only if it has works plus another established table."""
+    names = set(_user_table_names(conn))
+    if _LEGACY_MARKER_CORE not in names:
+        return False
+    return bool(names & _LEGACY_MARKER_COMPANIONS)
 
 
 def read_schema_version(conn: sqlite3.Connection) -> int:
@@ -500,8 +627,16 @@ def ensure_database_schema(conn: sqlite3.Connection, schema_path: str) -> None:
         if is_fresh_database(conn):
             _bootstrap_fresh(conn, schema_sql)
             return
-        version = read_schema_version(conn)
-        _normalize_identical_version_rows(conn, version)
+        if table_exists(conn, "schema_version"):
+            version = read_schema_version(conn)
+            _normalize_identical_version_rows(conn, version)
+        elif is_legacy_prks_database(conn):
+            version = 0
+        else:
+            raise MigrationError(
+                "not_prks_database",
+                "This file is not a PRKS database.",
+            )
         if version < LEGACY_BASELINE_VERSION:
             _run_legacy_bridge(conn, schema_sql)
             version = LEGACY_BASELINE_VERSION
@@ -569,9 +704,24 @@ def validate_current_schema(conn: sqlite3.Connection) -> None:
                     "Required schema object is missing.",
                     object=f"{table}.{column}",
                 )
-    for index_name in REQUIRED_INDEXES:
-        if not index_exists(conn, index_name):
-            raise MigrationError("schema_drift", "Required schema object is missing.", object=index_name)
+    for spec in INDEX_SPECS:
+        if not _index_matches_spec(conn, spec):
+            raise MigrationError(
+                "schema_drift",
+                "Required schema object is missing or has the wrong definition.",
+                object=spec.name,
+            )
+    for table, required_fks in _TABLE_FKS.items():
+        if not table_exists(conn, table):
+            raise MigrationError("schema_drift", "Required schema object is missing.", object=table)
+        present = _foreign_key_tuples(conn, table)
+        for expected in required_fks:
+            if expected not in present:
+                raise MigrationError(
+                    "schema_drift",
+                    "Required schema object is missing or has the wrong definition.",
+                    object=table,
+                )
     fts_cols = set(_fts_column_names(conn))
     for column in REQUIRED_FTS_COLUMNS:
         if column not in fts_cols:
@@ -846,7 +996,8 @@ def _preflight_unique_indexes(conn: sqlite3.Connection) -> None:
     for table, index_name, sql in _UNIQUE_PREFLIGHT:
         if not table_exists(conn, table):
             continue
-        if index_exists(conn, index_name):
+        spec = _index_spec(index_name)
+        if spec is not None and _index_matches_spec(conn, spec):
             continue
         conflict = conn.execute(sql).fetchone()
         if conflict is not None:
@@ -859,13 +1010,14 @@ def _preflight_unique_indexes(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_required_indexes(conn: sqlite3.Connection) -> None:
-    for index_name, sql in _INDEX_SQL.items():
-        if index_exists(conn, index_name):
+    for spec in INDEX_SPECS:
+        if _index_matches_spec(conn, spec):
             continue
-        table = _index_table_name(index_name)
-        if table is not None and not table_exists(conn, table):
+        if not table_exists(conn, spec.table):
             continue
-        conn.execute(sql)
+        if index_exists(conn, spec.name):
+            conn.execute(f"DROP INDEX {_ident(spec.name)}")
+        conn.execute(_INDEX_SQL[spec.name])
 
 
 def _ensure_works_fts(conn: sqlite3.Connection) -> None:
@@ -960,6 +1112,17 @@ def _assert_known_table_shapes(conn: sqlite3.Connection) -> None:
                 "Existing table has an incompatible primary key.",
                 object=table,
             )
+    for table, required_fks in _TABLE_FKS.items():
+        if not table_exists(conn, table):
+            raise MigrationError("incompatible_table", "Required schema object is missing.", object=table)
+        present = _foreign_key_tuples(conn, table)
+        for expected in required_fks:
+            if expected not in present:
+                raise MigrationError(
+                    "incompatible_table",
+                    "Existing table has an incompatible foreign key.",
+                    object=table,
+                )
 
 
 def _fts_column_names(conn: sqlite3.Connection) -> List[str]:
@@ -995,6 +1158,17 @@ def _table_pk_columns(conn: sqlite3.Connection, table: str) -> Tuple[str, ...]:
             ranked.append((pk, str(_row_field(row, 1, "name"))))
     ranked.sort()
     return tuple(name for _order, name in ranked)
+
+
+def _foreign_key_tuples(conn: sqlite3.Connection, table: str) -> set[Tuple[str, str, str, str]]:
+    found: set[Tuple[str, str, str, str]] = set()
+    for row in conn.execute(f"PRAGMA foreign_key_list({_ident(table)})"):
+        parent = str(_row_field(row, 2, "table") or "")
+        src = str(_row_field(row, 3, "from") or "")
+        dest = str(_row_field(row, 4, "to") or "")
+        on_delete = str(_row_field(row, 6, "on_delete") or "NO ACTION").upper()
+        found.add((src, parent, dest, on_delete))
+    return found
 
 
 def _user_table_names(conn: sqlite3.Connection) -> List[str]:
@@ -1051,25 +1225,82 @@ def _row_field(row, index: int, key: str):
         return row[index]
 
 
+def _index_spec(name: str) -> Optional[IndexSpec]:
+    for spec in INDEX_SPECS:
+        if spec.name == name:
+            return spec
+    return None
+
+
+def _index_owner_table(conn: sqlite3.Connection, name: str) -> Optional[str]:
+    row = conn.execute(
+        "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ? LIMIT 1",
+        (name,),
+    ).fetchone()
+    if row is None:
+        return None
+    return str(_row_field(row, 0, "tbl_name") or "") or None
+
+
+def _index_is_unique(conn: sqlite3.Connection, name: str, table: str) -> bool:
+    for row in conn.execute(f"PRAGMA index_list({_ident(table)})"):
+        if _row_field(row, 1, "name") == name:
+            return bool(int(_row_field(row, 2, "unique") or 0))
+    return False
+
+
+def _index_key_columns(conn: sqlite3.Connection, name: str) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    columns: List[str] = []
+    collations: List[str] = []
+    for row in conn.execute(f"PRAGMA index_xinfo({_ident(name)})"):
+        raw_key = _row_field(row, 5, "key")
+        try:
+            key = 1 if raw_key is None else int(raw_key)
+        except (TypeError, ValueError):
+            key = 1
+        if key == 0:
+            continue
+        cid = int(_row_field(row, 1, "cid") or 0)
+        col_name = _row_field(row, 2, "name")
+        coll = str(_row_field(row, 4, "coll") or "BINARY")
+        if cid < 0 or col_name is None:
+            continue
+        columns.append(str(col_name))
+        collations.append(coll.upper())
+    return tuple(columns), tuple(collations)
+
+
+def _normalize_index_sql(sql: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
+    text = re.sub(r"--[^\n]*", "", text)
+    text = text.replace('"', "")
+    return re.sub(r"\s+", "", text).upper()
+
+
+def _index_matches_spec(conn: sqlite3.Connection, spec: IndexSpec) -> bool:
+    if not index_exists(conn, spec.name):
+        return False
+    owner = _index_owner_table(conn, spec.name)
+    if owner != spec.table:
+        return False
+    if _index_is_unique(conn, spec.name, spec.table) != spec.unique:
+        return False
+    if spec.expression_tokens:
+        sql = _master_sql(conn, "index", spec.name) or ""
+        normalized = _normalize_index_sql(sql)
+        return all(_normalize_index_sql(token) in normalized for token in spec.expression_tokens)
+    columns, collations = _index_key_columns(conn, spec.name)
+    if columns != spec.columns:
+        return False
+    expected = tuple((coll or "BINARY").upper() for coll in spec.collations)
+    if not expected:
+        expected = tuple("BINARY" for _ in spec.columns)
+    return collations == expected
+
+
 def _index_table_name(index_name: str) -> Optional[str]:
-    mapping = {
-        "idx_playlist_items_work_unique": "playlist_items",
-        "idx_person_groups_name_nocase": "person_groups",
-        "idx_tags_name_nocase": "tags",
-        "idx_publishers_name_nocase": "publishers",
-        "idx_publisher_aliases_alias_nocase": "publisher_aliases",
-        "idx_roles_work_id": "roles",
-        "idx_roles_person_id": "roles",
-        "idx_annotations_work_id": "annotations",
-        "idx_arguments_work_id": "arguments",
-        "idx_playlist_items_playlist_id": "playlist_items",
-        "idx_works_last_opened_at": "works",
-        "idx_folders_parent_id": "folders",
-        "idx_folders_parent_title_nocase": "folders",
-        "idx_processing_files_status": "processing_files",
-        "idx_tag_aliases_alias_nocase": "tag_aliases",
-    }
-    return mapping.get(index_name)
+    spec = _index_spec(index_name)
+    return spec.table if spec is not None else None
 
 
 def _statement_kind(stmt: str) -> str:
