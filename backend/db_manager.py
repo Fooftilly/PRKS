@@ -92,6 +92,103 @@ class BulkWorkError(ValueError):
         self.http_status = http_status
 
 
+class SavedViewError(ValueError):
+    """Controlled Saved View failure. http_status is 400, 404, or 409."""
+
+    def __init__(self, message: str, http_status: int = 400):
+        super().__init__(message)
+        self.http_status = http_status
+
+
+PRKS_SAVED_VIEW_MAX = 100
+PRKS_SAVED_VIEW_NAME_MAX = 80
+PRKS_SAVED_VIEW_Q_MAX = 500
+PRKS_SAVED_VIEW_FIELD_MAX = 200
+_SAVED_VIEW_MODES = frozenset({"all", "advanced", "tag"})
+_SAVED_VIEW_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _saved_view_has_controls(value: str) -> bool:
+    return bool(_SAVED_VIEW_CONTROL_RE.search(value))
+
+
+def normalize_saved_view_name(raw) -> str:
+    if not isinstance(raw, str):
+        raise SavedViewError("Name must be a string.")
+    name = raw.strip()
+    if not name:
+        raise SavedViewError("Name is required.")
+    if _saved_view_has_controls(name):
+        raise SavedViewError("Name contains invalid characters.")
+    if len(name) > PRKS_SAVED_VIEW_NAME_MAX:
+        raise SavedViewError("Name is too long.")
+    return name
+
+
+def normalize_saved_view_search(search) -> Dict[str, str]:
+    if not isinstance(search, dict):
+        raise SavedViewError("Search definition is required.")
+    for key in ("mode", "q", "tag", "author", "publisher"):
+        if key not in search:
+            raise SavedViewError("Search definition is incomplete.")
+    mode_raw = search.get("mode")
+    if not isinstance(mode_raw, str):
+        raise SavedViewError("Invalid search mode.")
+    mode = mode_raw.strip()
+    if mode not in _SAVED_VIEW_MODES:
+        raise SavedViewError("Invalid search mode.")
+
+    def _field(key: str, max_len: int) -> str:
+        value = search.get(key)
+        if not isinstance(value, str):
+            raise SavedViewError("Search fields must be strings.")
+        text = value.strip()
+        if _saved_view_has_controls(text):
+            raise SavedViewError("Search definition contains invalid characters.")
+        if len(text) > max_len:
+            raise SavedViewError("Search field is too long.")
+        return text
+
+    q = _field("q", PRKS_SAVED_VIEW_Q_MAX)
+    tag = _field("tag", PRKS_SAVED_VIEW_FIELD_MAX)
+    author = _field("author", PRKS_SAVED_VIEW_FIELD_MAX)
+    publisher = _field("publisher", PRKS_SAVED_VIEW_FIELD_MAX)
+    if mode == "all":
+        if not q or tag or author or publisher:
+            raise SavedViewError("All-fields views require a query and no other filters.")
+    elif mode == "advanced":
+        if tag:
+            raise SavedViewError("Advanced views cannot include a tag.")
+        if not (q or author or publisher):
+            raise SavedViewError("Advanced views require keywords, author, or publisher.")
+    else:
+        if not tag or q:
+            raise SavedViewError("Tag views require a tag and no keyword query.")
+    return {
+        "mode": mode,
+        "q": q,
+        "tag": tag,
+        "author": author,
+        "publisher": publisher,
+    }
+
+
+def saved_view_api_row(row: dict) -> Dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "search": {
+            "mode": row["mode"],
+            "q": row["search_q"],
+            "tag": row["search_tag"],
+            "author": row["search_author"],
+            "publisher": row["search_publisher"],
+        },
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
 def _prks_parse_bibtex_export_fields_json(raw: str) -> Dict[str, bool]:
     """Load stored JSON; invalid or missing → all True. Unknown keys ignored."""
     out = dict(PRKS_BIBTEX_EXPORT_FIELDS_DEFAULT)
@@ -675,6 +772,163 @@ class PRKSDatabase:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 ("bibtex_export_fields", blob),
             )
+
+    def get_saved_views(self) -> List[dict]:
+        rows = self.execute_query(
+            "SELECT * FROM saved_views ORDER BY LOWER(name) ASC, id ASC"
+        )
+        return [saved_view_api_row(r) for r in rows]
+
+    def get_saved_view(self, view_id: str) -> Optional[dict]:
+        vid = (view_id or "").strip()
+        if not vid:
+            return None
+        rows = self.execute_query("SELECT * FROM saved_views WHERE id = ?", (vid,))
+        if not rows:
+            return None
+        return saved_view_api_row(rows[0])
+
+    def create_saved_view(self, name, search) -> dict:
+        n = normalize_saved_view_name(name)
+        fields = normalize_saved_view_search(search)
+        vid = self.generate_id("SV")
+        with self.get_connection() as conn:
+            try:
+                count_row = conn.execute("SELECT COUNT(*) FROM saved_views").fetchone()
+                count = int(count_row[0] if count_row and count_row[0] is not None else 0)
+                if count >= PRKS_SAVED_VIEW_MAX:
+                    raise SavedViewError(
+                        "The library already has the maximum number of Saved Views.",
+                        409,
+                    )
+                clash = conn.execute(
+                    "SELECT id FROM saved_views WHERE name = ? COLLATE NOCASE LIMIT 1",
+                    (n,),
+                ).fetchone()
+                if clash:
+                    raise SavedViewError(
+                        "A Saved View with that name already exists.",
+                        409,
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO saved_views (
+                        id, name, mode, search_q, search_tag, search_author, search_publisher
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        vid,
+                        n,
+                        fields["mode"],
+                        fields["q"],
+                        fields["tag"],
+                        fields["author"],
+                        fields["publisher"],
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM saved_views WHERE id = ?", (vid,)
+                ).fetchone()
+            except sqlite3.IntegrityError:
+                raise SavedViewError(
+                    "A Saved View with that name already exists.",
+                    409,
+                )
+        return saved_view_api_row(dict(row))
+
+    def update_saved_view(self, view_id: str, *, name=None, search=None) -> dict:
+        vid = (view_id or "").strip()
+        if not vid:
+            raise SavedViewError("Saved View not found.", 404)
+        if name is None and search is None:
+            raise SavedViewError("Nothing to update.")
+        new_name = normalize_saved_view_name(name) if name is not None else None
+        new_search = normalize_saved_view_search(search) if search is not None else None
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM saved_views WHERE id = ?", (vid,)
+            ).fetchone()
+            if not row:
+                raise SavedViewError("Saved View not found.", 404)
+            if new_name is not None:
+                clash = conn.execute(
+                    """
+                    SELECT id FROM saved_views
+                    WHERE name = ? COLLATE NOCASE AND id != ?
+                    LIMIT 1
+                    """,
+                    (new_name, vid),
+                ).fetchone()
+                if clash:
+                    raise SavedViewError(
+                        "A Saved View with that name already exists.",
+                        409,
+                    )
+            try:
+                if new_name is not None and new_search is not None:
+                    conn.execute(
+                        """
+                        UPDATE saved_views
+                        SET name = ?, mode = ?, search_q = ?, search_tag = ?,
+                            search_author = ?, search_publisher = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (
+                            new_name,
+                            new_search["mode"],
+                            new_search["q"],
+                            new_search["tag"],
+                            new_search["author"],
+                            new_search["publisher"],
+                            vid,
+                        ),
+                    )
+                elif new_name is not None:
+                    conn.execute(
+                        """
+                        UPDATE saved_views
+                        SET name = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (new_name, vid),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE saved_views
+                        SET mode = ?, search_q = ?, search_tag = ?,
+                            search_author = ?, search_publisher = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (
+                            new_search["mode"],
+                            new_search["q"],
+                            new_search["tag"],
+                            new_search["author"],
+                            new_search["publisher"],
+                            vid,
+                        ),
+                    )
+                row = conn.execute(
+                    "SELECT * FROM saved_views WHERE id = ?", (vid,)
+                ).fetchone()
+            except sqlite3.IntegrityError:
+                raise SavedViewError(
+                    "A Saved View with that name already exists.",
+                    409,
+                )
+        return saved_view_api_row(dict(row))
+
+    def delete_saved_view(self, view_id: str) -> None:
+        vid = (view_id or "").strip()
+        if not vid:
+            raise SavedViewError("Saved View not found.", 404)
+        with self.get_connection() as conn:
+            cur = conn.execute("DELETE FROM saved_views WHERE id = ?", (vid,))
+            if cur.rowcount < 1:
+                raise SavedViewError("Saved View not found.", 404)
 
     def _get_bibtex_export_profile(self) -> Dict[str, bool]:
         m = self.get_app_settings_map()

@@ -17,7 +17,9 @@ from backend.db_manager import (
     PRKSDatabase,
     PRKS_BIBTEX_EXPORT_FIELD_IDS,
     PRKS_BULK_WORK_MAX,
+    PRKS_SAVED_VIEW_MAX,
     BulkWorkError,
+    SavedViewError,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
@@ -1421,3 +1423,125 @@ class TestDBManager(unittest.TestCase):
                 )
         self.assertEqual(self.db.get_work(a)["status"], "Paused")
         self.assertEqual(self.db.get_work(b)["status"], "Paused")
+
+    def _sv_search(self, **overrides):
+        base = {
+            "mode": "advanced",
+            "q": "culture industry",
+            "tag": "",
+            "author": "Adorno",
+            "publisher": "",
+        }
+        base.update(overrides)
+        return base
+
+    def test_saved_view_crud_order_and_timestamps(self):
+        beta = self.db.create_saved_view("Beta", self._sv_search(q="beta"))
+        alpha = self.db.create_saved_view("Alpha", self._sv_search(q="alpha"))
+        listed = self.db.get_saved_views()
+        self.assertEqual([v["name"] for v in listed], ["Alpha", "Beta"])
+        self.assertTrue(listed[0]["id"].startswith("SV-"))
+        self.assertNotIn("search_q", listed[0])
+        self.assertEqual(listed[0]["search"]["q"], "alpha")
+        got = self.db.get_saved_view(alpha["id"])
+        self.assertEqual(got["name"], "Alpha")
+        self.db.execute_query(
+            "UPDATE saved_views SET created_at = ?, updated_at = ? WHERE id = ?",
+            ("2020-01-01 00:00:00", "2020-01-01 00:00:00", alpha["id"]),
+        )
+        updated = self.db.update_saved_view(alpha["id"], name="Alpha renamed")
+        self.assertEqual(updated["id"], alpha["id"])
+        self.assertEqual(updated["name"], "Alpha renamed")
+        self.assertEqual(updated["created_at"], "2020-01-01 00:00:00")
+        self.assertNotEqual(updated["updated_at"], "2020-01-01 00:00:00")
+        changed = self.db.update_saved_view(
+            alpha["id"],
+            search=self._sv_search(mode="all", q="critical theory", author="", publisher=""),
+        )
+        self.assertEqual(changed["search"]["mode"], "all")
+        self.assertEqual(changed["search"]["q"], "critical theory")
+        self.assertEqual(changed["id"], alpha["id"])
+        self.db.delete_saved_view(beta["id"])
+        names = [v["name"] for v in self.db.get_saved_views()]
+        self.assertEqual(names, ["Alpha renamed"])
+        self.assertIsNone(self.db.get_saved_view(beta["id"]))
+
+    def test_saved_view_validation_rejects_invalid_definitions(self):
+        cases = [
+            {"name": "", "search": self._sv_search()},
+            {"name": "X", "search": self._sv_search(mode="nope")},
+            {"name": "X", "search": self._sv_search(mode="all", q="", author="", publisher="")},
+            {"name": "X", "search": self._sv_search(q="", author="", publisher="")},
+            {"name": "X", "search": self._sv_search(tag="Frankfurt")},
+            {"name": "X", "search": self._sv_search(mode="tag", q="", tag="", author="")},
+            {"name": "X", "search": self._sv_search(mode="tag", q="nope", tag="Frankfurt", author="")},
+            {"name": "X", "search": {"mode": "all", "q": 1, "tag": "", "author": "", "publisher": ""}},
+            {"name": "X" * 81, "search": self._sv_search()},
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaises(SavedViewError):
+                    self.db.create_saved_view(payload["name"], payload["search"])
+        self.assertEqual(self.db.get_saved_views(), [])
+
+    def test_saved_view_duplicate_name_is_case_insensitive(self):
+        self.db.create_saved_view("Critical Theory", self._sv_search())
+        with self.assertRaises(SavedViewError) as ctx:
+            self.db.create_saved_view("critical theory", self._sv_search(q="other"))
+        self.assertEqual(ctx.exception.http_status, 409)
+        self.assertEqual(str(ctx.exception), "A Saved View with that name already exists.")
+        other = self.db.create_saved_view("Other", self._sv_search(q="other"))
+        with self.assertRaises(SavedViewError) as ctx2:
+            self.db.update_saved_view(other["id"], name="CRITICAL THEORY")
+        self.assertEqual(ctx2.exception.http_status, 409)
+
+    def test_saved_view_create_rolls_back_on_failure(self):
+        orig = self.db.get_connection
+
+        class _ConnProxy:
+            def __init__(self, conn):
+                object.__setattr__(self, "_conn", conn)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+            def __setattr__(self, name, value):
+                if name == "_conn":
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._conn, name, value)
+
+            def execute(self, sql, params=()):
+                result = self._conn.execute(sql, params)
+                if isinstance(sql, str) and "INSERT INTO saved_views" in sql:
+                    raise RuntimeError("injected")
+                return result
+
+            def __enter__(self):
+                self._conn.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return self._conn.__exit__(exc_type, exc, tb)
+
+        def wrapped():
+            return _ConnProxy(orig())
+
+        with patch.object(self.db, "get_connection", wrapped):
+            with self.assertRaises(RuntimeError):
+                self.db.create_saved_view("Injected", self._sv_search())
+        self.assertEqual(self.db.get_saved_views(), [])
+
+    def test_saved_view_delete_does_not_touch_works(self):
+        w = self.db.add_work(title="Keep File")
+        view = self.db.create_saved_view("Keep File Search", self._sv_search())
+        self.db.delete_saved_view(view["id"])
+        self.assertEqual(self.db.get_work(w)["title"], "Keep File")
+
+    def test_saved_view_max_bound(self):
+        with patch("backend.db_manager.PRKS_SAVED_VIEW_MAX", 1):
+            self.db.create_saved_view("One", self._sv_search())
+            with self.assertRaises(SavedViewError) as ctx:
+                self.db.create_saved_view("Two", self._sv_search(q="two"))
+            self.assertEqual(ctx.exception.http_status, 409)
+        self.assertEqual(len(self.db.get_saved_views()), 1)

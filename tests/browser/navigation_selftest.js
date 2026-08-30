@@ -49,6 +49,11 @@
         assertEq('#/search?q=a&tag=b q', parse('#/search?q=a&tag=b').params.q, 'a');
         assertEq('#/search?q=a&tag=b tag', parse('#/search?q=a&tag=b').params.tag, 'b');
         assertEq('#/recent name', parse('#/recent').name, 'recent');
+        assertEq('#/views name', parse('#/views').name, 'saved-views');
+        assertEq('#/views/SV-1 name', parse('#/views/SV-1').name, 'saved-view-detail');
+        assertEq('#/views/SV-1 id', parse('#/views/SV-1').params.viewId, 'SV-1');
+        assertEq('#/views/ missing id', parse('#/views/').name, 'unknown');
+        assert('saved view is detail', parse('#/views/SV-1').detail === true);
         assertEq('#/types name', parse('#/types').name, 'types');
         assertEq('#/types/article name', parse('#/types/article').name, 'type-detail');
         assertEq('#/playlists name', parse('#/playlists').name, 'playlists');
@@ -67,6 +72,8 @@
         const href = root.prksSidebarHrefForRoute;
         if (typeof href === 'function') {
             assertEq('folder detail nav', href(parse('#/folders/F-1')), '#/folders');
+            assertEq('saved views nav', href(parse('#/views')), '#/views');
+            assertEq('saved view detail nav', href(parse('#/views/SV-1')), '#/views');
             assertEq('playlist detail nav', href(parse('#/playlists/PL-1')), '#/playlists');
             assertEq('type detail nav', href(parse('#/types/article')), '#/types');
             assertEq('person nav', href(parse('#/people/P-1')), '#/people');
@@ -143,6 +150,27 @@
             assertEq('direct person fallback hash', root.prksResolveBackTarget(parse('#/people/P-1')).hash, '#/people');
             assertEq('direct group fallback hash', root.prksResolveBackTarget(parse('#/people/groups/PG-1')).hash, '#/people/groups');
             assertEq('direct playlist fallback hash', root.prksResolveBackTarget(parse('#/playlists/PL-1')).hash, '#/playlists');
+            assertEq('direct saved view fallback hash', root.prksResolveBackTarget(parse('#/views/SV-1')).hash, '#/views');
+
+            try {
+                root.sessionStorage.removeItem(root.PRKS_ROUTE_STATES_KEY);
+            } catch (_e) {}
+            const sv = parse('#/views/SV-1');
+            const workFromSv = parse('#/works/W-1');
+            root.prksRememberOrigin(workFromSv, sv);
+            const backSv = root.prksResolveBackTarget(workFromSv);
+            assertEq('back hash from saved view', backSv.hash, '#/views/SV-1');
+            if (typeof document !== 'undefined' && document.getElementById) {
+                const main = document.getElementById('main-content');
+                if (main && typeof root.prksCaptureCurrentRouteState === 'function') {
+                    main.scrollTop = 420;
+                    root.prksCaptureCurrentRouteState(sv);
+                    main.scrollTop = 0;
+                    root.__prksRouteGen = 7;
+                    root.prksRestoreRouteState(sv, 7);
+                    assertEq('saved view scroll restored', main.scrollTop, 420);
+                }
+            }
 
             const bad = root.prksValidateOriginRecord({ hash: 'javascript:alert(1)', label: 'x' });
             assertEq('reject javascript origin', bad, null);
@@ -217,6 +245,11 @@
                 root.prksSyncSidebarActive(parse('#/playlists/PL-1'));
                 assertEq('playlist detail → Playlists', currentHref(), '#/playlists');
                 assertEq('one current playlist', currentCount(), 1);
+                root.prksSyncSidebarActive(parse('#/views'));
+                assertEq('saved views current', currentHref(), '#/views');
+                root.prksSyncSidebarActive(parse('#/views/SV-1'));
+                assertEq('saved view detail → Saved Views', currentHref(), '#/views');
+                assertEq('one current saved views', currentCount(), 1);
                 root.prksSyncSidebarActive(parse('#/types/article'));
                 assertEq('type detail → File Types', currentHref(), '#/types');
                 root.prksSyncSidebarActive(parse('#/people/P-1'));
@@ -243,6 +276,20 @@
             assertEq('stale title ignored', document.title, 'Keep Me — PRKS');
             root.prksSetResolvedDocumentTitle(parse('#/recent'), {}, 5);
             assertEq('current title applied', document.title, 'Recent — PRKS');
+            root.prksSetResolvedDocumentTitle(parse('#/views'), {}, 5);
+            assertEq('saved views title', document.title, 'Saved Views — PRKS');
+            root.prksSetResolvedDocumentTitle(
+                parse('#/views/SV-1'),
+                { entityTitle: 'Critical Theory' },
+                5
+            );
+            assertEq('saved view entity title', document.title, 'Critical Theory — PRKS');
+            root.prksSetResolvedDocumentTitle(
+                parse('#/views/SV-missing'),
+                { notFound: true, notFoundTitle: 'Saved View not found' },
+                5
+            );
+            assertEq('saved view missing title', document.title, 'Saved View not found — PRKS');
         }
 
         if (typeof root.prksPublishRouteSidebar === 'function') {

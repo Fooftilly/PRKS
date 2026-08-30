@@ -72,7 +72,12 @@ function renderSearch(results, query, container, options = {}) {
     const emptyMsg = tag
         ? 'No files have this tag yet.'
         : 'No results found matching your query.';
-    let html = `<div class="page-header page-header--search"><h2>${title}</h2>`;
+    let html = `<div class="page-header page-header--search"><div class="page-header__title-row"><h2>${title}</h2>`;
+    const canOfferSave = !!(query || tag || author || publisher);
+    if (canOfferSave) {
+        html += `<div class="page-header__actions"><button type="button" class="ribbon-btn" id="prks-save-view-btn">Save View</button></div>`;
+    }
+    html += `</div>`;
     if (!tag) {
         const qEsc = searchEscapeHtml(query);
         const aEsc = searchEscapeHtml(author);
@@ -125,18 +130,31 @@ function renderSearch(results, query, container, options = {}) {
                 </div>`;
         }
     }
-    html += `</div><div class="card-grid">`;
-    if (results && results.length > 0) {
-        results.forEach(w => {
-            const subtitle = w.abstract ? w.abstract.substring(0, 100) + '…' : '';
-            html += typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { subtitle }) : '';
-        });
-    } else {
-        html += `<p class="prks-inline-message">${emptyMsg}</p>`;
-    }
     html += `</div>`;
+    if (typeof window.prksSearchResultCardsHtml === 'function') {
+        html += window.prksSearchResultCardsHtml(results, emptyMsg);
+    } else {
+        html += `<div class="card-grid">`;
+        if (results && results.length > 0) {
+            results.forEach(w => {
+                const subtitle = w.abstract ? w.abstract.substring(0, 100) + '…' : '';
+                html += typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { subtitle }) : '';
+            });
+        } else {
+            html += `<p class="prks-inline-message">${emptyMsg}</p>`;
+        }
+        html += `</div>`;
+    }
     container.innerHTML = html;
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+    const saveBtn = document.getElementById('prks-save-view-btn');
+    if (saveBtn) {
+        saveBtn.onclick = () => {
+            if (typeof window.prksOpenSavedViewModalFromCurrentSearch === 'function') {
+                window.prksOpenSavedViewModalFromCurrentSearch();
+            }
+        };
+    }
     if (!tag) {
         const runBtn = document.getElementById('search-run-btn');
         const qIn = document.getElementById('search-q-input');

@@ -122,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initForms();
     if (typeof prksInitNavDisclosures === 'function') prksInitNavDisclosures();
     if (typeof prksInitCommandPalette === 'function') prksInitCommandPalette();
+    if (typeof prksInitSavedViews === 'function') prksInitSavedViews();
     initUploadDragAndDrop();
 });
 
@@ -1349,6 +1350,7 @@ async function handleRoute() {
     window.__prksPersonDetailEditing = false;
     window.__prksPersonWorksEditing = false;
     window.__prksPersonGroupDetailEditing = false;
+    window.__prksCurrentSavedView = null;
     window.__prksRouteSidebar = {};
 
     if (typeof prksSyncSidebarActive === 'function') {
@@ -1471,6 +1473,44 @@ async function handleRoute() {
                 if (stale()) return;
                 publishSidebar({ workCount: works.length });
                 renderRecent(works, contentDiv);
+                break;
+            }
+            case 'saved-views': {
+                const views = typeof fetchSavedViews === 'function' ? await fetchSavedViews() : [];
+                if (stale()) return;
+                if (typeof renderSavedViewsIndex === 'function') {
+                    renderSavedViewsIndex(views, contentDiv);
+                } else {
+                    contentDiv.innerHTML =
+                        '<div class="page-header"><h2>Saved Views</h2></div><p class="meta-row">Saved Views UI unavailable.</p>';
+                }
+                break;
+            }
+            case 'saved-view-detail': {
+                const viewId = route.params.viewId;
+                const view = typeof fetchSavedView === 'function' ? await fetchSavedView(viewId) : null;
+                if (stale()) return;
+                window.__prksCurrentSavedView = view || null;
+                if (!view) {
+                    if (typeof renderSavedViewNotFound === 'function') {
+                        renderSavedViewNotFound(contentDiv);
+                    } else {
+                        contentDiv.innerHTML =
+                            '<div class="page-header"><h2>Saved View not found.</h2></div><p class="meta-row"><a href="#/views">Back to Saved Views</a></p>';
+                    }
+                    titleOpts = { notFound: true, notFoundTitle: 'Saved View not found' };
+                    break;
+                }
+                const mapped =
+                    typeof prksSearchOptionsFromDefinition === 'function'
+                        ? prksSearchOptionsFromDefinition(view.search || {})
+                        : { q: '', tag: null, options: {} };
+                const results = await fetchSearch(mapped.q, mapped.tag, mapped.options);
+                if (stale()) return;
+                if (typeof renderSavedViewDetail === 'function') {
+                    renderSavedViewDetail(view, results, contentDiv);
+                }
+                titleOpts = { entityTitle: view.name || 'Saved View' };
                 break;
             }
             case 'progress': {

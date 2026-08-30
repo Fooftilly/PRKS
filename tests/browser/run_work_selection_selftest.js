@@ -397,6 +397,7 @@ assert('search supported', root.prksWorkSelectionIsSupportedRoute({ name: 'searc
 assert('work not supported', !root.prksWorkSelectionIsSupportedRoute({ name: 'work' }));
 assert('person not supported', !root.prksWorkSelectionIsSupportedRoute({ name: 'person' }));
 assert('playlist-detail not supported', !root.prksWorkSelectionIsSupportedRoute({ name: 'playlist-detail' }));
+assert('saved-view-detail supported', root.prksWorkSelectionIsSupportedRoute({ name: 'saved-view-detail' }));
 assert('processing-files not supported', !root.prksWorkSelectionIsSupportedRoute({ name: 'processing-files' }));
 
 page.innerHTML = '';

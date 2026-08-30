@@ -13,6 +13,7 @@
     const MAX_PERSONS = 4;
     const MAX_GROUPS = 3;
     const MAX_PLAYLISTS = 3;
+    const MAX_SAVED_VIEWS = 4;
 
     const ALLOWED_MODALS = {
         'work-modal': true,
@@ -30,11 +31,22 @@
         'select-exit': function () {
             if (typeof root.prksWorkSelectionExit === 'function') root.prksWorkSelectionExit();
         },
+        'save-search-view': function () {
+            if (typeof root.prksOpenSavedViewModalFromCurrentSearch === 'function') {
+                root.prksOpenSavedViewModalFromCurrentSearch();
+            }
+        },
+        'edit-saved-view': function () {
+            if (typeof root.prksOpenSavedViewModalForCurrentView === 'function') {
+                root.prksOpenSavedViewModalForCurrentView();
+            }
+        },
     };
 
     const EMPTY_IDS = [
         'navigate-folders',
         'navigate-recent',
+        'navigate-saved-views',
         'navigate-people',
         'navigate-processing',
         'new-file',
@@ -69,6 +81,15 @@
             keywords: ['library', 'opened'],
             icon: 'clock',
             hash: '#/recent',
+            section: 'goto',
+        },
+        {
+            id: 'navigate-saved-views',
+            kind: 'navigate',
+            label: 'Saved Views',
+            keywords: ['library', 'search', 'smart views'],
+            icon: 'bookmark',
+            hash: '#/views',
             section: 'goto',
         },
         {
@@ -315,16 +336,19 @@
         activeIndex: 0,
         results: [],
         queryGen: 0,
+        sessionGen: 0,
         debounceTimer: null,
         prevFocus: null,
         folderCache: null,
         personCache: null,
         groupCache: null,
         playlistCache: null,
+        savedViewCache: null,
         folderPromise: null,
         personPromise: null,
         groupPromise: null,
         playlistPromise: null,
+        savedViewPromise: null,
         fetchFailed: false,
         works: [],
         worksLoading: false,
@@ -384,6 +408,44 @@
     }
 
     function searchHash(kind, q) {
+        if (typeof root.prksSearchHashFromDefinition === 'function') {
+            if (kind === 'all') {
+                return root.prksSearchHashFromDefinition({
+                    mode: 'all',
+                    q: q,
+                    tag: '',
+                    author: '',
+                    publisher: '',
+                });
+            }
+            if (kind === 'keywords') {
+                return root.prksSearchHashFromDefinition({
+                    mode: 'advanced',
+                    q: q,
+                    tag: '',
+                    author: '',
+                    publisher: '',
+                });
+            }
+            if (kind === 'people') {
+                return root.prksSearchHashFromDefinition({
+                    mode: 'advanced',
+                    q: '',
+                    tag: '',
+                    author: q,
+                    publisher: '',
+                });
+            }
+            if (kind === 'publisher') {
+                return root.prksSearchHashFromDefinition({
+                    mode: 'advanced',
+                    q: '',
+                    tag: '',
+                    author: '',
+                    publisher: q,
+                });
+            }
+        }
         const p = new URLSearchParams();
         if (kind === 'all') {
             p.set('any', '1');
@@ -552,33 +614,54 @@
                 ? root.prksWorkSelectionIsSupportedRoute(route)
                 : false;
         const active = typeof root.prksWorkSelectionIsActive === 'function' && root.prksWorkSelectionIsActive();
+        const out = [];
         if (supported && !active) {
-            return [
-                {
-                    id: 'select-files',
-                    kind: 'context',
-                    actionId: 'select-enter',
-                    label: 'Select files on this page',
-                    keywords: ['bulk', 'organize'],
-                    icon: 'check',
-                    section: 'actions',
-                },
-            ];
+            out.push({
+                id: 'select-files',
+                kind: 'context',
+                actionId: 'select-enter',
+                label: 'Select files on this page',
+                keywords: ['bulk', 'organize'],
+                icon: 'check',
+                section: 'actions',
+            });
+        } else if (active) {
+            out.push({
+                id: 'exit-select',
+                kind: 'context',
+                actionId: 'select-exit',
+                label: 'Exit file selection',
+                keywords: ['bulk'],
+                icon: 'x',
+                section: 'actions',
+            });
         }
-        if (active) {
-            return [
-                {
-                    id: 'exit-select',
+        if (route && route.name === 'search' && typeof root.prksSearchDefinitionFromRoute === 'function') {
+            const parsed = root.prksSearchDefinitionFromRoute(route);
+            if (parsed && parsed.ok) {
+                out.push({
+                    id: 'save-search-view',
                     kind: 'context',
-                    actionId: 'select-exit',
-                    label: 'Exit file selection',
-                    keywords: ['bulk'],
-                    icon: 'x',
+                    actionId: 'save-search-view',
+                    label: 'Save current search as view',
+                    keywords: ['saved views', 'smart view'],
+                    icon: 'bookmark',
                     section: 'actions',
-                },
-            ];
+                });
+            }
         }
-        return [];
+        if (route && route.name === 'saved-view-detail' && !active) {
+            out.push({
+                id: 'edit-saved-view',
+                kind: 'context',
+                actionId: 'edit-saved-view',
+                label: 'Edit this Saved View',
+                keywords: ['rename'],
+                icon: 'pencil',
+                section: 'actions',
+            });
+        }
+        return out;
     }
 
     function isInsidePalette(el) {
@@ -747,6 +830,19 @@
                     )
                 );
             }
+            if (state.savedViewCache) {
+                entities = entities.concat(
+                    entityRows(
+                        state.savedViewCache,
+                        q,
+                        'saved-view',
+                        function (v) { return [String(v.name || '')]; },
+                        function (v) { return '#/views/' + encodeURIComponent(v.id); },
+                        'bookmark',
+                        MAX_SAVED_VIEWS
+                    )
+                );
+            }
         }
 
         const searchSlots = search.length;
@@ -875,10 +971,12 @@
         state.personCache = null;
         state.groupCache = null;
         state.playlistCache = null;
+        state.savedViewCache = null;
         state.folderPromise = null;
         state.personPromise = null;
         state.groupPromise = null;
         state.playlistPromise = null;
+        state.savedViewPromise = null;
         state.fetchFailed = false;
         state.works = [];
         state.worksLoading = false;
@@ -891,18 +989,21 @@
         }
     }
 
-    function wrapCatalog(fn, assign, gen) {
+    function wrapCatalog(fn, assign) {
+        const session = state.sessionGen;
         return Promise.resolve()
             .then(function () {
                 return typeof fn === 'function' ? fn() : [];
             })
             .then(function (data) {
+                if (!state.open || session !== state.sessionGen) return;
                 const list = Array.isArray(data) ? data : [];
                 assign(list);
                 renderResults();
                 return list;
             })
             .catch(function () {
+                if (!state.open || session !== state.sessionGen) return;
                 state.fetchFailed = true;
                 assign([]);
                 renderResults();
@@ -910,21 +1011,24 @@
             });
     }
 
-    function ensureCatalogs(gen) {
+    function ensureCatalogs() {
         if (state.scope === 'create') return;
         if (normalizeQuery(state.query).length < MIN_DYNAMIC_LEN) return;
         if (!state.folderPromise) {
-            state.folderPromise = wrapCatalog(root.fetchFolders, function (v) { state.folderCache = v; }, gen);
+            state.folderPromise = wrapCatalog(root.fetchFolders, function (v) { state.folderCache = v; });
         }
         if (!state.personPromise) {
-            state.personPromise = wrapCatalog(root.fetchPersons, function (v) { state.personCache = v; }, gen);
+            state.personPromise = wrapCatalog(root.fetchPersons, function (v) { state.personCache = v; });
         }
         if (!state.groupPromise) {
-            state.groupPromise = wrapCatalog(root.fetchPersonGroups, function (v) { state.groupCache = v; }, gen);
+            state.groupPromise = wrapCatalog(root.fetchPersonGroups, function (v) { state.groupCache = v; });
         }
         if (!state.playlistPromise) {
             const fetchPl = root.fetchPlaylists;
-            state.playlistPromise = wrapCatalog(fetchPl, function (v) { state.playlistCache = v; }, gen);
+            state.playlistPromise = wrapCatalog(fetchPl, function (v) { state.playlistCache = v; });
+        }
+        if (!state.savedViewPromise) {
+            state.savedViewPromise = wrapCatalog(root.fetchSavedViews, function (v) { state.savedViewCache = v; });
         }
     }
 
@@ -997,7 +1101,7 @@
         state.queryGen += 1;
         const gen = state.queryGen;
         state.works = [];
-        ensureCatalogs(gen);
+        ensureCatalogs();
         renderResults();
         scheduleWorks(state.query, gen);
     }
@@ -1178,6 +1282,7 @@
             state.prevFocus = d && d.activeElement ? d.activeElement : null;
         }
         state.open = true;
+        state.sessionGen += 1;
         state.scope = options && options.scope === 'create' ? 'create' : 'all';
         state.query = '';
         state.activeIndex = 0;
@@ -1206,6 +1311,7 @@
     function closePalette(opts) {
         const restore = !opts || opts.restoreFocus !== false;
         const prev = state.prevFocus;
+        state.sessionGen += 1;
         state.open = false;
         state.scope = 'all';
         state.query = '';
@@ -1269,6 +1375,7 @@
         closePalette({ restoreFocus: false });
         state.inited = false;
         state.queryGen = 0;
+        state.sessionGen = 0;
         state.results = [];
     }
 
@@ -1277,6 +1384,7 @@
         PRKS_PALETTE_MAX_OPTIONS: MAX_OPTIONS,
         PRKS_PALETTE_MAX_WORKS: MAX_WORKS,
         PRKS_PALETTE_MAX_FOLDERS: MAX_FOLDERS,
+        PRKS_PALETTE_MAX_SAVED_VIEWS: MAX_SAVED_VIEWS,
         prksPaletteNormalizeQuery: normalizeQuery,
         prksPaletteScoreCommand: scoreCommand,
         prksPaletteFilterCommands: filterCommands,

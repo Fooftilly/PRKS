@@ -128,7 +128,7 @@ docker compose start prks
 
 PRKS automatically upgrades supported older databases at startup.
 
-Current schema version: **10**.
+Current schema version: **11**.
 
 Schema migrations are transactional and version-ordered. A database marked version N has passed every migration through N.
 
@@ -142,7 +142,7 @@ The index is disposable and is rebuilt after backup restore. **Settings → Rebu
 
 ## Bulk organization
 
-On supported work-list pages (folder, recent, search, file type, and progress), choose **Select**, pick files, and use the bulk toolbar to change progress, move or clear folders, or add and remove tags.
+On supported work-list pages (folder, recent, search, file type, progress, and Saved View results), choose **Select**, pick files, and use the bulk toolbar to change progress, move or clear folders, or add and remove tags.
 
 A bulk action is one request and one database transaction. If any selected file or target is invalid, none of the selected files are changed.
 
@@ -152,13 +152,21 @@ Press Ctrl+K (Cmd+K on macOS), or choose **Search or jump**.
 
 Use it to:
 
-- open files, folders, people, groups and playlists
+- open files, folders, people, groups, playlists and Saved Views
 - search the library
 - navigate to sections/progress views
 - create files/folders/people/groups
 - open Settings and common actions
 
 People and Progress sidebar shortcuts are collapsible. Active child routes stay visible without overwriting the collapsed preference.
+
+## Saved Views
+
+Run a search and choose **Save View**. Saved Views remember the search definition, not the current result list. Opening a Saved View always shows the files that match now.
+
+Saved Views are stored in the main PRKS database and included in backups. They are also searchable/openable from Ctrl/Cmd+K.
+
+A Saved View is not a snapshot of matching work IDs. If files, tags, authors, publishers, or PDF text change, the next time you open the view it re-runs the current search engine.
 
 ## Logging and privacy
 

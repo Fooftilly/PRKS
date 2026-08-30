@@ -458,6 +458,8 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
     def test_schema_9_backup_migrates_on_restore(self):
         source = self._bind_library(title="Incoming V9", pdf_name="v9.pdf")
         conn = sqlite3.connect(source["cfg"].db_path)
+        conn.execute("DROP INDEX IF EXISTS idx_saved_views_name_nocase")
+        conn.execute("DROP TABLE IF EXISTS saved_views")
         conn.execute("UPDATE schema_version SET version = 9")
         conn.commit()
         conn.close()
@@ -472,6 +474,62 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         titles = [row["title"] for row in live.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["Incoming V9"])
         self.assertTrue(os.path.isfile(os.path.join(dest.pdfs_dir, "v9.pdf")))
+        tables = [
+            row["name"]
+            for row in live.execute_query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='saved_views'"
+            )
+        ]
+        self.assertEqual(tables, ["saved_views"])
+        self.assertEqual(live.get_saved_views(), [])
+
+    def test_saved_views_survive_backup_restore(self):
+        source = self._bind_library(title="View Library", pdf_name="view.pdf")
+        view = server_module.db.create_saved_view(
+            "Adorno — culture industry",
+            {
+                "mode": "advanced",
+                "q": "culture industry",
+                "tag": "",
+                "author": "Adorno",
+                "publisher": "",
+            },
+        )
+        backup = create_backup(source["cfg"])
+        dest = bind_storage(self._cfg(self._tmpdir()))
+        staged = self._stage_copy(dest, backup.archive_path)
+        apply_restore(dest, staged.token, "RESTORE", rebind=bind_storage)
+        restored = server_module.db.get_saved_views()
+        self.assertEqual(len(restored), 1)
+        self.assertEqual(restored[0]["name"], "Adorno — culture industry")
+        self.assertEqual(restored[0]["search"], view["search"])
+        self.assertEqual(restored[0]["id"], view["id"])
+
+    def test_v10_backup_migrates_saved_views_on_restore(self):
+        source = self._bind_library(title="Incoming V10", pdf_name="v10.pdf")
+        conn = sqlite3.connect(source["cfg"].db_path)
+        conn.execute("DROP INDEX IF EXISTS idx_saved_views_name_nocase")
+        conn.execute("DROP TABLE IF EXISTS saved_views")
+        conn.execute("UPDATE schema_version SET version = 10")
+        conn.commit()
+        conn.close()
+        backup = create_backup(source["cfg"])
+        dest = bind_storage(self._cfg(self._tmpdir()))
+        staged = self._stage_copy(dest, backup.archive_path)
+        out = apply_restore(dest, staged.token, "RESTORE", rebind=bind_storage)
+        self.assertTrue(out["restored"])
+        versions = server_module.db.execute_query("SELECT version FROM schema_version")
+        self.assertEqual([row["version"] for row in versions], [PRKS_SCHEMA_VERSION])
+        tables = [
+            row["name"]
+            for row in server_module.db.execute_query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='saved_views'"
+            )
+        ]
+        self.assertEqual(tables, ["saved_views"])
+        self.assertEqual(server_module.db.get_saved_views(), [])
+        titles = [row["title"] for row in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Incoming V10"])
 
     def test_restore_migration_failure_restores_previous_library(self):
         lib = self._bind_library(

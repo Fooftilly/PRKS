@@ -251,8 +251,8 @@ class MigrationTestCase(unittest.TestCase):
 
 class TestRegistry(unittest.TestCase):
     def test_production_registry_is_contiguous(self):
-        self.assertEqual(LATEST_SCHEMA_VERSION, 10)
-        self.assertEqual(PRKS_SCHEMA_VERSION, 10)
+        self.assertEqual(LATEST_SCHEMA_VERSION, 11)
+        self.assertEqual(PRKS_SCHEMA_VERSION, 11)
         self.assertEqual(LEGACY_BASELINE_VERSION, 9)
         validate_migration_registry()
         self.assertEqual(MIGRATIONS[-1].target_version, LATEST_SCHEMA_VERSION)
@@ -292,7 +292,7 @@ class TestRegistry(unittest.TestCase):
 class TestFreshDatabase(MigrationTestCase):
     def test_fresh_database_is_version_10_and_idempotent(self):
         db = self._open()
-        self.assertEqual(_version(db.db_path), 10)
+        self.assertEqual(_version(db.db_path), 11)
         conn = db.get_connection()
         try:
             for name in (
@@ -306,6 +306,8 @@ class TestFreshDatabase(MigrationTestCase):
             self.assertTrue(column_exists(conn, "works", "author_text"))
             self.assertTrue(column_exists(conn, "roles", "credit_name"))
             self.assertTrue(table_exists(conn, "publishers"))
+            self.assertTrue(table_exists(conn, "saved_views"))
+            self.assertTrue(index_exists(conn, "idx_saved_views_name_nocase"))
             self.assertTrue(trigger_exists(conn, "works_ai"))
             signature = application_schema_signature(conn)
             self.assertIn("author_text", signature["fts_columns"])
@@ -315,7 +317,7 @@ class TestFreshDatabase(MigrationTestCase):
         with patch("backend.db_migrations.migrate_v9_to_v10") as spy:
             db2 = self._open()
             spy.assert_not_called()
-        self.assertEqual(_version(db2.db_path), 10)
+        self.assertEqual(_version(db2.db_path), 11)
         row = db2.get_work(work_id)
         self.assertEqual(row["title"], "Keep Me")
 
@@ -328,7 +330,7 @@ class TestLegacyAndV9(MigrationTestCase):
         conn.close()
         with _capture_logs() as logs:
             db = self._open()
-        self.assertEqual(_version(db.db_path), 10)
+        self.assertEqual(_version(db.db_path), 11)
         work = db.get_work("W-LEGACY1")
         self.assertEqual(work["title"], _SECRET_TITLE)
         self.assertEqual(work.get("doc_type"), "article")
@@ -345,7 +347,7 @@ class TestLegacyAndV9(MigrationTestCase):
         conn.commit()
         conn.close()
         db = self._open()
-        self.assertEqual(_version(db.db_path), 10)
+        self.assertEqual(_version(db.db_path), 11)
         self.assertEqual(db.get_work("W-LEGACY1")["title"], "Old Seven")
 
     def test_duplicate_identical_version_rows_are_normalized(self):
@@ -358,7 +360,7 @@ class TestLegacyAndV9(MigrationTestCase):
         conn.commit()
         conn.close()
         db = self._open()
-        self.assertEqual(_version(db.db_path), 10)
+        self.assertEqual(_version(db.db_path), 11)
         check = _raw(db.db_path)
         try:
             count = check.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
@@ -386,7 +388,7 @@ class TestLegacyAndV9(MigrationTestCase):
         finally:
             probe.close()
         db = self._open()
-        self.assertEqual(_version(db.db_path), 10)
+        self.assertEqual(_version(db.db_path), 11)
         conn = db.get_connection()
         try:
             self.assertTrue(column_exists(conn, "roles", "credit_name"))
@@ -427,13 +429,85 @@ class TestLegacyAndV9(MigrationTestCase):
             migrated_conn.close()
 
 
+class TestSavedViewsMigration(MigrationTestCase):
+    def _downgrade_to_v10(self, db_path, *, title="Keep V10"):
+        db = self._open()
+        work_id = db.add_work(title=title)
+        conn = _raw(db_path)
+        conn.execute("DROP INDEX IF EXISTS idx_saved_views_name_nocase")
+        conn.execute("DROP TABLE IF EXISTS saved_views")
+        conn.execute("UPDATE schema_version SET version = 10")
+        conn.commit()
+        conn.close()
+        return work_id
+
+    def test_v10_migrates_to_v11_and_keeps_rows(self):
+        work_id = self._downgrade_to_v10(self.storage.db_path)
+        probe = _raw(self.storage.db_path)
+        try:
+            self.assertEqual(read_schema_version(probe), 10)
+            self.assertFalse(table_exists(probe, "saved_views"))
+        finally:
+            probe.close()
+        with _capture_logs() as logs:
+            db = self._open()
+        self.assertEqual(_version(db.db_path), 11)
+        self.assertEqual(db.get_work(work_id)["title"], "Keep V10")
+        conn = db.get_connection()
+        try:
+            self.assertTrue(table_exists(conn, "saved_views"))
+            self.assertTrue(index_exists(conn, "idx_saved_views_name_nocase"))
+            spec_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' "
+                "AND name='idx_saved_views_name_nocase'"
+            ).fetchone()[0]
+            self.assertIn("NOCASE", spec_sql.upper())
+            self.assertIn("UNIQUE", spec_sql.upper())
+        finally:
+            conn.close()
+        blob = "\n".join(logs)
+        self.assertIn("db_migration_started from_version=10 to_version=11 migration=add_saved_views", blob)
+        self.assertNotIn("Keep V10", blob)
+
+    def test_fresh_v11_matches_v10_migrated_v11(self):
+        fresh_root = tempfile.mkdtemp(prefix="prks-mig-sv-fresh-")
+        self.addCleanup(lambda: shutil.rmtree(fresh_root, ignore_errors=True))
+        fresh_storage = StorageConfig.for_testing(fresh_root)
+        os.makedirs(fresh_storage.pdfs_dir, exist_ok=True)
+        fresh = PRKSDatabase(storage=fresh_storage, schema_path=_SCHEMA_PATH)
+        self._downgrade_to_v10(self.storage.db_path)
+        migrated = self._open()
+        fresh_conn = fresh.get_connection()
+        migrated_conn = migrated.get_connection()
+        try:
+            self.assertEqual(
+                application_schema_signature(fresh_conn),
+                application_schema_signature(migrated_conn),
+            )
+        finally:
+            fresh_conn.close()
+            migrated_conn.close()
+
+    def test_v11_wrong_saved_views_index_is_schema_drift(self):
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("DROP INDEX idx_saved_views_name_nocase")
+        conn.execute("CREATE UNIQUE INDEX idx_saved_views_name_nocase ON saved_views(name)")
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "idx_saved_views_name_nocase")
+
+
 class TestVersionRefusal(MigrationTestCase):
     def test_newer_version_is_refused_without_schema_changes(self):
         db = self._open()
         conn = _raw(db.db_path)
         conn.execute("CREATE TABLE canary_keep (id INTEGER)")
         conn.execute("INSERT INTO canary_keep (id) VALUES (1)")
-        conn.execute("UPDATE schema_version SET version = 11")
+        conn.execute("UPDATE schema_version SET version = 12")
         conn.commit()
         conn.close()
         with self.assertRaises(MigrationError) as ctx:
@@ -444,7 +518,7 @@ class TestVersionRefusal(MigrationTestCase):
         try:
             self.assertEqual(
                 check.execute("SELECT version FROM schema_version").fetchone()[0],
-                11,
+                12,
             )
             self.assertEqual(check.execute("SELECT id FROM canary_keep").fetchone()[0], 1)
         finally:
@@ -484,14 +558,15 @@ class TestTransactionsAndOrder(MigrationTestCase):
             raise RuntimeError("boom")
 
         conn = _raw(db.db_path)
+        from_version = read_schema_version(conn)
         try:
             with self.assertRaises(RuntimeError):
                 apply_ordered_migrations(
                     conn,
-                    10,
-                    (Migration(11, "exploding_probe", boom),),
+                    from_version,
+                    (Migration(from_version + 1, "exploding_probe", boom),),
                 )
-            self.assertEqual(read_schema_version(conn), 10)
+            self.assertEqual(read_schema_version(conn), from_version)
             self.assertFalse(table_exists(conn, "migration_probe"))
         finally:
             conn.close()
@@ -707,7 +782,7 @@ class TestConstraintAndDrift(MigrationTestCase):
         self.assertEqual(ctx.exception.code, "schema_drift")
         check = _raw(db.db_path)
         try:
-            self.assertEqual(read_schema_version(check), 10)
+            self.assertEqual(read_schema_version(check), 11)
             self.assertFalse(index_exists(check, "idx_playlist_items_work_unique"))
         finally:
             check.close()
@@ -729,7 +804,7 @@ class TestConstraintAndDrift(MigrationTestCase):
         try:
             self.assertEqual(
                 check.execute("SELECT version FROM schema_version").fetchone()[0],
-                10,
+                11,
             )
             unique = None
             for row in check.execute("PRAGMA index_list(playlist_items)"):
@@ -775,7 +850,7 @@ class TestConstraintAndDrift(MigrationTestCase):
         finally:
             conn.close()
         self._open()
-        self.assertEqual(_version(db.db_path), 10)
+        self.assertEqual(_version(db.db_path), 11)
 
     def test_v10_folder_parent_title_index_rejects_extra_key(self):
         db = self._open()
@@ -866,7 +941,7 @@ class TestConstraintAndDrift(MigrationTestCase):
         conn.commit()
         conn.close()
         db = self._open()
-        self.assertEqual(_version(db.db_path), 10)
+        self.assertEqual(_version(db.db_path), 11)
         check = db.get_connection()
         try:
             unique = None

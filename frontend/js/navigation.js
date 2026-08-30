@@ -54,6 +54,23 @@
             fallbackBack: '#/folders',
             sectionHash: '#/recent',
         },
+        'saved-views': {
+            title: 'Saved Views',
+            loadingTitle: 'Saved Views',
+            backLabel: 'Saved Views',
+            navHref: '#/views',
+            fallbackBack: '#/views',
+            sectionHash: '#/views',
+        },
+        'saved-view-detail': {
+            title: 'Saved View',
+            loadingTitle: 'Saved View',
+            backLabel: 'Saved View',
+            navHref: '#/views',
+            fallbackBack: '#/views',
+            sectionHash: '#/views',
+            detail: true,
+        },
         types: {
             title: 'File Types',
             loadingTitle: 'File Types',
@@ -325,6 +342,20 @@
 
         if (head === 'recent' && segs.length === 1) {
             return prksRouteRecord('recent', rawHash, '#/recent', {});
+        }
+
+        if (head === 'views' && segs.length === 1) {
+            return prksRouteRecord('saved-views', rawHash, '#/views', {});
+        }
+        if (head === 'views' && segs.length === 2) {
+            const viewId = prksSafeDecode(segs[1]);
+            if (viewId == null || !viewId) return prksUnknownRoute(rawHash);
+            return prksRouteRecord(
+                'saved-view-detail',
+                rawHash,
+                '#/views/' + prksEncodePathSegment(viewId),
+                { viewId: viewId }
+            );
         }
 
         if (head === 'types' && segs.length === 1) {

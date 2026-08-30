@@ -8,6 +8,7 @@
     const PRKS_BULK_SUPPORTED_ROUTES = new Set([
         'folder-detail',
         'recent',
+        'saved-view-detail',
         'type-detail',
         'progress',
         'search',

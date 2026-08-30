@@ -2165,6 +2165,85 @@ body {
     gap: 12px;
 }
 
+.saved-views-page__list {
+    margin-top: 10px;
+}
+
+.saved-views-page__list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.saved-views-page__list-main {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+    text-decoration: none;
+    color: inherit;
+    flex: 1;
+}
+
+.saved-views-page__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+}
+
+.saved-views-page__summary {
+    margin: 0;
+}
+
+.saved-views-page__row-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 6px;
+}
+
+.saved-view-detail__kicker {
+    margin: 0 0 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.saved-view-modal__mode {
+    border: 0;
+    margin: 0 0 12px;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+}
+
+.saved-view-modal__mode legend {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+    width: 100%;
+}
+
+.saved-view-modal__mode-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.9rem;
+}
+
+.page-header--search .page-header__title-row {
+    align-items: flex-start;
+}
+
 .playlists-page__list-main {
     display: flex;
     align-items: center;

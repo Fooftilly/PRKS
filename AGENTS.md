@@ -152,3 +152,19 @@ typing/editing or while another modal owns focus.
 
 Palette queries are ephemeral UI state and must not be persisted or logged.
 
+## Saved Views
+
+Saved Views store search definitions, never cached work membership.
+
+Executing a Saved View must reuse the normal PRKS search implementation; do not
+create a parallel search engine for Saved Views.
+
+Saved View names and search definitions are private canonical user data. Never
+include them in logs or performance diagnostics.
+
+Any future Saved View definition expansion requires an explicit schema/search
+contract rather than arbitrary executable rules.
+
+Do not add per-view polling or background notifications as an incidental Saved
+Views feature.
+

@@ -28,9 +28,12 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         pal_at = html.find('src="/js/command-palette.js"')
         app_at = html.find('src="/js/app.js"')
         sel_at = html.find('src="/js/work-selection.js"')
+        sv_at = html.find('src="/js/saved-views.js"')
         self.assertNotEqual(pal_at, -1)
         self.assertNotEqual(app_at, -1)
-        self.assertLess(sel_at, pal_at)
+        self.assertNotEqual(sv_at, -1)
+        self.assertLess(sel_at, sv_at)
+        self.assertLess(sv_at, pal_at)
         self.assertLess(pal_at, app_at)
         self.assertTrue(os.path.isfile(_PALETTE))
 
@@ -98,7 +101,7 @@ class FrontendCommandPaletteTests(unittest.TestCase):
 
     def test_no_schema_bump(self):
         schema = _read(_SCHEMA)
-        self.assertIn("LATEST_SCHEMA_VERSION = 10", schema)
+        self.assertIn("LATEST_SCHEMA_VERSION = 11", schema)
 
     def test_docs(self):
         readme = _read(_README)

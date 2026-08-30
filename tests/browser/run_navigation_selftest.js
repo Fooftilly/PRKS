@@ -52,6 +52,7 @@ function installDom() {
     const links = [
         makeLink('#/folders'),
         makeLink('#/recent'),
+        makeLink('#/views'),
         makeLink('#/types'),
         makeLink('#/playlists'),
         makeLink('#/tags'),

@@ -46,6 +46,7 @@ class FrontendWorkSelectionTests(unittest.TestCase):
         self.assertIn("'type-detail'", src)
         self.assertIn("'progress'", src)
         self.assertIn("'search'", src)
+        self.assertIn("'saved-view-detail'", src)
         self.assertIn("PRKS_BULK_SUPPORTED_ROUTES", src)
         self.assertIn("prksParseRoute", src)
         self.assertNotIn("hash.startsWith", src)

@@ -481,6 +481,9 @@ const sandbox = {
     fetchPlaylists: function () {
         return Promise.resolve([]);
     },
+    fetchSavedViews: function () {
+        return Promise.resolve([]);
+    },
 };
 
 sandbox.window = sandbox;
@@ -494,6 +497,7 @@ function runScript(rel) {
 }
 
 runScript('frontend/js/navigation.js');
+runScript('frontend/js/saved-views.js');
 runScript('frontend/js/work-selection.js');
 runScript('frontend/js/command-palette.js');
 
@@ -687,6 +691,41 @@ Promise.resolve()
         assert('stale ignored', got.indexOf('open-work-W-A') < 0);
         assert('fresh work kept', got.indexOf('open-work-W-B') >= 0);
 
+        let resolveFoldA;
+        let resolveFoldB;
+        let nFold = 0;
+        root.fetchSearch = function () {
+            return Promise.resolve([]);
+        };
+        root.fetchFolders = function () {
+            nFold += 1;
+            if (nFold === 1) return new Promise(function (r) { resolveFoldA = r; });
+            return new Promise(function (r) { resolveFoldB = r; });
+        };
+        root.prksCloseCommandPalette();
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('alpha');
+        return Promise.resolve()
+            .then(function () {
+                root.prksCloseCommandPalette();
+                root.prksOpenCommandPalette();
+                root.prksCommandPaletteSetQuery('alpha');
+                return Promise.resolve();
+            })
+            .then(function () {
+                resolveFoldB([{ id: 'F-FRESH', title: 'Alpha fresh' }]);
+                return new Promise(function (r) { setTimeout(r, 0); });
+            })
+            .then(function () {
+                resolveFoldA([{ id: 'F-STALE', title: 'Alpha stale' }]);
+                return new Promise(function (r) { setTimeout(r, 0); });
+            });
+    })
+    .then(function () {
+        const catalogIds = ids();
+        assert('stale catalog ignored', catalogIds.indexOf('open-folder-F-STALE') < 0);
+        assert('fresh catalog kept', catalogIds.indexOf('open-folder-F-FRESH') >= 0);
+
         root.fetchSearch = function () {
             const many = [];
             for (let i = 0; i < 40; i++) many.push({ id: 'W-' + i, title: 'Work ' + i });
@@ -724,6 +763,15 @@ Promise.resolve()
         };
         root.fetchPlaylists = function () {
             return Promise.resolve([{ id: 'PL-1', title: 'Lectures' }]);
+        };
+        root.fetchSavedViews = function () {
+            return Promise.resolve([
+                {
+                    id: 'SV-1',
+                    name: 'Culture Industry',
+                    search: { mode: 'all', q: 'PRIVATE_SAVED_QUERY_X9Q7', tag: '', author: '', publisher: '' },
+                },
+            ]);
         };
         root.prksCloseCommandPalette();
         root.prksOpenCommandPalette();
@@ -915,13 +963,40 @@ Promise.resolve()
         assert('no select on folders index', !selectFolders);
         root.prksCloseCommandPalette();
 
-        const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'command-palette.js'), 'utf8');
-        assert('no eval', src.indexOf('eval(') < 0);
-        assert('no new Function', src.indexOf('new Function') < 0);
-        assert('no dynamic window call', src.indexOf('window[') < 0);
+        location.hash = '#/search?q=culture';
+        root.prksOpenCommandPalette();
+        const saveView = root.prksCommandPaletteGetResults().filter(function (r) { return r.id === 'save-search-view'; })[0];
+        assert('save current search as view', !!saveView);
+        root.prksCloseCommandPalette();
 
-        console.log(passed + ' passed, ' + failed + ' failed');
-        if (failed) process.exit(1);
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('culture');
+        return new Promise(function (r) { setTimeout(r, 0); })
+            .then(function () {
+                const svRows = root.prksCommandPaletteGetResults().filter(function (r) {
+                    return r.entity === 'saved-view';
+                });
+                assert('saved view by name', svRows.some(function (r) { return r.entityId === 'SV-1'; }));
+                root.prksCloseCommandPalette();
+                root.prksOpenCommandPalette();
+                root.prksCommandPaletteSetQuery('PRIVATE_SAVED_QUERY_X9Q7');
+                return new Promise(function (r) { setTimeout(r, 0); });
+            })
+            .then(function () {
+                const leak = root.prksCommandPaletteGetResults().filter(function (r) {
+                    return r.entity === 'saved-view';
+                });
+                assert('saved view not matched by definition', leak.length === 0);
+                root.prksCloseCommandPalette();
+
+                const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'command-palette.js'), 'utf8');
+                assert('no eval', src.indexOf('eval(') < 0);
+                assert('no new Function', src.indexOf('new Function') < 0);
+                assert('no dynamic window call', src.indexOf('window[') < 0);
+
+                console.log(passed + ' passed, ' + failed + ' failed');
+                if (failed) process.exit(1);
+            });
     })
     .catch(function (err) {
         console.error(err);

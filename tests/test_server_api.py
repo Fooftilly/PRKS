@@ -2633,6 +2633,313 @@ class TestServerAPI(unittest.TestCase):
         self.assertNotIn(sentinel, blob)
         self.assertTrue(any("bulk_work_update" in line for line in records))
 
+    def _sv_json(self, method, path, payload=None):
+        data = None if payload is None else json.dumps(payload).encode()
+        req = urllib.request.Request(f"{self._base_url}{path}", data=data, method=method)
+        if payload is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as res:
+                body = res.read().decode()
+                parsed = json.loads(body) if body else {}
+                return res.status, parsed
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode()
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = {"raw": raw}
+            return exc.code, parsed
+
+    def test_saved_views_crud_and_duplicate_name(self):
+        status, created = self._sv_json(
+            "POST",
+            "/api/saved-views",
+            {
+                "name": "Adorno — culture industry",
+                "search": {
+                    "mode": "advanced",
+                    "q": "culture industry",
+                    "tag": "",
+                    "author": "Adorno",
+                    "publisher": "",
+                },
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertTrue(created["id"].startswith("SV-"))
+        self.assertEqual(created["search"]["author"], "Adorno")
+        self.assertNotIn("search_q", created)
+        vid = created["id"]
+        status, listed = self._sv_json("GET", "/api/saved-views")
+        self.assertEqual(status, 200)
+        self.assertTrue(any(v["id"] == vid for v in listed))
+        status, one = self._sv_json("GET", f"/api/saved-views/{vid}")
+        self.assertEqual(status, 200)
+        self.assertEqual(one["name"], "Adorno — culture industry")
+        status, dup = self._sv_json(
+            "POST",
+            "/api/saved-views",
+            {
+                "name": "adorno — culture industry",
+                "search": created["search"],
+            },
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(dup["error"], "A Saved View with that name already exists.")
+        status, patched = self._sv_json(
+            "PATCH",
+            f"/api/saved-views/{vid}",
+            {"name": "Critical Theory"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(patched["id"], vid)
+        self.assertEqual(patched["name"], "Critical Theory")
+        status, missing = self._sv_json("GET", "/api/saved-views/SV-missing")
+        self.assertEqual(status, 404)
+        status, deleted = self._sv_json("DELETE", f"/api/saved-views/{vid}")
+        self.assertEqual(status, 200)
+        status, gone = self._sv_json("GET", f"/api/saved-views/{vid}")
+        self.assertEqual(status, 404)
+
+    def test_saved_views_reject_invalid_and_partial_search(self):
+        status, body = self._sv_json(
+            "POST",
+            "/api/saved-views",
+            {"name": "Bad", "search": {"mode": "advanced", "author": "Adorno"}},
+        )
+        self.assertEqual(status, 400)
+        created = self._sv_json(
+            "POST",
+            "/api/saved-views",
+            {
+                "name": "Valid View",
+                "search": {
+                    "mode": "all",
+                    "q": "critical theory",
+                    "tag": "",
+                    "author": "",
+                    "publisher": "",
+                },
+            },
+        )[1]
+        status, partial = self._sv_json(
+            "PATCH",
+            f"/api/saved-views/{created['id']}",
+            {"search": {"author": "Adorno"}},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(
+            self._sv_json("GET", f"/api/saved-views/{created['id']}")[1]["search"]["q"],
+            "critical theory",
+        )
+
+    def test_saved_views_live_results_match_search(self):
+        db = self.__class__.test_db
+        a = db.add_work(title="Work A", author_text="Adorno")
+        view = self._sv_json(
+            "POST",
+            "/api/saved-views",
+            {
+                "name": "Adorno files",
+                "search": {
+                    "mode": "advanced",
+                    "q": "",
+                    "tag": "",
+                    "author": "Adorno",
+                    "publisher": "",
+                },
+            },
+        )[1]
+        with urllib.request.urlopen(f"{self._base_url}/api/search?author=Adorno") as res:
+            search_ids = [w["id"] for w in json.loads(res.read().decode())]
+        self.assertIn(a, search_ids)
+        stored = self._sv_json("GET", f"/api/saved-views/{view['id']}")[1]
+        self.assertEqual(stored["search"]["author"], "Adorno")
+        self.assertNotIn("works", stored)
+        b = db.add_work(title="Work B", author_text="Adorno")
+        with urllib.request.urlopen(f"{self._base_url}/api/search?author=Adorno") as res:
+            later = [w["id"] for w in json.loads(res.read().decode())]
+        self.assertIn(a, later)
+        self.assertIn(b, later)
+        still = self._sv_json("GET", f"/api/saved-views/{view['id']}")[1]
+        self.assertEqual(still["search"], stored["search"])
+
+    def test_saved_view_tag_results_are_live_after_bulk_remove(self):
+        db = self.__class__.test_db
+        tag = db.add_tag("Frankfurt School")
+        a = db.add_work(title="Tagged A")
+        b = db.add_work(title="Tagged B")
+        db.add_tag_to_work(a, tag["id"])
+        db.add_tag_to_work(b, tag["id"])
+        view = self._sv_json(
+            "POST",
+            "/api/saved-views",
+            {
+                "name": "Frankfurt tag view",
+                "search": {
+                    "mode": "tag",
+                    "q": "",
+                    "tag": "Frankfurt School",
+                    "author": "",
+                    "publisher": "",
+                },
+            },
+        )[1]
+        with urllib.request.urlopen(
+            f"{self._base_url}/api/search?tag={urllib.parse.quote('Frankfurt School')}"
+        ) as res:
+            before = [w["id"] for w in json.loads(res.read().decode())]
+        self.assertIn(a, before)
+        self.assertIn(b, before)
+        with self._post_json(
+            "/api/works/bulk",
+            {"work_ids": [a, b], "action": "remove_tags", "tag_ids": [tag["id"]]},
+        ) as res:
+            self.assertEqual(res.status, 200)
+        with urllib.request.urlopen(
+            f"{self._base_url}/api/search?tag={urllib.parse.quote('Frankfurt School')}"
+        ) as res:
+            after = [w["id"] for w in json.loads(res.read().decode())]
+        self.assertNotIn(a, after)
+        self.assertNotIn(b, after)
+        still = self._sv_json("GET", f"/api/saved-views/{view['id']}")[1]
+        self.assertEqual(still["search"]["tag"], "Frankfurt School")
+
+    def test_saved_views_trust_boundary(self):
+        payload = json.dumps(
+            {
+                "name": "Trust View",
+                "search": {
+                    "mode": "all",
+                    "q": "trust",
+                    "tag": "",
+                    "author": "",
+                    "publisher": "",
+                },
+            }
+        ).encode()
+        status, raw = self._raw_http(
+            "POST",
+            "/api/saved-views",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", "https://evil.example"),
+                ("Content-Type", "application/json"),
+            ],
+            payload,
+        )
+        self.assertEqual(status, 403)
+        status, _raw = self._raw_http(
+            "POST",
+            "/api/saved-views",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", f"http://localhost:{self._test_port}"),
+                ("Content-Type", "text/plain"),
+            ],
+            payload,
+        )
+        self.assertEqual(status, 415)
+        created = self._sv_json(
+            "POST",
+            "/api/saved-views",
+            {
+                "name": "Trust Keep",
+                "search": {
+                    "mode": "all",
+                    "q": "keep",
+                    "tag": "",
+                    "author": "",
+                    "publisher": "",
+                },
+            },
+        )[1]
+        status, _raw = self._raw_http(
+            "PATCH",
+            f"/api/saved-views/{created['id']}",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", "https://evil.example"),
+                ("Content-Type", "application/json"),
+            ],
+            json.dumps({"name": "Hijacked"}).encode(),
+        )
+        self.assertEqual(status, 403)
+        status, _raw = self._raw_http(
+            "DELETE",
+            f"/api/saved-views/{created['id']}",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", "https://evil.example"),
+            ],
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self._sv_json("GET", f"/api/saved-views/{created['id']}")[0], 200)
+
+    def test_saved_views_privacy_sentinel_not_logged(self):
+        import logging
+
+        sentinel = "PRIVATE_SAVED_QUERY_X9Q7"
+        records = []
+
+        class _H(logging.Handler):
+            def emit(self, record):
+                records.append(self.format(record))
+
+        handler = _H()
+        loggers = [
+            logging.getLogger("prks.server"),
+            logging.getLogger("prks.db"),
+            logging.getLogger("prks.performance"),
+        ]
+        prev_levels = []
+        for lg in loggers:
+            prev_levels.append(lg.level)
+            lg.addHandler(handler)
+            lg.setLevel(logging.DEBUG)
+        try:
+            status, created = self._sv_json(
+                "POST",
+                "/api/saved-views",
+                {
+                    "name": sentinel,
+                    "search": {
+                        "mode": "all",
+                        "q": sentinel,
+                        "tag": "",
+                        "author": "",
+                        "publisher": "",
+                    },
+                },
+            )
+            self.assertEqual(status, 201)
+            self._sv_json("GET", f"/api/saved-views/{created['id']}")
+            self._sv_json(
+                "PATCH",
+                f"/api/saved-views/{created['id']}",
+                {
+                    "search": {
+                        "mode": "all",
+                        "q": sentinel,
+                        "tag": "",
+                        "author": "",
+                        "publisher": "",
+                    }
+                },
+            )
+            snap = server_module.performance_snapshot()
+        finally:
+            for lg, prev in zip(loggers, prev_levels):
+                lg.removeHandler(handler)
+                lg.setLevel(prev)
+        blob = "\n".join(records) + json.dumps(snap)
+        self.assertNotIn(sentinel, blob)
+        self.assertTrue(any("saved_view_created" in line for line in records))
+        self.assertTrue(any("saved_view_updated" in line for line in records))
+        row = self.__class__.test_db.get_saved_view(created["id"])
+        self.assertEqual(row["search"]["q"], sentinel)
+
 
 if __name__ == '__main__':
     unittest.main()

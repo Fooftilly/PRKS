@@ -43,6 +43,7 @@
         arrowDown: 'arrow-down',
         pencil: 'pencil',
         check: 'check',
+        bookmark: 'bookmark',
     };
 
     function prksTagSearchIconHtml() {

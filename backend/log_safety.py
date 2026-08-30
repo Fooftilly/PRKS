@@ -82,6 +82,7 @@ _STATIC_API_PATHS = frozenset(
         "/api/backups/stage",
         "/api/backups/restore",
         "/api/processing-files",
+        "/api/saved-views",
         "/api/client-errors",
         "/api/diagnostics/performance",
         "/api/diagnostics/performance/reset",
@@ -100,6 +101,7 @@ _RESOURCE_SLOT = {
     "tags": ":id",
     "publishers": ":id",
     "processing-files": ":id",
+    "saved-views": ":id",
     "pdfs": ":pdf",
     "bibtex": ":id",
 }

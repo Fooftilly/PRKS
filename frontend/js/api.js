@@ -27,6 +27,7 @@ const PRKS_API_ERROR_SOURCES = {
     publishers: 'publishers.fetch',
     tags: 'tags.fetch',
     'processing-files': 'processing-files.fetch',
+    'saved-views': 'saved-views.fetch',
     'works-bulk': 'works.bulk',
     request: 'api',
 };
@@ -652,9 +653,75 @@ async function bulkUpdateWorks(payload) {
     return data;
 }
 
+async function fetchSavedViews() {
+    try {
+        const res = await fetch('/api/saved-views');
+        const data = await prksParseJsonResponse(res, [], 'saved-views');
+        return Array.isArray(data) ? data : [];
+    } catch (e) {
+        prksSetApiError('saved-views', 'Could not load Saved Views.');
+        prksReportApiClientError('saved-views');
+        return [];
+    }
+}
+
+async function fetchSavedView(id) {
+    try {
+        const res = await fetch('/api/saved-views/' + encodeURIComponent(id));
+        if (res.status === 404) return null;
+        const data = await prksParseJsonResponse(res, null, 'saved-views');
+        return data && data.id ? data : null;
+    } catch (e) {
+        prksSetApiError('saved-views', 'Could not load Saved View.');
+        prksReportApiClientError('saved-views');
+        return null;
+    }
+}
+
+async function createSavedView(payload) {
+    const res = await fetch('/api/saved-views', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error((data && data.error) || 'Could not save view.');
+    }
+    return data;
+}
+
+async function updateSavedView(id, payload) {
+    const res = await fetch('/api/saved-views/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error((data && data.error) || 'Could not update Saved View.');
+    }
+    return data;
+}
+
+async function deleteSavedView(id) {
+    const res = await fetch('/api/saved-views/' + encodeURIComponent(id), {
+        method: 'DELETE',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error((data && data.error) || 'Could not delete Saved View.');
+    }
+}
+
 window.bulkUpdateWorks = bulkUpdateWorks;
 window.fetchFolders = fetchFolders;
 window.fetchTags = fetchTags;
+window.fetchSavedViews = fetchSavedViews;
+window.fetchSavedView = fetchSavedView;
+window.createSavedView = createSavedView;
+window.updateSavedView = updateSavedView;
+window.deleteSavedView = deleteSavedView;
 
 (function prksPrefetchAppSettings() {
     void prksLoadAppSettings();

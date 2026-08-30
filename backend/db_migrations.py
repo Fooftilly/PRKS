@@ -24,7 +24,7 @@ from backend.log_safety import safe_error_type, safe_log_label
 
 LOGGER = logging.getLogger("prks.db")
 
-LATEST_SCHEMA_VERSION = 10
+LATEST_SCHEMA_VERSION = 11
 LEGACY_BASELINE_VERSION = 9
 
 # Unversioned files count as PRKS only with works plus another established table.
@@ -97,6 +97,7 @@ REQUIRED_TABLES = (
     "publisher_aliases",
     "person_groups",
     "person_group_members",
+    "saved_views",
 )
 
 REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
@@ -199,6 +200,17 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "tags": ("id", "name"),
     "person_groups": ("id", "name"),
     "playlist_items": ("playlist_id", "work_id", "position"),
+    "saved_views": (
+        "id",
+        "name",
+        "mode",
+        "search_q",
+        "search_tag",
+        "search_author",
+        "search_publisher",
+        "created_at",
+        "updated_at",
+    ),
 }
 
 @dataclass(frozen=True)
@@ -252,6 +264,13 @@ INDEX_SPECS: Tuple[IndexSpec, ...] = (
         "tag_aliases",
         True,
         columns=("alias",),
+        collations=("NOCASE",),
+    ),
+    IndexSpec(
+        "idx_saved_views_name_nocase",
+        "saved_views",
+        True,
+        columns=("name",),
         collations=("NOCASE",),
     ),
     IndexSpec("idx_roles_work_id", "roles", False, columns=("work_id",), collations=("BINARY",)),
@@ -417,6 +436,10 @@ _INDEX_SQL: Dict[str, str] = {
         "CREATE UNIQUE INDEX idx_tag_aliases_alias_nocase "
         "ON tag_aliases(alias COLLATE NOCASE)"
     ),
+    "idx_saved_views_name_nocase": (
+        "CREATE UNIQUE INDEX idx_saved_views_name_nocase "
+        "ON saved_views(name COLLATE NOCASE)"
+    ),
 }
 
 _UNIQUE_PREFLIGHT: Tuple[Tuple[str, str, str], ...] = (
@@ -472,6 +495,8 @@ _TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
         ("tag_id", "tags", "id", "CASCADE"),
     ),
 }
+
+_POST_V10_TABLES = frozenset({"saved_views"})
 
 _ACTIVE_SCHEMA_SQL: Optional[str] = None
 
@@ -777,6 +802,58 @@ def migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
     reconcile_pre_v10_schema(conn, _require_schema_sql())
 
 
+def migrate_v10_to_v11(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE saved_views (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL CHECK(TRIM(name) <> ''),
+
+            mode TEXT NOT NULL
+                CHECK(mode IN ('all', 'advanced', 'tag')),
+
+            search_q TEXT NOT NULL DEFAULT '',
+            search_tag TEXT NOT NULL DEFAULT '',
+            search_author TEXT NOT NULL DEFAULT '',
+            search_publisher TEXT NOT NULL DEFAULT '',
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            CHECK (
+                (
+                    mode = 'all'
+                    AND TRIM(search_q) <> ''
+                    AND search_tag = ''
+                    AND search_author = ''
+                    AND search_publisher = ''
+                )
+                OR
+                (
+                    mode = 'advanced'
+                    AND search_tag = ''
+                    AND (
+                        TRIM(search_q) <> ''
+                        OR TRIM(search_author) <> ''
+                        OR TRIM(search_publisher) <> ''
+                    )
+                )
+                OR
+                (
+                    mode = 'tag'
+                    AND TRIM(search_tag) <> ''
+                    AND search_q = ''
+                )
+            )
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_saved_views_name_nocase "
+        "ON saved_views(name COLLATE NOCASE)"
+    )
+
+
 def normalize_legacy_database_to_v9(conn: sqlite3.Connection) -> None:
     reconcile_pre_v10_schema(conn, _require_schema_sql())
     _set_schema_version(conn, LEGACY_BASELINE_VERSION)
@@ -927,6 +1004,8 @@ def _ensure_missing_tables(conn: sqlite3.Connection, schema_sql: str) -> None:
         if kind != "table" or name is None:
             continue
         if name == "works_fts":
+            continue
+        if name in _POST_V10_TABLES:
             continue
         if table_exists(conn, name):
             continue
@@ -1540,6 +1619,11 @@ MIGRATIONS: Tuple[Migration, ...] = (
         target_version=10,
         name="ordered_migration_baseline",
         apply=migrate_v9_to_v10,
+    ),
+    Migration(
+        target_version=11,
+        name="add_saved_views",
+        apply=migrate_v10_to_v11,
     ),
 )
 

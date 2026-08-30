@@ -323,6 +323,52 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_person_groups_name_nocase ON person_groups
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_nocase ON tags(name COLLATE NOCASE);
 
+-- Saved Views: named search definitions. Live results are never stored.
+CREATE TABLE IF NOT EXISTS saved_views (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL CHECK(TRIM(name) <> ''),
+
+    mode TEXT NOT NULL
+        CHECK(mode IN ('all', 'advanced', 'tag')),
+
+    search_q TEXT NOT NULL DEFAULT '',
+    search_tag TEXT NOT NULL DEFAULT '',
+    search_author TEXT NOT NULL DEFAULT '',
+    search_publisher TEXT NOT NULL DEFAULT '',
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CHECK (
+        (
+            mode = 'all'
+            AND TRIM(search_q) <> ''
+            AND search_tag = ''
+            AND search_author = ''
+            AND search_publisher = ''
+        )
+        OR
+        (
+            mode = 'advanced'
+            AND search_tag = ''
+            AND (
+                TRIM(search_q) <> ''
+                OR TRIM(search_author) <> ''
+                OR TRIM(search_publisher) <> ''
+            )
+        )
+        OR
+        (
+            mode = 'tag'
+            AND TRIM(search_tag) <> ''
+            AND search_q = ''
+        )
+    )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_views_name_nocase
+ON saved_views(name COLLATE NOCASE);
+
 -- Folder title uniqueness is parent-scoped. Do not add a global folders(title) unique index;
 -- existing DBs may have the same title under different parents.
 CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id);
