@@ -136,9 +136,9 @@ Databases created by a newer PRKS version are refused rather than downgraded. Do
 
 ## PDF text search
 
-PRKS keeps a separate derived PDF text-search index (`prks_text_index.db`). It is automatically reconciled with managed PDFs at startup. Unchanged PDFs are not re-extracted. Image-only or scanned PDFs may contain no searchable text; PRKS does not perform OCR.
+PRKS keeps a separate derived PDF text-search index (`prks_text_index.db`). It is automatically reconciled with managed PDFs at startup. Unchanged PDFs are compared by stored source fingerprint and filesystem metadata; they are not re-extracted and do not trigger a full FTS integrity scan. Image-only or scanned PDFs may contain no searchable text; PRKS does not perform OCR.
 
-The index is disposable and is rebuilt after backup restore. **Settings → Rebuild PDF text index** forces a complete re-extraction if search results seem incomplete or stale.
+The index is disposable and is rebuilt after backup restore. **Settings → Rebuild PDF text index** forces a complete re-extraction and FTS integrity verification if search results seem incomplete or stale.
 
 ## Logging and privacy
 
@@ -186,7 +186,7 @@ The table lists API routes with:
 - **Avg / P50 / P95 / Max** — duration in milliseconds. P50 and P95 are nearest-rank percentiles of the recent bounded sample (last 128 durations for that route), not a permanent historical distribution. Tiny samples are not statistically strong.
 - **DB** — measured DB share: instrumented `execute_query()` time divided by request time. This is directional, not profiler-grade SQL accounting. Some direct SQLite work is not included.
 
-Subsystem lines (PDF file stats, JSON encode, gzip, thumbnail render, PDF text search, and similar) use the same timing rules with fixed span names only.
+Subsystem lines (PDF file stats, JSON encode, gzip, thumbnail render, PDF text search, text-index phases, and similar) use the same timing rules with fixed span names only. Text-index reconciliation reports `text_index_reconcile` plus `text_index_load_state`, `text_index_source_scan`, `text_index_extract`, `text_index_write`, and `text_index_fts_verify` when those phases ran.
 
 Optional:
 

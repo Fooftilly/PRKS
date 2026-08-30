@@ -80,6 +80,29 @@ class SourceFingerprint:
 
 
 @dataclass(frozen=True)
+class TextIndexRowState:
+    work_id: str
+    source_ref_hash: str
+    source_size: int | None
+    source_mtime_ns: int | None
+    extractor_version: int | None
+    extraction_status: str
+    truncated: bool
+
+
+_ROW_UNSET = object()
+_SYNC_STATE_COLUMNS = (
+    "work_id",
+    "source_ref_hash",
+    "source_size",
+    "source_mtime_ns",
+    "extractor_version",
+    "extraction_status",
+    "truncated",
+)
+
+
+@dataclass(frozen=True)
 class TextIndexSyncResult:
     action: str
     status: str | None = None
@@ -106,6 +129,15 @@ def _fts_prefix_clause(tokens: List[str]) -> str:
 
 def _source_ref_hash(file_path: str) -> str:
     return hashlib.sha256(file_path.encode("utf-8")).hexdigest()
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalize_sql(sql: str | None) -> str:
@@ -199,6 +231,7 @@ class PRKSTextIndex:
         self.pdfs_dir = self.storage.pdfs_dir
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._last_recovery_reason: str | None = None
+        self._fts_suspect = False
         self._open_or_recover()
 
     def _conn(self) -> sqlite3.Connection:
@@ -243,6 +276,7 @@ class PRKSTextIndex:
             conn.execute("PRAGMA journal_mode = WAL")
             self._create_current_schema(conn)
             conn.commit()
+        self._fts_suspect = True
 
     def _classify_schema(self, conn: sqlite3.Connection) -> str:
         tables = self._user_tables(conn)
@@ -445,6 +479,7 @@ class PRKSTextIndex:
         columns = self._table_columns(conn, "work_text_index")
         if not self._current_schema_valid(conn, columns):
             raise _DerivedIndexUnusable("schema_invalid")
+        self._fts_suspect = True
 
     def _stat_source(self, abs_path: str) -> Tuple[int, int]:
         st = os.stat(abs_path)
@@ -473,30 +508,51 @@ class PRKSTextIndex:
             return "missing", abs_path, fp
         return "ok", abs_path, fp
 
-    def _fetch_row(self, conn: sqlite3.Connection, work_id: str) -> sqlite3.Row | None:
-        return conn.execute(
-            "SELECT * FROM work_text_index WHERE work_id = ?",
-            (work_id,),
-        ).fetchone()
+    def _state_from_row(self, row: sqlite3.Row | Dict[str, Any]) -> TextIndexRowState:
+        return TextIndexRowState(
+            work_id=str(row["work_id"] or ""),
+            source_ref_hash=str(row["source_ref_hash"] or ""),
+            source_size=_optional_int(row["source_size"]),
+            source_mtime_ns=_optional_int(row["source_mtime_ns"]),
+            extractor_version=_optional_int(row["extractor_version"]),
+            extraction_status=str(row["extraction_status"] or ""),
+            truncated=bool(row["truncated"]),
+        )
 
-    def _row_is_current(self, row: sqlite3.Row, fp: SourceFingerprint) -> bool:
-        status = str(row["extraction_status"] or "")
-        if status not in _SUCCESS_STATUSES:
+    def _load_sync_state(self) -> Dict[str, TextIndexRowState]:
+        cols = ", ".join(_SYNC_STATE_COLUMNS)
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT {cols} FROM work_text_index"
+            ).fetchall()
+        out: Dict[str, TextIndexRowState] = {}
+        for row in rows:
+            state = self._state_from_row(row)
+            if state.work_id:
+                out[state.work_id] = state
+        return out
+
+    def _fetch_row_state(self, work_id: str) -> TextIndexRowState | None:
+        cols = ", ".join(_SYNC_STATE_COLUMNS)
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT {cols} FROM work_text_index WHERE work_id = ?",
+                (work_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._state_from_row(row)
+
+    def _row_is_current(self, row: TextIndexRowState, fp: SourceFingerprint) -> bool:
+        if row.extraction_status not in _SUCCESS_STATUSES:
             return False
-        try:
-            extractor = int(row["extractor_version"] or 0)
-        except (TypeError, ValueError):
+        if row.extractor_version != TEXT_EXTRACTOR_VERSION:
             return False
-        if extractor != TEXT_EXTRACTOR_VERSION:
+        if (row.source_ref_hash or "") != fp.source_ref_hash:
             return False
-        if str(row["source_ref_hash"] or "") != fp.source_ref_hash:
+        if row.source_size is None or row.source_mtime_ns is None:
             return False
-        try:
-            size = int(row["source_size"])
-            mtime_ns = int(row["source_mtime_ns"])
-        except (TypeError, ValueError):
-            return False
-        return size == fp.source_size and mtime_ns == fp.source_mtime_ns
+        return row.source_size == fp.source_size and row.source_mtime_ns == fp.source_mtime_ns
 
     def _write_row(
         self,
@@ -508,60 +564,66 @@ class PRKSTextIndex:
         fp: SourceFingerprint | None,
     ) -> None:
         stored = (text or "")[:_MAX_EXTRACTED_CHARS]
-        with self._conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO work_text_index (
-                    work_id, extracted_text, source_ref_hash, source_size,
-                    source_mtime_ns, extractor_version, extraction_status,
-                    truncated, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(work_id) DO UPDATE SET
-                    extracted_text = excluded.extracted_text,
-                    source_ref_hash = excluded.source_ref_hash,
-                    source_size = excluded.source_size,
-                    source_mtime_ns = excluded.source_mtime_ns,
-                    extractor_version = excluded.extractor_version,
-                    extraction_status = excluded.extraction_status,
-                    truncated = excluded.truncated,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    work_id,
-                    stored,
-                    None if fp is None else fp.source_ref_hash,
-                    None if fp is None else fp.source_size,
-                    None if fp is None else fp.source_mtime_ns,
-                    None if fp is None else fp.extractor_version,
-                    status,
-                    1 if truncated else 0,
-                ),
-            )
-            conn.commit()
+        try:
+            with perf_span("text_index_write"):
+                with self._conn() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO work_text_index (
+                            work_id, extracted_text, source_ref_hash, source_size,
+                            source_mtime_ns, extractor_version, extraction_status,
+                            truncated, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(work_id) DO UPDATE SET
+                            extracted_text = excluded.extracted_text,
+                            source_ref_hash = excluded.source_ref_hash,
+                            source_size = excluded.source_size,
+                            source_mtime_ns = excluded.source_mtime_ns,
+                            extractor_version = excluded.extractor_version,
+                            extraction_status = excluded.extraction_status,
+                            truncated = excluded.truncated,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        (
+                            work_id,
+                            stored,
+                            None if fp is None else fp.source_ref_hash,
+                            None if fp is None else fp.source_size,
+                            None if fp is None else fp.source_mtime_ns,
+                            None if fp is None else fp.extractor_version,
+                            status,
+                            1 if truncated else 0,
+                        ),
+                    )
+                    conn.commit()
+        except sqlite3.Error:
+            self._fts_suspect = True
+            raise
 
     def _extract_stable(
         self, abs_path: str, file_path: str
     ) -> Tuple[PDFTextExtraction, SourceFingerprint]:
-        last_reason = "source_changed"
-        for _attempt in range(2):
-            try:
-                before_size, before_mtime = self._stat_source(abs_path)
-            except OSError as exc:
-                raise PDFTextExtractionError(safe_error_type(exc)) from None
-            extraction = extract_pdf(abs_path)
-            try:
-                after_size, after_mtime = self._stat_source(abs_path)
-            except OSError as exc:
-                raise PDFTextExtractionError(safe_error_type(exc)) from None
-            if before_size == after_size and before_mtime == after_mtime:
-                return extraction, SourceFingerprint(
-                    source_ref_hash=_source_ref_hash(file_path),
-                    source_size=after_size,
-                    source_mtime_ns=after_mtime,
-                    extractor_version=TEXT_EXTRACTOR_VERSION,
-                )
+        with perf_span("text_index_extract"):
             last_reason = "source_changed"
-        raise PDFTextExtractionError(last_reason)
+            for _attempt in range(2):
+                try:
+                    before_size, before_mtime = self._stat_source(abs_path)
+                except OSError as exc:
+                    raise PDFTextExtractionError(safe_error_type(exc)) from None
+                extraction = extract_pdf(abs_path)
+                try:
+                    after_size, after_mtime = self._stat_source(abs_path)
+                except OSError as exc:
+                    raise PDFTextExtractionError(safe_error_type(exc)) from None
+                if before_size == after_size and before_mtime == after_mtime:
+                    return extraction, SourceFingerprint(
+                        source_ref_hash=_source_ref_hash(file_path),
+                        source_size=after_size,
+                        source_mtime_ns=after_mtime,
+                        extractor_version=TEXT_EXTRACTOR_VERSION,
+                    )
+                last_reason = "source_changed"
+            raise PDFTextExtractionError(last_reason)
 
     def _log_extract_failed(self, work_id: str, error_type: str) -> None:
         LOGGER.warning(
@@ -577,6 +639,8 @@ class PRKSTextIndex:
         *,
         force: bool = False,
         allow_extract: bool = True,
+        known_row: Any = _ROW_UNSET,
+        known_fingerprint: SourceFingerprint | None = None,
     ) -> TextIndexSyncResult:
         work_id = (work_id or "").strip()
         if not work_id:
@@ -592,13 +656,18 @@ class PRKSTextIndex:
             self.remove_work(work_id)
             return TextIndexSyncResult(action="missing")
         assert abs_path is not None
-        try:
-            current_fp = self._fingerprint(fp_text, abs_path)
-        except OSError:
-            self.remove_work(work_id)
-            return TextIndexSyncResult(action="missing")
-        with self._conn() as conn:
-            row = self._fetch_row(conn, work_id)
+        if known_fingerprint is not None:
+            current_fp = known_fingerprint
+        else:
+            try:
+                current_fp = self._fingerprint(fp_text, abs_path)
+            except OSError:
+                self.remove_work(work_id)
+                return TextIndexSyncResult(action="missing")
+        if known_row is _ROW_UNSET:
+            row = self._fetch_row_state(work_id)
+        else:
+            row = known_row
         if (
             not force
             and row is not None
@@ -606,17 +675,17 @@ class PRKSTextIndex:
         ):
             return TextIndexSyncResult(
                 action="unchanged",
-                status=str(row["extraction_status"] or ""),
-                truncated=bool(row["truncated"]),
+                status=row.extraction_status,
+                truncated=row.truncated,
             )
         if not allow_extract:
             if row is not None and self._row_is_current(row, current_fp):
                 return TextIndexSyncResult(
                     action="skipped",
-                    status=str(row["extraction_status"] or ""),
-                    truncated=bool(row["truncated"]),
+                    status=row.extraction_status,
+                    truncated=row.truncated,
                 )
-            if row is not None and str(row["extraction_status"] or "") in _SUCCESS_STATUSES:
+            if row is not None and row.extraction_status in _SUCCESS_STATUSES:
                 self._write_row(
                     work_id,
                     text="",
@@ -734,6 +803,7 @@ class PRKSTextIndex:
                 ).fetchall()
             return [str(r["work_id"]) for r in rows if r["work_id"]]
         except sqlite3.Error as exc:
+            self._fts_suspect = True
             LOGGER.warning(
                 "text_index_search_failed error_type=%s",
                 safe_error_type(exc),
@@ -753,17 +823,21 @@ class PRKSTextIndex:
             expected[wid] = (row.get("file_path") or "").strip()
         return expected
 
-    def _indexed_work_ids(self) -> List[str]:
-        with self._conn() as conn:
-            rows = conn.execute("SELECT work_id FROM work_text_index").fetchall()
-        return [str(r["work_id"]) for r in rows if r["work_id"]]
-
-    def _remove_orphans(self, expected_ids: set[str]) -> int:
-        removed = 0
-        for work_id in self._indexed_work_ids():
-            if work_id not in expected_ids:
-                removed += self.remove_work(work_id)
-        return removed
+    def _remove_orphan_ids(self, orphan_ids: List[str]) -> int:
+        if not orphan_ids:
+            return 0
+        try:
+            with perf_span("text_index_write"):
+                with self._conn() as conn:
+                    conn.executemany(
+                        "DELETE FROM work_text_index WHERE work_id = ?",
+                        [(work_id,) for work_id in orphan_ids],
+                    )
+                    conn.commit()
+        except sqlite3.Error:
+            self._fts_suspect = True
+            raise
+        return len(orphan_ids)
 
     def _fts_integrity_ok(self, conn: sqlite3.Connection) -> bool:
         try:
@@ -772,14 +846,25 @@ class PRKSTextIndex:
             )
             return True
         except sqlite3.Error:
+            self._fts_suspect = True
             return False
 
     def _rebuild_fts(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            "INSERT INTO work_text_index_fts(work_text_index_fts) VALUES('rebuild')"
-        )
+        try:
+            conn.execute(
+                "INSERT INTO work_text_index_fts(work_text_index_fts) VALUES('rebuild')"
+            )
+        except sqlite3.Error:
+            self._fts_suspect = True
+            raise
 
     def _verify_or_rebuild_fts(self) -> bool:
+        with perf_span("text_index_fts_verify"):
+            rebuilt = self._verify_or_rebuild_fts_inner()
+        self._fts_suspect = False
+        return rebuilt
+
+    def _verify_or_rebuild_fts_inner(self) -> bool:
         conn = self._conn()
         try:
             if self._fts_integrity_ok(conn):
@@ -799,6 +884,51 @@ class PRKSTextIndex:
             return True
         finally:
             conn.close()
+
+    def _account_sync_result(
+        self, summary: Dict[str, Any], result: TextIndexSyncResult
+    ) -> None:
+        if result.action == "unchanged":
+            summary["unchanged"] += 1
+            summary["indexed"] += 1
+            if result.status == STATUS_EMPTY:
+                summary["empty"] += 1
+            if result.truncated:
+                summary["truncated"] += 1
+        elif result.action == "indexed":
+            summary["updated"] += 1
+            summary["indexed"] += 1
+            if result.truncated:
+                summary["truncated"] += 1
+        elif result.action == "empty":
+            summary["updated"] += 1
+            summary["indexed"] += 1
+            summary["empty"] += 1
+        elif result.action == "missing":
+            summary["missing"] += 1
+            summary["failed"] += 1
+        elif result.action == "failed":
+            summary["failed"] += 1
+        elif result.action == "invalid":
+            summary["failed"] += 1
+        elif result.action == "skipped":
+            summary["skipped"] += 1
+            if result.status in _SUCCESS_STATUSES:
+                summary["indexed"] += 1
+                if result.status == STATUS_EMPTY:
+                    summary["empty"] += 1
+                if result.truncated:
+                    summary["truncated"] += 1
+
+    def _account_unchanged_row(
+        self, summary: Dict[str, Any], row: TextIndexRowState
+    ) -> None:
+        summary["unchanged"] += 1
+        summary["indexed"] += 1
+        if row.extraction_status == STATUS_EMPTY:
+            summary["empty"] += 1
+        if row.truncated:
+            summary["truncated"] += 1
 
     def reconcile_all(
         self,
@@ -834,50 +964,54 @@ class PRKSTextIndex:
         _recovered: bool = False,
     ) -> Dict[str, Any]:
         summary = _empty_summary()
-        expected = self._canonical_managed_works(db)
-        summary["removed_orphans"] = self._remove_orphans(set(expected))
-        summary["processed"] = len(expected)
-        can_extract = extractor_available()
-        if not can_extract:
-            summary["extractor_unavailable"] = True
-        for work_id, file_path in expected.items():
+        with perf_span("text_index_load_state"):
+            index_state = self._load_sync_state()
+        pending: List[
+            Tuple[str, str, TextIndexRowState | None, SourceFingerprint | None]
+        ] = []
+        with perf_span("text_index_source_scan"):
+            expected = self._canonical_managed_works(db)
+            summary["processed"] = len(expected)
+            for work_id, file_path in expected.items():
+                kind, abs_path, fp_text = self._resolve_managed_source(file_path)
+                row_state = index_state.get(work_id)
+                if kind != "ok" or abs_path is None:
+                    pending.append((work_id, file_path, row_state, None))
+                    continue
+                try:
+                    current_fp = self._fingerprint(fp_text, abs_path)
+                except OSError:
+                    pending.append((work_id, file_path, row_state, None))
+                    continue
+                if (
+                    not force
+                    and row_state is not None
+                    and self._row_is_current(row_state, current_fp)
+                ):
+                    self._account_unchanged_row(summary, row_state)
+                    continue
+                pending.append((work_id, file_path, row_state, current_fp))
+            orphan_ids = [wid for wid in index_state if wid not in expected]
+        can_extract = True
+        if pending:
+            can_extract = extractor_available()
+            if not can_extract:
+                summary["extractor_unavailable"] = True
+        for work_id, file_path, row_state, known_fp in pending:
             result = self.sync_work(
                 work_id,
                 file_path,
                 force=force,
                 allow_extract=can_extract,
+                known_row=row_state,
+                known_fingerprint=known_fp,
             )
-            if result.action == "unchanged":
-                summary["unchanged"] += 1
-                summary["indexed"] += 1
-                if result.status == STATUS_EMPTY:
-                    summary["empty"] += 1
-                if result.truncated:
-                    summary["truncated"] += 1
-            elif result.action == "indexed":
-                summary["updated"] += 1
-                summary["indexed"] += 1
-                if result.truncated:
-                    summary["truncated"] += 1
-            elif result.action == "empty":
-                summary["updated"] += 1
-                summary["indexed"] += 1
-                summary["empty"] += 1
-            elif result.action == "missing":
-                summary["missing"] += 1
-                summary["failed"] += 1
-            elif result.action == "failed":
-                summary["failed"] += 1
-            elif result.action == "invalid":
-                summary["failed"] += 1
-            elif result.action == "skipped":
-                summary["skipped"] += 1
-                if result.status in _SUCCESS_STATUSES:
-                    summary["indexed"] += 1
-                    if result.status == STATUS_EMPTY:
-                        summary["empty"] += 1
-                    if result.truncated:
-                        summary["truncated"] += 1
+            self._account_sync_result(summary, result)
+        summary["removed_orphans"] = self._remove_orphan_ids(orphan_ids)
+        need_fts = bool(force or self._fts_suspect)
+        if not need_fts:
+            summary["fts_rebuilt"] = False
+            return summary
         try:
             summary["fts_rebuilt"] = self._verify_or_rebuild_fts()
         except sqlite3.Error:

@@ -100,6 +100,10 @@ Do not preserve stale searchable text after the canonical PDF changes.
 Derived-index schema corruption may be repaired by recreating the index;
 canonical `prks_data.db` must never receive that treatment.
 
+Normal startup must not run a full FTS5 integrity-check on a healthy derived
+index. Strong FTS verification belongs to explicit rebuild/repair or when
+FTS is already marked suspect.
+
 ## Database schema changes
 
 `backend/db_schema.sql` describes the complete latest schema for fresh databases.

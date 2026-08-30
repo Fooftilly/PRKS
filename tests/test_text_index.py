@@ -21,6 +21,7 @@ from backend.db_manager import PRKS_SCHEMA_VERSION, PRKSDatabase
 from backend.log_safety import PrivacySafeFormatter
 from backend.server import run_server
 from backend.storage.config import StorageConfig
+from backend.performance import snapshot, reset as reset_perf
 from backend.text_index import (
     STATUS_EMPTY,
     STATUS_FAILED,
@@ -32,6 +33,7 @@ from backend.text_index import (
     PDFTextExtractionError,
     PRKSTextIndex,
     _MAX_EXTRACTED_CHARS,
+    _SYNC_STATE_COLUMNS,
     extract_pdf,
     reconcile_at_startup,
 )
@@ -318,7 +320,9 @@ class TextIndexTestCase(unittest.TestCase):
         pdf_abs = os.path.join(self.storage.pdfs_dir, file_path.split("/")[-1])
         with open(pdf_abs, "wb") as handle:
             handle.write(_pdf_with_text_bytes("newtermbravo"))
-        summary = index.reconcile_all(self.db, force=False)
+        with patch.object(index, "sync_work", wraps=index.sync_work) as synced:
+            summary = index.reconcile_all(self.db, force=False)
+        synced.assert_called()
         self.assertEqual(summary["updated"], 1)
         self.assertNotIn(w_id, index.search_work_ids("oldtermalpha"))
         self.assertIn(w_id, index.search_work_ids("newtermbravo"))
@@ -351,9 +355,15 @@ class TextIndexTestCase(unittest.TestCase):
         w_id, file_path = self._add_pdf_work("stable term")
         index = self._index()
         index.sync_work(w_id, file_path)
-        with patch(
-            "backend.text_index.extract_pdf",
-            side_effect=AssertionError("extract"),
+        with (
+            patch(
+                "backend.text_index.extract_pdf",
+                side_effect=AssertionError("extract"),
+            ),
+            patch(
+                "backend.text_index.extractor_available",
+                side_effect=AssertionError("available"),
+            ),
         ):
             summary = index.reconcile_all(self.db, force=False)
         self.assertEqual(summary["unchanged"], 1)
@@ -496,7 +506,7 @@ class TextIndexTestCase(unittest.TestCase):
         self.assertNotIn(w_id, index.search_work_ids("unstable"))
         self.assertNotIn(w_id, index.search_work_ids("remain"))
 
-    def test_fts_inconsistency_rebuilt_without_reextract(self):
+    def test_fts_inconsistency_not_scanned_on_healthy_startup(self):
         w_id, file_path = self._add_pdf_work("original fts term")
         index = self._index()
         index.sync_work(w_id, file_path)
@@ -509,13 +519,150 @@ class TextIndexTestCase(unittest.TestCase):
         finally:
             conn.close()
         self.assertNotIn(w_id, index.search_work_ids("original"))
+        with (
+            patch(
+                "backend.text_index.extract_pdf",
+                side_effect=AssertionError("extract"),
+            ),
+            patch(
+                "backend.text_index.extractor_available",
+                side_effect=AssertionError("available"),
+            ),
+            patch.object(
+                index, "_fts_integrity_ok", side_effect=AssertionError("fts")
+            ) as chk,
+        ):
+            summary = index.reconcile_all(self.db, force=False)
+        chk.assert_not_called()
+        self.assertFalse(summary["fts_rebuilt"])
+        self.assertNotIn(w_id, index.search_work_ids("original"))
+
+    def test_fts_suspect_reconcile_rebuilds_without_reextract(self):
+        w_id, file_path = self._add_pdf_work("original fts term")
+        index = self._index()
+        index.sync_work(w_id, file_path)
+        conn = sqlite3.connect(index.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO work_text_index_fts(work_text_index_fts) VALUES('delete-all')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertNotIn(w_id, index.search_work_ids("original"))
+        index._fts_suspect = True
         with patch(
             "backend.text_index.extract_pdf",
             side_effect=AssertionError("extract"),
         ):
             summary = index.reconcile_all(self.db, force=False)
         self.assertTrue(summary["fts_rebuilt"])
+        self.assertFalse(index._fts_suspect)
         self.assertIn(w_id, index.search_work_ids("original"))
+
+    def test_rebuild_all_runs_strong_fts_verification(self):
+        w_id, file_path = self._add_pdf_work("rebuild fts term")
+        index = self._index()
+        index.sync_work(w_id, file_path)
+        with patch.object(
+            index, "_fts_integrity_ok", wraps=index._fts_integrity_ok
+        ) as chk:
+            summary = index.rebuild_all(self.db)
+        self.assertGreaterEqual(chk.call_count, 1)
+        self.assertIn(w_id, index.search_work_ids("rebuild"))
+        self.assertGreaterEqual(summary["updated"], 1)
+
+    def test_extractor_version_mismatch_reextracts(self):
+        w_id, file_path = self._add_pdf_work("version contract term")
+        index = self._index()
+        index.sync_work(w_id, file_path)
+        with index._conn() as conn:
+            conn.execute(
+                "UPDATE work_text_index SET extractor_version = 0 WHERE work_id = ?",
+                (w_id,),
+            )
+            conn.commit()
+        with patch("backend.text_index.extract_pdf", wraps=extract_pdf) as wrapped:
+            summary = index.reconcile_all(self.db, force=False)
+        self.assertEqual(summary["updated"], 1)
+        wrapped.assert_called()
+        self.assertEqual(self._row(index, w_id)["extractor_version"], TEXT_EXTRACTOR_VERSION)
+
+    def test_unchanged_reconcile_constant_index_work(self):
+        n_files = 100
+        index = self._index()
+        for i in range(n_files):
+            self._add_pdf_work(f"bulkterm{i:03d}", filename=f"bulk_{i:03d}.pdf")
+        primed = index.reconcile_all(self.db, force=False)
+        self.assertEqual(primed["updated"], n_files)
+        orig = index._conn
+        counts = {"n": 0}
+
+        def wrapped_conn():
+            counts["n"] += 1
+            return orig()
+
+        with (
+            patch.object(index, "_conn", side_effect=wrapped_conn),
+            patch(
+                "backend.text_index.extract_pdf",
+                side_effect=AssertionError("extract"),
+            ),
+            patch(
+                "backend.text_index.extractor_available",
+                side_effect=AssertionError("available"),
+            ),
+            patch.object(
+                index, "_fts_integrity_ok", side_effect=AssertionError("fts")
+            ),
+        ):
+            summary = index.reconcile_all(self.db, force=False)
+        self.assertEqual(summary["unchanged"], n_files)
+        self.assertEqual(summary["updated"], 0)
+        self.assertEqual(counts["n"], 1)
+        self.assertNotIn("extracted_text", _SYNC_STATE_COLUMNS)
+        self.assertNotIn("extracted_text", inspect.getsource(PRKSTextIndex._load_sync_state))
+
+        index.upsert_text("W-ORPHAN-BATCH", "orphan token")
+        with (
+            patch.object(index, "remove_work", side_effect=AssertionError("per-orphan")),
+            patch(
+                "backend.text_index.extract_pdf",
+                side_effect=AssertionError("extract"),
+            ),
+            patch.object(
+                index, "_fts_integrity_ok", side_effect=AssertionError("fts")
+            ),
+        ):
+            orphaned = index.reconcile_all(self.db, force=False)
+        self.assertEqual(orphaned["removed_orphans"], 1)
+        self.assertEqual(orphaned["unchanged"], n_files)
+        self.assertIsNone(self._row(index, "W-ORPHAN-BATCH"))
+
+    def test_unchanged_reconcile_omits_extract_and_fts_spans(self):
+        w_id, file_path = self._add_pdf_work("span skip term")
+        index = self._index()
+        index.sync_work(w_id, file_path)
+        reset_perf()
+        with (
+            patch(
+                "backend.text_index.extract_pdf",
+                side_effect=AssertionError("extract"),
+            ),
+            patch(
+                "backend.text_index.extractor_available",
+                side_effect=AssertionError("available"),
+            ),
+        ):
+            summary = index.reconcile_all(self.db, force=False)
+        self.assertEqual(summary["unchanged"], 1)
+        snap = snapshot()
+        self.assertGreaterEqual(snap["spans"].get("text_index_reconcile", {}).get("count", 0), 1)
+        self.assertGreaterEqual(snap["spans"].get("text_index_load_state", {}).get("count", 0), 1)
+        self.assertGreaterEqual(snap["spans"].get("text_index_source_scan", {}).get("count", 0), 1)
+        self.assertNotIn("text_index_extract", snap["spans"])
+        self.assertNotIn("text_index_fts_verify", snap["spans"])
+
 
     def test_trigger_drift_recreates_derived_index(self):
         w_id, file_path = self._add_pdf_work("trigger drift term")
@@ -566,6 +713,7 @@ class TextIndexTestCase(unittest.TestCase):
         self.assertNotIn(secret, joined)
         self.assertNotIn("/tmp/secret-path.db", joined)
         self.assertNotIn("disk image", joined)
+        self.assertTrue(index._fts_suspect)
 
     def test_startup_reconciliation_repairs_stale_and_orphans(self):
         w_id, file_path = self._add_pdf_work("startup old term")
@@ -591,9 +739,15 @@ class TextIndexTestCase(unittest.TestCase):
         w_id, file_path = self._add_pdf_work("startup skip term")
         index = self._index()
         index.sync_work(w_id, file_path)
-        with patch(
-            "backend.text_index.extract_pdf",
-            side_effect=AssertionError("extract"),
+        with (
+            patch(
+                "backend.text_index.extract_pdf",
+                side_effect=AssertionError("extract"),
+            ),
+            patch(
+                "backend.text_index.extractor_available",
+                side_effect=AssertionError("available"),
+            ),
         ):
             summary = reconcile_at_startup(self.db, index)
         self.assertEqual(summary["unchanged"], 1)
