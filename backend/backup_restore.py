@@ -36,6 +36,7 @@ from typing import Any, Callable, Iterator, Optional
 
 from backend.db_manager import PRKS_SCHEMA_VERSION
 from backend.log_safety import safe_error_type
+from backend.performance import clock_ns, record_span, span as perf_span
 from backend.storage import paths
 from backend.storage.config import StorageConfig
 
@@ -963,6 +964,7 @@ def create_backup(
     filename = _backup_filename(created)
     tmp_paths: list[str] = []
     tracker = _BackupProgress(progress, cancel_event)
+    t0 = clock_ns()
     try:
         tracker.check()
         if not os.path.isfile(config.db_path):
@@ -1099,11 +1101,12 @@ def create_backup(
             post_archive_hook(archive_path)
 
         tracker.emit(phase="verifying", force=True)
-        verified = verify_backup(
-            archive_path,
-            current_schema_version=max(PRKS_SCHEMA_VERSION, db_schema),
-            tracker=tracker,
-        )
+        with perf_span("backup_verify"):
+            verified = verify_backup(
+                archive_path,
+                current_schema_version=max(PRKS_SCHEMA_VERSION, db_schema),
+                tracker=tracker,
+            )
         if not verified.get("ok"):
             raise BackupError(
                 verified.get("reason") or "verification_failed",
@@ -1148,6 +1151,10 @@ def create_backup(
         LOGGER.error("backup_failed reason=internal error_type=%s", safe_error_type(exc))
         raise BackupError("internal", "Backup could not be created.", http_status=500) from exc
     finally:
+        try:
+            record_span("backup_create", clock_ns() - t0)
+        except Exception:
+            pass
         for path in tmp_paths:
             _safe_remove(path)
 
@@ -1555,11 +1562,12 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
         if os.path.abspath(upload_path) != os.path.abspath(archive_dest):
             os.replace(upload_path, archive_dest)
         _chmod_file(archive_dest)
-        verified = verify_backup(
-            archive_dest,
-            current_schema_version=supported_schema_ceiling(config),
-            extract_dir=tree_dir,
-        )
+        with perf_span("restore_verify"):
+            verified = verify_backup(
+                archive_dest,
+                current_schema_version=supported_schema_ceiling(config),
+                extract_dir=tree_dir,
+            )
         if not verified.get("ok"):
             raise RestoreError(
                 verified.get("reason") or "verification_failed",
@@ -1984,6 +1992,7 @@ def apply_restore(
         _safe_remove(rollback_root)
         _safe_remove(journal_path(config))
 
+    t_commit = clock_ns()
     try:
         _mark("moving_old")
         for name in list(components):
@@ -2107,6 +2116,11 @@ def apply_restore(
             "Restore failed. Current PRKS data was not changed.",
             http_status=500,
         ) from exc
+    finally:
+        try:
+            record_span("restore_commit", clock_ns() - t_commit)
+        except Exception:
+            pass
 
 
 def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:

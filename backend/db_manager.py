@@ -16,6 +16,13 @@ from pathlib import Path
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
+from backend.performance import (
+    classify_sql_write,
+    clock_ns,
+    record_counter,
+    record_db_call,
+    record_span,
+)
 from backend.storage import paths
 from backend.storage.config import StorageConfig
 
@@ -501,22 +508,37 @@ def enrich_work_rows_pdf_file_size(rows: Optional[List[dict]], pdfs_dir: str) ->
     """Set file_size_bytes on each row for on-disk PDFs under the PDF storage dir; else None."""
     if not rows:
         return
-    for row in rows:
-        if not row or not isinstance(row, dict):
-            continue
-        fp = (row.get("file_path") or "").strip()
-        if not fp.startswith("/api/pdfs/"):
-            row["file_size_bytes"] = None
-            continue
-        seg = fp.split("/")[-1]
-        path = safe_pdf_path_under_dir(pdfs_dir, seg)
-        if not path or not os.path.isfile(path):
-            row["file_size_bytes"] = None
-            continue
+    t0 = clock_ns()
+    examined = 0
+    stated = 0
+    try:
+        for row in rows:
+            if not row or not isinstance(row, dict):
+                continue
+            examined += 1
+            fp = (row.get("file_path") or "").strip()
+            if not fp.startswith("/api/pdfs/"):
+                row["file_size_bytes"] = None
+                continue
+            seg = fp.split("/")[-1]
+            path = safe_pdf_path_under_dir(pdfs_dir, seg)
+            if not path or not os.path.isfile(path):
+                row["file_size_bytes"] = None
+                continue
+            try:
+                row["file_size_bytes"] = os.path.getsize(path)
+                stated += 1
+            except OSError:
+                row["file_size_bytes"] = None
+    finally:
         try:
-            row["file_size_bytes"] = os.path.getsize(path)
-        except OSError:
-            row["file_size_bytes"] = None
+            record_span("pdf_file_stats", clock_ns() - t0)
+            if examined:
+                record_counter("pdf_file_stat_rows", examined)
+            if stated:
+                record_counter("pdf_file_stat_files", stated)
+        except Exception:
+            pass
 
 
 @dataclass(frozen=True)
@@ -574,13 +596,21 @@ class PRKSDatabase:
         return f"{prefix}-{u_hex[:8].upper()}"
 
     def execute_query(self, query: str, params: tuple = ()) -> List[dict]:
-        with self.get_connection() as conn:
-            cursor = conn.execute(query, params)
-            q0 = query.strip().upper()
-            if q0.startswith(("SELECT", "PRAGMA", "WITH")):
-                return [dict(row) for row in cursor.fetchall()]
-            conn.commit()
-            return []
+        t0 = clock_ns()
+        write = classify_sql_write(query)
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute(query, params)
+                q0 = query.strip().upper()
+                if q0.startswith(("SELECT", "PRAGMA", "WITH")):
+                    return [dict(row) for row in cursor.fetchall()]
+                conn.commit()
+                return []
+        finally:
+            try:
+                record_db_call(clock_ns() - t0, write=write)
+            except Exception:
+                pass
 
     # --- App settings (shared across all clients of this database) ---
     _PRKS_APP_SETTING_MAX_LEN = 500

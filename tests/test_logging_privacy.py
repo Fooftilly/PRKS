@@ -133,6 +133,14 @@ class TestSafeRoute(unittest.TestCase):
         self.assertEqual(safe_route("/api/backups/progress"), "/api/backups/progress")
         self.assertEqual(safe_route("/api/backups/stage"), "/api/backups/stage")
         self.assertEqual(safe_route("/api/backups/restore"), "/api/backups/restore")
+        self.assertEqual(
+            safe_route("/api/diagnostics/performance"),
+            "/api/diagnostics/performance",
+        )
+        self.assertEqual(
+            safe_route("/api/diagnostics/performance/reset"),
+            "/api/diagnostics/performance/reset",
+        )
 
     def test_unknown_api_fails_closed(self):
         self.assertEqual(safe_route("/api/not-a-real-family/secret"), "/api/:unknown")

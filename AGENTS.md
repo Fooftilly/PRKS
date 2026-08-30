@@ -27,6 +27,7 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/db_manager.py` SQLite
 - `backend/db_migrations.py` ordered schema migrations
 - `backend/backup_restore.py` verified backup/restore
+- `backend/performance.py` in-memory performance diagnostics
 - `frontend/` UI
 - `tests/` unittest
 
@@ -48,6 +49,19 @@ raw browser messages/stacks, qpdf stderr, or str/repr(exception).
 Use `backend/log_safety.py` for route/id/error normalization.
 Unexpected traceback logging must go through the privacy-safe formatter.
 Lowering `PRKS_LOG_LEVEL` / `PRKS_LOG_FILE_LEVEL` must never unlock raw data.
+
+## Performance
+
+Performance work must measure before optimizing.
+
+Runtime performance metrics are aggregate and privacy-safe; never record request
+bodies/query strings, search terms, library metadata, filenames/paths, SQL params,
+or dynamic user labels.
+
+Do not add schema indexes, caching, threading or SQLite tuning solely because an
+endpoint appears theoretically expensive; use measured diagnostics first.
+
+Performance instrumentation must never be required for application correctness.
 
 ## Backup and restore
 

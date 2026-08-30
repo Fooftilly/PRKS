@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 
 from backend.log_safety import safe_error_type, safe_log_label
+from backend.performance import span as perf_span
 
 
 LOGGER = logging.getLogger("prks.pdf")
@@ -43,6 +44,12 @@ def is_pdf_linearized(pdf_path: str) -> bool:
 
 
 def maybe_linearize_pdf_in_place(pdf_path: str, *, context: str = "") -> tuple[bool, str]:
+    """Try qpdf --linearize in-place. Returns (changed, reason)."""
+    with perf_span("pdf_linearize"):
+        return _maybe_linearize_pdf_in_place_inner(pdf_path, context=context)
+
+
+def _maybe_linearize_pdf_in_place_inner(pdf_path: str, *, context: str = "") -> tuple[bool, str]:
     """Try qpdf --linearize in-place. Returns (changed, reason)."""
     ctx = safe_log_label(context, fallback="unknown")
     if not _linearize_enabled():

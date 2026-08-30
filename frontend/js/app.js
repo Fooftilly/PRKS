@@ -107,6 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initPrksBackupRestoreAction();
     initPrksPdfTextReindexAction();
     initPrksExistingPdfLinearizeAction();
+    initPrksPerformanceDiagnostics();
     initPrksPdfRememberPageSetting();
     initPrksPdfLastPageVisibilityFlush();
     initPrksHintsSetting();
@@ -981,6 +982,218 @@ function initPrksExistingPdfLinearizeAction() {
             btn.textContent = oldText;
         }
     });
+}
+
+let __prksPerfSnapshot = null;
+
+function prksFormatPerfSeconds(s) {
+    s = Math.max(0, Math.floor(Number(s) || 0));
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s / 60) + ' min';
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return m ? (h + 'h ' + m + 'm') : (h + 'h');
+}
+
+function prksFormatPerfMs(v) {
+    if (v == null || !Number.isFinite(Number(v))) return '—';
+    const n = Number(v);
+    if (n >= 10) return String(Math.round(n));
+    return n.toFixed(1);
+}
+
+function prksPerfRouteLabel(row) {
+    return String(row.method || '') + ' ' + String(row.route || '');
+}
+
+function prksFormatPerformanceReport(snap) {
+    if (!snap || typeof snap !== 'object') return 'PRKS performance report\nNo data.';
+    const lines = [
+        'PRKS performance report',
+        'Measurement window: ' + prksFormatPerfSeconds(snap.measured_for_seconds),
+        'Slow threshold: ' + prksFormatPerfMs(snap.slow_threshold_ms) + 'ms',
+        'Requests: ' + String((snap.requests && snap.requests.total) || 0),
+        'Slow: ' + String((snap.requests && snap.requests.slow) || 0),
+        '',
+    ];
+    const routes = Array.isArray(snap.routes) ? snap.routes : [];
+    routes.forEach((row) => {
+        lines.push(
+            prksPerfRouteLabel(row) +
+            ' calls=' + String(row.count || 0) +
+            ' avg=' + prksFormatPerfMs(row.avg_ms) + 'ms' +
+            ' p95=' + prksFormatPerfMs(row.p95_ms) + 'ms' +
+            ' max=' + prksFormatPerfMs(row.max_ms) + 'ms' +
+            ' db_avg=' + prksFormatPerfMs(row.avg_db_ms) + 'ms' +
+            ' db_share=' + (row.measured_db_share_percent == null ? '—' : String(row.measured_db_share_percent) + '%')
+        );
+    });
+    const spans = snap.spans && typeof snap.spans === 'object' ? snap.spans : {};
+    const spanNames = Object.keys(spans);
+    if (spanNames.length) {
+        lines.push('');
+        spanNames.forEach((name) => {
+            const sp = spans[name] || {};
+            lines.push(
+                name +
+                ' count=' + String(sp.count || 0) +
+                ' avg=' + prksFormatPerfMs(sp.avg_ms) + 'ms' +
+                ' p95=' + prksFormatPerfMs(sp.p95_ms) + 'ms'
+            );
+        });
+    }
+    const c = snap.counters && typeof snap.counters === 'object' ? snap.counters : {};
+    const hits = Number(c.thumbnail_cache_hits || 0);
+    const misses = Number(c.thumbnail_cache_misses || 0);
+    const total = hits + misses;
+    const rate = total ? Math.round((1000 * hits) / total) / 10 : null;
+    lines.push('');
+    lines.push(
+        'Thumbnail cache: ' +
+        hits + ' hits / ' + misses + ' misses' +
+        (rate == null ? '' : ' — ' + rate + '% hit rate')
+    );
+    return lines.join('\n');
+}
+
+function prksRenderPerformanceDiagnostics(snap) {
+    __prksPerfSnapshot = snap;
+    const summaryEl = document.getElementById('prks-perf-summary');
+    const bodyEl = document.getElementById('prks-perf-routes-body');
+    const spansEl = document.getElementById('prks-perf-spans');
+    const thumbsEl = document.getElementById('prks-perf-thumbs');
+    const req = (snap && snap.requests) || {};
+    const threshold = prksFormatPerfMs(snap && snap.slow_threshold_ms);
+    if (summaryEl) {
+        summaryEl.textContent =
+            'Measured for: ' + prksFormatPerfSeconds(snap && snap.measured_for_seconds) +
+            '. API requests: ' + String(req.total || 0) +
+            '. Slow requests (>' + threshold + ' ms): ' + String(req.slow || 0) +
+            '.';
+    }
+    const routes = Array.isArray(snap && snap.routes) ? snap.routes.slice() : [];
+    if (bodyEl) {
+        bodyEl.replaceChildren();
+        if (!routes.length) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 6;
+            td.textContent = 'No API requests measured yet.';
+            tr.appendChild(td);
+            bodyEl.appendChild(tr);
+        } else {
+            routes.forEach((row) => {
+                const tr = document.createElement('tr');
+                const cells = [
+                    prksPerfRouteLabel(row),
+                    String(row.count || 0),
+                    prksFormatPerfMs(row.avg_ms),
+                    prksFormatPerfMs(row.p95_ms),
+                    prksFormatPerfMs(row.max_ms),
+                    row.measured_db_share_percent == null ? '—' : (String(row.measured_db_share_percent) + '%'),
+                ];
+                cells.forEach((text) => {
+                    const td = document.createElement('td');
+                    td.textContent = text;
+                    tr.appendChild(td);
+                });
+                bodyEl.appendChild(tr);
+            });
+        }
+    }
+    const spans = (snap && snap.spans && typeof snap.spans === 'object') ? snap.spans : {};
+    const wanted = [
+        ['pdf_file_stats', 'PDF file stats'],
+        ['pdf_text_search', 'PDF text search'],
+        ['thumbnail_render', 'Thumbnail render'],
+        ['json_encode', 'JSON encode'],
+        ['gzip', 'Gzip'],
+        ['portrait_fetch', 'Portrait fetch'],
+        ['text_index_reconcile', 'Text index reconcile'],
+        ['backup_create', 'Backup create'],
+        ['restore_commit', 'Restore commit'],
+        ['pdf_linearize', 'PDF linearize'],
+    ];
+    const spanParts = [];
+    wanted.forEach(([key, label]) => {
+        const sp = spans[key];
+        if (!sp || !sp.count) return;
+        spanParts.push(label + ' avg ' + prksFormatPerfMs(sp.avg_ms) + ' ms');
+    });
+    if (spansEl) {
+        spansEl.textContent = spanParts.length ? ('Subsystems: ' + spanParts.join('. ') + '.') : '';
+    }
+    const c = (snap && snap.counters) || {};
+    const hits = Number(c.thumbnail_cache_hits || 0);
+    const misses = Number(c.thumbnail_cache_misses || 0);
+    const total = hits + misses;
+    const rate = total ? (Math.round((1000 * hits) / total) / 10) : null;
+    if (thumbsEl) {
+        thumbsEl.textContent = total
+            ? ('Thumbnail cache: ' + hits + ' hits / ' + misses + ' misses — ' + rate + '% hit rate.')
+            : 'Thumbnail cache: no thumbnail requests yet.';
+    }
+}
+
+async function prksLoadPerformanceDiagnostics() {
+    const statusEl = document.getElementById('prks-perf-status');
+    try {
+        if (typeof prksGetPerformanceDiagnostics !== 'function') {
+            throw new Error('Performance API unavailable.');
+        }
+        const snap = await prksGetPerformanceDiagnostics();
+        prksRenderPerformanceDiagnostics(snap);
+        if (statusEl) statusEl.textContent = '';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = (e && e.message) || 'Could not load performance diagnostics.';
+    }
+}
+
+window.prksLoadPerformanceDiagnostics = prksLoadPerformanceDiagnostics;
+
+function initPrksPerformanceDiagnostics() {
+    const refreshBtn = document.getElementById('prks-perf-refresh-btn');
+    const resetBtn = document.getElementById('prks-perf-reset-btn');
+    const copyBtn = document.getElementById('prks-perf-copy-btn');
+    if (refreshBtn && refreshBtn.dataset.bound !== '1') {
+        refreshBtn.dataset.bound = '1';
+        refreshBtn.addEventListener('click', () => {
+            void prksLoadPerformanceDiagnostics();
+        });
+    }
+    if (resetBtn && resetBtn.dataset.bound !== '1') {
+        resetBtn.dataset.bound = '1';
+        resetBtn.addEventListener('click', async () => {
+            const statusEl = document.getElementById('prks-perf-status');
+            try {
+                if (typeof prksResetPerformanceDiagnostics !== 'function') {
+                    throw new Error('Performance API unavailable.');
+                }
+                await prksResetPerformanceDiagnostics();
+                await prksLoadPerformanceDiagnostics();
+                if (statusEl) statusEl.textContent = 'Measurements reset.';
+            } catch (e) {
+                if (statusEl) statusEl.textContent = (e && e.message) || 'Could not reset measurements.';
+            }
+        });
+    }
+    if (copyBtn && copyBtn.dataset.bound !== '1') {
+        copyBtn.dataset.bound = '1';
+        copyBtn.addEventListener('click', async () => {
+            const statusEl = document.getElementById('prks-perf-status');
+            const text = prksFormatPerformanceReport(__prksPerfSnapshot);
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    throw new Error('clipboard unavailable');
+                }
+                if (statusEl) statusEl.textContent = 'Report copied.';
+            } catch (_e) {
+                if (statusEl) statusEl.textContent = 'Could not copy report.';
+            }
+        });
+    }
 }
 
 function applyTheme(theme) {

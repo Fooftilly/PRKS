@@ -316,6 +316,37 @@
                 <button type="button" class="ribbon-btn" id="prks-linearize-existing-pdfs-btn">Linearize existing PDFs</button>
                 <p class="prks-settings-hint" id="prks-linearize-existing-pdfs-status" aria-live="polite"></p>
             </section>
+            <section class="prks-settings-section" aria-labelledby="prks-settings-perf-heading">
+                <h4 id="prks-settings-perf-heading" class="prks-settings-section__title">Performance diagnostics</h4>
+                <p class="prks-settings-hint">Runtime-only measurements from this PRKS process. No research content, search terms or file names are recorded. Measurements reset when PRKS restarts.</p>
+                <p class="prks-settings-hint" id="prks-perf-summary" aria-live="polite">Open Settings to load measurements, or click Refresh.</p>
+                <div class="prks-perf-table-wrap">
+                    <table class="prks-perf-table" id="prks-perf-routes">
+                        <caption class="prks-sr-only">Slowest API routes</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Route</th>
+                                <th scope="col">Calls</th>
+                                <th scope="col">Avg</th>
+                                <th scope="col">P95</th>
+                                <th scope="col">Max</th>
+                                <th scope="col">DB</th>
+                            </tr>
+                        </thead>
+                        <tbody id="prks-perf-routes-body">
+                            <tr><td colspan="6">No API requests measured yet.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="prks-settings-hint" id="prks-perf-spans"></p>
+                <p class="prks-settings-hint" id="prks-perf-thumbs"></p>
+                <div class="prks-backup-restore-row">
+                    <button type="button" class="ribbon-btn" id="prks-perf-refresh-btn">Refresh</button>
+                    <button type="button" class="ribbon-btn" id="prks-perf-reset-btn">Reset</button>
+                    <button type="button" class="ribbon-btn" id="prks-perf-copy-btn">Copy report</button>
+                </div>
+                <p class="prks-settings-hint" id="prks-perf-status" aria-live="polite"></p>
+            </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-device-heading">
                 <h4 id="prks-settings-device-heading" class="prks-settings-section__title">This device</h4>
                 <div class="prks-setting-row">

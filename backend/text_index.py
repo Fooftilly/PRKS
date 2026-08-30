@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from backend.db_manager import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.log_safety import safe_error_type, safe_log_id, safe_log_label
+from backend.performance import span as perf_span
 from backend.storage.config import StorageConfig
 
 
@@ -609,11 +610,22 @@ class PRKSTextIndex:
                 truncated=bool(row["truncated"]),
             )
         if not allow_extract:
-            if row is not None and str(row["extraction_status"] or "") in _SUCCESS_STATUSES:
+            if row is not None and self._row_is_current(row, current_fp):
                 return TextIndexSyncResult(
                     action="skipped",
                     status=str(row["extraction_status"] or ""),
                     truncated=bool(row["truncated"]),
+                )
+            if row is not None and str(row["extraction_status"] or "") in _SUCCESS_STATUSES:
+                self._write_row(
+                    work_id,
+                    text="",
+                    status=STATUS_FAILED,
+                    truncated=False,
+                    fp=current_fp,
+                )
+                return TextIndexSyncResult(
+                    action="failed", status=STATUS_FAILED, extracted=True
                 )
             return TextIndexSyncResult(action="skipped")
         try:
@@ -696,6 +708,10 @@ class PRKSTextIndex:
             return cur.rowcount or 0
 
     def search_work_ids(self, term: str, limit: int = 2000) -> List[str]:
+        with perf_span("pdf_text_search"):
+            return self._search_work_ids_inner(term, limit)
+
+    def _search_work_ids_inner(self, term: str, limit: int) -> List[str]:
         tokens = _search_tokens(term)
         if not tokens:
             return []
@@ -805,6 +821,18 @@ class PRKSTextIndex:
         removed_orphans — index rows with no matching canonical managed PDF work
         fts_rebuilt — FTS repaired from work_text_index this pass
         """
+        with perf_span("text_index_reconcile"):
+            return self._reconcile_all_inner(
+                db, force=force, _recovered=_recovered
+            )
+
+    def _reconcile_all_inner(
+        self,
+        db: Any,
+        *,
+        force: bool = False,
+        _recovered: bool = False,
+    ) -> Dict[str, Any]:
         summary = _empty_summary()
         expected = self._canonical_managed_works(db)
         summary["removed_orphans"] = self._remove_orphans(set(expected))

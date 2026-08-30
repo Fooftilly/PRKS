@@ -83,6 +83,8 @@ PRKS has no application-level authentication. Use that override only on a networ
 | `PRKS_LOG_FILE_LEVEL` | Persistent file log level. Default `ERROR`. |
 | `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep. Default `7`. |
 | `PRKS_LOG_FILE` | Override path for the rotating error log. Default `$PRKS_STORAGE/prks-errors.log`. |
+| `PRKS_PERF_SLOW_MS` | API request duration in milliseconds counted as slow. Default `250`. Clamped to 10–60000. Does not timeout requests. |
+| `PRKS_PERF_LOG_SLOW` | When truthy (`1`, `true`, `yes`, `on`), emit a privacy-safe `slow_request` INFO log for slow API requests. Default off. |
 | `PRKS_BACKUP_MAX_UPLOAD_BYTES` | Maximum size of an uploaded `.prks-backup` restore archive. Default 64 GiB. A valid `Content-Length` is required. |
 
 If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/prks_data.db`, `data/pdfs/`, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
@@ -172,6 +174,31 @@ Docker captures process stderr. Console output follows the same privacy rules as
 
 There is no remote telemetry. `POST /api/client-errors` is same-application metadata for correlating browser failures with server request IDs.
 
+## Performance diagnostics
+
+Use **Settings → Performance diagnostics** to see what is slow in this PRKS process.
+
+Measurements live only in memory. They reset when PRKS restarts or when you click **Reset**. They are not written to disk, not included in backups, and contain aggregate operational metadata only: safe route templates, HTTP method/status, durations, counts, and response sizes. They never include search terms, query strings, request bodies, titles, notes, filenames, paths, SQL, or person names. A copied report is safe to paste into a bug report.
+
+The table lists API routes with:
+
+- **Calls** — how often the route ran in this measurement window (frequency, not just latency)
+- **Avg / P50 / P95 / Max** — duration in milliseconds. P50 and P95 are nearest-rank percentiles of the recent bounded sample (last 128 durations for that route), not a permanent historical distribution. Tiny samples are not statistically strong.
+- **DB** — measured DB share: instrumented `execute_query()` time divided by request time. This is directional, not profiler-grade SQL accounting. Some direct SQLite work is not included.
+
+Subsystem lines (PDF file stats, JSON encode, gzip, thumbnail render, PDF text search, and similar) use the same timing rules with fixed span names only.
+
+Optional:
+
+```bash
+PRKS_PERF_SLOW_MS=150
+PRKS_PERF_LOG_SLOW=1
+```
+
+Slow logs stay privacy-safe (`method`, templated `route`, status, durations, call counts, request id). They do not stop or timeout requests.
+
+Do not add indexes, caching, threading, or SQLite tuning solely because an endpoint looks expensive on paper. Measure first.
+
 ## Development and tests
 
 ```bash
@@ -188,6 +215,7 @@ This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=
 | `backend/server.py` | HTTP handler: static frontend, REST-style `/api/...` routes. |
 | `backend/storage/config.py` | Frozen storage snapshot and env parser. |
 | `backend/storage/paths.py` | Path derivation and testing-mode containment. |
+| `backend/performance.py` | In-memory API/DB/span performance diagnostics. |
 | `backend/db_manager.py` | SQLite access and business logic. |
 | `backend/db_migrations.py` | Ordered schema migrations and current-schema validation. |
 | `backend/backup_restore.py` | Verified library backup and restore. |

@@ -3449,6 +3449,32 @@ body {
     flex-wrap: wrap;
     margin-top: 8px;
 }
+.prks-perf-table-wrap {
+    margin-top: 10px;
+    overflow-x: auto;
+}
+.prks-perf-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+}
+.prks-perf-table th,
+.prks-perf-table td {
+    text-align: left;
+    padding: 4px 8px 4px 0;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.prks-perf-table th:not(:first-child),
+.prks-perf-table td:not(:first-child) {
+    text-align: right;
+}
+.prks-perf-table td:first-child {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    white-space: normal;
+    word-break: break-all;
+}
 .prks-backup-file-input {
     position: absolute;
     width: 1px;

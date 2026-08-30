@@ -81,6 +81,8 @@ _STATIC_API_PATHS = frozenset(
         "/api/backups/restore",
         "/api/processing-files",
         "/api/client-errors",
+        "/api/diagnostics/performance",
+        "/api/diagnostics/performance/reset",
         "/api/roles",
         "/api/arguments",
         "/api/concepts",

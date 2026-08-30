@@ -268,6 +268,30 @@ class TextIndexTestCase(unittest.TestCase):
         self.assertEqual(row["extracted_text"], "")
         self.assertNotIn(w_id, index.search_work_ids("unique"))
 
+    def test_extractor_unavailable_clears_stale_changed_pdf(self):
+        w_id, file_path = self._add_pdf_work("old searchable unique term")
+        index = self._index()
+        index.sync_work(w_id, file_path)
+        self.assertIn(w_id, index.search_work_ids("unique"))
+        pdf_abs = os.path.join(self.storage.pdfs_dir, file_path.split("/")[-1])
+        with open(pdf_abs, "wb") as handle:
+            handle.write(_pdf_with_text_bytes("brand new secret term"))
+        with (
+            patch("backend.text_index.extractor_available", return_value=False),
+            patch(
+                "backend.text_index.extract_pdf",
+                side_effect=AssertionError("must not extract"),
+            ),
+        ):
+            summary = index.reconcile_all(self.db, force=False)
+        self.assertTrue(summary["extractor_unavailable"])
+        self.assertGreaterEqual(summary["failed"], 1)
+        row = self._row(index, w_id)
+        self.assertEqual(row["extraction_status"], STATUS_FAILED)
+        self.assertEqual(row["extracted_text"], "")
+        self.assertNotIn(w_id, index.search_work_ids("unique"))
+        self.assertNotIn(w_id, index.search_work_ids("secret"))
+
     def test_extractor_unavailable_preserves_existing_rows(self):
         w_id, file_path = self._add_pdf_work("keep existing searchable term")
         index = self._index()

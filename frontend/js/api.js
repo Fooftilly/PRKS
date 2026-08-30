@@ -506,6 +506,24 @@ async function prksLinearizeExistingPdfs(unlinearizedOnly = true) {
     return data;
 }
 
+async function prksGetPerformanceDiagnostics() {
+    const res = await fetch('/api/diagnostics/performance');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not load performance diagnostics.');
+    return data;
+}
+
+async function prksResetPerformanceDiagnostics() {
+    const res = await fetch('/api/diagnostics/performance/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not reset performance diagnostics.');
+    return data;
+}
+
 async function prksStartBackupProgress(signal) {
     const res = await fetch('/api/backups/progress', {
         method: 'POST',

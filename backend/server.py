@@ -47,6 +47,20 @@ from backend.log_safety import (
     safe_log_label,
     safe_route,
 )
+from backend.performance import (
+    begin_request,
+    clear_request,
+    clock_ns,
+    finish_request,
+    is_excluded_route,
+    record_counter,
+    record_span,
+    reset as reset_performance,
+    server_timing_header,
+    set_response_bytes,
+    set_status,
+    snapshot as performance_snapshot,
+)
 from backend.work_deletion import delete_work as delete_library_work
 from backend.backup_restore import (
     BackupError,
@@ -729,6 +743,53 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def _parse_client_error_payload(self, data):
         return client_error_log_fields(data)
 
+    def parse_request(self):
+        ok = super().parse_request()
+        if not ok:
+            return ok
+        try:
+            parsed = urlparse(getattr(self, "path", "") or "")
+            path = parsed.path or "/"
+            if path.startswith("/api/"):
+                method = (getattr(self, "command", "") or "GET").upper()
+                route = safe_route(path)
+                begin_request(
+                    method,
+                    route,
+                    excluded=is_excluded_route(route) or is_excluded_route(path),
+                )
+        except Exception:
+            pass
+        return ok
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        finally:
+            try:
+                finish_request(request_id=getattr(self, "_prks_request_id", "") or "")
+            except Exception:
+                pass
+            try:
+                clear_request()
+            except Exception:
+                pass
+
+    def send_response(self, code, message=None):
+        try:
+            set_status(int(code))
+        except Exception:
+            pass
+        super().send_response(code, message)
+
+    def send_header(self, keyword, value):
+        try:
+            if str(keyword).lower() == "content-length":
+                set_response_bytes(int(value))
+        except Exception:
+            pass
+        super().send_header(keyword, value)
+
     def end_headers(self):
         # Avoid hammering the server: browsers and embedded viewers may revalidate small assets often
         # if Cache-Control is missing (default was heuristic / no-store in some cases).
@@ -751,6 +812,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_header("Cache-Control", "public, max-age=0, must-revalidate")
                     elif ext in self._STATIC_LONG_CACHE_EXTS:
                         self.send_header("Cache-Control", "public, max-age=604800, immutable")
+        except Exception:
+            pass
+        try:
+            timing = server_timing_header()
+            if timing:
+                self.send_header("Server-Timing", timing)
         except Exception:
             pass
         if self._prks_request_id:
@@ -1393,7 +1460,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_path.path
         
         try:
-            if path == '/api/works':
+            if path == '/api/diagnostics/performance':
+                self.send_json(200, performance_snapshot())
+            elif path == '/api/works':
                 etag = db.etag_works_catalog()
                 if self._prks_if_none_match(etag):
                     self._send_json_not_modified(etag)
@@ -1476,6 +1545,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
                 cache_hit = cache_path is not None
                 generated_bytes: bytes | None = None
+                if cache_hit:
+                    try:
+                        record_counter("thumbnail_cache_hits")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        record_counter("thumbnail_cache_misses")
+                    except Exception:
+                        pass
 
                 if not cache_hit:
                     if os.path.exists(path_webp):
@@ -1496,6 +1575,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         return
 
                     try:
+                        t_render = clock_ns()
                         doc = fitz.open(pdf_path)
                         try:
                             page_index = page - 1
@@ -1512,7 +1592,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 scale = 0.6
                             mat = fitz.Matrix(scale, scale)
                             pix = pg.get_pixmap(matrix=mat, alpha=False)
+                            try:
+                                record_span("thumbnail_render", clock_ns() - t_render)
+                            except Exception:
+                                pass
+                            t_encode = clock_ns()
                             generated_bytes, thumb_sub = _prks_thumbnail_bytes_from_pixmap(pix)
+                            try:
+                                record_span("thumbnail_encode", clock_ns() - t_encode)
+                            except Exception:
+                                pass
                             serve_mime = f"image/{thumb_sub}"
                             # v2 cache: WebP only (lossy default); fallbacks use matching ext.
                             ext = "webp" if thumb_sub == "webp" else thumb_sub
@@ -1784,6 +1873,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
             data = self._read_json_body()
             if data is None:
+                return
+
+            if path == '/api/diagnostics/performance/reset':
+                reset_performance()
+                self.send_json(200, {"status": "reset"})
                 return
 
             if path == '/api/client-errors':
@@ -2549,11 +2643,25 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if etag and status == 200 and not precondition_checked and self._prks_if_none_match(etag):
             self._send_json_not_modified(etag)
             return
+        t0 = clock_ns()
         body = json.dumps(context).encode("utf-8")
+        try:
+            record_span("json_encode", clock_ns() - t0)
+        except Exception:
+            pass
         ae = (self.headers.get("Accept-Encoding") or "").lower()
         use_gzip = "gzip" in ae and len(body) >= _PRKS_JSON_GZIP_MIN_BYTES
         if use_gzip:
+            t1 = clock_ns()
             body = gzip.compress(body, compresslevel=6)
+            try:
+                record_span("gzip", clock_ns() - t1)
+            except Exception:
+                pass
+        try:
+            set_response_bytes(len(body))
+        except Exception:
+            pass
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         if etag and status == 200:
