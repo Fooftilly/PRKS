@@ -280,7 +280,14 @@
             <section class="prks-settings-section" aria-labelledby="prks-settings-backup-heading">
                 <h4 id="prks-settings-backup-heading" class="prks-settings-section__title">Backup &amp; restore</h4>
                 <p class="prks-settings-hint">Create a verified backup of your PRKS library. Includes database, PDFs and managed person files. Search index and thumbnails are rebuilt automatically.</p>
-                <button type="button" class="ribbon-btn" id="prks-backup-download-btn">Download backup</button>
+                <div class="prks-backup-restore-row">
+                    <button type="button" class="ribbon-btn" id="prks-backup-download-btn">Download backup</button>
+                    <button type="button" class="ribbon-btn hidden" id="prks-backup-cancel-btn">Stop backup</button>
+                </div>
+                <div id="prks-backup-progress" class="prks-backup-progress hidden">
+                    <progress id="prks-backup-progress-bar" max="100" value="0"></progress>
+                    <p class="prks-settings-hint" id="prks-backup-progress-label"></p>
+                </div>
                 <p class="prks-settings-hint" id="prks-backup-download-status" aria-live="polite"></p>
                 <p class="prks-settings-hint prks-backup-restore-heading">Restore a PRKS backup</p>
                 <p class="prks-settings-hint">Before restoring, download a backup of the current library if you may want to return to it.</p>

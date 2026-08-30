@@ -354,6 +354,41 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         self.assertTrue(backup.verified)
         self.assertTrue(any("already missing" in w for w in backup.warnings))
 
+    def test_progress_callback_reports_phases(self):
+        lib = self._bind_library()
+        events = []
+        backup = create_backup(lib["cfg"], progress=events.append)
+        self.assertTrue(backup.verified)
+        phases = [ev["phase"] for ev in events]
+        self.assertIn("snapshot", phases)
+        self.assertIn("archiving", phases)
+        self.assertIn("verifying", phases)
+        self.assertTrue(all("path" not in ev for ev in events))
+        percents = [ev["percent"] for ev in events]
+        self.assertGreaterEqual(percents[-1], percents[0])
+        self.assertLessEqual(max(percents), 99)
+
+    def test_cancel_stops_backup_and_deletes_temps(self):
+        lib = self._bind_library()
+        big = os.path.join(lib["cfg"].pdfs_dir, "big.bin")
+        with open(big, "wb") as handle:
+            handle.write(b"x" * (IO_CHUNK_SIZE * 4))
+        cancel = threading.Event()
+
+        def on_progress(ev):
+            if ev.get("phase") == "archiving" and int(ev.get("bytes_done") or 0) > 0:
+                cancel.set()
+
+        with self.assertRaises(BackupError) as ctx:
+            create_backup(lib["cfg"], progress=on_progress, cancel_event=cancel)
+        self.assertEqual(ctx.exception.reason, "cancelled")
+        maint = os.path.join(lib["cfg"].root, ".prks-maintenance", "backup")
+        leftovers = []
+        if os.path.isdir(maint):
+            for name in os.listdir(maint):
+                leftovers.append(name)
+        self.assertFalse(any(name.endswith(".prks-backup") for name in leftovers))
+
     def test_orphan_work_annotations_are_backup_warning(self):
         lib = self._bind_library()
         conn = sqlite3.connect(lib["cfg"].db_path)
@@ -853,6 +888,60 @@ class TestBackupRestoreHTTP(BackupRestoreTestCase):
         self.assertTrue(out["restored"])
         titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["HTTP Work"])
+
+    def test_progress_stream_then_token_download(self):
+        import http.client
+        import socket
+
+        self._bind_library(title="HTTP Progress Work")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        thread = threading.Thread(
+            target=server_module.run_server, args=(port, "127.0.0.1"), daemon=True
+        )
+        thread.start()
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                conn.request("GET", "/api/works")
+                res = conn.getresponse()
+                res.read()
+                conn.close()
+                if res.status == 200:
+                    break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            self.fail("server did not start")
+
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+        conn.request("GET", "/api/backups/progress", headers={"Host": "127.0.0.1"})
+        res = conn.getresponse()
+        body = res.read().decode("utf-8")
+        self.assertEqual(res.status, 200)
+        self.assertIn("ndjson", (res.getheader("Content-Type") or ""))
+        conn.close()
+        events = [json.loads(line) for line in body.splitlines() if line.strip()]
+        self.assertTrue(events)
+        self.assertEqual(events[-1]["phase"], "ready")
+        token = events[-1]["token"]
+        self.assertTrue(token)
+        self.assertTrue(all("path" not in ev for ev in events))
+
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+        conn.request(
+            "GET",
+            "/api/backups/download?token=" + token,
+            headers={"Host": "127.0.0.1"},
+        )
+        res = conn.getresponse()
+        blob = res.read()
+        self.assertEqual(res.status, 200)
+        self.assertIn(".prks-backup", res.getheader("Content-Disposition") or "")
+        self.assertGreater(len(blob), 64)
+        conn.close()
 
     def test_restore_post_requires_origin_when_present(self):
         import http.client

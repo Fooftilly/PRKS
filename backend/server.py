@@ -51,12 +51,15 @@ from backend.backup_restore import (
     BackupError,
     RestoreError,
     backup_max_upload_bytes,
+    cleanup_expired_backup_jobs,
     cleanup_stale_staging,
     create_backup,
     discard_temp_path,
     new_staging_upload_path,
+    run_backup_with_progress,
     stage_restore,
     stream_upload_to_file,
+    take_ready_backup,
     apply_restore,
 )
 from backend.person_image import (
@@ -1722,7 +1725,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path == '/api/settings':
                 self.send_json(200, db.get_app_settings_response())
             elif path == '/api/backups/download':
-                self._handle_backup_download()
+                token = (query.get('token') or [''])[0]
+                self._handle_backup_download(token=token)
+            elif path == '/api/backups/progress':
+                self._handle_backup_progress()
             elif path == '/api/processing-files':
                 db.scan_processing_files()
                 data = db.get_processing_files(include_imported=False)
@@ -2344,20 +2350,75 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_internal_error(exc)
 
-    def _handle_backup_download(self) -> None:
+    def _handle_backup_progress(self) -> None:
+        if _bound_storage is None:
+            self._send_internal_error()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+
+        def write_line(payload: dict) -> None:
+            body = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+            self.wfile.write(body)
+            self.wfile.flush()
+
+        try:
+            run_backup_with_progress(_bound_storage, write_line)
+        except Exception as exc:
+            LOGGER.error(
+                "backup_progress_failed reason=internal error_type=%s request_id=%s",
+                safe_error_type(exc),
+                safe_log_id(self._prks_request_id),
+            )
+            try:
+                write_line(
+                    {
+                        "phase": "failed",
+                        "percent": 0,
+                        "error": "Backup could not be created.",
+                        "reason": "internal",
+                    }
+                )
+            except Exception:
+                return
+
+    def _handle_backup_download(self, token: str = "") -> None:
         if _bound_storage is None:
             self._send_internal_error()
             return
         archive_path = None
         try:
+            if token:
+                archive_path, filename, warnings = take_ready_backup(token.strip())
+                file_size = os.path.getsize(archive_path)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{filename}"',
+                )
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(file_size))
+                self.end_headers()
+                with open(archive_path, "rb") as handle:
+                    while True:
+                        chunk = handle.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                return
             result = create_backup(_bound_storage)
             archive_path = result.archive_path
+            filename = result.filename
             file_size = os.path.getsize(archive_path)
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header(
                 "Content-Disposition",
-                f'attachment; filename="{result.filename}"',
+                f'attachment; filename="{filename}"',
             )
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(file_size))
@@ -2513,6 +2574,7 @@ def run_server(port=PORT, host=DEFAULT_HOST):
         LOGGER.warning("thumbnail_prune_skipped error_type=%s", safe_error_type(e))
     try:
         cleanup_stale_staging(_bound_storage)
+        cleanup_expired_backup_jobs(_bound_storage)
     except Exception as e:
         LOGGER.warning("restore_staging_cleanup_skipped error_type=%s", safe_error_type(e))
     with socketserver.TCPServer((host, port), PRKSHandler) as httpd:

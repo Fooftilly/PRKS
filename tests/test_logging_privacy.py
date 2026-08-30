@@ -130,6 +130,7 @@ class TestSafeRoute(unittest.TestCase):
             "/api/playlists/:id/items/:id",
         )
         self.assertEqual(safe_route("/api/backups/download"), "/api/backups/download")
+        self.assertEqual(safe_route("/api/backups/progress"), "/api/backups/progress")
         self.assertEqual(safe_route("/api/backups/stage"), "/api/backups/stage")
         self.assertEqual(safe_route("/api/backups/restore"), "/api/backups/restore")
 

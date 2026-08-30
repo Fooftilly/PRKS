@@ -6,6 +6,10 @@ later moves to ThreadingHTTPServer or threaded request handling, every mutating
 operation must participate in a maintenance gate so snapshots stay consistent
 across the database and managed files.
 
+Progress and cancel use the same request: GET /api/backups/progress streams
+NDJSON while packing. Aborting that connection cancels packing. Do not run
+backup packing on a worker thread while other HTTP mutations can proceed.
+
 Do not copy the live SQLite file while it may be in use. Snapshots use
 sqlite3.Connection.backup. Never extract an unvalidated backup ZIP in bulk.
 """
@@ -21,6 +25,7 @@ import secrets
 import shutil
 import sqlite3
 import stat
+import threading
 import time
 import zipfile
 from dataclasses import dataclass, fields
@@ -46,6 +51,11 @@ CONFIRM_RESTORE = "RESTORE"
 
 IO_CHUNK_SIZE = 64 * 1024
 STAGING_TTL_SECONDS = 60 * 60
+READY_BACKUP_TTL_SECONDS = 60 * 60
+_PROGRESS_EMIT_INTERVAL = 0.15
+_PROGRESS_PHASES = frozenset(
+    {"snapshot", "archiving", "verifying", "ready", "cancelled", "failed"}
+)
 DEFAULT_MAX_UPLOAD_BYTES = 64 * 1024 * 1024 * 1024
 DEFAULT_MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024 * 1024
 DEFAULT_MAX_ZIP_ENTRIES = 500_000
@@ -150,6 +160,234 @@ class StagingResult:
     manifest: dict[str, Any]
 
 
+_ready_lock = threading.Lock()
+_ready_backups: dict[str, dict[str, Any]] = {}
+
+
+class _BackupProgress:
+    def __init__(
+        self,
+        callback: Optional[Callable[[dict[str, Any]], None]],
+        cancel_event: Optional[threading.Event],
+    ) -> None:
+        self.callback = callback
+        self.cancel_event = cancel_event
+        self.phase = "snapshot"
+        self.files_done = 0
+        self.files_total = 0
+        self.payload_bytes = 1
+        self.archive_bytes = 0
+        self.verify_bytes = 0
+        self._last_emit = 0.0
+        self._last_percent = -1
+
+    def check(self) -> None:
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise BackupError("cancelled", "Backup was cancelled.", http_status=400)
+
+    def set_work(self, payload_bytes: int, files_total: int) -> None:
+        self.payload_bytes = max(1, int(payload_bytes))
+        self.files_total = max(0, int(files_total))
+
+    def percent(self) -> int:
+        if self.phase == "snapshot":
+            return 2
+        total = self.payload_bytes * 2
+        done = self.archive_bytes + self.verify_bytes
+        pct = int((100 * done) / total) if total else 100
+        if self.phase == "ready":
+            return 100
+        return max(2, min(99, pct))
+
+    def emit(self, *, phase: Optional[str] = None, force: bool = False) -> None:
+        self.check()
+        if phase:
+            self.phase = phase
+        now = time.monotonic()
+        pct = self.percent()
+        if (
+            not force
+            and phase is None
+            and now - self._last_emit < _PROGRESS_EMIT_INTERVAL
+            and pct == self._last_percent
+        ):
+            return
+        self._last_emit = now
+        self._last_percent = pct
+        payload = {
+            "phase": self.phase,
+            "percent": pct,
+            "files_done": self.files_done,
+            "files_total": self.files_total,
+            "bytes_done": self.archive_bytes + self.verify_bytes,
+            "bytes_total": self.payload_bytes * 2,
+        }
+        if self.callback is not None:
+            self.callback(payload)
+
+    def add_archive_bytes(self, n: int) -> None:
+        self.archive_bytes += max(0, int(n))
+        self.emit()
+
+    def add_verify_bytes(self, n: int) -> None:
+        self.verify_bytes += max(0, int(n))
+        self.emit()
+
+    def file_done(self) -> None:
+        self.files_done += 1
+        self.emit(force=True)
+
+
+def public_progress_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    phase = str(payload.get("phase") or "")
+    if phase not in _PROGRESS_PHASES:
+        phase = "archiving"
+    out: dict[str, Any] = {
+        "phase": phase,
+        "percent": max(0, min(100, int(payload.get("percent") or 0))),
+        "files_done": max(0, int(payload.get("files_done") or 0)),
+        "files_total": max(0, int(payload.get("files_total") or 0)),
+        "bytes_done": max(0, int(payload.get("bytes_done") or 0)),
+        "bytes_total": max(0, int(payload.get("bytes_total") or 0)),
+    }
+    token = payload.get("token")
+    if isinstance(token, str) and _TOKEN_RE.fullmatch(token):
+        out["token"] = token
+    filename = payload.get("filename")
+    if isinstance(filename, str) and filename.startswith("prks-backup-") and filename.endswith(BACKUP_EXTENSION):
+        out["filename"] = filename
+    warnings = payload.get("warnings")
+    if isinstance(warnings, list):
+        out["warnings"] = [str(item) for item in warnings if isinstance(item, str)]
+    error = payload.get("error")
+    if isinstance(error, str) and error:
+        out["error"] = error
+    reason = payload.get("reason")
+    if isinstance(reason, str) and _SAFE_REASON_RE.fullmatch(reason):
+        out["reason"] = reason
+    return out
+
+
+_SAFE_REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def stash_ready_backup(result: BackupResult) -> str:
+    token = secrets.token_urlsafe(24)
+    with _ready_lock:
+        _expire_ready_backups_unlocked()
+        _ready_backups[token] = {
+            "path": result.archive_path,
+            "filename": result.filename,
+            "warnings": list(result.warnings),
+            "created_unix": time.time(),
+        }
+    return token
+
+
+def take_ready_backup(token: str) -> tuple[str, str, list[str]]:
+    if not isinstance(token, str) or not _TOKEN_RE.fullmatch(token):
+        raise BackupError("unknown_token", "Backup is not available.", http_status=404)
+    with _ready_lock:
+        item = _ready_backups.pop(token, None)
+    if not item:
+        raise BackupError("unknown_token", "Backup is not available.", http_status=404)
+    path = str(item.get("path") or "")
+    filename = str(item.get("filename") or "")
+    warnings = [str(w) for w in (item.get("warnings") or []) if isinstance(w, str)]
+    if not path or not os.path.isfile(path):
+        raise BackupError("unknown_token", "Backup is not available.", http_status=404)
+    return path, filename, warnings
+
+
+def _expire_ready_backups_unlocked(*, now: Optional[float] = None) -> None:
+    current = time.time() if now is None else now
+    expired = []
+    for token, item in _ready_backups.items():
+        created = float(item.get("created_unix") or 0)
+        if created <= 0 or (current - created) >= READY_BACKUP_TTL_SECONDS:
+            expired.append(token)
+    for token in expired:
+        item = _ready_backups.pop(token, None)
+        if item and item.get("path"):
+            _safe_remove(str(item["path"]))
+
+
+def cleanup_expired_backup_jobs(config: StorageConfig, *, now: Optional[float] = None) -> None:
+    _assert_testing_safe(config)
+    with _ready_lock:
+        _expire_ready_backups_unlocked(now=now)
+
+
+def run_backup_with_progress(
+    config: StorageConfig,
+    write_line: Callable[[dict[str, Any]], None],
+) -> None:
+    """Pack a backup while emitting privacy-safe progress dicts. Client abort cancels."""
+    _assert_testing_safe(config)
+    cancel_event = threading.Event()
+
+    def emit(payload: dict[str, Any]) -> None:
+        if cancel_event.is_set():
+            raise BackupError("cancelled", "Backup was cancelled.", http_status=400)
+        try:
+            write_line(public_progress_payload(payload))
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError) as exc:
+            cancel_event.set()
+            raise BackupError("cancelled", "Backup was cancelled.", http_status=400) from exc
+
+    try:
+        result = create_backup(config, progress=emit, cancel_event=cancel_event)
+        token = stash_ready_backup(result)
+        emit(
+            {
+                "phase": "ready",
+                "percent": 100,
+                "files_done": result.summary.get("pdf_files") or 0,
+                "files_total": result.summary.get("pdf_files") or 0,
+                "bytes_done": 1,
+                "bytes_total": 1,
+                "token": token,
+                "filename": result.filename,
+                "warnings": list(result.warnings),
+            }
+        )
+    except BackupError as exc:
+        if cancel_event.is_set() or exc.reason == "cancelled":
+            try:
+                write_line(public_progress_payload({"phase": "cancelled", "percent": 0}))
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                return
+            return
+        try:
+            write_line(
+                public_progress_payload(
+                    {
+                        "phase": "failed",
+                        "percent": 0,
+                        "error": exc.message,
+                        "reason": exc.reason,
+                    }
+                )
+            )
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            return
+    except Exception as exc:
+        LOGGER.error("backup_failed reason=internal error_type=%s", safe_error_type(exc))
+        try:
+            write_line(
+                public_progress_payload(
+                    {
+                        "phase": "failed",
+                        "percent": 0,
+                        "error": "Backup could not be created.",
+                        "reason": "internal",
+                    }
+                )
+            )
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            return
+
+
 def backup_max_upload_bytes() -> int:
     raw = (os.environ.get("PRKS_BACKUP_MAX_UPLOAD_BYTES") or "").strip()
     if not raw:
@@ -163,11 +401,18 @@ def backup_max_upload_bytes() -> int:
     return value
 
 
-def iter_file_chunks(fileobj, *, chunk_size: int = IO_CHUNK_SIZE) -> Iterator[bytes]:
+def iter_file_chunks(
+    fileobj,
+    *,
+    chunk_size: int = IO_CHUNK_SIZE,
+    cancel_event: Optional[threading.Event] = None,
+) -> Iterator[bytes]:
     size = int(chunk_size)
     if size < 1:
         size = IO_CHUNK_SIZE
     while True:
+        if cancel_event is not None and cancel_event.is_set():
+            raise BackupError("cancelled", "Backup was cancelled.", http_status=400)
         chunk = fileobj.read(size)
         if not chunk:
             break
@@ -643,18 +888,29 @@ def _payload_allowed(path: str, *, processing_allowed: bool) -> bool:
     return False
 
 
-def _add_file_to_zip(zf: zipfile.ZipFile, arcname: str, src_path: str) -> dict[str, Any]:
+def _add_file_to_zip(
+    zf: zipfile.ZipFile,
+    arcname: str,
+    src_path: str,
+    *,
+    tracker: Optional[_BackupProgress] = None,
+) -> dict[str, Any]:
     compress = _entry_compress_type(arcname)
     info = zipfile.ZipInfo(arcname, date_time=time.gmtime()[:6])
     info.compress_type = compress
     info.external_attr = (0o100600 & 0xFFFF) << 16
     digest = hashlib.sha256()
     size = 0
+    cancel = None if tracker is None else tracker.cancel_event
     with open(src_path, "rb") as src, zf.open(info, "w") as dest:
-        for chunk in iter_file_chunks(src):
+        for chunk in iter_file_chunks(src, cancel_event=cancel):
             digest.update(chunk)
             dest.write(chunk)
             size += len(chunk)
+            if tracker is not None:
+                tracker.add_archive_bytes(len(chunk))
+    if tracker is not None:
+        tracker.file_done()
     return {"path": arcname, "size": size, "sha256": digest.hexdigest()}
 
 
@@ -670,6 +926,8 @@ def create_backup(
     config: StorageConfig,
     *,
     post_archive_hook: Optional[Callable[[str], None]] = None,
+    progress: Optional[Callable[[dict[str, Any]], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> BackupResult:
     """Build a verified .prks-backup next to live storage, then self-verify."""
     _assert_testing_safe(config)
@@ -677,7 +935,9 @@ def create_backup(
     created = _utc_now()
     filename = _backup_filename(created)
     tmp_paths: list[str] = []
+    tracker = _BackupProgress(progress, cancel_event)
     try:
+        tracker.check()
         if not os.path.isfile(config.db_path):
             raise BackupError(
                 "missing_database",
@@ -731,6 +991,10 @@ def create_backup(
                 http_status=400,
             )
 
+        file_total = 1 + len(pdf_files) + len(people_files) + len(processing_files)
+        tracker.set_work(payload_bytes, file_total)
+        tracker.emit(phase="snapshot", force=True)
+
         maint = _ensure_maintenance_dirs(config)
         work_dir = os.path.join(maint, "backup", secrets.token_urlsafe(12))
         _mkdir_owner(work_dir)
@@ -739,6 +1003,7 @@ def create_backup(
         archive_path = os.path.join(work_dir, filename)
 
         sqlite_snapshot(config.db_path, snapshot_path)
+        tracker.check()
         ok, reason = sqlite_integrity_report(snapshot_path)
         if not ok:
             raise BackupError(
@@ -762,16 +1027,19 @@ def create_backup(
                 f"{n} referenced PDF{'s were' if n != 1 else ' was'} already missing from the current library."
             )
 
+        tracker.emit(phase="archiving", force=True)
         entries: list[dict[str, Any]] = []
         with zipfile.ZipFile(archive_path, "w", allowZip64=True) as zf:
-            entries.append(_add_file_to_zip(zf, ARCHIVE_DB_PATH, snapshot_path))
+            entries.append(_add_file_to_zip(zf, ARCHIVE_DB_PATH, snapshot_path, tracker=tracker))
             for rel, abs_path in pdf_files:
-                entries.append(_add_file_to_zip(zf, f"files/pdfs/{rel}", abs_path))
+                entries.append(_add_file_to_zip(zf, f"files/pdfs/{rel}", abs_path, tracker=tracker))
             for rel, abs_path in people_files:
-                entries.append(_add_file_to_zip(zf, f"files/people/{rel}", abs_path))
+                entries.append(
+                    _add_file_to_zip(zf, f"files/people/{rel}", abs_path, tracker=tracker)
+                )
             for rel, abs_path in processing_files:
                 entries.append(
-                    _add_file_to_zip(zf, f"files/for_processing/{rel}", abs_path)
+                    _add_file_to_zip(zf, f"files/for_processing/{rel}", abs_path, tracker=tracker)
                 )
             manifest = {
                 "format": FORMAT_ID,
@@ -803,9 +1071,11 @@ def create_backup(
         if post_archive_hook is not None:
             post_archive_hook(archive_path)
 
+        tracker.emit(phase="verifying", force=True)
         verified = verify_backup(
             archive_path,
             current_schema_version=max(PRKS_SCHEMA_VERSION, db_schema),
+            tracker=tracker,
         )
         if not verified.get("ok"):
             raise BackupError(
@@ -839,7 +1109,10 @@ def create_backup(
             summary={**summary, "warnings": list(warnings), "audit": audit},
         )
     except BackupError as exc:
-        LOGGER.error("backup_failed reason=%s error_type=%s", exc.reason, safe_error_type(exc))
+        if exc.reason == "cancelled":
+            LOGGER.info("backup_cancelled")
+        else:
+            LOGGER.error("backup_failed reason=%s error_type=%s", exc.reason, safe_error_type(exc))
         raise
     except RestoreError as exc:
         LOGGER.error("backup_failed reason=%s error_type=%s", exc.reason, safe_error_type(exc))
@@ -851,12 +1124,12 @@ def create_backup(
         for path in tmp_paths:
             _safe_remove(path)
 
-
 def verify_backup(
     archive_path: str,
     *,
     current_schema_version: int = PRKS_SCHEMA_VERSION,
     extract_dir: Optional[str] = None,
+    tracker: Optional[_BackupProgress] = None,
 ) -> dict[str, Any]:
     """Reopen an archive and fully verify it. Optionally extract payload into extract_dir."""
     try:
@@ -864,7 +1137,10 @@ def verify_backup(
             archive_path,
             current_schema_version=current_schema_version,
             extract_dir=extract_dir,
+            tracker=tracker,
         )
+    except BackupError:
+        raise
     except RestoreError as exc:
         return {
             "ok": False,
@@ -881,6 +1157,7 @@ def _verify_backup_inner(
     *,
     current_schema_version: int,
     extract_dir: Optional[str],
+    tracker: Optional[_BackupProgress] = None,
 ) -> dict[str, Any]:
     if not os.path.isfile(archive_path):
         raise RestoreError("missing_archive", "Backup archive could not be read.")
@@ -995,9 +1272,12 @@ def _verify_backup_inner(
             with zf.open(info, "r") as src:
                 out = open(dest_path, "wb") if dest_path else None
                 try:
-                    for chunk in iter_file_chunks(src):
+                    cancel = None if tracker is None else tracker.cancel_event
+                    for chunk in iter_file_chunks(src, cancel_event=cancel):
                         actual += len(chunk)
                         total_written += len(chunk)
+                        if tracker is not None:
+                            tracker.add_verify_bytes(len(chunk))
                         if actual > int(meta["size"]):
                             raise RestoreError(
                                 "size_mismatch",

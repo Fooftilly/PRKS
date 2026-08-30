@@ -598,7 +598,11 @@ async function initBibtexExportFieldsSetting() {
 
 function initPrksBackupRestoreAction() {
     const downloadBtn = document.getElementById('prks-backup-download-btn');
+    const cancelBtn = document.getElementById('prks-backup-cancel-btn');
     const downloadStatus = document.getElementById('prks-backup-download-status');
+    const progressWrap = document.getElementById('prks-backup-progress');
+    const progressBar = document.getElementById('prks-backup-progress-bar');
+    const progressLabel = document.getElementById('prks-backup-progress-label');
     const fileInput = document.getElementById('prks-backup-file-input');
     const chooseBtn = document.getElementById('prks-backup-choose-btn');
     const fileLabel = document.getElementById('prks-backup-file-label');
@@ -615,6 +619,46 @@ function initPrksBackupRestoreAction() {
 
     let stagedToken = '';
     let restoreBusy = false;
+    let backupAbort = null;
+
+    const phaseLabel = (ev) => {
+        const phase = String(ev && ev.phase ? ev.phase : '');
+        const filesDone = Number(ev && ev.files_done) || 0;
+        const filesTotal = Number(ev && ev.files_total) || 0;
+        const filePart = filesTotal > 0 ? ` ${filesDone} of ${filesTotal} files.` : '';
+        if (phase === 'snapshot') return 'Snapshotting database…';
+        if (phase === 'archiving') return 'Packing files…' + filePart;
+        if (phase === 'verifying') return 'Verifying backup…' + filePart;
+        if (phase === 'ready') return 'Download starting…';
+        if (phase === 'cancelled') return 'Backup cancelled.';
+        if (phase === 'failed') return (ev && ev.error) || 'Backup could not be created.';
+        return 'Preparing backup…';
+    };
+
+    const setBackupProgressUi = (ev) => {
+        const pct = Math.max(0, Math.min(100, Number(ev && ev.percent) || 0));
+        if (progressBar) progressBar.value = pct;
+        if (progressLabel) progressLabel.textContent = phaseLabel(ev);
+        if (progressWrap) progressWrap.classList.remove('hidden');
+        progressWrap && progressWrap.setAttribute('aria-busy', ev && ev.phase === 'ready' ? 'false' : 'true');
+    };
+
+    const hideBackupProgress = () => {
+        if (progressWrap) {
+            progressWrap.classList.add('hidden');
+            progressWrap.setAttribute('aria-busy', 'false');
+        }
+        if (progressBar) progressBar.value = 0;
+        if (progressLabel) progressLabel.textContent = '';
+    };
+
+    const setBackupBusy = (busy) => {
+        downloadBtn.disabled = !!busy;
+        if (cancelBtn) {
+            cancelBtn.classList.toggle('hidden', !busy);
+            cancelBtn.disabled = !busy;
+        }
+    };
 
     const setRestoreBusy = (busy) => {
         restoreBusy = !!busy;
@@ -653,16 +697,106 @@ function initPrksBackupRestoreAction() {
         }
     };
 
-    downloadBtn.addEventListener('click', () => {
-        if (downloadStatus) downloadStatus.textContent = 'Preparing backup… Verifying backup… Download starting…';
+    const startBackupDownload = (token, filename) => {
         const a = document.createElement('a');
-        a.href = '/api/backups/download';
-        a.setAttribute('download', '');
+        const q = new URLSearchParams({ token: String(token || '') });
+        a.href = '/api/backups/download?' + q.toString();
+        if (filename) a.setAttribute('download', filename);
+        else a.setAttribute('download', '');
         a.style.display = 'none';
         document.body.appendChild(a);
         a.click();
         a.remove();
+    };
+
+    const readBackupProgress = async (reader) => {
+        const decoder = new TextDecoder();
+        let buf = '';
+        let last = null;
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop() || '';
+            for (const line of lines) {
+                const raw = line.trim();
+                if (!raw) continue;
+                let ev;
+                try {
+                    ev = JSON.parse(raw);
+                } catch (_e) {
+                    continue;
+                }
+                last = ev;
+                setBackupProgressUi(ev);
+                if (ev.phase === 'ready' && ev.token) {
+                    startBackupDownload(ev.token, ev.filename);
+                }
+            }
+        }
+        if (buf.trim()) {
+            try {
+                last = JSON.parse(buf.trim());
+                setBackupProgressUi(last);
+                if (last.phase === 'ready' && last.token) {
+                    startBackupDownload(last.token, last.filename);
+                }
+            } catch (_e) {
+                /* ignore trailing fragment */
+            }
+        }
+        return last;
+    };
+
+    downloadBtn.addEventListener('click', async () => {
+        if (backupAbort) return;
+        setBackupBusy(true);
+        hideBackupProgress();
+        setBackupProgressUi({ phase: 'snapshot', percent: 1 });
+        if (downloadStatus) downloadStatus.textContent = '';
+        backupAbort = new AbortController();
+        try {
+            if (typeof prksStartBackupProgress !== 'function') {
+                throw new Error('Backup API unavailable.');
+            }
+            const reader = await prksStartBackupProgress(backupAbort.signal);
+            const last = await readBackupProgress(reader);
+            if (!last || last.phase === 'cancelled') {
+                if (downloadStatus) downloadStatus.textContent = 'Backup cancelled.';
+                hideBackupProgress();
+                return;
+            }
+            if (last.phase === 'failed') {
+                hideBackupProgress();
+                if (downloadStatus) {
+                    downloadStatus.textContent =
+                        last.error || 'Backup could not be created.';
+                }
+                return;
+            }
+            hideBackupProgress();
+            const extra = Array.isArray(last.warnings) && last.warnings.length ? ` ${last.warnings.join(' ')}` : '';
+            if (downloadStatus) downloadStatus.textContent = 'Download starting…' + extra;
+        } catch (e) {
+            if (e && e.name === 'AbortError') {
+                if (downloadStatus) downloadStatus.textContent = 'Backup cancelled.';
+                hideBackupProgress();
+            } else if (downloadStatus) {
+                downloadStatus.textContent = (e && e.message) || 'Backup could not be created.';
+            }
+        } finally {
+            backupAbort = null;
+            setBackupBusy(false);
+        }
     });
+
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+            if (!backupAbort) return;
+            backupAbort.abort();
+        });
+    }
 
     if (chooseBtn && fileInput) {
         chooseBtn.addEventListener('click', () => {

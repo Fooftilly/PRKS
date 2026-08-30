@@ -76,6 +76,7 @@ _STATIC_API_PATHS = frozenset(
         "/api/publishers",
         "/api/settings",
         "/api/backups/download",
+        "/api/backups/progress",
         "/api/backups/stage",
         "/api/backups/restore",
         "/api/processing-files",
