@@ -121,3 +121,19 @@ Never swallow migration DDL failures.
 Never manually bump `schema_version` before migration success.
 Migrations may modify SQLite state only, not managed filesystem data.
 
+## Bulk work mutations
+
+Bulk work mutations must be validated before modification and commit atomically.
+
+Do not implement frontend bulk operations as one HTTP mutation per selected work
+when a transactional bulk backend operation exists.
+
+Bulk selection is ephemeral route-local UI state; it is not canonical application
+data.
+
+Adding new bulk actions requires explicit server-side action validation. Never
+allow arbitrary field names or dynamic method dispatch.
+
+Bulk deletion is not part of generic organization semantics and requires a
+separate reviewed design.
+

@@ -72,6 +72,25 @@ PRKS_BIBTEX_EXPORT_FIELD_IDS: Tuple[str, ...] = (
 )
 PRKS_BIBTEX_EXPORT_FIELDS_DEFAULT: Dict[str, bool] = {k: True for k in PRKS_BIBTEX_EXPORT_FIELD_IDS}
 
+PRKS_WORK_STATUSES: Tuple[str, ...] = (
+    "Not Started",
+    "Planned",
+    "In Progress",
+    "Completed",
+    "Paused",
+)
+PRKS_WORK_STATUS_SET = frozenset(PRKS_WORK_STATUSES)
+PRKS_BULK_WORK_ACTIONS = frozenset({"set_status", "move_folder", "add_tags", "remove_tags"})
+PRKS_BULK_WORK_MAX = 500
+
+
+class BulkWorkError(ValueError):
+    """Controlled bulk-organization failure. http_status is 400 or 404."""
+
+    def __init__(self, message: str, http_status: int = 400):
+        super().__init__(message)
+        self.http_status = http_status
+
 
 def _prks_parse_bibtex_export_fields_json(raw: str) -> Dict[str, bool]:
     """Load stored JSON; invalid or missing → all True. Unknown keys ignored."""
@@ -2444,6 +2463,158 @@ class PRKSDatabase:
             raise
         finally:
             conn.close()
+
+    def _normalize_bulk_ids(self, raw, *, kind: str) -> List[str]:
+        if not isinstance(raw, list):
+            raise BulkWorkError(f"{kind}_ids must be a JSON array.")
+        if not raw:
+            raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
+        if len(raw) > PRKS_BULK_WORK_MAX:
+            raise BulkWorkError(
+                "Too many files selected." if kind == "work" else "Too many tags selected."
+            )
+        out: List[str] = []
+        seen = set()
+        for item in raw:
+            if not isinstance(item, str):
+                raise BulkWorkError(f"{kind} IDs must be strings.")
+            nid = item.strip()
+            if not nid:
+                raise BulkWorkError(f"{kind} IDs must be non-empty.")
+            if nid in seen:
+                continue
+            seen.add(nid)
+            out.append(nid)
+        if not out:
+            raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
+        return out
+
+    def _bulk_ids_exist(self, conn, table: str, ids: List[str]) -> bool:
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT id FROM {table} WHERE id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+        found = {row["id"] for row in rows}
+        return found == set(ids)
+
+    def _prune_tag_if_unused_on_conn(self, conn, tag_id: str) -> None:
+        if not tag_id:
+            return
+        row = conn.execute(
+            """
+            SELECT (
+                EXISTS(SELECT 1 FROM work_tags WHERE tag_id = ?)
+                OR EXISTS(SELECT 1 FROM folder_tags WHERE tag_id = ?)
+            ) AS in_use
+            """,
+            (tag_id, tag_id),
+        ).fetchone()
+        if row and row["in_use"]:
+            return
+        conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+
+    def bulk_update_works(self, data: dict) -> Dict[str, Any]:
+        """Atomic organization of many works. One connection, one transaction.
+
+        ``updated`` is the number of selected works processed, not relationship
+        rows inserted or deleted. Tag add/remove are idempotent.
+        """
+        if not isinstance(data, dict):
+            raise BulkWorkError("JSON object body required")
+        action = data.get("action")
+        if not isinstance(action, str) or action not in PRKS_BULK_WORK_ACTIONS:
+            raise BulkWorkError("Unknown bulk action.")
+        work_ids = self._normalize_bulk_ids(data.get("work_ids"), kind="work")
+
+        status: Optional[str] = None
+        folder_id: Optional[str] = None
+        tag_ids: List[str] = []
+        target_count = 1
+
+        if action == "set_status":
+            raw_status = data.get("status")
+            if not isinstance(raw_status, str) or raw_status not in PRKS_WORK_STATUS_SET:
+                raise BulkWorkError("Invalid status.")
+            status = raw_status
+        elif action == "move_folder":
+            if "folder_id" not in data:
+                raise BulkWorkError("folder_id is required.")
+            raw_folder = data.get("folder_id")
+            if raw_folder is None:
+                folder_id = None
+            elif isinstance(raw_folder, str):
+                stripped = raw_folder.strip()
+                if not stripped:
+                    raise BulkWorkError("folder_id is invalid.")
+                folder_id = stripped
+            else:
+                raise BulkWorkError("folder_id must be a string or null.")
+        else:
+            tag_ids = self._normalize_bulk_ids(data.get("tag_ids"), kind="tag")
+            target_count = len(tag_ids)
+
+        conn = self.get_connection()
+        try:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._bulk_ids_exist(conn, "works", work_ids):
+                raise BulkWorkError("One or more selected files no longer exist.", 404)
+            if action == "move_folder" and folder_id:
+                row = conn.execute("SELECT id FROM folders WHERE id = ?", (folder_id,)).fetchone()
+                if not row:
+                    raise BulkWorkError("Folder not found.", 404)
+            if action in ("add_tags", "remove_tags"):
+                if not self._bulk_ids_exist(conn, "tags", tag_ids):
+                    raise BulkWorkError("One or more selected tags no longer exist.", 404)
+
+            if action == "set_status":
+                conn.executemany(
+                    "UPDATE works SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    [(status, wid) for wid in work_ids],
+                )
+            elif action == "move_folder":
+                conn.executemany(
+                    "DELETE FROM folder_files WHERE work_id = ?",
+                    [(wid,) for wid in work_ids],
+                )
+                if folder_id:
+                    conn.executemany(
+                        "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?)",
+                        [(folder_id, wid) for wid in work_ids],
+                    )
+            elif action == "add_tags":
+                pairs = [(wid, tid) for wid in work_ids for tid in tag_ids]
+                conn.executemany(
+                    "INSERT INTO work_tags (work_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    pairs,
+                )
+            else:
+                pairs = [(wid, tid) for wid in work_ids for tid in tag_ids]
+                conn.executemany(
+                    "DELETE FROM work_tags WHERE work_id = ? AND tag_id = ?",
+                    pairs,
+                )
+                for tid in tag_ids:
+                    self._prune_tag_if_unused_on_conn(conn, tid)
+
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+        return {
+            "status": "updated",
+            "action": action,
+            "requested": len(work_ids),
+            "updated": len(work_ids),
+            "target_count": target_count,
+        }
 
     def get_related_folders_for_work(self, work_id: str) -> List[dict]:
         # Find folders containing ANY work that shares an Author/Reviewer/etc. with THIS work

@@ -7192,6 +7192,228 @@ html.prks-force-mobile #work-header-doc-type-slot {
     }
 }
 
+.page-header__title-row,
+.page-header__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex-shrink: 0;
+}
+
+.page-header__title-row {
+    justify-content: space-between;
+    width: 100%;
+    gap: var(--space-md);
+}
+
+.page-header__title-row h2 {
+    min-width: 0;
+}
+
+.prks-work-select-btn {
+    flex-shrink: 0;
+}
+
+.prks-work-select-btn[hidden] {
+    display: none !important;
+}
+
+.project-card--work-card {
+    position: relative;
+}
+
+.project-card--work-card .work-card__select {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 2;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin: 0;
+    cursor: pointer;
+}
+
+body.prks-bulk-selection-active .project-card--work-card .work-card__select {
+    display: flex;
+}
+
+.work-card__checkbox {
+    width: 22px;
+    height: 22px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.project-card--work-card.is-selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+    background: var(--accent-soft);
+}
+
+body.prks-bulk-selection-active #main-content {
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+}
+
+.prks-bulk-toolbar {
+    position: fixed;
+    left: 50%;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    z-index: var(--z-toolbar);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm);
+    max-width: min(960px, calc(100vw - 24px));
+    width: max-content;
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+}
+
+.prks-bulk-toolbar.hidden {
+    display: none !important;
+}
+
+.prks-bulk-toolbar__count {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    padding: 0 6px;
+    white-space: nowrap;
+}
+
+.prks-bulk-toolbar__actions {
+    display: flex;
+    gap: var(--space-sm);
+}
+
+.prks-bulk-toolbar__organize {
+    display: none;
+}
+
+.prks-bulk-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal-confirm);
+    padding: var(--space-xl);
+    box-sizing: border-box;
+}
+
+.prks-bulk-sheet:not(.hidden) {
+    display: flex !important;
+    align-items: flex-end;
+    justify-content: center;
+}
+
+.prks-bulk-sheet__scrim {
+    position: absolute;
+    inset: 0;
+    background: var(--overlay-scrim);
+}
+
+.prks-bulk-sheet__panel {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 480px;
+    max-height: min(80vh, 640px);
+    overflow: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-2xl);
+}
+
+.prks-bulk-sheet__title {
+    margin: 0 0 var(--space-md);
+    font-size: 1.15rem;
+    font-weight: 600;
+}
+
+.prks-bulk-sheet__confirm {
+    margin: var(--space-md) 0;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+
+.prks-bulk-sheet__error {
+    min-height: 1.2em;
+    margin: 0 0 var(--space-md);
+    font-size: var(--text-sm);
+    color: var(--text-danger);
+}
+
+.prks-bulk-sheet__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-sm);
+}
+
+.prks-bulk-choice-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 40vh;
+    overflow: auto;
+}
+
+.prks-bulk-choice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 6px;
+    cursor: pointer;
+    font-size: var(--text-sm);
+}
+
+.prks-bulk-choice input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+}
+
+.prks-bulk-organize-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+@media (max-width: 640px) {
+    .prks-bulk-toolbar {
+        left: 12px;
+        right: 12px;
+        transform: none;
+        width: auto;
+        max-width: none;
+    }
+
+    .prks-bulk-toolbar__actions--desktop {
+        display: none;
+    }
+
+    .prks-bulk-toolbar__organize {
+        display: inline-flex;
+    }
+
+    .work-card__checkbox {
+        width: 24px;
+        height: 24px;
+    }
+
+    .project-card--work-card .work-card__select {
+        width: 32px;
+        height: 32px;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

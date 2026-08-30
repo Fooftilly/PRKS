@@ -20,6 +20,7 @@ from urllib.request import urlopen, Request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.db_manager import (
     PRKSDatabase,
+    BulkWorkError,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
@@ -1897,6 +1898,31 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     )
                 )
                 self.send_json(200, {"status": "logged", "request_id": self._prks_request_id})
+            elif path == '/api/works/bulk':
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                try:
+                    result = db.bulk_update_works(data)
+                except BulkWorkError as e:
+                    self.send_json(int(e.http_status), {'error': str(e)})
+                    return
+                LOGGER.info(
+                    "bulk_work_update action=%s work_count=%s target_count=%s request_id=%s",
+                    safe_log_label(result.get("action")),
+                    int(result.get("requested") or 0),
+                    int(result.get("target_count") or 0),
+                    safe_log_id(self._prks_request_id),
+                )
+                self.send_json(
+                    200,
+                    {
+                        "status": result.get("status"),
+                        "action": result.get("action"),
+                        "requested": result.get("requested"),
+                        "updated": result.get("updated"),
+                    },
+                )
             elif path == '/api/works/reindex-pdf-text':
                 force = bool(data.get("force", False)) if isinstance(data, dict) else False
                 summary = text_index.reconcile_all(db, force=force)

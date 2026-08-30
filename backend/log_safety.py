@@ -56,12 +56,14 @@ KNOWN_CLIENT_SOURCES = frozenset(
         "tags.fetch",
         "processing-files.fetch",
         "pdf.viewer",
+        "works.bulk",
     }
 )
 
 _STATIC_API_PATHS = frozenset(
     {
         "/api/works",
+        "/api/works/bulk",
         "/api/works/reindex-pdf-text",
         "/api/works/linearize-existing-pdfs",
         "/api/playlists",

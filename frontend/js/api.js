@@ -27,6 +27,7 @@ const PRKS_API_ERROR_SOURCES = {
     publishers: 'publishers.fetch',
     tags: 'tags.fetch',
     'processing-files': 'processing-files.fetch',
+    'works-bulk': 'works.bulk',
     request: 'api',
 };
 
@@ -633,6 +634,27 @@ async function patchFolder(folderId, updates) {
         throw new Error(data.error || 'Could not update folder.');
     }
 }
+
+async function bulkUpdateWorks(payload) {
+    const res = await fetch('/api/works/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const err = new Error(
+            (data && data.error) || 'Could not update the selected files.'
+        );
+        err.httpStatus = res.status;
+        throw err;
+    }
+    return data;
+}
+
+window.bulkUpdateWorks = bulkUpdateWorks;
+window.fetchFolders = fetchFolders;
+window.fetchTags = fetchTags;
 
 (function prksPrefetchAppSettings() {
     void prksLoadAppSettings();

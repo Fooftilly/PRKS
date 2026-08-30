@@ -141,6 +141,7 @@ class TestSafeRoute(unittest.TestCase):
             safe_route("/api/diagnostics/performance/reset"),
             "/api/diagnostics/performance/reset",
         )
+        self.assertEqual(safe_route("/api/works/bulk"), "/api/works/bulk")
 
     def test_unknown_api_fails_closed(self):
         self.assertEqual(safe_route("/api/not-a-real-family/secret"), "/api/:unknown")

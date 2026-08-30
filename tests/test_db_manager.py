@@ -16,6 +16,8 @@ apply_isolated_test_env(_PROJECT_DIR)
 from backend.db_manager import (
     PRKSDatabase,
     PRKS_BIBTEX_EXPORT_FIELD_IDS,
+    PRKS_BULK_WORK_MAX,
+    BulkWorkError,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
@@ -1226,3 +1228,196 @@ class TestDBManager(unittest.TestCase):
         self.assertEqual(staged, [])
         kept = self.db.execute_query("SELECT id FROM processing_files")
         self.assertEqual(kept, [])
+
+    def _folder_ids_for_work(self, work_id):
+        rows = self.db.execute_query(
+            "SELECT folder_id FROM folder_files WHERE work_id = ? ORDER BY folder_id",
+            (work_id,),
+        )
+        return [r["folder_id"] for r in rows]
+
+    def _tag_ids_for_work(self, work_id):
+        return sorted(t["id"] for t in self.db.get_work_tags(work_id))
+
+    def test_bulk_set_status_updates_selected_only(self):
+        a = self.db.add_work(title="A", status="Paused")
+        b = self.db.add_work(title="B", status="Paused")
+        c = self.db.add_work(title="C", status="Paused")
+        before_c = self.db.get_work(c)["updated_at"]
+        result = self.db.bulk_update_works(
+            {"work_ids": [a, b], "action": "set_status", "status": "Completed"}
+        )
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(result["action"], "set_status")
+        self.assertEqual(result["requested"], 2)
+        self.assertEqual(result["updated"], 2)
+        self.assertEqual(self.db.get_work(a)["status"], "Completed")
+        self.assertEqual(self.db.get_work(b)["status"], "Completed")
+        self.assertEqual(self.db.get_work(c)["status"], "Paused")
+        self.assertEqual(self.db.get_work(c)["updated_at"], before_c)
+        self.assertGreaterEqual(self.db.get_work(a)["updated_at"], before_c)
+
+    def test_bulk_set_status_rejects_invalid_values(self):
+        w = self.db.add_work(title="S", status="Planned")
+        for bad in ("Finished", "Read", ""):
+            with self.assertRaises(BulkWorkError) as ctx:
+                self.db.bulk_update_works(
+                    {"work_ids": [w], "action": "set_status", "status": bad}
+                )
+            self.assertEqual(ctx.exception.http_status, 400)
+            self.assertEqual(self.db.get_work(w)["status"], "Planned")
+
+    def test_bulk_move_folder_and_clear(self):
+        fx = self.db.add_folder(title="X", description="")
+        fy = self.db.add_folder(title="Y", description="")
+        a = self.db.add_work(title="A")
+        b = self.db.add_work(title="B")
+        c = self.db.add_work(title="C")
+        self.db.move_work_to_folder(a, fx)
+        self.db.move_work_to_folder(b, fx)
+        self.db.move_work_to_folder(c, fx)
+        result = self.db.bulk_update_works(
+            {"work_ids": [a, b], "action": "move_folder", "folder_id": fy}
+        )
+        self.assertEqual(result["updated"], 2)
+        self.assertEqual(self._folder_ids_for_work(a), [fy])
+        self.assertEqual(self._folder_ids_for_work(b), [fy])
+        self.assertEqual(self._folder_ids_for_work(c), [fx])
+        self.db.bulk_update_works(
+            {"work_ids": [a, b], "action": "move_folder", "folder_id": None}
+        )
+        self.assertEqual(self._folder_ids_for_work(a), [])
+        self.assertEqual(self._folder_ids_for_work(b), [])
+        self.assertEqual(self._folder_ids_for_work(c), [fx])
+
+    def test_bulk_tags_add_remove_idempotent(self):
+        a = self.db.add_work(title="A")
+        b = self.db.add_work(title="B")
+        c = self.db.add_work(title="C")
+        t1 = self.db.add_tag("T1")["id"]
+        t2 = self.db.add_tag("T2")["id"]
+        self.db.add_tag_to_work(a, t1)
+        self.db.add_tag_to_work(b, t2)
+        self.db.add_tag_to_work(c, t1)
+        self.db.bulk_update_works(
+            {"work_ids": [a, b], "action": "add_tags", "tag_ids": [t1, t2]}
+        )
+        self.assertEqual(self._tag_ids_for_work(a), sorted([t1, t2]))
+        self.assertEqual(self._tag_ids_for_work(b), sorted([t1, t2]))
+        self.assertEqual(self._tag_ids_for_work(c), [t1])
+        rels = self.db.execute_query("SELECT work_id, tag_id FROM work_tags")
+        pairs = [(r["work_id"], r["tag_id"]) for r in rels]
+        self.assertEqual(len(pairs), len(set(pairs)))
+        self.db.bulk_update_works(
+            {"work_ids": [a, b], "action": "remove_tags", "tag_ids": [t1]}
+        )
+        self.assertEqual(self._tag_ids_for_work(a), [t2])
+        self.assertEqual(self._tag_ids_for_work(b), [t2])
+        self.assertEqual(self._tag_ids_for_work(c), [t1])
+
+    def test_bulk_invalid_work_is_atomic(self):
+        w = self.db.add_work(title="Valid", status="Planned")
+        with self.assertRaises(BulkWorkError) as ctx:
+            self.db.bulk_update_works(
+                {
+                    "work_ids": [w, "W-MISSING"],
+                    "action": "set_status",
+                    "status": "Completed",
+                }
+            )
+        self.assertEqual(ctx.exception.http_status, 404)
+        self.assertEqual(self.db.get_work(w)["status"], "Planned")
+
+    def test_bulk_invalid_folder_is_atomic(self):
+        f = self.db.add_folder(title="Keep", description="")
+        w = self.db.add_work(title="Valid")
+        self.db.move_work_to_folder(w, f)
+        with self.assertRaises(BulkWorkError) as ctx:
+            self.db.bulk_update_works(
+                {"work_ids": [w], "action": "move_folder", "folder_id": "F-MISSING"}
+            )
+        self.assertEqual(ctx.exception.http_status, 404)
+        self.assertEqual(self._folder_ids_for_work(w), [f])
+
+    def test_bulk_invalid_tag_is_atomic(self):
+        w = self.db.add_work(title="Valid")
+        t1 = self.db.add_tag("Keep")["id"]
+        with self.assertRaises(BulkWorkError) as ctx:
+            self.db.bulk_update_works(
+                {
+                    "work_ids": [w],
+                    "action": "add_tags",
+                    "tag_ids": [t1, "T-MISSING"],
+                }
+            )
+        self.assertEqual(ctx.exception.http_status, 404)
+        self.assertEqual(self._tag_ids_for_work(w), [])
+
+    def test_bulk_deduplicates_work_ids(self):
+        a = self.db.add_work(title="A", status="Paused")
+        b = self.db.add_work(title="B", status="Paused")
+        result = self.db.bulk_update_works(
+            {
+                "work_ids": [a, a, b],
+                "action": "set_status",
+                "status": "Completed",
+            }
+        )
+        self.assertEqual(result["requested"], 2)
+        self.assertEqual(result["updated"], 2)
+        self.assertEqual(self.db.get_work(a)["status"], "Completed")
+        self.assertEqual(self.db.get_work(b)["status"], "Completed")
+
+    def test_bulk_rejects_over_limit(self):
+        w = self.db.add_work(title="Only", status="Planned")
+        too_many = [f"W-{i:04d}" for i in range(PRKS_BULK_WORK_MAX + 1)]
+        with self.assertRaises(BulkWorkError) as ctx:
+            self.db.bulk_update_works(
+                {"work_ids": too_many, "action": "set_status", "status": "Completed"}
+            )
+        self.assertEqual(ctx.exception.http_status, 400)
+        self.assertEqual(self.db.get_work(w)["status"], "Planned")
+
+    def test_bulk_rejects_unknown_action(self):
+        w = self.db.add_work(title="X", status="Planned")
+        with self.assertRaises(BulkWorkError):
+            self.db.bulk_update_works(
+                {"work_ids": [w], "action": "delete_everything"}
+            )
+        self.assertEqual(self.db.get_work(w)["status"], "Planned")
+
+    def test_bulk_transaction_rollback_on_injected_failure(self):
+        a = self.db.add_work(title="A", status="Paused")
+        b = self.db.add_work(title="B", status="Paused")
+        orig = self.db.get_connection
+
+        class _ConnProxy:
+            def __init__(self, conn):
+                object.__setattr__(self, "_conn", conn)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+            def __setattr__(self, name, value):
+                if name == "_conn":
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._conn, name, value)
+
+            def commit(self):
+                raise RuntimeError("injected")
+
+        def wrapped():
+            return _ConnProxy(orig())
+
+        with patch.object(self.db, "get_connection", wrapped):
+            with self.assertRaises(RuntimeError):
+                self.db.bulk_update_works(
+                    {
+                        "work_ids": [a, b],
+                        "action": "set_status",
+                        "status": "Completed",
+                    }
+                )
+        self.assertEqual(self.db.get_work(a)["status"], "Paused")
+        self.assertEqual(self.db.get_work(b)["status"], "Paused")

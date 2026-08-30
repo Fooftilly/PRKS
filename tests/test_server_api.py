@@ -2466,6 +2466,173 @@ class TestServerAPI(unittest.TestCase):
             self.assertEqual(get.call_count, 1)
             self.assertEqual(gone, [])
 
+    def _post_json(self, path, payload):
+        req = urllib.request.Request(
+            f"{self._base_url}{path}",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        return urllib.request.urlopen(req)
+
+    def test_bulk_works_status_and_counts(self):
+        db = self.__class__.test_db
+        a = db.add_work(title="Bulk A", status="Paused")
+        b = db.add_work(title="Bulk B", status="Paused")
+        c = db.add_work(title="Bulk C", status="Paused")
+        with self._post_json(
+            "/api/works/bulk",
+            {"work_ids": [a, a, b], "action": "set_status", "status": "Completed"},
+        ) as res:
+            self.assertEqual(res.status, 200)
+            body = json.loads(res.read().decode())
+        self.assertEqual(body["status"], "updated")
+        self.assertEqual(body["action"], "set_status")
+        self.assertEqual(body["requested"], 2)
+        self.assertEqual(body["updated"], 2)
+        self.assertNotIn("works", body)
+        self.assertEqual(db.get_work(a)["status"], "Completed")
+        self.assertEqual(db.get_work(b)["status"], "Completed")
+        self.assertEqual(db.get_work(c)["status"], "Paused")
+
+    def test_bulk_works_invalid_status_400(self):
+        db = self.__class__.test_db
+        w = db.add_work(title="Bulk Bad Status", status="Planned")
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/bulk",
+            data=json.dumps(
+                {"work_ids": [w], "action": "set_status", "status": "Finished"}
+            ).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 400)
+        self.assertEqual(db.get_work(w)["status"], "Planned")
+
+    def test_bulk_works_unknown_action_400(self):
+        db = self.__class__.test_db
+        w = db.add_work(title="Bulk Unknown Action", status="Planned")
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/bulk",
+            data=json.dumps(
+                {"work_ids": [w], "action": "delete_everything"}
+            ).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 400)
+        self.assertEqual(db.get_work(w)["status"], "Planned")
+
+    def test_bulk_works_missing_work_is_atomic(self):
+        db = self.__class__.test_db
+        w = db.add_work(title="Bulk Atomic Work", status="Planned")
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/bulk",
+            data=json.dumps(
+                {
+                    "work_ids": [w, "W-MISSING"],
+                    "action": "set_status",
+                    "status": "Completed",
+                }
+            ).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 404)
+        err = json.loads(cm.exception.read().decode())
+        self.assertEqual(err.get("error"), "One or more selected files no longer exist.")
+        self.assertEqual(db.get_work(w)["status"], "Planned")
+
+    def test_bulk_works_does_not_sync_text_index(self):
+        db = self.__class__.test_db
+        w = db.add_work(title="Bulk No Index", status="Paused")
+        with patch.object(server_module.text_index, "sync_work") as sync:
+            with self._post_json(
+                "/api/works/bulk",
+                {"work_ids": [w], "action": "set_status", "status": "Completed"},
+            ) as res:
+                self.assertEqual(res.status, 200)
+            sync.assert_not_called()
+
+    def test_bulk_works_trust_cross_origin_forbidden(self):
+        db = self.__class__.test_db
+        w = db.add_work(title="Bulk Trust", status="Planned")
+        status, payload = self._raw_http(
+            "POST",
+            "/api/works/bulk",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", "https://evil.example"),
+                ("Content-Type", "application/json"),
+            ],
+            json.dumps(
+                {"work_ids": [w], "action": "set_status", "status": "Completed"}
+            ).encode(),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self._json_error(payload), "origin_not_allowed")
+        self.assertEqual(db.get_work(w)["status"], "Planned")
+
+    def test_bulk_works_bad_content_type_rejected(self):
+        db = self.__class__.test_db
+        w = db.add_work(title="Bulk CType", status="Planned")
+        status, _payload = self._raw_http(
+            "POST",
+            "/api/works/bulk",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", f"http://localhost:{self._test_port}"),
+                ("Content-Type", "text/plain"),
+            ],
+            json.dumps(
+                {"work_ids": [w], "action": "set_status", "status": "Completed"}
+            ).encode(),
+        )
+        self.assertEqual(status, 415)
+        self.assertEqual(db.get_work(w)["status"], "Planned")
+
+    def test_bulk_works_privacy_no_title_in_logs(self):
+        import logging
+
+        db = self.__class__.test_db
+        sentinel = "PRIVATE_BULK_TITLE_X9Q7"
+        w = db.add_work(title=sentinel, status="Paused")
+        records = []
+
+        class _Handler(logging.Handler):
+            def emit(self, record):
+                records.append(self.format(record))
+
+        handler = _Handler()
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        loggers = [logging.getLogger("prks.server"), logging.getLogger("prks.db")]
+        prev_levels = []
+        for lg in loggers:
+            prev_levels.append(lg.level)
+            lg.addHandler(handler)
+            lg.setLevel(logging.DEBUG)
+        try:
+            with self._post_json(
+                "/api/works/bulk",
+                {"work_ids": [w], "action": "set_status", "status": "Completed"},
+            ) as res:
+                self.assertEqual(res.status, 200)
+            snap = server_module.performance_snapshot()
+        finally:
+            for lg, prev in zip(loggers, prev_levels):
+                lg.removeHandler(handler)
+                lg.setLevel(prev)
+        blob = "\n".join(records) + json.dumps(snap)
+        self.assertNotIn(sentinel, blob)
+        self.assertTrue(any("bulk_work_update" in line for line in records))
+
 
 if __name__ == '__main__':
     unittest.main()

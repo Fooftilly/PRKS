@@ -140,6 +140,12 @@ PRKS keeps a separate derived PDF text-search index (`prks_text_index.db`). It i
 
 The index is disposable and is rebuilt after backup restore. **Settings → Rebuild PDF text index** forces a complete re-extraction and FTS integrity verification if search results seem incomplete or stale.
 
+## Bulk organization
+
+On supported work-list pages (folder, recent, search, file type, and progress), choose **Select**, pick files, and use the bulk toolbar to change progress, move or clear folders, or add and remove tags.
+
+A bulk action is one request and one database transaction. If any selected file or target is invalid, none of the selected files are changed.
+
 ## Logging and privacy
 
 Persistent log: `<storage>/prks-errors.log`. Default persistent threshold is **ERROR**. Rotation is daily at midnight. Retention is **7 days**.
