@@ -30,6 +30,7 @@ def main() -> None:
     print(origin + "/tests/browser/markdown_security.html?dompurify=absent", flush=True)
     print(origin + "/tests/browser/markdown_security.html?dompurify=unsupported", flush=True)
     print(f"{origin}/tests/browser/pdf_viewer.html", flush=True)
+    print(f"{origin}/tests/browser/navigation.html", flush=True)
     print("Browser fixtures (test-only, 127.0.0.1). Ctrl-C to stop.", file=sys.stderr, flush=True)
     try:
         httpd.serve_forever()

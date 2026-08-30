@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PRKS navigation fixture</title>
+    <style>
+        body { font-family: sans-serif; margin: 1.5rem; }
+        #summary { font-weight: 700; margin: 1rem 0; }
+        .pass { color: #047857; }
+        .fail { color: #b91c1c; }
+        #main-content { height: 120px; overflow: auto; border: 1px solid #ccc; }
+        .nav-link { display: block; }
+        .nav-link.active { font-weight: 700; }
+    </style>
+</head>
+<body>
+    <h1>PRKS navigation fixture</h1>
+    <p>Loads production <code>frontend/js/navigation.js</code>. Serve with <code>python tests/browser/serve.py</code>.</p>
+    <p id="summary">Running…</p>
+    <ol id="results"></ol>
+    <nav>
+        <a href="#/folders" class="nav-link">All Folders</a>
+        <a href="#/recent" class="nav-link">Recent</a>
+        <a href="#/types" class="nav-link">File Types</a>
+        <a href="#/playlists" class="nav-link">Playlists</a>
+        <a href="#/people" class="nav-link">People</a>
+        <a href="#/people/role/Author" class="nav-link">Authors</a>
+        <a href="#/people/groups" class="nav-link">Groups</a>
+        <a href="#/progress?status=Paused" class="nav-link progress-filter" data-status="Paused">Paused</a>
+        <a href="#/processing-files" class="nav-link">Files for Processing</a>
+    </nav>
+    <div id="main-content"><div style="height:2000px">pad</div></div>
+    <script src="/frontend/js/navigation.js"></script>
+    <script src="/tests/browser/navigation_selftest.js"></script>
+    <script>
+(function () {
+    var summary = document.getElementById('summary');
+    var resultsEl = document.getElementById('results');
+    var result = window.prksRunNavigationSelfTests();
+    result.rows.forEach(function (r) {
+        var li = document.createElement('li');
+        li.className = r.ok ? 'pass' : 'fail';
+        li.textContent = (r.ok ? 'PASS' : 'FAIL') + '  ' + r.name + (r.detail ? ' — ' + r.detail : '');
+        resultsEl.appendChild(li);
+    });
+    summary.className = result.failed ? 'fail' : 'pass';
+    summary.textContent = result.passed + ' passed, ' + result.failed + ' failed';
+    window.__prksNavigationSelfTest = result;
+})();
+    </script>
+</body>
+</html>

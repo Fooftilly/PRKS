@@ -426,9 +426,12 @@ function prksWireTagsPageAliasPanel(container) {
     }
 }
 
-async function renderTagsPage(container) {
+async function renderTagsPage(container, routeGen) {
     prksTagsPageCtx.containerEl = container;
     const tags = await fetchTags({ used: true });
+    if (typeof prksIsRouteGenCurrent === 'function' && typeof routeGen === 'number' && !prksIsRouteGenCurrent(routeGen)) {
+        return;
+    }
     prksTagsPageCtx.tags = tags;
     prksTagsPageCtx.selectedId = null;
 

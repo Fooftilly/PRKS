@@ -231,9 +231,12 @@ function prksEnsurePublishersPageDelegated(container) {
     });
 }
 
-async function renderPublishersPage(container) {
+async function renderPublishersPage(container, routeGen) {
     prksPublishersPageCtx.containerEl = container;
     const publishers = await fetchPublishersInUse();
+    if (typeof prksIsRouteGenCurrent === 'function' && typeof routeGen === 'number' && !prksIsRouteGenCurrent(routeGen)) {
+        return;
+    }
     prksPublishersPageCtx.publishers = publishers;
     prksPublishersPageCtx.selectedId = null;
 

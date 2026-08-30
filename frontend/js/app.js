@@ -205,6 +205,10 @@ function prksPdfLastPageStorageKey(workId) {
 }
 
 function prksExtractWorkIdFromHash(h) {
+    if (typeof prksParseRoute === 'function') {
+        const route = prksParseRoute(h);
+        return route.name === 'work' && route.params.workId ? route.params.workId : null;
+    }
     if (!h || typeof h !== 'string' || !h.startsWith('#/works/')) return null;
     const parts = h.split('/');
     if (parts.length < 3) return null;
@@ -1239,23 +1243,7 @@ function initRouter() {
 }
 
 function prksRouteTitleFromHash(hash) {
-    if (hash.startsWith('#/works/')) return 'File';
-    if (hash.startsWith('#/folders/')) return 'Folder';
-    if (hash.startsWith('#/people/groups/')) return 'Group';
-    if (hash.startsWith('#/people/')) return 'Person';
-    if (hash.startsWith('#/playlists/')) return 'Playlist';
-    if (hash.startsWith('#/search')) return 'Search';
-    if (hash.startsWith('#/progress')) return 'Progress';
-    if (hash === '#/processing-files') return 'Files for Processing';
-    if (hash.startsWith('#/types/')) return 'File Type';
-    if (hash === '#/folders') return 'Folders';
-    if (hash === '#/playlists') return 'Playlists';
-    if (hash === '#/people') return 'People';
-    if (hash === '#/people/groups') return 'People Groups';
-    if (hash === '#/recent') return 'Recent';
-    if (hash === '#/tags') return 'Tags';
-    if (hash === '#/publishers') return 'Publishers';
-    if (hash === '#/types') return 'File Types';
+    if (typeof prksRouteLoadingTitle === 'function') return prksRouteLoadingTitle(hash);
     return 'Loading';
 }
 
@@ -1299,8 +1287,11 @@ async function handleRoute() {
         return;
     }
     const prevResolvedHash = window.__prksLastResolvedHash || '';
-    let hash = window.location.hash || '#/folders';
-    const leavingWorkPage = !!prevResolvedHash && prevResolvedHash.startsWith('#/works/') && hash !== prevResolvedHash;
+    const prevRoute =
+        prevResolvedHash && typeof prksParseRoute === 'function' ? prksParseRoute(prevResolvedHash) : null;
+    let route = typeof prksParseRoute === 'function' ? prksParseRoute(window.location.hash || '#/folders') : null;
+    if (!route) return;
+    const leavingWorkPage = !!(prevRoute && prevRoute.name === 'work' && route.canonicalHash !== prevRoute.canonicalHash);
     if (
         leavingWorkPage &&
         typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
@@ -1315,12 +1306,25 @@ async function handleRoute() {
             return;
         }
     }
-    prksMaybeFlushPdfLastPageOnRouteChange(prevResolvedHash, hash);
-    if (hash === '#/graph') {
-        window.location.hash = '#/folders';
-        return;
+    prksMaybeFlushPdfLastPageOnRouteChange(prevResolvedHash, route.hash);
+    if (route.name === 'graph' || route.canonicalize) {
+        const target = route.canonicalHash;
+        const here = window.location.hash || '';
+        if (target && target !== here) {
+            if (typeof prksNavigate === 'function') {
+                prksNavigate(target, { replace: true });
+            } else {
+                window.location.hash = target;
+            }
+            return;
+        }
     }
-    syncProgressSidebarActive(null);
+
+    if (prevRoute && prevRoute.canonicalHash && prevRoute.canonicalHash !== route.canonicalHash) {
+        if (typeof prksCaptureCurrentRouteState === 'function') prksCaptureCurrentRouteState(prevRoute);
+        if (route.detail && typeof prksRememberOrigin === 'function') prksRememberOrigin(route, prevRoute);
+    }
+
     const contentDiv = document.getElementById('page-content');
     if (!contentDiv) return;
     window.__prksRouteGen = (window.__prksRouteGen || 0) + 1;
@@ -1336,7 +1340,6 @@ async function handleRoute() {
     if (typeof window.prksDestroyWorkNotesEditor === 'function') {
         window.prksDestroyWorkNotesEditor();
     }
-    // Deep reset work context
     window.currentWork = null;
     window.currentFolder = null;
     window.currentPerson = null;
@@ -1347,209 +1350,268 @@ async function handleRoute() {
     window.__prksPersonGroupDetailEditing = false;
     window.__prksRouteSidebar = {};
 
-    document.querySelectorAll('.nav-link').forEach((l) => {
-        l.classList.remove('active');
-        l.removeAttribute('aria-current');
-    });
-    const link = Array.from(document.querySelectorAll('.nav-link')).find((l) => l.getAttribute('href') === hash);
-    if (link) {
-        link.classList.add('active');
-        link.setAttribute('aria-current', 'page');
-    } else if (hash.startsWith('#/people/') && !hash.startsWith('#/people/role/') && !hash.startsWith('#/people/groups')) {
-        const peopleLink = document.querySelector('.nav-link[href="#/people"]');
-        if (peopleLink) {
-            peopleLink.classList.add('active');
-            peopleLink.setAttribute('aria-current', 'page');
-        }
+    if (typeof prksSyncSidebarActive === 'function') {
+        prksSyncSidebarActive(route);
     }
 
-    prksRenderRouteLoading(contentDiv, hash);
+    prksRenderRouteLoading(contentDiv, route.hash);
 
-    if (hash === '#/folders') {
-        const folders = await fetchFolders();
-        if (routeGen !== window.__prksRouteGen) return;
-        window.__prksRouteSidebar = { folderCount: folders.length };
-        renderDashboard(folders, contentDiv);
-    } else if (hash === '#/playlists') {
-        if (typeof fetchPlaylists === 'function' && typeof renderPlaylistsIndex === 'function') {
-            const pls = await fetchPlaylists();
-            if (routeGen !== window.__prksRouteGen) return;
-            renderPlaylistsIndex(pls, contentDiv);
-        } else {
-            contentDiv.innerHTML = '<div class="page-header"><h2>Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
-        }
-    } else if (hash.startsWith('#/playlists/')) {
-        const plId = hash.split('/')[2];
-        if (typeof fetchPlaylistDetails === 'function' && typeof renderPlaylistDetail === 'function') {
-            const pl = await fetchPlaylistDetails(plId);
-            if (routeGen !== window.__prksRouteGen) return;
-            window.currentPlaylist = pl;
-            window.__prksPlaylistDetailEditing = false;
-            window.__prksPlaylistRename = {};
-            window.__prksRouteSidebar = pl
-                ? { playlistTitle: pl.title || 'Playlist', itemCount: Array.isArray(pl.items) ? pl.items.length : 0 }
-                : { playlistTitle: 'Playlist', itemCount: 0 };
-            renderPlaylistDetail(pl, contentDiv);
-        } else {
-            contentDiv.innerHTML = '<div class="page-header"><h2>Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
-        }
-    } else if (hash.startsWith('#/folders/')) {
-        const f_id = hash.split('/')[2];
-        const folder = await fetchFolderDetails(f_id);
-        if (routeGen !== window.__prksRouteGen) return;
-        renderFolderDetails(folder, contentDiv);
-    } else if (hash === '#/people') {
-        const persons = await fetchPersons();
-        if (routeGen !== window.__prksRouteGen) return;
-        renderPeopleList(persons, contentDiv);
-    } else if (hash.startsWith('#/people/role/')) {
-        const roleSlug = hash.slice('#/people/role/'.length);
-        const allowed = ['Author', 'Editor', 'Reviewer', 'Translator', 'Introduction', 'Foreword', 'Afterword'];
-        const roleFilter = allowed.includes(roleSlug) ? roleSlug : null;
-        window.__prksRouteSidebar = { role: roleFilter || decodeURIComponent(roleSlug.replace(/\+/g, ' ')) || 'Unknown role' };
-        const persons = await fetchPersons();
-        if (routeGen !== window.__prksRouteGen) return;
-        if (roleFilter) {
-            renderPeopleList(persons, contentDiv, { roleFilter });
-        } else {
-            contentDiv.innerHTML =
-                '<div class="page-header"><h2>People</h2></div><p class="prks-inline-message">Unknown role filter.</p>';
-        }
-    } else if (hash === '#/people/groups' || hash.startsWith('#/people/groups/')) {
-        const groupsLink = document.querySelector('.nav-link[href="#/people/groups"]');
-        if (groupsLink) {
-            groupsLink.classList.add('active');
-            groupsLink.setAttribute('aria-current', 'page');
-        }
-        if (hash === '#/people/groups') {
-            const groups = await fetchPersonGroups();
-            if (routeGen !== window.__prksRouteGen) return;
-            window.__prksRouteSidebar = { groupCount: Array.isArray(groups) ? groups.length : 0 };
-            renderPersonGroupsPage(groups, contentDiv);
-        } else {
-            // '#/people/groups/PG-…'.split('/') → ['#','people','groups',id]; filter(Boolean) keeps '#', so parts[2] was wrongly 'groups'
-            const g_id = hash.split('/')[3];
-            const group = g_id ? await fetchPersonGroupDetails(g_id) : null;
-            if (routeGen !== window.__prksRouteGen) return;
-            if (!group) {
+    let titleOpts = {};
+    const stale = () => routeGen !== window.__prksRouteGen;
+    const publishSidebar = (data) => {
+        if (typeof prksPublishRouteSidebar === 'function') return prksPublishRouteSidebar(data, routeGen);
+        if (stale()) return false;
+        window.__prksRouteSidebar = data || {};
+        return true;
+    };
+
+    try {
+        switch (route.name) {
+            case 'folders': {
+                const folders = await fetchFolders();
+                if (stale()) return;
+                publishSidebar({ folderCount: folders.length });
+                renderDashboard(folders, contentDiv);
+                break;
+            }
+            case 'playlists': {
+                if (typeof fetchPlaylists === 'function' && typeof renderPlaylistsIndex === 'function') {
+                    const pls = await fetchPlaylists();
+                    if (stale()) return;
+                    renderPlaylistsIndex(pls, contentDiv);
+                } else {
+                    contentDiv.innerHTML =
+                        '<div class="page-header"><h2>Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
+                }
+                break;
+            }
+            case 'playlist-detail': {
+                const plId = route.params.playlistId;
+                if (typeof fetchPlaylistDetails === 'function' && typeof renderPlaylistDetail === 'function') {
+                    const pl = await fetchPlaylistDetails(plId);
+                    if (stale()) return;
+                    window.currentPlaylist = pl;
+                    window.__prksPlaylistDetailEditing = false;
+                    window.__prksPlaylistRename = {};
+                    publishSidebar(
+                        pl
+                            ? {
+                                  playlistTitle: pl.title || 'Playlist',
+                                  itemCount: Array.isArray(pl.items) ? pl.items.length : 0,
+                              }
+                            : { playlistTitle: 'Playlist', itemCount: 0 }
+                    );
+                    renderPlaylistDetail(pl, contentDiv);
+                    titleOpts = pl
+                        ? { entityTitle: pl.title || 'Playlist' }
+                        : { notFound: true, notFoundTitle: 'Playlist not found' };
+                } else {
+                    contentDiv.innerHTML =
+                        '<div class="page-header"><h2>Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
+                }
+                break;
+            }
+            case 'folder-detail': {
+                const folder = await fetchFolderDetails(route.params.folderId);
+                if (stale()) return;
+                renderFolderDetails(folder, contentDiv);
+                titleOpts = folder
+                    ? { entityTitle: folder.title || 'Folder' }
+                    : { notFound: true, notFoundTitle: 'Folder not found' };
+                break;
+            }
+            case 'people': {
+                const persons = await fetchPersons();
+                if (stale()) return;
+                renderPeopleList(persons, contentDiv);
+                break;
+            }
+            case 'people-role': {
+                const roleFilter = route.params.knownRole ? route.params.role : null;
+                const persons = await fetchPersons();
+                if (stale()) return;
+                publishSidebar({ role: roleFilter || route.params.role || 'Unknown role' });
+                if (roleFilter) {
+                    renderPeopleList(persons, contentDiv, { roleFilter });
+                } else {
+                    contentDiv.innerHTML =
+                        '<div class="page-header"><h2>People</h2></div><p class="prks-inline-message">Unknown role filter.</p>';
+                }
+                break;
+            }
+            case 'people-groups': {
+                const groups = await fetchPersonGroups();
+                if (stale()) return;
+                publishSidebar({ groupCount: Array.isArray(groups) ? groups.length : 0 });
+                renderPersonGroupsPage(groups, contentDiv);
+                break;
+            }
+            case 'person-group-detail': {
+                const group = route.params.groupId ? await fetchPersonGroupDetails(route.params.groupId) : null;
+                if (stale()) return;
+                if (!group) {
+                    contentDiv.innerHTML =
+                        '<div class="page-header"><h2>Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
+                    titleOpts = { notFound: true, notFoundTitle: 'Group not found' };
+                } else {
+                    window.currentPersonGroup = group;
+                    publishSidebar({
+                        groupName: group.name,
+                        memberCount: Array.isArray(group.members) ? group.members.length : 0,
+                        subgroupCount: Array.isArray(group.children) ? group.children.length : 0,
+                    });
+                    renderPersonGroupDetail(group, contentDiv);
+                    titleOpts = { entityTitle: group.name || 'Group' };
+                }
+                break;
+            }
+            case 'recent': {
+                const works = await fetchRecent();
+                if (stale()) return;
+                publishSidebar({ workCount: works.length });
+                renderRecent(works, contentDiv);
+                break;
+            }
+            case 'progress': {
+                const status = route.params.status;
+                const works = await fetchWorks();
+                if (stale()) return;
+                publishSidebar({ status });
+                renderProgressByStatus(works, status, contentDiv);
+                break;
+            }
+            case 'processing-files': {
+                if (typeof prksRenderProcessingFilesPageWithFetch === 'function') {
+                    await prksRenderProcessingFilesPageWithFetch(contentDiv, { rescan: true, routeGen });
+                    if (stale()) return;
+                } else {
+                    const rows = await fetchProcessingFiles({ rescan: true });
+                    if (stale()) return;
+                    publishSidebar({ pendingCount: Array.isArray(rows) ? rows.length : 0 });
+                    if (typeof renderProcessingFilesPage === 'function') {
+                        renderProcessingFilesPage(rows, contentDiv);
+                    } else {
+                        contentDiv.innerHTML =
+                            '<div class="page-header"><h2>Files for Processing</h2></div><p class="meta-row">Processing inbox UI unavailable.</p>';
+                    }
+                }
+                break;
+            }
+            case 'search': {
+                const query = route.params.q || '';
+                const tag = route.params.tag || '';
+                const author = route.params.author || '';
+                const publisher = route.params.publisher || '';
+                const any = route.params.any || '';
+                const results = await fetchSearch(query, tag, { author, publisher, any });
+                if (stale()) return;
+                publishSidebar({
+                    query,
+                    tag,
+                    author,
+                    publisher,
+                    resultCount: Array.isArray(results) ? results.length : 0,
+                });
+                renderSearch(results, query, contentDiv, { tag, author, publisher, any });
+                break;
+            }
+            case 'tags': {
+                if (typeof renderTagsPage === 'function') {
+                    await renderTagsPage(contentDiv, routeGen);
+                    if (stale()) return;
+                }
+                break;
+            }
+            case 'publishers': {
+                if (typeof renderPublishersPage === 'function') {
+                    await renderPublishersPage(contentDiv, routeGen);
+                    if (stale()) return;
+                }
+                break;
+            }
+            case 'types': {
+                const works = await fetchWorks();
+                if (stale()) return;
+                renderTypesIndex(works, contentDiv);
+                break;
+            }
+            case 'type-detail': {
+                const works = await fetchWorks();
+                if (stale()) return;
+                renderWorksByDocType(works, route.params.docType, contentDiv);
+                break;
+            }
+            case 'work': {
+                const work = await fetchWorkDetails(route.params.workId);
+                if (stale()) return;
+                await renderWorkDetails(work, contentDiv, routeGen);
+                if (stale()) return;
+                titleOpts = work
+                    ? { entityTitle: String(work.title || '').trim() || 'File' }
+                    : { notFound: true, notFoundTitle: 'File not found' };
+                break;
+            }
+            case 'person': {
+                const person = await fetchPersonDetails(route.params.personId);
+                if (stale()) return;
+                publishSidebar(
+                    person
+                        ? {
+                              personDisplayName:
+                                  typeof personDisplayName === 'function'
+                                      ? personDisplayName(person) || 'Person'
+                                      : 'Person',
+                              linkedWorks:
+                                  typeof prksUniquePersonWorks === 'function'
+                                      ? prksUniquePersonWorks(person).length
+                                      : person.works
+                                        ? person.works.length
+                                        : 0,
+                          }
+                        : { personDisplayName: 'Person not found', linkedWorks: 0 }
+                );
+                renderPersonDetails(person, contentDiv);
+                if (person) {
+                    const nm =
+                        typeof personDisplayName === 'function'
+                            ? personDisplayName(person)
+                            : `${person.first_name || ''} ${person.last_name || ''}`.trim();
+                    titleOpts = { entityTitle: String(nm || '').trim() || 'Person' };
+                } else {
+                    titleOpts = { notFound: true, notFoundTitle: 'Person not found' };
+                }
+                break;
+            }
+            default: {
+                window.currentWork = null;
+                updatePanelContent('details');
                 contentDiv.innerHTML =
-                    '<div class="page-header"><h2>Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
-            } else {
-                window.currentPersonGroup = group;
-                window.__prksRouteSidebar = {
-                    groupName: group.name,
-                    memberCount: Array.isArray(group.members) ? group.members.length : 0,
-                    subgroupCount: Array.isArray(group.children) ? group.children.length : 0
-                };
-                renderPersonGroupDetail(group, contentDiv);
+                    '<div class="page-header"><h2>Section In Development</h2></div><p class="prks-dev-path-msg prks-inline-message"></p>';
+                const devPathEl = contentDiv.querySelector('.prks-dev-path-msg');
+                if (devPathEl) devPathEl.textContent = `The requested path (${route.hash}) is not yet fully implemented.`;
+                break;
             }
         }
-    } else if (hash === '#/recent') {
-        const works = await fetchRecent();
-        if (routeGen !== window.__prksRouteGen) return;
-        window.__prksRouteSidebar = { workCount: works.length };
-        renderRecent(works, contentDiv);
-    } else if (hash.startsWith('#/progress')) {
-        const status = parseProgressStatusFromHash(hash);
-        if (!status) {
-            window.location.hash = '#/progress?status=' + encodeURIComponent(PRKS_PROGRESS_STATUSES[0]);
-            return;
-        }
-        const works = await fetchWorks();
-        if (routeGen !== window.__prksRouteGen) return;
-        window.__prksRouteSidebar = { status };
-        renderProgressByStatus(works, status, contentDiv);
-        syncProgressSidebarActive(status);
-    } else if (hash === '#/processing-files') {
-        if (typeof prksRenderProcessingFilesPageWithFetch === 'function') {
-            await prksRenderProcessingFilesPageWithFetch(contentDiv, { rescan: true });
-            if (routeGen !== window.__prksRouteGen) return;
+    } catch (_e) {
+        if (stale()) return;
+        if (typeof prksRenderRouteError === 'function') prksRenderRouteError(contentDiv);
+        else contentDiv.innerHTML = '<p class="prks-inline-message">Could not load this view.</p>';
+        if (typeof prksFinishRouteRender === 'function') {
+            prksFinishRouteRender(route, routeGen, contentDiv, titleOpts);
         } else {
-            const rows = await fetchProcessingFiles({ rescan: true });
-            if (routeGen !== window.__prksRouteGen) return;
-            window.__prksRouteSidebar = { pendingCount: Array.isArray(rows) ? rows.length : 0 };
-            if (typeof renderProcessingFilesPage === 'function') {
-                renderProcessingFilesPage(rows, contentDiv);
-            } else {
-                contentDiv.innerHTML =
-                    '<div class="page-header"><h2>Files for Processing</h2></div><p class="meta-row">Processing inbox UI unavailable.</p>';
-            }
+            contentDiv.removeAttribute('aria-busy');
         }
-    } else if (hash.startsWith('#/search')) {
-        const urlParams = new URLSearchParams(hash.split('?')[1]);
-        const query = urlParams.get('q') || '';
-        const tag = urlParams.get('tag') || '';
-        const author = urlParams.get('author') || '';
-        const publisher = urlParams.get('publisher') || '';
-        const any = urlParams.get('any') || '';
-        const results = await fetchSearch(query, tag, { author, publisher, any });
-        if (routeGen !== window.__prksRouteGen) return;
-        window.__prksRouteSidebar = {
-            query,
-            tag,
-            author,
-            publisher,
-            resultCount: Array.isArray(results) ? results.length : 0
-        };
-        renderSearch(results, query, contentDiv, { tag, author, publisher, any });
-    } else if (hash === '#/tags') {
-        if (typeof renderTagsPage === 'function') {
-            await renderTagsPage(contentDiv);
-            if (routeGen !== window.__prksRouteGen) return;
-        }
-    } else if (hash === '#/publishers') {
-        if (typeof renderPublishersPage === 'function') {
-            await renderPublishersPage(contentDiv);
-            if (routeGen !== window.__prksRouteGen) return;
-        }
-    } else if (hash === '#/types') {
-        const works = await fetchWorks();
-        if (routeGen !== window.__prksRouteGen) return;
-        renderTypesIndex(works, contentDiv);
-    } else if (hash.startsWith('#/types/')) {
-        const docType = decodeURIComponent(hash.slice('#/types/'.length));
-        const works = await fetchWorks();
-        if (routeGen !== window.__prksRouteGen) return;
-        renderWorksByDocType(works, docType, contentDiv);
-    } else if (hash.startsWith('#/works/')) {
-        const w_id = hash.split('/')[2];
-        const work = await fetchWorkDetails(w_id);
-        if (routeGen !== window.__prksRouteGen) return;
-        await renderWorkDetails(work, contentDiv, routeGen);
-    } else if (hash.startsWith('#/people/')) {
-        const p_id = hash.split('/')[2];
-        const person = await fetchPersonDetails(p_id);
-        if (routeGen !== window.__prksRouteGen) return;
-        window.__prksRouteSidebar = person
-            ? {
-                  personDisplayName:
-                      typeof personDisplayName === 'function' ? personDisplayName(person) || 'Person' : 'Person',
-                  linkedWorks:
-                      typeof prksUniquePersonWorks === 'function'
-                          ? prksUniquePersonWorks(person).length
-                          : person.works
-                            ? person.works.length
-                            : 0
-              }
-            : { personDisplayName: 'Person not found', linkedWorks: 0 };
-        renderPersonDetails(person, contentDiv);
-    } else {
-        window.currentWork = null;
-        updatePanelContent('details');
-        contentDiv.innerHTML =
-            '<div class="page-header"><h2>Section In Development</h2></div><p class="prks-dev-path-msg prks-inline-message"></p>';
-        const devPathEl = contentDiv.querySelector('.prks-dev-path-msg');
-        if (devPathEl) devPathEl.textContent = `The requested path (${hash}) is not yet fully implemented.`;
+        return;
     }
 
-    if (routeGen !== window.__prksRouteGen) return;
+    if (stale()) return;
 
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(contentDiv);
     }
 
     const apiErr = typeof window.prksConsumeApiError === 'function' ? window.prksConsumeApiError() : null;
-    if (apiErr && contentDiv) {
+    if (apiErr && contentDiv && !contentDiv.querySelector('#prks-route-retry')) {
         const bar = document.createElement('div');
         bar.className = 'api-warning-banner';
         bar.setAttribute('role', 'status');
@@ -1557,17 +1619,21 @@ async function handleRoute() {
         contentDiv.prepend(bar);
     }
 
-    // Leaving a file clears currentWork at the start of this function, but the right panel
-    // is only filled inside renderWorkDetails — refresh it for folders, people, search, etc.
-    const onWorkDetailPage = hash.startsWith('#/works/') && window.currentWork;
+    const onWorkDetailPage = route.name === 'work' && window.currentWork;
     if (!onWorkDetailPage) {
         updatePanelContent(getActiveRightPanelTab());
     }
-    window.__prksLastResolvedHash = hash;
-    contentDiv.removeAttribute('aria-busy');
-    prksPlayPageEnterAnimation(contentDiv);
+    if (stale()) return;
+    if (typeof prksFinishRouteRender === 'function') {
+        prksFinishRouteRender(route, routeGen, contentDiv, titleOpts);
+    } else {
+        window.__prksLastResolvedHash = route.hash;
+        contentDiv.removeAttribute('aria-busy');
+        prksPlayPageEnterAnimation(contentDiv);
+    }
 }
 
+window.handleRoute = handleRoute;
 
 function initForms() {
     if (typeof initPrksDocTypeMenu === 'function') {
@@ -2188,7 +2254,14 @@ function initForms() {
         }
         closeModals();
         const hash = window.location.hash || '';
-        const workIdFromHash = hash.startsWith('#/works/') ? hash.split('/')[2] : '';
+        const workIdFromHash =
+            typeof prksParseRoute === 'function'
+                ? prksParseRoute(hash).name === 'work'
+                    ? prksParseRoute(hash).params.workId || ''
+                    : ''
+                : hash.startsWith('#/works/')
+                  ? hash.split('/')[2]
+                  : '';
         const onThisWork =
             workIdFromHash &&
             String(workIdFromHash) === String(work_id) &&
@@ -2288,10 +2361,14 @@ function initSearch() {
             p.set('q', query);
         }
         const targetHash = '#/search?' + p.toString();
-        const prevHash = window.location.hash || '';
-        window.location.hash = targetHash;
-        if (prevHash === targetHash && typeof handleRoute === 'function') {
-            void handleRoute();
+        if (typeof prksNavigate === 'function') {
+            prksNavigate(targetHash);
+        } else {
+            const prevHash = window.location.hash || '';
+            window.location.hash = targetHash;
+            if (prevHash === targetHash && typeof handleRoute === 'function') {
+                void handleRoute();
+            }
         }
     };
 

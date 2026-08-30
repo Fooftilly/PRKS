@@ -671,12 +671,16 @@ function prksProcessingCardHtml(file) {
 }
 
 async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
+    const routeGen = options.routeGen;
     const [items, people, folders, tags] = await Promise.all([
         fetchProcessingFiles(options),
         fetchPersons(),
         fetchFolders(),
         fetchTags({ used: false }),
     ]);
+    if (typeof prksIsRouteGenCurrent === 'function' && typeof routeGen === 'number' && !prksIsRouteGenCurrent(routeGen)) {
+        return;
+    }
     window.__prksProcessingPeople = Array.isArray(people) ? people : [];
     window.__prksProcessingFolders = Array.isArray(folders) ? folders : [];
     window.__prksProcessingTagsCache = Array.isArray(tags) ? tags : [];

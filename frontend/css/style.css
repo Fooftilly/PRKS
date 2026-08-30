@@ -1561,6 +1561,57 @@ body {
     padding-bottom: 8px;
     border-bottom: 1px solid var(--border);
 }
+
+.page-header:has(.prks-nav-back) {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+}
+
+.prks-nav-back-row {
+    margin: 0 0 8px;
+}
+
+.prks-nav-back-row--work {
+    flex-shrink: 0;
+    margin: 0 0 4px;
+    padding: 0 2px;
+}
+
+.prks-nav-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+    min-width: 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--text-secondary);
+    text-decoration: none;
+}
+
+.page-header:has(.prks-nav-back) > .prks-nav-back {
+    flex: 1 1 100%;
+    order: -1;
+    margin-bottom: 2px;
+}
+
+.prks-nav-back:hover,
+.prks-nav-back:focus-visible {
+    color: var(--accent);
+}
+
+.prks-nav-back__icon {
+    flex: 0 0 auto;
+}
+
+.prks-nav-back__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .page-header h2 {
     font-size: 1.15rem;
     font-weight: 700;

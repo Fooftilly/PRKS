@@ -846,6 +846,8 @@ async function populateFolderDropdown() {
 
     if (existingVal && folders.find(f => f.id === existingVal)) {
         select.value = existingVal;
+    } else if (typeof prksParseRoute === 'function' && prksParseRoute(window.location.hash).name === 'folder-detail') {
+        select.value = prksParseRoute(window.location.hash).params.folderId || '';
     } else if (window.location.hash.startsWith('#/folders/')) {
         select.value = window.location.hash.split('/')[2];
     }
@@ -1432,11 +1434,13 @@ async function prepareRoleModal() {
     workHidden.value = '';
 
     if (
-        hash.startsWith('#/people/') &&
-        !hash.startsWith('#/people/role/') &&
-        !hash.startsWith('#/people/groups')
+        typeof prksParseRoute === 'function'
+            ? prksParseRoute(hash).name === 'person'
+            : hash.startsWith('#/people/') &&
+              !hash.startsWith('#/people/role/') &&
+              !hash.startsWith('#/people/groups')
     ) {
-        const pid = hash.split('/')[2];
+        const pid = typeof prksParseRoute === 'function' ? prksParseRoute(hash).params.personId : hash.split('/')[2];
         const p = allPersons.find(x => String(x.id) === String(pid));
         if (p) {
             personHidden.value = p.id;
@@ -1446,9 +1450,13 @@ async function prepareRoleModal() {
     }
 
     let workId = null;
-    if (hash.startsWith('#/works/')) {
+    if (typeof prksParseRoute === 'function') {
+        const wr = prksParseRoute(hash);
+        if (wr.name === 'work') workId = wr.params.workId || null;
+    } else if (hash.startsWith('#/works/')) {
         workId = hash.split('/')[2];
-    } else if (window.currentWork && window.currentWork.id) {
+    }
+    if (!workId && window.currentWork && window.currentWork.id) {
         workId = window.currentWork.id;
     }
     if (workId) {
@@ -1603,11 +1611,13 @@ function setRightPanelRouteContext(hash) {
 }
 
 function isPersonGroupDetailHash(h) {
+    if (typeof prksParseRoute === 'function') return prksParseRoute(h).name === 'person-group-detail';
     if (!h || h === '#/people/groups') return false;
     return /^#\/people\/groups\/.+/.test(h);
 }
 
 function isPersonDetailHash(h) {
+    if (typeof prksParseRoute === 'function') return prksParseRoute(h).name === 'person';
     if (!h || !h.startsWith('#/people/')) return false;
     if (h.startsWith('#/people/role/')) return false;
     if (h === '#/people/groups' || h.startsWith('#/people/groups/')) return false;
@@ -1618,6 +1628,44 @@ function isPersonDetailHash(h) {
 }
 
 function inferRightPanelListMode(h) {
+    if (typeof prksParseRoute === 'function') {
+        const route = prksParseRoute(h);
+        switch (route.name) {
+            case 'folders':
+                return 'library';
+            case 'playlists':
+                return 'playlists';
+            case 'playlist-detail':
+                return 'playlist';
+            case 'people':
+                return 'people';
+            case 'people-role':
+                return 'people-role';
+            case 'people-groups':
+                return 'people-groups';
+            case 'person-group-detail':
+                return 'people-group';
+            case 'person':
+                return 'person';
+            case 'recent':
+                return 'recent';
+            case 'progress':
+                return 'progress';
+            case 'processing-files':
+                return 'processing-files';
+            case 'search':
+                return 'search';
+            case 'tags':
+                return 'tags';
+            case 'publishers':
+                return 'publishers';
+            case 'types':
+            case 'type-detail':
+                return 'types';
+            default:
+                return 'default';
+        }
+    }
     if (h === '#/folders') return 'library';
     if (h === '#/playlists') return 'playlists';
     if (h.startsWith('#/playlists/')) return 'playlist';
@@ -2605,7 +2653,9 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId) {
     const hash = window.location.hash || '';
     const wIdStr = String(workId);
     if (
-        hash.startsWith('#/works/') &&
+        (typeof prksParseRoute === 'function'
+            ? prksParseRoute(hash).name === 'work' && prksParseRoute(hash).params.workId === wIdStr
+            : hash.startsWith('#/works/')) &&
         window.currentWork &&
         String(window.currentWork.id) === wIdStr
     ) {
