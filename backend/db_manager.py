@@ -22,6 +22,7 @@ from backend.performance import (
     record_counter,
     record_db_call,
     record_span,
+    span as perf_span,
 )
 from backend.storage import paths
 from backend.storage.config import StorageConfig
@@ -672,6 +673,25 @@ class PRKSDatabase:
         "Afterword",
     }
 
+    def _processing_role_public(self, row: dict) -> dict:
+        first = (row.get("first_name") or "").strip()
+        last = (row.get("last_name") or "").strip()
+        name = " ".join([x for x in (first, last) if x]).strip() or row.get("person_id") or "Unknown"
+        return {
+            "person_id": row.get("person_id"),
+            "person_name": name,
+            "role_type": row.get("role_type"),
+            "order_index": row.get("order_index"),
+        }
+
+    def _processing_tag_public(self, row: dict) -> dict:
+        return {
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "color": row.get("color"),
+            "created_at": row.get("created_at"),
+        }
+
     def _get_processing_roles(self, processing_file_id: str) -> List[dict]:
         rows = self.execute_query(
             """
@@ -683,20 +703,7 @@ class PRKSDatabase:
             """,
             (processing_file_id,),
         )
-        out: List[dict] = []
-        for row in rows:
-            first = (row.get("first_name") or "").strip()
-            last = (row.get("last_name") or "").strip()
-            name = " ".join([x for x in (first, last) if x]).strip() or row.get("person_id") or "Unknown"
-            out.append(
-                {
-                    "person_id": row.get("person_id"),
-                    "person_name": name,
-                    "role_type": row.get("role_type"),
-                    "order_index": row.get("order_index"),
-                }
-            )
-        return out
+        return [self._processing_role_public(row) for row in rows]
 
     def _get_processing_tags(self, processing_file_id: str) -> List[dict]:
         rows = self.execute_query(
@@ -709,7 +716,56 @@ class PRKSDatabase:
             """,
             (processing_file_id,),
         )
-        return list(rows)
+        return [self._processing_tag_public(row) for row in rows]
+
+    def _processing_roles_by_file_id(self, *, include_imported: bool) -> Dict[str, List[dict]]:
+        sql = """
+            SELECT
+                r.processing_file_id,
+                p.id AS person_id,
+                p.first_name,
+                p.last_name,
+                r.role_type,
+                r.order_index
+            FROM processing_file_roles r
+            JOIN processing_files pf ON pf.id = r.processing_file_id
+            JOIN persons p ON p.id = r.person_id
+        """
+        params: tuple[Any, ...] = ()
+        if not include_imported:
+            sql += " WHERE pf.status != ?"
+            params = ("imported",)
+        sql += " ORDER BY r.processing_file_id, r.order_index ASC, r.rowid ASC"
+        out: Dict[str, List[dict]] = defaultdict(list)
+        for row in self.execute_query(sql, params):
+            pfid = str(row.get("processing_file_id") or "")
+            if pfid:
+                out[pfid].append(self._processing_role_public(row))
+        return out
+
+    def _processing_tags_by_file_id(self, *, include_imported: bool) -> Dict[str, List[dict]]:
+        sql = """
+            SELECT
+                pft.processing_file_id,
+                t.id,
+                t.name,
+                t.color,
+                t.created_at
+            FROM processing_file_tags pft
+            JOIN processing_files pf ON pf.id = pft.processing_file_id
+            JOIN tags t ON t.id = pft.tag_id
+        """
+        params: tuple[Any, ...] = ()
+        if not include_imported:
+            sql += " WHERE pf.status != ?"
+            params = ("imported",)
+        sql += " ORDER BY pft.processing_file_id, LOWER(t.name) ASC, t.id ASC"
+        out: Dict[str, List[dict]] = defaultdict(list)
+        for row in self.execute_query(sql, params):
+            pfid = str(row.get("processing_file_id") or "")
+            if pfid:
+                out[pfid].append(self._processing_tag_public(row))
+        return out
 
     def _set_processing_tags(self, processing_file_id: str, tags: List[dict]) -> None:
         if not isinstance(tags, list):
@@ -774,7 +830,13 @@ class PRKSDatabase:
                 )
             conn.commit()
 
-    def _processing_row_to_public(self, row: dict) -> dict:
+    def _processing_row_to_public(
+        self,
+        row: dict,
+        *,
+        roles: Optional[List[dict]] = None,
+        tags: Optional[List[dict]] = None,
+    ) -> dict:
         rel_path = (row.get("rel_path") or "").replace("\\", "/")
         folder_rel = os.path.dirname(rel_path).replace("\\", "/")
         if folder_rel in ("", "."):
@@ -813,67 +875,91 @@ class PRKSDatabase:
             "private_notes": row.get("private_notes") or "",
             "thumb_page": row.get("thumb_page"),
             "target_folder_id": row.get("target_folder_id") or "",
-            "roles": self._get_processing_roles(str(row.get("id") or "")),
-            "tags": self._get_processing_tags(str(row.get("id") or "")),
+            "roles": list(roles) if roles is not None else [],
+            "tags": list(tags) if tags is not None else [],
         }
 
-    def scan_processing_files(self) -> List[dict]:
+    def _discover_processing_pdfs(self) -> List[tuple[str, str, str]]:
         root = self.storage.processing_dir
         os.makedirs(root, exist_ok=True)
         root_real = os.path.realpath(root)
-        discovered_rel_paths: set[str] = set()
+        discovered: List[tuple[str, str, str]] = []
+        for dirpath, _dirnames, filenames in os.walk(root_real):
+            for filename in sorted(filenames):
+                if not str(filename).lower().endswith(".pdf"):
+                    continue
+                abs_path = os.path.realpath(os.path.join(dirpath, filename))
+                if abs_path != root_real and not abs_path.startswith(root_real + os.sep):
+                    continue
+                rel_path = os.path.relpath(abs_path, root_real).replace(os.sep, "/")
+                discovered.append((rel_path, abs_path, filename))
+        return discovered
+
+    def _reconcile_processing_files_from_disk(self) -> None:
+        discovered = self._discover_processing_pdfs()
+        discovered_rel_paths = {rel_path for rel_path, _abs_path, _filename in discovered}
         with self.get_connection() as conn:
-            for dirpath, _dirnames, filenames in os.walk(root_real):
-                for filename in sorted(filenames):
-                    if not str(filename).lower().endswith(".pdf"):
-                        continue
-                    abs_path = os.path.realpath(os.path.join(dirpath, filename))
-                    if abs_path != root_real and not abs_path.startswith(root_real + os.sep):
-                        continue
-                    rel_path = os.path.relpath(abs_path, root_real).replace(os.sep, "/")
-                    discovered_rel_paths.add(rel_path)
-                    existing = conn.execute(
-                        "SELECT status FROM processing_files WHERE rel_path = ?",
-                        (rel_path,),
-                    ).fetchone()
-                    next_status = "pending"
-                    if existing and str(existing["status"] or "") == "imported":
-                        next_status = "imported"
-                    conn.execute(
-                        """
-                        INSERT INTO processing_files (
-                            id, rel_path, abs_path, filename, status, last_error
-                        )
-                        VALUES (?, ?, ?, ?, ?, NULL)
-                        ON CONFLICT(rel_path) DO UPDATE SET
-                            abs_path = excluded.abs_path,
-                            filename = excluded.filename,
-                            status = CASE
-                                WHEN processing_files.status = 'imported' THEN 'imported'
-                                ELSE ?
-                            END,
-                            updated_at = CURRENT_TIMESTAMP
-                        """,
-                        (self.generate_id("PF"), rel_path, abs_path, filename, next_status, next_status),
+            existing_rows = conn.execute(
+                "SELECT id, rel_path, abs_path, filename, status FROM processing_files"
+            ).fetchall()
+            existing_by_rel: Dict[str, sqlite3.Row] = {}
+            for row in existing_rows:
+                rel = str(row["rel_path"] or "").replace("\\", "/")
+                if rel:
+                    existing_by_rel[rel] = row
+            inserts: List[tuple[str, str, str, str, str]] = []
+            updates: List[tuple[str, str, str, str]] = []
+            for rel_path, abs_path, filename in discovered:
+                existing = existing_by_rel.get(rel_path)
+                next_status = "pending"
+                if existing is not None and str(existing["status"] or "") == "imported":
+                    next_status = "imported"
+                if existing is None:
+                    inserts.append(
+                        (self.generate_id("PF"), rel_path, abs_path, filename, next_status)
                     )
-            if discovered_rel_paths:
-                placeholders = ",".join("?" * len(discovered_rel_paths))
-                conn.execute(
-                    f"""
-                    DELETE FROM processing_files
-                    WHERE status != 'imported'
-                      AND rel_path NOT IN ({placeholders})
+                else:
+                    updates.append((abs_path, filename, next_status, rel_path))
+            if inserts:
+                conn.executemany(
+                    """
+                    INSERT INTO processing_files (
+                        id, rel_path, abs_path, filename, status, last_error
+                    )
+                    VALUES (?, ?, ?, ?, ?, NULL)
                     """,
-                    tuple(discovered_rel_paths),
+                    inserts,
                 )
-            else:
-                conn.execute(
+            if updates:
+                conn.executemany(
+                    """
+                    UPDATE processing_files
+                    SET abs_path = ?,
+                        filename = ?,
+                        status = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE rel_path = ?
+                    """,
+                    updates,
+                )
+            removed = [
+                (rel,)
+                for rel in existing_by_rel
+                if rel not in discovered_rel_paths
+            ]
+            if removed:
+                conn.executemany(
                     """
                     DELETE FROM processing_files
-                    WHERE status != 'imported'
-                    """
+                    WHERE rel_path = ? AND status != 'imported'
+                    """,
+                    removed,
                 )
             conn.commit()
+
+    def scan_processing_files(self) -> List[dict]:
+        with perf_span("processing_scan"):
+            self._reconcile_processing_files_from_disk()
         return self.get_processing_files(include_imported=False)
 
     def get_processing_files(self, include_imported: bool = False) -> List[dict]:
@@ -889,13 +975,30 @@ class PRKSDatabase:
                 (row.get("rel_path") or "").lower(),
             )
         )
-        return [self._processing_row_to_public(row) for row in rows]
+        roles_by = self._processing_roles_by_file_id(include_imported=include_imported)
+        tags_by = self._processing_tags_by_file_id(include_imported=include_imported)
+        out: List[dict] = []
+        for row in rows:
+            pfid = str(row.get("id") or "")
+            out.append(
+                self._processing_row_to_public(
+                    row,
+                    roles=roles_by.get(pfid, []),
+                    tags=tags_by.get(pfid, []),
+                )
+            )
+        return out
 
     def get_processing_file(self, processing_file_id: str) -> Optional[dict]:
         rows = self.execute_query("SELECT * FROM processing_files WHERE id = ?", (processing_file_id,))
         if not rows:
             return None
-        return self._processing_row_to_public(rows[0])
+        pfid = str(rows[0].get("id") or processing_file_id)
+        return self._processing_row_to_public(
+            rows[0],
+            roles=self._get_processing_roles(pfid),
+            tags=self._get_processing_tags(pfid),
+        )
 
     def get_processing_file_pdf_path(self, processing_file_id: str) -> Optional[str]:
         rows = self.execute_query(

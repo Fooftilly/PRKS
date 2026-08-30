@@ -1025,7 +1025,8 @@ function prksFormatPerformanceReport(snap) {
             ' p95=' + prksFormatPerfMs(row.p95_ms) + 'ms' +
             ' max=' + prksFormatPerfMs(row.max_ms) + 'ms' +
             ' db_avg=' + prksFormatPerfMs(row.avg_db_ms) + 'ms' +
-            ' db_share=' + (row.measured_db_share_percent == null ? '—' : String(row.measured_db_share_percent) + '%')
+            ' db_share=' + (row.measured_db_share_percent == null ? '—' : String(row.measured_db_share_percent) + '%') +
+            ' db_calls=' + prksFormatPerfMs(row.db_calls_avg != null ? row.db_calls_avg : ((row.count ? (Number(row.db_calls || 0) / row.count) : 0))) + '/call'
         );
     });
     const spans = snap.spans && typeof snap.spans === 'object' ? snap.spans : {};
@@ -1077,7 +1078,7 @@ function prksRenderPerformanceDiagnostics(snap) {
         if (!routes.length) {
             const tr = document.createElement('tr');
             const td = document.createElement('td');
-            td.colSpan = 6;
+            td.colSpan = 7;
             td.textContent = 'No API requests measured yet.';
             tr.appendChild(td);
             bodyEl.appendChild(tr);
@@ -1091,6 +1092,7 @@ function prksRenderPerformanceDiagnostics(snap) {
                     prksFormatPerfMs(row.p95_ms),
                     prksFormatPerfMs(row.max_ms),
                     row.measured_db_share_percent == null ? '—' : (String(row.measured_db_share_percent) + '%'),
+                    prksFormatPerfMs(row.db_calls_avg != null ? row.db_calls_avg : (row.count ? (Number(row.db_calls || 0) / row.count) : 0)),
                 ];
                 cells.forEach((text) => {
                     const td = document.createElement('td');
@@ -1104,6 +1106,7 @@ function prksRenderPerformanceDiagnostics(snap) {
     const spans = (snap && snap.spans && typeof snap.spans === 'object') ? snap.spans : {};
     const wanted = [
         ['pdf_file_stats', 'PDF file stats'],
+        ['processing_scan', 'Processing scan'],
         ['pdf_text_search', 'PDF text search'],
         ['thumbnail_render', 'Thumbnail render'],
         ['json_encode', 'JSON encode'],

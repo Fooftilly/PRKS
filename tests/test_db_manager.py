@@ -1046,6 +1046,183 @@ class TestDBManager(unittest.TestCase):
         w = self.db.get_work(out["work_id"])
         self.assertEqual(w.get("folder_title"), "Uncategorized")
 
+    def _count_execute_query(self, fn):
+        original = self.db.execute_query
+        counts = {"n": 0}
 
-if __name__ == '__main__':
-    unittest.main()
+        def wrapped(*args, **kwargs):
+            counts["n"] += 1
+            return original(*args, **kwargs)
+
+        with patch.object(self.db, "execute_query", side_effect=wrapped):
+            result = fn()
+        return result, counts["n"]
+
+    def test_processing_files_list_uses_constant_query_count(self):
+        processing_root = self.storage.processing_dir
+        person_a = self.db.add_person(first_name="Ada", last_name="Role")
+        person_b = self.db.add_person(first_name="Bea", last_name="Role")
+        tag_alpha = self.db.add_tag("alpha", "#111111")
+        tag_zed = self.db.add_tag("Zed", "#222222")
+        tag_alpha_id = tag_alpha["id"] if isinstance(tag_alpha, dict) else tag_alpha
+        tag_zed_id = tag_zed["id"] if isinstance(tag_zed, dict) else tag_zed
+        n_files = 60
+        for i in range(n_files):
+            name = f"inbox_{i:03d}.pdf"
+            pdf_path = os.path.join(processing_root, name)
+            with open(pdf_path, "wb") as handle:
+                handle.write(b"%PDF-1.4\n%N1\n%%EOF\n")
+        staged = self.db.scan_processing_files()
+        self.assertEqual(len(staged), n_files)
+        mixed = staged[0]
+        empty = staged[1]
+        self.db.update_processing_file(
+            mixed["id"],
+            {
+                "roles": [
+                    {"person_id": person_b, "role_type": "Editor"},
+                    {"person_id": person_a, "role_type": "Author"},
+                ],
+                "tags": [{"id": tag_zed_id}, {"id": tag_alpha_id}],
+            },
+        )
+        listed, query_count = self._count_execute_query(
+            lambda: self.db.get_processing_files(include_imported=False)
+        )
+        self.assertEqual(query_count, 3)
+        self.assertEqual(len(listed), n_files)
+        by_id = {row["id"]: row for row in listed}
+        mixed_pub = by_id[mixed["id"]]
+        empty_pub = by_id[empty["id"]]
+        self.assertEqual([r["person_id"] for r in mixed_pub["roles"]], [person_b, person_a])
+        self.assertEqual([r["role_type"] for r in mixed_pub["roles"]], ["Editor", "Author"])
+        self.assertEqual([t["id"] for t in mixed_pub["tags"]], [tag_alpha_id, tag_zed_id])
+        self.assertEqual(empty_pub["roles"], [])
+        self.assertEqual(empty_pub["tags"], [])
+        empty_pub["roles"].append({"person_id": "x"})
+        self.assertEqual(by_id[mixed["id"]]["roles"][0]["person_id"], person_b)
+        single = self.db.get_processing_file(mixed["id"])
+        self.assertEqual(single["roles"], mixed_pub["roles"])
+        self.assertEqual(single["tags"], mixed_pub["tags"])
+
+        for i in range(n_files, n_files + 40):
+            name = f"inbox_{i:03d}.pdf"
+            with open(os.path.join(processing_root, name), "wb") as handle:
+                handle.write(b"%PDF-1.4\n%N1\n%%EOF\n")
+        self.db.scan_processing_files()
+        _listed2, query_count2 = self._count_execute_query(
+            lambda: self.db.get_processing_files(include_imported=False)
+        )
+        self.assertEqual(query_count2, 3)
+        self.assertEqual(len(_listed2), n_files + 40)
+
+    def test_processing_role_order_index_then_rowid(self):
+        processing_root = self.storage.processing_dir
+        pdf_path = os.path.join(processing_root, "order.pdf")
+        with open(pdf_path, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%ORD\n%%EOF\n")
+        staged = self.db.scan_processing_files()
+        pfid = staged[0]["id"]
+        p1 = self.db.add_person(first_name="First", last_name="Inserted")
+        p2 = self.db.add_person(first_name="Second", last_name="Inserted")
+        p3 = self.db.add_person(first_name="Third", last_name="Inserted")
+        with self.db.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO processing_file_roles
+                    (processing_file_id, person_id, role_type, order_index)
+                VALUES (?, ?, 'Author', 5)
+                """,
+                (pfid, p1),
+            )
+            conn.execute(
+                """
+                INSERT INTO processing_file_roles
+                    (processing_file_id, person_id, role_type, order_index)
+                VALUES (?, ?, 'Author', 1)
+                """,
+                (pfid, p2),
+            )
+            conn.execute(
+                """
+                INSERT INTO processing_file_roles
+                    (processing_file_id, person_id, role_type, order_index)
+                VALUES (?, ?, 'Editor', 1)
+                """,
+                (pfid, p3),
+            )
+            conn.commit()
+        row = self.db.get_processing_file(pfid)
+        self.assertEqual(
+            [(r["person_id"], r["order_index"]) for r in row["roles"]],
+            [(p2, 1), (p3, 1), (p1, 5)],
+        )
+        listed = self.db.get_processing_files()
+        self.assertEqual(
+            [(r["person_id"], r["order_index"]) for r in listed[0]["roles"]],
+            [(p2, 1), (p3, 1), (p1, 5)],
+        )
+
+    def test_processing_scan_keeps_existing_ids_and_imported_rows(self):
+        processing_root = self.storage.processing_dir
+        pdf_path = os.path.join(processing_root, "keep.pdf")
+        with open(pdf_path, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%KEEP\n%%EOF\n")
+        first = self.db.scan_processing_files()
+        keep_id = first[0]["id"]
+        with patch.object(self.db, "generate_id", wraps=self.db.generate_id) as gen:
+            second = self.db.scan_processing_files()
+        self.assertEqual(gen.call_count, 0)
+        self.assertEqual(second[0]["id"], keep_id)
+        self.db.execute_query(
+            """
+            INSERT INTO processing_files (id, rel_path, abs_path, filename, status)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("PF-KEEPIMP", "missing-imported.pdf", "/absent", "missing-imported.pdf", "imported"),
+        )
+        os.remove(pdf_path)
+        after = self.db.scan_processing_files()
+        self.assertEqual(after, [])
+        kept = self.db.execute_query(
+            "SELECT status FROM processing_files WHERE id = ?",
+            ("PF-KEEPIMP",),
+        )
+        self.assertEqual(kept[0]["status"], "imported")
+
+    def test_processing_scan_avoids_not_in_and_handles_many_files(self):
+        processing_root = self.storage.processing_dir
+        n_files = 1200
+        for i in range(n_files):
+            with open(os.path.join(processing_root, f"bulk_{i:04d}.pdf"), "wb") as handle:
+                handle.write(b"%PDF-1.4\n%%EOF\n")
+        sqls: list[str] = []
+        real_get = self.db.get_connection
+
+        def wrapped_get():
+            conn = real_get()
+            conn.set_trace_callback(lambda sql: sqls.append(str(sql)))
+            return conn
+
+        with patch.object(self.db, "get_connection", side_effect=wrapped_get):
+            staged = self.db.scan_processing_files()
+        self.assertEqual(len(staged), n_files)
+        blob = "\n".join(sqls).upper()
+        self.assertNotIn("NOT IN", blob)
+        os.remove(os.path.join(processing_root, "bulk_0000.pdf"))
+        staged2 = self.db.scan_processing_files()
+        self.assertEqual(len(staged2), n_files - 1)
+
+    def test_processing_scan_ignores_symlink_escape(self):
+        outside = os.path.join(self._tmpdir, "outside.pdf")
+        with open(outside, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%%EOF\n")
+        link = os.path.join(self.storage.processing_dir, "escape.pdf")
+        try:
+            os.symlink(outside, link)
+        except OSError as exc:
+            self.skipTest(f"symlink unavailable: {exc}")
+        staged = self.db.scan_processing_files()
+        self.assertEqual(staged, [])
+        kept = self.db.execute_query("SELECT id FROM processing_files")
+        self.assertEqual(kept, [])

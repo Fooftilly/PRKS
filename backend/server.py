@@ -1833,8 +1833,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 token = (query.get('token') or [''])[0]
                 self._handle_backup_download(token=token)
             elif path == '/api/processing-files':
-                db.scan_processing_files()
-                data = db.get_processing_files(include_imported=False)
+                rescan_raw = (query.get('rescan') or [''])[0]
+                rescan = str(rescan_raw).strip().lower() in ('1', 'true', 'yes')
+                if rescan:
+                    data = db.scan_processing_files()
+                else:
+                    data = db.get_processing_files(include_imported=False)
                 self.send_json(200, data)
             elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
                 parts = path.split('/')

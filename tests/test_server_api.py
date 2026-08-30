@@ -2402,6 +2402,70 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 421)
         self.assertEqual(self._json_error(payload), "untrusted_host")
 
+    def test_processing_files_rescan_query_controls_scan_and_avoids_duplicate_fetch(self):
+        processing_root = server_module.processing_dir
+        for dirpath, _dirnames, filenames in os.walk(processing_root, topdown=False):
+            for name in filenames:
+                os.remove(os.path.join(dirpath, name))
+            if dirpath != processing_root:
+                try:
+                    os.rmdir(dirpath)
+                except OSError:
+                    pass
+        db = server_module.db
+        db.scan_processing_files()
+        pdf_path = os.path.join(processing_root, "rescan_flag.pdf")
+        with open(pdf_path, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%RESCAN\n%%EOF\n")
+        with (
+            patch.object(db, "scan_processing_files", wraps=db.scan_processing_files) as scan,
+            patch.object(db, "get_processing_files", wraps=db.get_processing_files) as get,
+        ):
+            req = urllib.request.Request(f"{self._base_url}/api/processing-files")
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual(res.status, 200)
+                plain = json.loads(res.read().decode())
+            self.assertEqual(scan.call_count, 0)
+            self.assertEqual(get.call_count, 1)
+            self.assertEqual(plain, [])
+
+            scan.reset_mock()
+            get.reset_mock()
+            req_scan = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=1")
+            with urllib.request.urlopen(req_scan) as res:
+                scanned = json.loads(res.read().decode())
+            self.assertEqual(scan.call_count, 1)
+            self.assertEqual(get.call_count, 1)
+            self.assertEqual(len(scanned), 1)
+            self.assertEqual(scanned[0]["rel_path"], "rescan_flag.pdf")
+
+            scan.reset_mock()
+            get.reset_mock()
+            req_true = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=true")
+            with urllib.request.urlopen(req_true) as res:
+                self.assertEqual(res.status, 200)
+                _ = res.read()
+            self.assertEqual(scan.call_count, 1)
+            self.assertEqual(get.call_count, 1)
+
+            os.remove(pdf_path)
+            scan.reset_mock()
+            get.reset_mock()
+            req_stale = urllib.request.Request(f"{self._base_url}/api/processing-files")
+            with urllib.request.urlopen(req_stale) as res:
+                stale = json.loads(res.read().decode())
+            self.assertEqual(scan.call_count, 0)
+            self.assertEqual(len(stale), 1)
+
+            scan.reset_mock()
+            get.reset_mock()
+            req_refresh = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=yes")
+            with urllib.request.urlopen(req_refresh) as res:
+                gone = json.loads(res.read().decode())
+            self.assertEqual(scan.call_count, 1)
+            self.assertEqual(get.call_count, 1)
+            self.assertEqual(gone, [])
+
 
 if __name__ == '__main__':
     unittest.main()

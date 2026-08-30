@@ -110,6 +110,8 @@ class TestPerformanceRegistry(unittest.TestCase):
         self.assertEqual(route["p50_ms"], 30.0)
         self.assertEqual(route["p95_ms"], 50.0)
         self.assertEqual(route["max_ms"], 50.0)
+        self.assertEqual(route["db_calls"], 10)
+        self.assertEqual(route["db_calls_avg"], 2.0)
         self.assertEqual(route["measured_db_share_percent"], 50.0)
 
     def test_recent_sample_bounded(self):
@@ -234,6 +236,25 @@ class TestExecuteQueryInstrumentation(unittest.TestCase):
             rows = self.db.execute_query("SELECT 1 AS v")
         self.assertEqual(rows[0]["v"], 1)
 
+    def test_processing_scan_span_excludes_list_hydration(self):
+        processing_root = self.db.storage.processing_dir
+        os.makedirs(processing_root, exist_ok=True)
+        with open(os.path.join(processing_root, "span.pdf"), "wb") as handle:
+            handle.write(b"%PDF-1.4\n%%EOF\n")
+        original = self.db.execute_query
+        calls = {"n": 0}
+
+        def wrapped(*args, **kwargs):
+            calls["n"] += 1
+            return original(*args, **kwargs)
+
+        with patch.object(self.db, "execute_query", side_effect=wrapped):
+            rows = self.db.scan_processing_files()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(calls["n"], 3)
+        snap = snapshot()
+        self.assertEqual(snap["spans"].get("processing_scan", {}).get("count"), 1)
+
 
 class TestPerformanceHTTP(unittest.TestCase):
     @classmethod
@@ -315,7 +336,7 @@ class TestPerformanceHTTP(unittest.TestCase):
         self.assertIn("/api/works", routes)
         self.assertIn("/api/folders", routes)
         works = routes["/api/works"]
-        for key in ("count", "avg_ms", "p50_ms", "p95_ms", "max_ms", "avg_db_ms", "db_calls"):
+        for key in ("count", "avg_ms", "p50_ms", "p95_ms", "max_ms", "avg_db_ms", "db_calls", "db_calls_avg"):
             self.assertIn(key, works)
         self.assertGreaterEqual(works["count"], 1)
         self.assertGreaterEqual(works["db_calls"], 1)

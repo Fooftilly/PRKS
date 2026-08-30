@@ -53,6 +53,7 @@ SPAN_NAMES = frozenset(
         "restore_commit",
         "text_index_reconcile",
         "pdf_linearize",
+        "processing_scan",
     }
 )
 
@@ -84,6 +85,7 @@ _SERVER_TIMING_ORDER = (
     "thumbnail_encode",
     "portrait_fetch",
     "pdf_linearize",
+    "processing_scan",
     "text_index_reconcile",
     "backup_create",
     "backup_verify",
@@ -353,6 +355,7 @@ class PerformanceRegistry:
                     "max_ms": _ns_to_ms(max_ns),
                     "avg_db_ms": avg_db_ms,
                     "db_calls": db_calls,
+                    "db_calls_avg": round(db_calls / count, 1) if count else 0.0,
                     "measured_db_share_percent": db_share,
                     "avg_response_bytes": avg_bytes,
                 }
