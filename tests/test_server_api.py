@@ -2971,6 +2971,68 @@ class TestServerAPI(unittest.TestCase):
         status, work = self._sv_json("GET", f"/api/works/{wid}")
         self.assertIn("[[concept:Instrumental Reason]]", work["text_content"])
 
+    def test_stale_index_concept_delete_returns_409(self):
+        status, created = self._sv_json("POST", "/api/works", {"title": "Stale concept delete"})
+        self.assertEqual(status, 200)
+        wid = created["id"]
+        with patch.object(server_module.research_index, "sync_work", side_effect=RuntimeError("boom")):
+            status, _body = self._sv_json(
+                "PATCH",
+                f"/api/works/{wid}",
+                {"text_content": "[[concept:Culture Industry]]"},
+            )
+        self.assertEqual(status, 200)
+        status, concepts = self._sv_json("GET", "/api/concepts")
+        cid = next(c["id"] for c in concepts if c["name"] == "Culture Industry")
+        status, body = self._sv_json("DELETE", f"/api/concepts/{cid}")
+        self.assertEqual(status, 409)
+        self.assertEqual(body.get("code"), "concept_in_use")
+
+    def test_stale_index_argument_delete_returns_409(self):
+        status, created = self._sv_json("POST", "/api/works", {"title": "Stale argument delete"})
+        self.assertEqual(status, 200)
+        wid = created["id"]
+        status, arg = self._sv_json(
+            "POST",
+            "/api/arguments",
+            {"name": "Linked argument", "kind": "argument"},
+        )
+        self.assertEqual(status, 201)
+        aid = arg["id"]
+        with patch.object(server_module.research_index, "sync_work", side_effect=RuntimeError("boom")):
+            status, _body = self._sv_json(
+                "PATCH",
+                f"/api/works/{wid}",
+                {"text_content": "[[argument:%s|label]]" % aid},
+            )
+        self.assertEqual(status, 200)
+        status, body = self._sv_json("DELETE", f"/api/arguments/{aid}")
+        self.assertEqual(status, 409)
+        self.assertEqual(body.get("code"), "argument_in_use")
+
+    def test_missing_argument_ref_omitted_from_research_refs(self):
+        status, created = self._sv_json("POST", "/api/works", {"title": "Missing argument ref"})
+        self.assertEqual(status, 200)
+        wid = created["id"]
+        status, arg = self._sv_json(
+            "POST",
+            "/api/arguments",
+            {"name": "Real argument", "kind": "argument"},
+        )
+        self.assertEqual(status, 201)
+        aid = arg["id"]
+        status, _body = self._sv_json(
+            "PATCH",
+            f"/api/works/{wid}",
+            {"text_content": "[[argument:A-MISSING]] and [[argument:%s|ok]]" % aid},
+        )
+        self.assertEqual(status, 200)
+        status, work = self._sv_json("GET", f"/api/works/{wid}")
+        self.assertEqual(status, 200)
+        ids = [a["id"] for a in (work.get("research_refs") or {}).get("arguments") or []]
+        self.assertNotIn("A-MISSING", ids)
+        self.assertIn(aid, ids)
+
 
 if __name__ == '__main__':
     unittest.main()

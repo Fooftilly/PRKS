@@ -353,46 +353,50 @@ def update_concept(db: PRKSDatabase, concept_id: str, *, name=None, description=
         )
         if new_name is None and new_desc is None:
             raise ResearchError("nothing_to_update", "Nothing to update.")
-        if new_name is not None and normalize_concept_key(new_name) != normalize_concept_key(old_name):
-            status, ids = resolve_concept_key(conn, new_name)
-            if status == "ok" and ids[0] != cid:
-                raise ResearchError(
-                    "concept_exists",
-                    "A Concept with that name or alias already exists.",
-                    409,
-                )
-            if status == "ambiguous":
-                others = [i for i in ids if i != cid]
-                if others:
+        if new_name is not None and new_name != old_name:
+            old_key = normalize_concept_key(old_name)
+            new_key = normalize_concept_key(new_name)
+            identity_changed = new_key != old_key
+            if identity_changed:
+                status, ids = resolve_concept_key(conn, new_name)
+                if status == "ok" and ids[0] != cid:
                     raise ResearchError(
-                        "ambiguous_concept",
-                        "Multiple Concepts match that name.",
+                        "concept_exists",
+                        "A Concept with that name or alias already exists.",
                         409,
                     )
+                if status == "ambiguous":
+                    others = [i for i in ids if i != cid]
+                    if others:
+                        raise ResearchError(
+                            "ambiguous_concept",
+                            "Multiple Concepts match that name.",
+                            409,
+                        )
             conn.execute(
                 "UPDATE concepts SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (new_name, cid),
             )
-            old_key = normalize_concept_key(old_name)
-            existing_alias = _fetchone(
-                conn,
-                "SELECT 1 FROM concept_aliases WHERE concept_id = ? AND normalized_alias = ?",
-                (cid, old_key),
-            )
-            clash = _fetchone(
-                conn,
-                "SELECT concept_id FROM concept_aliases WHERE normalized_alias = ?",
-                (old_key,),
-            )
-            if not existing_alias and (not clash or clash["concept_id"] == cid):
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO concept_aliases
-                        (concept_id, alias, normalized_alias)
-                    VALUES (?, ?, ?)
-                    """,
-                    (cid, old_name, old_key),
+            if identity_changed:
+                existing_alias = _fetchone(
+                    conn,
+                    "SELECT 1 FROM concept_aliases WHERE concept_id = ? AND normalized_alias = ?",
+                    (cid, old_key),
                 )
+                clash = _fetchone(
+                    conn,
+                    "SELECT concept_id FROM concept_aliases WHERE normalized_alias = ?",
+                    (old_key,),
+                )
+                if not existing_alias and (not clash or clash["concept_id"] == cid):
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO concept_aliases
+                            (concept_id, alias, normalized_alias)
+                        VALUES (?, ?, ?)
+                        """,
+                        (cid, old_name, old_key),
+                    )
         if new_desc is not None:
             conn.execute(
                 "UPDATE concepts SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -402,20 +406,47 @@ def update_concept(db: PRKSDatabase, concept_id: str, *, name=None, description=
         return get_concept_on_conn(conn, cid)
 
 
-def delete_concept(db: PRKSDatabase, concept_id: str, *, mention_count: int) -> None:
+def _canonical_notes_reference_concept(conn: sqlite3.Connection, concept_id: str) -> bool:
+    for r in _fetchall(conn, "SELECT text_content FROM works"):
+        text = r["text_content"] or ""
+        if "[[concept:" not in text:
+            continue
+        markup = parse_research_markup(text)
+        for ref in markup.concept_refs:
+            status, ids = resolve_concept_key(conn, ref.name)
+            if status == "ok" and ids and ids[0] == concept_id:
+                return True
+            if status == "ambiguous" and concept_id in ids:
+                return True
+    return False
+
+
+def _canonical_notes_reference_argument(conn: sqlite3.Connection, argument_id: str) -> bool:
+    for r in _fetchall(conn, "SELECT text_content FROM works"):
+        text = r["text_content"] or ""
+        if "[[argument:" not in text:
+            continue
+        markup = parse_research_markup(text)
+        for ref in markup.argument_refs:
+            if ref.argument_id == argument_id:
+                return True
+    return False
+
+
+def delete_concept(db: PRKSDatabase, concept_id: str) -> None:
     cid = (concept_id or "").strip()
     if not cid:
         raise ResearchError("not_found", "Concept not found.", 404)
-    if mention_count > 0:
-        raise ResearchError(
-            "concept_in_use",
-            "This Concept is still referenced in research notes. Remove or replace those references before deleting it.",
-            409,
-        )
     with db.get_connection() as conn:
         row = _fetchone(conn, "SELECT 1 FROM concepts WHERE id = ?", (cid,))
         if not row:
             raise ResearchError("not_found", "Concept not found.", 404)
+        if _canonical_notes_reference_concept(conn, cid):
+            raise ResearchError(
+                "concept_in_use",
+                "This Concept is still referenced in research notes. Remove or replace those references before deleting it.",
+                409,
+            )
         conn.execute("DELETE FROM concepts WHERE id = ?", (cid,))
     LOGGER.info("concept_deleted concept_id=%s", safe_log_id(cid))
 
@@ -859,24 +890,19 @@ def update_argument(
         return _argument_bundle(conn, aid)
 
 
-def delete_argument(
-    db: PRKSDatabase,
-    argument_id: str,
-    *,
-    mention_count: int,
-) -> None:
+def delete_argument(db: PRKSDatabase, argument_id: str) -> None:
     aid = (argument_id or "").strip()
     if not aid:
         raise ResearchError("not_found", "Argument not found.", 404)
-    if mention_count > 0:
-        raise ResearchError(
-            "argument_in_use",
-            "This Argument is still referenced in research notes.",
-            409,
-        )
     with db.get_connection() as conn:
         if not _fetchone(conn, "SELECT 1 FROM arguments WHERE id = ?", (aid,)):
             raise ResearchError("not_found", "Argument not found.", 404)
+        if _canonical_notes_reference_argument(conn, aid):
+            raise ResearchError(
+                "argument_in_use",
+                "This Argument is still referenced in research notes.",
+                409,
+            )
         targeted = _fetchone(
             conn,
             "SELECT 1 FROM argument_target_arguments WHERE target_argument_id = ? LIMIT 1",

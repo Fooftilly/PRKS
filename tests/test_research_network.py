@@ -4,6 +4,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PROJECT_DIR)
@@ -103,6 +104,25 @@ class ResearchNetworkTests(unittest.TestCase):
         save_work_notes(self.db, wid, "still [[concept:Culture Industry]]")
         self.assertEqual(list_concepts(self.db)[0]["id"], cid)
 
+    def test_capitalization_only_rename_updates_display_name(self):
+        c = create_concept(self.db, "Culture Industry")
+        update_concept(self.db, c["id"], name="CULTURE INDUSTRY")
+        item = get_concept(self.db, c["id"])
+        self.assertEqual(item["name"], "CULTURE INDUSTRY")
+        self.assertEqual(item["aliases"], [])
+        wid = self._work()
+        save_work_notes(self.db, wid, "[[concept:Culture Industry]]")
+        self.assertEqual(list_concepts(self.db)[0]["id"], c["id"])
+
+    def test_rename_collision_unchanged(self):
+        a = create_concept(self.db, "Culture Industry")
+        create_concept(self.db, "Mass Culture")
+        with self.assertRaises(ResearchError) as ctx:
+            update_concept(self.db, a["id"], name="Mass Culture")
+        self.assertEqual(ctx.exception.code, "concept_exists")
+        self.assertEqual(get_concept(self.db, a["id"])["name"], "Culture Industry")
+        self.assertEqual(get_concept(self.db, a["id"])["aliases"], [])
+
     def test_alias_resolves(self):
         c = create_concept(self.db, "Cultural Industry")
         replace_concept_aliases(self.db, c["id"], ["Culture Industry", "Kulturindustrie"])
@@ -134,9 +154,40 @@ class ResearchNetworkTests(unittest.TestCase):
         self.index.sync_work(wid, self.db.get_work(wid)["text_content"], self.db)
         cid = list_concepts(self.db)[0]["id"]
         with self.assertRaises(ResearchError) as ctx:
-            delete_concept(self.db, cid, mention_count=self.index.mention_count_for_concept(cid))
+            delete_concept(self.db, cid)
         self.assertEqual(ctx.exception.code, "concept_in_use")
         self.assertEqual(ctx.exception.http_status, 409)
+
+    def test_delete_concept_blocked_when_index_stale_after_sync_failure(self):
+        wid = self._work()
+        save_work_notes(self.db, wid, "[[concept:Culture Industry]]")
+        cid = list_concepts(self.db)[0]["id"]
+        with patch.object(self.index, "sync_work", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.index.sync_work(wid, self.db.get_work(wid)["text_content"], self.db)
+        self.assertEqual(self.index.mention_count_for_concept(cid), 0)
+        with self.assertRaises(ResearchError) as ctx:
+            delete_concept(self.db, cid)
+        self.assertEqual(ctx.exception.code, "concept_in_use")
+        self.assertIsNotNone(get_concept(self.db, cid))
+
+    def test_delete_concept_blocks_ambiguous_candidate(self):
+        self.db.execute_query(
+            "INSERT INTO concepts (id, name, description) VALUES (?, ?, ?)",
+            ("C-aaa", "Culture Industry", ""),
+        )
+        self.db.execute_query(
+            "INSERT INTO concepts (id, name, description) VALUES (?, ?, ?)",
+            ("C-bbb", "culture industry", ""),
+        )
+        wid = self._work()
+        self.db.execute_query(
+            "UPDATE works SET text_content = ? WHERE id = ?",
+            ("[[concept:Culture Industry]]", wid),
+        )
+        with self.assertRaises(ResearchError) as ctx:
+            delete_concept(self.db, "C-aaa")
+        self.assertEqual(ctx.exception.code, "concept_in_use")
 
     def test_ambiguous_dormant_duplicates(self):
         self.db.execute_query(
@@ -231,9 +282,7 @@ class ResearchNetworkTests(unittest.TestCase):
         save_work_notes(self.db, wid, "See [[argument:" + arg["id"] + "|label]].")
         self.index.sync_work(wid, self.db.get_work(wid)["text_content"], self.db)
         with self.assertRaises(ResearchError) as ctx:
-            delete_argument(
-                self.db, arg["id"], mention_count=self.index.mention_count_for_argument(arg["id"])
-            )
+            delete_argument(self.db, arg["id"])
         self.assertEqual(ctx.exception.code, "argument_in_use")
         save_work_notes(self.db, wid, "")
         self.index.sync_work(wid, "", self.db)
@@ -244,9 +293,21 @@ class ResearchNetworkTests(unittest.TestCase):
             targets=[{"type": "argument", "id": arg["id"], "verdict_id": "opposes"}],
         )
         with self.assertRaises(ResearchError) as ctx:
-            delete_argument(self.db, arg["id"], mention_count=0)
+            delete_argument(self.db, arg["id"])
         self.assertEqual(ctx.exception.code, "argument_targeted")
         self.assertIsNotNone(get_argument(self.db, other["id"]))
+
+    def test_delete_argument_blocked_when_index_stale_after_sync_failure(self):
+        wid = self._work()
+        arg = create_argument(self.db, name="Linked", kind="argument")
+        save_work_notes(self.db, wid, "See [[argument:" + arg["id"] + "|label]].")
+        with patch.object(self.index, "sync_work", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.index.sync_work(wid, self.db.get_work(wid)["text_content"], self.db)
+        self.assertEqual(self.index.mention_count_for_argument(arg["id"]), 0)
+        with self.assertRaises(ResearchError) as ctx:
+            delete_argument(self.db, arg["id"])
+        self.assertEqual(ctx.exception.code, "argument_in_use")
 
     def test_unknown_argument_ref_does_not_create(self):
         wid = self._work()

@@ -166,13 +166,13 @@ Concepts, Positions, and Arguments/Stances are persistent research records. They
 
 Work↔Concept membership exists only because research notes (`works.text_content`) contain explicit `[[concept:Name]]` markup. Private notes never participate. Ordinary prose such as `Culture Industry` does not become a Concept; only `[[concept:Culture Industry]]` does. Unknown valid Concept names are created on note save. Concept records remain if every note reference is later removed.
 
-Concept aliases/search keys resolve note references. Renaming a Concept keeps the old name as an alias so existing notes keep working. Concepts may have multiple parents; hierarchy cycles are rejected.
+Concept aliases/search keys resolve note references. A Concept identity rename keeps the old name as an alias so existing notes keep working. Capitalization-only display changes update the Concept name without adding an alias. Concepts may have multiple parents; hierarchy cycles are rejected.
 
 Arguments/Stances use stable IDs in notes: `[[argument:A-123|Label]]`. Typing an unknown Argument ID does not create a record. Arguments record main Markdown text, source Works with page-range strings (Where made/taken), Position or Argument targets with an explicit verdict (Responds to), and derived reverse Counter/Response Arguments.
 
 Positions are lightweight claim records used as Argument targets. Glossaries/Concept Senses and Debates/Theories are deliberately omitted in this version.
 
-Note mentions live in a disposable derived index (`prks_research_index.db`), not in `prks_data.db`. Derived indexing failure never rolls back a valid note save.
+Note mentions live in a disposable derived index (`prks_research_index.db`), not in `prks_data.db`. Derived indexing failure never rolls back a valid note save. Concept and Argument deletion is guarded by canonical research notes, not by the derived index.
 
 ## Saved Views
 

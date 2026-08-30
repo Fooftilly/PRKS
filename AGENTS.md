@@ -182,10 +182,12 @@ prose never auto-links. Unknown valid Concept names are created on note save in
 the same transaction as the note. Removing every note reference does not delete
 the Concept.
 
-Concept aliases/search keys resolve note references. A Concept rename preserves
-the old name as an alias. Multi-parent hierarchy is allowed; cycles are
-rejected. Do not add Glossaries/Concept Senses or Debates/Theories as an
-incidental follow-on.
+Concept aliases/search keys resolve note references. A Concept identity
+rename preserves the old name as an alias. Capitalization or spacing-only
+display changes update `concepts.name` without a new alias; existing notes
+still resolve through the same normalized identity. Multi-parent hierarchy
+is allowed; cycles are rejected. Do not add Glossaries/Concept Senses or
+Debates/Theories as an incidental follow-on.
 
 Arguments/Stances use stable IDs in notes (`[[argument:A-id|Label]]`) and do not
 auto-create from unknown markup. Every target requires a verdict. Incoming
@@ -196,7 +198,9 @@ separate stored list.
 stored; surrounding note prose must not be. Unknown/corrupt derived schema may
 be deleted and recreated. Never touch `prks_data.db` because the research index
 is corrupt. Derived indexing failure must not roll back a valid canonical note
-save. Do not add research-index files to backups.
+save. Do not add research-index files to backups. Concept and Argument deletion
+must inspect canonical `works.text_content` with `parse_research_markup()`;
+the derived index is never the sole authority for those destructive checks.
 
 Concept, Position, and Argument names, definitions, aliases, main text, verdict
 labels, page ranges, markup, and backlink snippets are private. Never log them.

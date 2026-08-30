@@ -16,7 +16,7 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import PRKSDatabase
 from backend.research_index import PRKSResearchIndex, content_hash
-from backend.research_network import list_concepts, save_work_notes
+from backend.research_network import create_argument, list_concepts, save_work_notes
 from backend.storage.config import StorageConfig
 
 _SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")
@@ -97,6 +97,18 @@ class ResearchIndexTests(unittest.TestCase):
         work = self.db.get_work(wid)
         self.assertEqual(work["text_content"], text)
         self.assertEqual(list_concepts(self.db)[0]["name"], "Culture Industry")
+
+    def test_missing_argument_omitted_from_work_research_refs(self):
+        wid = self.db.add_work(title="W")
+        arg = create_argument(self.db, name="Real argument", kind="argument")
+        text = "See [[argument:A-MISSING]] and [[argument:%s|ok]]." % arg["id"]
+        save_work_notes(self.db, wid, text)
+        self.index.sync_work(wid, text, self.db)
+        self.index.reconcile_all(self.db)
+        refs = self.index.work_research_refs(wid, self.db)
+        ids = [a["id"] for a in refs.get("arguments") or []]
+        self.assertNotIn("A-MISSING", ids)
+        self.assertIn(arg["id"], ids)
 
     def test_content_hash_stable(self):
         self.assertEqual(content_hash("abc"), content_hash("abc"))

@@ -1427,11 +1427,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
                 cid = unquote(path.split('/')[-1])
                 try:
-                    n = research_index.mention_count_for_concept(cid)
-                    research_network.delete_concept(db, cid, mention_count=n)
+                    research_network.delete_concept(db, cid)
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
+                try:
+                    research_index.remove_concept_mentions(cid)
+                except Exception as e:
+                    LOGGER.warning(
+                        "research_index_cleanup_failed concept_id=%s error_type=%s",
+                        safe_log_id(cid),
+                        safe_error_type(e),
+                    )
                 self.send_json(200, {'status': 'deleted'})
             elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
                 pid = unquote(path.split('/')[-1])
@@ -1444,11 +1451,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
                 aid = unquote(path.split('/')[-1])
                 try:
-                    n = research_index.mention_count_for_argument(aid)
-                    research_network.delete_argument(db, aid, mention_count=n)
+                    research_network.delete_argument(db, aid)
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
+                try:
+                    research_index.remove_argument_mentions(aid)
+                except Exception as e:
+                    LOGGER.warning(
+                        "research_index_cleanup_failed argument_id=%s error_type=%s",
+                        safe_log_id(aid),
+                        safe_error_type(e),
+                    )
                 self.send_json(200, {'status': 'deleted'})
             else:
                 self.send_error(404, "API endpoint not found")

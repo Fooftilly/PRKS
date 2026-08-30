@@ -266,6 +266,22 @@ class PRKSResearchIndex:
             conn.execute("DELETE FROM work_note_state WHERE work_id = ?", (wid,))
             conn.commit()
 
+    def remove_concept_mentions(self, concept_id: str) -> None:
+        cid = (concept_id or "").strip()
+        if not cid:
+            return
+        with self._conn() as conn:
+            conn.execute("DELETE FROM concept_mentions WHERE concept_id = ?", (cid,))
+            conn.commit()
+
+    def remove_argument_mentions(self, argument_id: str) -> None:
+        aid = (argument_id or "").strip()
+        if not aid:
+            return
+        with self._conn() as conn:
+            conn.execute("DELETE FROM argument_mentions WHERE argument_id = ?", (aid,))
+            conn.commit()
+
     def mention_count_for_concept(self, concept_id: str) -> int:
         with self._conn() as conn:
             row = conn.execute(
@@ -345,7 +361,9 @@ class PRKSResearchIndex:
             )
             by_id = {r["id"]: r["name"] for r in name_rows}
             for aid in ids:
-                arguments.append({"id": aid, "name": by_id.get(aid, "")})
+                if aid not in by_id:
+                    continue
+                arguments.append({"id": aid, "name": by_id[aid]})
         return {"concepts": concepts, "arguments": arguments}
 
     def concept_backlinks(self, concept_id: str, db: PRKSDatabase) -> List[dict]:

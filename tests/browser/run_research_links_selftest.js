@@ -50,6 +50,20 @@ record('no raw img tag', xss.indexOf('<img') === -1);
 record('no javascript url', xss.toLowerCase().indexOf('javascript:') === -1);
 record('hash destinations', xss.indexOf('#/concepts/C-1') >= 0 && xss.indexOf('#/arguments/A-1') >= 0);
 
+const missingArg = api.prksReplaceResearchRefs(
+    'See [[argument:A-MISSING]] and [[argument:A-REAL|ok]].',
+    {
+        concepts: [],
+        arguments: [{ id: 'A-REAL', name: 'ok' }],
+    }
+);
+record(
+    'missing argument unresolved',
+    missingArg.indexOf('wiki-link-unresolved') >= 0 &&
+        missingArg.indexOf('#/arguments/A-MISSING') === -1
+);
+record('valid argument remains linked', missingArg.indexOf('#/arguments/A-REAL') >= 0);
+
 rows.forEach(function (r) {
     console.log((r.ok ? 'PASS  ' : 'FAIL  ') + r.name + (r.detail ? ' ' + r.detail : ''));
 });
