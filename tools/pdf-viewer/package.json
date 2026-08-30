@@ -1,0 +1,39 @@
+{
+  "name": "prks-pdf-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated PRKS PDF viewer build (EmbedPDF v2.15.0). Not used at application runtime.",
+  "scripts": {
+    "postinstall": "node scripts/apply-embedpdf-patches.mjs",
+    "build": "node build.mjs",
+    "guard": "node scripts/guard.mjs"
+  },
+  "dependencies": {
+    "@embedpdf/core": "2.15.0",
+    "@embedpdf/engines": "2.15.0",
+    "@embedpdf/models": "2.15.0",
+    "@embedpdf/pdfium": "2.15.0",
+    "@embedpdf/plugin-annotation": "2.15.0",
+    "@embedpdf/plugin-document-manager": "2.15.0",
+    "@embedpdf/plugin-history": "2.15.0",
+    "@embedpdf/plugin-interaction-manager": "2.15.0",
+    "@embedpdf/plugin-pan": "2.15.0",
+    "@embedpdf/plugin-render": "2.15.0",
+    "@embedpdf/plugin-scroll": "2.15.0",
+    "@embedpdf/plugin-selection": "2.15.0",
+    "@embedpdf/plugin-viewport": "2.15.0",
+    "@embedpdf/plugin-zoom": "2.15.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "esbuild": "0.25.9",
+    "typescript": "5.9.2"
+  },
+  "allowScripts": {
+    "esbuild@0.25.9": true
+  }
+}

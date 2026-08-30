@@ -2797,36 +2797,7 @@ body {
     outline-offset: 2px;
 }
 
-/* Floating toolbars (work PDF + upload preview) */
-#pdf-viewer::part(main-toolbar),
-#upload-viewer::part(main-toolbar) {
-    position: absolute;
-    top: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: auto;
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    box-shadow: none;
-    border: 1px solid var(--border);
-    z-index: var(--z-toolbar);
-    padding: 0 var(--space-sm);
-}
-
-#pdf-viewer::part(annotation-toolbar),
-#upload-viewer::part(annotation-toolbar) {
-    position: absolute;
-    top: 60px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: auto;
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    box-shadow: none;
-    border: 1px solid var(--border);
-    z-index: calc(var(--z-toolbar) - 1);
-    padding: 0 var(--space-sm);
-}
+/* Floating toolbars live inside the PRKS PDF viewer bundle. */
 
 .tab-content {
     padding: var(--space-lg);
@@ -3069,7 +3040,8 @@ body {
     font-family: inherit;
 }
 
-.annotation-row__edit-comment {
+.annotation-row__edit-comment,
+.annotation-row__delete {
     flex: 0 0 auto;
     width: auto;
     max-width: 50%;
@@ -3118,7 +3090,9 @@ body {
 }
 
 .annotation-row__edit-comment:hover,
-.annotation-row__edit-comment:focus-visible {
+.annotation-row__edit-comment:focus-visible,
+.annotation-row__delete:hover,
+.annotation-row__delete:focus-visible {
     border-color: var(--accent);
     color: var(--text-secondary);
     outline: 2px solid var(--accent);
@@ -5191,91 +5165,6 @@ textarea[data-prks-autosize="1"] {
     .work-pdf-pane {
         align-items: stretch;
     }
-}
-
-/* EmbedPDF: word snap + adjust-selection toolbar (PRKS) */
-.prks-embedpdf-selection-bar {
-    display: none;
-    position: absolute;
-    bottom: 0.65rem;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 10040;
-    flex-direction: row;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.35rem 0.5rem;
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
-    max-width: calc(100% - 1rem);
-    pointer-events: auto;
-    touch-action: manipulation;
-}
-
-.prks-embedpdf-selection-bar.is-visible {
-    display: flex;
-}
-
-.prks-embedpdf-selection-bar__btn {
-    font-size: 0.8rem;
-    font-weight: 500;
-    padding: 0.35rem 0.65rem;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-    background: var(--surface-muted);
-    color: var(--text);
-    cursor: pointer;
-    white-space: nowrap;
-    touch-action: manipulation;
-}
-
-.prks-embedpdf-selection-bar__btn:hover:not(:disabled) {
-    background: var(--surface);
-    border-color: var(--accent);
-}
-
-.prks-embedpdf-selection-bar__btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-}
-
-.prks-embedpdf-selection-bar__btn.is-active {
-    background: var(--accent-light);
-    border-color: var(--accent);
-    color: var(--accent);
-}
-
-.prks-embedpdf-selection-handle {
-    display: none;
-    position: fixed;
-    width: 24px;
-    height: 28px;
-    margin: 0;
-    padding: 0;
-    border-radius: 17px 17px 3px 17px;
-    z-index: 10050;
-    touch-action: none;
-    user-select: none;
-    pointer-events: auto;
-    box-sizing: border-box;
-    background: rgba(64, 156, 238, 0.98);
-    border: 2px solid #fff;
-    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
-    cursor: grab;
-}
-
-.prks-embedpdf-selection-handle--end {
-    border-radius: 3px 17px 17px 17px;
-}
-
-.prks-embedpdf-selection-handle.is-visible {
-    display: block;
-}
-
-.prks-embedpdf-selection-handle:active {
-    cursor: grabbing;
 }
 
 .document-view--work .work-pdf-pane--empty {

@@ -1,0 +1,23 @@
+# package: @embedpdf/plugin-viewport
+# version: 2.15.0
+# file: dist/react/index.js
+# why: every scrollTo was deferred one animation frame, so pan lagged the pointer
+# what: behavior auto is synchronous container.scrollTo; smooth keeps requestAnimationFrame
+# must-not: change goToPage/jump/fit contracts; touch scroll or document-manager
+--- a/dist/react/index.js
++++ b/dist/react/index.js
+@@
+-      ({ x, y, behavior = "auto" }) => {
+-        requestAnimationFrame(() => {
+-          container.scrollTo({ left: x, top: y, behavior });
+-        });
+-      }
++      ({ x, y, behavior = "auto" }) => {
++        if (behavior === "auto") {
++          container.scrollTo({ left: x, top: y, behavior });
++          return;
++        }
++        requestAnimationFrame(() => {
++          container.scrollTo({ left: x, top: y, behavior });
++        });
++      }

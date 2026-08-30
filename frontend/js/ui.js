@@ -2478,12 +2478,26 @@ async function submitWorkMetaEdit(workId) {
         // Refresh work in memory
         window.currentWork = await fetchWorkDetails(workId);
         toggleWorkMetaEdit(false);
-        // Refresh the main page header to reflect new title / document type
+        // Refresh the main page header, or the PDF toolbar identity, to reflect new title / document type
         const headerTitle = document.querySelector('.page-header--work-title');
         if (headerTitle) headerTitle.innerText = window.currentWork.title;
         const typeSlot = document.getElementById('work-header-doc-type-slot');
         if (typeSlot && typeof prksDocTypeBadgeHtml === 'function') {
             typeSlot.innerHTML = prksDocTypeBadgeHtml(window.currentWork.doc_type);
+        }
+        const toolbarTitle = document.querySelector('.prks-pdf-toolbar__title');
+        if (toolbarTitle) {
+            const nextTitle = String((window.currentWork && window.currentWork.title) || '').trim() || 'Document';
+            toolbarTitle.textContent = nextTitle;
+            toolbarTitle.setAttribute('title', nextTitle);
+        }
+        const toolbarType = document.querySelector('.prks-pdf-toolbar__type');
+        if (toolbarType && typeof prksDocTypeMeta === 'function') {
+            const meta = prksDocTypeMeta(window.currentWork.doc_type);
+            toolbarType.textContent = meta.label || '';
+            toolbarType.setAttribute('title', meta.label || '');
+            if (meta.color) toolbarType.style.background = meta.color;
+            if (meta.border) toolbarType.style.borderColor = meta.border;
         }
         // Also refresh works list if on works dashboard, but not strictly needed 
         // as hash change will trigger full refresh.
@@ -3612,6 +3626,7 @@ function renderWorkAnnotationsTab(work) {
                     <textarea id="pdf-annotation-editor-text" class="textarea-md" placeholder="Add a note/comment for this annotation…"></textarea>
                     <div class="pdf-annotation-editor__actions">
                         <button type="button" class="ribbon-btn" onclick="window.closePdfAnnotationEditor && window.closePdfAnnotationEditor()">Cancel</button>
+                        <button type="button" class="ribbon-btn" onclick="window.deletePdfAnnotationFromEditor && window.deletePdfAnnotationFromEditor()">Delete annotation</button>
                         <button type="button" class="add-new-btn" onclick="window.savePdfAnnotationComment && window.savePdfAnnotationComment()">Save comment</button>
                     </div>
                 </div>
@@ -3735,14 +3750,6 @@ function initUploadTagCombobox() {
 }
 
 function prksTeardownUploadEmbedViewer() {
-    if (
-        typeof window.__prksEmbedPdfSelectionAssistDetach === 'function' &&
-        window.__prksEmbedPdfSelectionAssistViewer === window.uploadViewer
-    ) {
-        try {
-            window.__prksEmbedPdfSelectionAssistDetach();
-        } catch (_e) {}
-    }
     const v = window.uploadViewer;
     if (v && typeof v.destroy === 'function') {
         try {
@@ -3764,9 +3771,6 @@ function removeUploadPdfPreview() {
     prksTeardownUploadEmbedViewer();
     const viewer = document.getElementById('upload-viewer');
     if (viewer) {
-        if (typeof window.prksDetachHideEmbedPdfErrorCloseButton === 'function') {
-            window.prksDetachHideEmbedPdfErrorCloseButton(viewer);
-        }
         viewer.innerHTML = '';
         viewer.classList.add('hidden');
     }
@@ -4325,9 +4329,6 @@ function initUploadDragAndDrop() {
 
             const pdfActions = document.getElementById('upload-pdf-preview-actions');
             if (pdfActions) pdfActions.classList.add('hidden');
-            if (viewer && typeof window.prksDetachHideEmbedPdfErrorCloseButton === 'function') {
-                window.prksDetachHideEmbedPdfErrorCloseButton(viewer);
-            }
             if (kindVal === 'video' && window.__prksUploadPdfBlobUrl) {
                 try {
                     URL.revokeObjectURL(window.__prksUploadPdfBlobUrl);
@@ -4612,9 +4613,6 @@ function handleUploadFile(file) {
         window.__prksUploadPdfBlobUrl = null;
     }
     prksTeardownUploadEmbedViewer();
-    if (viewerContainer && typeof window.prksDetachHideEmbedPdfErrorCloseButton === 'function') {
-        window.prksDetachHideEmbedPdfErrorCloseButton(viewerContainer);
-    }
     if (viewerContainer) viewerContainer.innerHTML = '';
 
     prompt.classList.add('hidden');
@@ -4622,61 +4620,20 @@ function handleUploadFile(file) {
     if (pdfActions) pdfActions.classList.remove('hidden');
 
     window.__prksPendingUploadPdfFile = file;
-    const url = URL.createObjectURL(file);
-    window.__prksUploadPdfBlobUrl = url;
-    Promise.all([
-        import('/js/components/works-pdf.js'),
-        import('https://cdn.jsdelivr.net/npm/@embedpdf/snippet@2/dist/embedpdf.js'),
-    ])
-        .then(([, embedModule]) => {
-            if (viewerContainer && typeof window.prksAttachHideEmbedPdfErrorCloseButton === 'function') {
-                window.prksAttachHideEmbedPdfErrorCloseButton(viewerContainer);
-            }
-            const EmbedPDF = embedModule.default;
-            const ZoomMode = embedModule.ZoomMode;
-            const disabledCategories = [
-                'annotation-shape',
-                'annotation-ink',
-                'redaction',
-                'form',
-                'annotation-text',
-                'annotation-stamp',
-                'stamp',
-                'insert-rubber-stamp',
-                'document',
-                'panel-sidebar',
-                'panel-comment',
-            ];
-
-            const initResult = EmbedPDF.init({
-                type: 'container',
+    import('/js/pdf-viewer-runtime.js')
+        .then((mod) =>
+            mod.createPrksPdfViewer({
                 target: viewerContainer,
-                src: url,
-                disabledCategories,
-                annotations: { annotationAuthor: getPrksAnnotationAuthor() },
-                zoom: ZoomMode ? { defaultZoomLevel: ZoomMode.FitWidth } : undefined,
-                theme:
-                    typeof window.getPrksEmbedPdfTheme === 'function'
-                        ? window.getPrksEmbedPdfTheme()
-                        : { preference: window.localStorage.getItem('prks-theme') || 'system' },
-            });
-
-            function finishUploadViewer(viewer) {
-                window.uploadViewer = viewer;
-                const run =
-                    typeof window.prksApplyEmbedPdfCustomizationWithRetry === 'function'
-                        ? window.prksApplyEmbedPdfCustomizationWithRetry(viewer)
-                        : typeof window.applyEmbedPdfUiCustomization === 'function'
-                          ? window.applyEmbedPdfUiCustomization(viewer)
-                          : Promise.resolve();
-                return Promise.resolve(run).catch(() => {});
-            }
-
-            if (initResult && typeof initResult.then === 'function') {
-                initResult.then(finishUploadViewer).catch(() => {});
-            } else {
-                void finishUploadViewer(initResult);
-            }
+                src: file,
+                mode: 'preview',
+                annotationAuthor: getPrksAnnotationAuthor(),
+            })
+        )
+        .then((viewer) => {
+            window.uploadViewer = viewer;
+        })
+        .catch((err) => {
+            console.error('Failed to load PDF preview', err);
         });
         
     // Auto-fill title if empty

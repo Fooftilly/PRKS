@@ -266,13 +266,17 @@ function initPrksPdfRememberPageSetting() {
 function initPrksPdfLastPageVisibilityFlush() {
     if (window.__prksPdfVisibilityFlushBound) return;
     window.__prksPdfVisibilityFlushBound = true;
-    document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState !== 'hidden') return;
+    const flush = () => {
         const sess = window.__prksPdfPageSession;
         if (sess && sess.workId) {
             prksFlushPdfLastPageToStorage(sess.workId);
         }
+    };
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'hidden') return;
+        flush();
     });
+    window.addEventListener('pagehide', flush);
 }
 
 function initPrksHintsSetting() {

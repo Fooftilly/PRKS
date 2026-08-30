@@ -1,0 +1,84 @@
+# package: @embedpdf/plugin-pan
+# version: 2.15.0
+# file: dist/index.js
+# why: mouse handlers ended drag on leave and had no capture, so pan stopped or kept scrolling incorrectly
+# what: Pointer Events; capture on down; end on pointerup/pointercancel only (not leave)
+# must-not: keep mouse* handlers (browsers also fire compatibility mouse events); touch scroll/document-manager
+--- a/dist/index.js
++++ b/dist/index.js
+@@
+-    const handlers = {
+-      onMouseDown: (_, pe) => {
+-        const metrics = viewportScope.getMetrics();
+-        dragState = {
+-          startX: pe.clientX,
+-          startY: pe.clientY,
+-          startLeft: metrics.scrollLeft,
+-          startTop: metrics.scrollTop
+-        };
+-        interactionScope.setCursor("panMode", "grabbing", 10);
+-      },
+-      onMouseMove: (_, pe) => {
+-        if (!dragState) return;
+-        const dx = pe.clientX - dragState.startX;
+-        const dy = pe.clientY - dragState.startY;
+-        viewportScope.scrollTo({
+-          x: dragState.startLeft - dx,
+-          y: dragState.startTop - dy
+-        });
+-      },
+-      onMouseUp: () => {
+-        if (!dragState) return;
+-        dragState = null;
+-        interactionScope.removeCursor("panMode");
+-      },
+-      onMouseLeave: () => {
+-        if (!dragState) return;
+-        dragState = null;
+-        interactionScope.removeCursor("panMode");
+-      },
+-      onMouseCancel: () => {
+-        if (!dragState) return;
+-        dragState = null;
+-        interactionScope.removeCursor("panMode");
+-      }
+-    };
++    const endDrag = (pe) => {
++      var _a;
++      if (!dragState) {
++        (_a = pe == null ? void 0 : pe.releasePointerCapture) == null ? void 0 : _a.call(pe);
++        return;
++      }
++      dragState = null;
++      interactionScope.removeCursor("panMode");
++      (_a = pe == null ? void 0 : pe.releasePointerCapture) == null ? void 0 : _a.call(pe);
++    };
++    const handlers = {
++      onPointerDown: (_, pe) => {
++        var _a;
++        const metrics = viewportScope.getMetrics();
++        dragState = {
++          startX: pe.clientX,
++          startY: pe.clientY,
++          startLeft: metrics.scrollLeft,
++          startTop: metrics.scrollTop
++        };
++        interactionScope.setCursor("panMode", "grabbing", 10);
++        (_a = pe.setPointerCapture) == null ? void 0 : _a.call(pe);
++      },
++      onPointerMove: (_, pe) => {
++        if (!dragState) return;
++        const dx = pe.clientX - dragState.startX;
++        const dy = pe.clientY - dragState.startY;
++        viewportScope.scrollTo({
++          x: dragState.startLeft - dx,
++          y: dragState.startTop - dy
++        });
++      },
++      onPointerUp: (_, pe) => {
++        endDrag(pe);
++      },
++      onPointerCancel: (_, pe) => {
++        endDrag(pe);
++      }
++    };

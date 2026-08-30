@@ -131,6 +131,16 @@ These controls reduce accidental/cross-origin access and DNS-rebinding risk. The
 
 Research notes (`works.text_content`) are stored as raw Markdown. Preview HTML is produced by EasyMDE/Marked and then sanitized with a pinned local DOMPurify allowlist (`frontend/vendor/dompurify`, `frontend/js/markdown-sanitize.js`). Arbitrary or active HTML is not a supported contract: unsafe tags, attributes, and URL schemes are stripped from the preview only. Sanitization never rewrites saved Markdown.
 
+Frontend libraries (Inter, EasyMDE, CodeMirror, Lucide, DOMPurify, the PDF viewer) are local files under `frontend/vendor/`. Node is not a runtime dependency. Docker does not run npm. To rebuild the PDF viewer after changing `tools/pdf-viewer/`:
+
+```bash
+cd tools/pdf-viewer
+npm ci
+npm run build
+```
+
+That writes `frontend/vendor/prks-pdf-viewer/` (EmbedPDF 2.15.0 + React 18.3.1, bundled). React is not part of the PRKS UI; it exists only inside that file. The PDF fixture is served by the same test-only server as the sanitizer fixture: open the printed `tests/browser/pdf_viewer.html` URL. It must report PASS with no jsDelivr / Google Fonts / unpkg requests.
+
 The sanitizer-boundary browser fixture is not served by the app. From the repo root:
 
 ```bash

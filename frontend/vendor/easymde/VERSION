@@ -1,0 +1,8 @@
+2.21.0
+source: https://github.com/Ionaru/easy-markdown-editor/releases/tag/2.21.0
+asset: https://cdn.jsdelivr.net/npm/easymde@2.21.0/dist/easymde.min.js
+css: https://cdn.jsdelivr.net/npm/easymde@2.21.0/dist/easymde.min.css
+sha256-js: 2c06bddfd0c89176db08ccf9d42e2beaa9b4f1a4ff8fb2ec0bf1bed25ce08e05
+sha256-css: 6eee36340432776d682e7372ec4a7eb29be4fdb3ffada32c0bfa5e31a5ef34a2
+license: MIT
+fetched: 2026-08-28

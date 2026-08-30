@@ -386,15 +386,21 @@ async function renderWorkDetails(work, container, routeGen) {
     window.currentWork = work;
     const workTitle = String((work && work.title) || '').trim();
     const headerTitle = workTitle ? prksEscapeHtmlLite(workTitle) : 'Document';
-
-    container.innerHTML = `
-        <div class="work-detail">
+    const pdfViewerActive = inferredKind === 'pdf' && !!work.file_path;
+    const workHeader = pdfViewerActive
+        ? ''
+        : `
             <div class="page-header page-header--work">
                 <div class="card-heading-row card-heading-row--wrap">
                     <h2 class="page-header--work-title">${headerTitle}</h2>
                     <span id="work-header-doc-type-slot">${typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : ''}</span>
                 </div>
             </div>
+        `;
+
+    container.innerHTML = `
+        <div class="work-detail">
+            ${workHeader}
             <div class="document-view document-view--work">
                 ${mainContent}
             </div>

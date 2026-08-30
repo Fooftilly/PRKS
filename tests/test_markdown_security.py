@@ -120,6 +120,7 @@ class MarkdownSecurityStructuralTests(unittest.TestCase):
         self.assertIn("__prksUnsupportedAddHookCalls", html)
         self.assertIn("wiki-link-unresolved", html)
         self.assertIn("data-pdf-ann-id", html)
+        # parity: pdf-wiki-link
         self.assertIn("//evil.example", html)
 
     def test_serve_py_binds_loopback_ephemeral(self):

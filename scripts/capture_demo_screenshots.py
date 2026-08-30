@@ -101,7 +101,7 @@ def main():
                 }"""
             )
             if wait_pdf:
-                page.wait_for_selector("embedpdf-container", timeout=20000)
+                page.wait_for_selector(".prks-pdf-viewer", timeout=20000)
                 page.wait_for_timeout(6000)
             else:
                 page.wait_for_timeout(2500)

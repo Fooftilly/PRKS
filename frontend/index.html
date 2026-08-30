@@ -12,14 +12,14 @@
     <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/vendor/inter/inter.css">
     <link rel="stylesheet" href="/css/style.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/hint/show-hint.css">
+    <link rel="stylesheet" href="/vendor/easymde/easymde.min.css">
+    <link rel="stylesheet" href="/vendor/codemirror/show-hint.css">
     <!-- CodeMirror lib must load before show-hint (addon needs global CodeMirror). EasyMDE bundles its own CM; we copy hint APIs onto that instance's constructor in works.js. -->
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/lib/codemirror.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.15/addon/hint/show-hint.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
+    <script src="/vendor/codemirror/codemirror.js"></script>
+    <script src="/vendor/codemirror/show-hint.js"></script>
+    <script src="/vendor/easymde/easymde.min.js"></script>
     <script src="/vendor/dompurify/purify.min.js"></script>
     <script src="/js/markdown-sanitize.js"></script>
 </head>
@@ -782,12 +782,11 @@
 
 
 
-    <script src="https://cdn.jsdelivr.net/npm/lucide@0.511.0/dist/umd/lucide.min.js"></script>
+    <script src="/vendor/lucide/lucide.min.js"></script>
     <script src="/js/icons.js"></script>
     <script src="/js/date-format.js"></script>
     <script src="/js/api.js"></script>
     <script src="/js/doc-types.js"></script>
-    <script src="/js/embedpdf-theme.js"></script>
     <script src="/js/ui.js"></script>
     <script src="/js/components/work-cards.js"></script>
     <script src="/js/components/folders.js"></script>

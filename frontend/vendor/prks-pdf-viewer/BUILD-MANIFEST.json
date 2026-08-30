@@ -1,0 +1,44 @@
+{
+  "embedpdf": "2.15.0",
+  "react": "18.3.1",
+  "reactDom": "18.3.1",
+  "fontFallback": null,
+  "tiling": false,
+  "pdfiumWasm": "pdfium.wasm",
+  "esbuild": "0.25.9",
+  "reactMetafileInputs": [
+    "node_modules/react/cjs/react.production.min.js",
+    "node_modules/react/index.js",
+    "node_modules/react-dom/cjs/react-dom.production.min.js",
+    "node_modules/react-dom/index.js",
+    "node_modules/react-dom/client.js",
+    "node_modules/react/cjs/react-jsx-runtime.production.min.js",
+    "node_modules/react/jsx-runtime.js"
+  ],
+  "outputSha256": {
+    "js": "15c234754527b78ecba8057def501713c3740a6e9a9ea8a660e16349a06fd637",
+    "css": "d81a689a3854fc316d9236d43b9e6883b8faef6ee5d8f24fed60e6545004f4ae",
+    "wasm": "c0af5a6aca30d7e54a149c3a68e317116ca906d6edc28fd3318b12c7d9478ac8"
+  },
+  "builtAt": "2026-08-30T09:50:50.907Z",
+  "embedpdfPatches": [
+    {
+      "package": "@embedpdf/plugin-pan",
+      "version": "2.15.0",
+      "patch": "embedpdf-plugin-pan-2.15.0.patch",
+      "sha256": "6ce0b17b4179b97d894cf2625b86ec5681dc80691436725a5fd9064802943e86"
+    },
+    {
+      "package": "@embedpdf/plugin-selection",
+      "version": "2.15.0",
+      "patch": "embedpdf-plugin-selection-2.15.0.patch",
+      "sha256": "51511f3d1b302ab6a12e6d38862a8d795400194bf11555c00a32149655b0b2c1"
+    },
+    {
+      "package": "@embedpdf/plugin-viewport",
+      "version": "2.15.0",
+      "patch": "embedpdf-plugin-viewport-2.15.0.patch",
+      "sha256": "ae3aaac03a0786c887c055a6c2517a6b6f2e33b491c5a27658c1421d170a818b"
+    }
+  ]
+}

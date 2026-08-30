@@ -15,6 +15,10 @@ ENV/
 env/
 .env/
 
+# --- PDF viewer maintainer Node island ---
+tools/pdf-viewer/node_modules/
+frontend/vendor/prks-pdf-viewer/esbuild-meta.json
+
 # --- Python packaging / build outputs ---
 build/
 dist/
@@ -53,3 +57,4 @@ htmlcov/
 Thumbs.db
 log.txt
 to-do.md
+prks-latest.zip

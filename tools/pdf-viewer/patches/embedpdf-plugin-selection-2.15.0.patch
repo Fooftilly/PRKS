@@ -1,0 +1,158 @@
+# package: @embedpdf/plugin-selection
+# version: 2.15.0
+# file: dist/index.js
+# why: text selection never captured the pointer, so pointerup outside the page never ended selecting
+# what: capture on drag begin (same helper marquee uses); shared idempotent end for pointerup/pointercancel
+# must-not: synthesized events; fan-out to every page; capture on every page pointerdown; IM global capture
+--- a/dist/index.js
++++ b/dist/index.js
+@@
+-function createTextSelectionHandler(opts) {
+-  const minDrag = opts.minDragDistance ?? 3;
+-  const tolFactor = opts.toleranceFactor ?? 1.5;
+-  let anchorGlyph = null;
+-  let anchorPos = null;
+-  let dragStarted = false;
+-  let lastDblClickTime = 0;
+-  function reset() {
+-    var _a;
+-    anchorGlyph = null;
+-    anchorPos = null;
+-    dragStarted = false;
+-    (_a = opts.setHasTextAnchor) == null ? void 0 : _a.call(opts, false);
+-  }
+-  return {
+-    onPointerDown: (point, evt, modeId) => {
+-      var _a, _b;
+-      if (evt.target === evt.currentTarget) {
+-        (_a = opts.onEmptySpaceClick) == null ? void 0 : _a.call(opts, modeId);
+-      }
+-      if (!opts.isEnabled(modeId)) return;
+-      const now = Date.now();
+-      if (lastDblClickTime === 0 || now - lastDblClickTime >= TRIPLE_CLICK_INTERVAL_MS) {
+-        opts.onClear(modeId);
+-      }
+-      const geo = opts.getGeometry();
+-      if (!geo) return;
+-      const g = glyphAt(geo, point, tolFactor);
+-      if (g !== -1) {
+-        anchorGlyph = g;
+-        anchorPos = point;
+-        dragStarted = false;
+-        (_b = opts.setHasTextAnchor) == null ? void 0 : _b.call(opts, true);
+-      }
+-    },
+-    onPointerMove: (point, _evt, modeId) => {
+-      if (!opts.isEnabled(modeId)) return;
+-      const geo = opts.getGeometry();
+-      if (!geo) return;
+-      const g = glyphAt(geo, point, tolFactor);
+-      opts.setCursor(g !== -1 ? "text" : null);
+-      if (anchorGlyph !== null && anchorPos && !dragStarted) {
+-        const dx = point.x - anchorPos.x;
+-        const dy = point.y - anchorPos.y;
+-        const dist = Math.sqrt(dx * dx + dy * dy);
+-        if (dist >= minDrag) {
+-          dragStarted = true;
+-          opts.onBegin(anchorGlyph, modeId);
+-          if (g !== -1) {
+-            opts.onUpdate(g, modeId);
+-          }
+-        }
+-        return;
+-      }
+-      if (opts.isSelecting() && g !== -1) {
+-        opts.onUpdate(g, modeId);
+-      }
+-    },
+-    onPointerUp: (_point, _evt, modeId) => {
+-      if (!opts.isEnabled(modeId)) {
+-        reset();
+-        return;
+-      }
+-      if (dragStarted) {
+-        opts.onEnd(modeId);
+-      }
+-      reset();
+-    },
++function createTextSelectionHandler(opts) {
++  const minDrag = opts.minDragDistance ?? 3;
++  const tolFactor = opts.toleranceFactor ?? 1.5;
++  let anchorGlyph = null;
++  let anchorPos = null;
++  let dragStarted = false;
++  let lastDblClickTime = 0;
++  let ended = false;
++  function reset() {
++    var _a;
++    anchorGlyph = null;
++    anchorPos = null;
++    dragStarted = false;
++    (_a = opts.setHasTextAnchor) == null ? void 0 : _a.call(opts, false);
++  }
++  function finish(evt, modeId) {
++    var _a;
++    if (ended) {
++      (_a = evt == null ? void 0 : evt.releasePointerCapture) == null ? void 0 : _a.call(evt);
++      return;
++    }
++    ended = true;
++    if (dragStarted) {
++      opts.onEnd(modeId);
++    }
++    reset();
++    (_a = evt == null ? void 0 : evt.releasePointerCapture) == null ? void 0 : _a.call(evt);
++  }
++  return {
++    onPointerDown: (point, evt, modeId) => {
++      var _a, _b;
++      if (evt.target === evt.currentTarget) {
++        (_a = opts.onEmptySpaceClick) == null ? void 0 : _a.call(opts, modeId);
++      }
++      if (!opts.isEnabled(modeId)) return;
++      ended = false;
++      const now = Date.now();
++      if (lastDblClickTime === 0 || now - lastDblClickTime >= TRIPLE_CLICK_INTERVAL_MS) {
++        opts.onClear(modeId);
++      }
++      const geo = opts.getGeometry();
++      if (!geo) return;
++      const g = glyphAt(geo, point, tolFactor);
++      if (g !== -1) {
++        anchorGlyph = g;
++        anchorPos = point;
++        dragStarted = false;
++        (_b = opts.setHasTextAnchor) == null ? void 0 : _b.call(opts, true);
++      }
++    },
++    onPointerMove: (point, evt, modeId) => {
++      var _a;
++      if (!opts.isEnabled(modeId)) return;
++      const geo = opts.getGeometry();
++      if (!geo) return;
++      const g = glyphAt(geo, point, tolFactor);
++      opts.setCursor(g !== -1 ? "text" : null);
++      if (anchorGlyph !== null && anchorPos && !dragStarted) {
++        const dx = point.x - anchorPos.x;
++        const dy = point.y - anchorPos.y;
++        const dist = Math.sqrt(dx * dx + dy * dy);
++        if (dist >= minDrag) {
++          dragStarted = true;
++          opts.onBegin(anchorGlyph, modeId);
++          (_a = evt.setPointerCapture) == null ? void 0 : _a.call(evt);
++          if (g !== -1) {
++            opts.onUpdate(g, modeId);
++          }
++        }
++        return;
++      }
++      if (opts.isSelecting() && g !== -1) {
++        opts.onUpdate(g, modeId);
++      }
++    },
++    onPointerUp: (_point, evt, modeId) => {
++      finish(evt, modeId);
++    },
++    onPointerCancel: (_point, evt, modeId) => {
++      finish(evt, modeId);
++    },

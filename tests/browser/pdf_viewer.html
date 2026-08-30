@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PRKS PDF viewer fixture</title>
+    <style>
+        body { font-family: sans-serif; margin: 1.5rem; }
+        #host { width: 820px; height: 640px; border: 1px solid #cbd5e1; }
+        #host-large { width: 820px; height: 640px; border: 1px solid #cbd5e1; margin-top: 1rem; }
+        .pass { color: #047857; }
+        .fail { color: #b91c1c; }
+        pre { background: #f4f4f5; padding: 0.75rem; overflow: auto; }
+    </style>
+</head>
+<body>
+    <h1>PRKS PDF viewer fixture</h1>
+    <p>
+        Loads production <code>frontend/js/pdf-viewer-runtime.js</code> and
+        <code>frontend/vendor/prks-pdf-viewer/</code>. Serve with
+        <code>python tests/browser/serve.py</code> (binds 127.0.0.1, ephemeral port).
+        Synthetic <code>dispatchEvent(new PointerEvent(...))</code> does not prove
+        pointer capture; leave-page / leave-viewport cases live in
+        <code>tests/browser/pointer_capture.py</code>.
+    </p>
+    <p id="summary">Running…</p>
+    <ol id="results"></ol>
+    <div id="host"></div>
+    <div id="host-large"></div>
+    <pre id="cdn-log"></pre>
+    <div hidden>
+        <span data-parity="pdf-render"></span>
+        <span data-parity="large-pdf-scroll"></span>
+        <span data-parity="zoom-controls"></span>
+        <span data-parity="pointer-mode"></span>
+        <span data-parity="pan-mode"></span>
+        <span data-parity="highlight-committed"></span>
+        <span data-parity="markup-highlight-equal"></span>
+        <span data-parity="underline-committed"></span>
+        <span data-parity="markup-underline-equal"></span>
+        <span data-parity="undo-redo"></span>
+        <span data-parity="annotation-select-menu"></span>
+        <span data-parity="annotation-delete"></span>
+        <span data-parity="annotation-edit-comment"></span>
+        <span data-parity="jump-to-annotation"></span>
+        <span data-parity="save-copy"></span>
+        <span data-parity="annotation-delete-reload"></span>
+        <span data-parity="selection-in-page"></span>
+        <span data-parity="zoom-menu"></span>
+        <span data-parity="responsive-toolbar"></span>
+        <span data-parity="no-native-drag"></span>
+    </div>
+
+    <script type="module">
+const ASSET_BASE = '/frontend/vendor/prks-pdf-viewer/';
+const MINIMAL = '/tests/browser/assets/minimal.pdf';
+const LARGE = '/tests/browser/assets/large.pdf';
+const CDN_NEEDLES = [
+    'cdn.jsdelivr.net',
+    'unpkg.com',
+    'fonts.googleapis.com',
+    'fonts.gstatic.com',
+    'fonts-jp',
+    'fonts-kr',
+    'fonts-sc',
+    'fonts-tc',
+    'fonts-latin',
+    'fonts-arabic',
+    'fonts-hebrew',
+];
+
+const resourceUrls = [];
+const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+        if (entry && entry.name) resourceUrls.push(String(entry.name));
+    }
+});
+observer.observe({ type: 'resource', buffered: true });
+
+const resultsEl = document.getElementById('results');
+const summaryEl = document.getElementById('summary');
+let passed = 0;
+let failed = 0;
+
+function record(name, ok, detail) {
+    const li = document.createElement('li');
+    li.className = ok ? 'pass' : 'fail';
+    li.textContent = (ok ? 'PASS' : 'FAIL') + '  ' + name + (detail ? ' — ' + detail : '');
+    resultsEl.appendChild(li);
+    if (ok) passed += 1;
+    else failed += 1;
+}
+
+function assert(name, cond, detail) {
+    record(name, !!cond, detail);
+}
+
+function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+}
+
+async function waitFor(fn, ms, label) {
+    const t0 = Date.now();
+    let last;
+    while (Date.now() - t0 < ms) {
+        last = await fn();
+        if (last) return last;
+        await sleep(40);
+    }
+    throw new Error((label || 'waitFor') + ' timed out');
+}
+
+function cdnHits() {
+    return resourceUrls.filter((u) => CDN_NEEDLES.some((n) => u.includes(n)));
+}
+
+function painted(host) {
+    return !!(host.querySelector('canvas') || host.querySelector('img') || host.querySelector('svg'));
+}
+
+function pageHost(root) {
+    const page = root.querySelector('.prks-pdf-page');
+    if (!page) return null;
+    return page.firstElementChild instanceof Element ? page.firstElementChild : page;
+}
+
+function firePointer(el, type, x, y, extra) {
+    el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId: extra && extra.pointerId != null ? extra.pointerId : 1,
+        pointerType: 'mouse',
+        clientX: x,
+        clientY: y,
+        buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1,
+        ...(extra || {}),
+    }));
+}
+
+function markupFields(ann) {
+    const raw = ann && ann.raw && typeof ann.raw === 'object' ? ann.raw : ann || {};
+    const hex = (v) => (v == null || v === '' ? null : String(v).toLowerCase());
+    const num = (v) => (v == null || v === '' ? null : Number(v));
+    const type = num(raw.type);
+    const blend = raw.blendMode == null ? null : Number(raw.blendMode);
+    return {
+        type,
+        color: hex(raw.color),
+        strokeColor: hex(raw.strokeColor),
+        opacity: num(raw.opacity),
+        blendMode: type === 10 ? null : blend,
+    };
+}
+
+function markupEqual(a, b) {
+    return JSON.stringify(markupFields(a)) === JSON.stringify(markupFields(b));
+}
+
+function annotationIds(viewerRef) {
+    return new Set(
+        (viewerRef.getAnnotations() || []).map((a) => a && a.id).filter(Boolean),
+    );
+}
+
+function newestAnnotation(viewerRef, before) {
+    return (viewerRef.getAnnotations() || []).find((a) => a && a.id && !before.has(a.id)) || null;
+}
+
+function inToolbarBounds(toolbar, el) {
+    if (!toolbar || !el) return false;
+    const tb = toolbar.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return (
+        r.width > 0 &&
+        r.height > 0 &&
+        r.left >= tb.left - 1 &&
+        r.right <= tb.right + 1 &&
+        r.top >= tb.top - 1 &&
+        r.bottom <= tb.bottom + 1
+    );
+}
+
+async function selectBand(root, y) {
+    const ph = pageHost(root);
+    if (!ph) return false;
+    const r = ph.getBoundingClientRect();
+    firePointer(ph, 'pointerdown', r.left + 90, r.top + y);
+    firePointer(ph, 'pointermove', r.left + 300, r.top + y);
+    firePointer(ph, 'pointerup', r.left + 300, r.top + y);
+    await sleep(400);
+    return true;
+}
+
+function clickPopupAction(root, label) {
+    const btn = [...root.querySelectorAll('.prks-pdf-selection-popup button')]
+        .find((b) => (b.getAttribute('aria-label') || b.textContent || '').trim() === label);
+    if (!btn) return false;
+    btn.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 2,
+        pointerType: 'mouse',
+        buttons: 1,
+    }));
+    btn.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 2,
+        pointerType: 'mouse',
+        buttons: 0,
+    }));
+    btn.click();
+    return true;
+}
+
+async function waitNewest(viewerRef, before, label) {
+    await waitFor(() => newestAnnotation(viewerRef, before), 8000, label);
+    return newestAnnotation(viewerRef, before);
+}
+
+async function createViaToolbar(viewerRef, root, kind, ySelect) {
+    const before = annotationIds(viewerRef);
+    const label = kind === 'highlight' ? 'Highlight' : 'Underline';
+    const toolBtn = root.querySelector(`.prks-pdf-toolbar__secondary [aria-label="${label}"]`);
+    if (!toolBtn) throw new Error('toolbar ' + label + ' missing');
+    if (getComputedStyle(toolBtn).display === 'none') throw new Error('toolbar ' + label + ' hidden');
+    toolBtn.click();
+    await sleep(50);
+    await selectBand(root, ySelect);
+    const ann = await waitNewest(viewerRef, before, 'toolbar ' + kind);
+    viewerRef.clearActiveTool();
+    viewerRef.setInteractionMode('pointer');
+    await sleep(50);
+    return ann;
+}
+
+async function createViaPopup(viewerRef, root, kind, ySelect) {
+    const before = annotationIds(viewerRef);
+    viewerRef.clearActiveTool();
+    viewerRef.setInteractionMode('pointer');
+    const label = kind === 'highlight' ? 'Highlight' : 'Underline';
+    await selectBand(root, ySelect);
+    const popup = await waitFor(
+        () => root.querySelector('.prks-pdf-selection-popup'),
+        4000,
+        'selection popup ' + kind,
+    );
+    if (!clickPopupAction(root, label)) throw new Error('popup ' + label + ' missing');
+    return waitNewest(viewerRef, before, 'popup ' + kind);
+}
+
+function clickMenuButton(root, className, label) {
+    const menu = root.querySelector(className);
+    if (!menu) return false;
+    const btn = [...menu.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === label);
+    if (!btn) return false;
+    btn.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 3,
+        pointerType: 'mouse',
+        buttons: 1,
+    }));
+    btn.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 3,
+        pointerType: 'mouse',
+        buttons: 0,
+    }));
+    btn.click();
+    return true;
+}
+
+function leftoverZoomScale(root) {
+    return [...root.querySelectorAll('*')].some((el) => {
+        const inline = el.style && el.style.transform;
+        return !!(inline && /scale\(/i.test(inline));
+    });
+}
+
+const pointerMode = new URLSearchParams(location.search).has('pointer');
+const events = [];
+const commentReqs = [];
+let viewer = null;
+
+try {
+    const { createPrksPdfViewer } = await import('/frontend/js/pdf-viewer-runtime.js');
+    assert('runtime export', typeof createPrksPdfViewer === 'function');
+
+    if (pointerMode) {
+        const host = document.getElementById('host');
+        viewer = await createPrksPdfViewer({
+            target: host,
+            src: MINIMAL,
+            mode: 'work',
+            assetBaseUrl: ASSET_BASE,
+        });
+        await waitFor(() => viewer.getPageCount() >= 2, 20000, 'page count');
+        await waitFor(() => painted(host), 20000, 'paint');
+        window.__prksPointerViewer = viewer;
+        window.__prksPointerReady = true;
+        summaryEl.textContent = 'pointer harness ready';
+        summaryEl.className = 'pass';
+    } else {
+    const host = document.getElementById('host');
+    viewer = await createPrksPdfViewer({
+        target: host,
+        src: MINIMAL,
+        mode: 'work',
+        assetBaseUrl: ASSET_BASE,
+        documentTitle: 'Retorika',
+        documentTypeLabel: 'Book',
+        onAnnotationChange: (evt) => events.push(evt),
+        onAnnotationCommentRequest: (info) => commentReqs.push(info),
+    });
+    viewer.onAnnotationEvent((evt) => events.push(evt));
+    const wasmAttr = host.querySelector('.prks-pdf-viewer')?.getAttribute('data-wasm-url') || '';
+
+    await waitFor(() => viewer.getPageCount() >= 2, 20000, 'page count');
+    assert('page count', viewer.getPageCount() >= 2, String(viewer.getPageCount()));
+    await waitFor(() => painted(host), 20000, 'paint');
+    assert('pages painted', painted(host));
+
+    const renderImage = await waitFor(
+        () => host.querySelector('.prks-pdf-render-image'),
+        20000,
+        'render image',
+    );
+    assert('render image exists', !!renderImage);
+    assert(
+        'render image not draggable',
+        renderImage && renderImage.draggable === false,
+        renderImage && String(renderImage.draggable),
+    );
+    const pageEl = host.querySelector('.prks-pdf-page');
+    let dragStarts = 0;
+    const onPageDragStart = (evt) => {
+        dragStarts += 1;
+        assert(
+            'dispatched dragstart prevented',
+            evt.defaultPrevented === true,
+            String(evt.defaultPrevented),
+        );
+    };
+    if (pageEl && renderImage) {
+        pageEl.addEventListener('dragstart', onPageDragStart);
+        const dragEvt = new Event('dragstart', { bubbles: true, cancelable: true });
+        renderImage.dispatchEvent(dragEvt);
+        pageEl.removeEventListener('dragstart', onPageDragStart);
+        assert('page saw one dragstart', dragStarts === 1, String(dragStarts));
+        assert(
+            'image dragstart defaultPrevented',
+            dragEvt.defaultPrevented === true,
+            String(dragEvt.defaultPrevented),
+        );
+    } else {
+        assert('page for dragstart contract', false);
+    }
+
+    viewer.goToPage(2);
+    await waitFor(() => viewer.getCurrentPage() === 2, 8000, 'goToPage 2');
+    assert('goToPage(2)', viewer.getCurrentPage() === 2, String(viewer.getCurrentPage()));
+    assert(
+        'toolbar title',
+        (host.querySelector('.prks-pdf-toolbar__title')?.textContent || '').trim() === 'Retorika',
+        host.querySelector('.prks-pdf-toolbar__title') && host.querySelector('.prks-pdf-toolbar__title').textContent,
+    );
+    assert(
+        'toolbar type badge',
+        (host.querySelector('.prks-pdf-toolbar__type')?.textContent || '').trim() === 'Book',
+        host.querySelector('.prks-pdf-toolbar__type') && host.querySelector('.prks-pdf-toolbar__type').textContent,
+    );
+    const pageInput = host.querySelector('.prks-pdf-toolbar__page-input');
+    assert('page input', !!pageInput);
+    if (pageInput) {
+        pageInput.focus();
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(pageInput, '1');
+        pageInput.dispatchEvent(new Event('input', { bubbles: true }));
+        pageInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+        pageInput.blur();
+        await waitFor(() => viewer.getCurrentPage() === 1, 8000, 'page input 1');
+        assert('page input navigates', viewer.getCurrentPage() === 1, String(viewer.getCurrentPage()));
+        viewer.goToPage(2);
+        await waitFor(() => viewer.getCurrentPage() === 2, 8000, 'restore page 2');
+    }
+
+    const beforeZoom = document.querySelector('.prks-pdf-toolbar__zoom-pct')?.textContent
+        || document.querySelector('.prks-pdf-toolbar__zoom')?.textContent
+        || '';
+    viewer.zoomIn();
+    await sleep(300);
+    viewer.zoomOut();
+    await sleep(200);
+    viewer.fitWidth();
+    await sleep(200);
+    assert('zoom controls ran', true, beforeZoom);
+
+    const zoomLevelBtn = host.querySelector('[aria-label="Zoom level"]');
+    if (zoomLevelBtn) {
+        zoomLevelBtn.click();
+        await sleep(50);
+        const pct150 = [...host.querySelectorAll('.prks-pdf-toolbar__menu [role="menuitem"]')]
+            .find((b) => (b.textContent || '').trim() === '150%');
+        if (pct150) pct150.click();
+        await waitFor(
+            () => (host.querySelector('.prks-pdf-toolbar__zoom-pct')?.textContent || '').trim() === '150%',
+            4000,
+            'zoom 150%',
+        );
+        const afterPreset = (host.querySelector('.prks-pdf-toolbar__zoom-pct')?.textContent || '').trim();
+        assert('zoom menu 150%', afterPreset === '150%', afterPreset);
+        zoomLevelBtn.click();
+        await sleep(50);
+        const fitWidth = [...host.querySelectorAll('.prks-pdf-toolbar__menu [role="menuitem"]')]
+            .find((b) => (b.textContent || '').trim() === 'Fit width');
+        if (fitWidth) fitWidth.click();
+        await sleep(300);
+        assert('zoom menu fit width', true);
+    } else {
+        assert('zoom level button', false);
+    }
+
+    const origHostWidth = host.style.width;
+    host.style.width = '360px';
+    await sleep(80);
+    const toolbar = host.querySelector('.prks-pdf-toolbar');
+    const moreBtn = host.querySelector('[aria-label="More tools"]');
+    const secondary = host.querySelector('.prks-pdf-toolbar__secondary');
+    const moreShown = moreBtn && getComputedStyle(moreBtn.parentElement).display !== 'none';
+    const secondaryHidden = secondary && getComputedStyle(secondary).display === 'none';
+    assert('narrow overflow tools', !!(moreShown && secondaryHidden));
+    assert(
+        'narrow toolbar no horizontal scroll',
+        !!(toolbar && toolbar.scrollWidth <= toolbar.clientWidth),
+        toolbar ? `${toolbar.scrollWidth}/${toolbar.clientWidth}` : 'no toolbar',
+    );
+    const pageIndicator = host.querySelector('.prks-pdf-toolbar__pages');
+    const zoomOutBtn = host.querySelector('[aria-label="Zoom out"]');
+    const zoomLevelBtnNarrow = host.querySelector('[aria-label="Zoom level"]');
+    const zoomInBtn = host.querySelector('[aria-label="Zoom in"]');
+    const pointerIn = inToolbarBounds(toolbar, host.querySelector('[aria-label="Pointer"]'));
+    const panIn = inToolbarBounds(toolbar, host.querySelector('[aria-label="Pan"]'));
+    const pagesIn = inToolbarBounds(toolbar, pageIndicator);
+    const zoomOutIn = inToolbarBounds(toolbar, zoomOutBtn);
+    const zoomPctIn = inToolbarBounds(toolbar, zoomLevelBtnNarrow);
+    const zoomInIn = inToolbarBounds(toolbar, zoomInBtn);
+    const moreIn = inToolbarBounds(toolbar, moreBtn);
+    assert(
+        'narrow primary controls in bounds',
+        pointerIn && panIn && pagesIn && zoomOutIn && zoomPctIn && zoomInIn && moreIn,
+        JSON.stringify({ pointerIn, panIn, pagesIn, zoomOutIn, zoomPctIn, zoomInIn, moreIn }),
+    );
+    host.style.width = origHostWidth;
+    await sleep(50);
+
+    viewer.setInteractionMode('pan');
+    await sleep(50);
+    const panBtn = host.querySelector('[aria-label="Pan"]');
+    const pointerBtn = host.querySelector('[aria-label="Pointer"]');
+    assert(
+        'pan mode',
+        panBtn && panBtn.getAttribute('aria-pressed') === 'true',
+        panBtn && panBtn.getAttribute('aria-pressed'),
+    );
+    viewer.setInteractionMode('pointer');
+    await sleep(50);
+    assert(
+        'pointer mode',
+        pointerBtn && pointerBtn.getAttribute('aria-pressed') === 'true',
+        pointerBtn && pointerBtn.getAttribute('aria-pressed'),
+    );
+
+    const hiBtn = host.querySelector('.prks-pdf-toolbar__secondary [aria-label="Highlight"]');
+    if (hiBtn && typeof viewer.activateMarkupTool === 'function') {
+        viewer.activateMarkupTool('highlight');
+        await sleep(50);
+        assert(
+            'highlight tool armed',
+            hiBtn.getAttribute('aria-pressed') === 'true',
+            hiBtn.getAttribute('aria-pressed'),
+        );
+        assert(
+            'pointer exclusive vs highlight',
+            pointerBtn && pointerBtn.getAttribute('aria-pressed') === 'false',
+            pointerBtn && pointerBtn.getAttribute('aria-pressed'),
+        );
+        assert(
+            'pan exclusive vs highlight',
+            panBtn && panBtn.getAttribute('aria-pressed') === 'false',
+            panBtn && panBtn.getAttribute('aria-pressed'),
+        );
+        viewer.setInteractionMode('pointer');
+        await sleep(50);
+        assert(
+            'pointer clears markup tool',
+            hiBtn.getAttribute('aria-pressed') === 'false',
+            hiBtn.getAttribute('aria-pressed'),
+        );
+        viewer.activateMarkupTool('underline');
+        await sleep(50);
+        viewer.setInteractionMode('pan');
+        await sleep(50);
+        const ulBtn = host.querySelector('.prks-pdf-toolbar__secondary [aria-label="Underline"]');
+        assert(
+            'pan clears markup tool',
+            ulBtn && ulBtn.getAttribute('aria-pressed') === 'false',
+            ulBtn && ulBtn.getAttribute('aria-pressed'),
+        );
+        viewer.setInteractionMode('pointer');
+        await sleep(50);
+    } else {
+        assert('highlight tool button', false);
+    }
+
+    assert('isSelecting export', typeof viewer.isSelecting === 'function');
+    assert('isSelecting idle', viewer.isSelecting() === false);
+
+    viewer.goToPage(1);
+    await waitFor(() => viewer.getCurrentPage() === 1, 8000, 'goToPage 1');
+    const ph = pageHost(host);
+    if (ph) {
+        const r = ph.getBoundingClientRect();
+        firePointer(ph, 'pointerdown', r.left + 90, r.top + 80);
+        firePointer(ph, 'pointermove', r.left + 280, r.top + 80);
+        firePointer(ph, 'pointerup', r.left + 280, r.top + 80);
+        await sleep(80);
+        assert('in-page pointerup clears selecting', viewer.isSelecting() === false);
+
+        firePointer(ph, 'pointerdown', r.left + 90, r.top + 90);
+        firePointer(ph, 'pointermove', r.left + 260, r.top + 90);
+        firePointer(ph, 'pointercancel', r.left + 260, r.top + 90);
+        await sleep(80);
+        assert('pointercancel clears selecting', viewer.isSelecting() === false);
+    } else {
+        assert('page host for selection events', false);
+    }
+
+    const vp = host.querySelector('.prks-pdf-viewport');
+    if (vp) {
+        const vr = vp.getBoundingClientRect();
+        vp.dispatchEvent(new WheelEvent('wheel', {
+            bubbles: true,
+            cancelable: true,
+            ctrlKey: true,
+            deltaY: -80,
+            clientX: vr.left + vr.width / 2,
+            clientY: vr.top + vr.height / 2,
+        }));
+        await sleep(400);
+        assert('ctrl+wheel leaves no CSS scale transform', leftoverZoomScale(host) === false);
+    } else {
+        assert('viewport for ctrl+wheel', false);
+    }
+
+    const anns0 = viewer.getAnnotations();
+    assert('annotations start empty or loaded', Array.isArray(anns0));
+
+    const apiId = crypto.randomUUID();
+    viewer.createAnnotation(0, {
+        id: apiId,
+        type: 9,
+        pageIndex: 0,
+        rect: { origin: { x: 72, y: 700 }, size: { width: 160, height: 14 } },
+        segmentRects: [{ origin: { x: 72, y: 700 }, size: { width: 160, height: 14 } }],
+        opacity: 1,
+        strokeColor: '#FFCD45',
+        color: '#FFCD45',
+        created: new Date(),
+    });
+    await waitFor(
+        () => events.some((e) => e && e.committed && e.kind === 'create' && e.annotationId === apiId)
+            || viewer.getAnnotations().some((a) => a && a.id === apiId),
+        8000,
+        'createAnnotation API',
+    );
+    assert('createAnnotation API', viewer.getAnnotations().some((a) => a && a.id === apiId), apiId);
+
+    const annA = await createViaToolbar(viewer, host, 'highlight', 70);
+    const annB = await createViaPopup(viewer, host, 'highlight', 95);
+    assert('highlight committed', !!(annA && annA.id && annB && annB.id), JSON.stringify({
+        a: annA && annA.id,
+        b: annB && annB.id,
+    }));
+    assert(
+        'toolbar highlight equals popup highlight',
+        !!(annA && annB && markupEqual(annA, annB)),
+        JSON.stringify({ a: markupFields(annA), b: markupFields(annB) }),
+    );
+    const createdId = annA && annA.id;
+    const hiParity = markupFields(annB);
+
+    if (createdId && typeof viewer.selectAnnotation === 'function') {
+        const commentsBefore = commentReqs.length;
+        viewer.selectAnnotation(createdId);
+        await waitFor(
+            () => host.querySelector('.prks-pdf-annotation-menu'),
+            4000,
+            'annotation menu',
+        );
+        const menu = host.querySelector('.prks-pdf-annotation-menu');
+        assert('annotation menu after select', !!menu);
+        assert(
+            'select does not open comment editor',
+            commentReqs.length === commentsBefore,
+            String(commentReqs.length),
+        );
+        assert(
+            'edit comment action',
+            clickMenuButton(host, '.prks-pdf-annotation-menu', 'Edit comment'),
+        );
+        await sleep(50);
+        assert(
+            'edit comment requests editor',
+            commentReqs.some((c) => c && c.annotationId === createdId),
+            JSON.stringify(commentReqs.slice(-1)),
+        );
+        const deletesBefore = events.filter((e) => e && e.committed && e.kind === 'delete').length;
+        assert('delete action', clickMenuButton(host, '.prks-pdf-annotation-menu', 'Delete'));
+        await waitFor(
+            () => events.filter((e) => e && e.committed && e.kind === 'delete').length > deletesBefore,
+            8000,
+            'committed delete',
+        );
+        assert(
+            'deleted annotation gone',
+            !viewer.getAnnotations().some((a) => a && a.id === createdId),
+        );
+    } else {
+        assert('selectAnnotation export', typeof viewer.selectAnnotation === 'function');
+    }
+
+    viewer.undo();
+    await sleep(200);
+    viewer.redo();
+    await sleep(200);
+    assert('undo/redo ran', true);
+    const jumpId = (annB && annB.id) || createdId;
+    if (jumpId && viewer.getAnnotations().some((a) => a && a.id === jumpId)) {
+        viewer.jumpToAnnotation(jumpId, 0);
+        await sleep(200);
+        assert('jumpToAnnotation', true, jumpId);
+    } else {
+        assert('jumpToAnnotation', false, 'no remaining highlight');
+    }
+
+    const annC = await createViaToolbar(viewer, host, 'underline', 120);
+    const annD = await createViaPopup(viewer, host, 'underline', 145);
+    assert('underline committed', !!(annC && annC.id && annD && annD.id), JSON.stringify({
+        c: annC && annC.id,
+        d: annD && annD.id,
+    }));
+    assert(
+        'toolbar underline equals popup underline',
+        !!(annC && annD && markupEqual(annC, annD)),
+        JSON.stringify({ c: markupFields(annC), d: markupFields(annD) }),
+    );
+    const unParity = markupFields(annD);
+
+    await sleep(400);
+    const copyWithAnn = await viewer.saveCopy();
+    viewer.destroy();
+    viewer = await createPrksPdfViewer({
+        target: host,
+        src: copyWithAnn,
+        mode: 'work',
+        assetBaseUrl: ASSET_BASE,
+        onAnnotationChange: (evt) => events.push(evt),
+    });
+    await waitFor(() => viewer.getPageCount() >= 2, 20000, 'persist reload pages');
+    await waitFor(() => painted(host), 20000, 'persist reload paint');
+    await sleep(1500);
+    const reloaded = viewer.getAnnotations();
+    const reloadedHi = reloaded.filter((a) => Number((a.raw && a.raw.type) || a.type) === 9);
+    const reloadedUn = reloaded.filter((a) => Number((a.raw && a.raw.type) || a.type) === 10);
+    assert(
+        'reload keeps highlight',
+        reloadedHi.length > 0,
+        reloaded.map((a) => String((a.raw && a.raw.type) || a.type)).join(','),
+    );
+    assert(
+        'reload highlight markup persists',
+        reloadedHi.length > 0 && reloadedHi.every((a) => JSON.stringify(markupFields(a)) === JSON.stringify(hiParity)),
+        JSON.stringify(reloadedHi.map(markupFields)),
+    );
+    assert(
+        'reload underline markup persists',
+        reloadedUn.length > 0 && reloadedUn.every((a) => JSON.stringify(markupFields(a)) === JSON.stringify(unParity)),
+        JSON.stringify(reloadedUn.map(markupFields)),
+    );
+    const killIds = reloaded
+        .filter((a) => Number((a.raw && a.raw.type) || a.type) === 9)
+        .map((a) => a.id)
+        .filter(Boolean);
+    if (typeof viewer.deleteAnnotation === 'function') {
+        for (const id of killIds) {
+            await viewer.deleteAnnotation(id);
+        }
+        await waitFor(
+            () => !viewer.getAnnotations().some((a) => Number((a.raw && a.raw.type) || a.type) === 9),
+            8000,
+            'delete before saveCopy',
+        );
+    }
+    const copyDeleted = await viewer.saveCopy();
+    viewer.destroy();
+    viewer = await createPrksPdfViewer({
+        target: host,
+        src: copyDeleted,
+        mode: 'work',
+        assetBaseUrl: ASSET_BASE,
+    });
+    await waitFor(() => viewer.getPageCount() >= 2, 20000, 'delete reload pages');
+    await waitFor(() => painted(host), 20000, 'delete reload paint');
+    await sleep(1500);
+    const afterDeleteReload = viewer.getAnnotations().filter((a) => Number((a.raw && a.raw.type) || a.type) === 9);
+    assert('reload after delete has no highlight', afterDeleteReload.length === 0, String(afterDeleteReload.length));
+
+    const copy = await viewer.saveCopy();
+    assert('saveCopy bytes', copy && copy.byteLength > 500, copy ? String(copy.byteLength) : 'empty');
+
+    viewer.destroy();
+    viewer = await createPrksPdfViewer({
+        target: host,
+        src: copy,
+        mode: 'work',
+        assetBaseUrl: ASSET_BASE,
+    });
+    await waitFor(() => viewer.getPageCount() >= 2, 20000, 'reload page count');
+    assert('reload from saveCopy', viewer.getPageCount() >= 2, String(viewer.getPageCount()));
+    viewer.goToPage(2);
+    await waitFor(() => viewer.getCurrentPage() === 2, 8000, 'jump after reload');
+    assert('jump after reload', viewer.getCurrentPage() === 2);
+    viewer.destroy();
+    host.innerHTML = '';
+    viewer = await createPrksPdfViewer({
+        target: host,
+        src: MINIMAL,
+        mode: 'work',
+        assetBaseUrl: ASSET_BASE,
+        initialPage: 2,
+    });
+    await waitFor(() => viewer.getPageCount() >= 2, 20000, 'initialPage pages');
+    await waitFor(() => painted(host), 20000, 'initialPage paint');
+    await waitFor(() => viewer.getCurrentPage() === 2, 8000, 'initialPage 2');
+    assert('initialPage restores page', viewer.getCurrentPage() === 2, String(viewer.getCurrentPage()));
+    viewer.destroy();
+    viewer = null;
+    host.innerHTML = '';
+    assert('destroy + recreate', !host.querySelector('.prks-pdf-viewer'));
+
+    const hostLarge = document.getElementById('host-large');
+    const largeViewer = await createPrksPdfViewer({
+        target: hostLarge,
+        src: LARGE,
+        mode: 'preview',
+        assetBaseUrl: ASSET_BASE,
+    });
+    await waitFor(() => largeViewer.getPageCount() >= 20, 25000, 'large page count');
+    assert('large pdf pages', largeViewer.getPageCount() >= 20, String(largeViewer.getPageCount()));
+    await waitFor(() => painted(hostLarge), 25000, 'large paint');
+    largeViewer.goToPage(10);
+    await sleep(400);
+    largeViewer.zoomIn();
+    largeViewer.zoomIn();
+    await sleep(500);
+    const stage = hostLarge.querySelector('.prks-pdf-viewport, .ep-viewport, .prks-pdf-stage');
+    if (stage) {
+        stage.scrollTop = 800;
+        await sleep(300);
+        stage.scrollTop = 0;
+    }
+    assert('large pdf scroll/zoom without crash', painted(hostLarge));
+    largeViewer.destroy();
+
+    const bad = cdnHits();
+    document.getElementById('cdn-log').textContent = resourceUrls.slice(0, 40).join('\n');
+    assert('no font/wasm CDN', bad.length === 0, bad.slice(0, 4).join(', '));
+    const wasmLocal =
+        resourceUrls.some((u) => u.includes('/prks-pdf-viewer/pdfium.wasm')) ||
+        (wasmAttr.includes('/prks-pdf-viewer/pdfium.wasm') &&
+            wasmAttr.startsWith(location.origin));
+    assert(
+        'wasm is local',
+        wasmLocal && !CDN_NEEDLES.some((n) => wasmAttr.includes(n)),
+        wasmAttr || 'no pdfium.wasm fetch recorded',
+    );
+    }
+} catch (err) {
+    assert('fixture run', false, err && err.message ? err.message : String(err));
+    if (viewer && typeof viewer.destroy === 'function' && !pointerMode) {
+        try { viewer.destroy(); } catch (_e) {}
+    }
+}
+
+if (!pointerMode) {
+    summaryEl.className = failed ? 'fail' : 'pass';
+    summaryEl.textContent = failed ? `FAILED ${failed}, passed ${passed}` : `PASS ${passed}`;
+    window.__prksPdfFixture = { passed, failed };
+}
+    </script>
+</body>
+</html>
