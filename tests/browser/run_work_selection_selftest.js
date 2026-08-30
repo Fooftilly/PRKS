@@ -492,15 +492,36 @@ root.prksWorkSelectionSubmitPayload({
     root.bulkUpdateWorks = async function () {
         throw new Error('One or more selected files no longer exist.');
     };
-    return root.prksWorkSelectionSubmitPayload({
-        work_ids: ['W-1'],
-        action: 'set_status',
-        status: 'Completed',
+    return Promise.resolve(root.prksWorkSelectionOpenSheet('status')).then(function () {
+        const sheet = document.getElementById('prks-bulk-sheet');
+        const body = sheet && sheet.querySelector('.prks-bulk-sheet__body');
+        const stBtn = document.createElement('button');
+        stBtn.className = 'prks-segmented__btn prks-segmented__btn--active';
+        stBtn.setAttribute('data-value', 'Completed');
+        if (body) body.appendChild(stBtn);
+        else if (sheet) sheet.appendChild(stBtn);
+        let applyBtn = sheet && sheet.querySelector('[data-bulk-apply]');
+        if (!applyBtn && sheet) {
+            applyBtn = document.createElement('button');
+            applyBtn.setAttribute('data-bulk-apply', '1');
+            applyBtn.textContent = 'Apply';
+            sheet.appendChild(applyBtn);
+        }
+        return root.prksWorkSelectionSubmitPayload({
+            work_ids: ['W-1'],
+            action: 'set_status',
+            status: 'Completed',
+        });
     });
 }).then(function (res) {
     assert('fail keeps mode', root.prksWorkSelectionIsActive());
     assertEq('fail keeps id', root.prksWorkSelectionGetIds().join(','), 'W-1');
     assert('fail not ok', res && res.ok === false);
+    const sheet = document.getElementById('prks-bulk-sheet');
+    const applyBtn = sheet && sheet.querySelector('[data-bulk-apply]');
+    assert('fail apply exists', !!applyBtn);
+    assertEq('fail apply label', applyBtn ? applyBtn.textContent : '', 'Apply');
+    assert('fail apply not working', applyBtn && applyBtn.textContent !== 'Working…');
 
     navCalls = 0;
     root.__prksRouteGen = 9;

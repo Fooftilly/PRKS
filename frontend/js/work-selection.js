@@ -137,8 +137,8 @@
             '<p class="prks-bulk-sheet__confirm"></p>' +
             '<p class="prks-bulk-sheet__error" role="alert"></p>' +
             '<div class="prks-bulk-sheet__actions">' +
-            '<button type="button" class="ribbon-btn" data-bulk-cancel>Cancel</button>' +
-            '<button type="button" class="add-new-btn" data-bulk-apply>Apply</button>' +
+            '<button type="button" class="ribbon-btn" data-bulk-cancel="1">Cancel</button>' +
+            '<button type="button" class="add-new-btn" data-bulk-apply="1">Apply</button>' +
             '</div>' +
             '</div>';
         document.body.appendChild(sheet);
@@ -744,12 +744,20 @@
         return null;
     }
 
+    function applyIdleLabel() {
+        if (state.sheetKind === 'status') {
+            const n = state.ids.size;
+            return 'Set status for ' + n + ' ' + filesWord(n);
+        }
+        return 'Apply';
+    }
+
     function setSubmitting(on) {
         state.submitting = !!on;
         const parts = sheetParts();
         if (parts.apply) {
             parts.apply.disabled = on || !canApplySheet();
-            parts.apply.textContent = on ? 'Working…' : parts.apply.textContent;
+            parts.apply.textContent = on ? 'Working…' : applyIdleLabel();
         }
         const cancels = document.querySelectorAll('#prks-bulk-sheet [data-bulk-cancel]');
         cancels.forEach((el) => {

@@ -566,6 +566,107 @@
         return prksMeta(route).navHref || null;
     }
 
+    const PRKS_NAV_PEOPLE_EXPANDED_KEY = 'prks.nav.peopleExpanded';
+    const PRKS_NAV_PROGRESS_EXPANDED_KEY = 'prks.nav.progressExpanded';
+
+    function prksReadNavExpandedPref(key) {
+        try {
+            const raw = String(root.localStorage.getItem(key) || '').trim();
+            return raw === '1' || raw === 'true';
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    function prksWriteNavExpandedPref(key, on) {
+        try {
+            root.localStorage.setItem(key, on ? '1' : '0');
+        } catch (_e) {}
+    }
+
+    function prksPeopleRouteForcesOpen(route) {
+        return !!(
+            route &&
+            (route.name === 'people-role' ||
+                route.name === 'people-groups' ||
+                route.name === 'person-group-detail')
+        );
+    }
+
+    function prksProgressRouteForcesOpen(route) {
+        return !!(route && route.name === 'progress');
+    }
+
+    function prksSetDisclosureVisual(which, expanded) {
+        if (typeof document === 'undefined' || !document.getElementById) return;
+        const listId = which === 'people' ? 'prks-nav-people-children' : 'prks-nav-progress-children';
+        const list = document.getElementById(listId);
+        const btn =
+            document.querySelector &&
+            document.querySelector('[data-nav-disclosure-toggle="' + which + '"]');
+        const wrap =
+            document.querySelector && document.querySelector('[data-nav-disclosure="' + which + '"]');
+        if (btn) {
+            btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            const show = which === 'people' ? 'Show People shortcuts' : 'Show Progress shortcuts';
+            const hide = which === 'people' ? 'Hide People shortcuts' : 'Hide Progress shortcuts';
+            btn.setAttribute('aria-label', expanded ? hide : show);
+        }
+        if (list) {
+            list.hidden = !expanded;
+            if (expanded) list.removeAttribute('hidden');
+            else list.setAttribute('hidden', '');
+        }
+        if (wrap) wrap.classList.toggle('nav-disclosure--open', !!expanded);
+    }
+
+    function prksSyncNavDisclosures(route) {
+        if (typeof document === 'undefined') return;
+        const peopleForced = prksPeopleRouteForcesOpen(route);
+        const progressForced = prksProgressRouteForcesOpen(route);
+        prksSetDisclosureVisual(
+            'people',
+            peopleForced || prksReadNavExpandedPref(PRKS_NAV_PEOPLE_EXPANDED_KEY)
+        );
+        prksSetDisclosureVisual(
+            'progress',
+            progressForced || prksReadNavExpandedPref(PRKS_NAV_PROGRESS_EXPANDED_KEY)
+        );
+    }
+
+    function prksInitNavDisclosures() {
+        if (typeof document === 'undefined' || !document.querySelectorAll) return;
+        const buttons = document.querySelectorAll('[data-nav-disclosure-toggle]');
+        for (let i = 0; i < buttons.length; i++) {
+            const btn = buttons[i];
+            if (!btn || btn.dataset.bound === '1') continue;
+            btn.dataset.bound = '1';
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const which = btn.getAttribute('data-nav-disclosure-toggle');
+                if (which !== 'people' && which !== 'progress') return;
+                const key =
+                    which === 'people'
+                        ? PRKS_NAV_PEOPLE_EXPANDED_KEY
+                        : PRKS_NAV_PROGRESS_EXPANDED_KEY;
+                const route = prksParseRoute(root.location ? root.location.hash : '');
+                const forced =
+                    which === 'people'
+                        ? prksPeopleRouteForcesOpen(route)
+                        : prksProgressRouteForcesOpen(route);
+                if (forced) {
+                    prksWriteNavExpandedPref(key, false);
+                    prksSyncNavDisclosures(route);
+                    return;
+                }
+                prksWriteNavExpandedPref(key, !prksReadNavExpandedPref(key));
+                prksSyncNavDisclosures(route);
+            });
+        }
+        prksSyncNavDisclosures(prksParseRoute(root.location ? root.location.hash : ''));
+    }
+
     function prksSyncSidebarActive(route) {
         if (typeof document === 'undefined' || !document.querySelectorAll) return;
         const origin = prksReadOriginForRoute(route);
@@ -575,19 +676,22 @@
             l.classList.remove('active');
             l.removeAttribute('aria-current');
         });
-        if (!href) return;
         let match = null;
-        links.forEach((l) => {
-            if (l.getAttribute('href') === href) match = l;
-        });
-        if (!match && route && route.name === 'progress' && route.params && route.params.status) {
+        if (href) {
             links.forEach((l) => {
-                if (l.getAttribute('data-status') === route.params.status) match = l;
+                if (l.getAttribute('href') === href) match = l;
             });
+            if (!match && route && route.name === 'progress' && route.params && route.params.status) {
+                links.forEach((l) => {
+                    if (l.getAttribute('data-status') === route.params.status) match = l;
+                });
+            }
         }
-        if (!match) return;
-        match.classList.add('active');
-        match.setAttribute('aria-current', 'page');
+        if (match) {
+            match.classList.add('active');
+            match.setAttribute('aria-current', 'page');
+        }
+        prksSyncNavDisclosures(route);
     }
 
     function prksRouteScrollElement() {
@@ -855,9 +959,12 @@
         PRKS_ROUTE_META: PRKS_ROUTE_META,
         PRKS_ROUTE_STATES_KEY: PRKS_ROUTE_STATES_KEY,
         PRKS_PROGRESS_STATUS_VALUES: PRKS_PROGRESS_STATUS_VALUES,
+        PRKS_PEOPLE_ROLES: PRKS_PEOPLE_ROLES,
         prksParseRoute: prksParseRoute,
         prksNavigate: prksNavigate,
         prksSyncSidebarActive: prksSyncSidebarActive,
+        prksSyncNavDisclosures: prksSyncNavDisclosures,
+        prksInitNavDisclosures: prksInitNavDisclosures,
         prksCaptureCurrentRouteState: prksCaptureCurrentRouteState,
         prksRestoreRouteState: prksRestoreRouteState,
         prksRememberOrigin: prksRememberOrigin,

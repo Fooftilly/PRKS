@@ -146,6 +146,20 @@ On supported work-list pages (folder, recent, search, file type, and progress), 
 
 A bulk action is one request and one database transaction. If any selected file or target is invalid, none of the selected files are changed.
 
+## Command palette
+
+Press Ctrl+K (Cmd+K on macOS), or choose **Search or jump**.
+
+Use it to:
+
+- open files, folders, people, groups and playlists
+- search the library
+- navigate to sections/progress views
+- create files/folders/people/groups
+- open Settings and common actions
+
+People and Progress sidebar shortcuts are collapsible. Active child routes stay visible without overwriting the collapsed preference.
+
 ## Logging and privacy
 
 Persistent log: `<storage>/prks-errors.log`. Default persistent threshold is **ERROR**. Rotation is daily at midnight. Retention is **7 days**.

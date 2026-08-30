@@ -1,0 +1,929 @@
+#!/usr/bin/env node
+'use strict';
+
+const path = require('path');
+const fs = require('fs');
+const vm = require('vm');
+
+class MemoryStorage {
+    constructor() {
+        this.store = Object.create(null);
+    }
+    getItem(k) {
+        return Object.prototype.hasOwnProperty.call(this.store, k) ? this.store[k] : null;
+    }
+    setItem(k, v) {
+        this.store[k] = String(v);
+    }
+    removeItem(k) {
+        delete this.store[k];
+    }
+}
+
+function tokenizeSelector(sel) {
+    return String(sel || '').trim();
+}
+
+function matchSimple(el, sel) {
+    if (!el || el.nodeType !== 1) return false;
+    let rest = String(sel || '').trim();
+    if (!rest) return false;
+    if (rest === ':scope') return false;
+    const parts = rest.split(/(?=[.#\[:])/);
+    for (let i = 0; i < parts.length; i++) {
+        const p = parts[i];
+        if (!p) continue;
+        if (p[0] === '#') {
+            if (el.id !== p.slice(1)) return false;
+        } else if (p[0] === '.') {
+            if (!el.classList.contains(p.slice(1))) return false;
+        } else if (p[0] === '[') {
+            const m = p.match(/^\[([^=\]:]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]+)))?\]$/);
+            if (!m) return false;
+            const key = m[1];
+            const want = m[2] != null ? m[2] : m[3] != null ? m[3] : m[4];
+            const got = el.getAttribute(key);
+            if (want == null) {
+                if (got == null) return false;
+            } else if (String(got) !== String(want)) return false;
+        } else if (p[0] === ':') {
+            continue;
+        } else if (p.toUpperCase() !== el.tagName) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function walk(node, fn) {
+    if (!node) return;
+    fn(node);
+    const kids = node.children || [];
+    for (let i = 0; i < kids.length; i++) walk(kids[i], fn);
+}
+
+function qs(root, sel, all) {
+    const raw = tokenizeSelector(sel);
+    if (!raw) return all ? [] : null;
+    if (raw[0] === '#') {
+        const id = raw.slice(1).split(/[.\[]/)[0];
+        let found = null;
+        walk(root.documentElement || root, function (n) {
+            if (!found && n.id === id) found = n;
+        });
+        if (raw === '#' + id) return all ? (found ? [found] : []) : found;
+    }
+    const out = [];
+    walk(root, function (n) {
+        if (n === root) return;
+        if (matchSimple(n, raw)) out.push(n);
+    });
+    return all ? out : out[0] || null;
+}
+
+function makeClassList(el) {
+    return {
+        contains: function (c) {
+            return String(el.className || '')
+                .split(/\s+/)
+                .filter(Boolean)
+                .indexOf(c) >= 0;
+        },
+        add: function (c) {
+            if (!this.contains(c)) el.className = (el.className ? el.className + ' ' : '') + c;
+        },
+        remove: function (c) {
+            el.className = String(el.className || '')
+                .split(/\s+/)
+                .filter(function (x) {
+                    return x && x !== c;
+                })
+                .join(' ');
+        },
+        toggle: function (c, on) {
+            if (on === undefined) on = !this.contains(c);
+            if (on) this.add(c);
+            else this.remove(c);
+        },
+    };
+}
+
+function makeEl(tag) {
+    const el = {
+        tagName: String(tag || 'div').toUpperCase(),
+        nodeType: 1,
+        className: '',
+        id: '',
+        hidden: false,
+        checked: false,
+        disabled: false,
+        isContentEditable: false,
+        type: '',
+        name: '',
+        value: '',
+        textContent: '',
+        children: [],
+        parentElement: null,
+        style: {},
+        attributes: Object.create(null),
+        listeners: [],
+        ownerDocument: null,
+        classList: null,
+        firstChild: null,
+        dataset: null,
+    };
+    el.classList = makeClassList(el);
+    el.dataset = new Proxy(
+        {},
+        {
+            get: function (_t, prop) {
+                const key = 'data-' + String(prop).replace(/[A-Z]/g, function (c) {
+                    return '-' + c.toLowerCase();
+                });
+                return el.getAttribute(key);
+            },
+            set: function (_t, prop, v) {
+                const key = 'data-' + String(prop).replace(/[A-Z]/g, function (c) {
+                    return '-' + c.toLowerCase();
+                });
+                el.setAttribute(key, v);
+                return true;
+            },
+        }
+    );
+    el.getAttribute = function (k) {
+        if (k === 'class') return el.className;
+        if (k === 'id') return el.id;
+        if (Object.prototype.hasOwnProperty.call(el.attributes, k)) return el.attributes[k];
+        return null;
+    };
+    el.setAttribute = function (k, v) {
+        const val = String(v);
+        if (k === 'class') el.className = val;
+        else if (k === 'id') el.id = val;
+        else if (k === 'hidden') el.hidden = true;
+        else if (k === 'type') el.type = val;
+        else el.attributes[k] = val;
+    };
+    el.removeAttribute = function (k) {
+        if (k === 'hidden') el.hidden = false;
+        delete el.attributes[k];
+        if (k === 'id') el.id = '';
+    };
+    el.appendChild = function (child) {
+        child.parentElement = el;
+        el.children.push(child);
+        el.firstChild = el.children[0] || null;
+        return child;
+    };
+    el.removeChild = function (child) {
+        el.children = el.children.filter(function (c) {
+            return c !== child;
+        });
+        child.parentElement = null;
+        el.firstChild = el.children[0] || null;
+        return child;
+    };
+    el.contains = function (other) {
+        if (other === el) return true;
+        let found = false;
+        walk(el, function (n) {
+            if (n === other) found = true;
+        });
+        return found;
+    };
+    el.closest = function (sel) {
+        let cur = el;
+        while (cur) {
+            if (matchSimple(cur, sel)) return cur;
+            cur = cur.parentElement;
+        }
+        return null;
+    };
+    el.querySelector = function (sel) {
+        return qs(el, sel, false);
+    };
+    el.querySelectorAll = function (sel) {
+        return qs(el, sel, true);
+    };
+    el.addEventListener = function (type, fn) {
+        el.listeners.push({ type: type, fn: fn });
+    };
+    el.focus = function () {
+        if (el.ownerDocument) el.ownerDocument.activeElement = el;
+    };
+    el.click = function () {
+        el.listeners
+            .filter(function (l) {
+                return l.type === 'click';
+            })
+            .forEach(function (l) {
+                l.fn({ target: el, preventDefault: function () {}, stopPropagation: function () {} });
+            });
+    };
+    el.scrollIntoView = function () {};
+    Object.defineProperty(el, 'innerHTML', {
+        get: function () {
+            return el._innerHTML || '';
+        },
+        set: function (html) {
+            el._innerHTML = String(html || '');
+        },
+    });
+    return el;
+}
+
+function installDom() {
+    const body = makeEl('body');
+    const html = makeEl('html');
+    const page = makeEl('div');
+    page.id = 'page-content';
+    const main = makeEl('main');
+    main.id = 'main-content';
+    const launch = makeEl('button');
+    launch.id = 'prks-command-palette-launch';
+    const newMore = makeEl('button');
+    newMore.id = 'prks-ribbon-new-more';
+    const newFile = makeEl('button');
+    newFile.id = 'prks-ribbon-new-file';
+    const hint = makeEl('kbd');
+    hint.setAttribute('data-palette-shortcut-hint', '1');
+    hint.textContent = 'Ctrl K';
+    launch.appendChild(hint);
+
+    const peopleWrap = makeEl('li');
+    peopleWrap.setAttribute('data-nav-disclosure', 'people');
+    peopleWrap.className = 'nav-disclosure';
+    const peopleLink = makeEl('a');
+    peopleLink.className = 'nav-link nav-disclosure__link';
+    peopleLink.setAttribute('href', '#/people');
+    peopleLink.textContent = 'People';
+    const peopleBtn = makeEl('button');
+    peopleBtn.setAttribute('data-nav-disclosure-toggle', 'people');
+    peopleBtn.setAttribute('aria-expanded', 'false');
+    peopleBtn.setAttribute('aria-controls', 'prks-nav-people-children');
+    const peopleKids = makeEl('ul');
+    peopleKids.id = 'prks-nav-people-children';
+    peopleKids.hidden = true;
+    peopleKids.setAttribute('hidden', '');
+    const authorLink = makeEl('a');
+    authorLink.className = 'nav-link nav-link--sub';
+    authorLink.setAttribute('href', '#/people/role/Author');
+    authorLink.textContent = 'Authors';
+    const groupsLink = makeEl('a');
+    groupsLink.className = 'nav-link nav-link--sub';
+    groupsLink.setAttribute('href', '#/people/groups');
+    peopleKids.appendChild(authorLink);
+    peopleKids.appendChild(groupsLink);
+    peopleWrap.appendChild(peopleLink);
+    peopleWrap.appendChild(peopleBtn);
+    peopleWrap.appendChild(peopleKids);
+
+    const progressWrap = makeEl('li');
+    progressWrap.setAttribute('data-nav-disclosure', 'progress');
+    progressWrap.className = 'nav-disclosure';
+    const progressBtn = makeEl('button');
+    progressBtn.setAttribute('data-nav-disclosure-toggle', 'progress');
+    progressBtn.setAttribute('aria-expanded', 'false');
+    progressBtn.setAttribute('aria-controls', 'prks-nav-progress-children');
+    const progressKids = makeEl('ul');
+    progressKids.id = 'prks-nav-progress-children';
+    progressKids.hidden = true;
+    progressKids.setAttribute('hidden', '');
+    const pausedLink = makeEl('a');
+    pausedLink.className = 'nav-link progress-filter';
+    pausedLink.setAttribute('href', '#/progress?status=Paused');
+    pausedLink.setAttribute('data-status', 'Paused');
+    progressKids.appendChild(pausedLink);
+    progressWrap.appendChild(progressBtn);
+    progressWrap.appendChild(progressKids);
+
+    const foldersLink = makeEl('a');
+    foldersLink.className = 'nav-link';
+    foldersLink.setAttribute('href', '#/folders');
+    const recentLink = makeEl('a');
+    recentLink.className = 'nav-link';
+    recentLink.setAttribute('href', '#/recent');
+
+    const sidebar = makeEl('nav');
+    sidebar.id = 'sidebar';
+    sidebar.appendChild(foldersLink);
+    sidebar.appendChild(recentLink);
+    sidebar.appendChild(peopleWrap);
+    sidebar.appendChild(progressWrap);
+
+    const modal = makeEl('div');
+    modal.id = 'work-modal';
+    modal.className = 'modal hidden';
+    const personModal = makeEl('div');
+    personModal.id = 'person-modal';
+    personModal.className = 'modal hidden';
+    const settingsModal = makeEl('div');
+    settingsModal.id = 'settings-modal';
+    settingsModal.className = 'modal hidden';
+    const roleModal = makeEl('div');
+    roleModal.id = 'role-modal';
+    roleModal.className = 'modal hidden';
+    const unsaved = makeEl('div');
+    unsaved.id = 'prks-modal-unsaved-confirm';
+    unsaved.className = 'prks-modal-unsaved-confirm hidden';
+    unsaved.setAttribute('aria-modal', 'true');
+    const bulk = makeEl('div');
+    bulk.id = 'prks-bulk-sheet';
+    bulk.className = 'prks-bulk-sheet hidden';
+    bulk.setAttribute('aria-modal', 'true');
+
+    body.appendChild(main);
+    body.appendChild(sidebar);
+    body.appendChild(launch);
+    body.appendChild(newFile);
+    body.appendChild(newMore);
+    body.appendChild(modal);
+    body.appendChild(personModal);
+    body.appendChild(settingsModal);
+    body.appendChild(roleModal);
+    body.appendChild(unsaved);
+    body.appendChild(bulk);
+    main.appendChild(page);
+    html.appendChild(body);
+    body.parentElement = html;
+
+    const listeners = [];
+    const document = {
+        documentElement: html,
+        body: body,
+        readyState: 'complete',
+        title: 'PRKS',
+        activeElement: body,
+        createElement: function (tag) {
+            const n = makeEl(tag);
+            n.ownerDocument = document;
+            return n;
+        },
+        getElementById: function (id) {
+            let found = null;
+            walk(html, function (n) {
+                if (!found && n.id === id) found = n;
+            });
+            return found;
+        },
+        querySelector: function (sel) {
+            if (sel === 'body') return body;
+            return qs(html, sel, false);
+        },
+        querySelectorAll: function (sel) {
+            return qs(html, sel, true);
+        },
+        addEventListener: function (type, fn, opts) {
+            listeners.push({ type: type, fn: fn, capture: !!(opts && opts.capture === true) || opts === true });
+        },
+        contains: function (n) {
+            return html.contains(n);
+        },
+        _listeners: listeners,
+        _dispatch: function (type, event) {
+            listeners
+                .filter(function (l) {
+                    return l.type === type;
+                })
+                .forEach(function (l) {
+                    l.fn(event);
+                });
+        },
+    };
+    body.ownerDocument = document;
+    walk(html, function (n) {
+        n.ownerDocument = document;
+    });
+    return {
+        document: document,
+        launch: launch,
+        newMore: newMore,
+        peopleBtn: peopleBtn,
+        peopleKids: peopleKids,
+        peopleWrap: peopleWrap,
+        progressBtn: progressBtn,
+        progressKids: progressKids,
+        authorLink: authorLink,
+        pausedLink: pausedLink,
+        modal: modal,
+        unsaved: unsaved,
+        bulk: bulk,
+        textarea: null,
+    };
+}
+
+const installed = installDom();
+const { document, launch, newMore, peopleBtn, peopleKids, peopleWrap, progressBtn, progressKids, authorLink, pausedLink, modal, unsaved, bulk } = installed;
+
+const textarea = document.createElement('textarea');
+document.body.appendChild(textarea);
+
+const location = {
+    hash: '#/folders',
+    href: 'http://127.0.0.1:8070/#/folders',
+};
+
+const navCalls = [];
+const modalCalls = [];
+const localStorage = new MemoryStorage();
+
+const sandbox = {
+    console: console,
+    window: null,
+    globalThis: null,
+    document: document,
+    location: location,
+    localStorage: localStorage,
+    sessionStorage: new MemoryStorage(),
+    navigator: { platform: 'Linux x86_64', userAgent: 'node' },
+    setTimeout: setTimeout,
+    clearTimeout: clearTimeout,
+    URLSearchParams: URLSearchParams,
+    Promise: Promise,
+    module: { exports: {} },
+    exports: {},
+    require: require,
+    prksNavigate: function (hash) {
+        navCalls.push({ hash: hash, replace: false });
+        location.hash = hash;
+    },
+    openModal: function (id) {
+        modalCalls.push(id);
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('hidden');
+    },
+    prksAnyModalOpen: function () {
+        const nodes = document.querySelectorAll('.modal');
+        for (let i = 0; i < nodes.length; i++) {
+            if (!nodes[i].classList.contains('hidden')) return true;
+        }
+        return false;
+    },
+    prksIsModalUnsavedConfirmOpen: function () {
+        return !!(unsaved && !unsaved.classList.contains('hidden'));
+    },
+    personDisplayName: function (p) {
+        return String((p.first_name || '') + ' ' + (p.last_name || '')).trim();
+    },
+    fetchSearch: function () {
+        return Promise.resolve([]);
+    },
+    fetchFolders: function () {
+        return Promise.resolve([]);
+    },
+    fetchPersons: function () {
+        return Promise.resolve([]);
+    },
+    fetchPersonGroups: function () {
+        return Promise.resolve([]);
+    },
+    fetchPlaylists: function () {
+        return Promise.resolve([]);
+    },
+};
+
+sandbox.window = sandbox;
+sandbox.globalThis = sandbox;
+sandbox.root = sandbox;
+
+function runScript(rel) {
+    const file = path.join(__dirname, '..', '..', rel);
+    const code = fs.readFileSync(file, 'utf8');
+    vm.runInNewContext(code, sandbox, { filename: file });
+}
+
+runScript('frontend/js/navigation.js');
+runScript('frontend/js/work-selection.js');
+runScript('frontend/js/command-palette.js');
+
+const root = sandbox;
+root.prksNavigate = function (hash, opts) {
+    navCalls.push({ hash: String(hash || ''), replace: !!(opts && opts.replace) });
+    location.hash = String(hash || '');
+};
+root.__prksPaletteDebounceMs = 0;
+root.prksInitNavDisclosures();
+root.prksInitCommandPalette();
+
+let passed = 0;
+let failed = 0;
+function assert(name, ok) {
+    if (ok) {
+        passed += 1;
+        console.log('PASS  ' + name);
+    } else {
+        failed += 1;
+        console.log('FAIL  ' + name);
+    }
+}
+function assertEq(name, a, b) {
+    const ok = a === b;
+    if (!ok) console.log('      got', JSON.stringify(a), 'want', JSON.stringify(b));
+    assert(name, ok);
+}
+
+function keyEvent(key, mods) {
+    const m = mods || {};
+    let prevented = false;
+    return {
+        key: key,
+        ctrlKey: !!m.ctrl,
+        metaKey: !!m.meta,
+        altKey: !!m.alt,
+        shiftKey: !!m.shift,
+        target: m.target || document.activeElement,
+        preventDefault: function () {
+            prevented = true;
+        },
+        stopPropagation: function () {},
+        get defaultPrevented() {
+            return prevented;
+        },
+    };
+}
+
+function ids() {
+    return root.prksCommandPaletteGetResults().map(function (r) {
+        return r.id;
+    });
+}
+
+root.PRKS_PALETTE_COMMANDS.forEach(function (cmd) {
+    if (cmd.kind !== 'navigate') return;
+    const parsed = root.prksParseRoute(cmd.hash);
+    assert('hash recognized ' + cmd.id, parsed && parsed.name && parsed.name !== 'unknown');
+});
+
+const sentinel = 'Adorno & Horkheimer';
+const hashes = {
+    all: root.prksPaletteSearchHash('all', sentinel),
+    keywords: root.prksPaletteSearchHash('keywords', sentinel),
+    people: root.prksPaletteSearchHash('people', sentinel),
+    publisher: root.prksPaletteSearchHash('publisher', sentinel),
+};
+assert('search all prefix', hashes.all.indexOf('#/search?') === 0);
+['all', 'keywords', 'people', 'publisher'].forEach(function (kind) {
+    const rec = root.prksParseRoute(hashes[kind]);
+    assert('search route ' + kind, rec.name === 'search');
+    const q = hashes[kind].slice('#/search?'.length);
+    const p = new URLSearchParams(q);
+    if (kind === 'all') {
+        assertEq('all any', p.get('any'), '1');
+        assertEq('all q', p.get('q'), sentinel);
+    } else if (kind === 'keywords') {
+        assertEq('kw q', p.get('q'), sentinel);
+        assert('kw no any', p.get('any') == null);
+    } else if (kind === 'people') {
+        assertEq('people author', p.get('author'), sentinel);
+    } else {
+        assertEq('pub publisher', p.get('publisher'), sentinel);
+    }
+});
+
+const peopleCmd = root.PRKS_PALETTE_COMMANDS.filter(function (c) {
+    return c.id === 'navigate-people';
+})[0];
+const newPerson = root.PRKS_PALETTE_COMMANDS.filter(function (c) {
+    return c.id === 'new-person';
+})[0];
+assert('people label beats keyword', root.prksPaletteScoreCommand(peopleCmd, 'people') > root.prksPaletteScoreCommand(newPerson, 'people'));
+const rankedNew = root.prksPaletteFilterCommands('new per', { scope: 'all' });
+assert('new per → New Person first', rankedNew[0] && rankedNew[0].id === 'new-person');
+
+root.prksOpenCommandPalette({ scope: 'all' });
+assert('open first active', root.prksCommandPaletteIsOpen() && root.prksCommandPaletteGetActiveIndex() === 0);
+const n0 = root.prksCommandPaletteGetResults().length;
+root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+assertEq('arrow down', root.prksCommandPaletteGetActiveIndex(), 1);
+root.prksCommandPaletteHandleKey(keyEvent('ArrowUp'));
+assertEq('arrow up', root.prksCommandPaletteGetActiveIndex(), 0);
+navCalls.length = 0;
+root.prksCommandPaletteExecuteActive();
+assert('enter navigates', navCalls.length === 1 && navCalls[0].hash === '#/folders');
+assert('enter closes', !root.prksCommandPaletteIsOpen());
+assert('navigate not replace', navCalls[0].replace !== true);
+
+root.prksOpenCommandPalette();
+root.prksCommandPaletteHandleKey(keyEvent('Escape'));
+assert('escape closes', !root.prksCommandPaletteIsOpen());
+
+document.activeElement = textarea;
+const ignored = keyEvent('k', { ctrl: true, target: textarea });
+root.prksCommandPaletteHandleDocumentKey(ignored);
+assert('textarea guard', !root.prksCommandPaletteIsOpen() && !ignored.defaultPrevented);
+
+const inputEl = document.createElement('input');
+document.body.appendChild(inputEl);
+const ignoredIn = keyEvent('k', { ctrl: true, target: inputEl });
+root.prksCommandPaletteHandleDocumentKey(ignoredIn);
+assert('input guard', !root.prksCommandPaletteIsOpen());
+
+const ce = document.createElement('div');
+ce.isContentEditable = true;
+ce.setAttribute('contenteditable', 'true');
+document.body.appendChild(ce);
+root.prksCommandPaletteHandleDocumentKey(keyEvent('k', { ctrl: true, target: ce }));
+assert('contenteditable guard', !root.prksCommandPaletteIsOpen());
+
+const cm = document.createElement('div');
+cm.className = 'CodeMirror';
+document.body.appendChild(cm);
+root.prksCommandPaletteHandleDocumentKey(keyEvent('k', { ctrl: true, target: cm }));
+assert('CodeMirror guard', !root.prksCommandPaletteIsOpen());
+
+modal.classList.remove('hidden');
+const blocked = keyEvent('k', { ctrl: true, target: document.body });
+root.prksCommandPaletteHandleDocumentKey(blocked);
+assert('modal guard', !root.prksCommandPaletteIsOpen() && !blocked.defaultPrevented);
+modal.classList.add('hidden');
+
+unsaved.classList.remove('hidden');
+root.prksCommandPaletteHandleDocumentKey(keyEvent('k', { ctrl: true, target: document.body }));
+assert('unsaved guard', !root.prksCommandPaletteIsOpen());
+unsaved.classList.add('hidden');
+
+bulk.classList.remove('hidden');
+root.prksCommandPaletteHandleDocumentKey(keyEvent('k', { ctrl: true, target: document.body }));
+assert('bulk sheet guard', !root.prksCommandPaletteIsOpen());
+bulk.classList.add('hidden');
+
+const taken = keyEvent('k', { ctrl: true, target: document.body });
+root.prksCommandPaletteHandleDocumentKey(taken);
+assert('ctrl-k opens', root.prksCommandPaletteIsOpen() && taken.defaultPrevented);
+root.prksCloseCommandPalette();
+
+const takenMeta = keyEvent('k', { meta: true, target: document.body });
+root.prksCommandPaletteHandleDocumentKey(takenMeta);
+assert('cmd-k opens', root.prksCommandPaletteIsOpen() && takenMeta.defaultPrevented);
+root.prksCloseCommandPalette();
+
+launch.focus();
+root.prksOpenCommandPalette();
+root.prksCommandPaletteHandleKey(keyEvent('Escape'));
+assert('focus returns to launcher', document.activeElement === launch);
+
+let resolveA;
+let resolveB;
+root.fetchSearch = function (q) {
+    if (q === 'aa') return new Promise(function (r) { resolveA = r; });
+    if (q === 'ab') return new Promise(function (r) { resolveB = r; });
+    return Promise.resolve([]);
+};
+root.prksOpenCommandPalette();
+root.prksCommandPaletteSetQuery('aa');
+root.prksCommandPaletteSetQuery('ab');
+Promise.resolve()
+    .then(function () {
+        resolveB([{ id: 'W-B', title: 'Later' }]);
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        resolveA([{ id: 'W-A', title: 'Stale' }]);
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        const got = ids();
+        assert('stale ignored', got.indexOf('open-work-W-A') < 0);
+        assert('fresh work kept', got.indexOf('open-work-W-B') >= 0);
+
+        root.fetchSearch = function () {
+            const many = [];
+            for (let i = 0; i < 40; i++) many.push({ id: 'W-' + i, title: 'Work ' + i });
+            return Promise.resolve(many);
+        };
+        const folders = [];
+        for (let i = 0; i < 40; i++) folders.push({ id: 'F-' + i, title: 'Alpha folder ' + i });
+        root.fetchFolders = function () {
+            return Promise.resolve(folders);
+        };
+        root.prksCloseCommandPalette();
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('alpha');
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        const rows = root.prksCommandPaletteGetResults();
+        const workN = rows.filter(function (r) { return r.entity === 'work'; }).length;
+        const folderN = rows.filter(function (r) { return r.entity === 'folder'; }).length;
+        assert('work cap', workN <= root.PRKS_PALETTE_MAX_WORKS);
+        assert('folder cap', folderN <= root.PRKS_PALETTE_MAX_FOLDERS);
+        assert('total cap', rows.length <= root.PRKS_PALETTE_MAX_OPTIONS);
+
+        root.fetchSearch = function () {
+            return Promise.resolve([{ id: 'W-1', title: 'Retorika', author_text: 'Aristotle', year: '1991' }]);
+        };
+        root.fetchFolders = function () {
+            return Promise.resolve([{ id: 'F-1', title: 'Rhetoric' }]);
+        };
+        root.fetchPersons = function () {
+            return Promise.resolve([{ id: 'P-1', first_name: 'Theodor', last_name: 'Adorno' }]);
+        };
+        root.fetchPersonGroups = function () {
+            return Promise.resolve([{ id: 'G-1', title: 'Frankfurt' }]);
+        };
+        root.fetchPlaylists = function () {
+            return Promise.resolve([{ id: 'PL-1', title: 'Lectures' }]);
+        };
+        root.prksCloseCommandPalette();
+        root.prksOpenCommandPalette();
+        navCalls.length = 0;
+        root.prksCommandPaletteSetQuery('retorika');
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        const rows = root.prksCommandPaletteGetResults();
+        const work = rows.filter(function (r) { return r.id === 'open-work-W-1'; })[0];
+        assert('work row present', !!work);
+        const idx = rows.indexOf(work);
+        navCalls.length = 0;
+        while (root.prksCommandPaletteGetActiveIndex() !== idx) {
+            root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+            if (root.prksCommandPaletteGetActiveIndex() === 0 && idx !== 0) break;
+        }
+        root.prksCommandPaletteExecuteActive();
+        assertEq('work navigates hash', navCalls[0] && navCalls[0].hash, '#/works/W-1');
+
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('rhetoric');
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        navCalls.length = 0;
+        const folder = root.prksCommandPaletteGetResults().filter(function (r) { return r.entity === 'folder'; })[0];
+        assert('folder row', !!folder);
+        const rows = root.prksCommandPaletteGetResults();
+        let i = 0;
+        while (rows[root.prksCommandPaletteGetActiveIndex()] !== folder && i < 20) {
+            root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+            i += 1;
+        }
+        root.prksCommandPaletteExecuteActive();
+        assertEq('folder hash', navCalls[0] && navCalls[0].hash, '#/folders/F-1');
+
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('adorno');
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        navCalls.length = 0;
+        const person = root.prksCommandPaletteGetResults().filter(function (r) { return r.entity === 'person'; })[0];
+        assert('person row', !!person);
+        const rows = root.prksCommandPaletteGetResults();
+        let i = 0;
+        while (rows[root.prksCommandPaletteGetActiveIndex()] !== person && i < 20) {
+            root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+            i += 1;
+        }
+        root.prksCommandPaletteExecuteActive();
+        assertEq('person hash', navCalls[0] && navCalls[0].hash, '#/people/P-1');
+
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('frankfurt');
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        navCalls.length = 0;
+        const g = root.prksCommandPaletteGetResults().filter(function (r) { return r.entity === 'group'; })[0];
+        assert('group row', !!g);
+        const rows = root.prksCommandPaletteGetResults();
+        let i = 0;
+        while (rows[root.prksCommandPaletteGetActiveIndex()] !== g && i < 20) {
+            root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+            i += 1;
+        }
+        root.prksCommandPaletteExecuteActive();
+        assertEq('group hash', navCalls[0] && navCalls[0].hash, '#/people/groups/G-1');
+
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('lectures');
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        navCalls.length = 0;
+        const p = root.prksCommandPaletteGetResults().filter(function (r) { return r.entity === 'playlist'; })[0];
+        assert('playlist row', !!p);
+        const rows = root.prksCommandPaletteGetResults();
+        let i = 0;
+        while (rows[root.prksCommandPaletteGetActiveIndex()] !== p && i < 20) {
+            root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+            i += 1;
+        }
+        root.prksCommandPaletteExecuteActive();
+        assertEq('playlist hash', navCalls[0] && navCalls[0].hash, '#/playlists/PL-1');
+
+        root.prksOpenCommandPalette({ scope: 'create' });
+        assertEq('create scope', root.prksCommandPaletteScope(), 'create');
+        const createIds = ids();
+        assert('create only create cmds', createIds.every(function (id) { return id.indexOf('new-') === 0; }));
+        assert('create no search', createIds.indexOf('search-all') < 0);
+        modalCalls.length = 0;
+        const personCmd = root.prksCommandPaletteGetResults().filter(function (r) { return r.id === 'new-person'; })[0];
+        const crows = root.prksCommandPaletteGetResults();
+        i = 0;
+        while (crows[root.prksCommandPaletteGetActiveIndex()] !== personCmd && i < 10) {
+            root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+            i += 1;
+        }
+        root.prksCommandPaletteExecuteActive();
+        assert('create closes palette', !root.prksCommandPaletteIsOpen());
+        assertEq('new person modal', modalCalls[0], 'person-modal');
+
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('settings');
+        modalCalls.length = 0;
+        const settings = root.prksCommandPaletteGetResults().filter(function (r) { return r.id === 'settings'; })[0];
+        i = 0;
+        const srows = root.prksCommandPaletteGetResults();
+        while (srows[root.prksCommandPaletteGetActiveIndex()] !== settings && i < 20) {
+            root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+            i += 1;
+        }
+        root.prksCommandPaletteExecuteActive();
+        assertEq('settings modal', modalCalls[0], 'settings-modal');
+
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('link person');
+        modalCalls.length = 0;
+        const link = root.prksCommandPaletteGetResults().filter(function (r) { return r.id === 'link-person'; })[0];
+        i = 0;
+        const lrows = root.prksCommandPaletteGetResults();
+        while (lrows[root.prksCommandPaletteGetActiveIndex()] !== link && i < 20) {
+            root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+            i += 1;
+        }
+        root.prksCommandPaletteExecuteActive();
+        assertEq('link person modal', modalCalls[0], 'role-modal');
+        ['work-modal', 'person-modal', 'settings-modal', 'role-modal'].forEach(function (id) {
+            const el = document.getElementById(id);
+            if (el) el.classList.add('hidden');
+        });
+
+        newMore.click();
+        assertEq('New… create scope', root.prksCommandPaletteScope(), 'create');
+        root.prksCloseCommandPalette();
+
+        location.hash = '#/folders';
+        localStorage.setItem('prks.nav.peopleExpanded', '0');
+        localStorage.setItem('prks.nav.progressExpanded', '0');
+        root.prksSyncSidebarActive(root.prksParseRoute('#/folders'));
+        assert('people collapsed', peopleKids.hidden === true);
+        assertEq('people aria collapsed', peopleBtn.getAttribute('aria-expanded'), 'false');
+        peopleBtn.click();
+        assert('people toggle open', peopleKids.hidden === false);
+        assertEq('people aria open', peopleBtn.getAttribute('aria-expanded'), 'true');
+        peopleBtn.click();
+        assert('people toggle closed', peopleKids.hidden === true);
+
+        progressBtn.click();
+        assert('progress toggle open', progressKids.hidden === false);
+        progressBtn.click();
+        assert('progress toggle closed', progressKids.hidden === true);
+
+        localStorage.setItem('prks.nav.peopleExpanded', '0');
+        location.hash = '#/people/role/Author';
+        root.prksSyncSidebarActive(root.prksParseRoute('#/people/role/Author'));
+        assert('author forces people open', peopleKids.hidden === false);
+        assertEq('author current', authorLink.getAttribute('aria-current'), 'page');
+        assertEq('pref still collapsed', localStorage.getItem('prks.nav.peopleExpanded'), '0');
+        assertEq('one current on author', document.querySelectorAll('.nav-link[aria-current="page"]').length, 1);
+        assert('disclosure btn not current', peopleBtn.getAttribute('aria-current') == null);
+
+        location.hash = '#/folders';
+        root.prksSyncSidebarActive(root.prksParseRoute('#/folders'));
+        assert('people collapses after leave', peopleKids.hidden === true);
+
+        localStorage.setItem('prks.nav.progressExpanded', '0');
+        location.hash = '#/progress?status=Paused';
+        root.prksSyncSidebarActive(root.prksParseRoute('#/progress?status=Paused'));
+        assert('paused forces progress open', progressKids.hidden === false);
+        assertEq('paused current', pausedLink.getAttribute('aria-current'), 'page');
+        assertEq('progress pref collapsed', localStorage.getItem('prks.nav.progressExpanded'), '0');
+        location.hash = '#/recent';
+        root.prksSyncSidebarActive(root.prksParseRoute('#/recent'));
+        assert('progress collapses after leave', progressKids.hidden === true);
+
+        location.hash = '#/recent';
+        root.prksOpenCommandPalette();
+        const select = root.prksCommandPaletteGetResults().filter(function (r) { return r.id === 'select-files'; })[0];
+        assert('select files on recent', !!select);
+        root.prksCloseCommandPalette();
+
+        location.hash = '#/folders';
+        root.prksOpenCommandPalette();
+        const selectFolders = root.prksCommandPaletteGetResults().filter(function (r) { return r.id === 'select-files'; })[0];
+        assert('no select on folders index', !selectFolders);
+        root.prksCloseCommandPalette();
+
+        const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'command-palette.js'), 'utf8');
+        assert('no eval', src.indexOf('eval(') < 0);
+        assert('no new Function', src.indexOf('new Function') < 0);
+        assert('no dynamic window call', src.indexOf('window[') < 0);
+
+        console.log(passed + ' passed, ' + failed + ' failed');
+        if (failed) process.exit(1);
+    })
+    .catch(function (err) {
+        console.error(err);
+        process.exit(1);
+    });

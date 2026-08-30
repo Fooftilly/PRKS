@@ -137,3 +137,18 @@ allow arbitrary field names or dynamic method dispatch.
 Bulk deletion is not part of generic organization semantics and requires a
 separate reviewed design.
 
+## Command palette
+
+Command palette commands must use explicit allowlisted actions. Never execute
+user query text as JavaScript or dynamic method names.
+
+Navigation commands must use prksNavigate() and existing canonical hash routes.
+
+Do not introduce duplicate CRUD forms solely for command-palette actions; reuse
+existing modals and route handlers.
+
+Global command shortcuts must not steal keyboard shortcuts while the user is
+typing/editing or while another modal owns focus.
+
+Palette queries are ephemeral UI state and must not be persisted or logged.
+
