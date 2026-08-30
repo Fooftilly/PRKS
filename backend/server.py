@@ -37,6 +37,15 @@ from backend.text_index import (
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 from backend.storage import paths
 from backend.storage.config import StorageConfig
+from backend.log_safety import (
+    client_error_log_fields,
+    format_client_error_log,
+    safe_bind_scope,
+    safe_error_type,
+    safe_log_id,
+    safe_log_label,
+    safe_route,
+)
 from backend.work_deletion import delete_work as delete_library_work
 from backend.person_image import (
     PersonImageUrlError,
@@ -586,39 +595,40 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=frontend_dir, **kwargs)
 
     def _request_context(self) -> dict:
-        parsed = urlparse(getattr(self, "path", ""))
+        parsed = urlparse(getattr(self, "path", "") or "")
+        method = (getattr(self, "command", "") or "").strip() or "unknown"
         return {
-            "method": getattr(self, "command", ""),
-            "path": parsed.path,
-            "query": parsed.query,
-            "client": getattr(self, "client_address", ("", 0))[0],
-            "request_id": self._prks_request_id,
+            "method": safe_log_label(method, fallback="unknown"),
+            "route": safe_route(parsed.path or "/"),
+            "request_id": safe_log_id(self._prks_request_id),
         }
 
     def _send_internal_error(self, exc: Exception | None = None):
         ctx = self._request_context()
         if exc is not None:
             LOGGER.exception(
-                "unhandled_api_error method=%s path=%s query=%s client=%s request_id=%s",
+                "unhandled_api_error method=%s route=%s request_id=%s error_type=%s",
                 ctx["method"],
-                ctx["path"],
-                ctx["query"],
-                ctx["client"],
+                ctx["route"],
                 ctx["request_id"],
+                safe_error_type(exc),
+                exc_info=exc,
             )
         else:
             LOGGER.error(
-                "internal_error method=%s path=%s query=%s client=%s request_id=%s",
+                "internal_error method=%s route=%s request_id=%s",
                 ctx["method"],
-                ctx["path"],
-                ctx["query"],
-                ctx["client"],
+                ctx["route"],
                 ctx["request_id"],
             )
         self.send_json(500, {"error": "internal_error", "request_id": self._prks_request_id})
 
     def _reject_request(self, status: int, error: str, reason: str) -> None:
-        LOGGER.info("request_rejected reason=%s", reason)
+        LOGGER.info(
+            "request_rejected reason=%s request_id=%s",
+            safe_log_label(reason),
+            safe_log_id(self._prks_request_id),
+        )
         self.send_json(status, {"error": error})
 
     def _validate_request_host(self) -> bool:
@@ -690,32 +700,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(400, {"error": "invalid_json"})
             return None
 
-    @staticmethod
-    def _sanitize_client_error_text(value, limit=500):
-        if value is None:
-            return ""
-        text = str(value).strip()
-        if len(text) > limit:
-            return text[:limit]
-        return text
-
     def _parse_client_error_payload(self, data):
-        if not isinstance(data, dict):
-            raise ValueError("JSON object body required")
-        message = self._sanitize_client_error_text(data.get("message"), limit=2000)
-        if not message:
-            raise ValueError("message is required")
-        payload = {
-            "kind": self._sanitize_client_error_text(data.get("kind"), limit=64) or "client_error",
-            "message": message,
-            "stack": self._sanitize_client_error_text(data.get("stack"), limit=8000),
-            "route": self._sanitize_client_error_text(data.get("route"), limit=512),
-            "source": self._sanitize_client_error_text(data.get("source"), limit=512),
-            "request_id": self._sanitize_client_error_text(data.get("request_id"), limit=64),
-            "client_time": self._sanitize_client_error_text(data.get("client_time"), limit=64),
-            "user_agent": self._sanitize_client_error_text(self.headers.get("User-Agent"), limit=512),
-        }
-        return payload
+        return client_error_log_fields(data)
 
     def end_headers(self):
         # Avoid hammering the server: browsers and embedded viewers may revalidate small assets often
@@ -745,12 +731,26 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("X-Request-ID", self._prks_request_id)
         super().end_headers()
 
+    def log_request(self, code="-", size="-"):
+        ctx = self._request_context()
+        LOGGER.debug(
+            "request_access method=%s route=%s status=%s request_id=%s",
+            ctx["method"],
+            ctx["route"],
+            code,
+            ctx["request_id"],
+        )
+
+    def log_error(self, format, *args):
+        LOGGER.debug(
+            "stdlib_http_error request_id=%s",
+            safe_log_id(getattr(self, "_prks_request_id", "")),
+        )
+
     def log_message(self, format, *args):
-        LOGGER.info(
-            "request_access client=%s request_id=%s message=%s",
-            self.address_string(),
-            self._prks_request_id,
-            format % args,
+        LOGGER.debug(
+            "stdlib_http_message request_id=%s",
+            safe_log_id(getattr(self, "_prks_request_id", "")),
         )
 
     def do_GET(self):
@@ -1149,15 +1149,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
         if use_partial and (start > 0 or end < file_size - 1):
             length = end - start + 1
-            LOGGER.info(
-                "pdf_stream mode=partial method=%s head_only=%s request_id=%s path=%s start=%s end=%s file_size=%s",
-                self.command,
-                head_only,
-                self._prks_request_id,
-                self.path,
+            ctx = self._request_context()
+            LOGGER.debug(
+                "pdf_stream mode=partial method=%s route=%s start=%s end=%s file_size=%s request_id=%s",
+                ctx["method"],
+                ctx["route"],
                 start,
                 end,
                 file_size,
+                ctx["request_id"],
             )
             self.send_response(206)
             self.send_header("Content-Type", "application/pdf")
@@ -1181,13 +1181,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     remaining -= len(chunk)
             return
 
-        LOGGER.info(
-            "pdf_stream mode=full method=%s head_only=%s request_id=%s path=%s file_size=%s",
-            self.command,
-            head_only,
-            self._prks_request_id,
-            self.path,
+        ctx = self._request_context()
+        LOGGER.debug(
+            "pdf_stream mode=full method=%s route=%s file_size=%s request_id=%s",
+            ctx["method"],
+            ctx["route"],
             file_size,
+            ctx["request_id"],
         )
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
@@ -1333,7 +1333,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
         prepared = fetch_and_prepare(url)
         if prepared is None:
-            LOGGER.info("portrait_fetch_failed")
+            LOGGER.info(
+                "portrait_fetch_failed request_id=%s",
+                safe_log_id(self._prks_request_id),
+            )
             self.send_error(404, "Profile image not available")
             return
         try:
@@ -1444,9 +1447,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except Exception as e:
                         # Common when the image/venv omits `pip install -r requirements.txt` (see Dockerfile).
                         LOGGER.warning(
-                            "thumbnail_fitz_import_failed error=%s request_id=%s",
-                            e,
-                            self._prks_request_id,
+                            "thumbnail_fitz_import_failed error_type=%s request_id=%s",
+                            safe_error_type(e),
+                            safe_log_id(self._prks_request_id),
                         )
                         self.send_error(404, "Thumbnail unavailable")
                         return
@@ -1495,11 +1498,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except Exception as exc:
                         # If a particular PDF can't be rendered, don't take down the whole request path.
                         LOGGER.warning(
-                            "thumbnail_render_failed work_id=%s page=%s request_id=%s",
-                            w_id,
+                            "thumbnail_render_failed work_id=%s page=%s request_id=%s error_type=%s",
+                            safe_log_id(w_id),
                             page,
-                            self._prks_request_id,
-                            exc_info=exc,
+                            safe_log_id(self._prks_request_id),
+                            safe_error_type(exc),
                         )
                         self.send_error(404, "Thumbnail unavailable")
                         return
@@ -1730,15 +1733,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {"error": str(e)})
                     return
                 LOGGER.error(
-                    "client_error kind=%s message=%s route=%s source=%s client_request_id=%s request_id=%s user_agent=%s stack=%s",
-                    payload["kind"],
-                    payload["message"],
-                    payload["route"],
-                    payload["source"],
-                    payload["request_id"],
-                    self._prks_request_id,
-                    payload["user_agent"],
-                    payload["stack"],
+                    format_client_error_log(
+                        payload,
+                        request_id=self._prks_request_id,
+                    )
                 )
                 self.send_json(200, {"status": "logged", "request_id": self._prks_request_id})
             elif path == '/api/works/reindex-pdf-text':
@@ -1773,10 +1771,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         continue
                     did_change, reason = maybe_linearize_pdf_in_place(abs_path, context="settings-bulk")
                     LOGGER.info(
-                        "pdf_linearize_result context=settings-bulk changed=%s reason=%s path=%s",
-                        did_change,
-                        reason,
-                        abs_path,
+                        "pdf_linearize_result context=settings-bulk changed=%s reason=%s",
+                        "true" if did_change else "false",
+                        safe_log_label(reason),
                     )
                     if did_change:
                         changed += 1
@@ -1818,7 +1815,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 if abs_path and os.path.exists(abs_path):
                                     text_index.upsert_from_pdf(work_id, abs_path)
                     except Exception as e:
-                        LOGGER.warning("processing_import_text_index_failed processing_file_id=%s error=%s", pf_id, e)
+                        LOGGER.warning(
+                            "processing_import_text_index_failed processing_file_id=%s error_type=%s",
+                            safe_log_id(pf_id),
+                            safe_error_type(e),
+                        )
                     self.send_json(200, out)
                 else:
                     self.send_error(404, "API endpoint not found")
@@ -1843,10 +1844,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     if abs_uploaded_path:
                         changed, reason = maybe_linearize_pdf_in_place(abs_uploaded_path, context="work-create-upload")
                         LOGGER.info(
-                            "pdf_linearize_result context=work-create-upload changed=%s reason=%s path=%s",
-                            changed,
-                            reason,
-                            abs_uploaded_path,
+                            "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
+                            "true" if changed else "false",
+                            safe_log_label(reason),
                         )
                     file_path = f"/api/pdfs/{local_filename}"
 
@@ -1921,7 +1921,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         if abs_path and os.path.exists(abs_path):
                             text_index.upsert_from_pdf(w_id, abs_path)
                     except Exception as e:
-                        LOGGER.warning("work_create_text_index_failed work_id=%s error=%s", w_id, e)
+                        LOGGER.warning(
+                            "work_create_text_index_failed work_id=%s error_type=%s",
+                            safe_log_id(w_id),
+                            safe_error_type(e),
+                        )
                 # Optionally attach to playlist
                 playlist_id = (data.get('playlist_id') or '').strip()
                 if playlist_id:
@@ -1930,11 +1934,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except Exception as exc:
                         # best-effort: do not fail work creation if playlist link fails
                         LOGGER.warning(
-                            "work_playlist_attach_failed playlist_id=%s work_id=%s request_id=%s",
-                            playlist_id,
-                            w_id,
-                            self._prks_request_id,
-                            exc_info=exc,
+                            "work_playlist_attach_failed playlist_id=%s work_id=%s request_id=%s error_type=%s",
+                            safe_log_id(playlist_id),
+                            safe_log_id(w_id),
+                            safe_log_id(self._prks_request_id),
+                            safe_error_type(exc),
                         )
                 folder_id = data.get("folder_id")
                 raw_folder = str(folder_id).strip() if folder_id is not None else ""
@@ -2260,15 +2264,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             f.write(pdf_bytes)
                         changed, reason = maybe_linearize_pdf_in_place(pdf_path, context="work-pdf-overwrite")
                         LOGGER.info(
-                            "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s path=%s",
-                            changed,
-                            reason,
-                            pdf_path,
+                            "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
+                            "true" if changed else "false",
+                            safe_log_label(reason),
                         )
                         try:
                             text_index.upsert_from_pdf(w_id, pdf_path)
                         except Exception as e:
-                            LOGGER.warning("work_pdf_replace_text_index_failed work_id=%s error=%s", w_id, e)
+                            LOGGER.warning(
+                                "work_pdf_replace_text_index_failed work_id=%s error_type=%s",
+                                safe_log_id(w_id),
+                                safe_error_type(e),
+                            )
                             
                     # 2. Extract annotations
                     byte_matches = re.findall(rb'\[\[(.*?)\]\]', pdf_bytes)
@@ -2337,14 +2344,15 @@ def run_server(port=PORT, host=DEFAULT_HOST):
         if n:
             LOGGER.info("thumbnail_prune_complete pruned=%s", n)
     except Exception as e:
-        LOGGER.warning("thumbnail_prune_skipped error=%s", e)
+        LOGGER.warning("thumbnail_prune_skipped error_type=%s", safe_error_type(e))
     with socketserver.TCPServer((host, port), PRKSHandler) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
-        if host == "0.0.0.0":
-            LOGGER.info("server_starting bind=%s:%s", host, port)
-        else:
-            LOGGER.info("server_starting url=http://%s:%s", host, port)
+        LOGGER.info(
+            "server_starting bind_scope=%s port=%s",
+            safe_bind_scope(host),
+            port,
+        )
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

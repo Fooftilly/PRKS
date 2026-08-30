@@ -56,38 +56,23 @@ function initPrksGlobalErrorReporting() {
     window.__prksGlobalErrorReportingBound = true;
     window.addEventListener('error', (event) => {
         const err = event && event.error;
-        const message = err && err.message ? String(err.message) : String(event && event.message ? event.message : 'Unhandled error');
         if (typeof window.prksReportClientError === 'function') {
             window.prksReportClientError({
                 kind: 'window_error',
-                message,
-                stack: err && err.stack ? String(err.stack) : '',
-                source: event && event.filename ? String(event.filename) : 'window',
+                error_name: err && err.name ? String(err.name) : 'Error',
+                source: event && event.filename ? String(event.filename) : 'client',
+                line: event && event.lineno,
+                column: event && event.colno,
             });
         }
     });
     window.addEventListener('unhandledrejection', (event) => {
         const reason = event ? event.reason : null;
-        let message = 'Unhandled promise rejection';
-        let stack = '';
-        if (reason instanceof Error) {
-            message = reason.message || message;
-            stack = reason.stack || '';
-        } else if (typeof reason === 'string') {
-            message = reason;
-        } else if (reason != null) {
-            try {
-                message = JSON.stringify(reason);
-            } catch (_e) {
-                message = String(reason);
-            }
-        }
         if (typeof window.prksReportClientError === 'function') {
             window.prksReportClientError({
                 kind: 'unhandled_rejection',
-                message,
-                stack,
-                source: 'promise',
+                error_name: reason instanceof Error ? (reason.name || 'Error') : 'Error',
+                source: 'client',
             });
         }
     });

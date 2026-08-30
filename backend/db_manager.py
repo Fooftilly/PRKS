@@ -13,6 +13,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
+from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.storage import paths
 from backend.storage.config import StorageConfig
@@ -1283,13 +1284,15 @@ class PRKSDatabase:
         try:
             changed, reason = maybe_linearize_pdf_in_place(destination_abs, context="processing-import")
             LOGGER.info(
-                "pdf_linearize_result context=processing-import changed=%s reason=%s path=%s",
-                changed,
-                reason,
-                destination_abs,
+                "pdf_linearize_result context=processing-import changed=%s reason=%s",
+                "true" if changed else "false",
+                safe_log_label(reason),
             )
         except Exception as e:
-            LOGGER.warning("pdf_linearize_result context=processing-import error=%s", e)
+            LOGGER.warning(
+                "pdf_linearize_error context=processing-import error_type=%s",
+                safe_error_type(e),
+            )
 
         title = (row.get("title") or "").strip() or os.path.splitext(row.get("filename") or "Untitled")[0]
         status_draft = (row.get("status_draft") or "Not Started").strip() or "Not Started"

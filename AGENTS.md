@@ -36,3 +36,14 @@ New substantial behavior, in order:
 4. Do not create `routes/`, `services/`, or other layers ahead of real behavior.
 
 `server.py` keeps HTTP concerns. Substantial SQL, filesystem mutation, PDF processing, indexing, imports, and domain workflows live outside the handler. Do not split `server.py` or introduce a framework.
+
+## Logging privacy
+
+Logs are metadata-only. Never log user/library content, request bodies/query strings,
+titles, notes, annotations, names, filenames/absolute paths, user URLs, headers,
+raw browser messages/stacks, qpdf stderr, or str/repr(exception).
+
+Use `backend/log_safety.py` for route/id/error normalization.
+Unexpected traceback logging must go through the privacy-safe formatter.
+Lowering `PRKS_LOG_LEVEL` / `PRKS_LOG_FILE_LEVEL` must never unlock raw data.
+

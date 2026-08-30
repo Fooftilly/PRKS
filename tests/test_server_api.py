@@ -147,10 +147,10 @@ class TestServerAPI(unittest.TestCase):
     def test_1aa_client_errors_endpoint_accepts_payload(self):
         payload = {
             "kind": "window_error",
-            "message": "Test client-side failure",
-            "stack": "stack-line-1",
-            "route": "#/folders",
+            "error_name": "TypeError",
             "source": "app.js",
+            "line": 10,
+            "column": 2,
             "request_id": "abc123",
         }
         req = urllib.request.Request(
@@ -169,7 +169,7 @@ class TestServerAPI(unittest.TestCase):
     def test_1ab_client_errors_endpoint_rejects_invalid_payload(self):
         req = urllib.request.Request(
             f"{self._base_url}/api/client-errors",
-            data=json.dumps({"kind": "window_error"}).encode(),
+            data=json.dumps(["window_error"]).encode(),
             method="POST",
         )
         req.add_header("Content-Type", "application/json")

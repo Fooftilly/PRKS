@@ -79,12 +79,50 @@ PRKS has no application-level authentication. Use that override only on a networ
 | `PRKS_STORAGE` | If set, root directory for persistent data. Database: `$PRKS_STORAGE/prks_data.db`. PDFs: `$PRKS_STORAGE/pdfs/`. Thumbnails: `$PRKS_STORAGE/thumbs/`. |
 | `PRKS_TESTING` | When truthy (`1`, `true`, `yes`), uses testing paths and stricter checks (see testing mode above). |
 | `PRKS_THUMB_LOSSLESS` | When truthy, PDF card thumbnails use lossless WebP/PNG cache encoding (debugging). Default is card-optimized lossy WebP; cache filenames use rev `_v2`. |
+| `PRKS_LOG_LEVEL` | Stderr log level. Default `INFO`. Changes volume, not what kinds of data may be logged. |
+| `PRKS_LOG_FILE_LEVEL` | Persistent file log level. Default `ERROR`. |
+| `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep. Default `7`. |
+| `PRKS_LOG_FILE` | Override path for the rotating error log. Default `$PRKS_STORAGE/prks-errors.log`. |
 
 If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/prks_data.db`, `data/pdfs/`, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
 
 Person profile images (`GET /api/persons/{id}/profile-image`) are optional. `image_url` must be a direct public HTTP/HTTPS URL (HTTPS preferred) that itself returns HTTP 200. PRKS does not follow redirects, and private/local/link-local targets are refused. Only static JPEG/PNG/WebP/GIF rasters are accepted. The download is size- and time-bounded; the image is decoded and transcoded (max 512px edge, usually WebP) before anything is cached. Original remote bytes are not kept. Local portrait upload is not part of this feature. Updating a valid `image_url` clears that person’s cached portraits.
 
 Backup your database by copying `/data` folder.
+
+## Logging and privacy
+
+Persistent log: `<storage>/prks-errors.log`. Default persistent threshold is **ERROR**. Rotation is daily at midnight. Retention is **7 days**.
+
+PRKS logs describe operations and failures, not the contents of the research library. Increasing `PRKS_LOG_LEVEL` or `PRKS_LOG_FILE_LEVEL` (including `DEBUG`) changes volume, not privacy policy.
+
+Logs may include:
+
+- event names
+- request IDs
+- safe endpoint templates (`/api/search`, `/api/pdfs/:pdf`, `/api/works/:id`)
+- HTTP status
+- internal opaque IDs (`work_id`, `processing_file_id`)
+- counts, page numbers, byte ranges, file sizes
+- exception class names
+- repository-relative traceback locations
+
+PRKS deliberately does not log:
+
+- research titles, notes, abstracts, annotations, or selected PDF text
+- person, tag, folder, or publisher names
+- search terms
+- PDF filenames or absolute filesystem paths
+- source, portrait, or image URLs
+- request bodies, query strings, or headers (`Host`, `Origin`, `User-Agent`, …)
+- client/LAN IP addresses
+- browser messages, stacks, routes, or hash state
+- raw exception messages
+- qpdf stderr
+
+Docker captures process stderr. Console output follows the same privacy rules as the persistent file.
+
+There is no remote telemetry. `POST /api/client-errors` is same-application metadata for correlating browser failures with server request IDs.
 
 ## Development and tests
 

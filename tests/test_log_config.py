@@ -84,8 +84,56 @@ class TestSetupLogging(unittest.TestCase):
                 cfg = StorageConfig.from_env()
                 with _isolated_logging():
                     setup_logging(cfg)
-            self.assertTrue(os.path.isfile(log_file))
+    def test_logging_initialized_omits_log_file_path(self):
+        with tempfile.TemporaryDirectory(prefix="prks-log-") as tmp:
+            private_root = os.path.join(tmp, "PRIVATE_X9Q7")
+            os.makedirs(private_root)
+            log_file = os.path.join(private_root, "prks-errors.log")
+            with _env(testing="1", storage=tmp, log_file=log_file):
+                cfg = StorageConfig.from_env()
+                with _isolated_logging():
+                    with self.assertLogs("prks.log_config", level="INFO") as cm:
+                        setup_logging(cfg)
+            joined = "\n".join(cm.output)
+            self.assertIn("logging_initialized", joined)
+            self.assertIn("retention_days=", joined)
+            self.assertNotIn("log_file=", joined)
+            self.assertNotIn(private_root, joined)
+            self.assertNotIn("PRIVATE_X9Q7", joined)
 
+    def test_posix_log_file_is_owner_only(self):
+        if os.name != "posix":
+            self.skipTest("POSIX file modes")
+        with tempfile.TemporaryDirectory(prefix="prks-log-") as tmp:
+            log_file = os.path.join(tmp, "prks-errors.log")
+            with _env(testing="1", storage=tmp, log_file=log_file):
+                cfg = StorageConfig.from_env()
+                with _isolated_logging():
+                    setup_logging(cfg)
+                    mode = os.stat(log_file).st_mode
+                    self.assertEqual(mode & 0o077, 0)
+                    from logging.handlers import TimedRotatingFileHandler
 
-if __name__ == "__main__":
-    unittest.main()
+                    handlers = [
+                        h
+                        for h in logging.getLogger().handlers
+                        if isinstance(h, TimedRotatingFileHandler)
+                    ]
+                    self.assertTrue(handlers)
+                    handlers[0].doRollover()
+                    self.assertTrue(os.path.isfile(log_file))
+                    self.assertEqual(os.stat(log_file).st_mode & 0o077, 0)
+
+    def test_handlers_use_privacy_safe_formatter(self):
+        from backend.log_safety import PrivacySafeFormatter
+
+        with tempfile.TemporaryDirectory(prefix="prks-log-") as tmp:
+            log_file = os.path.join(tmp, "prks-errors.log")
+            with _env(testing="1", storage=tmp, log_file=log_file):
+                cfg = StorageConfig.from_env()
+                with _isolated_logging():
+                    setup_logging(cfg)
+                    self.assertTrue(logging.getLogger().handlers)
+                    for handler in logging.getLogger().handlers:
+                        self.assertIsInstance(handler.formatter, PrivacySafeFormatter)
+

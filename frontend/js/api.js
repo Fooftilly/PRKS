@@ -12,19 +12,67 @@ function prksEscapeHtml(s) {
 
 window.prksEscapeHtml = prksEscapeHtml;
 
+const PRKS_API_ERROR_SOURCES = {
+    works: 'works.fetch',
+    folders: 'folders.fetch',
+    'folder-details': 'folders.details',
+    persons: 'persons.fetch',
+    'work-details': 'works.details',
+    'person-details': 'persons.details',
+    'person-groups': 'person-groups.fetch',
+    'person-group-details': 'person-groups.details',
+    recent: 'recent.fetch',
+    'recently-added': 'recently-added.fetch',
+    search: 'search.fetch',
+    publishers: 'publishers.fetch',
+    tags: 'tags.fetch',
+    'processing-files': 'processing-files.fetch',
+    request: 'api',
+};
+
+function prksSafeClientSource(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return 'client';
+    if (raw === 'client' || raw === 'api' || raw === 'external') return raw;
+    if (Object.prototype.hasOwnProperty.call(PRKS_API_ERROR_SOURCES, raw)) {
+        return PRKS_API_ERROR_SOURCES[raw];
+    }
+    if (/^[a-z][a-z0-9._-]*$/.test(raw)) return raw;
+    let path = raw;
+    try {
+        const url = new URL(raw, window.location.origin);
+        path = url.pathname || '';
+    } catch (_e) {
+        path = raw.split('?')[0].split('#')[0];
+    }
+    const firstParty = path.startsWith('/js/') || path.startsWith('/vendor/') || path.startsWith('/css/') || path === '/sw.js';
+    const base = path.split('/').pop() || '';
+    if (firstParty && /^[A-Za-z0-9._-]+\.(js|css|mjs|map|svg|webmanifest)$/.test(base)) {
+        return base;
+    }
+    if (/^[A-Za-z0-9._-]+\.(js|css|mjs)$/.test(raw)) return raw;
+    return 'external';
+}
+
+function prksApiErrorSource(context) {
+    const key = String(context || '');
+    return PRKS_API_ERROR_SOURCES[key] || 'api';
+}
+
 function prksSetApiError(context, message, requestId = '') {
-    const payload = {
+    window.__prksLastApiError = {
         context: String(context || 'request'),
         message: String(message || 'Request failed'),
         requestId: String(requestId || ''),
         at: Date.now(),
     };
-    window.__prksLastApiError = payload;
+}
+
+function prksReportApiClientError(context, requestId = '') {
     prksReportClientError({
         kind: 'api_client_error',
-        message: payload.message,
-        source: String(context || 'request'),
-        request_id: payload.requestId,
+        source: prksApiErrorSource(context),
+        request_id: String(requestId || ''),
     });
 }
 
@@ -49,9 +97,11 @@ function prksTrimClientErrorText(value, maxLen) {
 function prksShouldReportClientError(payload) {
     const key = [
         payload.kind || '',
-        payload.message || '',
-        payload.route || '',
+        payload.error_name || '',
         payload.source || '',
+        payload.line || '',
+        payload.http_status || '',
+        payload.request_id || '',
     ].join('|');
     const now = Date.now();
     const prev = __prksRecentClientErrors.get(key) || 0;
@@ -68,20 +118,30 @@ function prksShouldReportClientError(payload) {
 
 function prksBuildClientErrorPayload(input) {
     const payload = input && typeof input === 'object' ? input : {};
-    return {
+    const out = {
         kind: prksTrimClientErrorText(payload.kind || 'client_error', 64),
-        message: prksTrimClientErrorText(payload.message || 'Unknown client error', 2000),
-        stack: prksTrimClientErrorText(payload.stack || '', 8000),
-        route: prksTrimClientErrorText(payload.route || window.location.hash || '', 512),
-        source: prksTrimClientErrorText(payload.source || '', 512),
+        error_name: prksTrimClientErrorText(payload.error_name || 'Error', 64),
+        source: prksSafeClientSource(payload.source || 'client'),
         request_id: prksTrimClientErrorText(payload.request_id || '', 64),
-        client_time: new Date().toISOString(),
     };
+    const line = Number(payload.line);
+    if (Number.isInteger(line) && line >= 0) {
+        out.line = line;
+    }
+    const column = Number(payload.column);
+    if (Number.isInteger(column) && column >= 0) {
+        out.column = column;
+    }
+    const httpStatus = Number(payload.http_status);
+    if (Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599) {
+        out.http_status = httpStatus;
+    }
+    return out;
 }
 
 function prksReportClientError(input) {
     const payload = prksBuildClientErrorPayload(input);
-    if (!payload.message || !prksShouldReportClientError(payload)) {
+    if (!prksShouldReportClientError(payload)) {
         return;
     }
     fetch('/api/client-errors', {
@@ -101,8 +161,8 @@ async function prksParseJsonResponse(res, fallback, context = 'request') {
         prksSetApiError(context, `Request failed (${res.status})`, requestId);
         prksReportClientError({
             kind: 'api_http_error',
-            message: `HTTP ${res.status} while loading ${context}`,
-            source: '/api',
+            source: prksApiErrorSource(context),
+            http_status: res.status,
             request_id: requestId,
         });
         return fallback;
@@ -113,9 +173,8 @@ async function prksParseJsonResponse(res, fallback, context = 'request') {
         prksSetApiError(context, 'Received invalid server response.', requestId);
         prksReportClientError({
             kind: 'api_parse_error',
-            message: `Invalid JSON response while loading ${context}`,
-            source: '/api',
-            stack: e && e.stack ? String(e.stack) : '',
+            error_name: e && e.name ? String(e.name) : 'Error',
+            source: prksApiErrorSource(context),
             request_id: requestId,
         });
         return fallback;
@@ -135,6 +194,7 @@ async function fetchWorks() {
             return Array.isArray(data) ? data : [];
         } catch (e) {
             prksSetApiError('works', 'Could not load files.');
+            prksReportApiClientError('works');
             return [];
         } finally {
             _prksFetchWorksInFlight = null;
@@ -149,6 +209,7 @@ async function fetchFolders() {
         return Array.isArray(data) ? data : [];
     } catch (e) {
         prksSetApiError('folders', 'Could not load folders.');
+        prksReportApiClientError('folders');
         return [];
     }
 }
@@ -158,6 +219,7 @@ async function fetchFolderDetails(id) {
         return await prksParseJsonResponse(res, null, 'folder-details');
     } catch (e) {
         prksSetApiError('folder-details', 'Could not load folder details.');
+        prksReportApiClientError('folder-details');
         return null;
     }
 }
@@ -168,6 +230,7 @@ async function fetchPersons() {
         return Array.isArray(data) ? data : [];
     } catch (e) {
         prksSetApiError('persons', 'Could not load people.');
+        prksReportApiClientError('persons');
         return [];
     }
 }
@@ -177,6 +240,7 @@ async function fetchWorkDetails(id) {
         return await prksParseJsonResponse(res, null, 'work-details');
     } catch (e) {
         prksSetApiError('work-details', 'Could not load file details.');
+        prksReportApiClientError('work-details');
         return null;
     }
 }
@@ -186,6 +250,7 @@ async function fetchPersonDetails(id) {
         return await prksParseJsonResponse(res, null, 'person-details');
     } catch (e) {
         prksSetApiError('person-details', 'Could not load person details.');
+        prksReportApiClientError('person-details');
         return null;
     }
 }
@@ -196,6 +261,7 @@ async function fetchPersonGroups() {
         return Array.isArray(data) ? data : [];
     } catch (e) {
         prksSetApiError('person-groups', 'Could not load groups.');
+        prksReportApiClientError('person-groups');
         return [];
     }
 }
@@ -205,6 +271,7 @@ async function fetchPersonGroupDetails(id) {
         return await prksParseJsonResponse(res, null, 'person-group-details');
     } catch (e) {
         prksSetApiError('person-group-details', 'Could not load group details.');
+        prksReportApiClientError('person-group-details');
         return null;
     }
 }
@@ -215,6 +282,7 @@ async function fetchRecent() {
         return Array.isArray(data) ? data : [];
     } catch (e) {
         prksSetApiError('recent', 'Could not load recent files.');
+        prksReportApiClientError('recent');
         return [];
     }
 }
@@ -225,6 +293,7 @@ async function fetchRecentlyAdded() {
         return Array.isArray(data) ? data : [];
     } catch (e) {
         prksSetApiError('recently-added', 'Could not load recently added files.');
+        prksReportApiClientError('recently-added');
         return [];
     }
 }
@@ -247,6 +316,7 @@ async function fetchSearch(query, tagName, options = {}) {
             return Array.isArray(data) ? data : [];
         } catch (e) {
             prksSetApiError('search', 'Search request failed.');
+            prksReportApiClientError('search');
             return [];
         }
     }
@@ -266,6 +336,7 @@ async function fetchSearch(query, tagName, options = {}) {
         return Array.isArray(data) ? data : [];
     } catch (e) {
         prksSetApiError('search', 'Search request failed.');
+        prksReportApiClientError('search');
         return [];
     }
 }
@@ -276,6 +347,7 @@ async function fetchPublishersInUse() {
         return Array.isArray(data) ? data : [];
     } catch (e) {
         prksSetApiError('publishers', 'Could not load publishers.');
+        prksReportApiClientError('publishers');
         return [];
     }
 }
@@ -292,6 +364,7 @@ async function fetchTags(options = {}) {
         return Array.isArray(data) ? data : [];
     } catch (e) {
         prksSetApiError('tags', 'Could not load tags.');
+        prksReportApiClientError('tags');
         return [];
     }
 }
@@ -308,6 +381,7 @@ async function fetchProcessingFiles(options = {}) {
         return Array.isArray(data) ? data : [];
     } catch (_e) {
         prksSetApiError('processing-files', 'Could not load files for processing.');
+        prksReportApiClientError('processing-files');
         return [];
     }
 }

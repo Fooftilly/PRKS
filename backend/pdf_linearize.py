@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import tempfile
 
+from backend.log_safety import safe_error_type, safe_log_label
+
 
 LOGGER = logging.getLogger("prks.pdf")
 _MISSING_QPDF_WARNED = False
@@ -42,13 +44,14 @@ def is_pdf_linearized(pdf_path: str) -> bool:
 
 def maybe_linearize_pdf_in_place(pdf_path: str, *, context: str = "") -> tuple[bool, str]:
     """Try qpdf --linearize in-place. Returns (changed, reason)."""
+    ctx = safe_log_label(context, fallback="unknown")
     if not _linearize_enabled():
         return False, "disabled"
     qpdf = shutil.which("qpdf")
     if not qpdf:
         global _MISSING_QPDF_WARNED
         if not _MISSING_QPDF_WARNED:
-            LOGGER.warning("pdf_linearize_skip_missing_qpdf context=%s", context or "unknown")
+            LOGGER.warning("pdf_linearize_skip_missing_qpdf context=%s", ctx)
             _MISSING_QPDF_WARNED = True
         return False, "missing-qpdf"
     if not pdf_path or not os.path.exists(pdf_path):
@@ -67,17 +70,19 @@ def maybe_linearize_pdf_in_place(pdf_path: str, *, context: str = "") -> tuple[b
         )
         if proc.returncode != 0:
             LOGGER.warning(
-                "pdf_linearize_failed context=%s code=%s stderr=%s",
-                context or "unknown",
+                "pdf_linearize_failed context=%s exit_code=%s",
+                ctx,
                 proc.returncode,
-                (proc.stderr or "").strip(),
             )
             return False, "qpdf-failed"
         os.replace(tmp_path, pdf_path)
-        LOGGER.info("pdf_linearize_ok context=%s path=%s", context or "unknown", pdf_path)
         return True, "ok"
     except Exception as e:
-        LOGGER.warning("pdf_linearize_error context=%s error=%s", context or "unknown", e)
+        LOGGER.warning(
+            "pdf_linearize_error context=%s error_type=%s",
+            ctx,
+            safe_error_type(e),
+        )
         return False, "error"
     finally:
         try:
