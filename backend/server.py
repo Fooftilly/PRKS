@@ -31,6 +31,7 @@ from backend.db_manager import (
 from backend.text_index import (
     PRKSTextIndex,
     get_text_index,
+    reconcile_at_startup,
     replace_text_index,
     reset_text_index,
 )
@@ -905,7 +906,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(400, {'error': str(e)})
                         return
                 if body:
+                    patched_file_path = "file_path" in body
                     db.update_work_metadata(w_id, body)
+                    if patched_file_path:
+                        try:
+                            rows = db.execute_query(
+                                "SELECT file_path FROM works WHERE id = ?",
+                                (w_id,),
+                            )
+                            fp = (rows[0].get("file_path") or "") if rows else ""
+                            text_index.sync_work(w_id, fp)
+                        except Exception as e:
+                            LOGGER.warning(
+                                "work_patch_text_index_failed work_id=%s error_type=%s",
+                                safe_log_id(w_id),
+                                safe_error_type(e),
+                            )
                 self.send_json(200, {'status': 'updated'})
             elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
                 pl_id = path.split('/')[-1]
@@ -1784,7 +1800,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 )
                 self.send_json(200, {"status": "logged", "request_id": self._prks_request_id})
             elif path == '/api/works/reindex-pdf-text':
-                summary = text_index.reindex_all(db)
+                force = bool(data.get("force", False)) if isinstance(data, dict) else False
+                summary = text_index.reconcile_all(db, force=force)
                 self.send_json(200, {"status": "ok", **summary})
             elif path == '/api/works/linearize-existing-pdfs':
                 unlinearized_only = bool(data.get("unlinearized_only", True))
@@ -1853,11 +1870,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         if work_id:
                             row = db.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
                             fp = (row[0].get("file_path") or "").strip() if row else ""
-                            if fp.startswith("/api/pdfs/"):
-                                filename = fp.split("/")[-1]
-                                abs_path = _safe_pdf_path_in_pdfs_dir(filename)
-                                if abs_path and os.path.exists(abs_path):
-                                    text_index.upsert_from_pdf(work_id, abs_path)
+                            text_index.sync_work(work_id, fp)
                     except Exception as e:
                         LOGGER.warning(
                             "processing_import_text_index_failed processing_file_id=%s error_type=%s",
@@ -1958,18 +1971,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     thumb_page=data.get('thumb_page'),
                     private_notes=data.get('private_notes', ''),
                 )
-                if file_path.startswith("/api/pdfs/"):
-                    try:
-                        filename = file_path.split("/")[-1]
-                        abs_path = _safe_pdf_path_in_pdfs_dir(filename)
-                        if abs_path and os.path.exists(abs_path):
-                            text_index.upsert_from_pdf(w_id, abs_path)
-                    except Exception as e:
-                        LOGGER.warning(
-                            "work_create_text_index_failed work_id=%s error_type=%s",
-                            safe_log_id(w_id),
-                            safe_error_type(e),
-                        )
+                try:
+                    text_index.sync_work(w_id, file_path)
+                except Exception as e:
+                    LOGGER.warning(
+                        "work_create_text_index_failed work_id=%s error_type=%s",
+                        safe_log_id(w_id),
+                        safe_error_type(e),
+                    )
                 # Optionally attach to playlist
                 playlist_id = (data.get('playlist_id') or '').strip()
                 if playlist_id:
@@ -2313,7 +2322,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             safe_log_label(reason),
                         )
                         try:
-                            text_index.upsert_from_pdf(w_id, pdf_path)
+                            stored_fp = res_path[0]["file_path"]
+                            text_index.sync_work(w_id, stored_fp)
                         except Exception as e:
                             LOGGER.warning(
                                 "work_pdf_replace_text_index_failed work_id=%s error_type=%s",
@@ -2570,6 +2580,10 @@ def run_server(port=PORT, host=DEFAULT_HOST):
             LOGGER.info("thumbnail_prune_complete pruned=%s", n)
     except Exception as e:
         LOGGER.warning("thumbnail_prune_skipped error_type=%s", safe_error_type(e))
+    try:
+        reconcile_at_startup(db, text_index)
+    except Exception as e:
+        LOGGER.warning("text_index_reconcile_failed error_type=%s", safe_error_type(e))
     try:
         cleanup_stale_staging(_bound_storage)
         cleanup_expired_backup_jobs(_bound_storage)

@@ -193,9 +193,7 @@ class BackupRestoreTestCase(unittest.TestCase):
             work_id, json.dumps([{"id": "a1", "type": "highlight", "content": "note"}])
         )
         db.patch_app_settings({"annotation_author": author})
-        server_module.text_index.upsert_from_pdf(
-            work_id, os.path.join(bound.pdfs_dir, pdf_name)
-        )
+        server_module.text_index.sync_work(work_id, f"/api/pdfs/{pdf_name}")
         return {
             "cfg": bound,
             "work_id": work_id,
@@ -284,6 +282,15 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         self.assertNotIn("stale-thumb.webp", thumbs)
         hits = server_module.text_index.search_work_ids("unique token alpha")
         self.assertIn(source["work_id"], hits)
+        with server_module.text_index._conn() as conn:
+            version = conn.execute(
+                "SELECT value FROM text_index_meta WHERE key = 'schema_version'"
+            ).fetchone()[0]
+            legacy = conn.execute(
+                "SELECT COUNT(*) FROM work_text_index WHERE extraction_status = 'legacy'"
+            ).fetchone()[0]
+        self.assertEqual(int(version), 2)
+        self.assertEqual(int(legacy), 0)
 
     def test_restore_replaces_existing_library(self):
         lib_a = self._bind_library(
@@ -314,6 +321,15 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         hits = server_module.text_index.search_work_ids("only in B")
         self.assertTrue(hits)
         self.assertFalse(server_module.text_index.search_work_ids("only in A"))
+        with server_module.text_index._conn() as conn:
+            version = conn.execute(
+                "SELECT value FROM text_index_meta WHERE key = 'schema_version'"
+            ).fetchone()[0]
+            legacy = conn.execute(
+                "SELECT COUNT(*) FROM work_text_index WHERE extraction_status = 'legacy'"
+            ).fetchone()[0]
+        self.assertEqual(int(version), 2)
+        self.assertEqual(int(legacy), 0)
 
     def test_sqlite_online_backup_is_used(self):
         src = Path(_PROJECT_DIR, "backend", "backup_restore.py").read_text(encoding="utf-8")

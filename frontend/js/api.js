@@ -488,10 +488,10 @@ async function prksReindexPdfText() {
     const res = await fetch('/api/works/reindex-pdf-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ force: true }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Could not re-index PDF text.');
+    if (!res.ok) throw new Error(data.error || 'Could not rebuild PDF text index.');
     return data;
 }
 

@@ -132,6 +132,12 @@ Schema migrations are transactional and version-ordered. A database marked versi
 
 Databases created by a newer PRKS version are refused rather than downgraded. Download a verified backup before installing a PRKS revision that announces a database schema upgrade.
 
+## PDF text search
+
+PRKS keeps a separate derived PDF text-search index (`prks_text_index.db`). It is automatically reconciled with managed PDFs at startup. Unchanged PDFs are not re-extracted. Image-only or scanned PDFs may contain no searchable text; PRKS does not perform OCR.
+
+The index is disposable and is rebuilt after backup restore. **Settings → Rebuild PDF text index** forces a complete re-extraction if search results seem incomplete or stale.
+
 ## Logging and privacy
 
 Persistent log: `<storage>/prks-errors.log`. Default persistent threshold is **ERROR**. Rotation is daily at midnight. Retention is **7 days**.

@@ -731,6 +731,10 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req_s) as rs:
             rows = json.loads(rs.read().decode())
         self.assertTrue(any(r.get("id") == w_id for r in rows))
+        req_old = urllib.request.Request(f"{self._base_url}/api/search?any=1&q=oldtermreplacepdf")
+        with urllib.request.urlopen(req_old) as rold:
+            old_rows = json.loads(rold.read().decode())
+        self.assertFalse(any(r.get("id") == w_id for r in old_rows))
 
     def test_9b_manual_reindex_pdf_text(self):
         term = "ManualReindexTermBeta"
@@ -766,11 +770,129 @@ class TestServerAPI(unittest.TestCase):
             body = json.loads(rr.read().decode())
         self.assertEqual(body.get("status"), "ok")
         self.assertGreaterEqual(int(body.get("processed", 0)), 1)
+        self.assertIn("updated", body)
+        self.assertIn("unchanged", body)
+        self.assertIn("removed_orphans", body)
 
         req_after = urllib.request.Request(f"{self._base_url}/api/search?any=1&q={urllib.parse.quote(term)}")
         with urllib.request.urlopen(req_after) as ra:
             rows_after = json.loads(ra.read().decode())
         self.assertTrue(any(r.get("id") == w_id for r in rows_after))
+
+        req_force = urllib.request.Request(
+            f"{self._base_url}/api/works/reindex-pdf-text",
+            data=json.dumps({"force": True}).encode(),
+            method="POST",
+        )
+        req_force.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_force) as rf:
+            self.assertEqual(rf.status, 200)
+            force_body = json.loads(rf.read().decode())
+        self.assertGreaterEqual(int(force_body.get("updated", 0)), 1)
+
+    def test_9b2_patch_file_path_syncs_text_index(self):
+        a_name = "patch_fp_a.pdf"
+        b_name = "patch_fp_b.pdf"
+        a_path = os.path.join(server_module.pdfs_dir, a_name)
+        b_path = os.path.join(server_module.pdfs_dir, b_name)
+        with open(a_path, "wb") as handle:
+            handle.write(_pdf_with_text_bytes("patchfilepathtermA"))
+        with open(b_path, "wb") as handle:
+            handle.write(_pdf_with_text_bytes("patchfilepathtermB"))
+        payload = {
+            "title": "Patch File Path Work",
+            "status": "Planned",
+            "file_b64": base64.b64encode(_pdf_with_text_bytes("unused")).decode("utf-8"),
+            "file_name": "patch_fp_upload.pdf",
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            w_id = json.loads(res.read().decode())["id"]
+        patch_a = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}",
+            data=json.dumps({"file_path": f"/api/pdfs/{a_name}"}).encode(),
+            method="PATCH",
+        )
+        patch_a.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(patch_a) as pa:
+            self.assertEqual(pa.status, 200)
+        req_a = urllib.request.Request(f"{self._base_url}/api/search?any=1&q=patchfilepathtermA")
+        with urllib.request.urlopen(req_a) as ra:
+            self.assertTrue(any(r.get("id") == w_id for r in json.loads(ra.read().decode())))
+        patch_b = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}",
+            data=json.dumps({"file_path": f"/api/pdfs/{b_name}"}).encode(),
+            method="PATCH",
+        )
+        patch_b.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(patch_b) as pb:
+            self.assertEqual(pb.status, 200)
+        req_b = urllib.request.Request(f"{self._base_url}/api/search?any=1&q=patchfilepathtermB")
+        with urllib.request.urlopen(req_b) as rb:
+            self.assertTrue(any(r.get("id") == w_id for r in json.loads(rb.read().decode())))
+        req_old = urllib.request.Request(f"{self._base_url}/api/search?any=1&q=patchfilepathtermA")
+        with urllib.request.urlopen(req_old) as rold:
+            self.assertFalse(any(r.get("id") == w_id for r in json.loads(rold.read().decode())))
+        patch_clear = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}",
+            data=json.dumps({"file_path": ""}).encode(),
+            method="PATCH",
+        )
+        patch_clear.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(patch_clear) as pc:
+            self.assertEqual(pc.status, 200)
+        req_gone = urllib.request.Request(f"{self._base_url}/api/search?any=1&q=patchfilepathtermB")
+        with urllib.request.urlopen(req_gone) as rg:
+            self.assertFalse(any(r.get("id") == w_id for r in json.loads(rg.read().decode())))
+
+    def test_9b3_overwrite_extraction_failure_clears_old_text(self):
+        original = _pdf_with_text_bytes("overwritefailoldterm")
+        payload = {
+            "title": "Overwrite Fail Work",
+            "status": "Planned",
+            "file_b64": base64.b64encode(original).decode("utf-8"),
+            "file_name": "overwrite_fail_test.pdf",
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            w_id = json.loads(res.read().decode())["id"]
+        req_old = urllib.request.Request(f"{self._base_url}/api/search?any=1&q=overwritefailoldterm")
+        with urllib.request.urlopen(req_old) as rold:
+            self.assertTrue(any(r.get("id") == w_id for r in json.loads(rold.read().decode())))
+        updated = _pdf_with_text_bytes("overwritefailnewterm")
+        from backend.text_index import PDFTextExtractionError
+
+        with patch(
+            "backend.text_index.extract_pdf",
+            side_effect=PDFTextExtractionError("FileDataError"),
+        ):
+            overwrite_req = urllib.request.Request(
+                f"{self._base_url}/api/works/{w_id}/pdf",
+                data=json.dumps({"file_b64": base64.b64encode(updated).decode("utf-8")}).encode(),
+                method="POST",
+            )
+            overwrite_req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(overwrite_req) as orr:
+                self.assertEqual(orr.status, 200)
+        req_old2 = urllib.request.Request(f"{self._base_url}/api/search?any=1&q=overwritefailoldterm")
+        with urllib.request.urlopen(req_old2) as rold2:
+            self.assertFalse(any(r.get("id") == w_id for r in json.loads(rold2.read().decode())))
+        req_new = urllib.request.Request(f"{self._base_url}/api/search?any=1&q=overwritefailnewterm")
+        with urllib.request.urlopen(req_new) as rnew:
+            self.assertFalse(any(r.get("id") == w_id for r in json.loads(rnew.read().decode())))
+        req_work = urllib.request.Request(f"{self._base_url}/api/works/{w_id}")
+        with urllib.request.urlopen(req_work) as rw:
+            self.assertEqual(rw.status, 200)
 
     def test_9c_linearize_existing_pdfs_endpoint(self):
         pdf_bytes = _pdf_with_text_bytes("linearize me")
@@ -1551,7 +1673,7 @@ class TestServerAPI(unittest.TestCase):
         os.makedirs(nested, exist_ok=True)
         source_pdf = os.path.join(nested, "api_inbox.pdf")
         with open(source_pdf, "wb") as f:
-            f.write(b"%PDF-1.4\n%API-INBOX\n%%EOF\n")
+            f.write(_pdf_with_text_bytes("processingimportsearchterm"))
         with open(os.path.join(nested, "ignore.txt"), "w", encoding="utf-8") as f:
             f.write("not a pdf")
         req_person = urllib.request.Request(
@@ -1622,6 +1744,12 @@ class TestServerAPI(unittest.TestCase):
         self.assertTrue(
             any(r.get("id") == person_id and r.get("role_type") == "Author" for r in work.get("roles", []))
         )
+        req_search = urllib.request.Request(
+            f"{self._base_url}/api/search?any=1&q=processingimportsearchterm"
+        )
+        with urllib.request.urlopen(req_search) as rsearch:
+            search_rows = json.loads(rsearch.read().decode())
+        self.assertTrue(any(r.get("id") == imported["work_id"] for r in search_rows))
 
         req_scan_again = urllib.request.Request(f"{self._base_url}/api/processing-files?rescan=1")
         with urllib.request.urlopen(req_scan_again) as rsa:

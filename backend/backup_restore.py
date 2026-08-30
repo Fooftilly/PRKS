@@ -2036,7 +2036,7 @@ def apply_restore(
         index_obj = text_index_module.get_text_index()
         index_summary = {"processed": 0, "indexed": 0, "failed": 0}
         try:
-            index_summary = index_obj.reindex_all(db_obj)
+            index_summary = index_obj.reconcile_all(db_obj, force=False)
         except Exception as exc:
             LOGGER.error(
                 "restore_reindex_failed error_type=%s",

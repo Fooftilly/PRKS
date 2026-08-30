@@ -903,6 +903,29 @@ function initPrksBackupRestoreAction() {
     }
 }
 
+function prksFormatTextIndexSummary(out) {
+    const processed = Number(out.processed || 0);
+    const updated = Number(out.updated || 0);
+    const unchanged = Number(out.unchanged || 0);
+    const empty = Number(out.empty || 0);
+    const failed = Number(out.failed || 0);
+    const orphans = Number(out.removed_orphans || 0);
+    const parts = [];
+    if (updated) parts.push(`${updated} rebuilt`);
+    if (unchanged) parts.push(`${unchanged} already current`);
+    if (empty) parts.push(`${empty} contained no text`);
+    if (failed) parts.push(`${failed} failed`);
+    const pdfLabel = processed === 1 ? 'PDF' : 'PDFs';
+    let msg = `Done. ${processed} ${pdfLabel} checked`;
+    if (parts.length) msg += `: ${parts.join(', ')}.`;
+    else msg += '.';
+    if (orphans) {
+        const entryLabel = orphans === 1 ? 'entry was' : 'entries were';
+        msg += ` ${orphans} stale index ${entryLabel} removed.`;
+    }
+    return msg;
+}
+
 function initPrksPdfTextReindexAction() {
     const btn = document.getElementById('prks-reindex-pdf-text-btn');
     const statusEl = document.getElementById('prks-reindex-pdf-text-status');
@@ -911,21 +934,16 @@ function initPrksPdfTextReindexAction() {
     btn.addEventListener('click', async () => {
         btn.disabled = true;
         const oldText = btn.textContent;
-        btn.textContent = 'Re-indexing…';
+        btn.textContent = 'Rebuilding…';
         if (statusEl) statusEl.textContent = '';
         try {
             if (typeof prksReindexPdfText !== 'function') {
-                throw new Error('PDF re-index API unavailable.');
+                throw new Error('PDF rebuild API unavailable.');
             }
             const out = await prksReindexPdfText();
-            if (statusEl) {
-                const processed = Number(out.processed || 0);
-                const indexed = Number(out.indexed || 0);
-                const failed = Number(out.failed || 0);
-                statusEl.textContent = `Done. Processed ${processed}, indexed ${indexed}, failed ${failed}.`;
-            }
+            if (statusEl) statusEl.textContent = prksFormatTextIndexSummary(out);
         } catch (e) {
-            if (statusEl) statusEl.textContent = (e && e.message) || 'Could not re-index PDF text.';
+            if (statusEl) statusEl.textContent = (e && e.message) || 'Could not rebuild PDF text index.';
         } finally {
             btn.disabled = false;
             btn.textContent = oldText;

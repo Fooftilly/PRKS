@@ -68,6 +68,24 @@ Do not use `ZipFile.extractall()` on unvalidated backup input.
 
 Do not log archive paths, PDF names, manifest contents, or raw restore errors.
 
+## PDF text index
+
+`prks_text_index.db` is derived, never canonical.
+
+Any code path that changes a work's managed PDF identity must synchronize the
+text index or rely on the central reconciliation mechanism.
+
+Do not write extracted PDF text into the canonical main DB solely for search.
+
+Do not add text-index files to backups.
+
+Do not treat an extraction exception as a successful empty PDF.
+
+Do not preserve stale searchable text after the canonical PDF changes.
+
+Derived-index schema corruption may be repaired by recreating the index;
+canonical `prks_data.db` must never receive that treatment.
+
 ## Database schema changes
 
 `backend/db_schema.sql` describes the complete latest schema for fresh databases.
