@@ -715,13 +715,12 @@ def validate_current_schema(conn: sqlite3.Connection) -> None:
         if not table_exists(conn, table):
             raise MigrationError("schema_drift", "Required schema object is missing.", object=table)
         present = _foreign_key_tuples(conn, table)
-        for expected in required_fks:
-            if expected not in present:
-                raise MigrationError(
-                    "schema_drift",
-                    "Required schema object is missing or has the wrong definition.",
-                    object=table,
-                )
+        if present != set(required_fks):
+            raise MigrationError(
+                "schema_drift",
+                "Required schema object is missing or has the wrong definition.",
+                object=table,
+            )
     fts_cols = set(_fts_column_names(conn))
     for column in REQUIRED_FTS_COLUMNS:
         if column not in fts_cols:
@@ -1116,13 +1115,12 @@ def _assert_known_table_shapes(conn: sqlite3.Connection) -> None:
         if not table_exists(conn, table):
             raise MigrationError("incompatible_table", "Required schema object is missing.", object=table)
         present = _foreign_key_tuples(conn, table)
-        for expected in required_fks:
-            if expected not in present:
-                raise MigrationError(
-                    "incompatible_table",
-                    "Existing table has an incompatible foreign key.",
-                    object=table,
-                )
+        if present != set(required_fks):
+            raise MigrationError(
+                "incompatible_table",
+                "Existing table has an incompatible foreign key.",
+                object=table,
+            )
 
 
 def _fts_column_names(conn: sqlite3.Connection) -> List[str]:
@@ -1270,6 +1268,87 @@ def _index_key_columns(conn: sqlite3.Connection, name: str) -> Tuple[Tuple[str, 
     return tuple(columns), tuple(collations)
 
 
+def _index_key_cids(conn: sqlite3.Connection, name: str) -> Tuple[int, ...]:
+    cids: List[int] = []
+    for row in conn.execute(f"PRAGMA index_xinfo({_ident(name)})"):
+        raw_key = _row_field(row, 5, "key")
+        try:
+            key = 1 if raw_key is None else int(raw_key)
+        except (TypeError, ValueError):
+            key = 1
+        if key == 0:
+            continue
+        cids.append(int(_row_field(row, 1, "cid") or 0))
+    return tuple(cids)
+
+
+def _split_create_index_key_exprs(sql: str) -> Optional[List[str]]:
+    """Split CREATE INDEX ... ON table (key, ...) into key expressions. Not a general SQL parser."""
+    text = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
+    text = re.sub(r"--[^\n]*", "", text)
+    match = re.search(r"\bON\s+\"?([A-Za-z_][A-Za-z0-9_]*)\"?\s*\(", text, re.IGNORECASE)
+    if not match:
+        return None
+    i = match.end()
+    depth = 1
+    buf: List[str] = []
+    parts: List[str] = []
+    in_single = False
+    n = len(text)
+    while i < n and depth > 0:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if in_single:
+            buf.append(ch)
+            if ch == "'" and nxt == "'":
+                buf.append(nxt)
+                i += 2
+                continue
+            if ch == "'":
+                in_single = False
+            i += 1
+            continue
+        if ch == "'":
+            in_single = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "(":
+            depth += 1
+            buf.append(ch)
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                part = "".join(buf).strip()
+                if part:
+                    parts.append(part)
+                break
+            buf.append(ch)
+        elif ch == "," and depth == 1:
+            parts.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    else:
+        return None
+    return parts
+
+
+def _folders_parent_title_index_matches(conn: sqlite3.Connection, spec: IndexSpec) -> bool:
+    """Exact two-key expression contract for idx_folders_parent_title_nocase."""
+    key_cids = _index_key_cids(conn, spec.name)
+    if key_cids != (-2,) * len(spec.expression_tokens):
+        return False
+    sql = _master_sql(conn, "index", spec.name) or ""
+    exprs = _split_create_index_key_exprs(sql)
+    if exprs is None or len(exprs) != len(spec.expression_tokens):
+        return False
+    actual = tuple(_normalize_index_sql(expr) for expr in exprs)
+    expected = tuple(_normalize_index_sql(token) for token in spec.expression_tokens)
+    return actual == expected
+
+
 def _normalize_index_sql(sql: str) -> str:
     text = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
     text = re.sub(r"--[^\n]*", "", text)
@@ -1286,9 +1365,7 @@ def _index_matches_spec(conn: sqlite3.Connection, spec: IndexSpec) -> bool:
     if _index_is_unique(conn, spec.name, spec.table) != spec.unique:
         return False
     if spec.expression_tokens:
-        sql = _master_sql(conn, "index", spec.name) or ""
-        normalized = _normalize_index_sql(sql)
-        return all(_normalize_index_sql(token) in normalized for token in spec.expression_tokens)
+        return _folders_parent_title_index_matches(conn, spec)
     columns, collations = _index_key_columns(conn, spec.name)
     if columns != spec.columns:
         return False

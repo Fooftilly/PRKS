@@ -757,6 +757,104 @@ class TestConstraintAndDrift(MigrationTestCase):
         self.assertEqual(ctx.exception.code, "schema_drift")
         self.assertEqual(ctx.exception.details.get("object"), "idx_tags_name_nocase")
 
+    def test_v10_folder_parent_title_index_is_accepted(self):
+        db = self._open()
+        conn = db.get_connection()
+        try:
+            spec_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' "
+                "AND name='idx_folders_parent_title_nocase'"
+            ).fetchone()[0]
+            self.assertIn("COALESCE", spec_sql.upper())
+            cids = [
+                int(row[1])
+                for row in conn.execute("PRAGMA index_xinfo(idx_folders_parent_title_nocase)")
+                if int(row[5] if row[5] is not None else 1) != 0
+            ]
+            self.assertEqual(cids, [-2, -2])
+        finally:
+            conn.close()
+        self._open()
+        self.assertEqual(_version(db.db_path), 10)
+
+    def test_v10_folder_parent_title_index_rejects_extra_key(self):
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("DROP INDEX idx_folders_parent_title_nocase")
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_folders_parent_title_nocase "
+            "ON folders(COALESCE(parent_id, ''), LOWER(TRIM(title)), id)"
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "idx_folders_parent_title_nocase")
+
+    def test_v10_folder_parent_title_index_rejects_wrong_expression(self):
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("DROP INDEX idx_folders_parent_title_nocase")
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_folders_parent_title_nocase "
+            "ON folders(COALESCE(parent_id, ''), LOWER(title))"
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "idx_folders_parent_title_nocase")
+
+    def test_v10_folder_parent_title_index_rejects_reversed_keys(self):
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("DROP INDEX idx_folders_parent_title_nocase")
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_folders_parent_title_nocase "
+            "ON folders(LOWER(TRIM(title)), COALESCE(parent_id, ''))"
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "idx_folders_parent_title_nocase")
+
+    def test_v10_unexpected_fk_is_schema_drift(self):
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("ALTER TABLE publisher_aliases RENAME TO publisher_aliases_old")
+        conn.execute(
+            """
+            CREATE TABLE publisher_aliases (
+                id TEXT PRIMARY KEY,
+                publisher_id TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                extra_work_id TEXT,
+                FOREIGN KEY (publisher_id) REFERENCES publishers(id) ON DELETE CASCADE,
+                FOREIGN KEY (extra_work_id) REFERENCES works(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO publisher_aliases (id, publisher_id, alias) "
+            "SELECT id, publisher_id, alias FROM publisher_aliases_old"
+        )
+        conn.execute("DROP TABLE publisher_aliases_old")
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_publisher_aliases_alias_nocase "
+            "ON publisher_aliases(alias COLLATE NOCASE)"
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "publisher_aliases")
+
     def test_v9_wrong_named_index_is_reconciled(self):
         conn = _raw(self.storage.db_path)
         self._seed_legacy_core(conn)
@@ -813,6 +911,39 @@ class TestConstraintAndDrift(MigrationTestCase):
             self.assertEqual(read_schema_version(check), 9)
             fks = list(check.execute("PRAGMA foreign_key_list(publisher_aliases)"))
             self.assertEqual(fks, [])
+        finally:
+            check.close()
+
+    def test_v9_unexpected_fk_is_incompatible(self):
+        conn = _raw(self.storage.db_path)
+        self._seed_legacy_core(conn)
+        conn.execute(
+            "CREATE TABLE publishers (id TEXT PRIMARY KEY, name TEXT NOT NULL)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE publisher_aliases (
+                id TEXT PRIMARY KEY,
+                publisher_id TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                extra_work_id TEXT,
+                FOREIGN KEY (publisher_id) REFERENCES publishers(id) ON DELETE CASCADE,
+                FOREIGN KEY (extra_work_id) REFERENCES works(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_version (version) VALUES (9)")
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "incompatible_table")
+        self.assertEqual(ctx.exception.details.get("object"), "publisher_aliases")
+        check = _raw(self.storage.db_path)
+        try:
+            self.assertEqual(read_schema_version(check), 9)
+            self.assertEqual(len(list(check.execute("PRAGMA foreign_key_list(publisher_aliases)"))), 2)
         finally:
             check.close()
 
