@@ -507,7 +507,12 @@ async function prksLinearizeExistingPdfs(unlinearizedOnly = true) {
 }
 
 async function prksStartBackupProgress(signal) {
-    const res = await fetch('/api/backups/progress', { method: 'GET', signal });
+    const res = await fetch('/api/backups/progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+        signal,
+    });
     if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Backup could not be created.');

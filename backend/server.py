@@ -53,9 +53,9 @@ from backend.backup_restore import (
     backup_max_upload_bytes,
     cleanup_expired_backup_jobs,
     cleanup_stale_staging,
-    create_backup,
     discard_temp_path,
     new_staging_upload_path,
+    require_restore_upload_space,
     run_backup_with_progress,
     stage_restore,
     stream_upload_to_file,
@@ -1727,8 +1727,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path == '/api/backups/download':
                 token = (query.get('token') or [''])[0]
                 self._handle_backup_download(token=token)
-            elif path == '/api/backups/progress':
-                self._handle_backup_progress()
             elif path == '/api/processing-files':
                 db.scan_processing_files()
                 data = db.get_processing_files(include_imported=False)
@@ -1754,6 +1752,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         try:
             if path == '/api/backups/stage':
                 self._handle_backup_stage()
+                return
+            if path == '/api/backups/progress':
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._handle_backup_progress()
                 return
             if path == '/api/backups/restore':
                 data = self._read_json_body()
@@ -2391,28 +2395,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         archive_path = None
         try:
-            if token:
-                archive_path, filename, warnings = take_ready_backup(token.strip())
-                file_size = os.path.getsize(archive_path)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/octet-stream")
-                self.send_header(
-                    "Content-Disposition",
-                    f'attachment; filename="{filename}"',
+            token = (token or "").strip()
+            if not token:
+                self.send_json(
+                    400,
+                    {
+                        "error": "Backup is not available.",
+                        "reason": "unknown_token",
+                        "request_id": self._prks_request_id,
+                    },
                 )
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(file_size))
-                self.end_headers()
-                with open(archive_path, "rb") as handle:
-                    while True:
-                        chunk = handle.read(65536)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
                 return
-            result = create_backup(_bound_storage)
-            archive_path = result.archive_path
-            filename = result.filename
+            archive_path, filename, _warnings = take_ready_backup(token)
             file_size = os.path.getsize(archive_path)
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
@@ -2422,14 +2416,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             )
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(file_size))
-            missing = 0
-            audit = (result.summary or {}).get("audit") or {}
-            try:
-                missing = int(audit.get("managed_pdfs_missing") or 0)
-            except (TypeError, ValueError):
-                missing = 0
-            if missing:
-                self.send_header("X-PRKS-Backup-Missing-Pdfs", str(missing))
             self.end_headers()
             with open(archive_path, "rb") as handle:
                 while True:
@@ -2476,6 +2462,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         max_bytes = backup_max_upload_bytes()
         if content_length > max_bytes:
             self.send_json(413, {"error": "request_too_large"})
+            return
+        try:
+            require_restore_upload_space(_bound_storage, content_length)
+        except RestoreError as exc:
+            self.send_json(
+                exc.http_status,
+                {
+                    "error": exc.message,
+                    "reason": exc.reason,
+                    "request_id": self._prks_request_id,
+                },
+            )
             return
         upload_path = new_staging_upload_path(_bound_storage)
         try:

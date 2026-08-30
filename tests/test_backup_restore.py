@@ -24,19 +24,23 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.backup_restore import (
     ARCHIVE_DB_PATH,
+    DISK_MARGIN_BYTES,
     FORMAT_ID,
     FORMAT_VERSION,
     IO_CHUNK_SIZE,
     MANIFEST_NAME,
     BackupError,
+    RestoreCrash,
     RestoreError,
     apply_restore,
+    backup_additional_bytes,
     backup_storage_inventory,
     classified_storage_field_names,
     create_backup,
     hash_and_copy,
     iter_file_chunks,
     recover_incomplete_restore,
+    require_restore_upload_space,
     stage_restore,
     storage_config_path_field_names,
     verify_backup,
@@ -796,6 +800,194 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
         titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["New Library"])
 
+    def test_canonical_installed_journal_restores_previous(self):
+        orig = self._bind_library(title="Original", pdf_name="orig.pdf", person_bytes=b"OLD-PORTRAIT")
+        incoming = self._bind_library(
+            title="Incoming",
+            pdf_name="new.pdf",
+            pdf_text="incoming",
+            person_bytes=b"NEW-PORTRAIT",
+        )
+        cfg = orig["cfg"]
+        txn = "txn-canonical"
+        rollback = os.path.join(cfg.root, ".prks-maintenance", "rollback", txn)
+        os.makedirs(os.path.join(rollback, "database"), exist_ok=True)
+        db_name = os.path.basename(cfg.db_path)
+        os.replace(cfg.db_path, os.path.join(rollback, "database", db_name))
+        os.replace(cfg.pdfs_dir, os.path.join(rollback, "pdfs"))
+        os.replace(cfg.people_dir, os.path.join(rollback, "people"))
+        shutil.copy2(incoming["cfg"].db_path, cfg.db_path)
+        shutil.copytree(incoming["cfg"].pdfs_dir, cfg.pdfs_dir)
+        shutil.copytree(incoming["cfg"].people_dir, cfg.people_dir)
+        flags = {
+            "old_existed": True,
+            "old_move_started": True,
+            "old_moved": True,
+            "new_install_started": True,
+            "new_installed": True,
+        }
+        journal = {
+            "format": "prks-restore-journal",
+            "format_version": 1,
+            "transaction_id": txn,
+            "phase": "canonical_installed",
+            "components": {
+                "database": dict(flags),
+                "pdfs": dict(flags),
+                "people": dict(flags),
+            },
+        }
+        os.makedirs(os.path.join(cfg.root, ".prks-maintenance"), exist_ok=True)
+        with open(os.path.join(cfg.root, ".prks-maintenance", "restore-journal.json"), "w") as handle:
+            json.dump(journal, handle)
+        out = recover_incomplete_restore(cfg)
+        self.assertEqual(out["outcome"], "restored_previous")
+        self.assertFalse(out["needs_reindex"])
+        bind_storage(cfg)
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Original"])
+        self.assertTrue(os.path.isfile(os.path.join(cfg.pdfs_dir, "orig.pdf")))
+        self.assertFalse(os.path.isfile(os.path.join(cfg.pdfs_dir, "new.pdf")))
+        with open(os.path.join(cfg.people_dir, "portrait.webp"), "rb") as handle:
+            self.assertEqual(handle.read(), b"OLD-PORTRAIT")
+
+
+class TestRestoreCrashWindows(BackupRestoreTestCase):
+    def _crash_and_recover_old_library(self, fail_after):
+        lib = self._bind_library(title="Keep Me", pdf_name="keep.pdf", person_bytes=b"KEEP-PORTRAIT")
+        other = self._bind_library(
+            title="Incoming",
+            pdf_name="new.pdf",
+            pdf_text="incoming",
+            person_bytes=b"NEW-PORTRAIT",
+        )
+        backup = create_backup(other["cfg"])
+        bind_storage(lib["cfg"])
+        staged = self._stage_copy(lib["cfg"], backup.archive_path)
+        with self.assertRaises(RestoreCrash):
+            apply_restore(
+                lib["cfg"],
+                staged.token,
+                "RESTORE",
+                rebind=bind_storage,
+                fail_after=fail_after,
+            )
+        out = recover_incomplete_restore(lib["cfg"])
+        self.assertEqual(out["outcome"], "restored_previous")
+        self.assertFalse(out["needs_reindex"])
+        bind_storage(lib["cfg"])
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Keep Me"])
+        self.assertTrue(os.path.isfile(os.path.join(lib["cfg"].pdfs_dir, "keep.pdf")))
+        self.assertFalse(os.path.isfile(os.path.join(lib["cfg"].pdfs_dir, "new.pdf")))
+        with open(os.path.join(lib["cfg"].people_dir, "portrait.webp"), "rb") as handle:
+            self.assertEqual(handle.read(), b"KEEP-PORTRAIT")
+        settings = server_module.db.get_app_settings_response()
+        self.assertEqual(settings["annotation_author"], "Backup Author")
+        self.assertFalse(
+            os.path.isfile(os.path.join(lib["cfg"].root, ".prks-maintenance", "restore-journal.json"))
+        )
+
+    def test_crash_after_old_move_started_database(self):
+        self._crash_and_recover_old_library("old_move_started:database")
+
+    def test_crash_after_old_renamed_before_old_moved_database(self):
+        self._crash_and_recover_old_library("old_renamed:database")
+
+    def test_crash_after_new_install_started_database(self):
+        self._crash_and_recover_old_library("new_install_started:database")
+
+    def test_crash_after_new_renamed_before_new_installed_database(self):
+        self._crash_and_recover_old_library("new_renamed:database")
+
+    def test_crash_after_old_move_started_pdfs(self):
+        self._crash_and_recover_old_library("old_move_started:pdfs")
+
+    def test_crash_after_old_renamed_before_old_moved_pdfs(self):
+        self._crash_and_recover_old_library("old_renamed:pdfs")
+
+    def test_crash_after_new_install_started_pdfs(self):
+        self._crash_and_recover_old_library("new_install_started:pdfs")
+
+    def test_crash_after_new_renamed_before_new_installed_pdfs(self):
+        self._crash_and_recover_old_library("new_renamed:pdfs")
+
+
+class TestDiskAccounting(BackupRestoreTestCase):
+    def _file_bytes(self, cfg):
+        total = backup_module._dir_size_bytes(cfg.pdfs_dir)
+        total += backup_module._dir_size_bytes(cfg.people_dir)
+        if backup_module.processing_is_under_storage(cfg):
+            total += backup_module._dir_size_bytes(cfg.processing_dir)
+        return total
+
+    def test_backup_does_not_reserve_two_copies_of_pdf_library(self):
+        blob = b"%PDF-1.4\n" + (b"X" * (2 * 1024 * 1024)) + b"\n%%EOF\n"
+        lib = self._bind_library(extra_pdf_name="big.pdf", extra_pdf_bytes=blob)
+        cfg = lib["cfg"]
+        db_bytes = backup_module._db_on_disk_bytes(cfg)
+        file_bytes = self._file_bytes(cfg)
+        needed = backup_additional_bytes(db_bytes, file_bytes)
+        old_needed = (db_bytes + file_bytes) * 2 + DISK_MARGIN_BYTES
+        self.assertLess(needed, old_needed)
+        with patch.object(backup_module, "_free_bytes", return_value=needed):
+            backup = create_backup(cfg)
+        self.assertTrue(os.path.isfile(backup.archive_path))
+
+    def test_backup_rejects_when_snapshot_archive_margin_unavailable(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        needed = backup_additional_bytes(backup_module._db_on_disk_bytes(cfg), self._file_bytes(cfg))
+        with patch.object(backup_module, "_free_bytes", return_value=needed - 1):
+            with self.assertRaises(BackupError) as ctx:
+                create_backup(cfg)
+        self.assertEqual(ctx.exception.reason, "insufficient_storage")
+
+    def test_restore_upload_space_uses_content_length_not_live_library(self):
+        lib = self._bind_library()
+        with patch.object(backup_module, "_free_bytes", return_value=0):
+            with self.assertRaises(RestoreError) as ctx:
+                require_restore_upload_space(lib["cfg"], 1024)
+        self.assertEqual(ctx.exception.reason, "insufficient_storage")
+        with patch.object(backup_module, "_free_bytes", return_value=1024 + DISK_MARGIN_BYTES):
+            require_restore_upload_space(lib["cfg"], 1024)
+
+    def test_extract_space_uses_declared_uncompressed_not_archive_again(self):
+        lib = self._bind_library()
+        backup = create_backup(lib["cfg"])
+        dest = bind_storage(self._cfg(self._tmpdir()))
+        copied = _copy_backup(backup.archive_path, os.path.join(self._tmpdir(), "upload"))
+        with patch.object(backup_module, "_free_bytes", return_value=DISK_MARGIN_BYTES):
+            with self.assertRaises(RestoreError) as ctx:
+                stage_restore(dest, copied)
+        self.assertEqual(ctx.exception.reason, "insufficient_storage")
+
+    def test_commit_rename_does_not_require_live_plus_staged_copy(self):
+        blob = b"%PDF-1.4\n" + (b"X" * (512 * 1024)) + b"\n%%EOF\n"
+        lib = self._bind_library(title="Keep Me", pdf_name="keep.pdf")
+        other = self._bind_library(
+            title="Incoming",
+            pdf_name="new.pdf",
+            pdf_text="incoming",
+            extra_pdf_name="big.pdf",
+            extra_pdf_bytes=blob,
+        )
+        backup = create_backup(other["cfg"])
+        bind_storage(lib["cfg"])
+        staged = self._stage_copy(lib["cfg"], backup.archive_path)
+        tree_dir = os.path.join(
+            lib["cfg"].root, ".prks-maintenance", "restore-staging", staged.token, "tree"
+        )
+        live_size = backup_module._db_on_disk_bytes(lib["cfg"]) + self._file_bytes(lib["cfg"])
+        staged_size = backup_module._dir_size_bytes(tree_dir)
+        old_needed = live_size + staged_size + DISK_MARGIN_BYTES
+        self.assertGreater(old_needed, DISK_MARGIN_BYTES)
+        with patch.object(backup_module, "_free_bytes", return_value=DISK_MARGIN_BYTES):
+            out = apply_restore(lib["cfg"], staged.token, "RESTORE", rebind=bind_storage)
+        self.assertTrue(out["restored"])
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Incoming"])
+
 
 class TestSelfVerificationAndChunks(BackupRestoreTestCase):
     def test_invalid_hash_is_not_served(self):
@@ -872,7 +1064,31 @@ class TestBackupRestoreHTTP(BackupRestoreTestCase):
             self.fail("server did not start")
 
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
-        conn.request("GET", "/api/backups/download", headers={"Host": "127.0.0.1"})
+        payload = b"{}"
+        conn.request(
+            "POST",
+            "/api/backups/progress",
+            body=payload,
+            headers={
+                "Host": "127.0.0.1",
+                "Content-Type": "application/json",
+                "Content-Length": str(len(payload)),
+            },
+        )
+        res = conn.getresponse()
+        body = res.read()
+        self.assertEqual(res.status, 200)
+        events = [json.loads(line) for line in body.decode("utf-8").splitlines() if line.strip()]
+        self.assertEqual(events[-1]["phase"], "ready")
+        token = events[-1]["token"]
+        conn.close()
+
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+        conn.request(
+            "GET",
+            "/api/backups/download?token=" + token,
+            headers={"Host": "127.0.0.1"},
+        )
         res = conn.getresponse()
         body = res.read()
         self.assertEqual(res.status, 200)
@@ -917,7 +1133,17 @@ class TestBackupRestoreHTTP(BackupRestoreTestCase):
             self.fail("server did not start")
 
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
-        conn.request("GET", "/api/backups/progress", headers={"Host": "127.0.0.1"})
+        payload = b"{}"
+        conn.request(
+            "POST",
+            "/api/backups/progress",
+            body=payload,
+            headers={
+                "Host": "127.0.0.1",
+                "Content-Type": "application/json",
+                "Content-Length": str(len(payload)),
+            },
+        )
         res = conn.getresponse()
         body = res.read().decode("utf-8")
         self.assertEqual(res.status, 200)
@@ -986,6 +1212,175 @@ class TestBackupRestoreHTTP(BackupRestoreTestCase):
         res.read()
         conn.close()
         self.assertEqual(res.status, 403)
+
+    def test_download_without_token_does_not_create_backup(self):
+        import http.client
+        import socket
+
+        self._bind_library()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        thread = threading.Thread(
+            target=server_module.run_server, args=(port, "127.0.0.1"), daemon=True
+        )
+        thread.start()
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                conn.request("GET", "/api/works")
+                res = conn.getresponse()
+                res.read()
+                conn.close()
+                if res.status == 200:
+                    break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            self.fail("server did not start")
+
+        with patch.object(backup_module, "create_backup") as mocked:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/api/backups/download", headers={"Host": "127.0.0.1"})
+            res = conn.getresponse()
+            res.read()
+            conn.close()
+            self.assertEqual(res.status, 400)
+            mocked.assert_not_called()
+
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request(
+                "GET",
+                "/api/backups/download?token=aaaaaaaaaaaaaaaa",
+                headers={"Host": "127.0.0.1"},
+            )
+            res = conn.getresponse()
+            res.read()
+            conn.close()
+            self.assertEqual(res.status, 404)
+            mocked.assert_not_called()
+
+    def test_get_progress_does_not_create_backup(self):
+        import http.client
+        import socket
+
+        self._bind_library()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        thread = threading.Thread(
+            target=server_module.run_server, args=(port, "127.0.0.1"), daemon=True
+        )
+        thread.start()
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                conn.request("GET", "/api/works")
+                res = conn.getresponse()
+                res.read()
+                conn.close()
+                if res.status == 200:
+                    break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            self.fail("server did not start")
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/backups/progress", headers={"Host": "127.0.0.1"})
+        res = conn.getresponse()
+        res.read()
+        conn.close()
+        self.assertEqual(res.status, 404)
+
+    def test_progress_post_requires_json_content_type(self):
+        import http.client
+        import socket
+
+        self._bind_library()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        thread = threading.Thread(
+            target=server_module.run_server, args=(port, "127.0.0.1"), daemon=True
+        )
+        thread.start()
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                conn.request("GET", "/api/works")
+                res = conn.getresponse()
+                res.read()
+                conn.close()
+                if res.status == 200:
+                    break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            self.fail("server did not start")
+        payload = b"{}"
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/backups/progress",
+            body=payload,
+            headers={
+                "Host": "127.0.0.1",
+                "Content-Length": str(len(payload)),
+            },
+        )
+        res = conn.getresponse()
+        res.read()
+        conn.close()
+        self.assertEqual(res.status, 415)
+
+    def test_stage_rejects_upload_when_content_length_exceeds_free_space(self):
+        import http.client
+        import socket
+
+        self._bind_library()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        thread = threading.Thread(
+            target=server_module.run_server, args=(port, "127.0.0.1"), daemon=True
+        )
+        thread.start()
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                conn.request("GET", "/api/works")
+                res = conn.getresponse()
+                res.read()
+                conn.close()
+                if res.status == 200:
+                    break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            self.fail("server did not start")
+        payload = b"not-a-zip"
+        with patch.object(backup_module, "_free_bytes", return_value=0):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request(
+                "POST",
+                "/api/backups/stage",
+                body=payload,
+                headers={
+                    "Host": "127.0.0.1",
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": str(len(payload)),
+                },
+            )
+            res = conn.getresponse()
+            body = res.read()
+            conn.close()
+        self.assertEqual(res.status, 400)
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(data.get("reason"), "insufficient_storage")
 
 
 if __name__ == "__main__":

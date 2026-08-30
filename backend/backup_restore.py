@@ -6,9 +6,10 @@ later moves to ThreadingHTTPServer or threaded request handling, every mutating
 operation must participate in a maintenance gate so snapshots stay consistent
 across the database and managed files.
 
-Progress and cancel use the same request: GET /api/backups/progress streams
+Progress and cancel use the same request: POST /api/backups/progress streams
 NDJSON while packing. Aborting that connection cancels packing. Do not run
 backup packing on a worker thread while other HTTP mutations can proceed.
+GET /api/backups/download requires a one-time token and never creates a backup.
 
 Do not copy the live SQLite file while it may be in use. Snapshots use
 sqlite3.Connection.backup. Never extract an unvalidated backup ZIP in bulk.
@@ -139,6 +140,10 @@ class RestoreError(Exception):
         self.reason = reason
         self.message = message
         self.http_status = http_status
+
+
+class RestoreCrash(Exception):
+    """Test-only simulated crash. apply_restore must not roll back."""
 
 
 @dataclass
@@ -591,7 +596,7 @@ def _dir_size_bytes(path: str) -> int:
     return total
 
 
-def _canonical_live_size(config: StorageConfig) -> int:
+def _db_on_disk_bytes(config: StorageConfig) -> int:
     total = 0
     for path in (config.db_path, config.db_path + "-wal", config.db_path + "-shm"):
         if os.path.isfile(path) and not os.path.islink(path):
@@ -599,11 +604,33 @@ def _canonical_live_size(config: StorageConfig) -> int:
                 total += os.path.getsize(path)
             except OSError:
                 pass
-    total += _dir_size_bytes(config.pdfs_dir)
-    total += _dir_size_bytes(config.people_dir)
-    if processing_is_under_storage(config):
-        total += _dir_size_bytes(config.processing_dir)
     return total
+
+
+def backup_additional_bytes(db_bytes: int, file_bytes: int) -> int:
+    """Extra bytes backup creation still needs: snapshot + archive + verify DB + margin."""
+    db_bytes = max(0, int(db_bytes))
+    file_bytes = max(0, int(file_bytes))
+    snapshot = db_bytes
+    archive = db_bytes + file_bytes
+    verify_db = db_bytes
+    return snapshot + archive + verify_db + DISK_MARGIN_BYTES
+
+
+def require_restore_upload_space(config: StorageConfig, content_length: int) -> None:
+    _assert_testing_safe(config)
+    if int(content_length) < 0:
+        raise RestoreError(
+            "insufficient_storage",
+            "Not enough free storage to restore this backup safely.",
+            http_status=400,
+        )
+    if _free_bytes(config.root) < int(content_length) + DISK_MARGIN_BYTES:
+        raise RestoreError(
+            "insufficient_storage",
+            "Not enough free storage to restore this backup safely.",
+            http_status=400,
+        )
 
 
 def _atomic_write_json(path: str, payload: dict[str, Any]) -> None:
@@ -977,14 +1004,14 @@ def create_backup(
                 f"Backup skipped {n} symbolic link{'s' if n != 1 else ''} in managed storage."
             )
 
-        payload_bytes = (
-            os.path.getsize(config.db_path)
-            + sum(os.path.getsize(p) for _, p in pdf_files)
+        db_bytes = _db_on_disk_bytes(config)
+        file_bytes = (
+            sum(os.path.getsize(p) for _, p in pdf_files)
             + sum(os.path.getsize(p) for _, p in people_files)
             + sum(os.path.getsize(p) for _, p in processing_files)
         )
-        needed = payload_bytes * 2 + DISK_MARGIN_BYTES
-        if _free_bytes(config.root) < needed:
+        payload_bytes = db_bytes + file_bytes
+        if _free_bytes(config.root) < backup_additional_bytes(db_bytes, file_bytes):
             raise BackupError(
                 "insufficient_storage",
                 "Not enough free storage to create a backup safely.",
@@ -1188,6 +1215,13 @@ def _verify_backup_inner(
                 "too_large_uncompressed",
                 "Backup archive is not a valid PRKS backup.",
             )
+        if extract_dir is not None:
+            if _free_bytes(extract_dir) < declared_uncompressed + DISK_MARGIN_BYTES:
+                raise RestoreError(
+                    "insufficient_storage",
+                    "Not enough free storage to restore this backup safely.",
+                    http_status=400,
+                )
         normalized_files: list[zipfile.ZipInfo] = []
         for info in zf.infolist():
             name = _normalize_zip_name(info.filename)
@@ -1512,19 +1546,6 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
     cleanup_stale_staging(config)
     if not os.path.isfile(upload_path):
         raise RestoreError("missing_archive", "Backup archive could not be read.")
-    try:
-        archive_size = os.path.getsize(upload_path)
-    except OSError as exc:
-        raise RestoreError("missing_archive", "Backup archive could not be read.") from exc
-    uncompressed_guess = archive_size
-    live_size = _canonical_live_size(config)
-    needed = archive_size + uncompressed_guess + live_size + DISK_MARGIN_BYTES
-    if _free_bytes(config.root) < needed:
-        raise RestoreError(
-            "insufficient_storage",
-            "Not enough free storage to restore this backup safely.",
-            http_status=400,
-        )
     token = secrets.token_urlsafe(24)
     staging_dir = os.path.join(maintenance_root(config), "restore-staging", token)
     tree_dir = os.path.join(staging_dir, "tree")
@@ -1548,14 +1569,6 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
         manifest = verified["manifest"]
         summary = verified["summary"]
         warnings = list(verified.get("warnings") or [])
-        staged_bytes = _dir_size_bytes(tree_dir)
-        needed = archive_size + staged_bytes + live_size + DISK_MARGIN_BYTES
-        if _free_bytes(config.root) < needed:
-            raise RestoreError(
-                "insufficient_storage",
-                "Not enough free storage to restore this backup safely.",
-                http_status=400,
-            )
         meta = {
             "token": token,
             "created_unix": time.time(),
@@ -1723,6 +1736,62 @@ def _read_journal_file(path: str) -> dict[str, Any]:
     return data
 
 
+def _empty_component_state() -> dict[str, bool]:
+    return {
+        "old_existed": False,
+        "old_move_started": False,
+        "old_moved": False,
+        "new_install_started": False,
+        "new_installed": False,
+    }
+
+
+def _component_flags(state: dict[str, Any]) -> dict[str, bool]:
+    old_moved = bool(state.get("old_moved"))
+    new_installed = bool(state.get("new_installed"))
+    return {
+        "old_existed": bool(state.get("old_existed") or old_moved),
+        "old_move_started": bool(state.get("old_move_started") or old_moved),
+        "old_moved": old_moved,
+        "new_install_started": bool(state.get("new_install_started") or new_installed),
+        "new_installed": new_installed,
+    }
+
+
+def _rollback_component_path(config: StorageConfig, rollback_root: str, name: str) -> str:
+    if name == "database":
+        return os.path.join(rollback_root, "database", os.path.basename(config.db_path))
+    return os.path.join(rollback_root, name)
+
+
+def _remove_live_component(config: StorageConfig, name: str) -> None:
+    live = _component_live_path(config, name)
+    if os.path.lexists(live):
+        _safe_remove(live)
+    if name == "database":
+        for side in _db_sidecar_paths(live):
+            if os.path.lexists(side):
+                _safe_remove(side)
+
+
+def _restore_rollback_component(config: StorageConfig, rollback_root: str, name: str) -> None:
+    live = _component_live_path(config, name)
+    rolled = _rollback_component_path(config, rollback_root, name)
+    if not os.path.lexists(rolled):
+        return
+    parent = os.path.dirname(live)
+    if parent:
+        _mkdir_owner(parent)
+    os.replace(rolled, live)
+    if name == "database":
+        rolled_dir = os.path.dirname(rolled)
+        base = os.path.basename(config.db_path)
+        for suffix in ("-wal", "-shm", "-journal"):
+            src = os.path.join(rolled_dir, base + suffix)
+            if os.path.lexists(src):
+                os.replace(src, live + suffix)
+
+
 def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> None:
     txn = journal["transaction_id"]
     rollback_root = os.path.join(maintenance_root(config), "rollback", txn)
@@ -1730,27 +1799,97 @@ def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> No
     for name, state in components.items():
         if not isinstance(state, dict):
             continue
-        live = _component_live_path(config, name)
-        rolled = os.path.join(rollback_root, name)
-        if name == "database":
-            rolled = os.path.join(rollback_root, "database", os.path.basename(config.db_path))
-        if state.get("new_installed"):
-            if os.path.lexists(live):
-                _safe_remove(live)
-            for side in _db_sidecar_paths(live) if name == "database" else ():
-                if os.path.lexists(side):
-                    _safe_remove(side)
-        if state.get("old_moved") and os.path.lexists(rolled):
-            parent = os.path.dirname(live)
-            if parent:
-                _mkdir_owner(parent)
-            os.replace(rolled, live)
-            if name == "database":
-                rolled_dir = os.path.dirname(rolled)
-                for suffix in ("-wal", "-shm", "-journal"):
-                    src = os.path.join(rolled_dir, os.path.basename(config.db_path) + suffix)
-                    if os.path.lexists(src):
-                        os.replace(src, live + suffix)
+        flags = _component_flags(state)
+        if flags["new_install_started"]:
+            _remove_live_component(config, name)
+        if flags["old_existed"]:
+            _restore_rollback_component(config, rollback_root, name)
+
+
+def _raise_fail_after(fail_after: Optional[str], key: str) -> None:
+    if fail_after != key:
+        return
+    raise RestoreCrash(key)
+
+
+def _move_old_component(
+    config: StorageConfig,
+    name: str,
+    rollback_root: str,
+    state: dict[str, bool],
+    persist,
+    fail_after: Optional[str],
+) -> None:
+    live = _component_live_path(config, name)
+    dest = _rollback_component_path(config, rollback_root, name)
+    if name == "database":
+        _mkdir_owner(os.path.dirname(dest))
+    existed = os.path.lexists(live)
+    state["old_existed"] = existed
+    persist()
+    if not existed:
+        return
+    state["old_move_started"] = True
+    persist()
+    _raise_fail_after(fail_after, f"old_move_started:{name}")
+    if name == "database":
+        os.replace(live, dest)
+        base = os.path.basename(live)
+        dest_dir = os.path.dirname(dest)
+        for suffix in ("-wal", "-shm", "-journal"):
+            side = live + suffix
+            if os.path.lexists(side):
+                os.replace(side, os.path.join(dest_dir, base + suffix))
+    else:
+        os.replace(live, dest)
+    _raise_fail_after(fail_after, f"old_renamed:{name}")
+    state["old_moved"] = True
+    persist()
+    if fail_after == "old_moved" and name == "database":
+        raise RuntimeError("test_fail_after_old_moved")
+
+
+def _install_new_component(
+    config: StorageConfig,
+    name: str,
+    tree_dir: str,
+    state: dict[str, bool],
+    persist,
+    fail_after: Optional[str],
+    *,
+    processing_in_backup: bool,
+) -> None:
+    live = _component_live_path(config, name)
+    staged = _component_staged_path(tree_dir, name)
+    state["new_install_started"] = True
+    persist()
+    _raise_fail_after(fail_after, f"new_install_started:{name}")
+
+    def _install_empty_dir() -> None:
+        _mkdir_owner(live)
+        state["new_installed"] = True
+        persist()
+
+    if name == "processing" and not processing_in_backup:
+        _install_empty_dir()
+        return
+    if name in {"pdfs", "people", "processing"} and not os.path.isdir(staged):
+        _install_empty_dir()
+        return
+    if not os.path.lexists(staged):
+        if name in {"pdfs", "people", "processing"}:
+            _install_empty_dir()
+            return
+        raise RestoreError("missing_database", "Backup archive is not a valid PRKS backup.")
+    parent = os.path.dirname(live)
+    if parent:
+        _mkdir_owner(parent)
+    os.replace(staged, live)
+    _raise_fail_after(fail_after, f"new_renamed:{name}")
+    state["new_installed"] = True
+    persist()
+    if fail_after == "new_installed" and name == "pdfs":
+        raise RuntimeError("test_fail_after_new_installed")
 
 
 def apply_restore(
@@ -1793,9 +1932,7 @@ def apply_restore(
             "Processing queue files in this backup were not restored because the current processing directory is outside PRKS storage."
         )
 
-    live_size = _canonical_live_size(config)
-    staged_size = _dir_size_bytes(tree_dir)
-    if _free_bytes(config.root) < (live_size + staged_size + DISK_MARGIN_BYTES):
+    if _free_bytes(config.root) < DISK_MARGIN_BYTES:
         raise RestoreError(
             "insufficient_storage",
             "Not enough free storage to restore this backup safely.",
@@ -1805,12 +1942,12 @@ def apply_restore(
     rollback_root = os.path.join(maintenance_root(config), "rollback", txn)
     _mkdir_owner(rollback_root)
     components: dict[str, dict[str, bool]] = {
-        "database": {"old_moved": False, "new_installed": False},
-        "pdfs": {"old_moved": False, "new_installed": False},
-        "people": {"old_moved": False, "new_installed": False},
+        "database": _empty_component_state(),
+        "pdfs": _empty_component_state(),
+        "people": _empty_component_state(),
     }
     if restore_processing:
-        components["processing"] = {"old_moved": False, "new_installed": False}
+        components["processing"] = _empty_component_state()
     journal = {
         "format": "prks-restore-journal",
         "format_version": 1,
@@ -1850,55 +1987,26 @@ def apply_restore(
     try:
         _mark("moving_old")
         for name in list(components):
-            live = _component_live_path(config, name)
-            if name == "database":
-                dest_dir = os.path.join(rollback_root, "database")
-                _mkdir_owner(dest_dir)
-                if os.path.lexists(live):
-                    os.replace(live, os.path.join(dest_dir, os.path.basename(live)))
-                    components[name]["old_moved"] = True
-                for suffix in ("-wal", "-shm", "-journal"):
-                    side = live + suffix
-                    if os.path.lexists(side):
-                        os.replace(side, os.path.join(dest_dir, os.path.basename(live) + suffix))
-            else:
-                dest = os.path.join(rollback_root, name)
-                if os.path.lexists(live):
-                    os.replace(live, dest)
-                    components[name]["old_moved"] = True
-            _mark("moving_old")
-            if fail_after == "old_moved" and name == "database":
-                raise RuntimeError("test_fail_after_old_moved")
+            _move_old_component(
+                config,
+                name,
+                rollback_root,
+                components[name],
+                lambda: _mark("moving_old"),
+                fail_after,
+            )
 
         _mark("installing_new")
         for name in list(components):
-            live = _component_live_path(config, name)
-            staged = _component_staged_path(tree_dir, name)
-            if name == "processing" and not processing_in_backup:
-                _mkdir_owner(live)
-                components[name]["new_installed"] = True
-                _mark("installing_new")
-                continue
-            if name in {"pdfs", "people", "processing"} and not os.path.isdir(staged):
-                _mkdir_owner(live)
-                components[name]["new_installed"] = True
-                _mark("installing_new")
-                continue
-            if not os.path.lexists(staged):
-                if name in {"pdfs", "people", "processing"}:
-                    _mkdir_owner(live)
-                    components[name]["new_installed"] = True
-                    _mark("installing_new")
-                    continue
-                raise RestoreError("missing_database", "Backup archive is not a valid PRKS backup.")
-            parent = os.path.dirname(live)
-            if parent:
-                _mkdir_owner(parent)
-            os.replace(staged, live)
-            components[name]["new_installed"] = True
-            _mark("installing_new")
-            if fail_after == "new_installed" and name == "pdfs":
-                raise RuntimeError("test_fail_after_new_installed")
+            _install_new_component(
+                config,
+                name,
+                tree_dir,
+                components[name],
+                lambda: _mark("installing_new"),
+                fail_after,
+                processing_in_backup=processing_in_backup,
+            )
 
         ok, reason = sqlite_integrity_report(config.db_path)
         if not ok:
@@ -1967,6 +2075,8 @@ def apply_restore(
             "reload_required": True,
             "index": index_summary,
         }
+    except RestoreCrash:
+        raise
     except RestoreError:
         LOGGER.error("restore_rolled_back reason=restore_error")
         if not committed:
@@ -2026,17 +2136,14 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
     token = journal.get("staging_token")
     staging_dir = _staging_dir(config, token) if isinstance(token, str) and _TOKEN_RE.fullmatch(token) else None
 
-    if phase in ("canonical_installed", "committed"):
+    if phase == "committed":
         _safe_remove(rollback_root)
         if staging_dir:
             _safe_remove(staging_dir)
         _safe_remove(path)
-        needs_reindex = phase == "canonical_installed"
-        if needs_reindex:
-            clear_derived_storage(config)
         cleanup_stale_staging(config)
         LOGGER.info("restore_recovery_completed outcome=keep_restored")
-        return {"performed": True, "outcome": "keep_restored", "needs_reindex": needs_reindex}
+        return {"performed": True, "outcome": "keep_restored", "needs_reindex": False}
 
     _rollback_from_journal(config, journal)
     _safe_remove(rollback_root)

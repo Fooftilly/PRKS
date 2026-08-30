@@ -60,6 +60,9 @@ required backup state and must be rebuilt after restore.
 
 Restore validation must complete before live canonical state is modified.
 
+Crash before committed restores the previous library. Only committed keeps
+the restored library.
+
 Do not use `ZipFile.extractall()` on unvalidated backup input.
 
 Do not log archive paths, PDF names, manifest contents, or raw restore errors.
