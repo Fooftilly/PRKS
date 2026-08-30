@@ -20,6 +20,7 @@ class StorageConfig:
     people_dir: str
     processing_dir: str
     index_db_path: str
+    research_index_db_path: str
     log_file: str
     processing_fallback_allowed: bool = False
 
@@ -70,6 +71,7 @@ class StorageConfig:
             processing_override=processing_override,
         )
         index_db_path = paths.derive_index_db_path(root)
+        research_index_db_path = paths.derive_research_index_db_path(root)
         log_file = paths.derive_log_file(root=root, log_override=log_override)
         writable = (
             (
@@ -87,6 +89,7 @@ class StorageConfig:
                 else "processing_dir",
             ),
             (index_db_path, "index_db_path"),
+            (research_index_db_path, "research_index_db_path"),
             (
                 log_file,
                 "PRKS_LOG_FILE" if (log_override or "").strip() else "log_file",
@@ -110,6 +113,7 @@ class StorageConfig:
             people_dir=people_dir,
             processing_dir=processing_dir,
             index_db_path=index_db_path,
+            research_index_db_path=research_index_db_path,
             log_file=log_file,
             processing_fallback_allowed=processing_fallback_allowed,
         )

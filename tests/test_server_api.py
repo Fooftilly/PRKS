@@ -975,12 +975,11 @@ class TestServerAPI(unittest.TestCase):
         )
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req) as res:
-            self.assertEqual(res.status, 200)
+            self.assertEqual(res.status, 201)
             raw = res.read().decode()
         body = json.loads(raw)
         self.assertIn("id", body)
-        self.assertIn("status", body)
-        self.assertEqual(body["status"], "skipped")
+        self.assertEqual(body.get("name"), "API Concept")
 
     def test_12_pdf_path_outside_storage_returns_404(self):
         evil = urllib.request.Request(f"{self._base_url}/api/pdfs/..")
@@ -1001,7 +1000,7 @@ class TestServerAPI(unittest.TestCase):
             data = json.loads(res.read().decode())
         self.assertIsInstance(data, list)
 
-    def test_15_post_concepts_creates_mentioned_role(self):
+    def test_15_post_concepts_does_not_attach_work_metadata(self):
         req_p = urllib.request.Request(
             f"{self._base_url}/api/persons",
             data=json.dumps({"first_name": "Concept", "last_name": "Mention"}).encode(),
@@ -1033,16 +1032,16 @@ class TestServerAPI(unittest.TestCase):
         )
         req_c.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req_c) as rc:
-            self.assertEqual(rc.status, 200)
+            self.assertEqual(rc.status, 201)
             body = json.loads(rc.read().decode())
-        self.assertEqual(body.get("status"), "processed")
+        self.assertEqual(body.get("name"), "Linked Concept")
+        self.assertTrue(body.get("id"))
 
         rows = self.__class__.test_db.execute_query(
             "SELECT role_type FROM roles WHERE person_id = ? AND work_id = ?",
             (p_id, w_id),
         )
-        types = {r["role_type"] for r in rows}
-        self.assertIn("Mentioned", types)
+        self.assertEqual(rows, [])
 
     def test_16_playlist_add_item_and_get(self):
         req_pl = urllib.request.Request(
@@ -2939,6 +2938,38 @@ class TestServerAPI(unittest.TestCase):
         self.assertTrue(any("saved_view_updated" in line for line in records))
         row = self.__class__.test_db.get_saved_view(created["id"])
         self.assertEqual(row["search"]["q"], sentinel)
+
+    def test_note_save_creates_concept_and_research_refs(self):
+        status, created = self._sv_json("POST", "/api/works", {"title": "Research note work"})
+        self.assertEqual(status, 200)
+        wid = created["id"]
+        status, body = self._sv_json(
+            "PATCH",
+            f"/api/works/{wid}",
+            {"text_content": "See [[concept:Culture Industry]]."},
+        )
+        self.assertEqual(status, 200)
+        status, concepts = self._sv_json("GET", "/api/concepts")
+        self.assertEqual(status, 200)
+        names = [c["name"] for c in concepts]
+        self.assertIn("Culture Industry", names)
+        status, work = self._sv_json("GET", f"/api/works/{wid}")
+        self.assertEqual(status, 200)
+        refs = work.get("research_refs") or {}
+        self.assertTrue(refs.get("concepts"))
+
+    def test_index_sync_failure_keeps_note(self):
+        status, created = self._sv_json("POST", "/api/works", {"title": "Index fail work"})
+        wid = created["id"]
+        with patch.object(server_module.research_index, "sync_work", side_effect=RuntimeError("boom")):
+            status, body = self._sv_json(
+                "PATCH",
+                f"/api/works/{wid}",
+                {"text_content": "[[concept:Instrumental Reason]]"},
+            )
+        self.assertEqual(status, 200)
+        status, work = self._sv_json("GET", f"/api/works/{wid}")
+        self.assertIn("[[concept:Instrumental Reason]]", work["text_content"])
 
 
 if __name__ == '__main__':

@@ -109,7 +109,7 @@ class BackupStorageInventory:
 def backup_storage_inventory() -> BackupStorageInventory:
     return BackupStorageInventory(
         canonical=("db_path", "pdfs_dir", "people_dir"),
-        derived=("thumbs_dir", "index_db_path"),
+        derived=("thumbs_dir", "index_db_path", "research_index_db_path"),
         operational=("log_file",),
         conditional=("processing_dir",),
         container=("root", "configured_root"),
@@ -463,6 +463,7 @@ def _assert_testing_safe(config: StorageConfig) -> None:
         (config.processing_dir, "processing_dir"),
         (config.thumbs_dir, "thumbs_dir"),
         (config.index_db_path, "index_db_path"),
+        (config.research_index_db_path, "research_index_db_path"),
         (maintenance_root(config), "maintenance"),
     ):
         paths.assert_safe_testing_path(path, testing=testing, what=what)
@@ -1693,6 +1694,10 @@ def clear_derived_storage(config: StorageConfig) -> None:
         config.index_db_path + "-wal",
         config.index_db_path + "-shm",
         config.index_db_path + "-journal",
+        config.research_index_db_path,
+        config.research_index_db_path + "-wal",
+        config.research_index_db_path + "-shm",
+        config.research_index_db_path + "-journal",
     ):
         if os.path.lexists(path):
             _safe_remove(path)
@@ -2040,6 +2045,7 @@ def apply_restore(
 
         import backend.server as server_module
         import backend.text_index as text_index_module
+        import backend.research_index as research_index_module
 
         db_obj = server_module.db
         index_obj = text_index_module.get_text_index()
@@ -2058,6 +2064,13 @@ def apply_restore(
                 warnings.append(
                     f"Search index rebuilt with {failed} PDF text extraction failure{'s' if failed != 1 else ''}."
                 )
+        try:
+            research_index_module.get_research_index().reconcile_all(db_obj)
+        except Exception as exc:
+            LOGGER.error(
+                "restore_research_index_failed error_type=%s",
+                safe_error_type(exc),
+            )
 
         summary = library_summary_from_db(config.db_path)
         _mark("committed")

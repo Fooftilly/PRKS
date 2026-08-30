@@ -172,7 +172,7 @@ class TextIndexTestCase(unittest.TestCase):
             conn.close()
 
     def test_main_schema_version_unchanged(self):
-        self.assertEqual(PRKS_SCHEMA_VERSION, 11)
+        self.assertEqual(PRKS_SCHEMA_VERSION, 12)
         self.assertEqual(TEXT_INDEX_SCHEMA_VERSION, 2)
         self.assertEqual(TEXT_EXTRACTOR_VERSION, 1)
 

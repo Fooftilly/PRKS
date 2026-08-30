@@ -1592,6 +1592,67 @@ async function handleRoute() {
                     : { notFound: true, notFoundTitle: 'File not found' };
                 break;
             }
+            case 'concepts': {
+                const items = typeof fetchConcepts === 'function' ? await fetchConcepts() : [];
+                if (stale()) return;
+                if (typeof renderConceptsIndex === 'function') renderConceptsIndex(items, contentDiv);
+                else contentDiv.innerHTML = '<div class="page-header"><h2>Concepts</h2></div>';
+                break;
+            }
+            case 'concept-detail': {
+                const item = typeof fetchConcept === 'function' ? await fetchConcept(route.params.conceptId) : null;
+                if (stale()) return;
+                if (!item) {
+                    if (typeof renderConceptNotFound === 'function') renderConceptNotFound(contentDiv);
+                    else contentDiv.innerHTML = '<div class="page-header"><h2>Concept not found.</h2></div>';
+                    titleOpts = { notFound: true, notFoundTitle: 'Concept not found' };
+                } else {
+                    if (typeof renderConceptDetail === 'function') renderConceptDetail(item, contentDiv);
+                    titleOpts = { entityTitle: item.name || 'Concept' };
+                }
+                break;
+            }
+            case 'positions': {
+                const items = typeof fetchPositions === 'function' ? await fetchPositions() : [];
+                if (stale()) return;
+                if (typeof renderPositionsIndex === 'function') renderPositionsIndex(items, contentDiv);
+                else contentDiv.innerHTML = '<div class="page-header"><h2>Positions</h2></div>';
+                break;
+            }
+            case 'position-detail': {
+                const item = typeof fetchPosition === 'function' ? await fetchPosition(route.params.positionId) : null;
+                if (stale()) return;
+                if (!item) {
+                    if (typeof renderPositionNotFound === 'function') renderPositionNotFound(contentDiv);
+                    else contentDiv.innerHTML = '<div class="page-header"><h2>Position not found.</h2></div>';
+                    titleOpts = { notFound: true, notFoundTitle: 'Position not found' };
+                } else {
+                    if (typeof renderPositionDetail === 'function') renderPositionDetail(item, contentDiv);
+                    titleOpts = { entityTitle: item.name || 'Position' };
+                }
+                break;
+            }
+            case 'arguments': {
+                const kind = route.params.kind || '';
+                const items = typeof fetchArguments === 'function' ? await fetchArguments(kind || undefined) : [];
+                if (stale()) return;
+                if (typeof renderArgumentsIndex === 'function') renderArgumentsIndex(items, contentDiv, kind || 'all');
+                else contentDiv.innerHTML = '<div class="page-header"><h2>Arguments &amp; Stances</h2></div>';
+                break;
+            }
+            case 'argument-detail': {
+                const item = typeof fetchArgument === 'function' ? await fetchArgument(route.params.argumentId) : null;
+                if (stale()) return;
+                if (!item) {
+                    if (typeof renderArgumentNotFound === 'function') renderArgumentNotFound(contentDiv);
+                    else contentDiv.innerHTML = '<div class="page-header"><h2>Argument not found.</h2></div>';
+                    titleOpts = { notFound: true, notFoundTitle: 'Argument not found' };
+                } else {
+                    if (typeof renderArgumentDetail === 'function') renderArgumentDetail(item, contentDiv);
+                    titleOpts = { entityTitle: item.name || 'Argument' };
+                }
+                break;
+            }
             case 'person': {
                 const person = await fetchPersonDetails(route.params.personId);
                 if (stale()) return;

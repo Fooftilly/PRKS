@@ -1,0 +1,56 @@
+[
+  {
+    "id": "plain-concept",
+    "text": "Adorno's account of [[concept:Culture Industry]] depends upon standardization.",
+    "concepts": ["Culture Industry"],
+    "arguments": []
+  },
+  {
+    "id": "whitespace-case",
+    "text": "See [[concept:  culture   industry  ]].",
+    "concepts": ["culture industry"],
+    "arguments": []
+  },
+  {
+    "id": "inline-code-ignored",
+    "text": "Not a ref: `[[concept:Culture Industry]]` but this is [[concept:Mass Culture]].",
+    "concepts": ["Mass Culture"],
+    "arguments": []
+  },
+  {
+    "id": "fence-ignored",
+    "text": "```text\n[[concept:Culture Industry]]\n```\nAfter [[concept:Pseudo-individualization]]",
+    "concepts": ["Pseudo-individualization"],
+    "arguments": []
+  },
+  {
+    "id": "escaped-ignored",
+    "text": "Literal \\[[concept:Culture Industry]] and real [[concept:Instrumental Reason]].",
+    "concepts": ["Instrumental Reason"],
+    "arguments": []
+  },
+  {
+    "id": "malformed",
+    "text": "[[concept:]] [[concept:   ]] [[argument:]] [[argument:not-an-id]] leftover.",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "argument-labeled",
+    "text": "See [[argument:A-12345|Adorno's standardization argument]] and [[argument:A-99]].",
+    "concepts": [],
+    "arguments": ["A-12345", "A-99"]
+  },
+  {
+    "id": "prose-not-auto",
+    "text": "Culture Industry appearing as ordinary prose must not become a Concept.",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "newline-rejected",
+    "text": "[[concept:Culture\nIndustry]]",
+    "concepts": [],
+    "arguments": []
+  }
+]

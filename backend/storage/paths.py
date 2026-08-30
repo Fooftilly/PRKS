@@ -4,6 +4,7 @@ from typing import Optional
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _TEXT_INDEX_DB_NAME = "prks_text_index.db"
+_RESEARCH_INDEX_DB_NAME = "prks_research_index.db"
 _PRODUCTION_STORAGE = "/data"
 PROCESSING_PROD_PREFERRED = "/data/for_processing"
 
@@ -109,6 +110,10 @@ def derive_processing_dir(
 
 def derive_index_db_path(root: str) -> str:
     return os.path.join(root, _TEXT_INDEX_DB_NAME)
+
+
+def derive_research_index_db_path(root: str) -> str:
+    return os.path.join(root, _RESEARCH_INDEX_DB_NAME)
 
 
 def derive_log_file(*, root: str, log_override: str) -> str:

@@ -885,6 +885,7 @@ window.prksIsDuplicateRoleLinkError = prksIsDuplicateRoleLinkError;
 window.prksNotifyRoleLinkFailure = prksNotifyRoleLinkFailure;
 window.prksAlertMessage = prksAlertMessage;
 window.prksConfirmDestructive = prksConfirmDestructive;
+window.prksPromptTextDialog = prksPromptTextDialog;
 
 function personDisplayName(p) {
     return `${(p.first_name || '').trim()} ${p.last_name || ''}`.trim();
@@ -1126,6 +1127,7 @@ function prksPromptTextDialog(options = {}) {
         const descEl = document.getElementById('prks-modal-confirm-desc');
         const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
         const okBtn = document.getElementById('prks-modal-confirm-ok');
+        const actions = document.querySelector('.prks-modal-confirm__actions');
         if (!root || !descEl || !okBtn || !cancelBtn) {
             resolve(null);
             return;
@@ -1135,36 +1137,56 @@ function prksPromptTextDialog(options = {}) {
         const defaultValue = options.defaultValue != null ? String(options.defaultValue) : '';
         const okLabel = options.okLabel != null ? String(options.okLabel) : 'Save';
         const cancelLabel = options.cancelLabel != null ? String(options.cancelLabel) : 'Cancel';
+        const multiline = options.multiline === true;
 
         if (titleEl) titleEl.textContent = title;
         descEl.textContent = '';
+        descEl.classList.toggle('prks-modal-confirm__desc--prompt', true);
         if (message) {
-            const p = document.createElement('p');
-            p.className = 'prks-modal-confirm__desc';
+            const p = document.createElement('span');
+            p.className = 'prks-modal-prompt__hint';
             p.textContent = message;
             descEl.appendChild(p);
         }
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'prks-modal-prompt__input';
+        const input = document.createElement(multiline ? 'textarea' : 'input');
+        if (!multiline) input.type = 'text';
+        else input.rows = options.rows != null ? Number(options.rows) || 8 : 8;
+        input.className =
+            'prks-modal-prompt__input' + (multiline ? ' prks-modal-prompt__input--multiline' : '');
         input.value = defaultValue;
         input.setAttribute('aria-label', title);
+        input.setAttribute('autocomplete', 'off');
         descEl.appendChild(input);
 
         cancelBtn.classList.remove('hidden');
         cancelBtn.setAttribute('aria-hidden', 'false');
         cancelBtn.textContent = cancelLabel;
+        if (actions) actions.classList.remove('prks-modal-confirm__actions--alertOnly');
         okBtn.textContent = okLabel;
+        okBtn.classList.remove('add-new-btn', 'btn-danger-outline');
+        okBtn.classList.add('add-new-btn');
         prksModalConfirmAlertOnly = false;
 
+        if (!multiline) {
+            input.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' || e.shiftKey) return;
+                e.preventDefault();
+                prksFinishModalConfirm(true);
+            });
+        }
+
         prksModalConfirmResolve = (confirmed) => {
-            const val = confirmed ? input.value.trim() : null;
+            const val = confirmed ? String(input.value || '').trim() : null;
+            descEl.classList.remove('prks-modal-confirm__desc--prompt');
             descEl.textContent = '';
             resolve(val);
         };
         root.classList.remove('hidden');
         root.setAttribute('aria-hidden', 'false');
-        requestAnimationFrame(() => input.focus());
+        requestAnimationFrame(() => {
+            input.focus();
+            if (typeof input.select === 'function' && !multiline) input.select();
+        });
     });
 }
 

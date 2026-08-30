@@ -57,6 +57,8 @@ function prksGetWikiLinkAutocompleteContext(cm) {
     const before = lineText.slice(0, cur.ch);
     const m = before.match(/\[\[([^\]|]*)$/);
     if (!m) return null;
+    const query = m[1] || '';
+    if (/^(pdf:|concept:|argument:)/i.test(query)) return null;
     const startCh = before.lastIndexOf('[[') + 2;
     const CM = cm.constructor;
     const from = CM.Pos(cur.line, startCh);
@@ -120,6 +122,10 @@ function prksAttachWikiLinkAutocomplete(cm) {
                 CM.showHint(editor, prksPdfAnnLinkHint, { completeSingle: false });
                 return;
             }
+            if (prksGetConceptLinkAutocompleteContext(editor)) {
+                CM.showHint(editor, prksConceptLinkHint, { completeSingle: false });
+                return;
+            }
             if (!prksGetWikiLinkAutocompleteContext(editor)) return;
             CM.showHint(editor, prksWikiLinkHint, { completeSingle: false });
         });
@@ -129,6 +135,10 @@ function prksAttachWikiLinkAutocomplete(cm) {
     const openWikiHint = function (editor) {
         if (prksGetPdfAnnLinkAutocompleteContext(editor)) {
             CM.showHint(editor, prksPdfAnnLinkHint, { completeSingle: false });
+            return;
+        }
+        if (prksGetConceptLinkAutocompleteContext(editor)) {
+            CM.showHint(editor, prksConceptLinkHint, { completeSingle: false });
             return;
         }
         if (prksGetWikiLinkAutocompleteContext(editor)) {
@@ -149,6 +159,7 @@ function prksReplaceWikiMarkersWithLinks(plainText, titleLowerToId) {
     const map = titleLowerToId || {};
     return plainText.replace(/\[\[([^\]]+)\]\]/g, (full, inner) => {
         const trimmed = String(inner).trim();
+        if (/^(concept:|argument:|pdf:)/i.test(trimmed)) return full;
         let target;
         let label;
         const pipe = trimmed.indexOf('|');
@@ -272,6 +283,291 @@ function prksPdfAnnLinkHint(cm) {
             hint: prksPdfAnnLinkCompletionPick,
         })),
     };
+}
+
+function prksGetConceptLinkAutocompleteContext(cm) {
+    const cur = cm.getCursor();
+    const lineText = cm.getLine(cur.line);
+    const before = lineText.slice(0, cur.ch);
+    const m = before.match(/\[\[concept:([^\]|]*)$/);
+    if (!m) return null;
+    const startCh = before.lastIndexOf('[[concept:') + '[[concept:'.length;
+    const CM = cm.constructor;
+    return { from: CM.Pos(cur.line, startCh), to: cur, query: m[1] || '' };
+}
+
+function prksConceptHintRows() {
+    const rows = window.__prksConceptHintList || [];
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+        const c = rows[i];
+        if (!c || !c.name) continue;
+        out.push({ name: String(c.name), haystack: String(c.name) });
+        const aliases = c.aliases || [];
+        for (let j = 0; j < aliases.length; j++) {
+            const a = String(aliases[j] || '').trim();
+            if (a) out.push({ name: String(c.name), haystack: a });
+        }
+    }
+    return out;
+}
+
+function prksFilterConceptsForHint(query) {
+    const ql = query.trim().toLowerCase();
+    const rows = prksConceptHintRows();
+    if (!ql) {
+        const seen = {};
+        const uniq = [];
+        for (let i = 0; i < rows.length; i++) {
+            if (seen[rows[i].name]) continue;
+            seen[rows[i].name] = true;
+            uniq.push(rows[i]);
+            if (uniq.length >= PRKS_WIKI_HINT_MAX) break;
+        }
+        return uniq;
+    }
+    const pref = [];
+    const sub = [];
+    const seen = {};
+    for (let i = 0; i < rows.length; i++) {
+        const w = rows[i];
+        const hl = w.haystack.toLowerCase();
+        const nl = w.name.toLowerCase();
+        if (seen[w.name]) continue;
+        if (hl.startsWith(ql) || nl.startsWith(ql)) {
+            seen[w.name] = true;
+            pref.push(w);
+        } else if (hl.includes(ql) || nl.includes(ql)) {
+            seen[w.name] = true;
+            sub.push(w);
+        }
+        if (pref.length >= PRKS_WIKI_HINT_MAX) break;
+    }
+    if (pref.length >= PRKS_WIKI_HINT_MAX) return pref.slice(0, PRKS_WIKI_HINT_MAX);
+    return pref.concat(sub.slice(0, PRKS_WIKI_HINT_MAX - pref.length));
+}
+
+function prksConceptLinkCompletionPick(cm, data, completion) {
+    const from = completion.from != null ? completion.from : data.from;
+    const to = completion.to != null ? completion.to : data.to;
+    const name = typeof completion.text === 'string' ? completion.text : '';
+    cm.replaceRange(name + ']]', from, to, 'complete');
+}
+
+function prksConceptLinkHint(cm) {
+    const ctx = prksGetConceptLinkAutocompleteContext(cm);
+    if (!ctx) return null;
+    const matches = prksFilterConceptsForHint(ctx.query);
+    if (matches.length === 0) return null;
+    return {
+        from: ctx.from,
+        to: ctx.to,
+        list: matches.map((w) => ({
+            text: w.name,
+            displayText: w.haystack === w.name ? w.name : w.name + ' (' + w.haystack + ')',
+            hint: prksConceptLinkCompletionPick,
+        })),
+    };
+}
+
+function prksInsertNotesMarkup(cm, markup) {
+    if (!cm || !markup) return;
+    const cur = cm.getCursor();
+    cm.replaceRange(markup, cur, cur, 'complete');
+    cm.focus();
+}
+
+function prksCurrentPdfPagesForWork(workId) {
+    const sess = window.__prksPdfPageSession;
+    if (!sess || sess.workId !== workId) return '';
+    const n = sess.pageNumber;
+    if (!Number.isFinite(n) || n < 1) return '';
+    return String(Math.floor(n));
+}
+
+function prksCloseResearchPicker() {
+    const el = document.getElementById('prks-research-picker');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function prksOpenResearchPicker(opts) {
+    prksCloseResearchPicker();
+    const d = document;
+    const overlay = d.createElement('div');
+    overlay.id = 'prks-research-picker';
+    overlay.className = 'prks-research-picker';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.innerHTML =
+        '<div class="prks-research-picker__panel">' +
+        '<p class="prks-research-picker__title">' +
+        prksEscapeHtmlLite(opts.title || '') +
+        '</p>' +
+        '<input type="search" class="prks-research-picker__q" placeholder="Search…" autocomplete="off">' +
+        '<div class="prks-research-picker__list" role="listbox"></div>' +
+        (opts.extraHtml || '') +
+        '<button type="button" class="ribbon-btn ribbon-btn--sm prks-research-picker__close">Close</button>' +
+        '</div>';
+    d.body.appendChild(overlay);
+    const q = overlay.querySelector('.prks-research-picker__q');
+    const list = overlay.querySelector('.prks-research-picker__list');
+    const closeBtn = overlay.querySelector('.prks-research-picker__close');
+    function render() {
+        const query = (q.value || '').trim().toLowerCase();
+        const rows = opts.items() || [];
+        const filtered = [];
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
+            if (!query) {
+                filtered.push(r);
+            } else {
+                const hay = (r.haystack || r.label || '').toLowerCase();
+                if (hay.indexOf(query) >= 0) filtered.push(r);
+            }
+            if (filtered.length >= 40) break;
+        }
+        let html = filtered
+            .map(function (r) {
+                return (
+                    '<button type="button" class="prks-research-picker__item" data-id="' +
+                    prksEscapeAttr(r.id) +
+                    '">' +
+                    prksEscapeHtmlLite(r.label) +
+                    '</button>'
+                );
+            })
+            .join('');
+        if (opts.createLabel && (q.value || '').trim()) {
+            html +=
+                '<button type="button" class="prks-research-picker__item prks-research-picker__create" data-create="1">' +
+                prksEscapeHtmlLite(opts.createLabel((q.value || '').trim())) +
+                '</button>';
+        }
+        if (!html) html = '<p class="meta-row">No matches.</p>';
+        list.innerHTML = html;
+    }
+    function pick(id, createName) {
+        prksCloseResearchPicker();
+        if (createName && typeof opts.onCreate === 'function') opts.onCreate(createName);
+        else if (id && typeof opts.onPick === 'function') opts.onPick(id);
+    }
+    list.addEventListener('click', function (e) {
+        const btn = e.target.closest && e.target.closest('button[data-id], button[data-create]');
+        if (!btn) return;
+        if (btn.getAttribute('data-create') === '1') pick('', (q.value || '').trim());
+        else pick(btn.getAttribute('data-id'));
+    });
+    if (closeBtn) closeBtn.addEventListener('click', prksCloseResearchPicker);
+    overlay.addEventListener('click', function (e) {
+        if (e.target === overlay) prksCloseResearchPicker();
+    });
+    q.addEventListener('input', render);
+    q.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            prksCloseResearchPicker();
+        }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const first = list.querySelector('button[data-id], button[data-create]');
+            if (first) first.click();
+        }
+    });
+    render();
+    q.focus();
+}
+
+function prksOpenConceptPicker(cm) {
+    const items = function () {
+        return (window.__prksConceptHintList || []).map(function (c) {
+            const aliases = (c.aliases || []).join(' ');
+            return {
+                id: c.id,
+                label: c.name,
+                haystack: (c.name || '') + ' ' + aliases,
+            };
+        });
+    };
+    prksOpenResearchPicker({
+        title: 'Insert Concept',
+        items: items,
+        createLabel: function (name) {
+            return 'Insert [[concept:' + name + ']]';
+        },
+        onPick: function (id) {
+            const rows = window.__prksConceptHintList || [];
+            let name = '';
+            for (let i = 0; i < rows.length; i++) {
+                if (rows[i].id === id) {
+                    name = rows[i].name;
+                    break;
+                }
+            }
+            if (name) prksInsertNotesMarkup(cm, '[[concept:' + name + ']]');
+        },
+        onCreate: function (name) {
+            prksInsertNotesMarkup(cm, '[[concept:' + name + ']]');
+        },
+    });
+}
+
+function prksOpenArgumentPicker(cm, work) {
+    const items = function () {
+        return (window.__prksArgumentHintList || []).map(function (a) {
+            return {
+                id: a.id,
+                label: (a.kind === 'stance' ? 'Stance: ' : 'Argument: ') + (a.name || a.id),
+                haystack: (a.name || '') + ' ' + (a.id || ''),
+            };
+        });
+    };
+    const extra =
+        '<div class="prks-research-picker__actions">' +
+        '<button type="button" class="ribbon-btn ribbon-btn--sm" data-new="argument">New Argument</button> ' +
+        '<button type="button" class="ribbon-btn ribbon-btn--sm" data-new="stance">New Stance</button>' +
+        '</div>';
+    prksOpenResearchPicker({
+        title: 'Insert Argument / Stance',
+        items: items,
+        extraHtml: extra,
+        onPick: function (id) {
+            const rows = window.__prksArgumentHintList || [];
+            let name = id;
+            for (let i = 0; i < rows.length; i++) {
+                if (rows[i].id === id) {
+                    name = rows[i].name || id;
+                    break;
+                }
+            }
+            prksInsertNotesMarkup(cm, '[[argument:' + id + '|' + name + ']]');
+        },
+    });
+    const overlay = document.getElementById('prks-research-picker');
+    if (!overlay) return;
+    overlay.addEventListener('click', function (e) {
+        const btn = e.target.closest && e.target.closest('[data-new]');
+        if (!btn) return;
+        const kind = btn.getAttribute('data-new');
+        prksCloseResearchPicker();
+        void (async function () {
+            if (typeof window.prksCreateArgumentFromWork !== 'function') return;
+            const created = await window.prksCreateArgumentFromWork({
+                kind: kind,
+                workId: work && work.id,
+                pages: prksCurrentPdfPagesForWork(work && work.id),
+            });
+            if (created && created.id) {
+                prksInsertNotesMarkup(
+                    cm,
+                    '[[argument:' + created.id + '|' + (created.name || created.id) + ']]'
+                );
+                if (typeof fetchArguments === 'function') {
+                    const list = await fetchArguments();
+                    window.__prksArgumentHintList = list;
+                }
+            }
+        })();
+    });
 }
 
 async function deleteWork(w_id) {
@@ -453,6 +749,20 @@ async function renderWorkDetails(work, container, routeGen) {
             window.__prksWikiTitleMap = {};
             window.__prksWikiWorkList = [];
         }
+        try {
+            if (typeof fetchConcepts === 'function') {
+                window.__prksConceptHintList = await fetchConcepts();
+            }
+        } catch (_e) {
+            window.__prksConceptHintList = [];
+        }
+        try {
+            if (typeof fetchArguments === 'function') {
+                window.__prksArgumentHintList = await fetchArguments();
+            }
+        } catch (_e) {
+            window.__prksArgumentHintList = [];
+        }
         if (prksRouteStale(routeGen)) return;
         initEasyMDE(work);
         setupWorkNotesSplitResize(work.id);
@@ -494,6 +804,20 @@ function initEasyMDE(work) {
   </ul>
 </div>
 <div class="prks-help-section">
+  <div class="prks-help-title">Concepts</div>
+  <ul>
+    <li><code>[[concept:Culture Industry]]</code> Concept link (created on save if new)</li>
+    <li>Type <code>[[concept:</code> for name/alias suggestions</li>
+  </ul>
+</div>
+<div class="prks-help-section">
+  <div class="prks-help-title">Arguments / Stances</div>
+  <ul>
+    <li><code>[[argument:A-123|Label]]</code> stable Argument link</li>
+    <li>Unknown Argument IDs stay unresolved; they are not created</li>
+  </ul>
+</div>
+<div class="prks-help-section">
   <div class="prks-help-title">PDF annotation links</div>
   <ul>
     <li><code>[[pdf:&lt;annotationId&gt;]]</code> jump inside PDF viewer</li>
@@ -503,14 +827,15 @@ function initEasyMDE(work) {
 <div class="prks-help-section">
   <div class="prks-help-title">Autocomplete</div>
   <ul>
-    <li>Type <code>[[</code> then suggestions</li>
+    <li>Type <code>[[</code> then work suggestions</li>
+    <li>Type <code>[[concept:</code> then Concept suggestions</li>
     <li>Type <code>[[pdf:</code> then annotation suggestions</li>
   </ul>
 </div>
 <div class="prks-help-section">
   <div class="prks-help-title">Preview</div>
   <ul>
-    <li>Click work link to open that work</li>
+    <li>Click work, Concept, or Argument link to open that record</li>
     <li>Click pdf link to jump to annotation</li>
   </ul>
 </div>
@@ -537,6 +862,25 @@ function initEasyMDE(work) {
             "link",
             "image",
             "|",
+            {
+                name: "prks-insert-concept",
+                className: "fa fa-lightbulb-o prks-notes-concept",
+                title: "Concept",
+                action: () => {
+                    const cm = window.workNotesEasyMDE && window.workNotesEasyMDE.codemirror;
+                    if (cm) prksOpenConceptPicker(cm);
+                },
+            },
+            {
+                name: "prks-insert-argument",
+                className: "fa fa-comment prks-notes-argument",
+                title: "Argument",
+                action: () => {
+                    const cm = window.workNotesEasyMDE && window.workNotesEasyMDE.codemirror;
+                    if (cm) prksOpenArgumentPicker(cm, work);
+                },
+            },
+            "|",
             "preview",
             "side-by-side",
             "fullscreen",
@@ -561,7 +905,15 @@ function initEasyMDE(work) {
         status: ["lines", "words", "cursor"],
         minHeight: "120px",
         previewRender: (plainText) => {
-            let t = prksReplacePdfAnnotationWikiMarkers(plainText);
+            const refs =
+                (window.currentWork && window.currentWork.id === work.id && window.currentWork.research_refs) ||
+                work.research_refs ||
+                {};
+            let t = plainText;
+            if (typeof window.prksReplaceResearchRefs === 'function') {
+                t = window.prksReplaceResearchRefs(t, refs);
+            }
+            t = prksReplacePdfAnnotationWikiMarkers(t);
             t = prksReplaceWikiMarkersWithLinks(t, titleLowerToId);
             return prksSanitizeMarkdownPreviewHtml(easyMDE.markdown(t));
         },
@@ -587,7 +939,7 @@ function initEasyMDE(work) {
                 const a = e.target.closest && e.target.closest('a.wiki-link-internal');
                 if (!a || !a.getAttribute('href')) return;
                 const href = a.getAttribute('href');
-                if (href.startsWith('#/works/')) {
+                if (href.startsWith('#/works/') || href.startsWith('#/concepts/') || href.startsWith('#/arguments/')) {
                     e.preventDefault();
                     window.location.hash = href.slice(1);
                 }
@@ -600,7 +952,7 @@ function initEasyMDE(work) {
                 const a = e.target && e.target.closest ? e.target.closest('a.wiki-link-internal') : null;
                 if (!a) return;
                 const href = a.getAttribute('href') || '';
-                if (!href.startsWith('#/works/')) return;
+                if (!href.startsWith('#/works/') && !href.startsWith('#/concepts/') && !href.startsWith('#/arguments/')) return;
                 if (typeof prksMaybeOpenHashInNewTab === 'function') {
                     prksMaybeOpenHashInNewTab(e, href);
                 }
@@ -624,6 +976,17 @@ function initEasyMDE(work) {
                 });
                 if (statusEl) {
                     statusEl.innerText = res.ok ? 'All changes saved' : 'Error saving changes';
+                }
+                if (res.ok && typeof fetchWorkDetails === 'function') {
+                    const latest = await fetchWorkDetails(work.id);
+                    if (
+                        latest &&
+                        latest.research_refs &&
+                        window.currentWork &&
+                        window.currentWork.id === work.id
+                    ) {
+                        window.currentWork.research_refs = latest.research_refs;
+                    }
                 }
             } catch (e) {
                 if (statusEl) statusEl.innerText = "Error saving changes";

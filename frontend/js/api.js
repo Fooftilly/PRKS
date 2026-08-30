@@ -714,6 +714,209 @@ async function deleteSavedView(id) {
     }
 }
 
+async function prksResearchJson(res, fallbackMessage, source) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const err = new Error((data && data.error) || fallbackMessage);
+        err.httpStatus = res.status;
+        err.code = data && data.code;
+        if (source) prksReportApiClientError(source);
+        throw err;
+    }
+    return data;
+}
+
+async function fetchConcepts() {
+    try {
+        const res = await fetch('/api/concepts');
+        const data = await prksParseJsonResponse(res, [], 'concepts.fetch');
+        return Array.isArray(data) ? data : [];
+    } catch (e) {
+        prksSetApiError('concepts', 'Could not load Concepts.');
+        prksReportApiClientError('concepts.fetch');
+        return [];
+    }
+}
+
+async function fetchConcept(id) {
+    try {
+        const res = await fetch('/api/concepts/' + encodeURIComponent(id));
+        if (res.status === 404) return null;
+        const data = await prksParseJsonResponse(res, null, 'concepts.fetch');
+        return data && data.id ? data : null;
+    } catch (e) {
+        prksSetApiError('concepts', 'Could not load Concept.');
+        prksReportApiClientError('concepts.fetch');
+        return null;
+    }
+}
+
+async function createConcept(payload) {
+    const res = await fetch('/api/concepts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    return prksResearchJson(res, 'Could not create Concept.', 'concepts.create');
+}
+
+async function updateConcept(id, payload) {
+    const res = await fetch('/api/concepts/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    return prksResearchJson(res, 'Could not update Concept.', 'concepts.update');
+}
+
+async function deleteConcept(id) {
+    const res = await fetch('/api/concepts/' + encodeURIComponent(id), { method: 'DELETE' });
+    return prksResearchJson(res, 'Could not delete Concept.', 'concepts.delete');
+}
+
+async function putConceptParents(id, parentIds) {
+    const res = await fetch('/api/concepts/' + encodeURIComponent(id) + '/parents', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent_ids: parentIds || [] }),
+    });
+    return prksResearchJson(res, 'Could not update Concept parents.', 'concepts.parents');
+}
+
+async function putConceptAliases(id, aliases) {
+    const res = await fetch('/api/concepts/' + encodeURIComponent(id) + '/aliases', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aliases: aliases || [] }),
+    });
+    return prksResearchJson(res, 'Could not update Concept aliases.', 'concepts.aliases');
+}
+
+async function fetchPositions() {
+    try {
+        const res = await fetch('/api/positions');
+        const data = await prksParseJsonResponse(res, [], 'positions.fetch');
+        return Array.isArray(data) ? data : [];
+    } catch (e) {
+        prksSetApiError('positions', 'Could not load Positions.');
+        prksReportApiClientError('positions.fetch');
+        return [];
+    }
+}
+
+async function fetchPosition(id) {
+    try {
+        const res = await fetch('/api/positions/' + encodeURIComponent(id));
+        if (res.status === 404) return null;
+        const data = await prksParseJsonResponse(res, null, 'positions.fetch');
+        return data && data.id ? data : null;
+    } catch (e) {
+        prksSetApiError('positions', 'Could not load Position.');
+        prksReportApiClientError('positions.fetch');
+        return null;
+    }
+}
+
+async function createPosition(payload) {
+    const res = await fetch('/api/positions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    return prksResearchJson(res, 'Could not create Position.', 'positions.create');
+}
+
+async function updatePosition(id, payload) {
+    const res = await fetch('/api/positions/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    return prksResearchJson(res, 'Could not update Position.', 'positions.update');
+}
+
+async function deletePosition(id) {
+    const res = await fetch('/api/positions/' + encodeURIComponent(id), { method: 'DELETE' });
+    return prksResearchJson(res, 'Could not delete Position.', 'positions.delete');
+}
+
+async function fetchArguments(kind) {
+    try {
+        const q = kind ? '?kind=' + encodeURIComponent(kind) : '';
+        const res = await fetch('/api/arguments' + q);
+        const data = await prksParseJsonResponse(res, [], 'arguments.fetch');
+        return Array.isArray(data) ? data : [];
+    } catch (e) {
+        prksSetApiError('arguments', 'Could not load Arguments.');
+        prksReportApiClientError('arguments.fetch');
+        return [];
+    }
+}
+
+async function fetchArgument(id) {
+    try {
+        const res = await fetch('/api/arguments/' + encodeURIComponent(id));
+        if (res.status === 404) return null;
+        const data = await prksParseJsonResponse(res, null, 'arguments.fetch');
+        return data && data.id ? data : null;
+    } catch (e) {
+        prksSetApiError('arguments', 'Could not load Argument.');
+        prksReportApiClientError('arguments.fetch');
+        return null;
+    }
+}
+
+async function fetchArgumentVerdicts() {
+    try {
+        const res = await fetch('/api/argument-verdicts');
+        const data = await prksParseJsonResponse(res, [], 'arguments.fetch');
+        return Array.isArray(data) ? data : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+async function createArgument(payload) {
+    const res = await fetch('/api/arguments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    return prksResearchJson(res, 'Could not create Argument.', 'arguments.create');
+}
+
+async function updateArgument(id, payload) {
+    const res = await fetch('/api/arguments/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    return prksResearchJson(res, 'Could not update Argument.', 'arguments.update');
+}
+
+async function deleteArgument(id) {
+    const res = await fetch('/api/arguments/' + encodeURIComponent(id), { method: 'DELETE' });
+    return prksResearchJson(res, 'Could not delete Argument.', 'arguments.delete');
+}
+
+async function putArgumentSources(id, sources) {
+    const res = await fetch('/api/arguments/' + encodeURIComponent(id) + '/sources', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sources: sources || [] }),
+    });
+    return prksResearchJson(res, 'Could not update Argument sources.', 'arguments.sources');
+}
+
+async function putArgumentTargets(id, targets) {
+    const res = await fetch('/api/arguments/' + encodeURIComponent(id) + '/targets', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targets: targets || [] }),
+    });
+    return prksResearchJson(res, 'Could not update Argument targets.', 'arguments.targets');
+}
+
 window.bulkUpdateWorks = bulkUpdateWorks;
 window.fetchFolders = fetchFolders;
 window.fetchTags = fetchTags;
@@ -722,6 +925,26 @@ window.fetchSavedView = fetchSavedView;
 window.createSavedView = createSavedView;
 window.updateSavedView = updateSavedView;
 window.deleteSavedView = deleteSavedView;
+window.fetchConcepts = fetchConcepts;
+window.fetchConcept = fetchConcept;
+window.createConcept = createConcept;
+window.updateConcept = updateConcept;
+window.deleteConcept = deleteConcept;
+window.putConceptParents = putConceptParents;
+window.putConceptAliases = putConceptAliases;
+window.fetchPositions = fetchPositions;
+window.fetchPosition = fetchPosition;
+window.createPosition = createPosition;
+window.updatePosition = updatePosition;
+window.deletePosition = deletePosition;
+window.fetchArguments = fetchArguments;
+window.fetchArgument = fetchArgument;
+window.fetchArgumentVerdicts = fetchArgumentVerdicts;
+window.createArgument = createArgument;
+window.updateArgument = updateArgument;
+window.deleteArgument = deleteArgument;
+window.putArgumentSources = putArgumentSources;
+window.putArgumentTargets = putArgumentTargets;
 
 (function prksPrefetchAppSettings() {
     void prksLoadAppSettings();

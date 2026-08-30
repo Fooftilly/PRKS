@@ -61,6 +61,7 @@ class MarkdownSecurityStructuralTests(unittest.TestCase):
         self.assertIn("window.prksSanitizeMarkdownPreviewHtml = function", sanitize)
         self.assertNotIn("function prksSanitizeMarkdownPreviewHtml", works)
         self.assertIn("return prksSanitizeMarkdownPreviewHtml(easyMDE.markdown(t));", works)
+        self.assertIn("prksReplaceResearchRefs", works)
         self.assertNotIn(_BLACKLIST_SELECTOR, works)
         self.assertNotIn(_BLACKLIST_SELECTOR, sanitize)
 

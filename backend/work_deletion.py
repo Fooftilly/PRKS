@@ -47,6 +47,21 @@ def delete_work(db: PRKSDatabase, text_index: PRKSTextIndex, work_id: str) -> Wo
             safe_error_type(e),
         )
     try:
+        from backend.research_index import get_research_index
+
+        idx = get_research_index()
+        if os.path.isfile(idx.db_path):
+            idx.remove_work(work_id)
+    except RuntimeError:
+        pass
+    except Exception as e:
+        failures.append("research_index")
+        LOGGER.warning(
+            "research_index_cleanup_failed work_id=%s error_type=%s",
+            wid,
+            safe_error_type(e),
+        )
+    try:
         thumbnail_failures = prks_delete_pdf_thumbnails_for_work_id(
             work_id,
             db.storage.thumbs_dir,

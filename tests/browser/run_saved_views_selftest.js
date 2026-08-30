@@ -199,9 +199,47 @@ Promise.resolve(root.createSavedView({
         assert('no results table', src.indexOf('saved_view_works') < 0);
         assert('uses fetchSearch mapping', src.indexOf('prksSearchOptionsFromDefinition') >= 0);
         assert('no eval', src.indexOf('eval(') < 0);
+        assert('index edit captures routeGen', src.indexOf('routeGen') >= 0);
+        assert('index edit captures canonicalHash', src.indexOf('canonicalHash') >= 0);
 
-        console.log(passed + ' passed, ' + failed + ' failed');
-        if (failed) process.exit(1);
+        const beforeStale = modalCalls.length;
+        root.__prksRouteGen = 1;
+        root.location.hash = '#/views';
+        let resolveView;
+        const pending = new Promise(function (resolve) {
+            resolveView = resolve;
+        });
+        root.fetchSavedView = function () {
+            return pending;
+        };
+        const editPromise = root.prksOpenSavedViewIndexEdit('SV-STALE');
+        root.__prksRouteGen = 2;
+        root.location.hash = '#/folders';
+        resolveView({
+            id: 'SV-STALE',
+            name: 'Stale View',
+            search: { mode: 'all', q: 'x', tag: '', author: '', publisher: '' },
+        });
+        return editPromise.then(function () {
+            assertEq('stale index edit does not open modal', modalCalls.length, beforeStale);
+
+            root.__prksRouteGen = 3;
+            root.location.hash = '#/views';
+            root.fetchSavedView = function () {
+                return Promise.resolve({
+                    id: 'SV-OK',
+                    name: 'Current View',
+                    search: { mode: 'all', q: 'y', tag: '', author: '', publisher: '' },
+                });
+            };
+            return root.prksOpenSavedViewIndexEdit('SV-OK');
+        }).then(function () {
+            assertEq('current index edit opens modal', modalCalls[modalCalls.length - 1], 'saved-view-modal');
+            assertEq('current index edit fills name', inputs.name.value, 'Current View');
+
+            console.log(passed + ' passed, ' + failed + ' failed');
+            if (failed) process.exit(1);
+        });
     })
     .catch(function (err) {
         console.error(err);

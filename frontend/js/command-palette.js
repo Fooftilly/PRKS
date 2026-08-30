@@ -14,6 +14,9 @@
     const MAX_GROUPS = 3;
     const MAX_PLAYLISTS = 3;
     const MAX_SAVED_VIEWS = 4;
+    const MAX_CONCEPTS = 4;
+    const MAX_POSITIONS = 3;
+    const MAX_ARGUMENTS = 4;
 
     const ALLOWED_MODALS = {
         'work-modal': true,
@@ -144,6 +147,33 @@
             keywords: ['people', 'groups'],
             icon: 'folders',
             hash: '#/people/groups',
+            section: 'goto',
+        },
+        {
+            id: 'navigate-concepts',
+            kind: 'navigate',
+            label: 'Concepts',
+            keywords: ['research', 'ideas', 'terms'],
+            icon: 'network',
+            hash: '#/concepts',
+            section: 'goto',
+        },
+        {
+            id: 'navigate-positions',
+            kind: 'navigate',
+            label: 'Positions',
+            keywords: ['research', 'claims', 'theories'],
+            icon: 'flag',
+            hash: '#/positions',
+            section: 'goto',
+        },
+        {
+            id: 'navigate-arguments',
+            kind: 'navigate',
+            label: 'Arguments & Stances',
+            keywords: ['research', 'stance', 'argument'],
+            icon: 'messages-square',
+            hash: '#/arguments',
             section: 'goto',
         },
         {
@@ -344,11 +374,17 @@
         groupCache: null,
         playlistCache: null,
         savedViewCache: null,
+        conceptCache: null,
+        positionCache: null,
+        argumentCache: null,
         folderPromise: null,
         personPromise: null,
         groupPromise: null,
         playlistPromise: null,
         savedViewPromise: null,
+        conceptPromise: null,
+        positionPromise: null,
+        argumentPromise: null,
         fetchFailed: false,
         works: [],
         worksLoading: false,
@@ -549,6 +585,13 @@
                     names.push(a);
                 });
         }
+        return names;
+    }
+
+    function conceptHaystacks(c) {
+        const names = [String((c && c.name) || '')];
+        const aliases = (c && c.aliases) || [];
+        for (let i = 0; i < aliases.length; i++) names.push(String(aliases[i] || ''));
         return names;
     }
 
@@ -843,6 +886,45 @@
                     )
                 );
             }
+            if (state.conceptCache) {
+                entities = entities.concat(
+                    entityRows(
+                        state.conceptCache,
+                        q,
+                        'concept',
+                        conceptHaystacks,
+                        function (c) { return '#/concepts/' + encodeURIComponent(c.id); },
+                        'network',
+                        MAX_CONCEPTS
+                    )
+                );
+            }
+            if (state.positionCache) {
+                entities = entities.concat(
+                    entityRows(
+                        state.positionCache,
+                        q,
+                        'position',
+                        function (p) { return [String(p.name || '')]; },
+                        function (p) { return '#/positions/' + encodeURIComponent(p.id); },
+                        'flag',
+                        MAX_POSITIONS
+                    )
+                );
+            }
+            if (state.argumentCache) {
+                entities = entities.concat(
+                    entityRows(
+                        state.argumentCache,
+                        q,
+                        'argument',
+                        function (a) { return [String(a.name || '')]; },
+                        function (a) { return '#/arguments/' + encodeURIComponent(a.id); },
+                        'messages-square',
+                        MAX_ARGUMENTS
+                    )
+                );
+            }
         }
 
         const searchSlots = search.length;
@@ -972,11 +1054,17 @@
         state.groupCache = null;
         state.playlistCache = null;
         state.savedViewCache = null;
+        state.conceptCache = null;
+        state.positionCache = null;
+        state.argumentCache = null;
         state.folderPromise = null;
         state.personPromise = null;
         state.groupPromise = null;
         state.playlistPromise = null;
         state.savedViewPromise = null;
+        state.conceptPromise = null;
+        state.positionPromise = null;
+        state.argumentPromise = null;
         state.fetchFailed = false;
         state.works = [];
         state.worksLoading = false;
@@ -1029,6 +1117,15 @@
         }
         if (!state.savedViewPromise) {
             state.savedViewPromise = wrapCatalog(root.fetchSavedViews, function (v) { state.savedViewCache = v; });
+        }
+        if (!state.conceptPromise) {
+            state.conceptPromise = wrapCatalog(root.fetchConcepts, function (v) { state.conceptCache = v; });
+        }
+        if (!state.positionPromise) {
+            state.positionPromise = wrapCatalog(root.fetchPositions, function (v) { state.positionCache = v; });
+        }
+        if (!state.argumentPromise) {
+            state.argumentPromise = wrapCatalog(root.fetchArguments, function (v) { state.argumentCache = v; });
         }
     }
 

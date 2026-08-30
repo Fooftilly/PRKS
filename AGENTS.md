@@ -27,6 +27,9 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/db_manager.py` SQLite
 - `backend/db_migrations.py` ordered schema migrations
 - `backend/backup_restore.py` verified backup/restore
+- `backend/research_markup.py` research-note semantic markup parser
+- `backend/research_network.py` Concepts, Positions, Arguments/Stances
+- `backend/research_index.py` disposable derived note-reference index
 - `backend/performance.py` in-memory performance diagnostics
 - `frontend/` UI
 - `tests/` unittest
@@ -70,7 +73,7 @@ Backup/restore code must never operate on production storage during tests.
 Do not add a persistent storage component without classifying it as canonical,
 derived, operational, or conditional in backup inventory.
 
-`thumbs/` and `prks_text_index.db` (including WAL/SHM) are derived. They are not
+`thumbs/`, `prks_text_index.db`, and `prks_research_index.db` (including WAL/SHM) are derived. They are not
 required backup state and must be rebuilt after restore.
 
 Restore validation must complete before live canonical state is modified.
@@ -167,4 +170,34 @@ contract rather than arbitrary executable rules.
 
 Do not add per-view polling or background notifications as an incidental Saved
 Views feature.
+
+## Research network
+
+Concepts, Positions, and Arguments/Stances are persistent canonical records in
+`prks_data.db`. Work↔Concept membership is never stored as Work metadata.
+
+The Work→Concept relation exists only because `works.text_content` contains
+explicit `[[concept:Name]]`. `private_notes` must not participate. Ordinary
+prose never auto-links. Unknown valid Concept names are created on note save in
+the same transaction as the note. Removing every note reference does not delete
+the Concept.
+
+Concept aliases/search keys resolve note references. A Concept rename preserves
+the old name as an alias. Multi-parent hierarchy is allowed; cycles are
+rejected. Do not add Glossaries/Concept Senses or Debates/Theories as an
+incidental follow-on.
+
+Arguments/Stances use stable IDs in notes (`[[argument:A-id|Label]]`) and do not
+auto-create from unknown markup. Every target requires a verdict. Incoming
+Counter/Response Arguments are reverse queries of target relations, not a
+separate stored list.
+
+`prks_research_index.db` is derived, never canonical. Mention offsets may be
+stored; surrounding note prose must not be. Unknown/corrupt derived schema may
+be deleted and recreated. Never touch `prks_data.db` because the research index
+is corrupt. Derived indexing failure must not roll back a valid canonical note
+save. Do not add research-index files to backups.
+
+Concept, Position, and Argument names, definitions, aliases, main text, verdict
+labels, page ranges, markup, and backlink snippets are private. Never log them.
 

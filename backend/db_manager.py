@@ -2111,7 +2111,8 @@ class PRKSDatabase:
         if not res: return None
         work = res[0]
         work['roles'] = self.get_work_roles(work_id)
-        work['arguments'] = self.execute_query("SELECT * FROM arguments WHERE work_id = ?", (work_id,))
+        work['arguments'] = []
+        work['research_refs'] = {"concepts": [], "arguments": []}
         ann = self.get_work_annotations(work_id)
         work['annotations'] = ann
         work['tags'] = self.get_work_tags(work_id)
@@ -3405,9 +3406,23 @@ class PRKSDatabase:
         return concept_id
 
     def add_argument(self, work_id: str, premise: str, conclusion: str) -> str:
+        from backend.db_migrations import _legacy_argument_main_text
+
         arg_id = self.generate_id("A")
-        query = "INSERT INTO arguments (id, work_id, premise, conclusion) VALUES (?, ?, ?, ?)"
-        self.execute_query(query, (arg_id, work_id, premise, conclusion))
+        short = arg_id[2:8] if len(arg_id) > 2 else arg_id
+        main_text = _legacy_argument_main_text(premise or "", conclusion or "")
+        self.execute_query(
+            "INSERT INTO arguments (id, name, kind, main_text) VALUES (?, ?, 'argument', ?)",
+            (arg_id, "Argument " + short, main_text),
+        )
+        if work_id:
+            self.execute_query(
+                """
+                INSERT INTO argument_sources (argument_id, work_id, pages, order_index)
+                VALUES (?, ?, '', 0)
+                """,
+                (arg_id, work_id),
+            )
         return arg_id
 
     # --- Tags ---

@@ -56,6 +56,10 @@ KNOWN_CLIENT_SOURCES = frozenset(
         "tags.fetch",
         "processing-files.fetch",
         "pdf.viewer",
+        "saved-views.fetch",
+        "concepts.fetch",
+        "positions.fetch",
+        "arguments.fetch",
         "works.bulk",
     }
 )
@@ -88,7 +92,9 @@ _STATIC_API_PATHS = frozenset(
         "/api/diagnostics/performance/reset",
         "/api/roles",
         "/api/arguments",
+        "/api/argument-verdicts",
         "/api/concepts",
+        "/api/positions",
     }
 )
 
@@ -102,6 +108,9 @@ _RESOURCE_SLOT = {
     "publishers": ":id",
     "processing-files": ":id",
     "saved-views": ":id",
+    "concepts": ":id",
+    "positions": ":id",
+    "arguments": ":id",
     "pdfs": ":pdf",
     "bibtex": ":id",
 }
@@ -125,6 +134,8 @@ _NESTED_STATIC = {
     "tags": frozenset({"aliases"}),
     "publishers": frozenset({"aliases"}),
     "processing-files": frozenset({"pdf", "import"}),
+    "concepts": frozenset({"parents", "aliases"}),
+    "arguments": frozenset({"sources", "targets"}),
 }
 
 _NESTED_ID_AFTER = {

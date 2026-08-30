@@ -31,6 +31,7 @@ class TestListenPortGuard(unittest.TestCase):
             people_dir="/tmp/prks-listen-prod/people",
             processing_dir="/tmp/prks-listen-prod/for_processing",
             index_db_path="/tmp/prks-listen-prod/prks_text_index.db",
+            research_index_db_path="/tmp/prks-listen-prod/prks_research_index.db",
             log_file="/tmp/prks-listen-prod/prks-errors.log",
         )
         with self.assertRaises(RuntimeError) as ctx:
@@ -52,6 +53,7 @@ class TestListenPortGuard(unittest.TestCase):
             people_dir="/tmp/prks-listen-prod/people",
             processing_dir="/tmp/prks-listen-prod/for_processing",
             index_db_path="/tmp/prks-listen-prod/prks_text_index.db",
+            research_index_db_path="/tmp/prks-listen-prod/prks_research_index.db",
             log_file="/tmp/prks-listen-prod/prks-errors.log",
         )
         server_module._validate_listen_port(8080)

@@ -102,7 +102,7 @@ A verified `.prks-backup` archive contains:
 - managed person files
 - the processing queue, when that directory lives under the configured PRKS storage root
 
-It does **not** include thumbnail cache, the PDF text-search index (`prks_text_index.db` and WAL/SHM files), logs, or temporary maintenance files. After restore, thumbnails are discarded and the text index is rebuilt.
+It does **not** include thumbnail cache, the PDF text-search index (`prks_text_index.db` and WAL/SHM files), the derived research-reference index (`prks_research_index.db` and WAL/SHM files), logs, or temporary maintenance files. After restore, thumbnails are discarded and the text index and research-reference index are rebuilt.
 
 `.prks-backup` files hold private research data. Store them as carefully as the live library. The archive is ZIP-based, but restore it through PRKS (**Settings → Backup & restore**) rather than unzipping it into `/data` by hand.
 
@@ -152,13 +152,27 @@ Press Ctrl+K (Cmd+K on macOS), or choose **Search or jump**.
 
 Use it to:
 
-- open files, folders, people, groups, playlists and Saved Views
+- open files, folders, people, groups, playlists, Saved Views, Concepts, Positions, and Arguments/Stances
 - search the library
 - navigate to sections/progress views
 - create files/folders/people/groups
 - open Settings and common actions
 
-People and Progress sidebar shortcuts are collapsible. Active child routes stay visible without overwriting the collapsed preference.
+People, Progress, and Research sidebar shortcuts are collapsible. Active child routes stay visible without overwriting the collapsed preference.
+
+## Research network
+
+Concepts, Positions, and Arguments/Stances are persistent research records. They are not Work metadata.
+
+Work↔Concept membership exists only because research notes (`works.text_content`) contain explicit `[[concept:Name]]` markup. Private notes never participate. Ordinary prose such as `Culture Industry` does not become a Concept; only `[[concept:Culture Industry]]` does. Unknown valid Concept names are created on note save. Concept records remain if every note reference is later removed.
+
+Concept aliases/search keys resolve note references. Renaming a Concept keeps the old name as an alias so existing notes keep working. Concepts may have multiple parents; hierarchy cycles are rejected.
+
+Arguments/Stances use stable IDs in notes: `[[argument:A-123|Label]]`. Typing an unknown Argument ID does not create a record. Arguments record main Markdown text, source Works with page-range strings (Where made/taken), Position or Argument targets with an explicit verdict (Responds to), and derived reverse Counter/Response Arguments.
+
+Positions are lightweight claim records used as Argument targets. Glossaries/Concept Senses and Debates/Theories are deliberately omitted in this version.
+
+Note mentions live in a disposable derived index (`prks_research_index.db`), not in `prks_data.db`. Derived indexing failure never rolls back a valid note save.
 
 ## Saved Views
 
@@ -188,7 +202,8 @@ Logs may include:
 PRKS deliberately does not log:
 
 - research titles, notes, abstracts, annotations, or selected PDF text
-- person, tag, folder, or publisher names
+- person, tag, folder, publisher, Concept, Position, or Argument names
+- Concept aliases, definitions, Argument main text, verdict labels, or backlink snippets
 - search terms
 - PDF filenames or absolute filesystem paths
 - source, portrait, or image URLs
@@ -247,6 +262,9 @@ This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=
 | `backend/db_manager.py` | SQLite access and business logic. |
 | `backend/db_migrations.py` | Ordered schema migrations and current-schema validation. |
 | `backend/backup_restore.py` | Verified library backup and restore. |
+| `backend/research_markup.py` | Authoritative `[[concept:]]` / `[[argument:]]` parser. |
+| `backend/research_network.py` | Concept, Position, and Argument/Stance domain. |
+| `backend/research_index.py` | Disposable derived note-reference index. |
 | `backend/db_schema.sql` | Complete latest schema for fresh databases. |
 | `frontend/` | Static SPA (HTML, CSS, JS), PWA assets. |
 | `data/` | Default production database and files (gitignored as appropriate). |
@@ -273,7 +291,7 @@ The HTTP adapter validates `Host` on every request, rejects cross-origin state-c
 
 These controls reduce accidental/cross-origin access and DNS-rebinding risk. They are not authentication. Public Internet exposure is still unsafe.
 
-Research notes (`works.text_content`) are stored as raw Markdown. Preview HTML is produced by EasyMDE/Marked and then sanitized with a pinned local DOMPurify allowlist (`frontend/vendor/dompurify`, `frontend/js/markdown-sanitize.js`). Arbitrary or active HTML is not a supported contract: unsafe tags, attributes, and URL schemes are stripped from the preview only. Sanitization never rewrites saved Markdown.
+Research notes (`works.text_content`) are stored as raw Markdown, including literal `[[concept:Name]]` and `[[argument:A-ID|Label]]` markup. A preprocessor turns recognized references into internal hash links, then EasyMDE/Marked renders Markdown, then a pinned local DOMPurify allowlist sanitizes the preview (`frontend/vendor/dompurify`, `frontend/js/markdown-sanitize.js`). Markup inside code spans/fences or escaped as `\[[` is not a semantic reference. Arbitrary or active HTML is not a supported contract: unsafe tags, attributes, and URL schemes are stripped from the preview only. Sanitization never rewrites saved Markdown.
 
 Frontend libraries (Inter, EasyMDE, CodeMirror, Lucide, DOMPurify, the PDF viewer) are local files under `frontend/vendor/`. Node is not a runtime dependency. Docker does not run npm. To rebuild the PDF viewer after changing `tools/pdf-viewer/`:
 

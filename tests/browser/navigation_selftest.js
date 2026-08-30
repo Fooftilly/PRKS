@@ -49,7 +49,17 @@
         assertEq('#/search?q=a&tag=b q', parse('#/search?q=a&tag=b').params.q, 'a');
         assertEq('#/search?q=a&tag=b tag', parse('#/search?q=a&tag=b').params.tag, 'b');
         assertEq('#/recent name', parse('#/recent').name, 'recent');
-        assertEq('#/views name', parse('#/views').name, 'saved-views');
+        assertEq('#/concepts name', parse('#/concepts').name, 'concepts');
+        assertEq('#/concepts/C-1 name', parse('#/concepts/C-1').name, 'concept-detail');
+        assertEq('#/concepts/C-1 id', parse('#/concepts/C-1').params.conceptId, 'C-1');
+        assertEq('#/positions name', parse('#/positions').name, 'positions');
+        assertEq('#/positions/P-1 name', parse('#/positions/P-1').name, 'position-detail');
+        assertEq('#/arguments name', parse('#/arguments').name, 'arguments');
+        assertEq('#/arguments?kind=stance name', parse('#/arguments?kind=stance').name, 'arguments');
+        assertEq('#/arguments?kind=stance kind', parse('#/arguments?kind=stance').params.kind, 'stance');
+        assertEq('#/arguments/A-1 name', parse('#/arguments/A-1').name, 'argument-detail');
+        assert('concept is detail', parse('#/concepts/C-1').detail === true);
+        assert('arguments index not detail', parse('#/arguments').detail !== true);
         assertEq('#/views/SV-1 name', parse('#/views/SV-1').name, 'saved-view-detail');
         assertEq('#/views/SV-1 id', parse('#/views/SV-1').params.viewId, 'SV-1');
         assertEq('#/views/ missing id', parse('#/views/').name, 'unknown');
@@ -72,7 +82,9 @@
         const href = root.prksSidebarHrefForRoute;
         if (typeof href === 'function') {
             assertEq('folder detail nav', href(parse('#/folders/F-1')), '#/folders');
-            assertEq('saved views nav', href(parse('#/views')), '#/views');
+            assertEq('concept detail nav', href(parse('#/concepts/C-1')), '#/concepts');
+            assertEq('argument detail nav', href(parse('#/arguments/A-1')), '#/arguments');
+            assertEq('position detail nav', href(parse('#/positions/P-1')), '#/positions');
             assertEq('saved view detail nav', href(parse('#/views/SV-1')), '#/views');
             assertEq('playlist detail nav', href(parse('#/playlists/PL-1')), '#/playlists');
             assertEq('type detail nav', href(parse('#/types/article')), '#/types');

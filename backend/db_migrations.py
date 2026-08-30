@@ -24,7 +24,7 @@ from backend.log_safety import safe_error_type, safe_log_label
 
 LOGGER = logging.getLogger("prks.db")
 
-LATEST_SCHEMA_VERSION = 11
+LATEST_SCHEMA_VERSION = 12
 LEGACY_BASELINE_VERSION = 9
 
 # Unversioned files count as PRKS only with works plus another established table.
@@ -79,7 +79,14 @@ REQUIRED_TABLES = (
     "playlist_items",
     "persons",
     "concepts",
+    "concept_aliases",
+    "concept_parents",
+    "positions",
     "arguments",
+    "argument_verdicts",
+    "argument_sources",
+    "argument_target_positions",
+    "argument_target_arguments",
     "roles",
     "annotations",
     "work_annotations",
@@ -211,6 +218,27 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
         "created_at",
         "updated_at",
     ),
+    "concepts": ("id", "name", "description", "created_at", "updated_at"),
+    "concept_aliases": ("concept_id", "alias", "normalized_alias", "created_at"),
+    "concept_parents": ("child_concept_id", "parent_concept_id", "created_at"),
+    "positions": ("id", "name", "description", "created_at", "updated_at"),
+    "arguments": ("id", "name", "kind", "main_text", "created_at", "updated_at"),
+    "argument_verdicts": ("id", "label", "sort_order", "enabled"),
+    "argument_sources": ("argument_id", "work_id", "pages", "order_index", "created_at"),
+    "argument_target_positions": (
+        "argument_id",
+        "position_id",
+        "verdict_id",
+        "order_index",
+        "created_at",
+    ),
+    "argument_target_arguments": (
+        "argument_id",
+        "target_argument_id",
+        "verdict_id",
+        "order_index",
+        "created_at",
+    ),
 }
 
 @dataclass(frozen=True)
@@ -283,10 +311,38 @@ INDEX_SPECS: Tuple[IndexSpec, ...] = (
         collations=("BINARY",),
     ),
     IndexSpec(
-        "idx_arguments_work_id",
-        "arguments",
+        "idx_concept_aliases_normalized",
+        "concept_aliases",
+        True,
+        columns=("normalized_alias",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_concept_parents_parent",
+        "concept_parents",
+        False,
+        columns=("parent_concept_id",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_argument_sources_work_id",
+        "argument_sources",
         False,
         columns=("work_id",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_argument_target_arguments_target",
+        "argument_target_arguments",
+        False,
+        columns=("target_argument_id",),
+        collations=("BINARY",),
+    ),
+    IndexSpec(
+        "idx_argument_target_positions_position",
+        "argument_target_positions",
+        False,
+        columns=("position_id",),
         collations=("BINARY",),
     ),
     IndexSpec(
@@ -417,7 +473,24 @@ _INDEX_SQL: Dict[str, str] = {
     "idx_annotations_work_id": (
         "CREATE INDEX idx_annotations_work_id ON annotations(work_id)"
     ),
-    "idx_arguments_work_id": "CREATE INDEX idx_arguments_work_id ON arguments(work_id)",
+    "idx_concept_aliases_normalized": (
+        "CREATE UNIQUE INDEX idx_concept_aliases_normalized "
+        "ON concept_aliases(normalized_alias)"
+    ),
+    "idx_concept_parents_parent": (
+        "CREATE INDEX idx_concept_parents_parent ON concept_parents(parent_concept_id)"
+    ),
+    "idx_argument_sources_work_id": (
+        "CREATE INDEX idx_argument_sources_work_id ON argument_sources(work_id)"
+    ),
+    "idx_argument_target_arguments_target": (
+        "CREATE INDEX idx_argument_target_arguments_target "
+        "ON argument_target_arguments(target_argument_id)"
+    ),
+    "idx_argument_target_positions_position": (
+        "CREATE INDEX idx_argument_target_positions_position "
+        "ON argument_target_positions(position_id)"
+    ),
     "idx_playlist_items_playlist_id": (
         "CREATE INDEX idx_playlist_items_playlist_id ON playlist_items(playlist_id)"
     ),
@@ -497,6 +570,62 @@ _TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
 }
 
 _POST_V10_TABLES = frozenset({"saved_views"})
+_POST_V11_TABLES = frozenset(
+    {
+        "concept_aliases",
+        "concept_parents",
+        "positions",
+        "argument_verdicts",
+        "argument_sources",
+        "argument_target_positions",
+        "argument_target_arguments",
+    }
+)
+_LEGACY_ARGUMENTS_SQL = """
+CREATE TABLE arguments (
+    id TEXT PRIMARY KEY,
+    work_id TEXT NOT NULL,
+    premise TEXT,
+    conclusion TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
+)
+"""
+
+# PKs/FKs enforced on the current (v12) schema. Pre-v10 reconcile uses _TABLE_PKS/_TABLE_FKS only.
+_CURRENT_TABLE_PKS: Dict[str, Tuple[str, ...]] = {
+    "concepts": ("id",),
+    "concept_aliases": ("concept_id", "normalized_alias"),
+    "concept_parents": ("child_concept_id", "parent_concept_id"),
+    "positions": ("id",),
+    "arguments": ("id",),
+    "argument_verdicts": ("id",),
+    "argument_sources": ("argument_id", "work_id"),
+    "argument_target_positions": ("argument_id", "position_id"),
+    "argument_target_arguments": ("argument_id", "target_argument_id"),
+}
+
+_CURRENT_TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
+    "concept_aliases": (("concept_id", "concepts", "id", "CASCADE"),),
+    "concept_parents": (
+        ("child_concept_id", "concepts", "id", "CASCADE"),
+        ("parent_concept_id", "concepts", "id", "CASCADE"),
+    ),
+    "argument_sources": (
+        ("argument_id", "arguments", "id", "CASCADE"),
+        ("work_id", "works", "id", "CASCADE"),
+    ),
+    "argument_target_positions": (
+        ("argument_id", "arguments", "id", "CASCADE"),
+        ("position_id", "positions", "id", "RESTRICT"),
+        ("verdict_id", "argument_verdicts", "id", "NO ACTION"),
+    ),
+    "argument_target_arguments": (
+        ("argument_id", "arguments", "id", "CASCADE"),
+        ("target_argument_id", "arguments", "id", "RESTRICT"),
+        ("verdict_id", "argument_verdicts", "id", "NO ACTION"),
+    ),
+}
 
 _ACTIVE_SCHEMA_SQL: Optional[str] = None
 
@@ -766,6 +895,32 @@ def validate_current_schema(conn: sqlite3.Connection) -> None:
             "Obsolete schema object is still present.",
             object="idx_folders_title_nocase",
         )
+    if index_exists(conn, "idx_arguments_work_id"):
+        raise MigrationError(
+            "schema_drift",
+            "Obsolete schema object is still present.",
+            object="idx_arguments_work_id",
+        )
+    for table, pk_cols in _CURRENT_TABLE_PKS.items():
+        if not table_exists(conn, table):
+            raise MigrationError("schema_drift", "Required schema object is missing.", object=table)
+        actual_pk = _table_pk_columns(conn, table)
+        if actual_pk != pk_cols:
+            raise MigrationError(
+                "schema_drift",
+                "Required schema object is missing or has the wrong definition.",
+                object=table,
+            )
+    for table, required_fks in _CURRENT_TABLE_FKS.items():
+        if not table_exists(conn, table):
+            raise MigrationError("schema_drift", "Required schema object is missing.", object=table)
+        present = _foreign_key_tuples(conn, table)
+        if present != set(required_fks):
+            raise MigrationError(
+                "schema_drift",
+                "Required schema object is missing or has the wrong definition.",
+                object=table,
+            )
 
 
 def application_schema_signature(conn: sqlite3.Connection) -> dict:
@@ -800,6 +955,189 @@ def application_schema_signature(conn: sqlite3.Connection) -> dict:
 
 def migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
     reconcile_pre_v10_schema(conn, _require_schema_sql())
+
+
+def migrate_v11_to_v12(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE concept_aliases (
+            concept_id TEXT NOT NULL,
+            alias TEXT NOT NULL,
+            normalized_alias TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (concept_id, normalized_alias),
+            FOREIGN KEY (concept_id) REFERENCES concepts(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_concept_aliases_normalized "
+        "ON concept_aliases(normalized_alias)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_parents (
+            child_concept_id TEXT NOT NULL,
+            parent_concept_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (child_concept_id, parent_concept_id),
+            CHECK (child_concept_id <> parent_concept_id),
+            FOREIGN KEY (child_concept_id) REFERENCES concepts(id) ON DELETE CASCADE,
+            FOREIGN KEY (parent_concept_id) REFERENCES concepts(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX idx_concept_parents_parent ON concept_parents(parent_concept_id)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE positions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE argument_verdicts (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO argument_verdicts (id, label, sort_order, enabled) VALUES
+            ('supports', 'Supports', 1, 1),
+            ('opposes', 'Opposes', 2, 1),
+            ('qualifies', 'Qualifies', 3, 1),
+            ('holds', 'Holds', 4, 1)
+        """
+    )
+
+    conn.execute("DROP INDEX IF EXISTS idx_arguments_work_id")
+    has_legacy = table_exists(conn, "arguments") and column_exists(conn, "arguments", "work_id")
+    if has_legacy:
+        conn.execute("ALTER TABLE arguments RENAME TO arguments_legacy_v11")
+    elif table_exists(conn, "arguments"):
+        conn.execute("DROP TABLE arguments")
+
+    conn.execute(
+        """
+        CREATE TABLE arguments (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('argument', 'stance')),
+            main_text TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE argument_sources (
+            argument_id TEXT NOT NULL,
+            work_id TEXT NOT NULL,
+            pages TEXT NOT NULL DEFAULT '',
+            order_index INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (argument_id, work_id),
+            FOREIGN KEY (argument_id) REFERENCES arguments(id) ON DELETE CASCADE,
+            FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX idx_argument_sources_work_id ON argument_sources(work_id)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE argument_target_positions (
+            argument_id TEXT NOT NULL,
+            position_id TEXT NOT NULL,
+            verdict_id TEXT NOT NULL,
+            order_index INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (argument_id, position_id),
+            FOREIGN KEY (argument_id) REFERENCES arguments(id) ON DELETE CASCADE,
+            FOREIGN KEY (position_id) REFERENCES positions(id) ON DELETE RESTRICT,
+            FOREIGN KEY (verdict_id) REFERENCES argument_verdicts(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE argument_target_arguments (
+            argument_id TEXT NOT NULL,
+            target_argument_id TEXT NOT NULL,
+            verdict_id TEXT NOT NULL,
+            order_index INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (argument_id, target_argument_id),
+            CHECK (argument_id <> target_argument_id),
+            FOREIGN KEY (argument_id) REFERENCES arguments(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_argument_id) REFERENCES arguments(id) ON DELETE RESTRICT,
+            FOREIGN KEY (verdict_id) REFERENCES argument_verdicts(id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX idx_argument_target_arguments_target "
+        "ON argument_target_arguments(target_argument_id)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_argument_target_positions_position "
+        "ON argument_target_positions(position_id)"
+    )
+
+    if has_legacy:
+        rows = conn.execute(
+            "SELECT id, work_id, premise, conclusion, created_at FROM arguments_legacy_v11"
+        ).fetchall()
+        for row in rows:
+            arg_id = str(row[0] if not hasattr(row, "keys") else row["id"])
+            work_id = row[1] if not hasattr(row, "keys") else row["work_id"]
+            premise = row[2] if not hasattr(row, "keys") else row["premise"]
+            conclusion = row[3] if not hasattr(row, "keys") else row["conclusion"]
+            created_at = row[4] if not hasattr(row, "keys") else row["created_at"]
+            short = arg_id[2:] if arg_id.startswith("A-") else arg_id
+            name = "Argument %s" % short
+            main_text = _legacy_argument_main_text(premise, conclusion)
+            conn.execute(
+                """
+                INSERT INTO arguments (id, name, kind, main_text, created_at, updated_at)
+                VALUES (?, ?, 'argument', ?, ?, ?)
+                """,
+                (arg_id, name, main_text, created_at, created_at),
+            )
+            if work_id:
+                conn.execute(
+                    """
+                    INSERT INTO argument_sources (
+                        argument_id, work_id, pages, order_index, created_at
+                    ) VALUES (?, ?, '', 0, ?)
+                    """,
+                    (arg_id, work_id, created_at),
+                )
+        conn.execute("DROP TABLE arguments_legacy_v11")
+
+
+def _legacy_argument_main_text(premise, conclusion) -> str:
+    sections = []
+    prem = "" if premise is None else str(premise)
+    conc = "" if conclusion is None else str(conclusion)
+    if prem.strip():
+        sections.append("### Premise\n\n" + prem)
+    if conc.strip():
+        sections.append("### Conclusion\n\n" + conc)
+    return "\n\n".join(sections)
 
 
 def migrate_v10_to_v11(conn: sqlite3.Connection) -> None:
@@ -1005,7 +1343,11 @@ def _ensure_missing_tables(conn: sqlite3.Connection, schema_sql: str) -> None:
             continue
         if name == "works_fts":
             continue
-        if name in _POST_V10_TABLES:
+        if name in _POST_V10_TABLES or name in _POST_V11_TABLES:
+            continue
+        if name == "arguments":
+            if not table_exists(conn, "arguments"):
+                conn.execute(_LEGACY_ARGUMENTS_SQL)
             continue
         if table_exists(conn, name):
             continue
@@ -1624,6 +1966,11 @@ MIGRATIONS: Tuple[Migration, ...] = (
         target_version=11,
         name="add_saved_views",
         apply=migrate_v10_to_v11,
+    ),
+    Migration(
+        target_version=12,
+        name="research_network",
+        apply=migrate_v11_to_v12,
     ),
 )
 

@@ -37,6 +37,15 @@ from backend.text_index import (
     replace_text_index,
     reset_text_index,
 )
+from backend.research_index import (
+    PRKSResearchIndex,
+    get_research_index,
+    reconcile_research_index_at_startup,
+    replace_research_index,
+    reset_research_index,
+)
+from backend.research_network import ResearchError
+import backend.research_network as research_network
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 from backend.storage import paths
 from backend.storage.config import StorageConfig
@@ -112,6 +121,7 @@ thumbs_dir: str | None = None
 processing_dir: str | None = None
 db: PRKSDatabase | None = None
 text_index: PRKSTextIndex | None = None
+research_index: PRKSResearchIndex | None = None
 
 
 def normalize_listen_host(host: str) -> str:
@@ -350,8 +360,9 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
 
     db_local = PRKSDatabase(storage=config, schema_path="backend/db_schema.sql")
     candidate = PRKSTextIndex(storage=config)
+    research_candidate = PRKSResearchIndex(storage=config)
 
-    global _bound_storage, pdfs_dir, thumbs_dir, processing_dir, db, text_index
+    global _bound_storage, pdfs_dir, thumbs_dir, processing_dir, db, text_index, research_index
     previous_published = (
         _bound_storage,
         pdfs_dir,
@@ -359,24 +370,35 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
         processing_dir,
         db,
         text_index,
+        research_index,
     )
     try:
         previous_index = get_text_index()
     except RuntimeError:
         previous_index = None
     try:
+        previous_research = get_research_index()
+    except RuntimeError:
+        previous_research = None
+    try:
         replace_text_index(candidate)
+        replace_research_index(research_candidate)
         _bound_storage = config
         pdfs_dir = config.pdfs_dir
         thumbs_dir = config.thumbs_dir
         processing_dir = config.processing_dir
         db = db_local
         text_index = candidate
+        research_index = research_candidate
     except Exception:
         if previous_index is not None:
             replace_text_index(previous_index)
         else:
             reset_text_index()
+        if previous_research is not None:
+            replace_research_index(previous_research)
+        else:
+            reset_research_index()
         (
             _bound_storage,
             pdfs_dir,
@@ -384,6 +406,7 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
             processing_dir,
             db,
             text_index,
+            research_index,
         ) = previous_published
         raise
     return config
@@ -976,7 +999,25 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         return
                 if body:
                     patched_file_path = "file_path" in body
-                    db.update_work_metadata(w_id, body)
+                    notes_text = None
+                    if "text_content" in body:
+                        notes_text = body.pop("text_content")
+                    if notes_text is not None:
+                        try:
+                            research_network.save_work_notes(db, w_id, notes_text)
+                        except ResearchError as e:
+                            self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                            return
+                        try:
+                            research_index.sync_work(w_id, notes_text, db)
+                        except Exception as e:
+                            LOGGER.warning(
+                                "research_index_sync_failed work_id=%s error_type=%s",
+                                safe_log_id(w_id),
+                                safe_error_type(e),
+                            )
+                    if body:
+                        db.update_work_metadata(w_id, body)
                     if patched_file_path:
                         try:
                             rows = db.execute_query(
@@ -1082,6 +1123,138 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     "true" if has_search else "false",
                 )
                 self.send_json(200, view)
+            elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
+                cid = unquote(path.split('/')[-1])
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                try:
+                    item = research_network.update_concept(
+                        db,
+                        cid,
+                        name=data.get('name') if 'name' in data else None,
+                        description=data.get('description') if 'description' in data else None,
+                    )
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, item)
+            elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
+                pid = unquote(path.split('/')[-1])
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                try:
+                    item = research_network.update_position(
+                        db,
+                        pid,
+                        name=data.get('name') if 'name' in data else None,
+                        description=data.get('description') if 'description' in data else None,
+                    )
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, item)
+            elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
+                aid = unquote(path.split('/')[-1])
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                try:
+                    item = research_network.update_argument(
+                        db,
+                        aid,
+                        name=data.get('name') if 'name' in data else None,
+                        kind=data.get('kind') if 'kind' in data else None,
+                        main_text=data.get('main_text') if 'main_text' in data else None,
+                    )
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, item)
+            else:
+                self.send_error(404, "API endpoint not found")
+        except Exception as exc:
+            self._send_internal_error(exc)
+
+    def do_PUT(self):
+        if not self._validate_request_host():
+            return
+        parsed_path = urlparse(self.path)
+        if parsed_path.path.startswith('/api/'):
+            if not self._validate_mutation_origin():
+                return
+            self.handle_api_put(parsed_path)
+        else:
+            self.send_error(405, "Method Not Allowed")
+
+    def handle_api_put(self, parsed_path):
+        path = parsed_path.path
+        try:
+            data = self._read_json_body()
+            if data is None:
+                return
+            parts = path.split('/')
+            if (
+                path.startswith('/api/concepts/')
+                and len(parts) == 5
+                and parts[4] == 'parents'
+            ):
+                cid = unquote(parts[3])
+                parent_ids = data.get('parent_ids') if isinstance(data, dict) else None
+                if parent_ids is None and isinstance(data, list):
+                    parent_ids = data
+                try:
+                    item = research_network.replace_concept_parents(db, cid, parent_ids)
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, item)
+            elif (
+                path.startswith('/api/concepts/')
+                and len(parts) == 5
+                and parts[4] == 'aliases'
+            ):
+                cid = unquote(parts[3])
+                aliases = data.get('aliases') if isinstance(data, dict) else None
+                if aliases is None and isinstance(data, list):
+                    aliases = data
+                try:
+                    item = research_network.replace_concept_aliases(db, cid, aliases)
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, item)
+            elif (
+                path.startswith('/api/arguments/')
+                and len(parts) == 5
+                and parts[4] == 'sources'
+            ):
+                aid = unquote(parts[3])
+                sources = data.get('sources') if isinstance(data, dict) else None
+                if sources is None and isinstance(data, list):
+                    sources = data
+                try:
+                    item = research_network.replace_argument_sources(db, aid, sources)
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, item)
+            elif (
+                path.startswith('/api/arguments/')
+                and len(parts) == 5
+                and parts[4] == 'targets'
+            ):
+                aid = unquote(parts[3])
+                targets = data.get('targets') if isinstance(data, dict) else None
+                if targets is None and isinstance(data, list):
+                    targets = data
+                try:
+                    item = research_network.replace_argument_targets(db, aid, targets)
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, item)
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
@@ -1250,6 +1423,32 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     "saved_view_deleted view_id=%s",
                     safe_log_id(vid),
                 )
+                self.send_json(200, {'status': 'deleted'})
+            elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
+                cid = unquote(path.split('/')[-1])
+                try:
+                    n = research_index.mention_count_for_concept(cid)
+                    research_network.delete_concept(db, cid, mention_count=n)
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, {'status': 'deleted'})
+            elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
+                pid = unquote(path.split('/')[-1])
+                try:
+                    research_network.delete_position(db, pid)
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, {'status': 'deleted'})
+            elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
+                aid = unquote(path.split('/')[-1])
+                try:
+                    n = research_index.mention_count_for_argument(aid)
+                    research_network.delete_argument(db, aid, mention_count=n)
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
                 self.send_json(200, {'status': 'deleted'})
             else:
                 self.send_error(404, "API endpoint not found")
@@ -1694,8 +1893,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 data = db.get_work(w_id)
-                if data: self.send_json(200, data)
-                else: self.send_error(404, "Work not found")
+                if data:
+                    try:
+                        data['research_refs'] = research_index.work_research_refs(w_id, db)
+                    except Exception as e:
+                        LOGGER.warning(
+                            "research_index_refs_failed work_id=%s error_type=%s",
+                            safe_log_id(w_id),
+                            safe_error_type(e),
+                        )
+                    self.send_json(200, data)
+                else:
+                    self.send_error(404, "Work not found")
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
                 w_id = path.split('/')[3]
                 data = {"work_id": w_id, "annotations_json": db.get_work_annotations(w_id)}
@@ -1768,6 +1977,53 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, data)
                 else:
                     self.send_json(404, {'error': 'Saved View not found.'})
+            elif path == '/api/concepts':
+                items = research_network.list_concepts(db)
+                counts = research_index.concept_mention_counts()
+                for item in items:
+                    item['mention_count'] = int(counts.get(item['id'], 0))
+                self.send_json(200, items)
+            elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
+                cid = unquote(path.split('/')[-1])
+                item = research_network.get_concept(db, cid)
+                if not item:
+                    self.send_json(404, {'error': 'Concept not found.'})
+                    return
+                item['mention_count'] = research_index.mention_count_for_concept(cid)
+                item['mentions'] = research_index.concept_backlinks(cid, db)
+                self.send_json(200, item)
+            elif path == '/api/positions':
+                self.send_json(200, research_network.list_positions(db))
+            elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
+                pid = unquote(path.split('/')[-1])
+                item = research_network.get_position(db, pid)
+                if item:
+                    self.send_json(200, item)
+                else:
+                    self.send_json(404, {'error': 'Position not found.'})
+            elif path == '/api/argument-verdicts':
+                self.send_json(200, research_network.list_verdicts(db))
+            elif path == '/api/arguments':
+                kind = (query.get('kind') or [''])[0].strip() or None
+                try:
+                    items = research_network.list_arguments(db, kind=kind)
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                counts = research_index.argument_mention_counts()
+                for item in items:
+                    item['mention_count'] = int(counts.get(item['id'], 0))
+                self.send_json(200, items)
+            elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
+                aid = unquote(path.split('/')[-1])
+                item = research_network.get_argument(db, aid)
+                if not item:
+                    self.send_json(404, {'error': 'Argument not found.'})
+                    return
+                item['mention_count'] = research_index.mention_count_for_argument(aid)
+                item['mentions'] = research_index.argument_backlinks(aid, db)
+                item['verdicts'] = research_network.list_verdicts(db)
+                self.send_json(200, item)
             elif path.startswith('/api/persons/') and path.endswith('/profile-image'):
                 parts = path.split('/')
                 if len(parts) != 5:
@@ -2296,6 +2552,47 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     safe_log_label((view.get("search") or {}).get("mode")),
                 )
                 self.send_json(201, view)
+            elif path == '/api/concepts':
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                try:
+                    item = research_network.create_concept(
+                        db, data.get('name'), data.get('description', '') or ''
+                    )
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(201, item)
+            elif path == '/api/positions':
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                try:
+                    item = research_network.create_position(
+                        db, data.get('name'), data.get('description', '') or ''
+                    )
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(201, item)
+            elif path == '/api/arguments':
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                try:
+                    item = research_network.create_argument(
+                        db,
+                        name=data.get('name'),
+                        kind=data.get('kind'),
+                        main_text=data.get('main_text', '') or '',
+                        sources=data.get('sources'),
+                        targets=data.get('targets'),
+                    )
+                except ResearchError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(201, item)
             elif path.startswith('/api/person-groups/') and path.endswith('/members'):
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'members':
@@ -2434,52 +2731,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': str(e)})
                     return
                 self.send_json(200, {'status': 'success'})
-            elif path == '/api/arguments':
-                a_id = db.add_argument(data.get('work_id'), data.get('premise'), data.get('conclusion'))
-                self.send_json(200, {'id': a_id})
-            elif path == '/api/concepts':
-                c_id = db.add_concept(data.get('name'), data.get('description'))
-                w_id = data.get('work_id')
-                file_b64 = data.get('file_b64', '')
-                text = data.get('annotations_text', '')
-
-                matches = []
-                if file_b64:
-                    try:
-                        pdf_bytes = base64.b64decode(file_b64, validate=True)
-                    except (binascii.Error, ValueError):
-                        self.send_json(400, {'error': 'Invalid file_b64 payload'})
-                        return
-                    byte_matches = re.findall(rb'\[\[(.*?)\]\]', pdf_bytes)
-                    for b in byte_matches:
-                        try:
-                            decoded = b.decode('utf-8', errors='ignore').strip()
-                            clean = ''.join(c for c in decoded if c.isalnum() or c.isspace() or c in "-_")
-                            if clean:
-                                matches.append(clean)
-                        except Exception:
-                            pass
-                elif text:
-                    matches = [m.strip() for m in re.findall(r'\[\[(.*?)\]\]', text)]
-
-                mention_status = 'skipped'
-                if w_id and matches:
-                    mention_status = 'processed'
-                    for raw in matches:
-                        db_res = db.execute_query(
-                            "SELECT id FROM persons WHERE (first_name || ' ' || last_name) = ? OR last_name = ?",
-                            (raw, raw),
-                        )
-                        if db_res:
-                            p_id = db_res[0]['id']
-                            exist = db.execute_query(
-                                "SELECT 1 FROM roles WHERE person_id=? AND work_id=? AND role_type='Mentioned'",
-                                (p_id, w_id),
-                            )
-                            if not exist:
-                                db.add_role(p_id, w_id, 'Mentioned')
-                self.send_json(200, {'id': c_id, 'status': mention_status})
-                
             elif path.startswith('/api/works/') and path.endswith('/pdf'):
                 w_id = path.split('/')[3]
                 file_b64 = data.get('file_b64', '')
@@ -2784,6 +3035,10 @@ def run_server(port=PORT, host=DEFAULT_HOST):
         reconcile_at_startup(db, text_index)
     except Exception as e:
         LOGGER.warning("text_index_reconcile_failed error_type=%s", safe_error_type(e))
+    try:
+        reconcile_research_index_at_startup(db, research_index)
+    except Exception as e:
+        LOGGER.warning("research_index_reconcile_failed error_type=%s", safe_error_type(e))
     try:
         cleanup_stale_staging(_bound_storage)
         cleanup_expired_backup_jobs(_bound_storage)

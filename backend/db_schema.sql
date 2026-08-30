@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS persons (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Concepts: Abstract entities or theories
+-- Concepts: persistent semantic records. Work membership is derived from notes.
 CREATE TABLE IF NOT EXISTS concepts (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -101,15 +101,107 @@ CREATE TABLE IF NOT EXISTS concepts (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Arguments: Structured logical claims linked to works
+CREATE TABLE IF NOT EXISTS concept_aliases (
+    concept_id TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    normalized_alias TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (concept_id, normalized_alias),
+    FOREIGN KEY (concept_id) REFERENCES concepts(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_concept_aliases_normalized
+    ON concept_aliases(normalized_alias);
+
+CREATE TABLE IF NOT EXISTS concept_parents (
+    child_concept_id TEXT NOT NULL,
+    parent_concept_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (child_concept_id, parent_concept_id),
+    CHECK (child_concept_id <> parent_concept_id),
+    FOREIGN KEY (child_concept_id) REFERENCES concepts(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_concept_id) REFERENCES concepts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_concept_parents_parent
+    ON concept_parents(parent_concept_id);
+
+-- Positions: lightweight claims that Arguments/Stances can target
+CREATE TABLE IF NOT EXISTS positions (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Arguments / Stances: structured research records (not Work metadata)
 CREATE TABLE IF NOT EXISTS arguments (
     id TEXT PRIMARY KEY,
-    work_id TEXT NOT NULL,
-    premise TEXT,
-    conclusion TEXT,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('argument', 'stance')),
+    main_text TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS argument_verdicts (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT OR IGNORE INTO argument_verdicts (id, label, sort_order, enabled) VALUES
+    ('supports', 'Supports', 1, 1),
+    ('opposes', 'Opposes', 2, 1),
+    ('qualifies', 'Qualifies', 3, 1),
+    ('holds', 'Holds', 4, 1);
+
+CREATE TABLE IF NOT EXISTS argument_sources (
+    argument_id TEXT NOT NULL,
+    work_id TEXT NOT NULL,
+    pages TEXT NOT NULL DEFAULT '',
+    order_index INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (argument_id, work_id),
+    FOREIGN KEY (argument_id) REFERENCES arguments(id) ON DELETE CASCADE,
     FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_argument_sources_work_id
+    ON argument_sources(work_id);
+
+CREATE TABLE IF NOT EXISTS argument_target_positions (
+    argument_id TEXT NOT NULL,
+    position_id TEXT NOT NULL,
+    verdict_id TEXT NOT NULL,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (argument_id, position_id),
+    FOREIGN KEY (argument_id) REFERENCES arguments(id) ON DELETE CASCADE,
+    FOREIGN KEY (position_id) REFERENCES positions(id) ON DELETE RESTRICT,
+    FOREIGN KEY (verdict_id) REFERENCES argument_verdicts(id)
+);
+
+CREATE TABLE IF NOT EXISTS argument_target_arguments (
+    argument_id TEXT NOT NULL,
+    target_argument_id TEXT NOT NULL,
+    verdict_id TEXT NOT NULL,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (argument_id, target_argument_id),
+    CHECK (argument_id <> target_argument_id),
+    FOREIGN KEY (argument_id) REFERENCES arguments(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_argument_id) REFERENCES arguments(id) ON DELETE RESTRICT,
+    FOREIGN KEY (verdict_id) REFERENCES argument_verdicts(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_argument_target_arguments_target
+    ON argument_target_arguments(target_argument_id);
+
+CREATE INDEX IF NOT EXISTS idx_argument_target_positions_position
+    ON argument_target_positions(position_id);
 
 -- Roles: Bridge between Persons and Works
 CREATE TABLE IF NOT EXISTS roles (
@@ -379,6 +471,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_parent_title_nocase
 CREATE INDEX IF NOT EXISTS idx_roles_work_id ON roles(work_id);
 CREATE INDEX IF NOT EXISTS idx_roles_person_id ON roles(person_id);
 CREATE INDEX IF NOT EXISTS idx_annotations_work_id ON annotations(work_id);
-CREATE INDEX IF NOT EXISTS idx_arguments_work_id ON arguments(work_id);
 CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist_id ON playlist_items(playlist_id);
 CREATE INDEX IF NOT EXISTS idx_works_last_opened_at ON works(last_opened_at);

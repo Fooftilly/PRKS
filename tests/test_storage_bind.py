@@ -17,6 +17,7 @@ from backend.server import bind_storage, run_server
 from backend.storage import paths
 from backend.storage.config import StorageConfig
 from backend.text_index import PRKSTextIndex, get_text_index, reset_text_index
+from backend.research_index import get_research_index, reset_research_index
 import backend.server as server_module
 
 
@@ -28,6 +29,10 @@ def _capture_bind():
         previous_index = get_text_index()
     except RuntimeError:
         previous_index = None
+    try:
+        previous_research = get_research_index()
+    except RuntimeError:
+        previous_research = None
     return (
         server_module._bound_storage,
         server_module.pdfs_dir,
@@ -36,6 +41,8 @@ def _capture_bind():
         server_module.db,
         server_module.text_index,
         previous_index,
+        server_module.research_index,
+        previous_research,
     )
 
 
@@ -48,6 +55,8 @@ def _restore_bind(snapshot):
         server_module.db,
         server_module.text_index,
         previous_index,
+        server_module.research_index,
+        previous_research,
     ) = snapshot
     if previous_index is None:
         reset_text_index()
@@ -55,6 +64,12 @@ def _restore_bind(snapshot):
         from backend.text_index import replace_text_index
 
         replace_text_index(previous_index)
+    if previous_research is None:
+        reset_research_index()
+    else:
+        from backend.research_index import replace_research_index
+
+        replace_research_index(previous_research)
 
 
 class TestStorageBind(unittest.TestCase):
@@ -113,6 +128,7 @@ class TestStorageBind(unittest.TestCase):
             people_dir=os.path.join(root, "people"),
             processing_dir=preferred,
             index_db_path=os.path.join(root, "prks_text_index.db"),
+            research_index_db_path=os.path.join(root, "prks_research_index.db"),
             log_file=os.path.join(root, "prks-errors.log"),
             processing_fallback_allowed=True,
         )
@@ -147,6 +163,7 @@ class TestStorageBind(unittest.TestCase):
             people_dir=os.path.join(root, "people"),
             processing_dir=preferred,
             index_db_path=os.path.join(root, "prks_text_index.db"),
+            research_index_db_path=os.path.join(root, "prks_research_index.db"),
             log_file=os.path.join(root, "prks-errors.log"),
             processing_fallback_allowed=False,
         )

@@ -430,9 +430,34 @@
         });
     }
 
+    function currentCanonicalHash() {
+        if (typeof root.prksCurrentCanonicalHash === 'function') {
+            return root.prksCurrentCanonicalHash();
+        }
+        if (typeof root.prksParseRoute === 'function' && root.location) {
+            const parsed = root.prksParseRoute(root.location.hash || '');
+            return (parsed && parsed.canonicalHash) || '';
+        }
+        return root.location ? String(root.location.hash || '') : '';
+    }
+
+    function editFetchStillCurrent(routeGen, canonicalHash) {
+        if (routeGen !== root.__prksRouteGen) return false;
+        return canonicalHash === currentCanonicalHash();
+    }
+
     async function openEditById(id) {
         if (typeof root.fetchSavedView !== 'function') return;
-        const view = await root.fetchSavedView(id);
+        const routeGen = root.__prksRouteGen;
+        const canonicalHash = currentCanonicalHash();
+        let view;
+        try {
+            view = await root.fetchSavedView(id);
+        } catch (_e) {
+            if (!editFetchStillCurrent(routeGen, canonicalHash)) return;
+            return;
+        }
+        if (!editFetchStillCurrent(routeGen, canonicalHash)) return;
         if (!view) return;
         openModalWith({
             viewId: view.id,
@@ -529,6 +554,7 @@
         prksSearchResultCardsHtml: prksSearchResultCardsHtml,
         prksOpenSavedViewModalFromCurrentSearch: prksOpenSavedViewModalFromCurrentSearch,
         prksOpenSavedViewModalForCurrentView: prksOpenSavedViewModalForCurrentView,
+        prksOpenSavedViewIndexEdit: openEditById,
         prksOpenSavedViewModal: openModalWith,
         renderSavedViewsIndex: renderSavedViewsIndex,
         renderSavedViewDetail: renderSavedViewDetail,

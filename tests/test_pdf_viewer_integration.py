@@ -406,6 +406,26 @@ class PdfViewerIntegrationTests(unittest.TestCase):
             }
             self.assertEqual(got, want, name)
 
+    def test_notes_and_argument_insert_do_not_remount_pdf(self):
+        works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
+        args = _read(os.path.join(_FRONTEND, "js", "components", "arguments.js"))
+        self.assertIn("initPdfViewerForWork", works)
+        save_block = works.split("JSON.stringify({ text_content: content })", 1)[1].split(
+            "function prksDestroyWorkNotesEditor", 1
+        )[0]
+        self.assertNotIn("initPdfViewerForWork", save_block)
+        self.assertNotIn("prksNavigate", save_block)
+        create = args.split("async function createArgumentFromWork", 1)[1].split(
+            "const api =", 1
+        )[0]
+        self.assertNotIn("prksNavigate", create)
+        self.assertNotIn("initPdfViewerForWork", create)
+        picker = works.split("function prksOpenArgumentPicker", 1)[1].split(
+            "async function deleteWork", 1
+        )[0]
+        self.assertNotIn("prksNavigate", picker)
+        self.assertIn("prksInsertNotesMarkup", picker)
+
 
 if __name__ == "__main__":
     unittest.main()

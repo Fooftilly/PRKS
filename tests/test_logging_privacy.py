@@ -143,11 +143,13 @@ class TestSafeRoute(unittest.TestCase):
         )
         self.assertEqual(safe_route("/api/works/bulk"), "/api/works/bulk")
         self.assertEqual(safe_route("/api/saved-views"), "/api/saved-views")
-        self.assertEqual(
-            safe_route("/api/saved-views/SV-ABC"),
-            "/api/saved-views/:id",
-        )
+        self.assertEqual(safe_route("/api/saved-views/SV-ABC"), "/api/saved-views/:id")
         self.assertNotIn("SV-ABC", safe_route("/api/saved-views/SV-ABC"))
+        self.assertEqual(safe_route("/api/concepts"), "/api/concepts")
+        self.assertEqual(safe_route("/api/concepts/C-ABC/parents"), "/api/concepts/:id/parents")
+        self.assertEqual(safe_route("/api/arguments/A-ABC/targets"), "/api/arguments/:id/targets")
+        self.assertEqual(safe_route("/api/positions/P-ABC"), "/api/positions/:id")
+        self.assertEqual(safe_route("/api/argument-verdicts"), "/api/argument-verdicts")
 
     def test_unknown_api_fails_closed(self):
         self.assertEqual(safe_route("/api/not-a-real-family/secret"), "/api/:unknown")

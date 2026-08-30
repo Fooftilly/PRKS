@@ -681,6 +681,21 @@ body {
     box-sizing: border-box;
 }
 
+.prks-modal-prompt__input--multiline {
+    min-height: 8rem;
+    resize: vertical;
+    line-height: 1.45;
+}
+
+.prks-modal-confirm__desc--prompt {
+    display: block;
+}
+
+.prks-modal-prompt__hint {
+    display: block;
+    margin: 0;
+}
+
 .person-profile__work-card-wrap {
     position: relative;
 }
@@ -7779,4 +7794,125 @@ body.prks-bulk-selection-active #main-content {
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
     }
+}
+
+.prks-research-picker {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: rgba(15, 15, 18, 0.45);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 12vh 1rem 1rem;
+}
+
+.prks-research-picker__panel {
+    background: var(--surface, #fff);
+    color: var(--text, #111);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    min-width: min(420px, 92vw);
+    max-width: 520px;
+    max-height: 70vh;
+    overflow: auto;
+    padding: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.prks-research-picker__title {
+    margin: 0 0 8px;
+    font-weight: 650;
+}
+
+.prks-research-picker__q {
+    width: 100%;
+    margin-bottom: 8px;
+}
+
+.prks-research-picker__item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    padding: 6px 8px;
+    cursor: pointer;
+    font: inherit;
+}
+
+.prks-research-picker__item:hover,
+.prks-research-picker__item:focus {
+    background: var(--surface-muted, #f4f4f5);
+}
+
+.prks-research-picker__actions {
+    margin: 8px 0;
+}
+
+.prks-arg-form {
+    max-width: 42rem;
+}
+
+.prks-arg-form.form-pane {
+    overflow: visible;
+    padding-right: 0;
+}
+
+.prks-arg-form .form-field-label {
+    margin-top: 0;
+}
+
+.prks-arg-form input[type="text"],
+.prks-arg-form select,
+.prks-arg-form textarea {
+    display: block;
+    width: 100%;
+    margin-top: 0;
+    padding: 9px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+    color: var(--text-primary);
+    font-family: var(--font-family);
+    font-size: inherit;
+    box-sizing: border-box;
+    color-scheme: inherit;
+}
+
+.prks-arg-form input[type="text"]:focus-visible,
+.prks-arg-form select:focus-visible,
+.prks-arg-form textarea:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent);
+}
+
+.prks-arg-form textarea {
+    min-height: 10rem;
+    resize: vertical;
+    line-height: 1.45;
+}
+
+.prks-arg-form__actions {
+    margin: var(--space-lg) 0 0;
+}
+
+.prks-arg-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.prks-arg-row input,
+.prks-arg-row select {
+    flex: 1 1 8rem;
+    width: auto;
+    min-width: 0;
+}
+
+.research-md {
+    margin: 0.75rem 0 1.25rem;
 }

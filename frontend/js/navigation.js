@@ -163,6 +163,57 @@
             sectionHash: '#/people/groups',
             detail: true,
         },
+        concepts: {
+            title: 'Concepts',
+            loadingTitle: 'Concepts',
+            backLabel: 'Concepts',
+            navHref: '#/concepts',
+            fallbackBack: '#/concepts',
+            sectionHash: '#/concepts',
+        },
+        'concept-detail': {
+            title: 'Concept',
+            loadingTitle: 'Concept',
+            backLabel: 'Concept',
+            navHref: '#/concepts',
+            fallbackBack: '#/concepts',
+            sectionHash: '#/concepts',
+            detail: true,
+        },
+        positions: {
+            title: 'Positions',
+            loadingTitle: 'Positions',
+            backLabel: 'Positions',
+            navHref: '#/positions',
+            fallbackBack: '#/positions',
+            sectionHash: '#/positions',
+        },
+        'position-detail': {
+            title: 'Position',
+            loadingTitle: 'Position',
+            backLabel: 'Position',
+            navHref: '#/positions',
+            fallbackBack: '#/positions',
+            sectionHash: '#/positions',
+            detail: true,
+        },
+        arguments: {
+            title: 'Arguments & Stances',
+            loadingTitle: 'Arguments & Stances',
+            backLabel: 'Arguments & Stances',
+            navHref: '#/arguments',
+            fallbackBack: '#/arguments',
+            sectionHash: '#/arguments',
+        },
+        'argument-detail': {
+            title: 'Argument',
+            loadingTitle: 'Argument',
+            backLabel: 'Argument',
+            navHref: '#/arguments',
+            fallbackBack: '#/arguments',
+            sectionHash: '#/arguments',
+            detail: true,
+        },
         progress: {
             title: 'Progress',
             loadingTitle: 'Progress',
@@ -388,6 +439,55 @@
             return prksRouteRecord('publishers', rawHash, '#/publishers', {});
         }
 
+        if (head === 'concepts' && segs.length === 1) {
+            return prksRouteRecord('concepts', rawHash, '#/concepts', {});
+        }
+        if (head === 'concepts' && segs.length === 2) {
+            const conceptId = prksSafeDecode(segs[1]);
+            if (conceptId == null || !conceptId) return prksUnknownRoute(rawHash);
+            return prksRouteRecord(
+                'concept-detail',
+                rawHash,
+                '#/concepts/' + prksEncodePathSegment(conceptId),
+                { conceptId: conceptId }
+            );
+        }
+
+        if (head === 'positions' && segs.length === 1) {
+            return prksRouteRecord('positions', rawHash, '#/positions', {});
+        }
+        if (head === 'positions' && segs.length === 2) {
+            const positionId = prksSafeDecode(segs[1]);
+            if (positionId == null || !positionId) return prksUnknownRoute(rawHash);
+            return prksRouteRecord(
+                'position-detail',
+                rawHash,
+                '#/positions/' + prksEncodePathSegment(positionId),
+                { positionId: positionId }
+            );
+        }
+
+        if (head === 'arguments' && segs.length === 1) {
+            let kind = '';
+            try {
+                kind = String(new URLSearchParams(split.query).get('kind') || '').trim();
+            } catch (_e) {
+                kind = '';
+            }
+            const canonical = kind ? '#/arguments?kind=' + prksEncodePathSegment(kind) : '#/arguments';
+            return prksRouteRecord('arguments', rawHash, canonical, { kind: kind });
+        }
+        if (head === 'arguments' && segs.length === 2) {
+            const argumentId = prksSafeDecode(segs[1]);
+            if (argumentId == null || !argumentId) return prksUnknownRoute(rawHash);
+            return prksRouteRecord(
+                'argument-detail',
+                rawHash,
+                '#/arguments/' + prksEncodePathSegment(argumentId),
+                { argumentId: argumentId }
+            );
+        }
+
         if (head === 'processing-files' && segs.length === 1) {
             return prksRouteRecord('processing-files', rawHash, '#/processing-files', {});
         }
@@ -470,6 +570,12 @@
     function prksCurrentLocationHash() {
         if (typeof root.location === 'undefined' || root.location.hash == null) return PRKS_HOME_HASH;
         return root.location.hash || PRKS_HOME_HASH;
+    }
+
+    function prksCurrentCanonicalHash() {
+        const hash = prksCurrentLocationHash();
+        const route = prksParseRoute(hash);
+        return route && route.canonicalHash ? route.canonicalHash : hash;
     }
 
     function prksMeta(route) {
@@ -599,6 +705,28 @@
 
     const PRKS_NAV_PEOPLE_EXPANDED_KEY = 'prks.nav.peopleExpanded';
     const PRKS_NAV_PROGRESS_EXPANDED_KEY = 'prks.nav.progressExpanded';
+    const PRKS_NAV_RESEARCH_EXPANDED_KEY = 'prks.nav.researchExpanded';
+
+    const PRKS_NAV_DISCLOSURES = {
+        people: {
+            listId: 'prks-nav-people-children',
+            prefKey: PRKS_NAV_PEOPLE_EXPANDED_KEY,
+            show: 'Show People shortcuts',
+            hide: 'Hide People shortcuts',
+        },
+        progress: {
+            listId: 'prks-nav-progress-children',
+            prefKey: PRKS_NAV_PROGRESS_EXPANDED_KEY,
+            show: 'Show Progress shortcuts',
+            hide: 'Hide Progress shortcuts',
+        },
+        research: {
+            listId: 'prks-nav-research-children',
+            prefKey: PRKS_NAV_RESEARCH_EXPANDED_KEY,
+            show: 'Show Research shortcuts',
+            hide: 'Hide Research shortcuts',
+        },
+    };
 
     function prksReadNavExpandedPref(key) {
         try {
@@ -628,10 +756,23 @@
         return !!(route && route.name === 'progress');
     }
 
+    function prksResearchRouteForcesOpen(route) {
+        return !!(
+            route &&
+            (route.name === 'concepts' ||
+                route.name === 'concept-detail' ||
+                route.name === 'positions' ||
+                route.name === 'position-detail' ||
+                route.name === 'arguments' ||
+                route.name === 'argument-detail')
+        );
+    }
+
     function prksSetDisclosureVisual(which, expanded) {
         if (typeof document === 'undefined' || !document.getElementById) return;
-        const listId = which === 'people' ? 'prks-nav-people-children' : 'prks-nav-progress-children';
-        const list = document.getElementById(listId);
+        const spec = PRKS_NAV_DISCLOSURES[which];
+        if (!spec) return;
+        const list = document.getElementById(spec.listId);
         const btn =
             document.querySelector &&
             document.querySelector('[data-nav-disclosure-toggle="' + which + '"]');
@@ -639,9 +780,7 @@
             document.querySelector && document.querySelector('[data-nav-disclosure="' + which + '"]');
         if (btn) {
             btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            const show = which === 'people' ? 'Show People shortcuts' : 'Show Progress shortcuts';
-            const hide = which === 'people' ? 'Hide People shortcuts' : 'Hide Progress shortcuts';
-            btn.setAttribute('aria-label', expanded ? hide : show);
+            btn.setAttribute('aria-label', expanded ? spec.hide : spec.show);
         }
         if (list) {
             list.hidden = !expanded;
@@ -655,6 +794,7 @@
         if (typeof document === 'undefined') return;
         const peopleForced = prksPeopleRouteForcesOpen(route);
         const progressForced = prksProgressRouteForcesOpen(route);
+        const researchForced = prksResearchRouteForcesOpen(route);
         prksSetDisclosureVisual(
             'people',
             peopleForced || prksReadNavExpandedPref(PRKS_NAV_PEOPLE_EXPANDED_KEY)
@@ -662,6 +802,10 @@
         prksSetDisclosureVisual(
             'progress',
             progressForced || prksReadNavExpandedPref(PRKS_NAV_PROGRESS_EXPANDED_KEY)
+        );
+        prksSetDisclosureVisual(
+            'research',
+            researchForced || prksReadNavExpandedPref(PRKS_NAV_RESEARCH_EXPANDED_KEY)
         );
     }
 
@@ -676,16 +820,16 @@
                 e.preventDefault();
                 e.stopPropagation();
                 const which = btn.getAttribute('data-nav-disclosure-toggle');
-                if (which !== 'people' && which !== 'progress') return;
-                const key =
-                    which === 'people'
-                        ? PRKS_NAV_PEOPLE_EXPANDED_KEY
-                        : PRKS_NAV_PROGRESS_EXPANDED_KEY;
+                const spec = PRKS_NAV_DISCLOSURES[which];
+                if (!spec) return;
+                const key = spec.prefKey;
                 const route = prksParseRoute(root.location ? root.location.hash : '');
                 const forced =
                     which === 'people'
                         ? prksPeopleRouteForcesOpen(route)
-                        : prksProgressRouteForcesOpen(route);
+                        : which === 'progress'
+                          ? prksProgressRouteForcesOpen(route)
+                          : prksResearchRouteForcesOpen(route);
                 if (forced) {
                     prksWriteNavExpandedPref(key, false);
                     prksSyncNavDisclosures(route);
@@ -992,6 +1136,7 @@
         PRKS_PROGRESS_STATUS_VALUES: PRKS_PROGRESS_STATUS_VALUES,
         PRKS_PEOPLE_ROLES: PRKS_PEOPLE_ROLES,
         prksParseRoute: prksParseRoute,
+        prksCurrentCanonicalHash: prksCurrentCanonicalHash,
         prksNavigate: prksNavigate,
         prksSyncSidebarActive: prksSyncSidebarActive,
         prksSyncNavDisclosures: prksSyncNavDisclosures,

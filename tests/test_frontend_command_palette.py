@@ -68,6 +68,7 @@ class FrontendCommandPaletteTests(unittest.TestCase):
     def test_people_and_progress_disclosures(self):
         html = _read(_INDEX)
         nav = _read(_NAV)
+        src = _read(_PALETTE)
         self.assertIn('data-nav-disclosure="people"', html)
         self.assertIn('data-nav-disclosure-toggle="people"', html)
         self.assertIn('id="prks-nav-people-children"', html)
@@ -76,6 +77,10 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertIn('id="prks-nav-progress-children"', html)
         self.assertIn("prks.nav.peopleExpanded", nav)
         self.assertIn("prks.nav.progressExpanded", nav)
+        self.assertIn("prks.nav.researchExpanded", nav)
+        self.assertIn('data-nav-disclosure="research"', html)
+        self.assertIn('id="prks-nav-research-children"', html)
+        self.assertIn("navigate-concepts", src)
         self.assertIn("prksSyncNavDisclosures", nav)
         self.assertIn("prksInitNavDisclosures", nav)
         self.assertIn("Folders</span>", html)
@@ -101,7 +106,7 @@ class FrontendCommandPaletteTests(unittest.TestCase):
 
     def test_no_schema_bump(self):
         schema = _read(_SCHEMA)
-        self.assertIn("LATEST_SCHEMA_VERSION = 11", schema)
+        self.assertIn("LATEST_SCHEMA_VERSION = 12", schema)
 
     def test_docs(self):
         readme = _read(_README)
