@@ -6,7 +6,7 @@ import re
 import unittest
 from urllib.parse import unquote
 
-from tests.e2e.fixtures import PERSON_DISPLAY, WORK_A_TITLE, seed_library
+from tests.e2e.fixtures import MINIMAL_PDF, PERSON_DISPLAY, WORK_A_TITLE, seed_library
 from tests.e2e.harness import (
     AppServer,
     FixtureServer,
@@ -285,91 +285,131 @@ def _viewer_annotation_count(page):
     )
 
 
-def _drag_pdf_text_selection(page):
-    host = page.locator("#pdf-viewer .prks-pdf-page > *").first
-    host.wait_for()
-    box = host.bounding_box()
-    if not box:
-        return
-    sx = box["x"] + min(90, max(20, box["width"] * 0.15))
-    sy = box["y"] + min(95, max(20, box["height"] * 0.12))
-    page.mouse.move(sx, sy)
-    page.mouse.down()
-    page.mouse.move(sx + min(210, box["width"] * 0.45), sy, steps=10)
-    page.mouse.up()
-    page.wait_for_timeout(400)
+def _pdf_text_band_fractions():
+    """Selectable-text location on the seeded minimal.pdf, as fractions of page size.
+
+    PyMuPDF uses a top-left origin matching the rendered page image.
+    """
+    import fitz
+
+    doc = fitz.open(str(MINIMAL_PDF))
+    try:
+        page = doc[0]
+        words = page.get_text("words")
+        if len(words) < 2:
+            raise AssertionError("seeded PDF has no selectable words")
+        pw, ph = float(page.rect.width), float(page.rect.height)
+        x0, y0, _x1, y1 = words[0][:4]
+        x1 = words[min(2, len(words) - 1)][2]
+        return {
+            "fx0": float(x0) / pw,
+            "fx1": min(0.95, float(x1) / pw + 0.04),
+            "fy": ((float(y0) + float(y1)) / 2.0) / ph,
+        }
+    finally:
+        doc.close()
+
+
+def _pdf_selection_geometry(page):
+    """Viewport coordinates for a real-mouse drag across rendered PDF text."""
+    band = _pdf_text_band_fractions()
+    page.evaluate(
+        """(band) => {
+            const viewer = document.querySelector('#pdf-viewer');
+            const pageEl = viewer && viewer.querySelector('.prks-pdf-page');
+            const vp = viewer && viewer.querySelector('.prks-pdf-viewport');
+            if (!pageEl || !vp) return;
+            const host = pageEl.firstElementChild instanceof Element ? pageEl.firstElementChild : pageEl;
+            const yOnPage = host.offsetHeight * band.fy;
+            vp.scrollTop = Math.max(0, yOnPage - vp.clientHeight * 0.35);
+        }""",
+        band,
+    )
+    page.wait_for_function(
+        """(band) => {
+            const viewer = document.querySelector('#pdf-viewer');
+            const pageEl = viewer && viewer.querySelector('.prks-pdf-page');
+            const vp = viewer && viewer.querySelector('.prks-pdf-viewport');
+            if (!pageEl || !vp) return false;
+            const host = pageEl.firstElementChild instanceof Element ? pageEl.firstElementChild : pageEl;
+            const hr = host.getBoundingClientRect();
+            const vr = vp.getBoundingClientRect();
+            const y = hr.top + hr.height * band.fy;
+            return y >= vr.top + 8 && y <= vr.bottom - 8;
+        }""",
+        arg=band,
+        timeout=5000,
+    )
+    geo = page.evaluate(
+        """(band) => {
+            const viewer = document.querySelector('#pdf-viewer');
+            const pageEl = viewer && viewer.querySelector('.prks-pdf-page');
+            if (!viewer || !pageEl) return { error: 'missing page' };
+            const host = pageEl.firstElementChild instanceof Element ? pageEl.firstElementChild : pageEl;
+            const vp = viewer.querySelector('.prks-pdf-viewport') || viewer;
+            const hr = host.getBoundingClientRect();
+            const vr = vp.getBoundingClientRect();
+            const clampX = (x) => Math.min(Math.max(x, vr.left + 6), vr.right - 6);
+            const clampY = (y) => Math.min(Math.max(y, vr.top + 6), vr.bottom - 6);
+            const sx = clampX(hr.left + hr.width * band.fx0);
+            const ex = clampX(hr.left + hr.width * band.fx1);
+            const y = clampY(hr.top + hr.height * band.fy);
+            return {
+                sx: sx,
+                sy: y,
+                ex: ex,
+                ey: y,
+                source: 'pdf-text-band',
+                band: band,
+                host: { x: hr.x, y: hr.y, w: hr.width, h: hr.height },
+                viewport: { x: vr.x, y: vr.y, w: vr.width, h: vr.height },
+            };
+        }""",
+        band,
+    )
+    if not geo or geo.get("error"):
+        raise AssertionError("could not measure PDF text selection geometry: %s" % geo)
+    if abs(geo["ex"] - geo["sx"]) < 20:
+        raise AssertionError("PDF selection drag is too short: %s" % geo)
+    return geo
 
 
 def _commit_pdf_highlight(page):
-    """Select text with a real mouse; fall back to the viewer's createAnnotation API."""
+    """Pointer mode → real mouse text selection → selection popup Highlight."""
     _wait_pdf_viewer(page)
-    page.evaluate(
+    pointer = page.locator('#pdf-viewer .prks-pdf-toolbar [aria-label="Pointer"]')
+    pointer.wait_for(state="visible")
+    pointer.click()
+    page.wait_for_function(
         """() => {
-            const v = window.currentPdfViewer;
-            if (v && typeof v.setInteractionMode === 'function') v.setInteractionMode('pointer');
+            const b = document.querySelector('#pdf-viewer .prks-pdf-toolbar [aria-label="Pointer"]');
+            return b && b.getAttribute('aria-pressed') === 'true';
         }"""
     )
-    pointer_btn = page.locator('#pdf-viewer [aria-label="Pointer"]')
-    if pointer_btn.count():
-        pointer_btn.first.click()
     before = _viewer_annotation_count(page)
-    toolbar_hi = page.locator('#pdf-viewer .prks-pdf-toolbar__secondary [aria-label="Highlight"]')
-    if toolbar_hi.count():
-        toolbar_hi.first.click()
-    _drag_pdf_text_selection(page)
-    popup = page.locator(".prks-pdf-selection-popup [aria-label='Highlight']")
-    if popup.count():
-        popup.click()
+    geo = _pdf_selection_geometry(page)
+    page.mouse.move(geo["sx"], geo["sy"])
+    page.mouse.down()
+    page.mouse.move(geo["ex"], geo["ey"], steps=12)
+    page.mouse.up()
+    page.wait_for_timeout(400)
+    popup = page.locator(".prks-pdf-selection-popup")
     try:
-        page.wait_for_function(
-            """(n) => {
-                const v = window.currentPdfViewer;
-                return !!(v && v.getAnnotations && v.getAnnotations().length > n);
-            }""",
-            arg=before,
-            timeout=5000,
-        )
-    except Exception:
-        created = page.evaluate(
-            """async () => {
-                const v = window.currentPdfViewer;
-                if (!v || typeof v.createAnnotation !== 'function') return false;
-                const id = (crypto.randomUUID && crypto.randomUUID()) || ('e2e-' + Date.now());
-                const payload = {
-                    id: id,
-                    type: 9,
-                    pageIndex: 0,
-                    rect: { origin: { x: 72, y: 700 }, size: { width: 160, height: 14 } },
-                    segmentRects: [{ origin: { x: 72, y: 700 }, size: { width: 160, height: 14 } }],
-                    opacity: 1,
-                    strokeColor: '#FFCD45',
-                    color: '#FFCD45',
-                    created: new Date(),
-                };
-                const result = v.createAnnotation(0, payload);
-                if (result && typeof result.then === 'function') await result;
-                if (result && typeof result.toPromise === 'function') await result.toPromise();
-                return (v.getAnnotations() || []).some((a) => a && (a.id === id || (a.raw && a.raw.id === id)));
-            }"""
-        )
-        if not created:
-            raise AssertionError("could not create a PDF highlight")
-        page.wait_for_function(
-            """(n) => {
-                const v = window.currentPdfViewer;
-                return !!(v && v.getAnnotations && v.getAnnotations().length > n);
-            }""",
-            arg=before,
-            timeout=8000,
-        )
-    page.evaluate(
-        """() => {
-            const st = window.__prksWorkAnnotationSyncState;
-            if (st && (st.pendingChanges || st.inFlight || st.localMutationSeen)) return;
-            if (typeof window.__prksFlushWorkAnnotationPersistence === 'function') {
-                void window.__prksFlushWorkAnnotationPersistence();
-            }
-        }"""
+        popup.wait_for(state="visible", timeout=8000)
+    except Exception as exc:
+        raise AssertionError(
+            "selection popup did not appear after mouse text selection: %s" % geo
+        ) from exc
+    highlight = popup.locator("[aria-label='Highlight']")
+    highlight.wait_for(state="visible")
+    highlight.click()
+    page.wait_for_function(
+        """(n) => {
+            const v = window.currentPdfViewer;
+            return !!(v && v.getAnnotations && v.getAnnotations().length > n);
+        }""",
+        arg=before,
+        timeout=10000,
     )
 
 

@@ -284,7 +284,7 @@ python -m pip install -r requirements-dev.txt
 python run_tests.py --e2e
 ```
 
-`python tests/e2e/run.py` remains the direct E2E entry point. The first `--e2e` / `run.py` run installs Chromium into repository-local `.playwright-browsers/` (gitignored) when that Playwright revision is missing. Later runs reuse the cache and do not download again. `python tests/e2e/install_browser.py` is the same installer on its own. Use the same Python interpreter for install and tests: a Chromium revision for one Playwright version will not satisfy another. Test execution sets `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so Playwright cannot silently fetch browsers into the virtualenv or OS user cache.
+`python tests/e2e/run.py` remains the direct E2E entry point. Before any browser download, the runner checks `importlib.metadata.version("playwright")` against the exact pin in `requirements-dev.txt` (`playwright==1.62.0`). A mismatch fails immediately. If the pin matches and Chromium is missing, it installs into repository-local `.playwright-browsers/` (gitignored). Later runs reuse that cache. `python tests/e2e/install_browser.py` is the same installer on its own. Test execution sets `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so Playwright cannot silently fetch browsers into the virtualenv or OS user cache.
 
 Every E2E run creates a fresh temporary `PRKS_STORAGE` with `PRKS_TESTING=1`, binds `127.0.0.1`, and deletes that tree on teardown. It never targets `data/` or a live production storage directory.
 
