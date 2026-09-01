@@ -31,6 +31,7 @@
     let statusMessage = '';
     let pendingFocus = '';
     let boundKeyHandler = null;
+    let reloadGeneration = 0;
 
     function esc(s) {
         if (typeof root.prksEscapeHtml === 'function') return root.prksEscapeHtml(s);
@@ -467,7 +468,12 @@
         ];
     }
 
+    function graphReloadIsStale(gen, originDom) {
+        return gen !== reloadGeneration || liveDom !== originDom;
+    }
+
     function destroyResearchGraph() {
+        reloadGeneration += 1;
         if (boundKeyHandler && liveDom) {
             liveDom.removeEventListener('keydown', boundKeyHandler);
             boundKeyHandler = null;
@@ -911,9 +917,12 @@
         const wantPeople = nextPeople === undefined ? includePeople : !!nextPeople;
         const prevPeople = includePeople;
         const keep = selectedId;
-        const host = liveDom.parentNode;
+        const originDom = liveDom;
+        const host = originDom.parentNode;
+        const gen = (reloadGeneration += 1);
         try {
             const data = await root.fetchResearchGraph({ people: wantPeople });
+            if (graphReloadIsStale(gen, originDom)) return false;
             includePeople = wantPeople;
             filters.people = wantPeople;
             snapshot = data;
@@ -931,6 +940,7 @@
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
             return true;
         } catch (e) {
+            if (graphReloadIsStale(gen, originDom)) return false;
             includePeople = prevPeople;
             filters.people = prevPeople;
             syncPeopleCheckbox();

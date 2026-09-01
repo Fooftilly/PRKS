@@ -422,6 +422,56 @@ function makeGraphHost() {
         String(conceptHost._inspector.innerHTML).indexOf('Could not load Research Graph.') >= 0
     );
 
+    const leaveHost = makeGraphHost();
+    fetchImpl = async function () {
+        return fixture;
+    };
+    await g.renderResearchGraph(leaveHost, {});
+    let resolveLeave;
+    fetchImpl = function () {
+        return new Promise(function (resolve) {
+            resolveLeave = resolve;
+        });
+    };
+    const leavePending = g.reloadGraph(true);
+    g.destroyResearchGraph();
+    leaveHost.innerHTML = 'WORKS PAGE';
+    resolveLeave(fixture);
+    const leaveResult = await leavePending;
+    assertEq(rows, 'stale reload after leave returns false', leaveResult, false);
+    assertEq(rows, 'stale reload does not replace left page', leaveHost.innerHTML, 'WORKS PAGE');
+
+    const raceHost = makeGraphHost();
+    fetchImpl = async function () {
+        return fixture;
+    };
+    await g.renderResearchGraph(raceHost, {});
+    const deferred = [];
+    fetchImpl = function (opts) {
+        return new Promise(function (resolve, reject) {
+            deferred.push({ opts: opts || {}, resolve: resolve, reject: reject });
+        });
+    };
+    const onPending = g.reloadGraph(true);
+    const offPending = g.reloadGraph(false);
+    assertEq(rows, 'rapid toggle started two fetches', deferred.length, 2);
+    deferred[1].resolve(fixture);
+    const offResult = await offPending;
+    assertEq(rows, 'latest people-off reload applies', offResult, true);
+    assertEq(rows, 'people checkbox follows latest toggle', raceHost._peopleBox.checked, false);
+    raceHost._inspector.innerHTML = '';
+    const tooLarge = new Error('too large');
+    tooLarge.code = 'graph_too_large';
+    deferred[0].reject(tooLarge);
+    const onResult = await onPending;
+    assertEq(rows, 'older people-on reload is ignored', onResult, false);
+    assertEq(rows, 'stale people-on does not restore people', raceHost._peopleBox.checked, false);
+    assert(
+        rows,
+        'stale people-on failure does not paint error',
+        String(raceHost._inspector.innerHTML).indexOf('too large') < 0
+    );
+
     const passed = rows.filter((r) => r.ok).length;
     const failed = rows.filter((r) => !r.ok).length;
     rows.forEach((r) => {

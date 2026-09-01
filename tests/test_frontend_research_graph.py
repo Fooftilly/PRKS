@@ -65,6 +65,8 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("peopleRequiredForFocus", src)
         self.assertIn("reloadGraphFailureMessage", src)
         self.assertIn("startsWith('person:')", src)
+        self.assertIn("reloadGeneration", src)
+        self.assertIn("graphReloadIsStale", src)
         self.assertIn(".destroy()", src)
         self.assertIn("__prksResearchGraphLiveCount", src)
         self.assertIn("display", src)
