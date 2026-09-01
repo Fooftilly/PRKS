@@ -939,8 +939,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._validate_mutation_origin():
                 return
+            if parsed_path.path == '/api/backups/stage':
+                self._handle_backup_stage(parsed_path)
+                return
+            data = self._read_json_body()
+            if data is None:
+                return
             with self._library_access(parsed_path):
-                self.handle_api_post(parsed_path)
+                self.handle_api_post(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -951,17 +957,21 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._validate_mutation_origin():
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_patch(parsed_path)
-        else:
-            self.send_error(405, "Method Not Allowed")
-
-    def handle_api_patch(self, parsed_path):
-        path = parsed_path.path
-        try:
             data = self._read_json_body()
             if data is None:
                 return
+            with self._library_access(parsed_path):
+                self.handle_api_patch(parsed_path, data)
+        else:
+            self.send_error(405, "Method Not Allowed")
+
+    def handle_api_patch(self, parsed_path, data=None):
+        path = parsed_path.path
+        try:
+            if data is None:
+                data = self._read_json_body()
+                if data is None:
+                    return
             if path.startswith('/api/processing-files/') and len(path.split('/')) == 4:
                 pf_id = path.split('/')[-1]
                 if not isinstance(data, dict):
@@ -1206,17 +1216,21 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._validate_mutation_origin():
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_put(parsed_path)
-        else:
-            self.send_error(405, "Method Not Allowed")
-
-    def handle_api_put(self, parsed_path):
-        path = parsed_path.path
-        try:
             data = self._read_json_body()
             if data is None:
                 return
+            with self._library_access(parsed_path):
+                self.handle_api_put(parsed_path, data)
+        else:
+            self.send_error(405, "Method Not Allowed")
+
+    def handle_api_put(self, parsed_path, data=None):
+        path = parsed_path.path
+        try:
+            if data is None:
+                data = self._read_json_body()
+                if data is None:
+                    return
             parts = path.split('/')
             if (
                 path.startswith('/api/concepts/')
@@ -2218,27 +2232,21 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_internal_error(exc)
 
-    def handle_api_post(self, parsed_path):
+    def handle_api_post(self, parsed_path, data=None):
         path = parsed_path.path
         try:
             if path == '/api/backups/stage':
-                self._handle_backup_stage()
+                self._handle_backup_stage(parsed_path)
                 return
-            if path == '/api/backups/progress':
+            if data is None:
                 data = self._read_json_body()
                 if data is None:
                     return
+            if path == '/api/backups/progress':
                 self._handle_backup_progress()
                 return
             if path == '/api/backups/restore':
-                data = self._read_json_body()
-                if data is None:
-                    return
                 self._handle_backup_restore(data)
-                return
-
-            data = self._read_json_body()
-            if data is None:
                 return
 
             if path == '/api/diagnostics/performance/reset':
@@ -2946,71 +2954,81 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except OSError:
                     pass
 
-    def _handle_backup_stage(self) -> None:
-        if _bound_storage is None:
-            self._send_internal_error()
-            return
+    def _validate_backup_stage_headers(self) -> int | None:
         types = self.headers.get_all("Content-Type") or []
         if len(types) != 1 or not octet_stream_content_type_allowed(types[0]):
             self._reject_request(415, "unsupported_media_type", "unsupported_media_type")
-            return
+            return None
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
             self.send_json(400, {"error": "invalid Content-Length"})
-            return
+            return None
         try:
             content_length = int(raw_length)
         except (TypeError, ValueError):
             self.send_json(400, {"error": "invalid Content-Length"})
-            return
+            return None
         if content_length < 0:
             self.send_json(400, {"error": "invalid Content-Length"})
-            return
+            return None
         max_bytes = backup_max_upload_bytes()
         if content_length > max_bytes:
             self.send_json(413, {"error": "request_too_large"})
+            return None
+        return content_length
+
+    def _handle_backup_stage(self, parsed_path=None) -> None:
+        content_length = self._validate_backup_stage_headers()
+        if content_length is None:
             return
-        try:
-            require_restore_upload_space(_bound_storage, content_length)
-        except RestoreError as exc:
-            self.send_json(
-                exc.http_status,
-                {
-                    "error": exc.message,
-                    "reason": exc.reason,
-                    "request_id": self._prks_request_id,
-                },
-            )
-            return
-        upload_path = new_staging_upload_path(_bound_storage)
-        try:
-            stream_upload_to_file(
-                self.rfile,
-                upload_path,
-                expected_length=content_length,
-                max_bytes=max_bytes,
-            )
-            staged = stage_restore(_bound_storage, upload_path)
-            self.send_json(
-                200,
-                {
-                    "token": staged.token,
-                    "verified": True,
-                    "summary": staged.summary,
-                    "warnings": staged.warnings,
-                },
-            )
-        except RestoreError as exc:
-            self.send_json(
-                exc.http_status,
-                {
-                    "error": exc.message,
-                    "reason": exc.reason,
-                    "request_id": self._prks_request_id,
-                },
-            )
-        finally:
-            discard_temp_path(upload_path)
+        if parsed_path is None:
+            parsed_path = urlparse(self.path)
+        max_bytes = backup_max_upload_bytes()
+        with self._library_access(parsed_path):
+            if _bound_storage is None:
+                self._send_internal_error()
+                return
+            try:
+                require_restore_upload_space(_bound_storage, content_length)
+            except RestoreError as exc:
+                self.send_json(
+                    exc.http_status,
+                    {
+                        "error": exc.message,
+                        "reason": exc.reason,
+                        "request_id": self._prks_request_id,
+                    },
+                )
+                return
+            upload_path = new_staging_upload_path(_bound_storage)
+            try:
+                stream_upload_to_file(
+                    self.rfile,
+                    upload_path,
+                    expected_length=content_length,
+                    max_bytes=max_bytes,
+                )
+                staged = stage_restore(_bound_storage, upload_path)
+                self.send_json(
+                    200,
+                    {
+                        "token": staged.token,
+                        "verified": True,
+                        "summary": staged.summary,
+                        "warnings": staged.warnings,
+                    },
+                )
+            except RestoreError as exc:
+                self.send_json(
+                    exc.http_status,
+                    {
+                        "error": exc.message,
+                        "reason": exc.reason,
+                        "request_id": self._prks_request_id,
+                    },
+                )
+            finally:
+                discard_temp_path(upload_path)
 
     def _handle_backup_restore(self, data) -> None:
         if _bound_storage is None:
