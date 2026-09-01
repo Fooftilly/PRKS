@@ -11,6 +11,8 @@ import re
 import uuid
 import logging
 import ipaddress
+import threading
+from contextlib import nullcontext
 from dataclasses import replace
 from email.message import Message
 from urllib.parse import urlparse, parse_qs, unquote
@@ -97,6 +99,7 @@ from backend.person_image import (
     normalize_person_image_url,
     read_legacy_portrait_bytes,
 )
+from backend.concurrency import LibraryAccessGate, request_access_mode
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -596,6 +599,7 @@ def _prks_thumbnail_bytes_from_pixmap(pix) -> tuple[bytes, str]:
 
 _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
+_SAVE_TOKEN_LOCK = threading.Lock()
 
 def _youtube_video_id(url: str) -> str | None:
     try:
@@ -696,6 +700,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             safe_log_id(self._prks_request_id),
         )
         self.send_json(status, {"error": error})
+
+    def _library_access(self, parsed_path):
+        mode = request_access_mode(
+            getattr(self, "command", "") or "GET",
+            parsed_path.path,
+            parsed_path.query,
+        )
+        if mode is None:
+            return nullcontext()
+        gate = getattr(self.server, "prks_access_gate", None)
+        if gate is None:
+            return nullcontext()
+        return gate.scope(mode)
 
     def _validate_request_host(self) -> bool:
         hosts = self.headers.get_all("Host") or []
@@ -877,7 +894,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            self.handle_api_get(parsed_path)
+            with self._library_access(parsed_path):
+                self.handle_api_get(parsed_path)
         else:
             requested = unquote(parsed_path.path or '/')
             safe_rel = requested.lstrip('/')
@@ -898,7 +916,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
-            self.handle_api_head(parsed_path)
+            with self._library_access(parsed_path):
+                self.handle_api_head(parsed_path)
         else:
             requested = unquote(parsed_path.path or '/')
             safe_rel = requested.lstrip('/')
@@ -920,7 +939,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._validate_mutation_origin():
                 return
-            self.handle_api_post(parsed_path)
+            with self._library_access(parsed_path):
+                self.handle_api_post(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -931,7 +951,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._validate_mutation_origin():
                 return
-            self.handle_api_patch(parsed_path)
+            with self._library_access(parsed_path):
+                self.handle_api_patch(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1185,7 +1206,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._validate_mutation_origin():
                 return
-            self.handle_api_put(parsed_path)
+            with self._library_access(parsed_path):
+                self.handle_api_put(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1268,7 +1290,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._validate_mutation_origin():
                 return
-            self.handle_api_delete(parsed_path)
+            with self._library_access(parsed_path):
+                self.handle_api_delete(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1932,8 +1955,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     if not token:
                         self.send_json(400, {'error': 'token is required'})
                         return
-                    pdf_saved = _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK.get(w_id) == token
-                    ann_saved = _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK.get(w_id) == token
+                    with _SAVE_TOKEN_LOCK:
+                        pdf_saved = _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK.get(w_id) == token
+                        ann_saved = _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK.get(w_id) == token
                     self.send_json(
                         200,
                         {
@@ -2818,7 +2842,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         except Exception:
                             continue
                     if save_token:
-                        _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
+                        with _SAVE_TOKEN_LOCK:
+                            _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
                     self.send_json(200, {'status': 'success'})
                 else:
                     self.send_error(400, "No file_b64 provided")
@@ -2828,7 +2853,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 save_token = str(data.get('save_token', '') or '').strip()
                 db.save_work_annotations(w_id, annotations_json)
                 if save_token:
-                    _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token
+                    with _SAVE_TOKEN_LOCK:
+                        _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token
                 self.send_json(200, {'status': 'saved'})
             else:
                 self.send_error(404, "API endpoint not found")
@@ -3051,6 +3077,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads = True
+    block_on_close = False
+    allow_reuse_address = True
+
+
 def run_server(port=PORT, host=DEFAULT_HOST):
     if _bound_storage is None:
         raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
@@ -3078,9 +3110,10 @@ def run_server(port=PORT, host=DEFAULT_HOST):
         cleanup_expired_backup_jobs(_bound_storage)
     except Exception as e:
         LOGGER.warning("restore_staging_cleanup_skipped error_type=%s", safe_error_type(e))
-    with socketserver.TCPServer((host, port), PRKSHandler) as httpd:
+    with PRKSThreadingTCPServer((host, port), PRKSHandler) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
+        httpd.prks_access_gate = LibraryAccessGate()
         LOGGER.info(
             "server_starting bind_scope=%s port=%s",
             safe_bind_scope(host),

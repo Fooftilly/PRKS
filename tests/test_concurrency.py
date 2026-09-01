@@ -1,0 +1,674 @@
+"""Library access gate and threaded HTTP concurrency."""
+import http.client
+import json
+import os
+import re
+import shutil
+import socket
+import sqlite3
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import patch
+
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PROJECT_DIR)
+
+from run_tests import apply_isolated_test_env
+
+apply_isolated_test_env(_PROJECT_DIR)
+
+from backend.backup_restore import CONFIRM_RESTORE, create_backup, stage_restore
+from backend.concurrency import LibraryAccessGate, request_access_mode
+from backend.storage.config import StorageConfig
+from backend.text_index import get_text_index, reset_text_index
+import backend.server as server_module
+
+_FORBIDDEN_SAME_THREAD = re.compile(r"check_same_thread\s*=\s*False")
+
+
+def _find_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return sock.getsockname()[1]
+
+
+def _capture_bind():
+    try:
+        previous_index = get_text_index()
+    except RuntimeError:
+        previous_index = None
+    return (
+        server_module._bound_storage,
+        server_module.pdfs_dir,
+        server_module.thumbs_dir,
+        server_module.processing_dir,
+        server_module.db,
+        server_module.text_index,
+        previous_index,
+    )
+
+
+def _restore_bind(snapshot):
+    (
+        server_module._bound_storage,
+        server_module.pdfs_dir,
+        server_module.thumbs_dir,
+        server_module.processing_dir,
+        server_module.db,
+        server_module.text_index,
+        previous_index,
+    ) = snapshot
+    if previous_index is None:
+        reset_text_index()
+    else:
+        from backend.text_index import replace_text_index
+
+        replace_text_index(previous_index)
+
+
+def _py_files(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for name in filenames:
+            if name.endswith(".py"):
+                yield os.path.join(dirpath, name)
+
+
+class TrackingGate(LibraryAccessGate):
+    instances = []
+
+    def __init__(self):
+        super().__init__()
+        TrackingGate.instances.append(self)
+
+
+class RequestAccessModeTests(unittest.TestCase):
+    def test_static_and_defaults(self):
+        self.assertIsNone(request_access_mode("GET", "/index.html"))
+        self.assertIsNone(request_access_mode("GET", "/vendor/app.js"))
+        self.assertEqual(request_access_mode("GET", "/api/works"), "read")
+        self.assertEqual(request_access_mode("HEAD", "/api/pdfs/a.pdf"), "read")
+        self.assertEqual(request_access_mode("POST", "/api/works"), "mutation")
+        self.assertEqual(request_access_mode("PATCH", "/api/works/W-1"), "mutation")
+        self.assertEqual(request_access_mode("PUT", "/api/concepts/C-1/parents"), "mutation")
+        self.assertEqual(request_access_mode("DELETE", "/api/works/W-1"), "mutation")
+        self.assertEqual(request_access_mode("POST", "/api/new-endpoint"), "mutation")
+
+    def test_exceptions(self):
+        self.assertEqual(request_access_mode("GET", "/api/processing-files"), "read")
+        self.assertEqual(
+            request_access_mode("GET", "/api/processing-files", "rescan=1"),
+            "mutation",
+        )
+        self.assertEqual(
+            request_access_mode("GET", "/api/processing-files", "rescan=true"),
+            "mutation",
+        )
+        self.assertEqual(
+            request_access_mode("GET", "/api/persons/P-1/profile-image"),
+            "mutation",
+        )
+        self.assertEqual(
+            request_access_mode("GET", "/api/works/W-1/thumbnail"),
+            "mutation",
+        )
+        self.assertEqual(request_access_mode("GET", "/api/backups/download"), "read")
+        self.assertEqual(request_access_mode("POST", "/api/backups/progress"), "backup")
+        self.assertEqual(request_access_mode("POST", "/api/backups/restore"), "restore")
+        self.assertEqual(request_access_mode("POST", "/api/backups/stage"), "read")
+
+
+class LibraryAccessGateTests(unittest.TestCase):
+    def test_concurrent_reads(self):
+        gate = LibraryAccessGate()
+        a_inside = threading.Event()
+        release_a = threading.Event()
+        b_inside = threading.Event()
+
+        def read_a():
+            with gate.read():
+                a_inside.set()
+                self.assertTrue(release_a.wait(5))
+
+        def read_b():
+            with gate.read():
+                b_inside.set()
+
+        t_a = threading.Thread(target=read_a)
+        t_a.start()
+        self.assertTrue(a_inside.wait(5))
+        t_b = threading.Thread(target=read_b)
+        t_b.start()
+        self.assertTrue(b_inside.wait(5))
+        release_a.set()
+        t_a.join(5)
+        t_b.join(5)
+        self.assertFalse(t_a.is_alive())
+        self.assertFalse(t_b.is_alive())
+
+    def test_mutations_serialize(self):
+        gate = LibraryAccessGate()
+        a_inside = threading.Event()
+        release_a = threading.Event()
+        b_inside = threading.Event()
+        lock = threading.Lock()
+        active = 0
+        max_active = 0
+
+        def mutation(hold):
+            nonlocal active, max_active
+            with gate.mutation():
+                with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                if hold:
+                    a_inside.set()
+                    self.assertTrue(release_a.wait(5))
+                else:
+                    b_inside.set()
+                with lock:
+                    active -= 1
+
+        t_a = threading.Thread(target=mutation, args=(True,))
+        t_a.start()
+        self.assertTrue(a_inside.wait(5))
+        t_b = threading.Thread(target=mutation, args=(False,))
+        t_b.start()
+        self.assertFalse(b_inside.wait(0.05))
+        self.assertEqual(gate.snapshot()["mutation_active"], True)
+        release_a.set()
+        self.assertTrue(b_inside.wait(5))
+        t_a.join(5)
+        t_b.join(5)
+        self.assertEqual(max_active, 1)
+
+    def test_backup_waits_for_mutation_and_blocks_later_mutation(self):
+        gate = LibraryAccessGate()
+        mut_a_inside = threading.Event()
+        release_a = threading.Event()
+        backup_inside = threading.Event()
+        release_backup = threading.Event()
+        mut_b_inside = threading.Event()
+
+        def mut_a():
+            with gate.mutation():
+                mut_a_inside.set()
+                self.assertTrue(release_a.wait(5))
+
+        def do_backup():
+            with gate.backup():
+                backup_inside.set()
+                self.assertTrue(release_backup.wait(5))
+
+        def mut_b():
+            with gate.mutation():
+                mut_b_inside.set()
+
+        t_a = threading.Thread(target=mut_a)
+        t_a.start()
+        self.assertTrue(mut_a_inside.wait(5))
+        t_backup = threading.Thread(target=do_backup)
+        t_backup.start()
+        self.assertTrue(gate.wait_until(lambda s: s["backup_waiting"] >= 1))
+        self.assertFalse(backup_inside.is_set())
+        t_b = threading.Thread(target=mut_b)
+        t_b.start()
+        self.assertFalse(mut_b_inside.wait(0.05))
+        release_a.set()
+        self.assertTrue(backup_inside.wait(5))
+        self.assertFalse(mut_b_inside.is_set())
+        release_backup.set()
+        self.assertTrue(mut_b_inside.wait(5))
+        t_a.join(5)
+        t_backup.join(5)
+        t_b.join(5)
+
+    def test_backup_allows_reads_blocks_mutations(self):
+        gate = LibraryAccessGate()
+        backup_inside = threading.Event()
+        release_backup = threading.Event()
+        read_done = threading.Event()
+        mut_inside = threading.Event()
+
+        def do_backup():
+            with gate.backup():
+                backup_inside.set()
+                self.assertTrue(release_backup.wait(5))
+
+        def do_read():
+            with gate.read():
+                read_done.set()
+
+        def do_mut():
+            with gate.mutation():
+                mut_inside.set()
+
+        t_backup = threading.Thread(target=do_backup)
+        t_backup.start()
+        self.assertTrue(backup_inside.wait(5))
+        t_read = threading.Thread(target=do_read)
+        t_read.start()
+        self.assertTrue(read_done.wait(5))
+        t_mut = threading.Thread(target=do_mut)
+        t_mut.start()
+        self.assertFalse(mut_inside.wait(0.05))
+        release_backup.set()
+        self.assertTrue(mut_inside.wait(5))
+        t_backup.join(5)
+        t_read.join(5)
+        t_mut.join(5)
+
+    def test_restore_waits_for_read_and_starves_new_reads(self):
+        gate = LibraryAccessGate()
+        read_a_inside = threading.Event()
+        release_a = threading.Event()
+        restore_inside = threading.Event()
+        release_restore = threading.Event()
+        read_b_inside = threading.Event()
+
+        def read_a():
+            with gate.read():
+                read_a_inside.set()
+                self.assertTrue(release_a.wait(5))
+
+        def do_restore():
+            with gate.restore():
+                restore_inside.set()
+                self.assertTrue(release_restore.wait(5))
+
+        def read_b():
+            with gate.read():
+                read_b_inside.set()
+
+        t_a = threading.Thread(target=read_a)
+        t_a.start()
+        self.assertTrue(read_a_inside.wait(5))
+        t_restore = threading.Thread(target=do_restore)
+        t_restore.start()
+        self.assertTrue(gate.wait_until(lambda s: s["restore_waiting"] >= 1))
+        self.assertFalse(restore_inside.is_set())
+        t_b = threading.Thread(target=read_b)
+        t_b.start()
+        self.assertFalse(read_b_inside.wait(0.05))
+        release_a.set()
+        self.assertTrue(restore_inside.wait(5))
+        self.assertFalse(read_b_inside.is_set())
+        release_restore.set()
+        self.assertTrue(read_b_inside.wait(5))
+        t_a.join(5)
+        t_restore.join(5)
+        t_b.join(5)
+
+    def test_restore_waits_for_mutation_and_backup(self):
+        gate = LibraryAccessGate()
+        for holder in ("mutation", "backup"):
+            with self.subTest(holder=holder):
+                held = threading.Event()
+                release_held = threading.Event()
+                restore_inside = threading.Event()
+
+                def hold(kind=holder):
+                    ctx = gate.mutation() if kind == "mutation" else gate.backup()
+                    with ctx:
+                        held.set()
+                        self.assertTrue(release_held.wait(5))
+
+                def do_restore():
+                    with gate.restore():
+                        restore_inside.set()
+
+                t_hold = threading.Thread(target=hold)
+                t_hold.start()
+                self.assertTrue(held.wait(5))
+                t_restore = threading.Thread(target=do_restore)
+                t_restore.start()
+                self.assertTrue(gate.wait_until(lambda s: s["restore_waiting"] >= 1))
+                self.assertFalse(restore_inside.is_set())
+                release_held.set()
+                self.assertTrue(restore_inside.wait(5))
+                t_hold.join(5)
+                t_restore.join(5)
+
+    def test_exception_releases_every_scope(self):
+        gate = LibraryAccessGate()
+        for name in ("read", "mutation", "backup", "restore"):
+            with self.assertRaises(RuntimeError):
+                with getattr(gate, name)():
+                    raise RuntimeError("boom")
+            snap = gate.snapshot()
+            self.assertEqual(snap["active_reads"], 0)
+            self.assertFalse(snap["mutation_active"])
+            self.assertFalse(snap["backup_active"])
+            self.assertFalse(snap["restore_active"])
+            self.assertEqual(snap["backup_waiting"], 0)
+            self.assertEqual(snap["restore_waiting"], 0)
+            with gate.read():
+                pass
+            with gate.mutation():
+                pass
+
+
+class StructuralConcurrencyGuards(unittest.TestCase):
+    def test_production_has_no_check_same_thread_false(self):
+        hits = []
+        for path in _py_files(os.path.join(_PROJECT_DIR, "backend")):
+            rel = os.path.relpath(path, _PROJECT_DIR)
+            with open(path, encoding="utf-8") as handle:
+                for lineno, line in enumerate(handle, 1):
+                    if _FORBIDDEN_SAME_THREAD.search(line):
+                        hits.append("%s:%s" % (rel, lineno))
+        self.assertEqual(hits, [])
+
+
+class LiveHttpConcurrencyTests(unittest.TestCase):
+    def setUp(self):
+        self._prev = _capture_bind()
+        self._tmpdir = tempfile.mkdtemp(prefix="prks-conc-")
+        TrackingGate.instances = []
+        cfg = StorageConfig.for_testing(self._tmpdir)
+        os.makedirs(cfg.pdfs_dir, exist_ok=True)
+        os.makedirs(cfg.thumbs_dir, exist_ok=True)
+        server_module.bind_storage(cfg)
+        self.port = _find_free_port()
+        self._gate_patch = patch.object(server_module, "LibraryAccessGate", TrackingGate)
+        self._gate_patch.start()
+        self.thread = threading.Thread(
+            target=server_module.run_server,
+            args=(self.port, "127.0.0.1"),
+            daemon=True,
+        )
+        self.thread.start()
+        self._wait_ready()
+        self.gate = TrackingGate.instances[-1]
+
+    def tearDown(self):
+        self._gate_patch.stop()
+        _restore_bind(self._prev)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _wait_ready(self, timeout=8.0):
+        deadline_err = None
+        stop = time.time() + timeout
+        while time.time() < stop:
+            try:
+                status, _body = self._request("GET", "/api/works")
+                if status == 200:
+                    return
+            except OSError as exc:
+                deadline_err = exc
+            time.sleep(0.05)
+        raise RuntimeError("server did not start: %s" % deadline_err)
+
+    def _request(self, method, path, body=None, timeout=10):
+        payload = None
+        headers = {"Host": "127.0.0.1"}
+        if body is not None:
+            payload = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+            headers["Content-Length"] = str(len(payload))
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        try:
+            conn.request(method, path, body=payload, headers=headers)
+            res = conn.getresponse()
+            data = res.read()
+            return res.status, data
+        finally:
+            conn.close()
+
+    def test_http_reads_overlap_on_separate_threads(self):
+        entered = threading.Event()
+        release = threading.Event()
+        b_done = threading.Event()
+        orig = server_module.db.get_all_works
+
+        def wrapped():
+            entered.set()
+            self.assertTrue(release.wait(5))
+            return orig()
+
+        def req_a():
+            self._request("GET", "/api/works", timeout=15)
+
+        def req_b():
+            status, body = self._request("GET", "/api/folders")
+            self.assertEqual(status, 200)
+            json.loads(body)
+            b_done.set()
+
+        with patch.object(server_module.db, "get_all_works", wrapped):
+            t_a = threading.Thread(target=req_a)
+            t_a.start()
+            self.assertTrue(entered.wait(5))
+            t_b = threading.Thread(target=req_b)
+            t_b.start()
+            self.assertTrue(b_done.wait(5))
+            release.set()
+            t_a.join(5)
+            t_b.join(5)
+
+    def test_http_mutations_serialize(self):
+        a_inside = threading.Event()
+        release_a = threading.Event()
+        b_inside = threading.Event()
+        orig = server_module.db.add_work
+        order = []
+
+        def wrapped(*args, **kwargs):
+            if not a_inside.is_set():
+                a_inside.set()
+                order.append("a")
+                self.assertTrue(release_a.wait(5))
+                return orig(*args, **kwargs)
+            b_inside.set()
+            order.append("b")
+            return orig(*args, **kwargs)
+
+        def post(title):
+            status, _body = self._request(
+                "POST",
+                "/api/works",
+                {"title": title},
+                timeout=15,
+            )
+            self.assertEqual(status, 200)
+
+        with patch.object(server_module.db, "add_work", wrapped):
+            t_a = threading.Thread(target=post, args=("A",))
+            t_a.start()
+            self.assertTrue(a_inside.wait(5))
+            t_b = threading.Thread(target=post, args=("B",))
+            t_b.start()
+            self.assertTrue(self.gate.wait_until(lambda s: s["mutation_active"]))
+            self.assertFalse(b_inside.is_set())
+            release_a.set()
+            self.assertTrue(b_inside.wait(5))
+            t_a.join(5)
+            t_b.join(5)
+        self.assertEqual(order, ["a", "b"])
+
+    def test_http_backup_blocks_mutations_allows_reads(self):
+        backup_inside = threading.Event()
+        release_backup = threading.Event()
+        mut_inside = threading.Event()
+        rescan_inside = threading.Event()
+        second_backup = threading.Event()
+        orig_backup = server_module.run_backup_with_progress
+        orig_add = server_module.db.add_work
+        orig_scan = server_module.db.scan_processing_files
+        backup_calls = []
+
+        def wrapped_backup(*args, **kwargs):
+            backup_calls.append(1)
+            if not backup_inside.is_set():
+                backup_inside.set()
+                self.assertTrue(release_backup.wait(15))
+                return orig_backup(*args, **kwargs)
+            second_backup.set()
+            return orig_backup(*args, **kwargs)
+
+        def wrapped_add(*args, **kwargs):
+            mut_inside.set()
+            return orig_add(*args, **kwargs)
+
+        def wrapped_scan(*args, **kwargs):
+            rescan_inside.set()
+            return orig_scan(*args, **kwargs)
+
+        def run_backup():
+            status, body = self._request("POST", "/api/backups/progress", {}, timeout=30)
+            self.assertEqual(status, 200)
+            events = [
+                json.loads(line)
+                for line in body.decode("utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(events[-1]["phase"], "ready")
+            self.assertTrue(events[-1].get("token"))
+
+        with (
+            patch.object(server_module, "run_backup_with_progress", wrapped_backup),
+            patch.object(server_module.db, "add_work", wrapped_add),
+            patch.object(server_module.db, "scan_processing_files", wrapped_scan),
+        ):
+            t_backup = threading.Thread(target=run_backup)
+            t_backup.start()
+            self.assertTrue(backup_inside.wait(10))
+            status, body = self._request("GET", "/api/works")
+            self.assertEqual(status, 200)
+            json.loads(body)
+
+            t_mut = threading.Thread(
+                target=lambda: self._request(
+                    "POST", "/api/works", {"title": "X"}, timeout=20
+                )
+            )
+            t_mut.start()
+            t_rescan = threading.Thread(
+                target=lambda: self._request(
+                    "GET", "/api/processing-files?rescan=1", timeout=20
+                )
+            )
+            t_rescan.start()
+            t_backup2 = threading.Thread(target=run_backup)
+            t_backup2.start()
+            self.assertTrue(self.gate.wait_until(lambda s: s["backup_active"]))
+            self.assertFalse(mut_inside.is_set())
+            self.assertFalse(rescan_inside.is_set())
+            self.assertFalse(second_backup.is_set())
+            self.assertEqual(len(backup_calls), 1)
+            release_backup.set()
+            t_backup.join(20)
+            t_mut.join(10)
+            t_rescan.join(10)
+            t_backup2.join(20)
+        self.assertTrue(mut_inside.is_set())
+        self.assertTrue(rescan_inside.is_set())
+
+    def test_http_restore_prevents_stale_binding(self):
+        cfg = server_module._bound_storage
+        db = server_module.db
+        db.add_work(title="BEFORE")
+        backup = create_backup(cfg)
+        copied = os.path.join(self._tmpdir, "upload.prks-backup")
+        shutil.copy2(backup.archive_path, copied)
+        staged = stage_restore(cfg, copied)
+        db.add_work(title="AFTER")
+        titles_live = {
+            row["title"] for row in db.execute_query("SELECT title FROM works")
+        }
+        self.assertEqual(titles_live, {"BEFORE", "AFTER"})
+
+        apply_entered = threading.Event()
+        release_apply = threading.Event()
+        orig_apply = server_module.apply_restore
+        seen_titles = []
+
+        def wrapped_apply(*args, **kwargs):
+            apply_entered.set()
+            self.assertTrue(release_apply.wait(15))
+            return orig_apply(*args, **kwargs)
+
+        bound_db = server_module.db
+        real_get = bound_db.get_all_works
+
+        def recording_get():
+            rows = real_get()
+            seen_titles.append(tuple(sorted(r["title"] for r in rows if r.get("title"))))
+            return rows
+
+        get_result = {}
+
+        def delayed_get():
+            status, body = self._request("GET", "/api/works", timeout=30)
+            get_result["status"] = status
+            get_result["titles"] = [
+                row["title"] for row in json.loads(body.decode("utf-8"))
+            ]
+
+        with (
+            patch.object(server_module, "apply_restore", wrapped_apply),
+            patch.object(bound_db, "get_all_works", recording_get),
+        ):
+            def run_restore():
+                status, body = self._request(
+                    "POST",
+                    "/api/backups/restore",
+                    {"token": staged.token, "confirm": CONFIRM_RESTORE},
+                    timeout=30,
+                )
+                get_result["restore_status"] = status
+                get_result["restore_body"] = body
+
+            t_restore = threading.Thread(target=run_restore)
+            t_restore.start()
+            self.assertTrue(apply_entered.wait(10))
+            t_get = threading.Thread(target=delayed_get)
+            t_get.start()
+            self.assertTrue(self.gate.wait_until(lambda s: s["restore_active"]))
+            self.assertEqual(seen_titles, [])
+            release_apply.set()
+            t_restore.join(20)
+            t_get.join(20)
+        self.assertEqual(get_result.get("restore_status"), 200)
+        self.assertEqual(get_result.get("status"), 200)
+        self.assertEqual(set(get_result.get("titles") or []), {"BEFORE"})
+        self.assertEqual(seen_titles, [])
+        self.assertNotIn("AFTER", get_result.get("titles") or [])
+
+    def test_sqlite_thread_ownership_two_reads(self):
+        barrier = threading.Barrier(2, timeout=5)
+        orig = server_module.db.get_all_works
+        errors = []
+
+        def wrapped():
+            barrier.wait()
+            try:
+                return orig()
+            except sqlite3.ProgrammingError as exc:
+                errors.append(exc)
+                raise
+
+        results = []
+
+        def worker():
+            status, body = self._request("GET", "/api/works", timeout=15)
+            results.append(status)
+            json.loads(body)
+
+        with patch.object(server_module.db, "get_all_works", wrapped):
+            t1 = threading.Thread(target=worker)
+            t2 = threading.Thread(target=worker)
+            t1.start()
+            t2.start()
+            t1.join(10)
+            t2.join(10)
+        self.assertEqual(errors, [])
+        self.assertEqual(results, [200, 200])
+
+
+if __name__ == "__main__":
+    unittest.main()

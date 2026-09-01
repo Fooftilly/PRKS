@@ -1,14 +1,16 @@
 """First-party local backup and restore for the PRKS library.
 
-Concurrency: PRKS currently serves HTTP with socketserver.TCPServer (one request
-at a time). Backup and restore rely on that for cross-file consistency. If PRKS
-later moves to ThreadingHTTPServer or threaded request handling, every mutating
-operation must participate in a maintenance gate so snapshots stay consistent
-across the database and managed files.
+Concurrency: PRKS serves HTTP with a threaded stdlib server. Ordinary reads may
+overlap. Canonical mutations are serialized. Backup holds a maintenance scope
+for the complete snapshot and archive so mutations cannot change the DB or
+managed files while packing; ordinary reads may continue. Restore is exclusive
+against all active-storage access, including reads, mutations, and backup, and
+remains held across replacement and bind_storage(). SQLite connections stay
+per-operation; there is no connection pool.
 
 Progress and cancel use the same request: POST /api/backups/progress streams
 NDJSON while packing. Aborting that connection cancels packing. Do not run
-backup packing on a worker thread while other HTTP mutations can proceed.
+backup packing on a worker thread that skips the backup scope.
 GET /api/backups/download requires a one-time token and never creates a backup.
 
 Do not copy the live SQLite file while it may be in use. Snapshots use

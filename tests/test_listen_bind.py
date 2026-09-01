@@ -116,7 +116,7 @@ class TestListenServerBind(unittest.TestCase):
     def _run_patched(self, **kwargs):
         httpd = MagicMock()
         httpd.serve_forever.side_effect = KeyboardInterrupt
-        with patch.object(server_module.socketserver, "TCPServer") as ctor:
+        with patch.object(server_module, "PRKSThreadingTCPServer") as ctor:
             ctor.return_value.__enter__.return_value = httpd
             run_server(**kwargs)
         return ctor
@@ -137,14 +137,14 @@ class TestListenServerBind(unittest.TestCase):
         self.assertEqual(ctor.call_args[0][0], ("0.0.0.0", 9000))
 
     def test_empty_host_rejected_before_server_construction(self):
-        with patch.object(server_module.socketserver, "TCPServer") as ctor:
+        with patch.object(server_module, "PRKSThreadingTCPServer") as ctor:
             with self.assertRaises(ValueError) as ctx:
                 run_server(host="")
             self.assertEqual(str(ctx.exception), "host must not be empty")
             ctor.assert_not_called()
 
     def test_whitespace_host_rejected_before_server_construction(self):
-        with patch.object(server_module.socketserver, "TCPServer") as ctor:
+        with patch.object(server_module, "PRKSThreadingTCPServer") as ctor:
             with self.assertRaises(ValueError) as ctx:
                 run_server(host="   ")
             self.assertEqual(str(ctx.exception), "host must not be empty")

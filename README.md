@@ -108,6 +108,8 @@ It does **not** include thumbnail cache, the PDF text-search index (`prks_text_i
 
 Restore uploads the archive into a staging area, verifies structure, hashes, SQLite integrity, and schema compatibility, then asks you to type `RESTORE` before replacing the current library. A malformed or corrupt backup cannot change live data. If restore is interrupted before it commits, PRKS puts the previous library back.
 
+While PRKS is running, ordinary reads may overlap. Canonical mutations are serialized (one writer at a time). Creating a backup blocks canonical mutations for the whole snapshot and archive so the ZIP stays consistent; ordinary reads may continue. Restore is exclusive: it waits for in-flight storage access, then blocks new reads, mutations, and backups until replacement and rebind finish. SQLite connections remain per-operation. Threading does not mean parallel SQLite writes, and there is no connection pool.
+
 The backup does not include machine-specific deployment settings (`PRKS_STORAGE`, `PRKS_FOR_PROCESSING_DIR`, bind host, Docker UID/GID, and similar). A backup made under Docker `/data` can be restored to `./data` or another `PRKS_STORAGE`. Browser `localStorage` preferences (theme, force-mobile layout, and other device-only settings) are not part of the server backup.
 
 There is no cloud backup, schedule, or encryption in this release. If you copy a `.prks-backup` off a trusted disk, use filesystem or container encryption, or wait for a later encrypted-backup feature.
@@ -274,7 +276,8 @@ This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=
 | Path | Role |
 | ---- | ---- |
 | `prks_app.py` | Only process entry: parses `--testing`, `--port`, `--host`, starts the server. |
-| `backend/server.py` | HTTP handler: static frontend, REST-style `/api/...` routes. |
+| `backend/server.py` | Threaded stdlib HTTP server and handler: static frontend, REST-style `/api/...` routes. |
+| `backend/concurrency.py` | Process-local library access gate (reads, mutations, backup, restore). |
 | `backend/storage/config.py` | Frozen storage snapshot and env parser. |
 | `backend/storage/paths.py` | Path derivation and testing-mode containment. |
 | `backend/performance.py` | In-memory API/DB/span performance diagnostics. |
