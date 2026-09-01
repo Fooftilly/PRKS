@@ -75,6 +75,39 @@ class TestRunTests(unittest.TestCase):
                 else:
                     os.environ[key] = value
 
+    def test_parse_mode_flags(self):
+        from run_tests import parse_mode
+
+        self.assertEqual(parse_mode([]), "unit")
+        self.assertEqual(parse_mode(["--e2e"]), "e2e")
+        self.assertEqual(parse_mode(["-e2e"]), "e2e")
+        self.assertEqual(parse_mode(["--all"]), "all")
+        self.assertEqual(parse_mode(["-all"]), "all")
+
+    def test_help_documents_e2e_flags(self):
+        py = shutil.which("python3") or shutil.which("python") or sys.executable
+        proc = subprocess.run(
+            [py, os.path.join(_PROJECT_DIR, "run_tests.py"), "--help"],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("--e2e", proc.stdout)
+        self.assertIn("--all", proc.stdout)
+        self.assertIn("Chromium", proc.stdout)
+
+    def test_default_runner_does_not_set_prks_e2e(self):
+        src_path = os.path.join(_PROJECT_DIR, "run_tests.py")
+        with open(src_path, encoding="utf-8") as handle:
+            src = handle.read()
+        self.assertNotIn('PRKS_E2E"] = "1"', src)
+        self.assertIn("run_e2e_tests", src)
+        self.assertIn("tests", src)
+        self.assertIn("e2e", src)
+        self.assertIn("run.py", src)
+
 
 if __name__ == "__main__":
     unittest.main()

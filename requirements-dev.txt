@@ -1,0 +1,2 @@
+# Maintainer / browser-test dependencies. Not used by Docker or production runtime.
+playwright==1.55.0

@@ -4,7 +4,7 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 
 ## Commands
 
-- Tests: `python run_tests.py`
+- Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`.
 - App, default for agents: `python prks_app.py --testing`
 - Real app or Compose: only with run-real authorization from the user
 

@@ -266,10 +266,36 @@ Do not add indexes, caching, threading, or SQLite tuning solely because an endpo
 ## Development and tests
 
 ```bash
-python run_tests.py
+python run_tests.py          # unit/API/structural/Node (no Chromium)
+python run_tests.py --e2e    # real Chromium + real PRKS server
+python run_tests.py --all    # unit suite, then E2E
 ```
 
-This discovers tests under `tests/`. `run_tests.py` always forces `PRKS_TESTING=1` and `PRKS_STORAGE` to the repo’s `data_testing/` directory and clears `PRKS_FOR_PROCESSING_DIR` and `PRKS_LOG_FILE`. That is stricter than `python prks_app.py --testing`, which may honor an explicit safe `PRKS_STORAGE`. Neither path uses `./data` or container `/data`.
+`-e2e` and `-all` are the same flags. Unflagged `python run_tests.py` discovers tests under `tests/` and does not launch Chromium. It always forces `PRKS_TESTING=1` and `PRKS_STORAGE` to the repo’s `data_testing/` directory and clears `PRKS_FOR_PROCESSING_DIR` and `PRKS_LOG_FILE`. That is stricter than `python prks_app.py --testing`, which may honor an explicit safe `PRKS_STORAGE`. Neither path uses `./data` or container `/data`.
+
+### Browser tests
+
+`python run_tests.py` is the Python/API/structural/Node suite. It does not launch Chromium.
+
+Real Chromium against a real PRKS server:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python run_tests.py --e2e
+```
+
+`python tests/e2e/run.py` remains the direct E2E entry point. The first `--e2e` / `run.py` run installs Chromium into repository-local `.playwright-browsers/` (gitignored) when that Playwright revision is missing. Later runs reuse the cache and do not download again. `python tests/e2e/install_browser.py` is the same installer on its own. Use the same Python interpreter for install and tests: a Chromium revision for one Playwright version will not satisfy another. Test execution sets `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so Playwright cannot silently fetch browsers into the virtualenv or OS user cache.
+
+Every E2E run creates a fresh temporary `PRKS_STORAGE` with `PRKS_TESTING=1`, binds `127.0.0.1`, and deletes that tree on teardown. It never targets `data/` or a live production storage directory.
+
+Focused static fixtures (Markdown sanitizer, PDF viewer island, navigation) stay available without the full app:
+
+```bash
+python tests/browser/serve.py
+python tests/browser/pointer_capture.py
+```
+
+`python tests/e2e/run.py` also automates the Markdown sanitizer fixture variants and runs the pointer-capture checks so those failures count.
 
 ## Project layout
 

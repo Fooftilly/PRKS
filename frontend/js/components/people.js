@@ -508,6 +508,18 @@ window.buildPersonListRowHtml = buildPersonListRowHtml;
 window.buildPersonListCardContentHtml = buildPersonListCardContentHtml;
 window.buildPersonListDetailsHtml = buildPersonListDetailsHtml;
 
+function prksPersonViewInGraph() {
+    const p = window.currentPerson;
+    if (!p || !p.id) return;
+    const hash =
+        typeof window.prksGraphFocusHash === 'function'
+            ? window.prksGraphFocusHash('person', p.id)
+            : '#/graph?focus=' + encodeURIComponent('person:' + p.id);
+    if (typeof window.prksNavigate === 'function') window.prksNavigate(hash);
+    else window.location.hash = hash;
+}
+window.prksPersonViewInGraph = prksPersonViewInGraph;
+
 const PEOPLE_LIST_ROLE_LABELS = {
     Author: 'Authors',
     Editor: 'Editors',
@@ -790,6 +802,7 @@ function renderPersonProfileDetailsSidebarHtml(person) {
             <p class="meta-row">Biography, portrait, and external links are in the main column.</p>
             <p class="route-sidebar__meta">${nWorks} linked file${nWorks === 1 ? '' : 's'}</p>
             ${worksEditBtn}
+            <button type="button" class="ribbon-btn person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
             <button type="button" class="add-new-btn person-sidebar__cta" onclick="openPersonProfileEdit()">Edit profile</button>
             <button type="button" class="add-new-btn person-sidebar__cta" onclick="openPersonProfileTemplateModal()">Edit profile using template</button>
             ${deleteBtn}

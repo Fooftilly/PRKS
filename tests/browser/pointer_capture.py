@@ -40,6 +40,10 @@ def _python() -> str:
 
 
 def _skip(reason: str) -> int:
+    if os.environ.get("PRKS_E2E") == "1":
+        print(f"FAIL: {reason}", file=sys.stderr)
+        print("Install: python tests/e2e/install_browser.py", file=sys.stderr)
+        return 1
     print(f"SKIP: {reason}")
     return 0
 
@@ -85,13 +89,15 @@ def _start_server() -> tuple[subprocess.Popen, str]:
 
 
 def main() -> int:
+    os.environ.setdefault("PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL", "0")
+    browsers = ROOT / ".playwright-browsers"
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(browsers))
+    if os.environ.get("PRKS_E2E") == "1":
+        os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return _skip("Playwright is not installed")
-
-    # Headless shell is optional; bundled Chromium is enough for these checks.
-    os.environ.setdefault("PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL", "0")
 
     proc = None
     try:
@@ -101,11 +107,14 @@ def main() -> int:
             page = None
             browser = None
             last_err = None
-            for kwargs in (
-                {"headless": True, "channel": "chrome"},
-                {"headless": True, "channel": "chromium"},
-                {"headless": True},
-            ):
+            launch_attempts = ({"headless": True},)
+            if os.environ.get("PRKS_E2E") != "1":
+                launch_attempts = (
+                    {"headless": True, "channel": "chrome"},
+                    {"headless": True, "channel": "chromium"},
+                    {"headless": True},
+                )
+            for kwargs in launch_attempts:
                 try:
                     browser = p.chromium.launch(**kwargs)
                     last_err = None

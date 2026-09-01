@@ -27,6 +27,9 @@ dist/
 .eggs/
 pip-wheel-metadata/
 
+# --- Playwright browser cache (repo-local) ---
+.playwright-browsers/
+
 # --- Testing / coverage ---
 .pytest_cache/
 .coverage

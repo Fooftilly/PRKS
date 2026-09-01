@@ -848,6 +848,7 @@ function initEasyMDE(work) {
     const easyMDE = new EasyMDE({
         element: document.getElementById('research-notes-editor'),
         spellChecker: false,
+        autoDownloadFontAwesome: false,
         /* Server PATCH below is the source of truth; EasyMDE localStorage autosave would restore stale drafts after reload (autosave delay > PATCH delay). */
         autosave: { enabled: false },
         toolbar: [
