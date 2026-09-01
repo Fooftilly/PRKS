@@ -41,6 +41,10 @@
             .replace(/"/g, '&quot;');
     }
 
+    function peopleRequiredForFocus(focus) {
+        return String(focus || '').startsWith('person:');
+    }
+
     function token(name, fallback) {
         if (typeof document === 'undefined' || !document.documentElement) return fallback;
         try {
@@ -695,9 +699,7 @@
                 const key = el.getAttribute('data-graph-filter');
                 if (!key) return;
                 if (key === 'people') {
-                    includePeople = !!el.checked;
-                    filters.people = includePeople;
-                    void reloadGraph();
+                    void reloadGraph(!!el.checked);
                     return;
                 }
                 filters[key] = !!el.checked;
@@ -891,37 +893,66 @@
         if (!liveCy.nodes().length) applyFocusAfterLayout();
     }
 
-    async function reloadGraph() {
-        if (!liveDom) return;
+    function syncPeopleCheckbox() {
+        if (!liveDom || !liveDom.querySelector) return;
+        const el = liveDom.querySelector('[data-graph-filter="people"]');
+        if (el) el.checked = !!includePeople;
+    }
+
+    function reloadGraphFailureMessage(err) {
+        if (err && err.code === 'graph_too_large') {
+            return 'Graph is too large to render as a single snapshot.';
+        }
+        return 'Could not load Research Graph.';
+    }
+
+    async function reloadGraph(nextPeople) {
+        if (!liveDom) return false;
+        const wantPeople = nextPeople === undefined ? includePeople : !!nextPeople;
+        const prevPeople = includePeople;
         const keep = selectedId;
         const host = liveDom.parentNode;
-        const data = await root.fetchResearchGraph({ people: includePeople });
-        snapshot = data;
-        filters.people = includePeople;
-        statusMessage = '';
-        if (keep && nodeById(snapshot, keep)) pendingFocus = keep;
-        else pendingFocus = '';
-        destroyResearchGraph();
-        if (!host) return;
-        host.innerHTML = shellHtml({
-            derivedOff: data.meta && data.meta.derived_note_edges_available === false,
-        });
-        bindShell(host);
-        mountCytoscape(host);
-        if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
+        try {
+            const data = await root.fetchResearchGraph({ people: wantPeople });
+            includePeople = wantPeople;
+            filters.people = wantPeople;
+            snapshot = data;
+            statusMessage = '';
+            if (keep && nodeById(snapshot, keep)) pendingFocus = keep;
+            else pendingFocus = '';
+            destroyResearchGraph();
+            if (!host) return false;
+            host.innerHTML = shellHtml({
+                derivedOff: data.meta && data.meta.derived_note_edges_available === false,
+            });
+            bindShell(host);
+            syncPeopleCheckbox();
+            mountCytoscape(host);
+            if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
+            return true;
+        } catch (e) {
+            includePeople = prevPeople;
+            filters.people = prevPeople;
+            syncPeopleCheckbox();
+            statusMessage = reloadGraphFailureMessage(e);
+            renderInspector();
+            return false;
+        }
     }
 
     async function renderResearchGraph(container, opts) {
         destroyResearchGraph();
         const options = opts || {};
-        pendingFocus = String(options.focus || '');
+        const focus = String(options.focus || '');
+        includePeople = peopleRequiredForFocus(focus);
+        filters = Object.assign({}, DEFAULT_FILTERS);
+        filters.people = includePeople;
+        pendingFocus = focus;
         statusMessage = '';
         selectedId = '';
         findQuery = '';
         findHits = [];
         findIndex = -1;
-        includePeople = false;
-        filters = Object.assign({}, DEFAULT_FILTERS);
         if (!container) return;
         container.innerHTML = shellHtml({});
         try {
@@ -934,6 +965,7 @@
                 derivedOff: data.meta && data.meta.derived_note_edges_available === false,
             });
             bindShell(container);
+            syncPeopleCheckbox();
             mountCytoscape(container);
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
         } catch (e) {
@@ -941,6 +973,7 @@
             const tooLarge = e && e.code === 'graph_too_large';
             container.innerHTML = shellHtml({ tooLarge: tooLarge, loadError: !tooLarge });
             bindShell(container);
+            syncPeopleCheckbox();
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
         }
     }
@@ -948,6 +981,11 @@
     const api = {
         renderResearchGraph: renderResearchGraph,
         destroyResearchGraph: destroyResearchGraph,
+        reloadGraph: reloadGraph,
+        peopleRequiredForFocus: peopleRequiredForFocus,
+        getSelectedGraphNodeId: function () {
+            return selectedId;
+        },
         toCytoscapeElements: toCytoscapeElements,
         displayLabelForEdge: displayLabelForEdge,
         nodeClasses: nodeClasses,

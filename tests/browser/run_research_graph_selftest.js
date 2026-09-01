@@ -27,8 +27,40 @@ const navigated = [];
 const fakeElements = [];
 let liveInstances = 0;
 
+function fakeElement(data) {
+    const id = data && data.id;
+    return {
+        length: 1,
+        empty: function () {
+            return false;
+        },
+        id: function () {
+            return id;
+        },
+        style: function () {
+            return this;
+        },
+        select: function () {},
+        unselect: function () {},
+        addClass: function () {},
+        removeClass: function () {},
+        selected: function () {
+            return false;
+        },
+        source: function () {
+            return { id: function () { return data && data.source; } };
+        },
+        target: function () {
+            return { id: function () { return data && data.target; } };
+        },
+    };
+}
+
 function fakeCollection(items) {
-    const arr = items || [];
+    const arr = (items || []).map(function (item) {
+        if (item && typeof item.id === 'function') return item;
+        return fakeElement(item);
+    });
     return {
         length: arr.length,
         empty: function () {
@@ -39,17 +71,21 @@ function fakeCollection(items) {
         },
         unselect: function () {},
         id: function () {
-            return arr[0] ? arr[0].id : '';
+            return arr[0] ? arr[0].id() : '';
         },
-        select: function () {},
+        select: function () {
+            arr.forEach(function (el) {
+                el.select();
+            });
+        },
         addClass: function () {},
         removeClass: function () {},
         style: function () {},
         source: function () {
-            return { id: function () { return arr[0] && arr[0].source; } };
+            return arr[0] ? arr[0].source() : { id: function () { return ''; } };
         },
         target: function () {
-            return { id: function () { return arr[0] && arr[0].target; } };
+            return arr[0] ? arr[0].target() : { id: function () { return ''; } };
         },
         selected: function () {
             return false;
@@ -95,9 +131,7 @@ function fakeCytoscape(opts) {
         getElementById: function (id) {
             const hit = nodes.find((n) => n.data.id === id);
             if (!hit) return fakeCollection([]);
-            const el = fakeCollection([{ id: id }]);
-            el.select = function () {};
-            return el;
+            return fakeCollection([{ id: id }]);
         },
         animate: function () {},
         fit: function () {},
@@ -163,11 +197,11 @@ const fixture = {
             doc_type: 'book',
         },
         {
-            id: 'person:P-1',
-            record_id: 'P-1',
+            id: 'person:P-123',
+            record_id: 'P-123',
             type: 'person',
             label: 'Max Horkheimer',
-            route: '#/people/P-1',
+            route: '#/people/P-123',
         },
     ],
     edges: [
@@ -194,9 +228,9 @@ const fixture = {
             count: 3,
         },
         {
-            id: 'work_author:person:P-1>work:W-1',
+            id: 'work_author:person:P-123>work:W-1',
             type: 'work_author',
-            source: 'person:P-1',
+            source: 'person:P-123',
             target: 'work:W-1',
         },
     ],
@@ -272,10 +306,130 @@ sandbox.destroyResearchGraph();
 sandbox.destroyResearchGraph();
 assertEq(rows, 'destroy is idempotent', sandbox.__prksResearchGraphLiveCount || 0, 0);
 
-const passed = rows.filter((r) => r.ok).length;
-const failed = rows.filter((r) => !r.ok).length;
-rows.forEach((r) => {
-    console.log((r.ok ? 'PASS' : 'FAIL') + '  ' + r.name + (r.detail ? ' — ' + r.detail : ''));
+function makeGraphHost() {
+    function noop() {}
+    const peopleBox = {
+        checked: false,
+        getAttribute: function (name) {
+            return name === 'data-graph-filter' ? 'people' : null;
+        },
+        addEventListener: noop,
+    };
+    const inspector = { innerHTML: '' };
+    const canvas = { id: 'prks-graph-canvas' };
+    const graphRoot = {
+        addEventListener: noop,
+        removeEventListener: noop,
+        querySelector: function (sel) {
+            if (sel === '#prks-graph-find') return { value: '', addEventListener: noop };
+            if (sel === '#prks-graph-find-results') return { innerHTML: '', hidden: true };
+            if (sel === '#prks-graph-inspector') return inspector;
+            if (sel === '#prks-graph-canvas') return canvas;
+            if (sel === '[data-graph-filter="people"]') return peopleBox;
+            return null;
+        },
+        querySelectorAll: function (sel) {
+            if (sel === '[data-graph-filter]') return [peopleBox];
+            return [];
+        },
+        parentNode: null,
+    };
+    const host = {
+        innerHTML: '',
+        querySelector: function (sel) {
+            if (sel === '.research-graph') return graphRoot;
+            if (sel === '#prks-graph-canvas') return canvas;
+            return graphRoot.querySelector(sel);
+        },
+        querySelectorAll: function (sel) {
+            return graphRoot.querySelectorAll(sel);
+        },
+        _peopleBox: peopleBox,
+        _inspector: inspector,
+    };
+    graphRoot.parentNode = host;
+    return host;
+}
+
+(async function () {
+    assertEq(rows, 'person focus requires people', g.peopleRequiredForFocus('person:P-123'), true);
+    assertEq(rows, 'concept focus does not require people', g.peopleRequiredForFocus('concept:C-1'), false);
+    assertEq(rows, 'empty focus does not require people', g.peopleRequiredForFocus(''), false);
+
+    const fetchCalls = [];
+    let fetchImpl = async function () {
+        return fixture;
+    };
+    sandbox.fetchResearchGraph = async function (opts) {
+        fetchCalls.push(opts || {});
+        return fetchImpl(opts);
+    };
+
+    const personHost = makeGraphHost();
+    await g.renderResearchGraph(personHost, { focus: 'person:P-123' });
+    assert(
+        rows,
+        'person focus initial request includes people',
+        fetchCalls[0] && fetchCalls[0].people === true
+    );
+    assertEq(rows, 'person focus selects person node', g.getSelectedGraphNodeId(), 'person:P-123');
+    assertEq(rows, 'person focus checks People filter', personHost._peopleBox.checked, true);
+
+    fetchCalls.length = 0;
+    const conceptHost = makeGraphHost();
+    await g.renderResearchGraph(conceptHost, { focus: 'concept:C-1' });
+    assert(
+        rows,
+        'concept focus initial request excludes people',
+        fetchCalls[0] && fetchCalls[0].people === false
+    );
+    assertEq(rows, 'concept focus selects concept node', g.getSelectedGraphNodeId(), 'concept:C-1');
+
+    const cyBefore = fakeElements[fakeElements.length - 1];
+    fetchImpl = async function () {
+        const err = new Error('too large');
+        err.code = 'graph_too_large';
+        throw err;
+    };
+    conceptHost._peopleBox.checked = true;
+    const tooLargeOk = await g.reloadGraph(true);
+    assertEq(rows, 'people reload graph_too_large returns false', tooLargeOk, false);
+    assert(
+        rows,
+        'people reload requested people',
+        fetchCalls[fetchCalls.length - 1] && fetchCalls[fetchCalls.length - 1].people === true
+    );
+    assertEq(rows, 'people checkbox restored after graph_too_large', conceptHost._peopleBox.checked, false);
+    assertEq(rows, 'prior graph kept after graph_too_large', cyBefore.destroyed, false);
+    assertEq(rows, 'selection kept after failed people reload', g.getSelectedGraphNodeId(), 'concept:C-1');
+    assert(
+        rows,
+        'graph_too_large status shown',
+        String(conceptHost._inspector.innerHTML).indexOf('too large to render as a single snapshot') >= 0
+    );
+
+    fetchImpl = async function () {
+        throw new Error('network');
+    };
+    conceptHost._peopleBox.checked = true;
+    const loadFailOk = await g.reloadGraph(true);
+    assertEq(rows, 'people reload ordinary failure returns false', loadFailOk, false);
+    assertEq(rows, 'people checkbox restored after load failure', conceptHost._peopleBox.checked, false);
+    assertEq(rows, 'prior graph kept after load failure', cyBefore.destroyed, false);
+    assert(
+        rows,
+        'ordinary load failure status shown',
+        String(conceptHost._inspector.innerHTML).indexOf('Could not load Research Graph.') >= 0
+    );
+
+    const passed = rows.filter((r) => r.ok).length;
+    const failed = rows.filter((r) => !r.ok).length;
+    rows.forEach((r) => {
+        console.log((r.ok ? 'PASS' : 'FAIL') + '  ' + r.name + (r.detail ? ' — ' + r.detail : ''));
+    });
+    console.log(passed + ' passed, ' + failed + ' failed');
+    if (failed) process.exit(1);
+})().catch(function (err) {
+    console.error(err && err.stack ? err.stack : err);
+    process.exit(1);
 });
-console.log(passed + ' passed, ' + failed + ' failed');
-if (failed) process.exit(1);

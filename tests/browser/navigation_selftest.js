@@ -72,6 +72,8 @@
         assertEq('#/graph canonical', parse('#/graph').canonicalHash, '#/graph');
         assertEq('#/graph?focus=concept:C-1 name', parse('#/graph?focus=concept:C-1').name, 'research-graph');
         assertEq('#/graph?focus=concept:C-1 focus', parse('#/graph?focus=concept:C-1').params.focus, 'concept:C-1');
+        assertEq('#/graph?focus=person:P-123 name', parse('#/graph?focus=person:P-123').name, 'research-graph');
+        assertEq('#/graph?focus=person:P-123 focus', parse('#/graph?focus=person:P-123').params.focus, 'person:P-123');
         assert(
             'graph focus preserved in canonical',
             parse('#/graph?focus=concept:C-1').canonicalHash.indexOf('focus=') >= 0
