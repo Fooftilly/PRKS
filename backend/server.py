@@ -2988,20 +2988,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if _bound_storage is None:
                 self._send_internal_error()
                 return
+            upload_path = None
             try:
                 require_restore_upload_space(_bound_storage, content_length)
-            except RestoreError as exc:
-                self.send_json(
-                    exc.http_status,
-                    {
-                        "error": exc.message,
-                        "reason": exc.reason,
-                        "request_id": self._prks_request_id,
-                    },
-                )
-                return
-            upload_path = new_staging_upload_path(_bound_storage)
-            try:
+                upload_path = new_staging_upload_path(_bound_storage)
                 stream_upload_to_file(
                     self.rfile,
                     upload_path,
@@ -3027,8 +3017,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         "request_id": self._prks_request_id,
                     },
                 )
+            except Exception as exc:
+                self._send_internal_error(exc)
             finally:
-                discard_temp_path(upload_path)
+                if upload_path:
+                    discard_temp_path(upload_path)
 
     def _handle_backup_restore(self, data) -> None:
         if _bound_storage is None:

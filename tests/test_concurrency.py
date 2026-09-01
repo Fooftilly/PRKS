@@ -834,6 +834,55 @@ class LiveHttpConcurrencyTests(unittest.TestCase):
                 except OSError:
                     pass
 
+    def test_stage_unexpected_oserror_is_internal_error_and_releases_gate(self):
+        seen = {}
+
+        def boom(_reader, dest_path, **_kwargs):
+            seen["path"] = dest_path
+            seen["snap"] = self.gate.snapshot()
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            with open(dest_path, "wb") as handle:
+                handle.write(b"partial")
+            raise OSError("forced")
+
+        payload = b"not-a-real-backup"
+        with patch.object(server_module, "stream_upload_to_file", boom):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+            try:
+                conn.request(
+                    "POST",
+                    "/api/backups/stage",
+                    body=payload,
+                    headers={
+                        "Host": "127.0.0.1",
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(len(payload)),
+                    },
+                )
+                res = conn.getresponse()
+                status = res.status
+                req_id = (res.getheader("X-Request-ID") or "").strip()
+                body = res.read()
+            finally:
+                conn.close()
+
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(status, 500)
+        self.assertEqual(data.get("error"), "internal_error")
+        self.assertTrue(req_id)
+        self.assertEqual(data.get("request_id"), req_id)
+        self.assertIn("path", seen)
+        self.assertGreater(seen["snap"]["active_reads"], 0)
+        self.assertTrue(
+            self.gate.wait_until(
+                lambda s: s["active_reads"] == 0
+                and not s["mutation_active"]
+                and not s["backup_active"]
+                and not s["restore_active"]
+            )
+        )
+        self.assertFalse(os.path.exists(seen["path"]))
+
 
 if __name__ == "__main__":
     unittest.main()
