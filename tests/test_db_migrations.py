@@ -1,3 +1,5 @@
+import inspect
+import json
 import logging
 import os
 import shutil
@@ -21,12 +23,16 @@ from backend.db_migrations import (
     LATEST_SCHEMA_VERSION,
     LEGACY_BASELINE_VERSION,
     MIGRATIONS,
+    REQUIRED_TABLES,
     Migration,
     MigrationError,
+    _LEGACY_MARKER_COMPANIONS,
     application_schema_signature,
     apply_ordered_migrations,
     column_exists,
     index_exists,
+    is_legacy_prks_database,
+    migrate_v12_to_v13,
     read_schema_version,
     table_exists,
     trigger_exists,
@@ -37,6 +43,27 @@ from backend.storage.config import StorageConfig
 
 _SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")
 _SECRET_TITLE = "PRIVATE_MIGRATION_TITLE_X9Q7"
+_LEGACY_WORK_ANNOTATIONS_DDL = """
+CREATE TABLE work_annotations (
+    work_id TEXT PRIMARY KEY,
+    annotations_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
+)
+"""
+_REALISTIC_ANN = {
+    "id": "ann-canonical",
+    "type": 9,
+    "pageIndex": 0,
+    "contents": "Keep me",
+    "color": "#FFCD45",
+    "strokeColor": "#FFCD45",
+    "opacity": 1,
+    "blendMode": "Multiply",
+    "segmentRects": [{"origin": {"x": 72, "y": 700}, "size": {"width": 160, "height": 14}}],
+    "rect": {"origin": {"x": 72, "y": 700}, "size": {"width": 160, "height": 14}},
+    "custom": {"prksComment": "Keep me"},
+}
 
 
 @contextmanager
@@ -251,8 +278,8 @@ class MigrationTestCase(unittest.TestCase):
 
 class TestRegistry(unittest.TestCase):
     def test_production_registry_is_contiguous(self):
-        self.assertEqual(LATEST_SCHEMA_VERSION, 12)
-        self.assertEqual(PRKS_SCHEMA_VERSION, 12)
+        self.assertEqual(LATEST_SCHEMA_VERSION, 13)
+        self.assertEqual(PRKS_SCHEMA_VERSION, 13)
         self.assertEqual(LEGACY_BASELINE_VERSION, 9)
         validate_migration_registry()
         self.assertEqual(MIGRATIONS[-1].target_version, LATEST_SCHEMA_VERSION)
@@ -292,7 +319,7 @@ class TestRegistry(unittest.TestCase):
 class TestFreshDatabase(MigrationTestCase):
     def test_fresh_database_is_version_10_and_idempotent(self):
         db = self._open()
-        self.assertEqual(_version(db.db_path), 12)
+        self.assertEqual(_version(db.db_path), 13)
         conn = db.get_connection()
         try:
             for name in (
@@ -309,6 +336,7 @@ class TestFreshDatabase(MigrationTestCase):
             self.assertTrue(table_exists(conn, "saved_views"))
             self.assertTrue(index_exists(conn, "idx_saved_views_name_nocase"))
             self.assertTrue(trigger_exists(conn, "works_ai"))
+            self.assertFalse(table_exists(conn, "work_annotations"))
             signature = application_schema_signature(conn)
             self.assertIn("author_text", signature["fts_columns"])
         finally:
@@ -317,7 +345,7 @@ class TestFreshDatabase(MigrationTestCase):
         with patch("backend.db_migrations.migrate_v9_to_v10") as spy:
             db2 = self._open()
             spy.assert_not_called()
-        self.assertEqual(_version(db2.db_path), 12)
+        self.assertEqual(_version(db2.db_path), 13)
         row = db2.get_work(work_id)
         self.assertEqual(row["title"], "Keep Me")
 
@@ -330,7 +358,7 @@ class TestLegacyAndV9(MigrationTestCase):
         conn.close()
         with _capture_logs() as logs:
             db = self._open()
-        self.assertEqual(_version(db.db_path), 12)
+        self.assertEqual(_version(db.db_path), 13)
         work = db.get_work("W-LEGACY1")
         self.assertEqual(work["title"], _SECRET_TITLE)
         self.assertEqual(work.get("doc_type"), "article")
@@ -347,7 +375,7 @@ class TestLegacyAndV9(MigrationTestCase):
         conn.commit()
         conn.close()
         db = self._open()
-        self.assertEqual(_version(db.db_path), 12)
+        self.assertEqual(_version(db.db_path), 13)
         self.assertEqual(db.get_work("W-LEGACY1")["title"], "Old Seven")
 
     def test_duplicate_identical_version_rows_are_normalized(self):
@@ -360,7 +388,7 @@ class TestLegacyAndV9(MigrationTestCase):
         conn.commit()
         conn.close()
         db = self._open()
-        self.assertEqual(_version(db.db_path), 12)
+        self.assertEqual(_version(db.db_path), 13)
         check = _raw(db.db_path)
         try:
             count = check.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
@@ -388,7 +416,7 @@ class TestLegacyAndV9(MigrationTestCase):
         finally:
             probe.close()
         db = self._open()
-        self.assertEqual(_version(db.db_path), 12)
+        self.assertEqual(_version(db.db_path), 13)
         conn = db.get_connection()
         try:
             self.assertTrue(column_exists(conn, "roles", "credit_name"))
@@ -463,7 +491,7 @@ class TestSavedViewsMigration(MigrationTestCase):
             probe.close()
         with _capture_logs() as logs:
             db = self._open()
-        self.assertEqual(_version(db.db_path), 12)
+        self.assertEqual(_version(db.db_path), 13)
         self.assertEqual(db.get_work(work_id)["title"], "Keep V10")
         conn = db.get_connection()
         try:
@@ -570,7 +598,7 @@ class TestResearchNetworkMigration(MigrationTestCase):
         work_id, concept_id, arg_id = self._downgrade_to_v11_with_legacy()
         with _capture_logs() as logs:
             db = self._open()
-        self.assertEqual(_version(db.db_path), 12)
+        self.assertEqual(_version(db.db_path), 13)
         conn = db.get_connection()
         try:
             self.assertTrue(table_exists(conn, "concept_aliases"))
@@ -657,13 +685,184 @@ class TestResearchNetworkMigration(MigrationTestCase):
         self.assertEqual(ctx.exception.details.get("object"), "concept_parents")
 
 
+class TestRemoveWorkAnnotationsMigration(MigrationTestCase):
+    def _install_v12_blob(self, work_id, payload):
+        conn = _raw(self.storage.db_path)
+        conn.execute(_LEGACY_WORK_ANNOTATIONS_DDL)
+        conn.execute(
+            "INSERT INTO work_annotations (work_id, annotations_json) VALUES (?, ?)",
+            (work_id, json.dumps(payload)),
+        )
+        conn.execute("UPDATE schema_version SET version = 12")
+        conn.commit()
+        conn.close()
+
+    def test_legacy_marker_keeps_work_annotations_current_schema_does_not(self):
+        self.assertNotIn("work_annotations", REQUIRED_TABLES)
+        self.assertIn("work_annotations", _LEGACY_MARKER_COMPANIONS)
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute("CREATE TABLE works (id TEXT PRIMARY KEY, title TEXT NOT NULL)")
+            conn.execute(
+                "CREATE TABLE work_annotations (work_id TEXT PRIMARY KEY, annotations_json TEXT)"
+            )
+            self.assertTrue(is_legacy_prks_database(conn))
+        finally:
+            conn.close()
+
+    def test_v13_migration_sql_drops_without_reading_json(self):
+        src = inspect.getsource(migrate_v12_to_v13)
+        self.assertIn("DROP TABLE IF EXISTS work_annotations", src)
+        self.assertNotIn("annotations_json", src)
+        self.assertNotIn("SELECT", src.upper().replace("IF EXISTS", ""))
+
+    def test_v12_migrates_to_v13_preserving_canonical_annotations(self):
+        db = self._open()
+        work_id = db.add_work(title="Keep V12")
+        person_id = db.add_person("Ada", "Lovelace")
+        db.add_role(person_id, work_id, "Author")
+        db.save_work_annotations(work_id, json.dumps([_REALISTIC_ANN]))
+        before = db.execute_query(
+            """
+            SELECT id, type, content, page_index, color, geometry_json
+            FROM annotations WHERE work_id = ? ORDER BY id
+            """,
+            (work_id,),
+        )
+        self._install_v12_blob(
+            work_id,
+            [{"id": "ann-stale", "contents": "OLD-C", "pageIndex": 0}],
+        )
+        probe = _raw(self.storage.db_path)
+        try:
+            self.assertEqual(read_schema_version(probe), 12)
+            self.assertTrue(table_exists(probe, "work_annotations"))
+            ids = [
+                row[0]
+                for row in probe.execute(
+                    "SELECT id FROM annotations WHERE work_id = ? ORDER BY id",
+                    (work_id,),
+                )
+            ]
+            self.assertEqual(ids, ["ann-canonical"])
+        finally:
+            probe.close()
+        db = self._open()
+        self.assertEqual(_version(db.db_path), 13)
+        self.assertEqual(db.get_work(work_id)["title"], "Keep V12")
+        self.assertEqual(db.get_work_roles(work_id)[0]["id"], person_id)
+        after = db.execute_query(
+            """
+            SELECT id, type, content, page_index, color, geometry_json
+            FROM annotations WHERE work_id = ? ORDER BY id
+            """,
+            (work_id,),
+        )
+        self.assertEqual(after, before)
+        conn = db.get_connection()
+        try:
+            self.assertFalse(table_exists(conn, "work_annotations"))
+        finally:
+            conn.close()
+        got = json.loads(db.get_work_annotations(work_id))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["id"], "ann-canonical")
+        self.assertEqual(got[0]["contents"], "Keep me")
+        self.assertEqual(got[0]["custom"]["prksComment"], "Keep me")
+        self.assertNotIn("ann-stale", json.dumps(got))
+
+    def test_divergent_stale_blob_is_discarded(self):
+        db = self._open()
+        work_id = db.add_work(title="Divergent")
+        db.sync_work_annotations(
+            work_id, [{"id": "ann-canonical", "contents": "keep", "pageIndex": 0}]
+        )
+        self._install_v12_blob(
+            work_id,
+            [{"id": "ann-stale", "contents": "resurrect", "pageIndex": 1}],
+        )
+        db = self._open()
+        ids = [row["id"] for row in db.execute_query("SELECT id FROM annotations")]
+        self.assertEqual(ids, ["ann-canonical"])
+        got = json.loads(db.get_work_annotations(work_id))
+        self.assertEqual([item["id"] for item in got], ["ann-canonical"])
+        self.assertNotIn("ann-stale", json.dumps(got))
+        conn = db.get_connection()
+        try:
+            self.assertFalse(table_exists(conn, "work_annotations"))
+        finally:
+            conn.close()
+
+    def test_empty_canonical_stays_empty_when_blob_is_stale(self):
+        db = self._open()
+        work_id = db.add_work(title="Empty Canonical")
+        self.assertEqual(json.loads(db.get_work_annotations(work_id)), [])
+        self._install_v12_blob(
+            work_id,
+            [{"id": "ann-stale", "contents": "should-not-return", "pageIndex": 0}],
+        )
+        db = self._open()
+        self.assertEqual(db.execute_query("SELECT id FROM annotations"), [])
+        self.assertEqual(json.loads(db.get_work_annotations(work_id)), [])
+        conn = db.get_connection()
+        try:
+            self.assertFalse(table_exists(conn, "work_annotations"))
+        finally:
+            conn.close()
+
+    def test_fresh_v13_matches_v12_migrated_v13(self):
+        fresh_root = tempfile.mkdtemp(prefix="prks-mig-ann-fresh-")
+        self.addCleanup(lambda: shutil.rmtree(fresh_root, ignore_errors=True))
+        fresh_storage = StorageConfig.for_testing(fresh_root)
+        os.makedirs(fresh_storage.pdfs_dir, exist_ok=True)
+        fresh = PRKSDatabase(storage=fresh_storage, schema_path=_SCHEMA_PATH)
+        db = self._open()
+        work_id = db.add_work(title="Sig")
+        self._install_v12_blob(work_id, [{"id": "stale"}])
+        migrated = self._open()
+        fresh_conn = fresh.get_connection()
+        migrated_conn = migrated.get_connection()
+        try:
+            self.assertEqual(
+                application_schema_signature(fresh_conn),
+                application_schema_signature(migrated_conn),
+            )
+            self.assertFalse(table_exists(fresh_conn, "work_annotations"))
+            self.assertFalse(table_exists(migrated_conn, "work_annotations"))
+        finally:
+            fresh_conn.close()
+            migrated_conn.close()
+
+    def test_failed_v13_rolls_back_drop_and_version(self):
+        db = self._open()
+        work_id = db.add_work(title="Rollback V13")
+        self._install_v12_blob(work_id, [{"id": "keep-blob"}])
+        conn = _raw(self.storage.db_path)
+
+        def boom(c):
+            c.execute("DROP TABLE IF EXISTS work_annotations")
+            raise RuntimeError("boom")
+
+        try:
+            with self.assertRaises(RuntimeError):
+                apply_ordered_migrations(
+                    conn,
+                    12,
+                    (Migration(13, "remove_legacy_work_annotations", boom),),
+                )
+            self.assertEqual(read_schema_version(conn), 12)
+            self.assertTrue(table_exists(conn, "work_annotations"))
+        finally:
+            conn.close()
+
+
 class TestVersionRefusal(MigrationTestCase):
     def test_newer_version_is_refused_without_schema_changes(self):
         db = self._open()
         conn = _raw(db.db_path)
         conn.execute("CREATE TABLE canary_keep (id INTEGER)")
         conn.execute("INSERT INTO canary_keep (id) VALUES (1)")
-        conn.execute("UPDATE schema_version SET version = 13")
+        conn.execute("UPDATE schema_version SET version = 14")
         conn.commit()
         conn.close()
         with self.assertRaises(MigrationError) as ctx:
@@ -674,7 +873,7 @@ class TestVersionRefusal(MigrationTestCase):
         try:
             self.assertEqual(
                 check.execute("SELECT version FROM schema_version").fetchone()[0],
-                13,
+                14,
             )
             self.assertEqual(check.execute("SELECT id FROM canary_keep").fetchone()[0], 1)
         finally:
@@ -938,7 +1137,7 @@ class TestConstraintAndDrift(MigrationTestCase):
         self.assertEqual(ctx.exception.code, "schema_drift")
         check = _raw(db.db_path)
         try:
-            self.assertEqual(read_schema_version(check), 12)
+            self.assertEqual(read_schema_version(check), 13)
             self.assertFalse(index_exists(check, "idx_playlist_items_work_unique"))
         finally:
             check.close()
@@ -960,7 +1159,7 @@ class TestConstraintAndDrift(MigrationTestCase):
         try:
             self.assertEqual(
                 check.execute("SELECT version FROM schema_version").fetchone()[0],
-                12,
+                13,
             )
             unique = None
             for row in check.execute("PRAGMA index_list(playlist_items)"):
@@ -1006,7 +1205,7 @@ class TestConstraintAndDrift(MigrationTestCase):
         finally:
             conn.close()
         self._open()
-        self.assertEqual(_version(db.db_path), 12)
+        self.assertEqual(_version(db.db_path), 13)
 
     def test_v10_folder_parent_title_index_rejects_extra_key(self):
         db = self._open()
@@ -1097,7 +1296,7 @@ class TestConstraintAndDrift(MigrationTestCase):
         conn.commit()
         conn.close()
         db = self._open()
-        self.assertEqual(_version(db.db_path), 12)
+        self.assertEqual(_version(db.db_path), 13)
         check = db.get_connection()
         try:
             unique = None

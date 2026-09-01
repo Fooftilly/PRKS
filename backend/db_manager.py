@@ -2403,7 +2403,6 @@ class PRKSDatabase:
         """Replace one Work's canonical annotations in a single transaction.
 
         Validates the complete incoming list before any delete/update/insert.
-        Does not read or write `work_annotations`.
         """
         with self.connection() as conn:
             try:

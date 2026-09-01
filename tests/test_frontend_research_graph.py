@@ -105,7 +105,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("/api/research-graph", _read(_API))
 
     def test_no_schema_bump(self):
-        self.assertIn("LATEST_SCHEMA_VERSION = 12", _read(_SCHEMA))
+        self.assertIn("LATEST_SCHEMA_VERSION = 13", _read(_SCHEMA))
 
     def test_docs(self):
         readme = _read(_README)

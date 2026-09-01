@@ -79,7 +79,6 @@ _REQUIRED_TABLES = (
     "works",
     "persons",
     "annotations",
-    "work_annotations",
     "app_settings",
 )
 _NON_PATH_STORAGE_FIELDS = frozenset({"mode", "processing_fallback_allowed"})

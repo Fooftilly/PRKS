@@ -130,7 +130,7 @@ docker compose start prks
 
 PRKS automatically upgrades supported older databases at startup.
 
-Current schema version: **11**.
+Current schema version: **13**.
 
 Schema migrations are transactional and version-ordered. A database marked version N has passed every migration through N.
 
@@ -140,9 +140,9 @@ Databases created by a newer PRKS version are refused rather than downgraded. Do
 
 PDF file bytes are the canonical rendered document, including markup the viewer writes into the file.
 
-The `annotations` table is canonical PRKS annotation metadata used by the sidebar, comments, and `GET /api/works/{id}/annotations`. Extra EmbedPDF fields that are not first-class columns are stored in `geometry_json` so the submitted object can be reconstructed.
+The `annotations` table is the sole PRKS annotation-metadata store, used by the sidebar, comments, and `GET /api/works/{id}/annotations`. Extra EmbedPDF fields that are not first-class columns are stored in `geometry_json` so the submitted object can be reconstructed.
 
-`work_annotations` is a legacy historical JSON snapshot table. Runtime code no longer reads or writes it. The table remains in the schema until a later cleanup migration. It is not a backup of annotation metadata.
+Schema v13 removed the former `work_annotations` JSON snapshot. PDF bytes remain the canonical rendered/embedded markup; `annotations` remains PRKS sidebar/comment metadata.
 
 ## PDF text search
 

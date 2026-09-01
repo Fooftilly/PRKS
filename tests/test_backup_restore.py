@@ -190,7 +190,22 @@ class BackupRestoreTestCase(unittest.TestCase):
         tag = db.add_tag("rhetoric")
         db.add_tag_to_work(work_id, tag["id"])
         db.save_work_annotations(
-            work_id, json.dumps([{"id": "a1", "type": "highlight", "content": "note"}])
+            work_id,
+            json.dumps(
+                [
+                    {
+                        "id": "a1",
+                        "type": "highlight",
+                        "content": "note",
+                        "pageIndex": 2,
+                        "color": "#FFCD45",
+                        "rect": {
+                            "origin": {"x": 1, "y": 2},
+                            "size": {"width": 3, "height": 4},
+                        },
+                    }
+                ]
+            ),
         )
         db.patch_app_settings({"annotation_author": author})
         server_module.text_index.sync_work(work_id, f"/api/pdfs/{pdf_name}")
@@ -279,18 +294,31 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         roles = live.execute_query("SELECT role_type FROM roles")
         self.assertTrue(roles)
         canonical = live.execute_query(
-            "SELECT id, type, content FROM annotations WHERE work_id = ? ORDER BY id",
+            """
+            SELECT id, type, content, page_index, color, geometry_json
+            FROM annotations WHERE work_id = ? ORDER BY id
+            """,
             (source["work_id"],),
         )
         self.assertEqual(len(canonical), 1)
         self.assertEqual(canonical[0]["id"], "a1")
         self.assertEqual(canonical[0]["type"], "highlight")
         self.assertEqual(canonical[0]["content"], "note")
+        self.assertEqual(canonical[0]["page_index"], 2)
+        self.assertEqual(canonical[0]["color"], "#FFCD45")
+        geom = json.loads(canonical[0]["geometry_json"] or "{}")
+        self.assertEqual(geom["rect"]["origin"]["x"], 1)
         anns = json.loads(live.get_work_annotations(source["work_id"]))
         self.assertEqual(len(anns), 1)
         self.assertEqual(anns[0]["id"], "a1")
         self.assertEqual(anns[0]["type"], "highlight")
         self.assertEqual(anns[0]["contents"], "note")
+        self.assertEqual(anns[0]["pageIndex"], 2)
+        self.assertEqual(anns[0]["rect"]["size"]["width"], 3)
+        tables = live.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='work_annotations'"
+        )
+        self.assertEqual(tables, [])
         thumbs = os.listdir(dest.thumbs_dir) if os.path.isdir(dest.thumbs_dir) else []
         self.assertNotIn("stale-thumb.webp", thumbs)
         hits = server_module.text_index.search_work_ids("unique token alpha")
@@ -423,12 +451,16 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
                 leftovers.append(name)
         self.assertFalse(any(name.endswith(".prks-backup") for name in leftovers))
 
-    def test_orphan_work_annotations_are_backup_warning(self):
+    def test_orphan_annotations_are_backup_warning(self):
         lib = self._bind_library()
         conn = sqlite3.connect(lib["cfg"].db_path)
+        conn.execute("PRAGMA foreign_keys = OFF")
         conn.execute(
-            "INSERT INTO work_annotations (work_id, annotations_json) VALUES (?, ?)",
-            ("W-MISSING", "[]"),
+            """
+            INSERT INTO annotations (id, work_id, type, content, page_index, color, geometry_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("orphan-ann", "W-MISSING", "highlight", "x", 0, "", "{}"),
         )
         conn.commit()
         conn.close()
@@ -502,6 +534,55 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         ]
         self.assertEqual(tables, ["saved_views"])
         self.assertEqual(live.get_saved_views(), [])
+
+    def test_schema_12_backup_with_work_annotations_restores_and_migrates(self):
+        source = self._bind_library(title="Incoming V12", pdf_name="v12.pdf")
+        work_id = source["work_id"]
+        conn = sqlite3.connect(source["cfg"].db_path)
+        conn.execute(
+            """
+            CREATE TABLE work_annotations (
+                work_id TEXT PRIMARY KEY,
+                annotations_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO work_annotations (work_id, annotations_json) VALUES (?, ?)",
+            (work_id, json.dumps([{"id": "ann-stale", "contents": "OLD-C"}])),
+        )
+        conn.execute("UPDATE schema_version SET version = 12")
+        conn.commit()
+        conn.close()
+        backup = create_backup(source["cfg"])
+        self.assertTrue(backup.verified)
+        dest = bind_storage(self._cfg(self._tmpdir()))
+        staged = self._stage_copy(dest, backup.archive_path)
+        self.assertTrue(staged.verified)
+        out = apply_restore(dest, staged.token, "RESTORE", rebind=bind_storage)
+        self.assertTrue(out["restored"])
+        live = server_module.db
+        versions = live.execute_query("SELECT version FROM schema_version")
+        self.assertEqual([row["version"] for row in versions], [PRKS_SCHEMA_VERSION])
+        self.assertEqual(PRKS_SCHEMA_VERSION, 13)
+        titles = [row["title"] for row in live.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Incoming V12"])
+        canonical = live.execute_query(
+            "SELECT id, type, content FROM annotations WHERE work_id = ? ORDER BY id",
+            (work_id,),
+        )
+        self.assertEqual(len(canonical), 1)
+        self.assertEqual(canonical[0]["id"], "a1")
+        self.assertEqual(canonical[0]["content"], "note")
+        leftover = live.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='work_annotations'"
+        )
+        self.assertEqual(leftover, [])
+        reconstructed = json.loads(live.get_work_annotations(work_id))
+        self.assertEqual([item["id"] for item in reconstructed], ["a1"])
+        self.assertNotIn("ann-stale", json.dumps(reconstructed))
 
     def test_saved_views_survive_backup_restore(self):
         source = self._bind_library(title="View Library", pdf_name="view.pdf")

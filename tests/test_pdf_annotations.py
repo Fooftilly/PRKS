@@ -13,6 +13,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import PRKSDatabase, WorkAnnotationError
+from backend.db_migrations import table_exists
 from backend.pdf_annotations import (
     normalize_annotation,
     parse_annotations_json,
@@ -161,20 +162,6 @@ class TestCanonicalAnnotations(unittest.TestCase):
     def _by_id(self, work_id):
         return {item["id"]: item for item in self._got(work_id)}
 
-    def _blob_rows(self, work_id=None):
-        if work_id is None:
-            return self.db.execute_query("SELECT work_id, annotations_json FROM work_annotations")
-        return self.db.execute_query(
-            "SELECT work_id, annotations_json FROM work_annotations WHERE work_id = ?",
-            (work_id,),
-        )
-
-    def _insert_blob(self, work_id, payload):
-        self.db.execute_query(
-            "INSERT INTO work_annotations (work_id, annotations_json) VALUES (?, ?)",
-            (work_id, json.dumps(payload)),
-        )
-
     def _canon_rows(self, work_id):
         return self.db.execute_query(
             """
@@ -183,6 +170,13 @@ class TestCanonicalAnnotations(unittest.TestCase):
             """,
             (work_id,),
         )
+
+    def test_work_annotations_table_does_not_exist(self):
+        conn = self.db.get_connection()
+        try:
+            self.assertFalse(table_exists(conn, "work_annotations"))
+        finally:
+            conn.close()
 
     def test_realistic_semantic_round_trip(self):
         w_id = self.db.add_work(title="PDF Ann")
@@ -218,7 +212,6 @@ class TestCanonicalAnnotations(unittest.TestCase):
         self.assertEqual(got["custom"]["prksComment"], "My comment")
         self.assertNotIn("page", got)
         self.assertNotIn("pageNumber", got)
-        self.assertEqual(self._blob_rows(w_id), [])
 
     def test_replacement_updates_deletes_and_inserts(self):
         w_id = self.db.add_work(title="Replace")
@@ -246,7 +239,7 @@ class TestCanonicalAnnotations(unittest.TestCase):
         ids = [row["id"] for row in self._canon_rows(w_id)]
         self.assertEqual(ids, ["A", "C", "D"])
 
-    def test_empty_list_clears_canonical_and_ignores_stale_blob(self):
+    def test_empty_list_clears_canonical(self):
         w_id = self.db.add_work(title="Empty")
         self.db.sync_work_annotations(
             w_id,
@@ -255,13 +248,9 @@ class TestCanonicalAnnotations(unittest.TestCase):
                 {"id": "B", "contents": "b", "pageIndex": 0},
             ],
         )
-        self._insert_blob(w_id, [{"id": "STALE", "contents": "nope"}])
         self.db.sync_work_annotations(w_id, [])
         self.assertEqual(self._got(w_id), [])
         self.assertEqual(self._canon_rows(w_id), [])
-        blob = self._blob_rows(w_id)
-        self.assertEqual(len(blob), 1)
-        self.assertIn("STALE", blob[0]["annotations_json"])
 
     def test_malformed_later_item_rolls_back(self):
         w_id = self.db.add_work(title="Rollback")
@@ -345,22 +334,6 @@ class TestCanonicalAnnotations(unittest.TestCase):
         with self.assertRaises(WorkAnnotationError):
             self.db.save_work_annotations(w_id, json.dumps({"id": "A"}))
         self.assertEqual(self._canon_rows(w_id), before)
-
-    def test_legacy_blob_is_not_written_or_read(self):
-        w_id = self.db.add_work(title="Blob")
-        stale = [{"id": "STALE", "contents": "legacy", "pageIndex": 0, "type": "note"}]
-        self._insert_blob(w_id, stale)
-        blob_before = self._blob_rows(w_id)[0]["annotations_json"]
-        self.db.save_work_annotations(w_id, json.dumps([_REALISTIC]))
-        got = self._got(w_id)
-        self.assertEqual(len(got), 1)
-        self.assertEqual(got[0]["id"], "ann-1")
-        blob_after = self._blob_rows(w_id)
-        self.assertEqual(len(blob_after), 1)
-        self.assertEqual(blob_after[0]["annotations_json"], blob_before)
-        self.db.save_work_annotations(w_id, "[]")
-        self.assertEqual(self._got(w_id), [])
-        self.assertEqual(self._blob_rows(w_id)[0]["annotations_json"], blob_before)
 
     def test_old_four_key_geometry_still_reconstructs(self):
         w_id = self.db.add_work(title="Legacy geom")

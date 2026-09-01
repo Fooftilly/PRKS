@@ -24,11 +24,14 @@ from backend.log_safety import safe_error_type, safe_log_label
 
 LOGGER = logging.getLogger("prks.db")
 
-LATEST_SCHEMA_VERSION = 12
+LATEST_SCHEMA_VERSION = 13
 LEGACY_BASELINE_VERSION = 9
 
 # Unversioned files count as PRKS only with works plus another established table.
 # Do not treat an arbitrary SQLite DB as a legacy library.
+#
+# Current schema does not require work_annotations (removed in v13).
+# Legacy recognition MAY still use that historical table name.
 _LEGACY_MARKER_CORE = "works"
 _LEGACY_MARKER_COMPANIONS = frozenset(
     {
@@ -89,7 +92,6 @@ REQUIRED_TABLES = (
     "argument_target_arguments",
     "roles",
     "annotations",
-    "work_annotations",
     "processing_files",
     "processing_file_roles",
     "processing_file_tags",
@@ -955,6 +957,11 @@ def application_schema_signature(conn: sqlite3.Connection) -> dict:
 
 def migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
     reconcile_pre_v10_schema(conn, _require_schema_sql())
+
+
+def migrate_v12_to_v13(conn: sqlite3.Connection) -> None:
+    """Retire the unused work_annotations snapshot. Do not import its JSON."""
+    conn.execute("DROP TABLE IF EXISTS work_annotations")
 
 
 def migrate_v11_to_v12(conn: sqlite3.Connection) -> None:
@@ -1971,6 +1978,11 @@ MIGRATIONS: Tuple[Migration, ...] = (
         target_version=12,
         name="research_network",
         apply=migrate_v11_to_v12,
+    ),
+    Migration(
+        target_version=13,
+        name="remove_legacy_work_annotations",
+        apply=migrate_v12_to_v13,
     ),
 )
 

@@ -229,14 +229,6 @@ CREATE TABLE IF NOT EXISTS annotations (
     FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
 );
 
--- Legacy historical JSON snapshot. Runtime no longer reads or writes this table.
-CREATE TABLE IF NOT EXISTS work_annotations (
-    work_id TEXT PRIMARY KEY,
-    annotations_json TEXT NOT NULL DEFAULT '[]',
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
-);
-
 -- Staging inbox for files discovered under /data/for_processing.
 -- Rows here are isolated from library/search until explicitly imported.
 CREATE TABLE IF NOT EXISTS processing_files (
