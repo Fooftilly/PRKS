@@ -48,6 +48,7 @@ from backend.research_index import (
 )
 from backend.research_network import ResearchError
 import backend.research_network as research_network
+from backend.pdf_annotations import WorkAnnotationError
 from backend.research_graph import GraphTooLargeError, ResearchGraphBuilder
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 from backend.storage import paths
@@ -2857,9 +2858,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(400, "No file_b64 provided")
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
                 w_id = path.split('/')[3]
-                annotations_json = data.get('annotations_json', '[]')
+                if not isinstance(data, dict) or 'annotations_json' not in data:
+                    self.send_json(
+                        400,
+                        {
+                            'error': 'annotations_json is required',
+                            'code': 'malformed_annotation_payload',
+                        },
+                    )
+                    return
+                annotations_json = data.get('annotations_json')
                 save_token = str(data.get('save_token', '') or '').strip()
-                db.save_work_annotations(w_id, annotations_json)
+                try:
+                    db.save_work_annotations(w_id, annotations_json)
+                except WorkAnnotationError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
                 if save_token:
                     with _SAVE_TOKEN_LOCK:
                         _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token

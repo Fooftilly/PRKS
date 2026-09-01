@@ -136,6 +136,14 @@ Schema migrations are transactional and version-ordered. A database marked versi
 
 Databases created by a newer PRKS version are refused rather than downgraded. Download a verified backup before installing a PRKS revision that announces a database schema upgrade.
 
+## PDF annotations
+
+PDF file bytes are the canonical rendered document, including markup the viewer writes into the file.
+
+The `annotations` table is canonical PRKS annotation metadata used by the sidebar, comments, and `GET /api/works/{id}/annotations`. Extra EmbedPDF fields that are not first-class columns are stored in `geometry_json` so the submitted object can be reconstructed.
+
+`work_annotations` is a legacy historical JSON snapshot table. Runtime code no longer reads or writes it. The table remains in the schema until a later cleanup migration. It is not a backup of annotation metadata.
+
 ## PDF text search
 
 PRKS keeps a separate derived PDF text-search index (`prks_text_index.db`). It is automatically reconciled with managed PDFs at startup. Unchanged PDFs are compared by stored source fingerprint and filesystem metadata; they are not re-extracted and do not trigger a full FTS integrity scan. Image-only or scanned PDFs may contain no searchable text; PRKS does not perform OCR.
@@ -308,6 +316,7 @@ python tests/browser/pointer_capture.py
 | `backend/storage/paths.py` | Path derivation and testing-mode containment. |
 | `backend/performance.py` | In-memory API/DB/span performance diagnostics. |
 | `backend/db_manager.py` | SQLite access and business logic. |
+| `backend/pdf_annotations.py` | Canonical PDF annotation normalize/validate/reconstruct. |
 | `backend/db_migrations.py` | Ordered schema migrations and current-schema validation. |
 | `backend/backup_restore.py` | Verified library backup and restore. |
 | `backend/research_markup.py` | Authoritative `[[concept:]]` / `[[argument:]]` parser. |

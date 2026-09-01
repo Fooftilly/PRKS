@@ -16,6 +16,12 @@ from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.log_safety import safe_error_type, safe_log_label
+from backend.pdf_annotations import (
+    WorkAnnotationError,
+    normalize_annotation_list,
+    parse_annotations_json,
+    reconstruct_annotation,
+)
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.performance import (
     classify_sql_write,
@@ -2376,113 +2382,109 @@ class PRKSDatabase:
             conn.commit()
 
     def get_work_annotations(self, work_id: str) -> str:
-        """Fetches structured annotations and returns them as a JSON list string."""
+        """Reconstruct annotation JSON solely from canonical `annotations` rows."""
         res = self.execute_query(
-            "SELECT id, type, content, page_index, color, geometry_json, updated_at FROM annotations WHERE work_id = ? ORDER BY page_index ASC", 
-            (work_id,)
+            """
+            SELECT id, type, content, page_index, color, geometry_json, updated_at
+            FROM annotations
+            WHERE work_id = ?
+            ORDER BY page_index ASC, id ASC
+            """,
+            (work_id,),
         )
-        # Map back to the keys the frontend expects
-        out = []
-        for row in res:
-            item = {
-                'id': row['id'],
-                'type': row['type'],
-                'contents': row['content'],
-                'pageIndex': row['page_index'],
-                'color': row['color'],
-                'updated_at': row['updated_at']
-            }
-            # Unpack geometry
-            try:
-                geom = json.loads(row['geometry_json'] or '{}')
-                item.update(geom)
-            except (TypeError, json.JSONDecodeError):
-                pass
-            out.append(item)
-        return json.dumps(out)
+        return json.dumps([reconstruct_annotation(row) for row in res])
 
     def save_work_annotations(self, work_id: str, annotations_json: str):
-        """Legacy placeholder for backward compatibility, redirects to sync."""
-        try:
-            items = json.loads(annotations_json)
-        except (TypeError, json.JSONDecodeError):
-            items = None
-        if isinstance(items, list):
-            self.sync_work_annotations(work_id, items)
-        # Still update the blob table as a backup
-        query = """
-        INSERT INTO work_annotations (work_id, annotations_json, updated_at)
-        VALUES (?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(work_id) DO UPDATE SET
-            annotations_json = excluded.annotations_json,
-            updated_at = CURRENT_TIMESTAMP
-        """
-        self.execute_query(query, (work_id, annotations_json))
+        """Parse the submitted JSON list and replace canonical annotations only."""
+        items = parse_annotations_json(annotations_json)
+        self.sync_work_annotations(work_id, items)
 
     def sync_work_annotations(self, work_id: str, items: List[dict]):
-        """
-        Synchronizes a list of annotations for a specific work.
-        Deletes items not in the list, updates existing ones, and inserts new ones.
+        """Replace one Work's canonical annotations in a single transaction.
+
+        Validates the complete incoming list before any delete/update/insert.
+        Does not read or write `work_annotations`.
         """
         with self.connection() as conn:
-            # 1. Get current IDs for this work
-            cursor = conn.execute("SELECT id FROM annotations WHERE work_id = ?", (work_id,))
-            existing_ids = {row['id'] for row in cursor.fetchall()}
-            
-            incoming_ids = set()
-            for item in items:
-                # Robust ID detection: PDF IDs are usually strings
-                ann_id = str(item.get('id') or item.get('uuid') or item.get('annotationId') or item.get('_id') or '')
-                if not ann_id: continue
-                incoming_ids.add(ann_id)
-                
-                # Extract fields with Snipet V2 fallback logic
-                a_type = str(item.get('type') or item.get('annotationType') or item.get('subtype') or 'highlight')
-                content = str(item.get('contents') or item.get('content') or item.get('comment') or item.get('text') or item.get('body') or '')
-                
-                # Page index normalization
-                p_idx = item.get('pageIndex')
-                if p_idx is None: p_idx = item.get('page')
-                if p_idx is None: p_idx = item.get('pageNumber')
-                if p_idx is None: p_idx = item.get('page_index')
-                try:
-                    page = int(p_idx) if p_idx is not None else 0
-                except (TypeError, ValueError):
-                    page = 0
+            try:
+                self._sync_work_annotations_on_conn(conn, work_id, items)
+            except sqlite3.IntegrityError as exc:
+                raise WorkAnnotationError(
+                    "annotation_id_conflict",
+                    "Annotation ID belongs to another Work.",
+                    409,
+                ) from exc
 
-                color = str(item.get('color', ''))
-                
-                # Geometry: Snippet often has rects or quadPoints
-                geom = json.dumps({
-                    'rects': item.get('rects'),
-                    'quadPoints': item.get('quadPoints'),
-                    'rect': item.get('rect'),
-                    'position': item.get('position')
-                })
-                
-                if ann_id in existing_ids:
-                    # Update
-                    query = """
-                    UPDATE annotations SET 
-                        type = ?, content = ?, page_index = ?, color = ?, 
+    def _sync_work_annotations_on_conn(self, conn, work_id: str, items: List[dict]) -> None:
+        exists = conn.execute(
+            "SELECT id FROM works WHERE id = ?",
+            (work_id,),
+        ).fetchone()
+        if not exists:
+            raise WorkAnnotationError("work_not_found", "Work not found.", 404)
+
+        normalized = normalize_annotation_list(items)
+        incoming_ids = [row["id"] for row in normalized]
+
+        if incoming_ids:
+            placeholders = ",".join("?" * len(incoming_ids))
+            owned = conn.execute(
+                f"SELECT id, work_id FROM annotations WHERE id IN ({placeholders})",
+                incoming_ids,
+            ).fetchall()
+            for existing in owned:
+                if existing["work_id"] != work_id:
+                    raise WorkAnnotationError(
+                        "annotation_id_conflict",
+                        "Annotation ID belongs to another Work.",
+                        409,
+                    )
+
+        current_ids = {
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM annotations WHERE work_id = ?",
+                (work_id,),
+            ).fetchall()
+        }
+        incoming_set = {row["id"] for row in normalized}
+
+        for row in normalized:
+            geom = json.dumps(row["geometry"], allow_nan=False)
+            params = (
+                row["type"],
+                row["content"],
+                row["page_index"],
+                row["color"],
+                geom,
+            )
+            if row["id"] in current_ids:
+                conn.execute(
+                    """
+                    UPDATE annotations SET
+                        type = ?, content = ?, page_index = ?, color = ?,
                         geometry_json = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
+                    WHERE id = ? AND work_id = ?
+                    """,
+                    params + (row["id"], work_id),
+                )
+            else:
+                conn.execute(
                     """
-                    conn.execute(query, (a_type, content, page, color, geom, ann_id))
-                else:
-                    # Insert
-                    query = """
-                    INSERT INTO annotations (id, work_id, type, content, page_index, color, geometry_json)
+                    INSERT INTO annotations
+                        (id, work_id, type, content, page_index, color, geometry_json)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """
-                    conn.execute(query, (ann_id, work_id, a_type, content, page, color, geom))
-            
-            # 3. Delete items or work context that are no longer present
-            to_delete = existing_ids - incoming_ids
-            for d_id in to_delete:
-                conn.execute("DELETE FROM annotations WHERE id = ?", (d_id,))
-            
-            conn.commit()
+                    """,
+                    (row["id"], work_id) + params,
+                )
+
+        to_delete = current_ids - incoming_set
+        if to_delete:
+            placeholders = ",".join("?" * len(to_delete))
+            conn.execute(
+                f"DELETE FROM annotations WHERE work_id = ? AND id IN ({placeholders})",
+                (work_id, *to_delete),
+            )
 
     def resolve_wiki_links(self, text: str) -> str:
         if not text: return ""

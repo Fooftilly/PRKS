@@ -25,6 +25,7 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/storage/config.py` frozen storage snapshot and env parser
 - `backend/storage/paths.py` storage-path derivation and testing-mode containment
 - `backend/db_manager.py` SQLite
+- `backend/pdf_annotations.py` canonical PDF annotation metadata
 - `backend/db_migrations.py` ordered schema migrations
 - `backend/backup_restore.py` verified backup/restore
 - `backend/research_markup.py` research-note semantic markup parser

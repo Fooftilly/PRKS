@@ -278,8 +278,19 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         self.assertEqual(len(tags), 1)
         roles = live.execute_query("SELECT role_type FROM roles")
         self.assertTrue(roles)
-        anns = live.get_work_annotations(source["work_id"])
-        self.assertIn("highlight", anns)
+        canonical = live.execute_query(
+            "SELECT id, type, content FROM annotations WHERE work_id = ? ORDER BY id",
+            (source["work_id"],),
+        )
+        self.assertEqual(len(canonical), 1)
+        self.assertEqual(canonical[0]["id"], "a1")
+        self.assertEqual(canonical[0]["type"], "highlight")
+        self.assertEqual(canonical[0]["content"], "note")
+        anns = json.loads(live.get_work_annotations(source["work_id"]))
+        self.assertEqual(len(anns), 1)
+        self.assertEqual(anns[0]["id"], "a1")
+        self.assertEqual(anns[0]["type"], "highlight")
+        self.assertEqual(anns[0]["contents"], "note")
         thumbs = os.listdir(dest.thumbs_dir) if os.path.isdir(dest.thumbs_dir) else []
         self.assertNotIn("stale-thumb.webp", thumbs)
         hits = server_module.text_index.search_work_ids("unique token alpha")

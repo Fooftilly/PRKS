@@ -1389,6 +1389,125 @@ class TestServerAPI(unittest.TestCase):
             urllib.request.urlopen(req_del)
         self.assertEqual(cm2.exception.code, 404)
 
+    def _create_work_api(self, title):
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": title, "status": "Planned"}).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            return json.loads(res.read().decode())["id"]
+
+    def _post_work_annotations(self, work_id, body):
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{work_id}/annotations",
+            data=json.dumps(body).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        return urllib.request.urlopen(req)
+
+    def _get_work_annotations(self, work_id):
+        req = urllib.request.Request(f"{self._base_url}/api/works/{work_id}/annotations")
+        with urllib.request.urlopen(req) as res:
+            payload = json.loads(res.read().decode())
+        return json.loads(payload["annotations_json"])
+
+    def _save_confirm(self, work_id, token):
+        q = urllib.parse.urlencode({"token": token})
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{work_id}/save-confirm?{q}"
+        )
+        with urllib.request.urlopen(req) as res:
+            return json.loads(res.read().decode())
+
+    def test_22c_annotation_http_validation(self):
+        w_id = self._create_work_api("Ann HTTP Valid")
+        other = self._create_work_api("Ann HTTP Other")
+        good = [{"id": "keep", "type": "note", "contents": "hello", "pageIndex": 0}]
+        with self._post_work_annotations(w_id, {"annotations_json": json.dumps(good)}) as res:
+            self.assertEqual(res.status, 200)
+        self.assertEqual(self._get_work_annotations(w_id)[0]["contents"], "hello")
+
+        cases = [
+            ({"save_token": "no-list"}, 400, "malformed_annotation_payload"),
+            ({"annotations_json": "{"}, 400, "malformed_annotation_payload"),
+            ({"annotations_json": json.dumps({"id": "a"})}, 400, "malformed_annotation_payload"),
+            ({"annotations_json": json.dumps("x")}, 400, "malformed_annotation_payload"),
+            (
+                {"annotations_json": json.dumps([{"type": "note", "pageIndex": 0}])},
+                400,
+                "malformed_annotation_payload",
+            ),
+            (
+                {
+                    "annotations_json": json.dumps(
+                        [
+                            {"id": "dup", "pageIndex": 0},
+                            {"id": "dup", "pageIndex": 1},
+                        ]
+                    )
+                },
+                400,
+                "malformed_annotation_payload",
+            ),
+        ]
+        for body, status, code in cases:
+            with self.subTest(body=body):
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    self._post_work_annotations(w_id, body)
+                self.assertEqual(cm.exception.code, status)
+                err = json.loads(cm.exception.read().decode())
+                self.assertEqual(err.get("code"), code)
+                self.assertEqual(self._get_work_annotations(w_id)[0]["id"], "keep")
+
+        with self._post_work_annotations(
+            other, {"annotations_json": json.dumps([{"id": "owned-x", "pageIndex": 0}])}
+        ) as res:
+            self.assertEqual(res.status, 200)
+        with self.assertRaises(urllib.error.HTTPError) as cm409:
+            self._post_work_annotations(
+                w_id,
+                {"annotations_json": json.dumps([{"id": "owned-x", "pageIndex": 0}])},
+            )
+        self.assertEqual(cm409.exception.code, 409)
+        err409 = json.loads(cm409.exception.read().decode())
+        self.assertEqual(err409.get("code"), "annotation_id_conflict")
+        self.assertEqual(self._get_work_annotations(w_id)[0]["id"], "keep")
+        self.assertEqual(self._get_work_annotations(other)[0]["id"], "owned-x")
+
+        with self.assertRaises(urllib.error.HTTPError) as cm404:
+            self._post_work_annotations(
+                "W-MISSING",
+                {"annotations_json": "[]"},
+            )
+        self.assertEqual(cm404.exception.code, 404)
+        err404 = json.loads(cm404.exception.read().decode())
+        self.assertEqual(err404.get("code"), "work_not_found")
+
+    def test_22d_annotation_save_token_only_after_success(self):
+        w_id = self._create_work_api("Ann Token")
+        good = [{"id": "tok", "contents": "ok", "pageIndex": 0}]
+        with self._post_work_annotations(
+            w_id, {"annotations_json": json.dumps(good), "save_token": "token-ok"}
+        ) as res:
+            self.assertEqual(res.status, 200)
+        confirm_ok = self._save_confirm(w_id, "token-ok")
+        self.assertTrue(confirm_ok["annotations_saved"])
+
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post_work_annotations(
+                w_id,
+                {"annotations_json": "{", "save_token": "token-bad"},
+            )
+        self.assertEqual(cm.exception.code, 400)
+        confirm_bad = self._save_confirm(w_id, "token-bad")
+        self.assertFalse(confirm_bad["annotations_saved"])
+        confirm_ok2 = self._save_confirm(w_id, "token-ok")
+        self.assertTrue(confirm_ok2["annotations_saved"])
+        self.assertEqual(self._get_work_annotations(w_id)[0]["id"], "tok")
+
     def test_22b_role_credit_name_post_and_patch(self):
         req_p = urllib.request.Request(
             f"{self._base_url}/api/persons",

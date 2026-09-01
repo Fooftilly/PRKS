@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS roles (
     FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
 );
 
--- Granular annotations/highlights
+-- Canonical PRKS annotation metadata (sidebar/comments). PDF bytes hold rendered markup.
 CREATE TABLE IF NOT EXISTS annotations (
     id TEXT PRIMARY KEY,
     work_id TEXT NOT NULL,
@@ -223,13 +223,13 @@ CREATE TABLE IF NOT EXISTS annotations (
     content TEXT,
     page_index INTEGER,
     color TEXT,
-    geometry_json TEXT, -- Serialized rects/quadPoints
+    geometry_json TEXT, -- Remaining JSON fields for EmbedPDF round-trip
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
 );
 
--- Persisted annotation/comment snapshots (Legacy/Cache)
+-- Legacy historical JSON snapshot. Runtime no longer reads or writes this table.
 CREATE TABLE IF NOT EXISTS work_annotations (
     work_id TEXT PRIMARY KEY,
     annotations_json TEXT NOT NULL DEFAULT '[]',
