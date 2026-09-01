@@ -68,7 +68,17 @@
         assertEq('#/types/article name', parse('#/types/article').name, 'type-detail');
         assertEq('#/playlists name', parse('#/playlists').name, 'playlists');
         assertEq('#/playlists/PL-1 name', parse('#/playlists/PL-1').name, 'playlist-detail');
-        assertEq('#/graph canonical', parse('#/graph').canonicalHash, '#/folders');
+        assertEq('#/graph name', parse('#/graph').name, 'research-graph');
+        assertEq('#/graph canonical', parse('#/graph').canonicalHash, '#/graph');
+        assertEq('#/graph?focus=concept:C-1 name', parse('#/graph?focus=concept:C-1').name, 'research-graph');
+        assertEq('#/graph?focus=concept:C-1 focus', parse('#/graph?focus=concept:C-1').params.focus, 'concept:C-1');
+        assert(
+            'graph focus preserved in canonical',
+            parse('#/graph?focus=concept:C-1').canonicalHash.indexOf('focus=') >= 0
+        );
+        assertEq('unknown graph focus ignored', parse('#/graph?focus=nope').params.focus, '');
+        assertEq('unknown graph focus canonical', parse('#/graph?focus=nope').canonicalHash, '#/graph');
+        assertEq('bare id focus ignored', parse('#/graph?focus=C-1').params.focus, '');
         assertEq('#/future-feature name', parse('#/future-feature').name, 'unknown');
         assertEq('malformed percent encoding', parse('#/works/%').name, 'unknown');
         assertEq('javascript hash', parse('javascript:alert(1)').name, 'unknown');
@@ -92,6 +102,8 @@
             assertEq('group detail nav', href(parse('#/people/groups/PG-1')), '#/people/groups');
             assertEq('author role nav', href(parse('#/people/role/Author')), '#/people/role/Author');
             assertEq('paused progress nav', href(parse('#/progress?status=Paused')), '#/progress?status=Paused');
+            assertEq('graph nav', href(parse('#/graph')), '#/graph');
+            assertEq('graph focus nav', href(parse('#/graph?focus=concept:C-1')), '#/graph');
             assertEq('search nav none', href(parse('#/search?q=secret')), null);
             assertEq('work default nav', href(parse('#/works/W-1')), '#/folders');
             assertEq(
@@ -126,6 +138,11 @@
                 'search title hides query',
                 root.prksDocumentTitleText(parse('#/search?q=Adorno%20AND%20private'), {}),
                 'Search — PRKS'
+            );
+            assertEq(
+                'graph title',
+                root.prksDocumentTitleText(parse('#/graph'), {}),
+                'Research Graph — PRKS'
             );
             assert(
                 'search title omits query string',
@@ -274,6 +291,9 @@
                 root.prksSyncSidebarActive(parse('#/progress?status=Paused'));
                 assertEq('paused progress', currentHref(), '#/progress?status=Paused');
                 assertEq('one current paused', currentCount(), 1);
+                root.prksSyncSidebarActive(parse('#/graph'));
+                assertEq('graph current', currentHref(), '#/graph');
+                assertEq('one current graph', currentCount(), 1);
                 root.prksSyncSidebarActive(parse('#/search?q=x'));
                 assertEq('search marks none', currentCount(), 0);
                 root.prksSyncSidebarActive(parse('#/future-feature'));

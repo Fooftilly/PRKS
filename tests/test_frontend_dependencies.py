@@ -85,6 +85,14 @@ class FrontendDependencyTests(unittest.TestCase):
         version = _read(os.path.join(_VENDOR, "dompurify", "VERSION"))
         self.assertIn("3.4.14", version)
 
+    def test_cytoscape_vendor_pin(self):
+        js = os.path.join(_VENDOR, "cytoscape", "cytoscape.min.js")
+        version = _read(os.path.join(_VENDOR, "cytoscape", "VERSION"))
+        self.assertTrue(os.path.isfile(js))
+        self.assertIn("3.31.2", version)
+        self.assertGreater(os.path.getsize(js), 10000)
+        self.assertNotIn("cdn.jsdelivr.net", version)
+
     def test_index_loads_local_deps_in_order(self):
         html = _read(_INDEX)
         inter = html.find('href="/vendor/inter/inter.css"')
@@ -95,6 +103,8 @@ class FrontendDependencyTests(unittest.TestCase):
         sanitize = html.find('src="/js/markdown-sanitize.js"')
         lucide = html.find('src="/vendor/lucide/lucide.min.js"')
         icons = html.find('src="/js/icons.js"')
+        cy = html.find('src="/vendor/cytoscape/cytoscape.min.js"')
+        graph = html.find('src="/js/components/research-graph.js"')
         for label, pos in (
             ("inter", inter),
             ("codemirror", cm),
@@ -104,6 +114,8 @@ class FrontendDependencyTests(unittest.TestCase):
             ("sanitize", sanitize),
             ("lucide", lucide),
             ("icons", icons),
+            ("cytoscape", cy),
+            ("research-graph", graph),
         ):
             self.assertNotEqual(pos, -1, label)
         self.assertLess(inter, cm)
@@ -112,6 +124,7 @@ class FrontendDependencyTests(unittest.TestCase):
         self.assertLess(easy, purify)
         self.assertLess(purify, sanitize)
         self.assertLess(lucide, icons)
+        self.assertLess(cy, graph)
 
     def test_no_ordinary_dependency_cdns_in_production_loaders(self):
         for path in _iter_production_loader_files():

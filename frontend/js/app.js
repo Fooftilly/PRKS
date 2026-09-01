@@ -1309,7 +1309,7 @@ async function handleRoute() {
         }
     }
     prksMaybeFlushPdfLastPageOnRouteChange(prevResolvedHash, route.hash);
-    if (route.name === 'graph' || route.canonicalize) {
+    if (route.canonicalize) {
         const target = route.canonicalHash;
         const here = window.location.hash || '';
         if (target && target !== here) {
@@ -1341,6 +1341,9 @@ async function handleRoute() {
     }
     if (typeof window.prksDestroyWorkNotesEditor === 'function') {
         window.prksDestroyWorkNotesEditor();
+    }
+    if (typeof window.destroyResearchGraph === 'function' && route.name !== 'research-graph') {
+        window.destroyResearchGraph();
     }
     window.currentWork = null;
     window.currentFolder = null;
@@ -1650,6 +1653,19 @@ async function handleRoute() {
                 } else {
                     if (typeof renderArgumentDetail === 'function') renderArgumentDetail(item, contentDiv);
                     titleOpts = { entityTitle: item.name || 'Argument' };
+                }
+                break;
+            }
+            case 'research-graph': {
+                if (typeof renderResearchGraph === 'function') {
+                    await renderResearchGraph(contentDiv, {
+                        focus: route.params.focus || '',
+                        routeGen: routeGen,
+                        stale: stale,
+                    });
+                } else {
+                    contentDiv.innerHTML =
+                        '<div class="page-header"><h2>Research Graph</h2></div><p class="meta-row">Graph UI unavailable.</p>';
                 }
                 break;
             }

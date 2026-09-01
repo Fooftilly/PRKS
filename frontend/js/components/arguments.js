@@ -234,6 +234,7 @@
             '</p><h2>' +
             esc(a.name || a.id) +
             '</h2></div><div class="page-header__actions">' +
+            '<button type="button" class="ribbon-btn" id="prks-arg-view-graph">View in graph</button>' +
             '<button type="button" class="ribbon-btn" id="prks-arg-response">New response argument</button>' +
             '<button type="button" class="ribbon-btn" id="prks-arg-delete">Delete</button>' +
             '</div></div></div>' +
@@ -270,6 +271,16 @@
             responses +
             '<h3>Mentioned in notes</h3>' +
             mentions;
+        const viewGraph = container.querySelector('#prks-arg-view-graph');
+        if (viewGraph) {
+            viewGraph.addEventListener('click', function () {
+                const hash =
+                    typeof root.prksGraphFocusHash === 'function'
+                        ? root.prksGraphFocusHash('argument', a.id)
+                        : '#/graph?focus=' + encodeURIComponent('argument:' + a.id);
+                if (typeof root.prksNavigate === 'function') root.prksNavigate(hash);
+            });
+        }
         const kindSel = container.querySelector('#prks-arg-kind');
         function defaultVerdict() {
             const kind = kindSel && kindSel.value === 'stance' ? 'stance' : 'argument';

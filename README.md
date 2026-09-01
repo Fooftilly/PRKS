@@ -174,6 +174,25 @@ Positions are lightweight claim records used as Argument targets. Glossaries/Con
 
 Note mentions live in a disposable derived index (`prks_research_index.db`), not in `prks_data.db`. Derived indexing failure never rolls back a valid note save. Concept and Argument deletion is guarded by canonical research notes, not by the derived index.
 
+## Research Graph
+
+`#/graph` is a read-only map of existing research relationships. It does not store edges of its own.
+
+The graph shows:
+
+- Concept hierarchy (`concept_parents`)
+- Positions and the Arguments/Stances that support, oppose, qualify, or hold them
+- Argument → Argument responses (the same directed target relation; no extra reverse edge)
+- Argument source Works (where an Argument/Stance was made or taken)
+- explicit research-note Concept and Argument references (`[[concept:…]]`, `[[argument:…]]`)
+- optional Author links for Works already in the graph (`?people=1`)
+
+The Graph is read-only. Editing relationships is done on their normal PRKS records.
+
+A Work→Concept or Work→Argument edge means that Work's research notes contain explicit semantic markup. It does not mean the Work is objectively about that Concept, and it is not the same as an Argument source Work.
+
+Graph node IDs are namespaced (`concept:C-…`, `position:P-…`, `person:P-…`) because raw PRKS IDs are not unique across record types. The graph is rebuilt on request from `prks_data.db` plus the derived research-reference index. There is no graph database and no schema migration for rendering.
+
 ## Saved Views
 
 Run a search and choose **Save View**. Saved Views remember the search definition, not the current result list. Opening a Saved View always shows the files that match now.

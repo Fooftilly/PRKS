@@ -214,6 +214,14 @@
             sectionHash: '#/arguments',
             detail: true,
         },
+        'research-graph': {
+            title: 'Research Graph',
+            loadingTitle: 'Research Graph',
+            backLabel: 'Research Graph',
+            navHref: '#/graph',
+            fallbackBack: '#/graph',
+            sectionHash: '#/graph',
+        },
         progress: {
             title: 'Progress',
             loadingTitle: 'Progress',
@@ -246,15 +254,6 @@
             fallbackBack: '#/folders',
             sectionHash: '#/folders',
             detail: true,
-        },
-        graph: {
-            title: 'Folders',
-            loadingTitle: 'Folders',
-            backLabel: 'Folders',
-            navHref: '#/folders',
-            fallbackBack: '#/folders',
-            sectionHash: '#/folders',
-            canonicalize: true,
         },
         unknown: {
             title: 'Section unavailable',
@@ -364,6 +363,37 @@
         return '#/progress?status=' + prksEncodePathSegment(st);
     }
 
+    const PRKS_GRAPH_FOCUS_RE = /^(concept|position|argument|work|person):[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+    function prksParseGraphFocus(query) {
+        if (!query) return '';
+        let usp;
+        try {
+            usp = new URLSearchParams(query);
+        } catch (_e) {
+            return '';
+        }
+        const raw = usp.get('focus');
+        if (raw == null) return '';
+        const decoded = String(raw).trim();
+        if (!PRKS_GRAPH_FOCUS_RE.test(decoded)) return '';
+        return decoded;
+    }
+
+    function prksGraphCanonical(focus) {
+        if (focus) return '#/graph?focus=' + prksEncodePathSegment(focus);
+        return '#/graph';
+    }
+
+    function prksGraphFocusHash(nodeType, recordId) {
+        const t = String(nodeType || '').trim();
+        const id = String(recordId || '').trim();
+        if (!t || !id) return '#/graph';
+        const focus = t + ':' + id;
+        if (!PRKS_GRAPH_FOCUS_RE.test(focus)) return '#/graph';
+        return prksGraphCanonical(focus);
+    }
+
     function prksParseRoute(hash) {
         const split = prksSplitHash(hash);
         if (!split) return prksUnknownRoute(String(hash || ''));
@@ -376,7 +406,9 @@
         const head = segs[0];
 
         if (head === 'graph' && segs.length === 1) {
-            return prksRouteRecord('graph', rawHash, PRKS_HOME_HASH, {}, { canonicalize: true });
+            const focus = prksParseGraphFocus(split.query);
+            const canonical = prksGraphCanonical(focus);
+            return prksRouteRecord('research-graph', rawHash, canonical, { focus: focus });
         }
 
         if (head === 'folders' && segs.length === 1) {
@@ -764,7 +796,8 @@
                 route.name === 'positions' ||
                 route.name === 'position-detail' ||
                 route.name === 'arguments' ||
-                route.name === 'argument-detail')
+                route.name === 'argument-detail' ||
+                route.name === 'research-graph')
         );
     }
 
@@ -918,7 +951,7 @@
     function prksValidateOriginRecord(raw) {
         if (!raw || typeof raw !== 'object') return null;
         const parsed = prksParseRoute(raw.hash);
-        if (!prksIsRecognizedRoute(parsed) || parsed.name === 'graph') return null;
+        if (!prksIsRecognizedRoute(parsed)) return null;
         if (parsed.canonicalHash.charAt(0) !== '#' || parsed.canonicalHash.charAt(1) !== '/') return null;
         let label = typeof raw.label === 'string' ? raw.label : prksBackLabelForRoute(parsed);
         label = String(label || '').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -928,7 +961,7 @@
 
     function prksRememberOrigin(destRoute, fromRoute) {
         if (!destRoute || !destRoute.detail || !fromRoute) return;
-        if (!prksIsRecognizedRoute(fromRoute) || fromRoute.name === 'graph') return;
+        if (!prksIsRecognizedRoute(fromRoute)) return;
         if (fromRoute.canonicalHash === destRoute.canonicalHash) return;
         const rec = prksValidateOriginRecord({
             hash: fromRoute.canonicalHash,
@@ -1136,6 +1169,8 @@
         PRKS_PROGRESS_STATUS_VALUES: PRKS_PROGRESS_STATUS_VALUES,
         PRKS_PEOPLE_ROLES: PRKS_PEOPLE_ROLES,
         prksParseRoute: prksParseRoute,
+        prksGraphFocusHash: prksGraphFocusHash,
+        prksParseGraphFocus: prksParseGraphFocus,
         prksCurrentCanonicalHash: prksCurrentCanonicalHash,
         prksNavigate: prksNavigate,
         prksSyncSidebarActive: prksSyncSidebarActive,

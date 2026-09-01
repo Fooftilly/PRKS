@@ -87,12 +87,24 @@
             '<div class="page-header"><div class="page-header__title-row"><div>' +
             '<p class="saved-view-detail__kicker">Position</p><h2>' +
             esc(p.name || 'Position') +
-            '</h2></div></div></div>' +
+            '</h2></div><div class="page-header__actions">' +
+            '<button type="button" class="ribbon-btn" id="prks-position-view-graph">View in graph</button>' +
+            '</div></div></div>' +
             '<div class="research-md">' +
             md(p.description) +
             '</div>' +
             '<h3>Arguments / Stances</h3>' +
             args;
+        const viewGraph = container.querySelector('#prks-position-view-graph');
+        if (viewGraph) {
+            viewGraph.addEventListener('click', function () {
+                const hash =
+                    typeof root.prksGraphFocusHash === 'function'
+                        ? root.prksGraphFocusHash('position', p.id)
+                        : '#/graph?focus=' + encodeURIComponent('position:' + p.id);
+                if (typeof root.prksNavigate === 'function') root.prksNavigate(hash);
+            });
+        }
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
     }
 

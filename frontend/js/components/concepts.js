@@ -166,6 +166,7 @@
             '<p class="saved-view-detail__kicker">Concept</p><h2>' +
             esc(c.name || 'Concept') +
             '</h2></div><div class="page-header__actions">' +
+            '<button type="button" class="ribbon-btn" id="prks-concept-view-graph">View in graph</button>' +
             '<button type="button" class="ribbon-btn" id="prks-concept-rename">Rename</button>' +
             '<button type="button" class="ribbon-btn" id="prks-concept-delete">Delete</button>' +
             '</div></div></div>' +
@@ -189,6 +190,16 @@
             esc(String(c.mention_count || 0)) +
             ' references</p>' +
             mentions;
+        const viewGraph = container.querySelector('#prks-concept-view-graph');
+        if (viewGraph) {
+            viewGraph.addEventListener('click', function () {
+                const hash =
+                    typeof root.prksGraphFocusHash === 'function'
+                        ? root.prksGraphFocusHash('concept', c.id)
+                        : '#/graph?focus=' + encodeURIComponent('concept:' + c.id);
+                if (typeof root.prksNavigate === 'function') root.prksNavigate(hash);
+            });
+        }
         container.querySelector('#prks-concept-rename').addEventListener('click', function () {
             void renameConcept(c);
         });

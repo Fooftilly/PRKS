@@ -312,6 +312,40 @@ class PRKSResearchIndex:
             ).fetchall()
         return {r["argument_id"]: int(r["c"]) for r in rows}
 
+    def aggregate_concept_mention_edges(self) -> List[dict]:
+        """Work→Concept mention aggregates. Graph projection only; not canonical."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT work_id, concept_id, COUNT(*) AS c
+                FROM concept_mentions
+                GROUP BY work_id, concept_id
+                """
+            ).fetchall()
+        return [
+            {"work_id": r["work_id"], "concept_id": r["concept_id"], "count": int(r["c"])}
+            for r in rows
+        ]
+
+    def aggregate_argument_mention_edges(self) -> List[dict]:
+        """Work→Argument mention aggregates. Graph projection only; not canonical."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT work_id, argument_id, COUNT(*) AS c
+                FROM argument_mentions
+                GROUP BY work_id, argument_id
+                """
+            ).fetchall()
+        return [
+            {
+                "work_id": r["work_id"],
+                "argument_id": r["argument_id"],
+                "count": int(r["c"]),
+            }
+            for r in rows
+        ]
+
     def work_research_refs(self, work_id: str, db: PRKSDatabase) -> Dict[str, List[dict]]:
         wid = (work_id or "").strip()
         concepts = []

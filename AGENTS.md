@@ -30,6 +30,7 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/research_markup.py` research-note semantic markup parser
 - `backend/research_network.py` Concepts, Positions, Arguments/Stances
 - `backend/research_index.py` disposable derived note-reference index
+- `backend/research_graph.py` read-only Research Graph projection
 - `backend/performance.py` in-memory performance diagnostics
 - `frontend/` UI
 - `tests/` unittest
@@ -204,4 +205,25 @@ the derived index is never the sole authority for those destructive checks.
 
 Concept, Position, and Argument names, definitions, aliases, main text, verdict
 labels, page ranges, markup, and backlink snippets are private. Never log them.
+
+## Research Graph
+
+The Research Graph is a read-only derived projection. It is never canonical
+relationship storage and must never authorize a destructive mutation.
+
+Graph node IDs must be namespaced by entity type; raw PRKS IDs are not globally
+unique across record types.
+
+Work→Concept and Work→Argument graph edges represent explicit research-note
+semantic references only. Never infer graph relations from plain prose, PDF
+text, tags or search similarity.
+
+Argument source edges and note-mention edges have different semantics and must
+remain distinguishable.
+
+Do not add graph persistence or a main-DB schema migration merely to render the
+Research Graph.
+
+The research graph and research-reference index are read-only projections. Their
+presence or absence must never authorize deletion or other canonical mutation.
 

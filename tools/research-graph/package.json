@@ -1,0 +1,13 @@
+{
+  "name": "prks-research-graph",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Maintainer-only Cytoscape.js pin for the PRKS Research Graph. Not a PRKS runtime dependency.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "cytoscape": "3.31.2"
+  }
+}

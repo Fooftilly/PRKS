@@ -62,6 +62,8 @@ function installDom() {
         makeLink('#/people/groups'),
         makeLink('#/progress?status=Paused', 'Paused'),
         makeLink('#/processing-files'),
+        makeLink('#/graph'),
+        makeLink('#/concepts'),
     ];
     links.forEach((l) => {
         l.classList._el = l;

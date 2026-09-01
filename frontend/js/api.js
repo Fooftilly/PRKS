@@ -29,6 +29,10 @@ const PRKS_API_ERROR_SOURCES = {
     'processing-files': 'processing-files.fetch',
     'saved-views': 'saved-views.fetch',
     'works-bulk': 'works.bulk',
+    concepts: 'concepts.fetch',
+    positions: 'positions.fetch',
+    arguments: 'arguments.fetch',
+    'research-graph': 'research-graph.fetch',
     request: 'api',
 };
 
@@ -918,6 +922,35 @@ async function putArgumentTargets(id, targets) {
 }
 
 window.bulkUpdateWorks = bulkUpdateWorks;
+async function fetchResearchGraph(opts) {
+    const people = !!(opts && opts.people);
+    const url = people ? '/api/research-graph?people=1' : '/api/research-graph';
+    try {
+        const res = await fetch(url);
+        if (res.status === 413) {
+            const data = await res.json().catch(function () {
+                return {};
+            });
+            const err = new Error('Graph is too large to render as a single snapshot.');
+            err.httpStatus = 413;
+            err.code = (data && data.code) || 'graph_too_large';
+            err.node_count = data && data.node_count;
+            err.edge_count = data && data.edge_count;
+            throw err;
+        }
+        const data = await prksParseJsonResponse(res, null, 'research-graph.fetch');
+        if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
+            throw new Error('Could not load Research Graph.');
+        }
+        return data;
+    } catch (e) {
+        if (e && e.code === 'graph_too_large') throw e;
+        prksSetApiError('research-graph', 'Could not load Research Graph.');
+        prksReportApiClientError('research-graph.fetch');
+        throw e;
+    }
+}
+
 window.fetchFolders = fetchFolders;
 window.fetchTags = fetchTags;
 window.fetchSavedViews = fetchSavedViews;
@@ -945,6 +978,7 @@ window.updateArgument = updateArgument;
 window.deleteArgument = deleteArgument;
 window.putArgumentSources = putArgumentSources;
 window.putArgumentTargets = putArgumentTargets;
+window.fetchResearchGraph = fetchResearchGraph;
 
 (function prksPrefetchAppSettings() {
     void prksLoadAppSettings();

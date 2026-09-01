@@ -177,6 +177,15 @@
             section: 'goto',
         },
         {
+            id: 'navigate-research-graph',
+            kind: 'navigate',
+            label: 'Research Graph',
+            keywords: ['research', 'graph', 'network', 'relationships'],
+            icon: 'share-2',
+            hash: '#/graph',
+            section: 'goto',
+        },
+        {
             id: 'navigate-people-authors',
             kind: 'navigate',
             label: 'Authors',
@@ -703,6 +712,36 @@
                 icon: 'pencil',
                 section: 'actions',
             });
+        }
+        if (
+            route &&
+            (route.name === 'concept-detail' ||
+                route.name === 'position-detail' ||
+                route.name === 'argument-detail')
+        ) {
+            let focusType = '';
+            let recordId = '';
+            if (route.name === 'concept-detail') {
+                focusType = 'concept';
+                recordId = route.params.conceptId || '';
+            } else if (route.name === 'position-detail') {
+                focusType = 'position';
+                recordId = route.params.positionId || '';
+            } else {
+                focusType = 'argument';
+                recordId = route.params.argumentId || '';
+            }
+            if (recordId && typeof root.prksGraphFocusHash === 'function') {
+                out.push({
+                    id: 'view-record-in-graph',
+                    kind: 'navigate',
+                    label: 'View this record in graph',
+                    keywords: ['research', 'graph', 'focus'],
+                    icon: 'share-2',
+                    hash: root.prksGraphFocusHash(focusType, recordId),
+                    section: 'actions',
+                });
+            }
         }
         return out;
     }

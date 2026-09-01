@@ -59,6 +59,7 @@ SPAN_NAMES = frozenset(
         "text_index_fts_verify",
         "pdf_linearize",
         "processing_scan",
+        "research_graph_build",
     }
 )
 
@@ -91,6 +92,7 @@ _SERVER_TIMING_ORDER = (
     "portrait_fetch",
     "pdf_linearize",
     "processing_scan",
+    "research_graph_build",
     "text_index_reconcile",
     "text_index_load_state",
     "text_index_source_scan",

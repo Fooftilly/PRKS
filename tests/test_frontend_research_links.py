@@ -65,6 +65,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn('id="prks-nav-research-children"', html)
         self.assertIn('href="#/concepts"', html)
         self.assertIn('href="#/arguments"', html)
+        self.assertIn('href="#/graph"', html)
 
     def test_parser_module_exists(self):
         src = _read(_LINKS)

@@ -46,6 +46,7 @@ from backend.research_index import (
 )
 from backend.research_network import ResearchError
 import backend.research_network as research_network
+from backend.research_graph import GraphTooLargeError, ResearchGraphBuilder
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 from backend.storage import paths
 from backend.storage.config import StorageConfig
@@ -1991,6 +1992,25 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, data)
                 else:
                     self.send_json(404, {'error': 'Saved View not found.'})
+            elif path == '/api/research-graph':
+                raw_people = (query.get('people') or [''])[0].strip().lower()
+                include_people = raw_people in ('1', 'true', 'yes', 'on')
+                try:
+                    snapshot = ResearchGraphBuilder().build(
+                        db,
+                        research_index,
+                        include_people=include_people,
+                    )
+                except GraphTooLargeError as e:
+                    body = {
+                        'error': str(e),
+                        'code': e.code,
+                        'node_count': e.extra.get('node_count', 0),
+                        'edge_count': e.extra.get('edge_count', 0),
+                    }
+                    self.send_json(e.http_status, body)
+                    return
+                self.send_json(200, snapshot.to_dict())
             elif path == '/api/concepts':
                 items = research_network.list_concepts(db)
                 counts = research_index.concept_mention_counts()

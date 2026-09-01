@@ -60,6 +60,7 @@ KNOWN_CLIENT_SOURCES = frozenset(
         "concepts.fetch",
         "positions.fetch",
         "arguments.fetch",
+        "research-graph.fetch",
         "works.bulk",
     }
 )
@@ -95,6 +96,7 @@ _STATIC_API_PATHS = frozenset(
         "/api/argument-verdicts",
         "/api/concepts",
         "/api/positions",
+        "/api/research-graph",
     }
 )
 
