@@ -180,7 +180,7 @@ class ResearchGraphTests(unittest.TestCase):
         self.assertEqual(types, sorted(types))
 
     def test_namespaced_ids_survive_person_position_collision(self):
-        with self.db.get_connection() as conn:
+        with self.db.connection() as conn:
             conn.execute(
                 "INSERT INTO persons (id, first_name, last_name) VALUES (?, ?, ?)",
                 ("P-123", "Ada", "Lovelace"),

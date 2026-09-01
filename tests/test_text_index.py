@@ -145,14 +145,14 @@ class TextIndexTestCase(unittest.TestCase):
         return w_id, f"/api/pdfs/{fname}"
 
     def _row(self, index: PRKSTextIndex, work_id: str) -> sqlite3.Row | None:
-        with index._conn() as conn:
+        with index._connection() as conn:
             return conn.execute(
                 "SELECT * FROM work_text_index WHERE work_id = ?",
                 (work_id,),
             ).fetchone()
 
     def _meta(self, index: PRKSTextIndex, key: str) -> str | None:
-        with index._conn() as conn:
+        with index._connection() as conn:
             row = conn.execute(
                 "SELECT value FROM text_index_meta WHERE key = ?",
                 (key,),
@@ -180,7 +180,7 @@ class TextIndexTestCase(unittest.TestCase):
         index = self._index()
         self.assertEqual(self._meta(index, "schema_version"), str(TEXT_INDEX_SCHEMA_VERSION))
         self.assertEqual(self._meta(index, "extractor_version"), str(TEXT_EXTRACTOR_VERSION))
-        with index._conn() as conn:
+        with index._connection() as conn:
             cols = {
                 r["name"]
                 for r in conn.execute("PRAGMA table_info(work_text_index)").fetchall()
@@ -335,7 +335,7 @@ class TextIndexTestCase(unittest.TestCase):
         index = self._index()
         index.sync_work(w_id, file_path_a)
         st_b = os.stat(path_b)
-        with index._conn() as conn:
+        with index._connection() as conn:
             conn.execute(
                 """
                 UPDATE work_text_index
@@ -576,7 +576,7 @@ class TextIndexTestCase(unittest.TestCase):
         w_id, file_path = self._add_pdf_work("version contract term")
         index = self._index()
         index.sync_work(w_id, file_path)
-        with index._conn() as conn:
+        with index._connection() as conn:
             conn.execute(
                 "UPDATE work_text_index SET extractor_version = 0 WHERE work_id = ?",
                 (w_id,),
@@ -697,6 +697,9 @@ class TextIndexTestCase(unittest.TestCase):
 
             def __exit__(self, *args):
                 return False
+
+            def close(self):
+                return None
 
             def execute(self, *args, **kwargs):
                 raise boom

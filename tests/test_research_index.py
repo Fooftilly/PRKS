@@ -75,7 +75,8 @@ class ResearchIndexTests(unittest.TestCase):
         self.assertGreaterEqual(os.path.getmtime(self.storage.db_path), canonical_mtime)
         cid = list_concepts(self.db)[0]["id"]
         self.assertEqual(index.mention_count_for_concept(cid), 1)
-        with sqlite3.connect(self.storage.research_index_db_path) as conn:
+        conn = sqlite3.connect(self.storage.research_index_db_path)
+        try:
             tables = {
                 r[0]
                 for r in conn.execute(
@@ -83,6 +84,8 @@ class ResearchIndexTests(unittest.TestCase):
                 )
                 if not str(r[0]).startswith("sqlite_")
             }
+        finally:
+            conn.close()
         self.assertIn("concept_mentions", tables)
 
     def test_index_sync_failure_does_not_roll_back_notes(self):

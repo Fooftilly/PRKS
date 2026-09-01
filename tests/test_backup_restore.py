@@ -284,7 +284,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         self.assertNotIn("stale-thumb.webp", thumbs)
         hits = server_module.text_index.search_work_ids("unique token alpha")
         self.assertIn(source["work_id"], hits)
-        with server_module.text_index._conn() as conn:
+        with server_module.text_index._connection() as conn:
             version = conn.execute(
                 "SELECT value FROM text_index_meta WHERE key = 'schema_version'"
             ).fetchone()[0]
@@ -323,7 +323,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         hits = server_module.text_index.search_work_ids("only in B")
         self.assertTrue(hits)
         self.assertFalse(server_module.text_index.search_work_ids("only in A"))
-        with server_module.text_index._conn() as conn:
+        with server_module.text_index._connection() as conn:
             version = conn.execute(
                 "SELECT value FROM text_index_meta WHERE key = 'schema_version'"
             ).fetchone()[0]

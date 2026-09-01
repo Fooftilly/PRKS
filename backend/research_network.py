@@ -130,7 +130,7 @@ def _fetchall(conn: sqlite3.Connection, sql: str, params: tuple = ()):
 
 
 def list_concepts(db: PRKSDatabase) -> List[dict]:
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         rows = _fetchall(
             conn,
             """
@@ -178,7 +178,7 @@ def get_concept(db: PRKSDatabase, concept_id: str) -> Optional[dict]:
     cid = (concept_id or "").strip()
     if not cid:
         return None
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         row = _fetchone(conn, "SELECT * FROM concepts WHERE id = ?", (cid,))
         if not row:
             return None
@@ -340,7 +340,7 @@ def update_concept(db: PRKSDatabase, concept_id: str, *, name=None, description=
     cid = (concept_id or "").strip()
     if not cid:
         raise ResearchError("not_found", "Concept not found.", 404)
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         row = _fetchone(conn, "SELECT * FROM concepts WHERE id = ?", (cid,))
         if not row:
             raise ResearchError("not_found", "Concept not found.", 404)
@@ -437,7 +437,7 @@ def delete_concept(db: PRKSDatabase, concept_id: str) -> None:
     cid = (concept_id or "").strip()
     if not cid:
         raise ResearchError("not_found", "Concept not found.", 404)
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         row = _fetchone(conn, "SELECT 1 FROM concepts WHERE id = ?", (cid,))
         if not row:
             raise ResearchError("not_found", "Concept not found.", 404)
@@ -466,7 +466,7 @@ def replace_concept_aliases(db: PRKSDatabase, concept_id: str, aliases) -> dict:
             continue
         seen_keys.add(key)
         names.append((alias, key))
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         row = _fetchone(conn, "SELECT id, name FROM concepts WHERE id = ?", (cid,))
         if not row:
             raise ResearchError("not_found", "Concept not found.", 404)
@@ -532,7 +532,7 @@ def replace_concept_parents(db: PRKSDatabase, concept_id: str, parent_ids) -> di
             continue
         seen.add(pid)
         pids.append(pid)
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         row = _fetchone(conn, "SELECT 1 FROM concepts WHERE id = ?", (cid,))
         if not row:
             raise ResearchError("not_found", "Concept not found.", 404)
@@ -602,7 +602,7 @@ def get_position(db: PRKSDatabase, position_id: str) -> Optional[dict]:
     pid = (position_id or "").strip()
     if not pid:
         return None
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         row = _fetchone(conn, "SELECT * FROM positions WHERE id = ?", (pid,))
         if not row:
             return None
@@ -643,7 +643,7 @@ def update_position(db: PRKSDatabase, position_id: str, *, name=None, descriptio
     pid = (position_id or "").strip()
     if not pid:
         raise ResearchError("not_found", "Position not found.", 404)
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         if not _fetchone(conn, "SELECT 1 FROM positions WHERE id = ?", (pid,)):
             raise ResearchError("not_found", "Position not found.", 404)
         if name is None and description is None:
@@ -666,7 +666,7 @@ def delete_position(db: PRKSDatabase, position_id: str) -> None:
     pid = (position_id or "").strip()
     if not pid:
         raise ResearchError("not_found", "Position not found.", 404)
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         if not _fetchone(conn, "SELECT 1 FROM positions WHERE id = ?", (pid,)):
             raise ResearchError("not_found", "Position not found.", 404)
         used = _fetchone(
@@ -803,7 +803,7 @@ def list_arguments(db: PRKSDatabase, kind: Optional[str] = None) -> List[dict]:
         sql += " WHERE kind = ?"
         params = (kind,)
     sql += " ORDER BY LOWER(name) ASC, id ASC"
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         rows = _fetchall(conn, sql, params)
         out = []
         for r in rows:
@@ -819,7 +819,7 @@ def get_argument(db: PRKSDatabase, argument_id: str) -> Optional[dict]:
     aid = (argument_id or "").strip()
     if not aid:
         return None
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         return _argument_bundle(conn, aid)
 
 
@@ -842,7 +842,7 @@ def create_argument(
     k = _validate_kind(kind)
     text = _optional_markdown(main_text, max_len=ARGUMENT_TEXT_MAX)
     aid = db.generate_id("A")
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         conn.execute(
             "INSERT INTO arguments (id, name, kind, main_text) VALUES (?, ?, ?, ?)",
             (aid, n, k, text),
@@ -866,7 +866,7 @@ def update_argument(
     aid = (argument_id or "").strip()
     if not aid:
         raise ResearchError("not_found", "Argument not found.", 404)
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         if not _fetchone(conn, "SELECT 1 FROM arguments WHERE id = ?", (aid,)):
             raise ResearchError("not_found", "Argument not found.", 404)
         if name is None and kind is None and main_text is None:
@@ -894,7 +894,7 @@ def delete_argument(db: PRKSDatabase, argument_id: str) -> None:
     aid = (argument_id or "").strip()
     if not aid:
         raise ResearchError("not_found", "Argument not found.", 404)
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         if not _fetchone(conn, "SELECT 1 FROM arguments WHERE id = ?", (aid,)):
             raise ResearchError("not_found", "Argument not found.", 404)
         if _canonical_notes_reference_argument(conn, aid):
@@ -955,7 +955,7 @@ def _replace_sources_on_conn(conn: sqlite3.Connection, arg_id: str, sources) -> 
 
 def replace_argument_sources(db: PRKSDatabase, argument_id: str, sources) -> dict:
     aid = (argument_id or "").strip()
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         if not _fetchone(conn, "SELECT 1 FROM arguments WHERE id = ?", (aid,)):
             raise ResearchError("not_found", "Argument not found.", 404)
         _replace_sources_on_conn(conn, aid, sources)
@@ -1064,7 +1064,7 @@ def _replace_targets_on_conn(conn: sqlite3.Connection, arg_id: str, targets) -> 
 
 def replace_argument_targets(db: PRKSDatabase, argument_id: str, targets) -> dict:
     aid = (argument_id or "").strip()
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         if not _fetchone(conn, "SELECT 1 FROM arguments WHERE id = ?", (aid,)):
             raise ResearchError("not_found", "Argument not found.", 404)
         _replace_targets_on_conn(conn, aid, targets)
@@ -1085,7 +1085,7 @@ def save_work_notes(db: PRKSDatabase, work_id: str, text_content) -> None:
         raise ResearchError("invalid_text", "Research notes contain invalid characters.")
     wid = (work_id or "").strip()
     markup = parse_research_markup(text_content)
-    with db.get_connection() as conn:
+    with db.connection() as conn:
         if not _fetchone(conn, "SELECT 1 FROM works WHERE id = ?", (wid,)):
             raise ResearchError("not_found", "Work not found.", 404)
         names = [ref.name for ref in markup.concept_refs]

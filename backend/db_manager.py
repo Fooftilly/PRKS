@@ -8,6 +8,7 @@ import html
 import shutil
 import logging
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from urllib.parse import unquote
 from datetime import datetime
 from dataclasses import dataclass
@@ -699,6 +700,15 @@ class PRKSDatabase:
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
 
+    @contextmanager
+    def connection(self):
+        conn = self.get_connection()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def init_db(self):
         """Create or upgrade the database through the ordered migration system."""
         conn = self.get_connection()
@@ -716,7 +726,7 @@ class PRKSDatabase:
         t0 = clock_ns()
         write = classify_sql_write(query)
         try:
-            with self.get_connection() as conn:
+            with self.connection() as conn:
                 cursor = conn.execute(query, params)
                 q0 = query.strip().upper()
                 if q0.startswith(("SELECT", "PRAGMA", "WITH")):
@@ -792,7 +802,7 @@ class PRKSDatabase:
         n = normalize_saved_view_name(name)
         fields = normalize_saved_view_search(search)
         vid = self.generate_id("SV")
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             try:
                 count_row = conn.execute("SELECT COUNT(*) FROM saved_views").fetchone()
                 count = int(count_row[0] if count_row and count_row[0] is not None else 0)
@@ -844,7 +854,7 @@ class PRKSDatabase:
             raise SavedViewError("Nothing to update.")
         new_name = normalize_saved_view_name(name) if name is not None else None
         new_search = normalize_saved_view_search(search) if search is not None else None
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             row = conn.execute(
                 "SELECT * FROM saved_views WHERE id = ?", (vid,)
             ).fetchone()
@@ -925,7 +935,7 @@ class PRKSDatabase:
         vid = (view_id or "").strip()
         if not vid:
             raise SavedViewError("Saved View not found.", 404)
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             cur = conn.execute("DELETE FROM saved_views WHERE id = ?", (vid,))
             if cur.rowcount < 1:
                 raise SavedViewError("Saved View not found.", 404)
@@ -1056,7 +1066,7 @@ class PRKSDatabase:
                 raise ValueError(f"Unknown tag id: {tid}")
             seen.add(tid)
             tag_ids.append(tid)
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             conn.execute("DELETE FROM processing_file_tags WHERE processing_file_id = ?", (processing_file_id,))
             for tid in tag_ids:
                 conn.execute(
@@ -1091,7 +1101,7 @@ class PRKSDatabase:
                 continue
             seen.add(key)
             normalized.append((person_id, role_type, idx))
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             conn.execute("DELETE FROM processing_file_roles WHERE processing_file_id = ?", (processing_file_id,))
             for person_id, role_type, order_index in normalized:
                 conn.execute(
@@ -1171,7 +1181,7 @@ class PRKSDatabase:
     def _reconcile_processing_files_from_disk(self) -> None:
         discovered = self._discover_processing_pdfs()
         discovered_rel_paths = {rel_path for rel_path, _abs_path, _filename in discovered}
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             existing_rows = conn.execute(
                 "SELECT id, rel_path, abs_path, filename, status FROM processing_files"
             ).fetchall()
@@ -1726,7 +1736,7 @@ class PRKSDatabase:
         return f'W/"prks-recently-added-{row["c"]}-{row["m"]}"'
 
     def delete_work_record(self, work_id: str) -> Optional[DeletedWorkRecord]:
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             row = conn.execute(
                 "SELECT file_path FROM works WHERE id = ?",
                 (work_id,),
@@ -2291,7 +2301,7 @@ class PRKSDatabase:
         return p
 
     def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             ok_p = conn.execute("SELECT 1 FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
             ok_w = conn.execute("SELECT 1 FROM works WHERE id = ?", (work_id,)).fetchone()
             if not ok_p or not ok_w:
@@ -2333,7 +2343,7 @@ class PRKSDatabase:
     def reorder_playlist(self, playlist_id: str, work_ids: List[str]) -> None:
         if not work_ids:
             return
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             ok_p = conn.execute("SELECT 1 FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
             if not ok_p:
                 raise ValueError("Playlist not found.")
@@ -2414,7 +2424,7 @@ class PRKSDatabase:
         Synchronizes a list of annotations for a specific work.
         Deletes items not in the list, updates existing ones, and inserts new ones.
         """
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             # 1. Get current IDs for this work
             cursor = conn.execute("SELECT id FROM annotations WHERE work_id = ?", (work_id,))
             existing_ids = {row['id'] for row in cursor.fetchall()}
@@ -3284,7 +3294,7 @@ class PRKSDatabase:
             if not gr:
                 raise ValueError(f"Unknown group id: {gid}")
             clean.append(gid)
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             conn.execute("DELETE FROM person_group_members WHERE person_id = ?", (person_id,))
             for gid in clean:
                 conn.execute(
@@ -3362,7 +3372,7 @@ class PRKSDatabase:
     ) -> bool:
         """Update credit_name on one role row. Empty string clears override."""
         cn = (credit_name or "").strip() or None
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             cur = conn.execute(
                 """
                 UPDATE roles SET credit_name = ?
@@ -3381,7 +3391,7 @@ class PRKSDatabase:
 
     def delete_work_role(self, work_id: str, person_id: str, role_type: str, order_index: int) -> bool:
         """Remove one role row (composite PK). Returns True if a row was deleted."""
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             cur = conn.execute(
                 """
                 DELETE FROM roles
@@ -3521,7 +3531,7 @@ class PRKSDatabase:
         if source == target:
             raise ValueError("cannot merge a tag into itself")
 
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             srow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (source,)).fetchone()
             trow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (target,)).fetchone()
             if not srow or not trow:
@@ -3597,7 +3607,7 @@ class PRKSDatabase:
         al = (alias or "").strip()
         if not al:
             return False
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             c = conn.execute(
                 "DELETE FROM tag_aliases WHERE tag_id = ? AND LOWER(alias) = LOWER(?)",
                 (tag_id, al),
@@ -3660,7 +3670,7 @@ class PRKSDatabase:
         al = (alias or "").strip()
         if not al:
             return False
-        with self.get_connection() as conn:
+        with self.connection() as conn:
             c = conn.execute(
                 "DELETE FROM publisher_aliases WHERE publisher_id = ? AND LOWER(alias) = LOWER(?)",
                 (publisher_id, al),

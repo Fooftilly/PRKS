@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -239,6 +240,15 @@ class PRKSTextIndex:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @contextmanager
+    def _connection(self):
+        conn = self._conn()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _open_or_recover(self) -> None:
         try:
             self._prepare_schema()
@@ -252,7 +262,7 @@ class PRKSTextIndex:
         self._recreate(reason)
 
     def _prepare_schema(self) -> None:
-        with self._conn() as conn:
+        with self._connection() as conn:
             conn.execute("PRAGMA journal_mode = WAL")
             kind = self._classify_schema(conn)
             if kind == "empty":
@@ -272,7 +282,7 @@ class PRKSTextIndex:
         LOGGER.warning("text_index_recreated reason=%s", safe_log_label(reason))
         _discard_index_files(self.db_path)
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        with self._conn() as conn:
+        with self._connection() as conn:
             conn.execute("PRAGMA journal_mode = WAL")
             self._create_current_schema(conn)
             conn.commit()
@@ -521,7 +531,7 @@ class PRKSTextIndex:
 
     def _load_sync_state(self) -> Dict[str, TextIndexRowState]:
         cols = ", ".join(_SYNC_STATE_COLUMNS)
-        with self._conn() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 f"SELECT {cols} FROM work_text_index"
             ).fetchall()
@@ -534,7 +544,7 @@ class PRKSTextIndex:
 
     def _fetch_row_state(self, work_id: str) -> TextIndexRowState | None:
         cols = ", ".join(_SYNC_STATE_COLUMNS)
-        with self._conn() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 f"SELECT {cols} FROM work_text_index WHERE work_id = ?",
                 (work_id,),
@@ -566,7 +576,7 @@ class PRKSTextIndex:
         stored = (text or "")[:_MAX_EXTRACTED_CHARS]
         try:
             with perf_span("text_index_write"):
-                with self._conn() as conn:
+                with self._connection() as conn:
                     conn.execute(
                         """
                         INSERT INTO work_text_index (
@@ -769,7 +779,7 @@ class PRKSTextIndex:
         work_id = (work_id or "").strip()
         if not work_id:
             return 0
-        with self._conn() as conn:
+        with self._connection() as conn:
             cur = conn.execute(
                 "DELETE FROM work_text_index WHERE work_id = ?", (work_id,)
             )
@@ -789,7 +799,7 @@ class PRKSTextIndex:
             return []
         lim = max(1, int(limit))
         try:
-            with self._conn() as conn:
+            with self._connection() as conn:
                 rows = conn.execute(
                     """
                     SELECT work_text_index.work_id AS work_id
@@ -828,7 +838,7 @@ class PRKSTextIndex:
             return 0
         try:
             with perf_span("text_index_write"):
-                with self._conn() as conn:
+                with self._connection() as conn:
                     conn.executemany(
                         "DELETE FROM work_text_index WHERE work_id = ?",
                         [(work_id,) for work_id in orphan_ids],

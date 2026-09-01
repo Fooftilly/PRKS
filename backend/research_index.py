@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 import sqlite3
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.db_manager import PRKSDatabase
@@ -79,6 +80,15 @@ class PRKSResearchIndex:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @contextmanager
+    def _connection(self):
+        conn = self._conn()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _open_or_recover(self) -> None:
         try:
             self._prepare_schema()
@@ -92,7 +102,7 @@ class PRKSResearchIndex:
         self._recreate(reason)
 
     def _prepare_schema(self) -> None:
-        with self._conn() as conn:
+        with self._connection() as conn:
             conn.execute("PRAGMA journal_mode = WAL")
             kind = self._classify_schema(conn)
             if kind == "empty":
@@ -107,7 +117,7 @@ class PRKSResearchIndex:
         LOGGER.warning("research_index_recreated reason=%s", safe_log_label(reason))
         _discard_index_files(self.db_path)
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-        with self._conn() as conn:
+        with self._connection() as conn:
             conn.execute("PRAGMA journal_mode = WAL")
             self._create_schema(conn)
             conn.commit()
@@ -209,7 +219,7 @@ class PRKSResearchIndex:
         argument_rows = [
             (wid, ref.argument_id, ref.start, ref.end) for ref in markup.argument_refs
         ]
-        with self._conn() as conn:
+        with self._connection() as conn:
             conn.execute("DELETE FROM concept_mentions WHERE work_id = ?", (wid,))
             conn.execute("DELETE FROM argument_mentions WHERE work_id = ?", (wid,))
             conn.execute(
@@ -246,7 +256,7 @@ class PRKSResearchIndex:
         from backend.research_network import resolve_concept_key
 
         out: Dict[str, str] = {}
-        with db.get_connection() as conn:
+        with db.connection() as conn:
             for name in names:
                 key = normalize_concept_key(name)
                 if key in out:
@@ -260,7 +270,7 @@ class PRKSResearchIndex:
         wid = (work_id or "").strip()
         if not wid:
             return
-        with self._conn() as conn:
+        with self._connection() as conn:
             conn.execute("DELETE FROM concept_mentions WHERE work_id = ?", (wid,))
             conn.execute("DELETE FROM argument_mentions WHERE work_id = ?", (wid,))
             conn.execute("DELETE FROM work_note_state WHERE work_id = ?", (wid,))
@@ -270,7 +280,7 @@ class PRKSResearchIndex:
         cid = (concept_id or "").strip()
         if not cid:
             return
-        with self._conn() as conn:
+        with self._connection() as conn:
             conn.execute("DELETE FROM concept_mentions WHERE concept_id = ?", (cid,))
             conn.commit()
 
@@ -278,12 +288,12 @@ class PRKSResearchIndex:
         aid = (argument_id or "").strip()
         if not aid:
             return
-        with self._conn() as conn:
+        with self._connection() as conn:
             conn.execute("DELETE FROM argument_mentions WHERE argument_id = ?", (aid,))
             conn.commit()
 
     def mention_count_for_concept(self, concept_id: str) -> int:
-        with self._conn() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS c FROM concept_mentions WHERE concept_id = ?",
                 (concept_id,),
@@ -291,7 +301,7 @@ class PRKSResearchIndex:
         return int(row["c"] if row else 0)
 
     def mention_count_for_argument(self, argument_id: str) -> int:
-        with self._conn() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS c FROM argument_mentions WHERE argument_id = ?",
                 (argument_id,),
@@ -299,14 +309,14 @@ class PRKSResearchIndex:
         return int(row["c"] if row else 0)
 
     def concept_mention_counts(self) -> Dict[str, int]:
-        with self._conn() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 "SELECT concept_id, COUNT(*) AS c FROM concept_mentions GROUP BY concept_id"
             ).fetchall()
         return {r["concept_id"]: int(r["c"]) for r in rows}
 
     def argument_mention_counts(self) -> Dict[str, int]:
-        with self._conn() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 "SELECT argument_id, COUNT(*) AS c FROM argument_mentions GROUP BY argument_id"
             ).fetchall()
@@ -314,7 +324,7 @@ class PRKSResearchIndex:
 
     def aggregate_concept_mention_edges(self) -> List[dict]:
         """Work→Concept mention aggregates. Graph projection only; not canonical."""
-        with self._conn() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT work_id, concept_id, COUNT(*) AS c
@@ -329,7 +339,7 @@ class PRKSResearchIndex:
 
     def aggregate_argument_mention_edges(self) -> List[dict]:
         """Work→Argument mention aggregates. Graph projection only; not canonical."""
-        with self._conn() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT work_id, argument_id, COUNT(*) AS c
@@ -350,7 +360,7 @@ class PRKSResearchIndex:
         wid = (work_id or "").strip()
         concepts = []
         arguments = []
-        with self._conn() as conn:
+        with self._connection() as conn:
             c_rows = conn.execute(
                 """
                 SELECT DISTINCT concept_id FROM concept_mentions WHERE work_id = ?
@@ -402,7 +412,7 @@ class PRKSResearchIndex:
 
     def concept_backlinks(self, concept_id: str, db: PRKSDatabase) -> List[dict]:
         cid = (concept_id or "").strip()
-        with self._conn() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT work_id, start_offset, end_offset
@@ -416,7 +426,7 @@ class PRKSResearchIndex:
 
     def argument_backlinks(self, argument_id: str, db: PRKSDatabase) -> List[dict]:
         aid = (argument_id or "").strip()
-        with self._conn() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT work_id, start_offset, end_offset
@@ -483,7 +493,7 @@ class PRKSResearchIndex:
     def _reconcile_inner(self, db: PRKSDatabase, summary: Dict[str, int]) -> Dict[str, int]:
         works = db.execute_query("SELECT id, text_content FROM works")
         canonical = {w["id"]: w.get("text_content") or "" for w in works}
-        with self._conn() as conn:
+        with self._connection() as conn:
             state_rows = conn.execute("SELECT work_id, content_hash FROM work_note_state").fetchall()
         state = {r["work_id"]: r["content_hash"] for r in state_rows}
         for wid, text in canonical.items():

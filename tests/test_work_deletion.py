@@ -32,7 +32,7 @@ _ABORT_TAGS = "prks_test_abort_delete_tags"
 
 
 def _index_has(index: PRKSTextIndex, work_id: str) -> bool:
-    with index._conn() as conn:
+    with index._connection() as conn:
         row = conn.execute(
             "SELECT 1 FROM work_text_index WHERE work_id = ?",
             (work_id,),

@@ -1130,7 +1130,7 @@ class TestDBManager(unittest.TestCase):
         p1 = self.db.add_person(first_name="First", last_name="Inserted")
         p2 = self.db.add_person(first_name="Second", last_name="Inserted")
         p3 = self.db.add_person(first_name="Third", last_name="Inserted")
-        with self.db.get_connection() as conn:
+        with self.db.connection() as conn:
             conn.execute(
                 """
                 INSERT INTO processing_file_roles

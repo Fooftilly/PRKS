@@ -164,7 +164,7 @@ class ResearchGraphBuilder:
         nodes: Dict[str, dict] = {}
         edges: Dict[str, dict] = {}
 
-        with db.get_connection() as conn:
+        with db.connection() as conn:
             concept_rows = self._q(conn, "SELECT id, name FROM concepts")
             parent_rows = self._q(
                 conn,
