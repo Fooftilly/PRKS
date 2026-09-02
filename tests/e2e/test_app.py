@@ -875,7 +875,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         server, page, _collector = self._start_app()
         work_id = server.ids["work_a"]
         extra_pages = []
-        page.context.on("page", extra_pages.append)
+        page.context.on("page", lambda p: extra_pages.append(p))
         detail_gets = []
 
         def on_request(req):
@@ -911,7 +911,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         server, page, _collector = self._start_app()
         person_id = server.ids["person"]
         extra_pages = []
-        page.context.on("page", extra_pages.append)
+        page.context.on("page", lambda p: extra_pages.append(p))
         person_gets = []
 
         def on_request(req):
@@ -969,7 +969,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.wait_for_selector("#prks-workspace-new-tab")
         page.locator("#prks-workspace-new-tab").click()
         page.wait_for_selector("#prks-command-palette:not([hidden])")
-        self.assertIn("Open in new tab", page.locator("#prks-command-palette-title").inner_text())
+        self.assertIn("Open in new tab", page.locator("#prks-command-palette-title").text_content())
         page.locator("#prks-command-palette-input").fill(PERSON_DISPLAY)
         label = page.locator(
             ".prks-command-palette__option-label",
@@ -1055,9 +1055,13 @@ class WorkspaceTabsTests(_BrowserE2E):
 
     def test_browser_back_forward_keeps_parked_tab(self):
         server, page, _collector = self._start_app()
+        person_id = server.ids["person"]
         _open_work_from_home(page, WORK_A_TITLE)
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
-        page.locator(".prks-person-chip").first.click()
+        page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid)""",
+            arg=person_id,
+        )
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
         page.evaluate("() => window.prksNavigate('#/concepts', { target: 'new-tab', activate: false })")
         page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")

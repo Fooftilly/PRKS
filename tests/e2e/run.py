@@ -19,7 +19,7 @@ if str(REPO) not in sys.path:
 
 os.environ["PRKS_E2E"] = "1"
 
-from tests.e2e.harness import apply_e2e_playwright_env
+from tests.e2e.harness import apply_e2e_playwright_env, python_for_subprocess
 from tests.e2e.install_browser import ensure_chromium_installed
 
 
@@ -29,7 +29,7 @@ def _run_pointer_capture() -> int:
     env["PLAYWRIGHT_BROWSERS_PATH"] = str(apply_e2e_playwright_env())
     env["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
     proc = subprocess.run(
-        [sys.executable, str(REPO / "tests" / "browser" / "pointer_capture.py")],
+        [python_for_subprocess(), str(REPO / "tests" / "browser" / "pointer_capture.py")],
         cwd=str(REPO),
         env=env,
     )

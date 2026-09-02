@@ -7,6 +7,7 @@ assertions fail.
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -31,6 +32,28 @@ REPO = Path(__file__).resolve().parents[2]
 HOST = "127.0.0.1"
 READY_TIMEOUT_S = 25.0
 STOP_TIMEOUT_S = 8.0
+
+
+def python_for_subprocess() -> str:
+    """Interpreter that can exec a .py file as argv[1].
+
+    Some IDE wrappers set sys.executable to an AppImage. Popen of that path
+    with a script argument never binds HTTP and writes no stdio.
+    """
+    exe = sys.executable or ""
+    name = Path(exe).name.lower()
+    if "python" in name and not name.endswith(".appimage"):
+        return exe
+    versioned = os.path.join(sys.base_prefix, "bin", "python%d.%d" % sys.version_info[:2])
+    generic = os.path.join(sys.base_prefix, "bin", "python3")
+    for candidate in (versioned, generic, shutil.which("python3"), shutil.which("python")):
+        if not candidate:
+            continue
+        if Path(candidate).name.lower().endswith(".appimage"):
+            continue
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return exe
 
 
 def apply_e2e_playwright_env() -> Path:
@@ -306,7 +329,7 @@ class AppServer:
         self._stderr = open(self._stderr_path, "w", encoding="utf-8")
         self.proc = subprocess.Popen(
             [
-                sys.executable,
+                python_for_subprocess(),
                 str(REPO / "prks_app.py"),
                 "--testing",
                 "--host",
@@ -365,7 +388,7 @@ class FixtureServer:
 
     def start(self):
         self.proc = subprocess.Popen(
-            [sys.executable, str(REPO / "tests" / "browser" / "serve.py")],
+            [python_for_subprocess(), str(REPO / "tests" / "browser" / "serve.py")],
             cwd=str(REPO),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
