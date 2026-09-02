@@ -198,7 +198,7 @@ function prksRenderTagsMergeModal() {
                         const col = prksSafeCssColor(t.color, '#6d6cf7');
                         return (
                             `<li class="tags-page-merge-list__item">` +
-                            `<button type="button" class="tags-page-merge-pick-btn" data-tag-merge-pick="${idEsc}" style="border-left: 3px solid ${col};">` +
+                            `<button type="button" class="tags-page-merge-pick-btn" data-tag-merge-pick="${idEsc}" style="--tag-accent:${col};">` +
                             `${escapeHtmlTagPage(t.name || '')}</button></li>`
                         );
                     })
@@ -463,7 +463,7 @@ async function renderTagsPage(container, routeGen) {
                               const color = prksSafeCssColor(t.color, '#6d6cf7');
                               const idEsc = escapeHtmlTagPage(t.id);
                               return (
-                                  `<span class="tag tag--page tag--page-with-actions" style="--tag-scale:${scale.toFixed(3)};border-left: ${borderLeftPx.toFixed(2)}px solid ${color};">` +
+                                  `<span class="tag tag--page tag--page-with-actions" style="--tag-scale:${scale.toFixed(3)};--tag-accent:${color};--tag-border-width:${borderLeftPx.toFixed(2)}px;">` +
                                   `<span class="tag--page__nav" role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}">${escapeHtmlTagPage(t.name)}</span>` +
                                   `<button type="button" class="tag-page-alias-btn" data-tag-alias-edit="${idEsc}" title="Aliases" aria-label="Edit aliases for ${escapeHtmlTagPage(t.name)}">⋯</button>` +
                                   `<button type="button" class="tag-page-merge-btn" data-tag-merge="${idEsc}" title="Merge into another tag" aria-label="Merge ${escapeHtmlTagPage(t.name)} into another tag">${typeof prksIcon === 'function' ? prksIcon('arrowRight', { size: 'sm' }) : '→'}</button>` +
@@ -484,7 +484,7 @@ async function renderTagsPage(container, routeGen) {
                 <div id="tags-page-alias-modal" class="modal tags-page-alias-modal hidden" role="dialog" aria-modal="true" aria-labelledby="tags-page-alias-heading" tabindex="-1">
                     <div class="modal-header">
                         <h3 id="tags-page-alias-heading">Tag aliases</h3>
-                        <button type="button" id="tags-page-alias-modal-close" class="close-btn" aria-label="Close">&times;</button>
+                        <button type="button" id="tags-page-alias-modal-close" class="prks-icon-btn close-btn" aria-label="Close">&times;</button>
                     </div>
                     <div class="modal-body tags-page-alias-modal__body">
                         <p class="modal-helper">Alternate names for this tag (same file set). Not shown as separate tags in the list.</p>
@@ -495,7 +495,7 @@ async function renderTagsPage(container, routeGen) {
                             <button type="button" id="tags-page-alias-add-btn" class="tags-page-alias-add__submit">Add alias</button>
                         </div>
                         <div class="tags-page-alias-delete">
-                            <button type="button" id="tags-page-alias-delete-btn" class="btn-danger-outline">Delete tag</button>
+                            <button type="button" id="tags-page-alias-delete-btn" class="prks-btn prks-btn--danger btn-danger-outline">Delete tag</button>
                         </div>
                     </div>
                 </div>
@@ -504,7 +504,7 @@ async function renderTagsPage(container, routeGen) {
                 <div id="tags-page-merge-modal" class="modal tags-page-merge-modal hidden" role="dialog" aria-modal="true" aria-labelledby="tags-page-merge-heading" tabindex="-1">
                     <div class="modal-header">
                         <h3 id="tags-page-merge-heading">Merge tag</h3>
-                        <button type="button" id="tags-page-merge-modal-close" class="close-btn" aria-label="Close">&times;</button>
+                        <button type="button" id="tags-page-merge-modal-close" class="prks-icon-btn close-btn" aria-label="Close">&times;</button>
                     </div>
                     <div class="modal-body tags-page-merge-modal__body">
                         <p class="modal-helper">Pick the tag that should stay. The tag you started from will be removed from the list; its name will resolve to the same files as the target.</p>

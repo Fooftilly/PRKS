@@ -438,7 +438,7 @@ function renderPersonGroupsPage(groups, container) {
     const expandToggleCollapseAll = !prksGroupTreeAllCollapsed(list);
     const toolbarActions = hasCollapsible
         ? `<div class="prks-group-library__toolbar-actions">
-            <button type="button" id="prks-group-library-expand-toggle" class="ribbon-btn prks-group-library__toolbar-btn${expandToggleCollapseAll ? ' is-collapse-all' : ''}" aria-label="${escapeHtmlGroup(expandToggleLabel)}" title="${escapeHtmlGroup(expandToggleLabel)}">${expandToggleInner}</button>
+            <button type="button" id="prks-group-library-expand-toggle" class="prks-btn prks-btn--secondary ribbon-btn prks-group-library__toolbar-btn${expandToggleCollapseAll ? ' is-collapse-all' : ''}" aria-label="${escapeHtmlGroup(expandToggleLabel)}" title="${escapeHtmlGroup(expandToggleLabel)}">${expandToggleInner}</button>
            </div>`
         : '';
     const searchToolbar =
@@ -461,9 +461,9 @@ function renderPersonGroupsPage(groups, container) {
 
     container.innerHTML = `
         <div class="prks-group-library">
-        <div class="page-header prks-group-library__header" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+        <div class="prks-page-header page-header prks-group-library__header page-header--split">
             <h2>People groups</h2>
-            <button type="button" class="ribbon-btn" onclick="openModal('group-modal')">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New group</button>
+            <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" onclick="openModal('group-modal')">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New group</button>
         </div>
         <p class="meta-row prks-group-library__intro">Organize people under hierarchical groups (e.g. <em>Philosophy</em> → <em>Frankfurt School</em>). Group names are unique. A person can belong to several groups.</p>
         ${searchToolbar}
@@ -514,15 +514,15 @@ function renderPersonGroupSummarySidebarHtml(g) {
     if (nSub) bits.push(`${nSub} subgroup${nSub === 1 ? '' : 's'}`);
     const meta = bits.length ? `<p class="group-sidebar__meta">${escapeHtmlGroup(bits.join(' · '))}</p>` : '';
     const parentLine = g.parent
-        ? `<p class="meta-row" style="margin:6px 0;">Parent: <a href="#/people/groups/${escapeHtmlGroup(g.parent.id)}" class="route-sidebar__link">${escapeHtmlGroup(g.parent.name)}</a></p>`
-        : '<p class="meta-row" style="margin:6px 0;">Top-level group</p>';
+        ? `<p class="meta-row meta-row--tight">Parent: <a href="#/people/groups/${escapeHtmlGroup(g.parent.id)}" class="route-sidebar__link">${escapeHtmlGroup(g.parent.name)}</a></p>`
+        : '<p class="meta-row meta-row--tight">Top-level group</p>';
     return `
         <div class="group-sidebar-pane">
             <h3 class="group-sidebar__title">${escapeHtmlGroup(g.name)}</h3>
             ${meta}
             ${parentLine}
             ${renderPersonGroupSubgroupsListHtml(g)}
-            <button type="button" class="add-new-btn group-sidebar__primary-btn" onclick="openPersonGroupEdit()">Edit group</button>
+            <button type="button" class="prks-btn prks-btn--primary add-new-btn group-sidebar__primary-btn" onclick="openPersonGroupEdit()">Edit group</button>
         </div>`;
 }
 
@@ -550,10 +550,10 @@ function renderPersonGroupEditSidebarHtml(g) {
                     <div id="gd-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
                 <label for="gd-description">Description</label>
-                <textarea id="gd-description" style="min-height:56px;">${escapeHtmlGroup(g.description || '')}</textarea>
+                <textarea id="gd-description" class="prks-textarea prks-textarea--short">${escapeHtmlGroup(g.description || '')}</textarea>
                 <div class="group-sidebar__actions">
-                    <button type="button" class="add-new-btn" id="gd-save-btn">Save changes</button>
-                    <button type="button" class="ribbon-btn group-sidebar__delete" id="gd-delete-btn">Delete group</button>
+                    <button type="button" class="prks-btn prks-btn--primary add-new-btn" id="gd-save-btn">Save changes</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn group-sidebar__delete" id="gd-delete-btn">Delete group</button>
                 </div>
             </div>
             ${renderPersonGroupSubgroupsListHtml(g)}
@@ -753,7 +753,7 @@ function renderPersonGroupAddMemberPanelHtml() {
                 </div>
                 <div id="group-add-member-results" class="combobox-results combobox-results--tag-panel hidden"></div>
             </div>
-            <button type="button" class="add-new-btn group-sidebar-pane--add-member__btn" id="group-add-member-btn">Add to group</button>
+            <button type="button" class="prks-btn prks-btn--primary add-new-btn group-sidebar-pane--add-member__btn" id="group-add-member-btn">Add to group</button>
         </div>`;
 }
 
@@ -763,12 +763,12 @@ function renderPersonGroupDetail(group, container) {
         ? `<a href="#/people/groups/${escapeHtmlGroup(g.parent.id)}" class="route-sidebar__link">${escapeHtmlGroup(g.parent.name)}</a>`
         : '';
     const breadcrumb = `
-        <p class="meta-row" style="margin-bottom:16px;">
+        <p class="meta-row meta-row--lede">
             <a href="#/people/groups" class="route-sidebar__link">All groups</a>
             ${g.parent ? ` · ${parentLink}` : ''}
         </p>`;
 
-    let membersHtml = `<h3 style="margin-top:8px;color:var(--text-secondary);">Members</h3>`;
+    let membersHtml = `<h3 class="prks-section-kicker">Members</h3>`;
 
     if (g.members && g.members.length > 0) {
         const rowFn =
@@ -793,7 +793,7 @@ function renderPersonGroupDetail(group, container) {
     }
 
     container.innerHTML = `
-        <div class="page-header" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
+        <div class="prks-page-header page-header page-header--split">
             <h2>${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folders') : ''} ${escapeHtmlGroup(g.name)}</h2>
         </div>
         ${breadcrumb}
@@ -818,16 +818,16 @@ function prksRenderPersonGroupChips(container, groups) {
     if (!container) return;
     const list = groups || [];
     if (!list.length) {
-        container.innerHTML = '<span class="meta-row" style="font-size:0.8rem;">No groups yet.</span>';
+        container.innerHTML = '<span class="meta-row meta-row--compact-empty">No groups yet.</span>';
         return;
     }
     container.innerHTML = list
         .map((g) => {
             const nm = escapeHtmlGroup(g.name || '');
             const id = escapeHtmlGroup(g.id);
-            return `<span class="tag pd-group-chip" data-group-id="${id}" style="display:inline-flex;align-items:center;gap:6px;">
+            return `<span class="tag pd-group-chip prks-chip" data-group-id="${id}">
                 ${nm}
-                <button type="button" class="pd-group-chip-remove" data-group-id="${id}" style="background:none;border:none;color:inherit;cursor:pointer;padding:0 2px;font-size:1rem;line-height:1;" title="Remove">&times;</button>
+                <button type="button" class="pd-group-chip-remove prks-chip__remove" data-group-id="${id}" title="Remove" aria-label="Remove ${nm}">&times;</button>
             </span>`;
         })
         .join(' ');

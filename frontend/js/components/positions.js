@@ -34,11 +34,11 @@
                   .join('')
             : '<p class="meta-row">No Positions yet. Create one to use as an Argument target.</p>';
         container.innerHTML =
-            '<div class="page-header"><div class="page-header__title-row"><h2>' +
+            '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2>' +
             (typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('flag') : '') +
             ' Positions</h2>' +
             '<div class="page-header__actions">' +
-            '<button type="button" class="ribbon-btn" id="prks-position-new">New Position</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-position-new">New Position</button>' +
             '</div></div></div><div class="list-view">' +
             rows +
             '</div>';
@@ -64,8 +64,8 @@
 
     function renderPositionNotFound(container) {
         container.innerHTML =
-            '<div class="page-header"><h2>Position not found.</h2></div>' +
-            '<p class="meta-row"><a class="ribbon-btn" href="#/positions">Back to Positions</a></p>';
+            '<div class="prks-page-header page-header"><h2>Position not found.</h2></div>' +
+            '<p class="meta-row"><a class="prks-btn prks-btn--secondary ribbon-btn" href="#/positions">Back to Positions</a></p>';
     }
 
     function renderPositionDetail(position, container) {
@@ -84,11 +84,11 @@
             })
             .join('') || '<p class="meta-row">No Arguments or Stances target this Position yet.</p>';
         container.innerHTML =
-            '<div class="page-header"><div class="page-header__title-row"><div>' +
+            '<div class="prks-page-header page-header"><div class="page-header__title-row"><div>' +
             '<p class="saved-view-detail__kicker">Position</p><h2>' +
             esc(p.name || 'Position') +
             '</h2></div><div class="page-header__actions">' +
-            '<button type="button" class="ribbon-btn" id="prks-position-view-graph">View in graph</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-position-view-graph">View in graph</button>' +
             '</div></div></div>' +
             '<div class="research-md">' +
             md(p.description) +

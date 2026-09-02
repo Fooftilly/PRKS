@@ -258,7 +258,7 @@ async function renderPublishersPage(container, routeGen) {
                           `<p class="meta-row publishers-page__list-stats">${count} file${count === 1 ? '' : 's'}${aliases ? ` · ${aliases} alias${aliases === 1 ? '' : 'es'}` : ''}</p>` +
                           `</div>` +
                           `<div class="publishers-page__list-actions">` +
-                          `<button type="button" class="ribbon-btn ribbon-btn--sm publishers-page__alias-btn" data-publisher-alias-edit="${idEsc}" title="Aliases" aria-label="Edit aliases for ${nm}">⋯<span>Aliases</span></button>` +
+                          `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm publishers-page__alias-btn" data-publisher-alias-edit="${idEsc}" title="Aliases" aria-label="Edit aliases for ${nm}">⋯<span>Aliases</span></button>` +
                           `</div>` +
                           `</div>`
                       );
@@ -290,7 +290,7 @@ async function renderPublishersPage(container, routeGen) {
                 <div id="publishers-page-alias-modal" class="modal tags-page-alias-modal hidden" role="dialog" aria-modal="true" aria-labelledby="publishers-page-alias-heading" tabindex="-1">
                     <div class="modal-header">
                         <h3 id="publishers-page-alias-heading">Publisher aliases</h3>
-                        <button type="button" id="publishers-page-alias-modal-close" class="close-btn" aria-label="Close">&times;</button>
+                        <button type="button" id="publishers-page-alias-modal-close" class="prks-icon-btn close-btn" aria-label="Close">&times;</button>
                     </div>
                     <div class="modal-body tags-page-alias-modal__body">
                         <p class="modal-helper">Alternate spellings that appear on some books. Search for any of these (or the canonical name) includes files whose publisher field exactly matches any label in this group (case-insensitive), or contains your search as a substring.</p>
@@ -301,7 +301,7 @@ async function renderPublishersPage(container, routeGen) {
                             <button type="button" id="publishers-page-alias-add-btn" class="tags-page-alias-add__submit">Add alias</button>
                         </div>
                         <div class="tags-page-alias-delete">
-                            <button type="button" id="publishers-page-delete-btn" class="btn-danger-outline">Delete publisher</button>
+                            <button type="button" id="publishers-page-delete-btn" class="prks-btn prks-btn--danger btn-danger-outline">Delete publisher</button>
                         </div>
                     </div>
                 </div>

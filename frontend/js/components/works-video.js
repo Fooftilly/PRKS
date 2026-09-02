@@ -34,10 +34,9 @@ function renderVideoViewerPane(work) {
     }
     return `
         <div class="work-pdf-pane">
-            <div style="width:100%; height:100%; padding:10px;">
+            <div class="prks-work-video-frame">
                 <iframe
                     src="${prksVideoEscapeAttr(embed)}"
-                    style="width:100%; height:100%; border:0; background: var(--surface);"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                     allowfullscreen
                     title="Video player"></iframe>

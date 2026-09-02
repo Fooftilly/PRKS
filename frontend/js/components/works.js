@@ -406,7 +406,7 @@ function prksOpenResearchPicker(opts) {
         '<input type="search" class="prks-research-picker__q" placeholder="Search…" autocomplete="off">' +
         '<div class="prks-research-picker__list" role="listbox"></div>' +
         (opts.extraHtml || '') +
-        '<button type="button" class="ribbon-btn ribbon-btn--sm prks-research-picker__close">Close</button>' +
+        '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm prks-research-picker__close">Close</button>' +
         '</div>';
     d.body.appendChild(overlay);
     const q = overlay.querySelector('.prks-research-picker__q');
@@ -523,8 +523,8 @@ function prksOpenArgumentPicker(cm, work) {
     };
     const extra =
         '<div class="prks-research-picker__actions">' +
-        '<button type="button" class="ribbon-btn ribbon-btn--sm" data-new="argument">New Argument</button> ' +
-        '<button type="button" class="ribbon-btn ribbon-btn--sm" data-new="stance">New Stance</button>' +
+        '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-new="argument">New Argument</button> ' +
+        '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-new="stance">New Stance</button>' +
         '</div>';
     prksOpenResearchPicker({
         title: 'Insert Argument / Stance',
@@ -686,7 +686,7 @@ async function renderWorkDetails(work, container, routeGen) {
     const workHeader = pdfViewerActive
         ? ''
         : `
-            <div class="page-header page-header--work">
+            <div class="prks-page-header page-header page-header--work">
                 <div class="card-heading-row card-heading-row--wrap">
                     <h2 class="page-header--work-title">${headerTitle}</h2>
                     <span id="work-header-doc-type-slot">${typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : ''}</span>

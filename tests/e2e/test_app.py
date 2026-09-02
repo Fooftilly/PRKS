@@ -477,3 +477,72 @@ class MarkdownFixtureTests(_BrowserE2E):
                 self.assertTrue(summary.startswith("PASS"), summary)
             finally:
                 page.close()
+
+
+_GALLERY_SECTIONS = (
+    "typography",
+    "surfaces",
+    "buttons",
+    "icon-buttons",
+    "fields",
+    "segmented",
+    "tabs",
+    "cards",
+    "rows",
+    "tags",
+    "chips",
+    "badges",
+    "status",
+    "nav",
+    "page-header",
+    "toolbar",
+    "panels",
+    "states",
+    "dialogs",
+    "workspace",
+)
+
+
+class DesignSystemGalleryTests(_BrowserE2E):
+    def test_gallery_themes_and_widths(self):
+        server = FixtureServer()
+        self.addCleanup(server.stop)
+        server.start()
+        widths = (1440, 900, 600, 390)
+        for theme in ("light", "dark"):
+            page = _BROWSER.new_page()
+            errors = []
+            failed = []
+            page.on("pageerror", lambda err: errors.append(str(err)))
+            page.on(
+                "requestfailed",
+                lambda req: failed.append(req.url) if req.url.startswith(server.origin) else None,
+            )
+            try:
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.goto(
+                    server.origin + "/tests/browser/design_system.html?theme=" + theme,
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_selector(".prks-gallery__wrap")
+                self.assertEqual(
+                    page.evaluate("() => document.documentElement.getAttribute('data-theme')"),
+                    theme,
+                )
+                for section in _GALLERY_SECTIONS:
+                    loc = page.locator('[data-gallery-section="%s"]' % section)
+                    self.assertEqual(loc.count(), 1, section)
+                    self.assertTrue(loc.first.is_visible(), section)
+                self.assertEqual(errors, [])
+                self.assertEqual(failed, [])
+                for width in widths:
+                    page.set_viewport_size({"width": width, "height": 900})
+                    overflow = page.evaluate(
+                        """() => {
+                            const root = document.documentElement;
+                            return root.scrollWidth - root.clientWidth;
+                        }"""
+                    )
+                    self.assertLessEqual(overflow, 2, "theme=%s width=%s overflow=%s" % (theme, width, overflow))
+            finally:
+                page.close()

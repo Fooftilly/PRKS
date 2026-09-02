@@ -74,11 +74,11 @@
                   .join('')
             : '<p class="meta-row">No Concepts yet. Type <code>[[concept:Name]]</code> in research notes, or create one here.</p>';
         container.innerHTML =
-            '<div class="page-header"><div class="page-header__title-row"><h2>' +
+            '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2>' +
             (typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('network') : '') +
             ' Concepts</h2>' +
             '<div class="page-header__actions">' +
-            '<button type="button" class="ribbon-btn" id="prks-concept-new">New Concept</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-concept-new">New Concept</button>' +
             '</div></div></div><div class="list-view">' +
             rows +
             '</div>';
@@ -118,8 +118,8 @@
 
     function renderConceptNotFound(container) {
         container.innerHTML =
-            '<div class="page-header"><h2>Concept not found.</h2></div>' +
-            '<p class="meta-row"><a class="ribbon-btn" href="#/concepts">Back to Concepts</a></p>';
+            '<div class="prks-page-header page-header"><h2>Concept not found.</h2></div>' +
+            '<p class="meta-row"><a class="prks-btn prks-btn--secondary ribbon-btn" href="#/concepts">Back to Concepts</a></p>';
     }
 
     function renderConceptDetail(concept, container) {
@@ -162,26 +162,26 @@
             );
         }).join('') || '<p class="meta-row">No research-note references.</p>';
         container.innerHTML =
-            '<div class="page-header"><div class="page-header__title-row"><div>' +
+            '<div class="prks-page-header page-header"><div class="page-header__title-row"><div>' +
             '<p class="saved-view-detail__kicker">Concept</p><h2>' +
             esc(c.name || 'Concept') +
             '</h2></div><div class="page-header__actions">' +
-            '<button type="button" class="ribbon-btn" id="prks-concept-view-graph">View in graph</button>' +
-            '<button type="button" class="ribbon-btn" id="prks-concept-rename">Rename</button>' +
-            '<button type="button" class="ribbon-btn" id="prks-concept-delete">Delete</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-concept-view-graph">View in graph</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-concept-rename">Rename</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-concept-delete">Delete</button>' +
             '</div></div></div>' +
             '<h3>Definition</h3><div class="research-md">' +
             md(c.description) +
             '</div>' +
-            '<p><button type="button" class="ribbon-btn ribbon-btn--sm" id="prks-concept-edit-def">Edit definition</button></p>' +
+            '<p><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" id="prks-concept-edit-def">Edit definition</button></p>' +
             '<h3>Search keys / aliases</h3><ul>' +
             aliases +
             '</ul>' +
-            '<p><button type="button" class="ribbon-btn ribbon-btn--sm" id="prks-concept-edit-aliases">Edit aliases</button></p>' +
+            '<p><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" id="prks-concept-edit-aliases">Edit aliases</button></p>' +
             '<h3>Parent concepts</h3><ul>' +
             parents +
             '</ul>' +
-            '<p><button type="button" class="ribbon-btn ribbon-btn--sm" id="prks-concept-edit-parents">Edit parents</button></p>' +
+            '<p><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" id="prks-concept-edit-parents">Edit parents</button></p>' +
             '<h3>Subconcepts</h3><ul>' +
             children +
             '</ul>' +

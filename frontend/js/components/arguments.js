@@ -91,7 +91,7 @@
             : '<p class="meta-row">No Arguments or Stances yet.</p>';
         function btn(k, label) {
             return (
-                '<button type="button" class="ribbon-btn ribbon-btn--sm' +
+                '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm' +
                 (kind === k ? ' ribbon-btn--active' : '') +
                 '" data-arg-filter="' +
                 k +
@@ -101,12 +101,12 @@
             );
         }
         container.innerHTML =
-            '<div class="page-header"><div class="page-header__title-row"><h2>' +
+            '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2>' +
             (typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('messages-square') : '') +
             ' Arguments &amp; Stances</h2>' +
             '<div class="page-header__actions">' +
-            '<button type="button" class="ribbon-btn" id="prks-argument-new">New Argument</button>' +
-            '<button type="button" class="ribbon-btn" id="prks-stance-new">New Stance</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-argument-new">New Argument</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-stance-new">New Stance</button>' +
             '</div></div></div>' +
             '<p>' +
             btn('all', 'All') +
@@ -149,8 +149,8 @@
 
     function renderArgumentNotFound(container) {
         container.innerHTML =
-            '<div class="page-header"><h2>Argument not found.</h2></div>' +
-            '<p class="meta-row"><a class="ribbon-btn" href="#/arguments">Back to Arguments &amp; Stances</a></p>';
+            '<div class="prks-page-header page-header"><h2>Argument not found.</h2></div>' +
+            '<p class="meta-row"><a class="prks-btn prks-btn--secondary ribbon-btn" href="#/arguments">Back to Arguments &amp; Stances</a></p>';
     }
 
     function renderArgumentDetail(argument, container) {
@@ -205,7 +205,7 @@
                     '<select data-field="verdict">' +
                     verdictOpts(t.verdict_id) +
                     '</select> ' +
-                    '<button type="button" class="ribbon-btn ribbon-btn--sm" data-remove="target">Remove</button>' +
+                    '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-remove="target">Remove</button>' +
                     '</div>'
                 );
             })
@@ -222,21 +222,21 @@
                     '<input type="text" data-field="pages" value="' +
                     esc(s.pages || '') +
                     '" placeholder="pages" maxlength="100"> ' +
-                    '<button type="button" class="ribbon-btn ribbon-btn--sm" data-remove="source">Remove</button>' +
+                    '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-remove="source">Remove</button>' +
                     '</div>'
                 );
             })
             .join('');
         container.innerHTML =
-            '<div class="page-header"><div class="page-header__title-row"><div>' +
+            '<div class="prks-page-header page-header"><div class="page-header__title-row"><div>' +
             '<p class="saved-view-detail__kicker">' +
             esc(kindLabel) +
             '</p><h2>' +
             esc(a.name || a.id) +
             '</h2></div><div class="page-header__actions">' +
-            '<button type="button" class="ribbon-btn" id="prks-arg-view-graph">View in graph</button>' +
-            '<button type="button" class="ribbon-btn" id="prks-arg-response">New response argument</button>' +
-            '<button type="button" class="ribbon-btn" id="prks-arg-delete">Delete</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-arg-view-graph">View in graph</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-arg-response">New response argument</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-arg-delete">Delete</button>' +
             '</div></div></div>' +
             '<form id="prks-arg-form" class="prks-arg-form form-pane">' +
             '<label class="form-field-label" for="prks-arg-name">Name</label>' +
@@ -259,13 +259,13 @@
             '<div id="prks-arg-targets">' +
             (targetRows || '<p class="meta-row">None</p>') +
             '</div>' +
-            '<button type="button" class="ribbon-btn ribbon-btn--sm" id="prks-arg-add-target">Add target</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" id="prks-arg-add-target">Add target</button>' +
             '<h3>Where made/taken</h3>' +
             '<div id="prks-arg-sources">' +
             (sourceRows || '<p class="meta-row">None</p>') +
             '</div>' +
-            '<button type="button" class="ribbon-btn ribbon-btn--sm" id="prks-arg-add-source">Add source</button>' +
-            '<p class="prks-arg-form__actions"><button type="submit" class="add-new-btn">Save</button></p>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" id="prks-arg-add-source">Add source</button>' +
+            '<p class="prks-arg-form__actions"><button type="submit" class="prks-btn prks-btn--primary add-new-btn">Save</button></p>' +
             '</form>' +
             '<h3>Counter/Response Arguments</h3>' +
             responses +
@@ -306,7 +306,7 @@
                 '<select data-field="verdict">' +
                 verdictOpts(t.verdict_id || defaultVerdict()) +
                 '</select> ' +
-                '<button type="button" class="ribbon-btn ribbon-btn--sm" data-remove="target">Remove</button>';
+                '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-remove="target">Remove</button>';
             wrap.appendChild(div);
         }
         function addSourceRow(preset) {
@@ -323,7 +323,7 @@
                 '<input type="text" data-field="pages" value="' +
                 esc(s.pages || '') +
                 '" placeholder="pages" maxlength="100"> ' +
-                '<button type="button" class="ribbon-btn ribbon-btn--sm" data-remove="source">Remove</button>';
+                '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-remove="source">Remove</button>';
             wrap.appendChild(div);
         }
         const addT = container.querySelector('#prks-arg-add-target');

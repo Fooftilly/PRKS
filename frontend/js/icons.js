@@ -121,7 +121,7 @@
         const cls = parts.join(' ');
         let style = '';
         if (typeof o.size === 'number' && o.size > 0) {
-            style = ` style="width:${o.size}px;height:${o.size}px"`;
+            style = ` style="--prks-icon-size:${o.size}px"`;
         }
         return (
             `<i data-lucide="${lucideName}" class="${cls}" aria-hidden="true"${style}></i>`

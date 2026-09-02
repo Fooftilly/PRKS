@@ -5,7 +5,7 @@ function searchEscapeHtml(s) {
 }
 
 function renderRecent(works, container) {
-    let html = `<div class="page-header"><h2>${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('clock') : ''} Recently Opened</h2></div><div class="card-grid">`;
+    let html = `<div class="prks-page-header page-header"><h2>${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('clock') : ''} Recently Opened</h2></div><div class="card-grid">`;
     if (works && works.length > 0) {
         works.forEach(w => {
             let dateStr = w.last_opened_at ? new Date(w.last_opened_at).toLocaleString() : 'Unknown';
@@ -72,10 +72,10 @@ function renderSearch(results, query, container, options = {}) {
     const emptyMsg = tag
         ? 'No files have this tag yet.'
         : 'No results found matching your query.';
-    let html = `<div class="page-header page-header--search"><div class="page-header__title-row"><h2>${title}</h2>`;
+    let html = `<div class="prks-page-header page-header page-header--search"><div class="page-header__title-row"><h2>${title}</h2>`;
     const canOfferSave = !!(query || tag || author || publisher);
     if (canOfferSave) {
-        html += `<div class="page-header__actions"><button type="button" class="ribbon-btn" id="prks-save-view-btn">Save View</button></div>`;
+        html += `<div class="page-header__actions"><button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-save-view-btn">Save View</button></div>`;
     }
     html += `</div>`;
     if (!tag) {
@@ -94,7 +94,7 @@ function renderSearch(results, query, container, options = {}) {
                             </div>
                         </div>
                     </div>
-                    <button type="button" class="ribbon-btn search-advanced__submit" id="search-run-btn">Search</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn search-advanced__submit" id="search-run-btn">Search</button>
                 </div>`;
         } else {
             html += `
@@ -126,7 +126,7 @@ function renderSearch(results, query, container, options = {}) {
                             </div>
                         </div>
                     </div>
-                    <button type="button" class="ribbon-btn search-advanced__submit" id="search-run-btn">Search</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn search-advanced__submit" id="search-run-btn">Search</button>
                 </div>`;
         }
     }

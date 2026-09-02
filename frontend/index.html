@@ -37,7 +37,7 @@
                         <p class="sidebar-caption-sm">Knowledge System</p>
                     </div>
                 </a>
-                <button onclick="openModal('settings-modal')" class="ribbon-btn settings-btn" title="Settings" aria-label="Settings"><span class="ribbon-btn__icon"><i data-lucide="settings" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
+                <button onclick="openModal('settings-modal')" class="prks-icon-btn prks-icon-btn--ghost ribbon-btn settings-btn" title="Settings" aria-label="Settings"><span class="ribbon-btn__icon"><i data-lucide="settings" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
             </div>
 
             <ul class="nav-menu">
@@ -146,7 +146,7 @@
                     <button
                         type="button"
                         id="prks-mobile-nav-btn"
-                        class="ribbon-btn"
+                        class="prks-btn prks-btn--secondary prks-icon-btn prks-icon-btn--ghost ribbon-btn"
                         aria-label="Open navigation"
                         aria-expanded="false"
                         aria-controls="sidebar"
@@ -159,11 +159,11 @@
                         <span class="prks-palette-launch__label">Search or jump…</span>
                         <kbd class="prks-palette-launch__hint" data-palette-shortcut-hint>Ctrl K</kbd>
                     </button>
-                    <button type="button" class="ribbon-btn" onclick="openModal('work-modal')" title="New File" id="prks-ribbon-new-file">
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" onclick="openModal('work-modal')" title="New File" id="prks-ribbon-new-file">
                         <span class="ribbon-btn__icon"><i data-lucide="file-plus" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
                         <span class="ribbon-btn__label">New File</span>
                     </button>
-                    <button type="button" id="prks-ribbon-new-more" class="ribbon-btn" title="New…" aria-label="New" aria-haspopup="dialog">
+                    <button type="button" id="prks-ribbon-new-more" class="prks-btn prks-btn--secondary ribbon-btn" title="New…" aria-label="New" aria-haspopup="dialog">
                         <span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
                         <span class="ribbon-btn__label">New…</span>
                     </button>
@@ -172,7 +172,7 @@
                     <button
                         type="button"
                         id="prks-mobile-details-btn"
-                        class="ribbon-btn"
+                        class="prks-btn prks-btn--secondary prks-icon-btn prks-icon-btn--ghost ribbon-btn"
                         aria-label="Open details panel"
                         aria-expanded="false"
                         aria-controls="right-panel"
@@ -185,9 +185,9 @@
 
         <!-- Right Panel (Details / Annotations) -->
         <aside id="right-panel">
-            <div class="tabs">
-                <button class="tab-btn active" data-target="details">Details</button>
-                <button class="tab-btn" data-target="annotations">Annotations</button>
+            <div class="prks-tabs tabs">
+                <button class="prks-tab tab-btn active is-active" data-target="details">Details</button>
+                <button class="prks-tab tab-btn" data-target="annotations">Annotations</button>
             </div>
             <div class="tab-content" id="panel-content">
                 <!-- Panel content dynamically fetched by app.js -->
@@ -217,8 +217,8 @@
                 Are you sure you want to close this window without saving the changes?
             </p>
             <div class="prks-modal-unsaved-confirm__actions">
-                <button type="button" class="ribbon-btn" id="prks-modal-unsaved-confirm-cancel">Cancel</button>
-                <button type="button" class="add-new-btn" id="prks-modal-unsaved-confirm-discard">Close without saving</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-modal-unsaved-confirm-cancel">Cancel</button>
+                <button type="button" class="prks-btn prks-btn--danger" id="prks-modal-unsaved-confirm-discard">Close without saving</button>
             </div>
         </div>
     </div>
@@ -237,8 +237,8 @@
             <h3 id="prks-modal-confirm-title" class="prks-modal-confirm__title">Confirm</h3>
             <p id="prks-modal-confirm-desc" class="prks-modal-confirm__desc"></p>
             <div class="prks-modal-confirm__actions">
-                <button type="button" class="ribbon-btn" id="prks-modal-confirm-cancel">Cancel</button>
-                <button type="button" class="add-new-btn" id="prks-modal-confirm-ok">OK</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-modal-confirm-cancel">Cancel</button>
+                <button type="button" class="prks-btn prks-btn--primary add-new-btn" id="prks-modal-confirm-ok">OK</button>
             </div>
         </div>
     </div>
@@ -246,7 +246,7 @@
     <div id="settings-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Settings</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <fieldset class="prks-theme-picker">
@@ -284,14 +284,14 @@
                 <h4 id="prks-settings-bibtex-heading" class="prks-settings-section__title">BibTeX / BibLaTeX export</h4>
                 <p class="prks-settings-hint">When a toggle is on, that field is included when you copy BibTeX. Turn off to keep data in the app but omit it from export. Stored with your library for all devices using this server.</p>
                 <div class="prks-bibtex-export-toggles" id="prks-bibtex-export-fields" role="group" aria-label="Fields to include in BibTeX export"></div>
-                <button type="button" class="ribbon-btn prks-bibtex-export-reset" id="prks-bibtex-export-reset">Restore export defaults</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn prks-bibtex-export-reset" id="prks-bibtex-export-reset">Restore export defaults</button>
             </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-backup-heading">
                 <h4 id="prks-settings-backup-heading" class="prks-settings-section__title">Backup &amp; restore</h4>
                 <p class="prks-settings-hint">Create a verified backup of your PRKS library. Includes database, PDFs and managed person files. Search index and thumbnails are rebuilt automatically.</p>
                 <div class="prks-backup-restore-row">
-                    <button type="button" class="ribbon-btn" id="prks-backup-download-btn">Download backup</button>
-                    <button type="button" class="ribbon-btn hidden" id="prks-backup-cancel-btn">Stop backup</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-backup-download-btn">Download backup</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn hidden" id="prks-backup-cancel-btn">Stop backup</button>
                 </div>
                 <div id="prks-backup-progress" class="prks-backup-progress hidden">
                     <progress id="prks-backup-progress-bar" max="100" value="0"></progress>
@@ -302,27 +302,27 @@
                 <p class="prks-settings-hint">Before restoring, download a backup of the current library if you may want to return to it.</p>
                 <div class="prks-backup-restore-row">
                     <input type="file" id="prks-backup-file-input" class="prks-backup-file-input" accept=".prks-backup,application/octet-stream,application/zip">
-                    <button type="button" class="ribbon-btn" id="prks-backup-choose-btn">Choose backup…</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-backup-choose-btn">Choose backup…</button>
                     <span class="prks-settings-hint" id="prks-backup-file-label">No file selected</span>
                 </div>
-                <button type="button" class="ribbon-btn" id="prks-backup-verify-btn">Verify backup</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-backup-verify-btn">Verify backup</button>
                 <p class="prks-settings-hint" id="prks-backup-restore-status" aria-live="polite"></p>
                 <div id="prks-backup-verified-panel" class="prks-backup-verified-panel hidden">
                     <p class="prks-backup-verified-title">Backup verified</p>
                     <ul class="prks-backup-summary" id="prks-backup-summary"></ul>
-                    <button type="button" class="ribbon-btn" id="prks-backup-restore-btn">Restore this backup</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-backup-restore-btn">Restore this backup</button>
                 </div>
             </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-pdf-index-heading">
                 <h4 id="prks-settings-pdf-index-heading" class="prks-settings-section__title">PDF text index</h4>
                 <p class="prks-settings-hint">PDF text search is maintained automatically. Use a full rebuild if PDF search results seem incomplete or stale.</p>
-                <button type="button" class="ribbon-btn" id="prks-reindex-pdf-text-btn">Rebuild PDF text index</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-reindex-pdf-text-btn">Rebuild PDF text index</button>
                 <p class="prks-settings-hint" id="prks-reindex-pdf-text-status" aria-live="polite"></p>
             </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-pdf-linearize-heading">
                 <h4 id="prks-settings-pdf-linearize-heading" class="prks-settings-section__title">PDF linearization</h4>
                 <p class="prks-settings-hint">Optimize existing library PDFs for progressive loading. Only non-linearized PDFs are processed.</p>
-                <button type="button" class="ribbon-btn" id="prks-linearize-existing-pdfs-btn">Linearize existing PDFs</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-linearize-existing-pdfs-btn">Linearize existing PDFs</button>
                 <p class="prks-settings-hint" id="prks-linearize-existing-pdfs-status" aria-live="polite"></p>
             </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-perf-heading">
@@ -351,9 +351,9 @@
                 <p class="prks-settings-hint" id="prks-perf-spans"></p>
                 <p class="prks-settings-hint" id="prks-perf-thumbs"></p>
                 <div class="prks-backup-restore-row">
-                    <button type="button" class="ribbon-btn" id="prks-perf-refresh-btn">Refresh</button>
-                    <button type="button" class="ribbon-btn" id="prks-perf-reset-btn">Reset</button>
-                    <button type="button" class="ribbon-btn" id="prks-perf-copy-btn">Copy report</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-perf-refresh-btn">Refresh</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-perf-reset-btn">Reset</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-perf-copy-btn">Copy report</button>
                 </div>
                 <p class="prks-settings-hint" id="prks-perf-status" aria-live="polite"></p>
             </section>
@@ -401,7 +401,7 @@
     <div id="prks-restore-confirm-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Replace library?</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <p class="prks-settings-hint">Restoring will replace the current PRKS library with the contents of this backup.</p>
@@ -409,34 +409,34 @@
             <label for="prks-restore-confirm-input" class="prks-settings-section__title">Type RESTORE to confirm</label>
             <input type="text" id="prks-restore-confirm-input" class="prks-settings-text-input" autocomplete="off" spellcheck="false" placeholder="RESTORE">
             <p class="prks-settings-hint" id="prks-restore-confirm-status" aria-live="polite"></p>
-            <button type="button" class="ribbon-btn" id="prks-restore-confirm-submit" disabled>Restore this backup</button>
+            <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-restore-confirm-submit" disabled>Restore this backup</button>
         </div>
     </div>
 
     <div id="master-add-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Create New Entity</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body modal-grid-2">
-            <button onclick="openModal('folder-modal')" class="add-new-btn create-entity-btn"><i data-lucide="folder" class="prks-icon" aria-hidden="true"></i> New Folder</button>
-            <button onclick="openModal('work-modal')" class="add-new-btn create-entity-btn"><i data-lucide="file-plus" class="prks-icon" aria-hidden="true"></i> New File</button>
-            <button onclick="openModal('person-modal')" class="add-new-btn create-entity-btn"><i data-lucide="users" class="prks-icon" aria-hidden="true"></i> New Author</button>
-            <button onclick="openModal('role-modal')" class="add-new-btn create-entity-btn"><i data-lucide="link" class="prks-icon" aria-hidden="true"></i> Link Person to Work</button>
+            <button onclick="openModal('folder-modal')" class="prks-btn prks-btn--primary add-new-btn create-entity-btn"><i data-lucide="folder" class="prks-icon" aria-hidden="true"></i> New Folder</button>
+            <button onclick="openModal('work-modal')" class="prks-btn prks-btn--primary add-new-btn create-entity-btn"><i data-lucide="file-plus" class="prks-icon" aria-hidden="true"></i> New File</button>
+            <button onclick="openModal('person-modal')" class="prks-btn prks-btn--primary add-new-btn create-entity-btn"><i data-lucide="users" class="prks-icon" aria-hidden="true"></i> New Author</button>
+            <button onclick="openModal('role-modal')" class="prks-btn prks-btn--primary add-new-btn create-entity-btn"><i data-lucide="link" class="prks-icon" aria-hidden="true"></i> Link Person to Work</button>
         </div>
     </div>
 
     <div id="work-modal" class="modal modal-wide hidden">
         <div class="modal-header">
             <h3>New File</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="upload-grid">
                 <!-- Left: Preview -->
                 <div class="preview-pane" id="upload-drop-zone">
                     <div id="upload-pdf-preview-actions" class="upload-pdf-preview-actions hidden" role="toolbar" aria-label="PDF preview actions">
-                        <button type="button" class="ribbon-btn" id="upload-pdf-remove-btn" title="Clear preview to choose a different PDF">Remove PDF</button>
+                        <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="upload-pdf-remove-btn" title="Clear preview to choose a different PDF">Remove PDF</button>
                     </div>
                     <div id="upload-viewer" class="hidden"></div>
                     <div id="drop-zone-prompt" class="drop-zone">
@@ -521,7 +521,7 @@
                             <input type="hidden" id="work-folder-id">
                             <div id="folder-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                         </div>
-                        <button type="button" onclick="quickCreateFolder()" class="ribbon-btn ribbon-btn--sm" title="Create New Folder" aria-label="Create New Folder"><span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span></button>
+                        <button type="button" onclick="quickCreateFolder()" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" title="Create New Folder" aria-label="Create New Folder"><span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span></button>
                     </div>
 
                     <label for="work-doc-type-trigger">Document type (BibLaTeX)</label>
@@ -558,7 +558,7 @@
                                     <div id="person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                                 </div>
                             </div>
-                            <button type="button" onclick="addRoleToUploadList()" class="ribbon-btn"><span class="ribbon-btn__icon"><i data-lucide="link" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="ribbon-btn__label">Link</span></button>
+                            <button type="button" onclick="addRoleToUploadList()" class="prks-btn prks-btn--secondary ribbon-btn"><span class="ribbon-btn__icon"><i data-lucide="link" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="ribbon-btn__label">Link</span></button>
                         </div>
                         <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles">
                             <div class="prks-upload-role-seg" id="upload-role-seg-mount"></div>
@@ -656,7 +656,7 @@
                     <label for="work-abstract">Abstract / Preface</label>
                     <textarea id="work-abstract" class="textarea-lg textarea-flex" placeholder="Briefly describe why this document is relevant, or use paper abstract..."></textarea>
                     
-                    <button id="save-work-btn" class="add-new-btn">Add File</button>
+                    <button id="save-work-btn" class="prks-btn prks-btn--primary add-new-btn">Add File</button>
                     <div id="upload-status-msg" class="upload-status hidden"></div>
                 </div>
             </div>
@@ -666,7 +666,7 @@
     <div id="folder-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Add New Folder</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -686,7 +686,7 @@
                 </div>
                 <label for="folder-description">Description</label>
                 <textarea id="folder-description" placeholder="Optional description…"></textarea>
-                <button id="save-folder-btn" class="add-new-btn">Save Folder</button>
+                <button id="save-folder-btn" class="prks-btn prks-btn--primary add-new-btn">Save Folder</button>
             </div>
         </div>
     </div>
@@ -694,7 +694,7 @@
     <div id="playlist-modal" class="modal hidden">
         <div class="modal-header">
             <h3>New playlist</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -703,7 +703,7 @@
                 <input type="text" id="playlist-title" placeholder="e.g. Philosophy Lectures" autocomplete="off">
                 <label for="playlist-description">Description</label>
                 <textarea id="playlist-description" class="textarea-sm" placeholder="Optional description…"></textarea>
-                <button id="save-playlist-btn" class="add-new-btn">Create playlist</button>
+                <button id="save-playlist-btn" class="prks-btn prks-btn--primary add-new-btn">Create playlist</button>
                 <p id="playlist-error" class="folder-field-error hidden" role="alert" aria-live="polite"></p>
             </div>
         </div>
@@ -712,7 +712,7 @@
     <div id="saved-view-modal" class="modal hidden">
         <div class="modal-header">
             <h3 id="saved-view-modal-title">Save View</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -742,7 +742,7 @@
                     <label for="saved-view-publisher">Publisher</label>
                     <input type="text" id="saved-view-publisher" maxlength="200" autocomplete="off">
                 </div>
-                <button type="button" id="save-saved-view-btn" class="add-new-btn">Save View</button>
+                <button type="button" id="save-saved-view-btn" class="prks-btn prks-btn--primary add-new-btn">Save View</button>
             </div>
         </div>
     </div>
@@ -750,7 +750,7 @@
     <div id="group-modal" class="modal hidden">
         <div class="modal-header">
             <h3>New people group</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -769,7 +769,7 @@
                 </div>
                 <label for="group-description">Description</label>
                 <textarea id="group-description" placeholder="Optional"></textarea>
-                <button type="button" id="save-group-btn" class="add-new-btn">Create group</button>
+                <button type="button" id="save-group-btn" class="prks-btn prks-btn--primary add-new-btn">Create group</button>
             </div>
         </div>
     </div>
@@ -777,7 +777,7 @@
     <div id="person-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Add New Person</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
@@ -809,26 +809,26 @@
                 <input type="url" id="person-link-iep" placeholder="https://iep.utm.edu/…">
                 <label for="person-links-other">Other links</label>
                 <textarea id="person-links-other" class="textarea-sm" placeholder="One URL per line, or [Title](https://...)"></textarea>
-                <button id="save-person-btn" class="add-new-btn">Save Person</button>
+                <button id="save-person-btn" class="prks-btn prks-btn--primary add-new-btn">Save Person</button>
             </div>
         </div>
     </div>
     <div id="person-template-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Edit Profile Using Template</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-pane">
                 <p class="modal-helper">Template uses strict JSON. Keep exact keys, string values only. Paste edited template then apply to open profile edit form.</p>
                 <div class="prks-inline-message">
-                    <p class="meta-row meta-row--compact" style="display:flex;align-items:center;gap:8px;">
+                    <p class="meta-row meta-row--compact prks-cluster">
                         <strong>How to fill template fields</strong>
-                        <button type="button" class="inline-action-btn" onclick="copyPersonTemplateGuideText(event)" title="Copy template field guide" aria-label="Copy template field guide"><i data-lucide="copy" class="prks-icon" aria-hidden="true"></i></button>
-                        <button type="button" class="inline-action-btn" onclick="copyPersonTemplateAndGuideText(event)" title="Copy template + field guide" aria-label="Copy template and field guide"><i data-lucide="copy" class="prks-icon" aria-hidden="true"></i><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></button>
+                        <button type="button" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn" onclick="copyPersonTemplateGuideText(event)" title="Copy template field guide" aria-label="Copy template field guide"><i data-lucide="copy" class="prks-icon" aria-hidden="true"></i></button>
+                        <button type="button" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn" onclick="copyPersonTemplateAndGuideText(event)" title="Copy template + field guide" aria-label="Copy template and field guide"><i data-lucide="copy" class="prks-icon" aria-hidden="true"></i><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></button>
                     </p>
                     <p>Fill this template according to the provided rules:</p>
-                    <ul style="margin: 0 0 0 18px;">
+                    <ul class="prks-guide-list">
                         <li><code>first_name</code>, <code>last_name</code>, <code>aliases</code>: plain text strings. Middle names should be placed in <code>first_name</code> field.</li>
                         <li><code>about</code>: MUST review and update when filling this template; DO NOT leave unchanged or empty if you are enriching other fields and reliable sources exist. Short encyclopedic biography for person cards and search (About / expertise). Include who they are, time period, field/domain, 2–4 main ideas/works/contributions, and why they are notable. DO NOT put birth year, death year, or lifespan dates in <code>about</code>; use <code>birth_date</code> and <code>death_date</code> only. Neutral third-person prose, complete sentences, plain text only (JSON string; optional blank line between paragraphs as <code>\n\n</code>). No Markdown, bullet lists, or URLs (use <code>link_*</code> and <code>links_other</code>). Target ~80–500 words (~400–2500 characters); avoid one-liners and essay-length dumps. Synthesize from Wikipedia, SEP, IEP, or provided links; do not invent facts. If existing text is present, improve or expand it rather than skipping this field.</li>
                         <li><code>birth_date</code>, <code>death_date</code>: plain date strings only — never prose, never <code>BC</code>, <code>BCE</code>, or <code>AD</code> suffixes. Allowed: (1) AD year-only positive <code>yyyy</code>, e.g. <code>1903</code>. (2) BC year-only: leading minus + BC year digits, e.g. source says 428 BC → <code>-428</code> (same for 384 BC → <code>-384</code>). (3) Full date <code>dd/mm/yyyy</code>; BC uses negative year in last segment, e.g. 15 March 384 BC → <code>15/03/-384</code>; AD e.g. <code>20/02/2001</code>. Wrong: <code>384 BC</code>, <code>428 BCE</code>, <code>-384 BC</code>, <code>born 428 BC</code>. Use day and month only if source states them; else year-only. Unknown date → <code>""</code>.</li>
@@ -843,9 +843,9 @@
                 </div>
                 <label for="person-template-json">Profile template</label>
                 <textarea id="person-template-json" class="textarea-sm" placeholder='Use "Reload template from profile" to fill JSON from the open person’s current fields.'></textarea>
-                <div class="form-actions">
-                    <button type="button" class="add-new-btn form-actions__btn form-actions__btn--secondary" onclick="insertPersonProfileTemplateFromCurrentData()">Reload template from profile</button>
-                    <button type="button" class="add-new-btn form-actions__btn form-actions__btn--primary" onclick="applyPersonProfileTemplateFromModal()">Apply template</button>
+                <div class="prks-form-actions form-actions">
+                    <button type="button" class="prks-btn prks-btn--secondary form-actions__btn form-actions__btn--secondary" onclick="insertPersonProfileTemplateFromCurrentData()">Reload template from profile</button>
+                    <button type="button" class="prks-btn prks-btn--primary add-new-btn form-actions__btn form-actions__btn--primary" onclick="applyPersonProfileTemplateFromModal()">Apply template</button>
                 </div>
                 <p id="person-template-feedback" class="prks-inline-message"></p>
             </div>
@@ -855,7 +855,7 @@
     <div id="role-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Link Person to Work</h3>
-            <button class="close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body">
             <p class="modal-helper">Search for someone already in your library, or type a name and choose <strong>Quick-create person</strong> in the list. Then click Create Link.</p>
@@ -896,7 +896,7 @@
                     <div id="role-link-credit-aliases" class="prks-role-credit-picker__aliases" hidden role="group" aria-label="Known aliases"></div>
                     <p class="meta-row meta-row--hint meta-row--compact">Check the box to override; pick an alias or type a name.</p>
                 </div>
-                <button id="save-role-btn" class="add-new-btn">Create Link</button>
+                <button id="save-role-btn" class="prks-btn prks-btn--primary add-new-btn">Create Link</button>
             </div>
         </div>
     </div>

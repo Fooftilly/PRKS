@@ -271,6 +271,18 @@ Slow logs stay privacy-safe (`method`, templated `route`, status, durations, cal
 
 Do not add indexes, caching, threading, or SQLite tuning solely because an endpoint looks expensive on paper. Measure first.
 
+## UI design
+
+`DESIGN.md` is authoritative for PRKS visual and interaction work. New UI primitives must be specified there and shown in `tests/browser/design_system.html` before they are used in production. Do not treat a generic design skill as a license to replace Inter, round the chrome, or add decorative surfaces.
+
+Open the gallery (both themes) from the fixture server:
+
+```bash
+python tests/browser/serve.py
+```
+
+Then open the printed origin’s `/tests/browser/design_system.html?theme=light` and `?theme=dark`.
+
 ## Development and tests
 
 ```bash
@@ -296,7 +308,7 @@ python run_tests.py --e2e
 
 Every E2E run creates a fresh temporary `PRKS_STORAGE` with `PRKS_TESTING=1`, binds `127.0.0.1`, and deletes that tree on teardown. It never targets `data/` or a live production storage directory.
 
-Focused static fixtures (Markdown sanitizer, PDF viewer island, navigation) stay available without the full app:
+Focused static fixtures (Markdown sanitizer, PDF viewer island, navigation, design system gallery) stay available without the full app:
 
 ```bash
 python tests/browser/serve.py
@@ -309,6 +321,7 @@ python tests/browser/pointer_capture.py
 
 | Path | Role |
 | ---- | ---- |
+| `DESIGN.md` | Authoritative UI visual/interaction contract. |
 | `prks_app.py` | Only process entry: parses `--testing`, `--port`, `--host`, starts the server. |
 | `backend/server.py` | Threaded stdlib HTTP server and handler: static frontend, REST-style `/api/...` routes. |
 | `backend/concurrency.py` | Process-local library access gate (reads, mutations, backup, restore). |

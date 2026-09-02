@@ -587,7 +587,7 @@
             html += '</ul>';
         }
         html +=
-            '<p><button type="button" class="ribbon-btn" id="prks-graph-open">' +
+            '<p><button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-graph-open">' +
             esc(model.openLabel) +
             '</button></p>';
         paintInspector(html);
@@ -758,7 +758,7 @@
         }
         return (
             '<div class="research-graph">' +
-            '<div class="page-header"><div class="page-header__title-row"><h2>' +
+            '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2>' +
             (typeof root.prksPageHeaderIconHtml === 'function'
                 ? root.prksPageHeaderIconHtml('share-2')
                 : '') +
@@ -766,8 +766,8 @@
             '<div class="research-graph__toolbar">' +
             '<label class="research-graph__find-label" for="prks-graph-find">Find node</label>' +
             '<input id="prks-graph-find" type="search" autocomplete="off" placeholder="Find node…">' +
-            '<button type="button" class="ribbon-btn" id="prks-graph-fit">Fit</button>' +
-            '<button type="button" class="ribbon-btn" id="prks-graph-reset">Reset layout</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-graph-fit">Fit</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-graph-reset">Reset layout</button>' +
             '</div>' +
             '<div id="prks-graph-find-results" class="research-graph__find-results" role="listbox" hidden></div>' +
             '<div class="research-graph__filters">' +

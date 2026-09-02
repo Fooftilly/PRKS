@@ -1128,9 +1128,9 @@
     function prksRenderRouteError(contentDiv) {
         if (!contentDiv) return;
         contentDiv.innerHTML =
-            '<div class="page-header"><h2>Could not load this view</h2></div>' +
+            '<div class="prks-page-header page-header"><h2>Could not load this view</h2></div>' +
             '<p class="prks-inline-message">Could not load this view.</p>' +
-            '<p><button type="button" class="add-new-btn" id="prks-route-retry">Retry</button></p>';
+            '<p><button type="button" class="prks-btn prks-btn--primary add-new-btn" id="prks-route-retry">Retry</button></p>';
         contentDiv.removeAttribute('aria-busy');
         const btn = contentDiv.querySelector('#prks-route-retry');
         if (btn) {

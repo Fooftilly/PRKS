@@ -520,7 +520,7 @@ function prksProcessingCardHtml(file) {
                 <div class="prks-processing-card__meta">
                     <p class="meta-row"><strong>Path:</strong> <code${pathTitleAttr}>${prksProcessingEsc(relPath)}</code></p>
                     <p class="meta-row"><strong>State:</strong> ${prksProcessingEsc(statusLabel)} · ${prksProcessingEsc(sourceHint)}</p>
-                    ${file.last_error ? `<p class="meta-row" style="color: var(--danger-color);"><strong>Error:</strong> ${prksProcessingEsc(file.last_error)}</p>` : ''}
+                    ${file.last_error ? `<p class="meta-row meta-row--error"><strong>Error:</strong> ${prksProcessingEsc(file.last_error)}</p>` : ''}
                 </div>
             </header>
             <div class="form-pane form-pane--tight prks-processing-card__core">
@@ -548,7 +548,7 @@ function prksProcessingCardHtml(file) {
                                     <div class="combobox-results combobox-results--tag-panel hidden" data-role="person-results"></div>
                                 </div>
                             </div>
-                            <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="add-role"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('link', { size: 'sm' }) : ''}</span><span class="ribbon-btn__label">Link</span></button>
+                            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-action="add-role"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('link', { size: 'sm' }) : ''}</span><span class="ribbon-btn__label">Link</span></button>
                         </div>
                         <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles">
                             <div class="prks-upload-role-seg">
@@ -595,7 +595,7 @@ function prksProcessingCardHtml(file) {
                 </div>
                 <div class="prks-processing-card__section">
                     <label>Folder (optional)</label>
-                    <p class="meta-row meta-row--hint" style="margin:0 0 6px 0;">Placed in this folder when you import.</p>
+                    <p class="meta-row meta-row--hint">Placed in this folder when you import.</p>
                     <div class="prks-combobox-with-action">
                         <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                             <div class="tag-add-shell__field">
@@ -605,7 +605,7 @@ function prksProcessingCardHtml(file) {
                             <input type="hidden" data-role="folder-id" value="">
                             <div class="combobox-results combobox-results--tag-panel hidden" data-role="folder-results"></div>
                         </div>
-                        <button type="button" class="ribbon-btn ribbon-btn--sm" data-action="quick-folder" title="Create new folder" aria-label="Create new folder"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''}</span></button>
+                        <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-action="quick-folder" title="Create new folder" aria-label="Create new folder"><span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''}</span></button>
                     </div>
                 </div>
                 <details class="prks-processing-card__more">
@@ -661,9 +661,9 @@ function prksProcessingCardHtml(file) {
                 </details>
             </div>
             <div class="form-actions prks-processing-card__actions">
-                <button type="button" class="ribbon-btn form-actions__btn form-actions__btn--secondary" data-action="preview"${canPreview ? '' : ' disabled'}>Preview</button>
-                <button type="button" class="ribbon-btn form-actions__btn form-actions__btn--secondary" data-action="save">Save metadata</button>
-                <button type="button" class="add-new-btn form-actions__btn form-actions__btn--primary" data-action="import"${canImport ? '' : ' disabled'}>Import to library</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn form-actions__btn--secondary" data-action="preview"${canPreview ? '' : ' disabled'}>Preview</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn form-actions__btn--secondary" data-action="save">Save metadata</button>
+                <button type="button" class="prks-btn prks-btn--primary add-new-btn form-actions__btn form-actions__btn--primary" data-action="import"${canImport ? '' : ' disabled'}>Import to library</button>
             </div>
             <p class="meta-row prks-processing-card__message" data-role="message" aria-live="polite"></p>
         </article>
@@ -709,19 +709,19 @@ function renderProcessingFilesPage(items, container) {
     const idToFile = new Map(list.map((f) => [String(f.id || ''), f]));
     const cards = visibleList.map(prksProcessingCardHtml).join('');
     container.innerHTML = `
-        <div class="page-header" style="gap:12px;flex-wrap:wrap;">
+        <div class="prks-page-header page-header page-header--split">
             <h2>Files for Processing</h2>
-            <div style="flex:1 1 auto;"></div>
-            <button type="button" class="ribbon-btn" id="prks-processing-refresh">Refresh folder scan</button>
+            <div class="prks-spacer"></div>
+            <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-processing-refresh">Refresh folder scan</button>
         </div>
-        <p class="meta-row" style="margin:0 0 14px 0;">
+        <p class="meta-row meta-row--lede">
             Inbox reads PDFs recursively from <code>/data/for_processing</code>. Files here stay out of library search and graph until imported.
         </p>
         ${remainingCount > 0 ? `<p class="meta-row" id="prks-processing-visible-note">Showing first ${visibleCount} of ${list.length} files to keep page responsive.</p>` : ''}
         <div class="prks-processing-main-layout">
             <div class="list-view prks-processing-main-layout__list" id="prks-processing-list">
                 ${cards || '<p class="meta-row">No PDF files waiting for processing.</p>'}
-                ${remainingCount > 0 ? `<div class="prks-processing-load-more-row"><button type="button" class="ribbon-btn" id="prks-processing-load-more">Load ${Math.min(25, remainingCount)} more</button></div>` : ''}
+                ${remainingCount > 0 ? `<div class="prks-processing-load-more-row"><button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-processing-load-more">Load ${Math.min(25, remainingCount)} more</button></div>` : ''}
             </div>
             <aside class="prks-processing-inline-preview" id="prks-processing-inline-preview">
                 <h3 class="prks-processing-inline-preview__title">PDF Preview</h3>

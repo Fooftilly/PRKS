@@ -1490,14 +1490,20 @@ async function prepareRoleModal() {
     }
 }
 
+function prksSetTabActive(btn, on) {
+    if (!btn || !btn.classList) return;
+    btn.classList.toggle('active', !!on);
+    btn.classList.toggle('is-active', !!on);
+}
+
 function initTabs() {
     const btns = document.querySelectorAll('#right-panel .tabs .tab-btn');
     btns.forEach((btn) => {
         btn.addEventListener('click', (e) => {
             const t = e.target;
             if (!t || !t.classList || !t.classList.contains('tab-btn')) return;
-            btns.forEach((b) => b.classList.remove('active'));
-            t.classList.add('active');
+            btns.forEach((b) => prksSetTabActive(b, false));
+            prksSetTabActive(t, true);
             const target = t.getAttribute('data-target');
             updatePanelContent(target);
         });
@@ -1516,8 +1522,8 @@ function prksSidebarEsc(s) {
 function activateRightPanelDetailsTab() {
     const rp = document.getElementById('right-panel');
     if (!rp) return;
-    rp.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-    rp.querySelector('.tab-btn[data-target="details"]')?.classList.add('active');
+    rp.querySelectorAll('.tab-btn').forEach((b) => prksSetTabActive(b, false));
+    prksSetTabActive(rp.querySelector('.tab-btn[data-target="details"]'), true);
 }
 
 /** Match tab button selection to the panel content. */
@@ -1529,7 +1535,7 @@ function prksSyncRightPanelTabStrip(tabId) {
     const allowed = new Set(visible.map((b) => b.getAttribute('data-target')));
     if (!allowed.has(want)) want = 'details';
     visible.forEach((btn) => {
-        btn.classList.toggle('active', btn.getAttribute('data-target') === want);
+        prksSetTabActive(btn, btn.getAttribute('data-target') === want);
     });
 }
 
@@ -1806,7 +1812,7 @@ function renderRouteContextSidebar(mode) {
                 ${prksRouteSidebarTitleRow('Playlists', 'route-new-playlist', 'How to create a playlist')}
                 <p class="route-sidebar__lede">Ordered collections of videos (courses, lecture series). Open a playlist to reorder items or add new videos.</p>
                 <p class="route-sidebar__action route-sidebar__action--block">
-                    <button type="button" class="add-new-btn route-sidebar__new-playlist-btn" id="prks-create-playlist-btn">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New playlist</button>
+                    <button type="button" class="prks-btn prks-btn--primary add-new-btn route-sidebar__new-playlist-btn" id="prks-create-playlist-btn">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New playlist</button>
                 </p>
             </div>`;
     }
@@ -2070,7 +2076,7 @@ function prksWorkPanelActionsHtml() {
         '<button type="button" class="tab-btn copy-bibtex-btn" aria-live="polite">' +
         (typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : '') +
         ' Copy BibTeX</button>' +
-        '<button type="button" class="ribbon-btn delete-work-btn" title="Delete this file">' +
+        '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn delete-work-btn" title="Delete this file">' +
         (typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : '') +
         ' Delete File</button>' +
         '</div>'
@@ -2254,7 +2260,7 @@ function renderPlaylistSummarySidebarHtml(pl) {
             <div class="doc-meta-card">
                 <div class="card-heading-row">
                     <h3>Playlist</h3>
-                    <button type="button" class="ribbon-btn form-actions__btn" id="prks-playlist-edit-btn">Edit</button>
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-playlist-edit-btn">Edit</button>
                 </div>
                 <p class="card-title">${title}</p>
                 ${desc ? `<p class="meta-row meta-row--compact">${desc}</p>` : '<p class="meta-row meta-row--compact meta-row--muted-italic">No description.</p>'}
@@ -2275,7 +2281,7 @@ function renderPlaylistEditSidebarHtml(pl) {
             <div class="doc-meta-card form-pane doc-meta-card--editing">
                 <div class="card-heading-row">
                     <h3 class="doc-meta-card__accent-title">Edit playlist</h3>
-                    <button type="button" class="close-btn" id="prks-playlist-edit-close" aria-label="Close">&times;</button>
+                    <button type="button" class="prks-icon-btn close-btn" id="prks-playlist-edit-close" aria-label="Close">&times;</button>
                 </div>
                 <label for="prks-playlist-edit-title">Title</label>
                 <input type="text" id="prks-playlist-edit-title" value="${title}" autocomplete="off">
@@ -2283,9 +2289,9 @@ function renderPlaylistEditSidebarHtml(pl) {
                 <textarea id="prks-playlist-edit-desc" class="textarea-sm">${desc}</textarea>
                 <label for="prks-playlist-edit-original-url">Original playlist URL</label>
                 <input type="url" id="prks-playlist-edit-original-url" value="${originalUrl}" placeholder="https://..." autocomplete="off">
-                <div class="form-actions">
-                    <button type="button" class="ribbon-btn form-actions__btn form-actions__btn--secondary" id="prks-playlist-edit-cancel">Cancel</button>
-                    <button type="button" class="add-new-btn form-actions__btn form-actions__btn--primary" id="prks-playlist-edit-save">Save</button>
+                <div class="prks-form-actions form-actions">
+                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn form-actions__btn--secondary" id="prks-playlist-edit-cancel">Cancel</button>
+                    <button type="button" class="prks-btn prks-btn--primary add-new-btn form-actions__btn form-actions__btn--primary" id="prks-playlist-edit-save">Save</button>
                 </div>
                 <p class="meta-row meta-row--spaced" id="prks-playlist-edit-status" aria-live="polite"></p>
             </div>
@@ -2759,7 +2765,7 @@ function renderWorkMetaTab(work, isEditing = false) {
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Title</h3>
-                <button onclick="toggleWorkMetaEdit(true)" class="inline-action-btn">Edit</button>
+                <button onclick="toggleWorkMetaEdit(true)" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn">Edit</button>
             </div>
             <p class="card-title">${escapeHtml(work.title)}</p>
             <div class="card-heading-row card-heading-row--wrap">
@@ -2799,7 +2805,7 @@ function renderWorkMetaTab(work, isEditing = false) {
         <div class="doc-meta-card">
             <div class="card-heading-row card-heading-row--wrap">
                 <h3>Linked Persons</h3>
-                <button type="button" class="work-link-person-btn" onclick="openModal('role-modal')" title="Link a person to this file (search or quick-create)">Link person</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm work-link-person-btn" onclick="openModal('role-modal')" title="Link a person to this file (search or quick-create)">Link person</button>
             </div>
             <div class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work)}</div>
         </div>
@@ -2869,7 +2875,7 @@ function renderFolderDetailsPanel(folder) {
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Hierarchy</h3>
-                <button type="button" class="ribbon-btn form-actions__btn" id="prks-folder-parent-edit-btn" aria-expanded="${
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-folder-parent-edit-btn" aria-expanded="${
                     parentEditing ? 'true' : 'false'
                 }">${parentEditing ? 'Done' : 'Move folder'}</button>
             </div>
@@ -2884,11 +2890,11 @@ function renderFolderDetailsPanel(folder) {
                     <input type="hidden" id="prks-folder-parent-id" value="">
                     <div id="prks-folder-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
-                <div class="prks-work-folder-controls" style="margin-top:10px;">
-                    <button type="button" class="add-new-btn" id="prks-folder-parent-save-btn">Move here</button>
+                <div class="prks-work-folder-controls">
+                    <button type="button" class="prks-btn prks-btn--primary add-new-btn" id="prks-folder-parent-save-btn">Move here</button>
                     ${
                         folder.parent
-                            ? '<button type="button" class="ribbon-btn form-actions__btn" id="prks-folder-parent-top-btn">Make top-level</button>'
+                            ? '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-folder-parent-top-btn">Make top-level</button>'
                             : ''
                     }
                 </div>
@@ -2898,7 +2904,7 @@ function renderFolderDetailsPanel(folder) {
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Folder files</h3>
-                <button type="button" class="ribbon-btn form-actions__btn" id="prks-folder-library-edit-btn">${editLabel}</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-folder-library-edit-btn">${editLabel}</button>
             </div>
             <p class="meta-row">Add existing files from your library.</p>
             ${searchBlock}
@@ -3598,7 +3604,7 @@ function renderWorkMetaEditTab(work) {
         <div class="doc-meta-card form-pane doc-meta-card--editing">
             <div class="card-heading-row">
                 <h3 class="doc-meta-card__accent-title">Edit Metadata</h3>
-                <button onclick="toggleWorkMetaEdit(false)" class="inline-action-btn inline-action-btn--close">&times;</button>
+                <button onclick="toggleWorkMetaEdit(false)" class="prks-icon-btn prks-icon-btn--ghost inline-action-btn inline-action-btn--close">&times;</button>
             </div>
             
             <label for="meta-title">Title</label>
@@ -3641,7 +3647,7 @@ function renderWorkMetaEditTab(work) {
                             <div id="meta-role-person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                         </div>
                     </div>
-                    <button type="button" id="meta-role-add-btn" onclick="addRoleToWorkFromMetaEditor('${work.id}')" class="ribbon-btn">+ Link</button>
+                    <button type="button" id="meta-role-add-btn" onclick="addRoleToWorkFromMetaEditor('${work.id}')" class="prks-btn prks-btn--secondary ribbon-btn">+ Link</button>
                 </div>
                 <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles prks-upload-person-stack__roles--tiles-2row">
                     <div class="prks-upload-role-seg" id="meta-role-seg-mount"></div>
@@ -3650,9 +3656,9 @@ function renderWorkMetaEditTab(work) {
             </div>
             <div id="meta-linked-persons-list" class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work)}</div>
             
-            <div class="form-actions">
-                <button class="ribbon-btn form-actions__btn form-actions__btn--secondary" onclick="toggleWorkMetaEdit(false)">Cancel</button>
-                <button id="inline-save-metadata-btn" class="add-new-btn form-actions__btn form-actions__btn--primary" onclick="submitWorkMetaEdit('${work.id}')">Save Changes</button>
+            <div class="prks-form-actions form-actions">
+                <button class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn form-actions__btn--secondary" onclick="toggleWorkMetaEdit(false)">Cancel</button>
+                <button id="inline-save-metadata-btn" class="prks-btn prks-btn--primary add-new-btn form-actions__btn form-actions__btn--primary" onclick="submitWorkMetaEdit('${work.id}')">Save Changes</button>
             </div>
         </div>
     `;
@@ -3699,9 +3705,9 @@ function renderWorkAnnotationsTab(work) {
                     <label for="pdf-annotation-editor-text">Comment</label>
                     <textarea id="pdf-annotation-editor-text" class="textarea-md" placeholder="Add a note/comment for this annotation…"></textarea>
                     <div class="pdf-annotation-editor__actions">
-                        <button type="button" class="ribbon-btn" onclick="window.closePdfAnnotationEditor && window.closePdfAnnotationEditor()">Cancel</button>
-                        <button type="button" class="ribbon-btn" onclick="window.deletePdfAnnotationFromEditor && window.deletePdfAnnotationFromEditor()">Delete annotation</button>
-                        <button type="button" class="add-new-btn" onclick="window.savePdfAnnotationComment && window.savePdfAnnotationComment()">Save comment</button>
+                        <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" onclick="window.closePdfAnnotationEditor && window.closePdfAnnotationEditor()">Cancel</button>
+                        <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" onclick="window.deletePdfAnnotationFromEditor && window.deletePdfAnnotationFromEditor()">Delete annotation</button>
+                        <button type="button" class="prks-btn prks-btn--primary add-new-btn" onclick="window.savePdfAnnotationComment && window.savePdfAnnotationComment()">Save comment</button>
                     </div>
                 </div>
             </section>

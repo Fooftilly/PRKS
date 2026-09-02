@@ -288,7 +288,7 @@ function prksFolderTreeEmptySearchHtml(filterQuery) {
     return (
         '<div class="prks-folder-tree__empty-state">' +
         '<p class="prks-inline-message prks-folder-tree__empty">No folders match your search.</p>' +
-        `<button type="button" class="add-new-btn prks-folder-tree__create-btn" data-prks-create-folder-query="${attrQ}">Create folder &quot;${label}&quot;</button>` +
+        `<button type="button" class="prks-btn prks-btn--primary add-new-btn prks-folder-tree__create-btn" data-prks-create-folder-query="${attrQ}">Create folder &quot;${label}&quot;</button>` +
         '</div>'
     );
 }
@@ -602,6 +602,7 @@ function prksApplyFolderLibraryTabUi(root, tab) {
         const t = btn.getAttribute('data-tab');
         const on = t === want;
         btn.classList.toggle('active', on);
+        btn.classList.toggle('is-active', on);
         btn.setAttribute('aria-selected', on ? 'true' : 'false');
     });
     const foldersPane = root.querySelector('[data-pane="folders"]');
@@ -657,18 +658,18 @@ function renderDashboard(folders, container) {
     const expandToggleCollapseAll = !prksFolderTreeAllCollapsed(list);
     const toolbarActions = hasCollapsible
         ? `<div class="prks-folder-library__toolbar-actions">
-            <button type="button" id="prks-folder-library-expand-toggle" class="ribbon-btn prks-folder-library__toolbar-btn${expandToggleCollapseAll ? ' is-collapse-all' : ''}" aria-label="${prksFolderEsc(expandToggleLabel)}" title="${prksFolderEsc(expandToggleLabel)}">${expandToggleInner}</button>
+            <button type="button" id="prks-folder-library-expand-toggle" class="prks-btn prks-btn--secondary ribbon-btn prks-folder-library__toolbar-btn${expandToggleCollapseAll ? ' is-collapse-all' : ''}" aria-label="${prksFolderEsc(expandToggleLabel)}" title="${prksFolderEsc(expandToggleLabel)}">${expandToggleInner}</button>
            </div>`
         : '';
     const foldersActive = activeTab !== 'recently-added';
     container.innerHTML = `
         <div class="prks-folder-library">
-        <div class="page-header prks-folder-library__header">
+        <div class="prks-page-header page-header prks-folder-library__header">
             <h2>Folder Library</h2>
         </div>
         <div class="tabs prks-folder-library__tabs" role="tablist" aria-label="Folder library views">
-            <button type="button" class="tab-btn prks-folder-library__tab-btn${foldersActive ? ' active' : ''}" role="tab" data-tab="folders" aria-selected="${foldersActive ? 'true' : 'false'}">Folders</button>
-            <button type="button" class="tab-btn prks-folder-library__tab-btn${foldersActive ? '' : ' active'}" role="tab" data-tab="recently-added" aria-selected="${foldersActive ? 'false' : 'true'}">Recently added</button>
+            <button type="button" class="tab-btn prks-tab prks-folder-library__tab-btn${foldersActive ? ' active is-active' : ''}" role="tab" data-tab="folders" aria-selected="${foldersActive ? 'true' : 'false'}">Folders</button>
+            <button type="button" class="tab-btn prks-tab prks-folder-library__tab-btn${foldersActive ? '' : ' active is-active'}" role="tab" data-tab="recently-added" aria-selected="${foldersActive ? 'false' : 'true'}">Recently added</button>
         </div>
         <div class="prks-folder-library__folders-toolbar${foldersActive ? '' : ' is-hidden'}">
             <div class="tag-add-shell tag-add-shell--flush prks-folder-library__search">
@@ -754,7 +755,7 @@ function renderFolderDetails(folder, container) {
     );
     const subfoldersHtml = subfoldersSorted.length
         ? `
-            <div class="page-header"><h3>Subfolders</h3></div>
+            <div class="prks-page-header page-header"><h3>Subfolders</h3></div>
             <div class="prks-folder-tree prks-folder-tree--detail-subfolders" role="list">
                 ${subfoldersSorted
                     .map((ch) => prksFolderTreeRowHtml(ch, 0, { expandable: false, role: 'listitem' }))
@@ -764,13 +765,13 @@ function renderFolderDetails(folder, container) {
         : '';
 
     container.innerHTML = `
-        <div class="page-header page-header--split">
+        <div class="prks-page-header page-header page-header--split">
             <h2>${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
-            ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="btn-danger-outline">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
+            ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger btn-danger-outline">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
         </div>
         <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
         ${subfoldersHtml}
-        <div class="page-header"><h3>Files</h3></div>
+        <div class="prks-page-header page-header"><h3>Files</h3></div>
         ${worksHtml}
     `;
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
@@ -869,7 +870,7 @@ function renderFolderAttachControlsHtml(work) {
                 <span class="prks-work-folder-summary"${summaryTitleAttr}>
                     ${currentSummary}
                 </span>
-                <button type="button" class="ribbon-btn ribbon-btn--sm form-actions__btn" id="prks-work-folder-edit-btn" aria-expanded="false">Edit</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm form-actions__btn" id="prks-work-folder-edit-btn" aria-expanded="false">Edit</button>
             </div>
         </div>
     `;
@@ -879,7 +880,7 @@ function renderFolderAttachControlsHtml(work) {
         <div class="doc-meta-card prks-work-folder-card">
             <div class="card-heading-row">
                 <h3>Folder</h3>
-                <button type="button" class="ribbon-btn ribbon-btn--sm form-actions__btn" id="prks-work-folder-edit-btn" aria-expanded="true">Done</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm form-actions__btn" id="prks-work-folder-edit-btn" aria-expanded="true">Done</button>
             </div>
             <p class="meta-row meta-row--spaced">${currentLineExpanded}</p>
             <div class="tag-add-shell combobox-container">
@@ -891,9 +892,9 @@ function renderFolderAttachControlsHtml(work) {
                 <div id="prks-work-folder-results" class="combobox-results combobox-results--tag-panel hidden"></div>
             </div>
             <div class="prks-work-folder-controls">
-                <button type="button" class="add-new-btn" id="prks-work-folder-set-btn">Set folder</button>
-                <button type="button" class="ribbon-btn form-actions__btn" id="prks-work-folder-clear-btn">Clear</button>
-                <button type="button" class="ribbon-btn form-actions__btn" id="prks-work-folder-new-btn">New...</button>
+                <button type="button" class="prks-btn prks-btn--primary add-new-btn" id="prks-work-folder-set-btn">Set folder</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-work-folder-clear-btn">Clear</button>
+                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-work-folder-new-btn">New...</button>
             </div>
             <p id="prks-work-folder-status" class="meta-row meta-row--spaced" aria-live="polite"></p>
         </div>

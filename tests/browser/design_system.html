@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#6d6cf7">
+    <title>PRKS design system</title>
+    <link rel="stylesheet" href="/frontend/vendor/inter/inter.css">
+    <link rel="stylesheet" href="/frontend/css/style.css">
+    <style>
+        /* Fixture chrome only: layout of the gallery page, not a second design system. */
+        html, body { height: auto; overflow: auto; }
+        body.prks-gallery {
+            display: block;
+            margin: 0;
+            padding: var(--space-lg);
+            background: var(--bg-color);
+            color: var(--text-primary);
+        }
+        .prks-gallery__wrap {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-2xl);
+        }
+        .prks-gallery__section {
+            border: 1px solid var(--border);
+            background: var(--surface);
+            padding: var(--space-md);
+        }
+        .prks-gallery__section h2 {
+            font-size: var(--text-lg);
+            font-weight: var(--weight-bold);
+            margin: 0 0 var(--space-md);
+            padding-bottom: var(--space-xs);
+            border-bottom: 1px solid var(--border);
+        }
+        .prks-gallery__swatch-row { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+        .prks-gallery__swatch {
+            width: 96px;
+            min-height: 56px;
+            padding: var(--space-xs);
+            border: 1px solid var(--border);
+            font-size: var(--text-2xs);
+            color: var(--text-secondary);
+        }
+        .prks-gallery__demo-tile {
+            min-height: 72px;
+            container-type: inline-size;
+        }
+        .prks-gallery-nav { display: flex; flex-wrap: wrap; gap: var(--space-xs); font-size: var(--text-xs); }
+        .prks-gallery-nav a { color: var(--accent); }
+    </style>
+</head>
+<body class="prks-gallery">
+    <div class="prks-gallery__wrap">
+        <header class="prks-page-header">
+            <div class="prks-page-header__title-row">
+                <h1 class="prks-page-title">PRKS design system</h1>
+            </div>
+            <div class="prks-page-header__actions prks-cluster">
+                <a class="prks-btn prks-btn--ghost prks-btn--sm" href="?theme=light">Light</a>
+                <a class="prks-btn prks-btn--ghost prks-btn--sm" href="?theme=dark">Dark</a>
+            </div>
+        </header>
+        <p class="prks-field__help">Production classes from <code>frontend/css/style.css</code>. Authority: <code>DESIGN.md</code>. Serve with <code>python tests/browser/serve.py</code>.</p>
+        <nav class="prks-gallery-nav" aria-label="Specimen sections">
+            <a href="#typography">Typography</a>
+            <a href="#surfaces">Surfaces</a>
+            <a href="#buttons">Buttons</a>
+            <a href="#icon-buttons">Icon buttons</a>
+            <a href="#fields">Fields</a>
+            <a href="#segmented">Segmented</a>
+            <a href="#tabs">Local tabs</a>
+            <a href="#cards">Cards</a>
+            <a href="#rows">List rows</a>
+            <a href="#tags">Tags</a>
+            <a href="#chips">Chips</a>
+            <a href="#badges">Badges</a>
+            <a href="#status">Status</a>
+            <a href="#nav">Navigation</a>
+            <a href="#page-header">Page header</a>
+            <a href="#toolbar">Toolbar</a>
+            <a href="#panels">Panels</a>
+            <a href="#states">Empty/loading/error</a>
+            <a href="#dialogs">Dialogs</a>
+            <a href="#workspace">Workspace (future)</a>
+        </nav>
+
+        <section class="prks-gallery__section" id="typography" data-gallery-section="typography">
+            <h2>Typography</h2>
+            <p style="font-size:var(--text-xl);font-weight:var(--weight-bold);">Page title text-xl 700</p>
+            <p style="font-size:var(--text-lg);font-weight:var(--weight-semibold);">Section title text-lg 600</p>
+            <p style="font-size:var(--text-md);font-weight:var(--weight-semibold);">Card title text-md 600</p>
+            <p style="font-size:var(--text-md);font-weight:var(--weight-normal);">Normal UI copy text-md 400</p>
+            <p class="meta-row" style="font-size:var(--text-sm);color:var(--text-secondary);">Metadata text-sm secondary</p>
+            <p class="prks-field__label">Field label text-xs 600</p>
+        </section>
+
+        <section class="prks-gallery__section" id="surfaces" data-gallery-section="surfaces">
+            <h2>Color / surface hierarchy</h2>
+            <div class="prks-gallery__swatch-row">
+                <div class="prks-gallery__swatch" style="background:var(--bg-color)">bg-color</div>
+                <div class="prks-gallery__swatch" style="background:var(--surface)">surface</div>
+                <div class="prks-gallery__swatch" style="background:var(--surface-muted)">surface-muted</div>
+                <div class="prks-gallery__swatch" style="background:var(--surface-inset)">surface-inset</div>
+                <div class="prks-gallery__swatch" style="background:var(--surface-selected)">surface-selected</div>
+                <div class="prks-gallery__swatch" style="background:var(--sidebar-bg)">sidebar-bg</div>
+                <div class="prks-gallery__swatch" style="background:var(--accent);color:var(--text-inverse)">accent</div>
+                <div class="prks-gallery__swatch" style="background:var(--danger);color:var(--text-inverse)">danger</div>
+                <div class="prks-gallery__swatch" style="background:var(--success);color:var(--text-inverse)">success</div>
+                <div class="prks-gallery__swatch" style="background:var(--warning);color:var(--text-inverse)">warning</div>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="buttons" data-gallery-section="buttons">
+            <h2>Buttons</h2>
+            <div class="prks-cluster">
+                <button type="button" class="prks-btn prks-btn--primary">Primary</button>
+                <button type="button" class="prks-btn prks-btn--secondary">Secondary</button>
+                <button type="button" class="prks-btn prks-btn--ghost">Ghost</button>
+                <button type="button" class="prks-btn prks-btn--danger">Danger</button>
+                <button type="button" class="prks-btn prks-btn--primary" disabled>Disabled</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm">Small</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--lg">Large</button>
+                <button type="button" class="prks-btn prks-btn--secondary"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i> With icon</button>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="icon-buttons" data-gallery-section="icon-buttons">
+            <h2>Icon buttons</h2>
+            <div class="prks-cluster">
+                <button type="button" class="prks-icon-btn" aria-label="Settings"><i data-lucide="settings" class="prks-icon" aria-hidden="true"></i></button>
+                <button type="button" class="prks-icon-btn prks-icon-btn--ghost" aria-label="Close"><i data-lucide="x" class="prks-icon" aria-hidden="true"></i></button>
+                <button type="button" class="prks-icon-btn prks-icon-btn--danger" aria-label="Delete"><i data-lucide="trash-2" class="prks-icon" aria-hidden="true"></i></button>
+                <button type="button" class="prks-icon-btn prks-icon-btn--sm" aria-label="Small"><i data-lucide="menu" class="prks-icon prks-icon--sm" aria-hidden="true"></i></button>
+                <button type="button" class="prks-icon-btn prks-icon-btn--lg" aria-label="Large"><i data-lucide="info" class="prks-icon" aria-hidden="true"></i></button>
+                <button type="button" class="prks-icon-btn" disabled aria-label="Disabled"><i data-lucide="settings" class="prks-icon" aria-hidden="true"></i></button>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="fields" data-gallery-section="fields">
+            <h2>Inputs / selects / textareas</h2>
+            <div class="prks-stack">
+                <div class="prks-field">
+                    <label class="prks-field__label" for="g-input">Label</label>
+                    <input class="prks-input" id="g-input" value="Normal field">
+                    <p class="prks-field__help">Help text uses secondary color.</p>
+                </div>
+                <div class="prks-field prks-field--error">
+                    <label class="prks-field__label" for="g-err">Error</label>
+                    <input class="prks-input" id="g-err" aria-invalid="true" value="Invalid">
+                    <p class="prks-field__error">Validation message.</p>
+                </div>
+                <div class="prks-field">
+                    <label class="prks-field__label" for="g-select">Select</label>
+                    <select class="prks-select" id="g-select"><option>Option A</option><option>Option B</option></select>
+                </div>
+                <div class="prks-field">
+                    <label class="prks-field__label" for="g-ta">Textarea</label>
+                    <textarea class="prks-textarea" id="g-ta" rows="3">Multiline</textarea>
+                </div>
+                <div class="prks-form-actions">
+                    <button type="button" class="prks-btn prks-btn--secondary">Cancel</button>
+                    <button type="button" class="prks-btn prks-btn--primary">Save</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="segmented" data-gallery-section="segmented">
+            <h2>Segmented controls</h2>
+            <div class="prks-segmented" role="group" aria-label="View">
+                <button type="button" class="prks-segmented__btn is-active">List</button>
+                <button type="button" class="prks-segmented__btn">Grid</button>
+                <button type="button" class="prks-segmented__btn">Tree</button>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="tabs" data-gallery-section="tabs">
+            <h2>Local tabs</h2>
+            <div class="prks-tabs" role="tablist">
+                <button type="button" class="prks-tab is-active" role="tab" aria-selected="true">Details</button>
+                <button type="button" class="prks-tab" role="tab" aria-selected="false">Annotations</button>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="cards" data-gallery-section="cards">
+            <h2>Cards</h2>
+            <div class="prks-card">
+                <strong>Card title</strong>
+                <p class="meta-row">Metadata · 12 items</p>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="rows" data-gallery-section="rows">
+            <h2>List rows</h2>
+            <div class="prks-list-row">Unselected row</div>
+            <div class="prks-list-row is-selected">Selected row</div>
+        </section>
+
+        <section class="prks-gallery__section" id="tags" data-gallery-section="tags">
+            <h2>Tags</h2>
+            <div class="prks-cluster">
+                <span class="prks-tag">epistemology</span>
+                <span class="prks-tag prks-tag--accent" style="--tag-accent:#16a34a">domain color</span>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="chips" data-gallery-section="chips">
+            <h2>Chips</h2>
+            <span class="prks-chip">Frankfurt School <button type="button" class="prks-chip__remove" aria-label="Remove">&times;</button></span>
+        </section>
+
+        <section class="prks-gallery__section" id="badges" data-gallery-section="badges">
+            <h2>Badges</h2>
+            <div class="prks-cluster">
+                <span class="prks-badge prks-badge--neutral">neutral</span>
+                <span class="prks-badge" style="--doc-type-color:#a855f7">Book</span>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="status" data-gallery-section="status">
+            <h2>Status states</h2>
+            <div class="prks-stack">
+                <span class="prks-status"><span class="prks-status__dot" aria-hidden="true"></span> Neutral</span>
+                <span class="prks-status prks-status--success"><span class="prks-status__dot" aria-hidden="true"></span> Saved</span>
+                <span class="prks-status prks-status--warning"><span class="prks-status__dot" aria-hidden="true"></span> Warning</span>
+                <span class="prks-status prks-status--danger"><span class="prks-status__dot" aria-hidden="true"></span> Error</span>
+                <span class="prks-op-offline"><span class="prks-status__dot" aria-hidden="true"></span> Offline</span>
+                <span class="prks-op-stale"><span class="prks-status__dot" aria-hidden="true"></span> Stale</span>
+                <span class="prks-op-queued"><span class="prks-status__dot" aria-hidden="true"></span> 3 changes queued</span>
+                <span class="prks-op-syncing"><span class="prks-status__dot" aria-hidden="true"></span> Syncing…</span>
+                <span class="prks-op-conflict"><span class="prks-status__dot" aria-hidden="true"></span> Conflict</span>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="nav" data-gallery-section="nav">
+            <h2>Navigation items</h2>
+            <ul class="nav-menu" style="max-width:250px;border:1px solid var(--border);padding:var(--space-sm);background:var(--sidebar-bg)">
+                <li class="nav-section">Library</li>
+                <li><a href="#typography" class="nav-link active"><span class="nav-link__label">Folders</span></a></li>
+                <li><a href="#typography" class="nav-link"><span class="nav-link__label">Recent</span></a></li>
+            </ul>
+        </section>
+
+        <section class="prks-gallery__section" id="page-header" data-gallery-section="page-header">
+            <h2>Page header</h2>
+            <div class="prks-page-header">
+                <div class="prks-page-header__context"><a href="#typography" class="prks-nav-back">Back to Folders</a></div>
+                <div class="prks-page-header__title-row">
+                    <h3 class="prks-page-title">People</h3>
+                    <span class="meta-row">128</span>
+                </div>
+                <div class="prks-page-header__actions">
+                    <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm">Select</button>
+                    <button type="button" class="prks-btn prks-btn--primary prks-btn--sm">New</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="toolbar" data-gallery-section="toolbar">
+            <h2>Toolbar</h2>
+            <div class="prks-toolbar">
+                <input class="prks-input" style="max-width:16rem" placeholder="Filter…">
+                <button type="button" class="prks-btn prks-btn--ghost prks-btn--sm">Clear</button>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="panels" data-gallery-section="panels">
+            <h2>Panels</h2>
+            <div class="prks-panel">
+                <div class="prks-panel__header">Details</div>
+                <div class="prks-panel__body"><p class="meta-row">Grouped metadata.</p></div>
+                <div class="prks-panel__footer"><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm">Edit</button></div>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="states" data-gallery-section="states">
+            <h2>Empty / loading / error</h2>
+            <div class="prks-state prks-state--empty">
+                <p class="prks-state__heading">No tags yet</p>
+                <p class="prks-state__body">Create a tag from the ribbon, or add one on a file.</p>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm">New tag</button>
+            </div>
+            <div class="prks-state prks-state--loading">
+                <p class="prks-state__heading">Loading</p>
+                <p class="prks-state__body">Loading view…</p>
+            </div>
+            <div class="prks-state prks-state--error">
+                <p class="prks-state__heading">Could not load</p>
+                <p class="prks-state__body">The view failed. Try again.</p>
+            </div>
+            <div class="prks-state prks-state--warning">
+                <p class="prks-state__heading">Partial result</p>
+                <p class="prks-state__body">Some items could not be listed.</p>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="dialogs" data-gallery-section="dialogs">
+            <h2>Modal / confirmation panels</h2>
+            <div class="prks-dialog" style="max-width:420px">
+                <div class="prks-dialog__header">
+                    <h3 class="prks-dialog__title">Close without saving?</h3>
+                    <button type="button" class="prks-icon-btn" aria-label="Close"><i data-lucide="x" class="prks-icon" aria-hidden="true"></i></button>
+                </div>
+                <div class="prks-dialog__body">
+                    <p class="prks-field__help">Unsaved confirm uses the same dialog family as Settings.</p>
+                    <div class="prks-dialog__actions">
+                        <button type="button" class="prks-btn prks-btn--secondary">Cancel</button>
+                        <button type="button" class="prks-btn prks-btn--danger">Close without saving</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="workspace" data-gallery-section="workspace">
+            <h2>Future workspace tabs / tiles / splitter</h2>
+            <p class="prks-field__help">Static specimens only. No workspace navigation.</p>
+            <div class="prks-workspace-tabs">
+                <span class="prks-workspace-tab is-main">Work A</span>
+                <span class="prks-workspace-tab">Concept B</span>
+                <span class="prks-workspace-tab is-parked">Search</span>
+            </div>
+            <div class="prks-row" style="align-items:stretch;min-height:120px;margin-top:var(--space-md)">
+                <div class="prks-tile prks-tile--main prks-gallery__demo-tile" style="flex:1">
+                    <div class="prks-tile-header">Main tile</div>
+                </div>
+                <div class="prks-splitter prks-splitter--vertical" role="separator" aria-orientation="vertical" tabindex="0"></div>
+                <div class="prks-tile prks-tile--secondary prks-tile--focused prks-gallery__demo-tile" style="flex:0 0 40%">
+                    <div class="prks-tile-header">Focused secondary</div>
+                </div>
+            </div>
+        </section>
+    </div>
+    <script src="/frontend/vendor/lucide/lucide.min.js"></script>
+    <script>
+    (function () {
+        var params = new URLSearchParams(location.search);
+        var theme = params.get('theme');
+        if (theme === 'light' || theme === 'dark') {
+            document.documentElement.setAttribute('data-theme', theme);
+        }
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+        }
+    })();
+    </script>
+</body>
+</html>
