@@ -793,6 +793,42 @@ async function renderWorkDetails(work, container, routeGen) {
         .catch((err) => console.error('related folders fetch failed', err));
 }
 
+/** EasyMDE toolbar uses Font Awesome class names; PRKS does not load that webfont. Map buttons to Lucide. */
+const PRKS_EASYMDE_TOOLBAR_ICONS = {
+    bold: 'bold',
+    italic: 'italic',
+    heading: 'heading',
+    quote: 'quote',
+    'unordered-list': 'list',
+    'ordered-list': 'list-ordered',
+    link: 'link',
+    image: 'image',
+    'prks-insert-concept': 'lightbulb',
+    'prks-insert-argument': 'message-square',
+    preview: 'eye',
+    'side-by-side': 'columns-2',
+    fullscreen: 'maximize-2',
+    'prks-notes-help': 'circle-help',
+};
+
+function prksPaintEasyMDEToolbarIcons(toolbar) {
+    if (!toolbar) return;
+    toolbar.querySelectorAll('button').forEach((btn) => {
+        const el = btn.querySelector('i:not(.separator)');
+        if (!el || el.getAttribute('data-lucide') || el.querySelector('svg, [data-lucide]')) return;
+        let lucideName = '';
+        btn.classList.forEach((cls) => {
+            if (!lucideName && PRKS_EASYMDE_TOOLBAR_ICONS[cls]) {
+                lucideName = PRKS_EASYMDE_TOOLBAR_ICONS[cls];
+            }
+        });
+        if (!lucideName) return;
+        el.setAttribute('data-lucide', lucideName);
+        el.classList.add('prks-icon', 'prks-icon--sm');
+    });
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(toolbar);
+}
+
 function initEasyMDE(work) {
     const titleLowerToId = window.__prksWikiTitleMap || {};
     const prksNotesHelpHtml = `
@@ -922,6 +958,9 @@ function initEasyMDE(work) {
 
     window.workNotesEasyMDE = easyMDE;
     prksAttachWikiLinkAutocomplete(easyMDE.codemirror);
+    prksPaintEasyMDEToolbarIcons(
+        document.querySelector('.work-notes-editor-wrap .editor-toolbar')
+    );
 
     const wrap = document.querySelector('.work-notes-editor-wrap');
     if (wrap) {

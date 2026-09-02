@@ -275,6 +275,63 @@ class DesignSystemContractTests(unittest.TestCase):
         self.assertGreater(danger_pos, 0)
         self.assertNotIn("background: var(--accent)", css[danger_pos : danger_pos + 220])
 
+    def test_work_delete_uses_canonical_danger(self):
+        ui = _read(os.path.join(_FRONTEND_JS, "ui.js"))
+        self.assertIn('class="prks-btn prks-btn--danger delete-work-btn"', ui)
+        self.assertNotIn("prks-btn--secondary delete-work-btn", ui)
+        css = _read(_CSS)
+        self.assertNotIn(".delete-work-btn", css)
+        self.assertNotIn("#ef4444", css.split(".prks-btn--danger {", 1)[-1][:800])
+
+    def test_annotation_sync_dots_use_semantic_tokens(self):
+        css = _read(_CSS)
+        saved = css.split(".work-annotation-sync-status--saved::before {", 1)
+        self.assertEqual(len(saved), 2)
+        saved_body = saved[1].split("}", 1)[0]
+        self.assertIn("var(--success)", saved_body)
+        self.assertNotIn("#16a34a", saved_body)
+        err = css.split(".work-annotation-sync-status--error::before {", 1)
+        self.assertEqual(len(err), 2)
+        err_body = err[1].split("}", 1)[0]
+        self.assertIn("var(--danger)", err_body)
+        self.assertNotIn("#dc2626", err_body)
+        saving = css.split(".work-annotation-sync-status--saving::before {", 1)[1].split("}", 1)[0]
+        self.assertIn("var(--accent)", saving)
+
+    def test_easymde_toolbar_icons_use_lucide_not_font_awesome(self):
+        works = _read(os.path.join(_FRONTEND_JS, "components", "works.js"))
+        self.assertIn("autoDownloadFontAwesome: false", works)
+        self.assertIn("prksPaintEasyMDEToolbarIcons", works)
+        self.assertIn("PRKS_EASYMDE_TOOLBAR_ICONS", works)
+        self.assertIn("preview: 'eye'", works)
+        self.assertIn("fullscreen: 'maximize-2'", works)
+        self.assertIn("'prks-insert-concept': 'lightbulb'", works)
+        self.assertIn("'prks-insert-argument': 'message-square'", works)
+        self.assertIn("'prks-notes-help': 'circle-help'", works)
+        index = _read(_INDEX).lower()
+        self.assertNotIn("font-awesome", index)
+        self.assertNotIn("fontawesome", index)
+
+    def test_section_13_is_third_party_integrations(self):
+        css = _read(_CSS)
+        start = css.find("/* 13 Third-party integrations */")
+        end = css.find("/* 14 Responsive / container rules */")
+        self.assertGreater(start, 0)
+        self.assertGreater(end, start)
+        block = css[start:end]
+        self.assertIn("EasyMDE", block)
+        self.assertIn("CodeMirror", block)
+        for banned in (
+            ".right-panel-stack",
+            ".right-panel-work-actions",
+            ".route-sidebar__",
+            ".delete-work-btn",
+            ".work-tags-list",
+            ".tag-add-shell {",
+            "#right-panel",
+        ):
+            self.assertNotIn(banned, block, banned)
+
 
 if __name__ == "__main__":
     unittest.main()

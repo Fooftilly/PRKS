@@ -1276,7 +1276,7 @@ body {
 
 .sidebar-header h2 {
     font-size: var(--text-lg);
-    font-weight: 700;
+    font-weight: var(--weight-bold);
     line-height: 1.1;
 }
 .sidebar-header p {
@@ -4176,8 +4176,8 @@ body {
 }
 
 .annotations-tab__title {
-    font-size: 0.86rem;
-    font-weight: 700;
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
     margin: 0;
     flex: 1;
     min-width: 0;
@@ -4522,15 +4522,18 @@ body {
     display: flex; justify-content: space-between; align-items: center;
     padding: var(--space-xl) var(--space-2xl); border-bottom: 1px solid var(--border);
 }
-.modal-header h3 { font-size: 1.2rem; font-weight: 600; }
+.modal-header h3 {
+    font-size: var(--text-xl);
+    font-weight: var(--weight-semibold);
+}
 .close-btn { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary); transition: var(--transition); }
 .close-btn:hover { color: var(--accent); }
 .modal-body { padding: var(--space-2xl); }
 .modal-helper {
     font-size: var(--text-sm);
     color: var(--text-secondary);
-    line-height: 1.45;
-    margin: 0 0 12px 0;
+    line-height: var(--line-normal);
+    margin: 0 0 var(--space-md);
 }
 
 /* Stacked confirm dialogs (above .modal, below dropdowns) */
@@ -6629,7 +6632,7 @@ html.prks-work-notes-mobile-side .document-view--work .work-notes-toggle-btn[ari
     align-items: center;
     gap: var(--space-sm);
     font-size: var(--text-2xs);
-    line-height: 1.2;
+    line-height: var(--line-compact);
     color: var(--text-secondary);
     white-space: nowrap;
 }
@@ -6654,11 +6657,11 @@ html.prks-work-notes-mobile-side .document-view--work .work-notes-toggle-btn[ari
 }
 
 .document-view--work .work-annotation-sync-status--saved::before {
-    background: #16a34a;
+    background: var(--success);
 }
 
 .document-view--work .work-annotation-sync-status--error::before {
-    background: #dc2626;
+    background: var(--danger);
 }
 
 @keyframes prks-ann-sync-pulse {
@@ -6875,8 +6878,8 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
 }
 
 .doc-meta-card h3 {
-    font-size: 0.86rem;
-    font-weight: 700;
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
 }
 
 /* Person profile right panel: match stacked primary actions (full width, centered label). */
@@ -6951,9 +6954,9 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     align-items: center;
     justify-content: space-between;
     gap: var(--space-sm);
-    margin: 0 0 8px 0;
-    font-size: 0.86rem;
-    font-weight: 700;
+    margin: 0 0 var(--space-sm);
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
     color: var(--text-primary);
 }
 
@@ -7020,120 +7023,24 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     overflow: hidden;
 }
 
-/* 13 Third-party integrations */
-/* EasyMDE: work detail only (single block, flush in notes pane) */
-.document-view--work .work-notes-editor-wrap .EasyMDEContainer {
-    border: none;
-    border-radius: 0;
-    background: transparent;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-}
-
-.document-view--work .work-notes-editor-wrap .editor-toolbar {
-    border: none;
-    border-bottom: 1px solid var(--border);
-    border-radius: 0;
-    background: var(--surface-muted);
-    flex-shrink: 0;
-}
-
-.document-view--work .work-notes-editor-wrap .editor-toolbar button {
-    border-radius: 0 !important;
-}
-
-.document-view--work .work-notes-editor-wrap .CodeMirror {
-    border: none;
-    border-radius: 0;
-    font-family: 'Inter', sans-serif;
-    font-size: 0.95rem;
-    flex: 1 !important;
-    min-height: 0 !important;
-    height: auto !important;
-}
-
-.document-view--work .work-notes-editor-wrap .CodeMirror-wrap {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
-.document-view--work .work-notes-editor-wrap .CodeMirror-scroll {
-    min-height: 0;
-    flex: 1;
-}
-
-.document-view--work .work-notes-editor-wrap .editor-statusbar {
-    border: none;
-    border-top: 1px solid var(--border);
-    border-radius: 0;
-    flex-shrink: 0;
-}
-
-/* CodeMirror wiki [[…]] autocomplete (addon appends to body; raise above EasyMDE fullscreen) */
-.CodeMirror-hints {
-    z-index: 10050;
-    font-family: var(--font-family);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-    box-shadow: none;
-}
-
-:root[data-theme="dark"] .CodeMirror-hints {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text-primary);
-}
-
-:root[data-theme="dark"] .CodeMirror-hint {
-    color: var(--text-primary);
-}
-
-:root[data-theme="dark"] li.CodeMirror-hint-active {
-    background: var(--accent);
-    color: #f8fafc;
-}
-
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .CodeMirror-hints {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        color: var(--text-primary);
-    }
-
-    :root:not([data-theme="light"]) .CodeMirror-hint {
-        color: var(--text-primary);
-    }
-
-    :root:not([data-theme="light"]) li.CodeMirror-hint-active {
-        background: var(--accent);
-        color: #f8fafc;
-    }
-}
-
 /* Work / folder tag controls (details panel & folder page) */
 .work-tags-list {
     flex-wrap: wrap;
-    gap: 6px;
+    gap: var(--space-sm);
     align-items: center;
 }
 
 .work-tags-empty {
     color: var(--text-tertiary);
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
     font-style: italic;
 }
 
 .work-tag-chip {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding-right: 4px;
+    gap: var(--space-xs);
+    padding-right: var(--space-xs);
 }
 
 .work-tag-remove {
@@ -7141,7 +7048,7 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     border: none;
     color: var(--text-secondary);
     cursor: pointer;
-    font-size: 1rem;
+    font-size: var(--text-lg);
     line-height: 1;
     padding: 0 2px;
     border-radius: var(--radius-sm);
@@ -7153,15 +7060,15 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
 }
 
 .work-tag-controls {
-    margin-top: 12px;
+    margin-top: var(--space-md);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-sm);
 }
 
 .work-tag-controls__label {
-    font-size: 0.72rem;
-    font-weight: 600;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
     color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.03em;
@@ -7169,7 +7076,7 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
 
 .work-tag-controls__row {
     display: flex;
-    gap: 8px;
+    gap: var(--space-sm);
     align-items: center;
     flex-wrap: wrap;
 }
@@ -7178,13 +7085,13 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
 .work-tag-input {
     flex: 1;
     min-width: 120px;
-    padding: 8px 10px;
+    padding: var(--space-sm) var(--space-sm);
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--surface-muted);
     color: var(--text-primary);
     font-family: var(--font-family);
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
 }
 
 .work-tag-add-btn {
@@ -7194,9 +7101,9 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
 
 /* Tag add field (details panel): one shell, inline dropdown so it isn’t clipped by panel scroll */
 .tag-add-field__caption {
-    margin: 12px 0 6px;
-    font-size: 0.8rem;
-    font-weight: 600;
+    margin: var(--space-md) 0 var(--space-sm);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
     color: var(--text-secondary);
     letter-spacing: 0.01em;
 }
@@ -7217,8 +7124,8 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
 .tag-add-shell__field {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 0 12px;
+    gap: var(--space-sm);
+    padding: 0 var(--space-md);
     min-height: 42px;
     background: var(--surface-muted);
 }
@@ -7257,7 +7164,7 @@ button.tag-add-shell__icon:focus-visible {
     background: transparent;
     padding: 10px 0;
     font-family: var(--font-family);
-    font-size: 0.88rem;
+    font-size: var(--text-md);
     color: var(--text-primary);
     outline: none;
     white-space: nowrap;
@@ -7340,16 +7247,16 @@ button.tag-add-shell__icon:focus-visible {
 }
 
 .combobox-results.combobox-results--tag-panel .result-item {
-    padding-left: 12px;
-    padding-right: 12px;
+    padding-left: var(--space-md);
+    padding-right: var(--space-md);
 }
 
 .combobox-results.combobox-results--tag-panel .result-item:first-child {
-    padding-top: 8px;
+    padding-top: var(--space-sm);
 }
 
 .combobox-results.combobox-results--tag-panel .result-item:last-child {
-    padding-bottom: 8px;
+    padding-bottom: var(--space-sm);
 }
 
 .combobox-results .result-item--create {
@@ -7358,7 +7265,194 @@ button.tag-add-shell__icon:focus-visible {
 }
 
 .folder-tags-block h3 {
-    margin-bottom: 8px;
+    margin-bottom: var(--space-sm);
+}
+
+.right-panel-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.right-panel-work-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+    align-items: center;
+}
+
+.right-panel-work-actions .copy-bibtex-btn {
+    font-size: var(--text-xs);
+    padding: 6px 10px;
+}
+
+/* List routes: hide tab strip — single contextual pane */
+#right-panel.right-panel--single-pane .tabs {
+    display: none;
+}
+
+/* Route-aware right column (library, people, search, etc.) */
+.route-sidebar__title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    margin: 0 0 var(--space-sm);
+}
+
+.route-sidebar__title-row .route-sidebar__title {
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+}
+
+.route-sidebar__title {
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    margin: 0 0 var(--space-sm);
+    color: var(--text-primary);
+}
+
+.route-sidebar__hint-btn {
+    width: 1.35rem;
+    height: 1.35rem;
+}
+.route-sidebar__lede {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    line-height: var(--line-reading);
+    margin: 0 0 var(--space-md);
+}
+.route-sidebar__meta {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    margin: 0 0 var(--space-md);
+}
+.route-sidebar__action {
+    margin: 0 0 var(--space-sm);
+}
+.route-sidebar__action--block {
+    margin-top: var(--space-xs);
+    margin-bottom: 0;
+}
+.route-sidebar__new-playlist-btn {
+    margin-top: 0;
+}
+.route-sidebar__link {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--accent);
+    text-decoration: none;
+}
+.route-sidebar__link:hover {
+    text-decoration: underline;
+}
+
+/* 13 Third-party integrations */
+/* EasyMDE: work detail only (single block, flush in notes pane) */
+.document-view--work .work-notes-editor-wrap .EasyMDEContainer {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.document-view--work .work-notes-editor-wrap .editor-toolbar {
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--surface-muted);
+    flex-shrink: 0;
+}
+
+.document-view--work .work-notes-editor-wrap .editor-toolbar button {
+    border-radius: 0 !important;
+    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.document-view--work .work-notes-editor-wrap .editor-toolbar button i:not(.separator) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-style: normal;
+}
+
+.document-view--work .work-notes-editor-wrap .CodeMirror {
+    border: none;
+    border-radius: 0;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.95rem;
+    flex: 1 !important;
+    min-height: 0 !important;
+    height: auto !important;
+}
+
+.document-view--work .work-notes-editor-wrap .CodeMirror-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.document-view--work .work-notes-editor-wrap .CodeMirror-scroll {
+    min-height: 0;
+    flex: 1;
+}
+
+.document-view--work .work-notes-editor-wrap .editor-statusbar {
+    border: none;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    flex-shrink: 0;
+}
+
+/* CodeMirror wiki [[…]] autocomplete (addon appends to body; raise above EasyMDE fullscreen) */
+.CodeMirror-hints {
+    z-index: 10050;
+    font-family: var(--font-family);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    box-shadow: none;
+}
+
+:root[data-theme="dark"] .CodeMirror-hints {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .CodeMirror-hint {
+    color: var(--text-primary);
+}
+
+:root[data-theme="dark"] li.CodeMirror-hint-active {
+    background: var(--accent);
+    color: #f8fafc;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .CodeMirror-hints {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text-primary);
+    }
+
+    :root:not([data-theme="light"]) .CodeMirror-hint {
+        color: var(--text-primary);
+    }
+
+    :root:not([data-theme="light"]) li.CodeMirror-hint-active {
+        background: var(--accent);
+        color: #f8fafc;
+    }
 }
 
 /* Wiki links in EasyMDE preview */
@@ -7393,117 +7487,6 @@ button.tag-add-shell__icon:focus-visible {
 .editor-preview .wiki-link-pdf-ann:hover {
     text-decoration: underline;
     border-bottom-color: transparent;
-}
-
-.right-panel-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.right-panel-work-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-}
-
-.right-panel-work-actions .copy-bibtex-btn {
-    font-size: 0.78rem;
-    padding: 6px 10px;
-}
-
-.right-panel-work-actions .delete-work-btn {
-    background: transparent;
-    color: #ef4444;
-    border-color: #ef4444;
-    font-size: 0.78rem;
-    padding: 6px 10px;
-    font-weight: 500;
-}
-
-/* List routes: hide tab strip — single contextual pane */
-#right-panel.right-panel--single-pane .tabs {
-    display: none;
-}
-
-/* Route-aware right column (library, people, search, etc.) */
-.route-sidebar__title-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin: 0 0 10px 0;
-}
-
-.route-sidebar__title-row .route-sidebar__title {
-    margin: 0;
-    flex: 1;
-    min-width: 0;
-}
-
-.route-sidebar__title {
-    font-size: 1rem;
-    font-weight: 600;
-    margin: 0 0 10px 0;
-    color: var(--text-primary);
-}
-
-.route-sidebar__hint-btn {
-    width: 1.35rem;
-    height: 1.35rem;
-}
-.route-sidebar__lede {
-    font-size: 0.82rem;
-    color: var(--text-secondary);
-    line-height: 1.5;
-    margin: 0 0 12px 0;
-}
-.route-sidebar__meta {
-    font-size: 0.78rem;
-    color: var(--text-tertiary);
-    margin: 0 0 14px 0;
-}
-.route-sidebar__action {
-    margin: 0 0 6px 0;
-}
-.route-sidebar__action--block {
-    margin-top: 4px;
-    margin-bottom: 0;
-}
-.route-sidebar__new-playlist-btn {
-    margin-top: 0;
-}
-.route-sidebar__link {
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: var(--accent);
-    text-decoration: none;
-}
-.route-sidebar__link:hover {
-    text-decoration: underline;
-}
-
-@media (max-width: 1240px) {
-    .prks-processing-main-layout {
-        grid-template-columns: 1fr;
-    }
-
-    .prks-processing-inline-preview {
-        position: static;
-        max-height: none;
-        scroll-margin-top: 10px;
-    }
-
-    /* Stacked: aside needs explicit min-height so flex shell grows (wide :has min-height overridden here). */
-    .prks-processing-inline-preview:has(.prks-processing-inline-preview__frame-shell:not(.hidden)) {
-        min-height: min(720px, 85svh);
-        min-height: min(720px, 85vh);
-    }
-
-    .prks-processing-inline-preview__frame-shell:not(.hidden) {
-        min-height: max(440px, min(68svh, 78vh));
-    }
 }
 
 /* EasyMDE dark theme (explicit dark + system dark) */
@@ -7668,6 +7651,29 @@ button.tag-add-shell__icon:focus-visible {
 }
 
 /* 14 Responsive / container rules */
+
+@media (max-width: 1240px) {
+    .prks-processing-main-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .prks-processing-inline-preview {
+        position: static;
+        max-height: none;
+        scroll-margin-top: 10px;
+    }
+
+    /* Stacked: aside needs explicit min-height so flex shell grows (wide :has min-height overridden here). */
+    .prks-processing-inline-preview:has(.prks-processing-inline-preview__frame-shell:not(.hidden)) {
+        min-height: min(720px, 85svh);
+        min-height: min(720px, 85vh);
+    }
+
+    .prks-processing-inline-preview__frame-shell:not(.hidden) {
+        min-height: max(440px, min(68svh, 78vh));
+    }
+}
+
 @media (max-width: 1580px) {
     #app-container {
         min-width: 0;

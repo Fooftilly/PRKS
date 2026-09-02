@@ -2076,7 +2076,7 @@ function prksWorkPanelActionsHtml() {
         '<button type="button" class="tab-btn copy-bibtex-btn" aria-live="polite">' +
         (typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : '') +
         ' Copy BibTeX</button>' +
-        '<button type="button" class="prks-btn prks-btn--secondary delete-work-btn" title="Delete this file">' +
+        '<button type="button" class="prks-btn prks-btn--danger delete-work-btn" title="Delete this file">' +
         (typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : '') +
         ' Delete File</button>' +
         '</div>'
