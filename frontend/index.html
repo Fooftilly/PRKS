@@ -180,6 +180,22 @@
                     ><span class="ribbon-btn__icon"><i data-lucide="info" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="prks-sr-only">Details</span></button>
                 </div>
             </div>
+            <div class="prks-workspace-tabs-shell">
+                <div
+                    id="prks-workspace-tabs"
+                    class="prks-workspace-tabs"
+                    role="tablist"
+                    aria-label="Workspace tabs"
+                ></div>
+                <button
+                    type="button"
+                    id="prks-workspace-new-tab"
+                    class="prks-icon-btn prks-icon-btn--ghost"
+                    aria-label="Open a new tab"
+                    title="Open a new tab"
+                ><span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
+            </div>
+            <div id="prks-workspace-live" class="prks-sr-only" aria-live="polite"></div>
             <div id="page-content"></div>
         </main>
 
@@ -911,6 +927,7 @@
     <script src="/js/icons.js"></script>
     <script src="/js/date-format.js"></script>
     <script src="/js/navigation.js"></script>
+    <script src="/js/workspace-tabs.js"></script>
     <script src="/js/request-coordinator.js"></script>
     <script src="/js/api.js"></script>
     <script src="/js/doc-types.js"></script>

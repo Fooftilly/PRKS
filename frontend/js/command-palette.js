@@ -399,6 +399,7 @@
         worksLoading: false,
         inited: false,
         emptyCreate: false,
+        navigationTarget: 'current',
     };
 
     function debounceMs() {
@@ -1058,14 +1059,24 @@
         }
     }
 
-    function executeRow(row) {
+    function executeRow(row, execOpts) {
         if (!row) return;
         const kind = row.kind;
         if (kind === 'navigate' || kind === 'search' || kind === 'open') {
             const hash = String(row.hash || '');
             if (!hash || hash.charAt(0) !== '#') return;
+            const background = !!(execOpts && execOpts.backgroundTab);
+            const newTabMode = state.navigationTarget === 'new-tab';
+            const target = background || newTabMode ? 'new-tab' : 'current';
+            const activate = newTabMode && !background;
             closePalette({ restoreFocus: false });
-            if (typeof root.prksNavigate === 'function') root.prksNavigate(hash);
+            if (typeof root.prksNavigate === 'function') {
+                if (target === 'new-tab') {
+                    root.prksNavigate(hash, { target: 'new-tab', activate: activate });
+                } else {
+                    root.prksNavigate(hash);
+                }
+            }
             return;
         }
         if (kind === 'modal') {
@@ -1082,9 +1093,9 @@
         }
     }
 
-    function executeActive() {
+    function executeActive(execOpts) {
         if (!state.results.length) return;
-        executeRow(state.results[state.activeIndex]);
+        executeRow(state.results[state.activeIndex], execOpts);
     }
 
     function clearCaches() {
@@ -1340,7 +1351,9 @@
                 const idx = parseInt(opt.getAttribute('data-palette-index'), 10);
                 if (Number.isFinite(idx)) {
                     state.activeIndex = idx;
-                    executeActive();
+                    executeActive({
+                        backgroundTab: !!(e.ctrlKey || e.metaKey) && state.navigationTarget !== 'new-tab',
+                    });
                 }
             }
         });
@@ -1376,7 +1389,9 @@
         }
         if (key === 'Enter') {
             e.preventDefault();
-            executeActive();
+            executeActive({
+                backgroundTab: (e.ctrlKey || e.metaKey) && state.navigationTarget !== 'new-tab',
+            });
             return;
         }
         if (key === 'Escape') {
@@ -1420,6 +1435,8 @@
         state.open = true;
         state.sessionGen += 1;
         state.scope = options && options.scope === 'create' ? 'create' : 'all';
+        state.navigationTarget =
+            options && options.navigationTarget === 'new-tab' && state.scope !== 'create' ? 'new-tab' : 'current';
         state.query = '';
         state.activeIndex = 0;
         state.queryGen += 1;
@@ -1427,11 +1444,17 @@
         clearCaches();
         parts.input.value = '';
         if (parts.title) {
-            parts.title.textContent = state.scope === 'create' ? 'Create…' : 'Search or jump';
+            if (state.scope === 'create') parts.title.textContent = 'Create…';
+            else if (state.navigationTarget === 'new-tab') parts.title.textContent = 'Open in new tab';
+            else parts.title.textContent = 'Search or jump';
         }
         parts.input.setAttribute(
             'placeholder',
-            state.scope === 'create' ? 'Create…' : 'Search or jump…'
+            state.scope === 'create'
+                ? 'Create…'
+                : state.navigationTarget === 'new-tab'
+                  ? 'Open in new tab…'
+                  : 'Search or jump…'
         );
         setHidden(parts.root, false);
         parts.root.classList.toggle('prks-command-palette--create', state.scope === 'create');
@@ -1450,6 +1473,7 @@
         state.sessionGen += 1;
         state.open = false;
         state.scope = 'all';
+        state.navigationTarget = 'current';
         state.query = '';
         state.activeIndex = 0;
         state.prevFocus = null;
@@ -1513,6 +1537,7 @@
         state.queryGen = 0;
         state.sessionGen = 0;
         state.results = [];
+        state.navigationTarget = 'current';
     }
 
     const api = {
@@ -1537,6 +1562,9 @@
         },
         prksCommandPaletteScope: function () {
             return state.scope;
+        },
+        prksCommandPaletteNavigationTarget: function () {
+            return state.navigationTarget;
         },
         prksCommandPaletteGetResults: function () {
             return state.results.slice();

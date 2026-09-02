@@ -252,7 +252,7 @@ function prksFolderTreeRowHtml(node, depth, options = {}) {
     return `
             <div class="prks-folder-tree__row${matchClass}" data-folder-id="${nodeIdAttr}" role="${role}"${ariaExpandedAttr} style="--depth:${depth}">
                 ${toggleHtml}
-                <a class="prks-folder-tree__link" href="${hash}" data-prks-middleclick-nav="1" onauxclick="return typeof prksMaybeOpenHashInNewTab==='function'&&prksMaybeOpenHashInNewTab(event,'${hash}')">
+                <a class="prks-folder-tree__link" href="${hash}">
                     <span class="prks-folder-tree__icon">${typeof prksIcon === 'function' ? prksIcon('folder') : ''}</span>
                     <span class="prks-folder-tree__title">${prksFolderEsc(node.title || 'Folder')}</span>
                 </a>
@@ -816,7 +816,7 @@ async function deleteFolder(f_id) {
     try {
         const res = await prksRequest('/api/folders/' + encodeURIComponent(f_id), { method: 'DELETE' });
         if (res.ok) {
-            window.location.hash = '#/folders';
+            if (typeof prksNavigate === 'function') prksNavigate('#/folders');
         } else {
             const text = await res.text();
             await prksAlertMessage('Error deleting folder: ' + text, 'Error');

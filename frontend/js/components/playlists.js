@@ -124,9 +124,7 @@ function renderPlaylistsIndex(playlists, container) {
                   const itemCount = Number(p.item_count || 0);
                   const icon = typeof prksIcon === 'function' ? prksIcon('clapperboard', { size: 'sm' }) : '';
                   return `
-                        <div class="project-card playlists-page__list-item" data-prks-middleclick-nav="1"
-                            onclick="window.location.hash='${path}'"
-                            onauxclick="return prksMaybeOpenHashInNewTab(event,'${path}')">
+                        <div class="project-card playlists-page__list-item" data-prks-route="${path}" data-prks-middleclick-nav="1">
                             <div class="playlists-page__list-main">
                                 <span class="playlists-page__badge">${icon}<span>${title}</span></span>
                                 <p class="meta-row playlists-page__list-stats">${itemCount} item${itemCount === 1 ? '' : 's'}</p>
@@ -200,7 +198,7 @@ function prksPlPlaylistItemBodyHtml(w, ren, editing) {
             </div>`;
     }
     return `
-        <div class="prks-playlist-item__body prks-playlist-item__body--link" role="link" tabindex="0" data-pl-nav="${wid}">
+        <div class="prks-playlist-item__body prks-playlist-item__body--link" role="link" tabindex="0" data-pl-nav="${wid}" data-prks-route="#/works/${encodeURIComponent(wid)}">
             ${titleHtml}
             <div class="meta-row">${subtitle}</div>
         </div>`;
@@ -254,7 +252,7 @@ function renderPlaylistDetail(pl, container) {
         const nav = ev.target.closest && ev.target.closest('[data-pl-nav]');
         if (nav && !editing) {
             const wid = String(nav.getAttribute('data-pl-nav') || '').trim();
-            if (wid) window.location.hash = '#/works/' + encodeURIComponent(wid);
+            if (wid && typeof prksNavigate === 'function') prksNavigate('#/works/' + encodeURIComponent(wid));
             return;
         }
         if (!editing) return;
@@ -483,12 +481,16 @@ async function mountPlaylistAttachControls(work) {
                 const nextBtn = document.getElementById('prks-work-playlist-next-btn');
                 if (prevBtn && prev) {
                     prevBtn.onclick = () => {
-                        window.location.hash = '#/works/' + encodeURIComponent(prev.id);
+                        if (typeof prksNavigate === 'function') {
+                            prksNavigate('#/works/' + encodeURIComponent(prev.id));
+                        }
                     };
                 }
                 if (nextBtn && next) {
                     nextBtn.onclick = () => {
-                        window.location.hash = '#/works/' + encodeURIComponent(next.id);
+                        if (typeof prksNavigate === 'function') {
+                            prksNavigate('#/works/' + encodeURIComponent(next.id));
+                        }
                     };
                 }
                 if (typeof prksRefreshIcons === 'function') prksRefreshIcons(navHost);

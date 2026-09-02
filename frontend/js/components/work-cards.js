@@ -161,9 +161,7 @@ function prksWorkCardHtml(w, options = {}) {
         : '';
 
     return `
-        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-middleclick-nav="1"
-            onclick="window.location.hash='#/works/${wid}'"
-            onauxclick="return prksMaybeOpenHashInNewTab(event,'#/works/${wid}')">
+        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1">
             ${thumbHtml}
             <div class="work-card__body">
                 <div class="card-title">${title}</div>

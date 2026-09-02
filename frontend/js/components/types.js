@@ -50,9 +50,7 @@ function renderTypesIndex(works, container) {
                           ? prksDocTypeBadgeHtml(r.value)
                           : `<span class="status-badge Planned">${prksTypesEsc(r.label)}</span>`;
                   return (
-                      `<div class="project-card types-page__list-item" data-prks-middleclick-nav="1"` +
-                      ` onclick="window.location.hash='${typePath}'"` +
-                      ` onauxclick="return prksMaybeOpenHashInNewTab(event,'${typePath}')">` +
+                      `<div class="project-card types-page__list-item" data-prks-route="${typePath}" data-prks-middleclick-nav="1">` +
                       `<div class="types-page__list-main">` +
                       `${badge}` +
                       `<p class="meta-row types-page__list-stats">${count} file${count === 1 ? '' : 's'}</p>` +

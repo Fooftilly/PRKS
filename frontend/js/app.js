@@ -124,9 +124,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initForceMobileSetting();
     initMobileWorkNotesRightSetting();
     if (typeof initPrksHintUi === 'function') initPrksHintUi();
-    initPrksMiddleClickNavigation();
     if (typeof initModalCloseUi === 'function') initModalCloseUi();
     if (typeof initMobileShell === 'function') initMobileShell();
+    if (typeof prksWorkspaceInit === 'function') prksWorkspaceInit();
     initRouter();
     initTabs();
     initForms();
@@ -135,34 +135,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof prksInitSavedViews === 'function') prksInitSavedViews();
     initUploadDragAndDrop();
 });
-
-function prksAbsoluteUrlForHash(hash) {
-    const h = String(hash || '');
-    const url = new URL(window.location.href);
-    url.hash = h.startsWith('#') ? h : '#' + h;
-    return url.toString();
-}
-
-function prksOpenHashInNewTab(hash) {
-    const abs = prksAbsoluteUrlForHash(hash);
-    window.open(abs, '_blank', 'noopener');
-}
-
-/**
- * For inline handlers: open in new tab when middle-click (button 1).
- * Returns true when it handled the event.
- */
-function prksMaybeOpenHashInNewTab(ev, hash) {
-    const e = ev || window.event;
-    if (!e) return false;
-    if (e.button !== 1) return false;
-    try {
-        e.preventDefault();
-        e.stopPropagation();
-    } catch (_err) {}
-    prksOpenHashInNewTab(hash);
-    return true;
-}
 
 function prksSyncSwitchUi(btn, on) {
     btn.setAttribute('aria-checked', on ? 'true' : 'false');
@@ -416,26 +388,6 @@ function initMobileWorkNotesRightSetting() {
         });
     }
     prksSyncWorkNotesMobileSideClass();
-}
-
-/**
- * Prevent default browser auto-scroll on middle-click for navigable cards.
- * (Still allows middle-click to open via prksMaybeOpenHashInNewTab.)
- */
-function initPrksMiddleClickNavigation() {
-    if (window.__prksMiddleClickNavBound) return;
-    window.__prksMiddleClickNavBound = true;
-    document.addEventListener(
-        'mousedown',
-        (e) => {
-            const t = e.target && e.target.closest ? e.target.closest('[data-prks-middleclick-nav]') : null;
-            if (!t) return;
-            if (e.button === 1) {
-                e.preventDefault();
-            }
-        },
-        true
-    );
 }
 
 function initTheme() {
@@ -1334,7 +1286,9 @@ function initSidebarBrandHome() {
 
 function initRouter() {
     initSidebarBrandHome();
-    window.addEventListener('hashchange', handleRoute);
+    if (typeof prksWorkspaceInit !== 'function') {
+        window.addEventListener('hashchange', handleRoute);
+    }
     handleRoute();
 }
 
@@ -1376,7 +1330,43 @@ function prksPlayPageEnterAnimation(contentDiv) {
     contentDiv.addEventListener('animationend', onEnd);
 }
 
-async function handleRoute() {
+function prksCanLeaveCurrentRoute(nextHash) {
+    if (typeof prksFlushPendingWorkResearchNotes === 'function') {
+        prksFlushPendingWorkResearchNotes();
+    }
+    const prevResolvedHash = window.__prksLastResolvedHash || '';
+    const prevRoute =
+        prevResolvedHash && typeof prksParseRoute === 'function' ? prksParseRoute(prevResolvedHash) : null;
+    const route =
+        typeof prksParseRoute === 'function'
+            ? prksParseRoute(nextHash || window.location.hash || '#/folders')
+            : null;
+    const leavingWorkPage = !!(
+        prevRoute &&
+        prevRoute.name === 'work' &&
+        route &&
+        route.canonicalHash !== prevRoute.canonicalHash
+    );
+    if (
+        leavingWorkPage &&
+        typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
+        window.prksHasPendingWorkAnnotationSync()
+    ) {
+        return window.confirm(
+            'PDF annotation sync still running. Leave page before all changes save to server?'
+        );
+    }
+    return true;
+}
+
+window.prksCanLeaveCurrentRoute = prksCanLeaveCurrentRoute;
+
+async function handleRoute(options) {
+    const opts = options || {};
+    const workspaceSwitch = !!opts.workspaceSwitch;
+    const fromPopstate = !!opts.fromPopstate;
+    const leaveApproved = !!opts.leaveApproved;
+    const fromWorkspace = !!opts.fromWorkspace;
     if (typeof prksCloseOverlays === 'function') prksCloseOverlays();
     if (window.__prksRouteRevertDueToPendingSync === true) {
         window.__prksRouteRevertDueToPendingSync = false;
@@ -1388,19 +1378,24 @@ async function handleRoute() {
     let route = typeof prksParseRoute === 'function' ? prksParseRoute(window.location.hash || '#/folders') : null;
     if (!route) return;
     const leavingWorkPage = !!(prevRoute && prevRoute.name === 'work' && route.canonicalHash !== prevRoute.canonicalHash);
-    if (
-        leavingWorkPage &&
-        typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
-        window.prksHasPendingWorkAnnotationSync()
-    ) {
-        const ok = window.confirm(
-            'PDF annotation sync still running. Leave page before all changes save to server?'
-        );
-        if (!ok) {
-            window.__prksRouteRevertDueToPendingSync = true;
-            window.location.hash = prevResolvedHash;
-            return;
+    if (!leaveApproved) {
+        if (
+            leavingWorkPage &&
+            typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
+            window.prksHasPendingWorkAnnotationSync()
+        ) {
+            const ok = window.confirm(
+                'PDF annotation sync still running. Leave page before all changes save to server?'
+            );
+            if (!ok) {
+                window.__prksRouteRevertDueToPendingSync = true;
+                window.location.hash = prevResolvedHash;
+                return;
+            }
         }
+    }
+    if (!fromWorkspace && typeof prksWorkspaceAdoptLocation === 'function') {
+        prksWorkspaceAdoptLocation();
     }
     prksMaybeFlushPdfLastPageOnRouteChange(prevResolvedHash, route.hash);
     if (route.canonicalize) {
@@ -1418,7 +1413,14 @@ async function handleRoute() {
 
     if (prevRoute && prevRoute.canonicalHash && prevRoute.canonicalHash !== route.canonicalHash) {
         if (typeof prksCaptureCurrentRouteState === 'function') prksCaptureCurrentRouteState(prevRoute);
-        if (route.detail && typeof prksRememberOrigin === 'function') prksRememberOrigin(route, prevRoute);
+        if (
+            !workspaceSwitch &&
+            !fromPopstate &&
+            route.detail &&
+            typeof prksRememberOrigin === 'function'
+        ) {
+            prksRememberOrigin(route, prevRoute);
+        }
     }
 
     const contentDiv = document.getElementById('page-content');
@@ -1435,6 +1437,9 @@ async function handleRoute() {
     if (window.annotationSyncInterval) {
         clearInterval(window.annotationSyncInterval);
         window.annotationSyncInterval = null;
+    }
+    if (typeof prksFlushPendingWorkResearchNotes === 'function') {
+        prksFlushPendingWorkResearchNotes();
     }
     if (window.saveNotesTimeout) {
         clearTimeout(window.saveNotesTimeout);
@@ -2305,8 +2310,9 @@ function initForms() {
                 if (window.__prksReturnToWorkModalAfterPlaylist === true) {
                     // closeModals() will restore the New File modal.
                 } else if ((window.location.hash || '') === '#/playlists') {
-                    window.location.hash = '#/playlists/' + encodeURIComponent(data.id);
-                    window.location.reload();
+                    if (typeof prksNavigate === 'function') {
+                        prksNavigate('#/playlists/' + encodeURIComponent(data.id));
+                    }
                 }
             } catch (e) {
                 console.error(e);
@@ -2411,8 +2417,9 @@ function initForms() {
                 return;
             }
             closeModals();
-            window.location.hash = '#/people/groups/' + (data.id || '');
-            window.location.reload();
+            if (typeof prksNavigate === 'function') {
+                prksNavigate('#/people/groups/' + (data.id || ''));
+            }
         };
     }
 

@@ -509,7 +509,7 @@ These are different concepts. Mixing them will break the later workspace project
 .prks-tab.is-active
 ```
 
-**Future workspace tabs** represent independently navigable PRKS pages/documents and may later be tiled. Reserved names (specify now, do not implement behavior in this design-system project):
+**Workspace tabs (stacked, v1)** represent independently navigable PRKS pages. Only the main tab is mounted. Parked tabs are state only. Reserved names:
 
 ```text
 .prks-workspace-tabs
@@ -522,11 +522,13 @@ These are different concepts. Mixing them will break the later workspace project
 .prks-splitter
 ```
 
-The component gallery may show static visual specimens of the reserved names. No workspace navigation logic.
+The component gallery shows the accessible tab-strip structure (activation control + close control). Tiling is not implemented yet.
 
 ### Future workspace / tab visual contract
 
 Workspace tabs should feel like application/document tabs, not browser chrome pasted into the page.
+
+Stacked v1: one main/visible tab (`mainTabId == focusedTabId`). Parked tabs are unmounted. Tiled mode is not shipped yet: main occupies the full left master column and a focused secondary may differ.
 
 | State | Visual |
 | --- | --- |
@@ -914,7 +916,6 @@ This document is updated in the same change that introduces a new primitive. The
 
 Upcoming work that must not invent a parallel visual system:
 
-- in-app workspace tabs
 - tiling / window-manager behavior
 - PWA offline / stale / queued / syncing / conflict UI
 

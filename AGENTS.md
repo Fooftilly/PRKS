@@ -33,7 +33,7 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/research_index.py` disposable derived note-reference index
 - `backend/research_graph.py` read-only Research Graph projection
 - `backend/performance.py` in-memory performance diagnostics
-- `frontend/` UI
+- `frontend/` UI (`frontend/js/workspace-tabs.js` stacked workspace tabs)
 - `tests/` unittest
 
 New substantial behavior, in order:
@@ -156,6 +156,26 @@ Global command shortcuts must not steal keyboard shortcuts while the user is
 typing/editing or while another modal owns focus.
 
 Palette queries are ephemeral UI state and must not be persisted or logged.
+
+## Workspace navigation
+
+Internal PRKS navigation uses prksNavigate.
+
+Do not write window.location.hash directly from feature code.
+
+Do not use window.open for ordinary internal PRKS routes.
+
+Normal navigation targets the current (main) tab.
+
+Ctrl/Cmd-click and middle-click target a background PRKS tab.
+
+Parked tabs must perform no API requests and own no live DOM/resources.
+
+Only the main tab is mounted until TabContext/tiling is implemented.
+
+Tab switching must not create contextual Back origins.
+
+Workspace state is intentionally memory-only in v1.
 
 ## Saved Views
 

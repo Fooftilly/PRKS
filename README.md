@@ -174,6 +174,17 @@ Use it to:
 
 People, Progress, and Research sidebar shortcuts are collapsible. Active child routes stay visible without overwriting the collapsed preference.
 
+## Workspace tabs
+
+PRKS keeps a strip of in-app tabs under the top ribbon. Only one page is visible at a time (stacked/browser mode). Tiled layouts come later. Tabs do not yet survive a full app reload.
+
+- Normal click: open in the current PRKS tab
+- Ctrl/Cmd-click or middle-click: open a background PRKS tab (no extra browser page)
+- **+**: choose a page or item in the command palette (“Open in new tab”) and open it as a new main tab
+- Close: close that PRKS tab; closing the last tab leaves Folders
+
+Parked tabs do no rendering or network work until you activate them.
+
 ## Research network
 
 Concepts, Positions, and Arguments/Stances are persistent research records. They are not Work metadata.

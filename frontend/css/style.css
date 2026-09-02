@@ -641,29 +641,98 @@ body {
     background: var(--hover-overlay);
 }
 
+.prks-workspace-tabs-shell {
+    display: flex;
+    align-items: stretch;
+    min-height: var(--control-height-lg);
+    margin: 0 calc(-1 * var(--space-md)) var(--space-md);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+}
+
 .prks-workspace-tabs {
     display: flex;
     align-items: stretch;
+    flex: 1 1 auto;
+    min-width: 0;
     gap: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-wrap: nowrap;
     min-height: var(--control-height-lg);
-    border-bottom: 1px solid var(--border);
     background: var(--surface);
+}
+
+.prks-workspace-tabs-shell #prks-workspace-new-tab {
+    flex: 0 0 auto;
+    align-self: center;
+    margin: 0 var(--space-xs);
 }
 
 .prks-workspace-tab {
     display: inline-flex;
-    align-items: center;
-    gap: var(--space-sm);
+    align-items: stretch;
+    flex: 0 0 auto;
+    max-width: 14rem;
+    min-width: 0;
     min-height: var(--control-height-lg);
-    padding: 0 var(--space-md);
     border: none;
     border-right: 1px solid var(--border);
-    background: transparent;
+    background: var(--surface);
     color: var(--text-secondary);
     font-family: var(--font-family);
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
-    cursor: default;
+}
+
+.prks-workspace-tab__activate {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-sm);
+    min-width: 0;
+    flex: 1 1 auto;
+    margin: 0;
+    padding: 0 var(--space-sm) 0 var(--space-md);
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+
+.prks-workspace-tab__icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+}
+
+.prks-workspace-tab__title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prks-workspace-tab__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: var(--control-height-sm);
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.prks-workspace-tab__close:hover,
+.prks-workspace-tab__close:focus-visible {
+    color: var(--text-primary);
+    background: var(--hover-overlay);
 }
 
 .prks-workspace-tab.is-main,
@@ -675,7 +744,18 @@ body {
 }
 
 .prks-workspace-tab.is-parked {
-    color: var(--text-tertiary);
+    background: var(--surface);
+    color: var(--text-secondary);
+}
+
+.prks-workspace-tab.is-main .prks-workspace-tab__activate {
+    color: var(--text-primary);
+}
+
+@container prks-main (max-width: 720px) {
+    .prks-workspace-tab {
+        max-width: 8.5rem;
+    }
 }
 
 .prks-tile {
@@ -2377,7 +2457,7 @@ body {
 }
 
 .top-ribbon {
-    margin: calc(-1 * var(--space-sm)) calc(-1 * var(--space-md)) var(--space-md) calc(-1 * var(--space-md));
+    margin: calc(-1 * var(--space-sm)) calc(-1 * var(--space-md)) 0 calc(-1 * var(--space-md));
     display: flex;
     gap: var(--space-sm);
     padding: var(--space-xs) var(--space-md);
@@ -2815,6 +2895,11 @@ body {
 }
 
 #main-content:has(.work-detail) .top-ribbon {
+    flex-shrink: 0;
+    margin-bottom: 0;
+}
+
+#main-content:has(.work-detail) .prks-workspace-tabs-shell {
     flex-shrink: 0;
     margin-bottom: 8px;
 }
@@ -3393,6 +3478,10 @@ body {
     flex-shrink: 0;
 }
 
+#main-content:has(.prks-folder-library) .prks-workspace-tabs-shell {
+    flex-shrink: 0;
+}
+
 #main-content:has(.prks-folder-library) #page-content {
     flex: 1 1 auto;
     min-height: 0;
@@ -3429,6 +3518,10 @@ body {
 }
 
 #main-content:has(.prks-group-library) .top-ribbon {
+    flex-shrink: 0;
+}
+
+#main-content:has(.prks-group-library) .prks-workspace-tabs-shell {
     flex-shrink: 0;
 }
 
@@ -3531,6 +3624,10 @@ body {
 }
 
 #main-content:has(.prks-people-library) .top-ribbon {
+    flex-shrink: 0;
+}
+
+#main-content:has(.prks-people-library) .prks-workspace-tabs-shell {
     flex-shrink: 0;
 }
 
@@ -7639,6 +7736,10 @@ button.prks-research-row {
     flex-shrink: 0;
 }
 
+#main-content:has(.research-graph) .prks-workspace-tabs-shell {
+    flex-shrink: 0;
+}
+
 #main-content:has(.research-graph) #page-content {
     flex: 1;
     min-height: 0;
@@ -8431,6 +8532,14 @@ button.prks-research-row {
         margin-right: -18px;
         overflow: hidden;
         gap: var(--space-sm);
+    }
+
+    .prks-workspace-tabs-shell {
+        margin-left: -18px;
+        margin-right: -18px;
+        position: sticky;
+        top: var(--control-height-lg);
+        z-index: 4;
     }
 
     .top-ribbon__left,

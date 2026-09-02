@@ -2960,7 +2960,7 @@ function renderFolderTagsChipsHtml(folder) {
             (t) =>
                 `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};" ` +
                 `role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}" ` +
-                `onclick="window.location.hash='#/search?tag='+this.getAttribute('data-tag-nav')" ` +
+                `data-prks-route="#/search?tag=${encodeURIComponent(t.name)}" ` +
                 `onkeydown="if(event && (event.key==='Enter' || event.key===' ')) {event.preventDefault(); this.click();}">` +
                 `${escapeHtml(t.name)}` +
                 `<button type="button" class="work-tag-remove" title="Remove tag" aria-label="Remove" data-folder-id="${escapeHtml(folder.id)}" data-tag-id="${escapeHtml(t.id)}">×</button>` +
@@ -3120,7 +3120,7 @@ function renderWorkTagsChips(work) {
             (t) =>
                 `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};" ` +
                 `role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}" ` +
-                `onclick="window.location.hash='#/search?tag='+this.getAttribute('data-tag-nav')" ` +
+                `data-prks-route="#/search?tag=${encodeURIComponent(t.name)}" ` +
                 `onkeydown="if(event && (event.key==='Enter' || event.key===' ')) {event.preventDefault(); this.click();}">` +
                 `${escapeHtml(t.name)}` +
                 `<button type="button" class="work-tag-remove" title="Remove tag" aria-label="Remove" data-work-id="${escapeHtml(work.id)}" data-tag-id="${escapeHtml(t.id)}">×</button>` +

@@ -88,7 +88,7 @@ function wirePublisherCloudNavigation(root) {
         const el = e.target.closest('[data-publisher-nav]');
         if (!el) return;
         const enc = el.getAttribute('data-publisher-nav');
-        if (enc != null) window.location.hash = '#/search?publisher=' + enc;
+        if (enc != null && typeof prksNavigate === 'function') prksNavigate('#/search?publisher=' + enc);
     };
     root.onkeydown = (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -96,7 +96,7 @@ function wirePublisherCloudNavigation(root) {
         if (!el) return;
         e.preventDefault();
         const enc = el.getAttribute('data-publisher-nav');
-        if (enc != null) window.location.hash = '#/search?publisher=' + enc;
+        if (enc != null && typeof prksNavigate === 'function') prksNavigate('#/search?publisher=' + enc);
     };
 }
 

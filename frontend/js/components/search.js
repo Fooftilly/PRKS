@@ -28,7 +28,7 @@ function prksRunSearchFromForm() {
         const p = new URLSearchParams();
         p.set('any', '1');
         p.set('q', v);
-        window.location.hash = '#/search?' + p.toString();
+        if (typeof prksNavigate === 'function') prksNavigate('#/search?' + p.toString());
         return;
     }
     const qv = (document.getElementById('search-q-input') || {}).value.trim() || '';
@@ -39,7 +39,7 @@ function prksRunSearchFromForm() {
     if (qv) p.set('q', qv);
     if (av) p.set('author', av);
     if (pv) p.set('publisher', pv);
-    window.location.hash = '#/search?' + p.toString();
+    if (typeof prksNavigate === 'function') prksNavigate('#/search?' + p.toString());
 }
 
 function renderSearch(results, query, container, options = {}) {

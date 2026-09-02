@@ -627,7 +627,7 @@ async function deleteWork(w_id) {
             return;
         }
         window.__prksRecentlyAddedDirty = true;
-        window.location.hash = '#/folders';
+        if (typeof prksNavigate === 'function') prksNavigate('#/folders');
     } catch (_e) {
         await prksAlertMessage('Error deleting file!', 'Error');
     }
@@ -668,7 +668,7 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
                         ? prksRoleDisplayName(r)
                         : `${r.first_name || ''} ${r.last_name || ''}`.trim();
                 const nm = `${prksEscapeHtmlLite(display)} (${prksEscapeHtmlLite(r.role_type)})`;
-                authorsStr += `<span class="tag prks-person-chip" data-person-id="${prksEscapeAttr(String(r.id || ''))}">${nm}</span>`;
+                authorsStr += `<span class="tag prks-person-chip" data-person-id="${prksEscapeAttr(String(r.id || ''))}" data-prks-route="#/people/${encodeURIComponent(String(r.id || ''))}">${nm}</span>`;
             }
         });
         if (authorsList.length > 0) {
@@ -678,7 +678,7 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
                         typeof prksRoleDisplayName === 'function'
                             ? prksRoleDisplayName(a)
                             : `${a.first_name || ''} ${a.last_name || ''}`.trim();
-                    return `<span class="tag author-tag prks-person-chip" data-person-id="${prksEscapeAttr(String(a.id || ''))}">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${prksEscapeHtmlLite(display)}</span>`;
+                    return `<span class="tag author-tag prks-person-chip" data-person-id="${prksEscapeAttr(String(a.id || ''))}" data-prks-route="#/people/${encodeURIComponent(String(a.id || ''))}">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${prksEscapeHtmlLite(display)}</span>`;
                 })
                 .join(' ');
             authorsStr = authorChips + authorsStr;
@@ -751,10 +751,6 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
     if (notesTa) notesTa.value = work.text_content || '';
     container.querySelectorAll('.prks-person-chip').forEach((el) => {
         el.style.cursor = 'pointer';
-        el.addEventListener('click', () => {
-            const pid = el.getAttribute('data-person-id');
-            if (pid) window.location.hash = '#/people/' + encodeURIComponent(pid);
-        });
     });
 
     // Populate Right Panel
@@ -838,9 +834,7 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
                 span.style.cursor = 'pointer';
                 span.textContent = '\uD83D\uDCC1 ' + String(f.title || '');
                 const fid = String(f.id || '');
-                span.addEventListener('click', () => {
-                    window.location.hash = '#/folders/' + encodeURIComponent(fid);
-                });
+                span.setAttribute('data-prks-route', '#/folders/' + encodeURIComponent(fid));
                 target.appendChild(span);
             }
         })
@@ -1033,72 +1027,75 @@ function initEasyMDE(work) {
                     }
                     return;
                 }
-                const a = e.target.closest && e.target.closest('a.wiki-link-internal');
-                if (!a || !a.getAttribute('href')) return;
-                const href = a.getAttribute('href');
-                if (href.startsWith('#/works/') || href.startsWith('#/concepts/') || href.startsWith('#/arguments/')) {
-                    e.preventDefault();
-                    window.location.hash = href.slice(1);
-                }
-            },
-            true
-        );
-        wrap.addEventListener(
-            'auxclick',
-            (e) => {
-                const a = e.target && e.target.closest ? e.target.closest('a.wiki-link-internal') : null;
-                if (!a) return;
-                const href = a.getAttribute('href') || '';
-                if (!href.startsWith('#/works/') && !href.startsWith('#/concepts/') && !href.startsWith('#/arguments/')) return;
-                if (typeof prksMaybeOpenHashInNewTab === 'function') {
-                    prksMaybeOpenHashInNewTab(e, href);
-                }
+                /* Internal wiki links use the workspace navigation contract. */
             },
             true
         );
     }
 
     const notesChangeHandler = () => {
-        const content = easyMDE.value();
         const statusEl = document.getElementById('editor-status');
         if (statusEl) statusEl.innerText = "Drafting...";
-
         clearTimeout(window.saveNotesTimeout);
-        window.saveNotesTimeout = setTimeout(async () => {
-            try {
-                const res = await prksRequest(
-                    '/api/works/' + encodeURIComponent(work.id),
-                    {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text_content: content })
-                    },
-                    {
-                        coalesceKey: 'work-research-notes:' + work.id
-                    }
-                );
-                if (statusEl) {
-                    statusEl.innerText = res.ok ? 'All changes saved' : 'Error saving changes';
-                }
-                if (res.ok && typeof fetchWorkDetails === 'function') {
-                    const latest = await fetchWorkDetails(work.id);
-                    if (
-                        latest &&
-                        latest.research_refs &&
-                        window.currentWork &&
-                        window.currentWork.id === work.id
-                    ) {
-                        window.currentWork.research_refs = latest.research_refs;
-                    }
-                }
-            } catch (e) {
-                if (statusEl) statusEl.innerText = "Error saving changes";
-            }
+        const workId = work.id;
+        window.saveNotesTimeout = setTimeout(function () {
+            prksEnqueueWorkResearchNotesSave(workId);
         }, 2000);
     };
     easyMDE.codemirror.on("change", notesChangeHandler);
     easyMDE.__notesChangeHandler = notesChangeHandler;
 }
+
+function prksEnqueueWorkResearchNotesSave(workId) {
+    const id = workId || (window.currentWork && window.currentWork.id);
+    if (!id) return;
+    let content = '';
+    if (window.workNotesEasyMDE && typeof window.workNotesEasyMDE.value === 'function') {
+        content = window.workNotesEasyMDE.value();
+    }
+    const statusEl = document.getElementById('editor-status');
+    void prksRequest(
+        '/api/works/' + encodeURIComponent(id),
+        {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text_content: content }),
+        },
+        {
+            coalesceKey: 'work-research-notes:' + id,
+        }
+    )
+        .then(function (res) {
+            if (statusEl) statusEl.innerText = res.ok ? 'All changes saved' : 'Error saving changes';
+            if (res.ok && typeof fetchWorkDetails === 'function') {
+                return fetchWorkDetails(id).then(function (latest) {
+                    if (
+                        latest &&
+                        latest.research_refs &&
+                        window.currentWork &&
+                        window.currentWork.id === id
+                    ) {
+                        window.currentWork.research_refs = latest.research_refs;
+                    }
+                });
+            }
+            return undefined;
+        })
+        .catch(function () {
+            if (statusEl) statusEl.innerText = 'Error saving changes';
+        });
+}
+
+function prksFlushPendingWorkResearchNotes() {
+    if (!window.saveNotesTimeout) return;
+    clearTimeout(window.saveNotesTimeout);
+    window.saveNotesTimeout = null;
+    const id = window.currentWork && window.currentWork.id;
+    if (!id) return;
+    prksEnqueueWorkResearchNotesSave(id);
+}
+
+window.prksFlushPendingWorkResearchNotes = prksFlushPendingWorkResearchNotes;
 
 function prksDestroyWorkNotesEditor() {
     if (!window.workNotesEasyMDE) return;

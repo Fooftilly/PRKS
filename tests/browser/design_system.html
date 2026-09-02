@@ -390,12 +390,30 @@
         </section>
 
         <section class="prks-gallery__section" id="workspace" data-gallery-section="workspace">
-            <h2>Future workspace tabs / tiles / splitter</h2>
-            <p class="prks-field__help">Static specimens only. No workspace navigation.</p>
-            <div class="prks-workspace-tabs">
-                <span class="prks-workspace-tab is-main">Work A</span>
-                <span class="prks-workspace-tab">Concept B</span>
-                <span class="prks-workspace-tab is-parked">Search</span>
+            <h2>Workspace tabs / future tiles / splitter</h2>
+            <p class="prks-field__help">Stacked tab-strip specimen. Tiling remains a static future contract.</p>
+            <div class="prks-workspace-tabs-shell">
+                <div class="prks-workspace-tabs" role="tablist" aria-label="Workspace tabs">
+                    <div class="prks-workspace-tab is-main">
+                        <button type="button" class="prks-workspace-tab__activate" role="tab" aria-selected="true">
+                            <span class="prks-workspace-tab__title">Work A</span>
+                        </button>
+                        <button type="button" class="prks-workspace-tab__close" aria-label="Close Work A">×</button>
+                    </div>
+                    <div class="prks-workspace-tab">
+                        <button type="button" class="prks-workspace-tab__activate" role="tab" aria-selected="false" tabindex="-1">
+                            <span class="prks-workspace-tab__title">Concept B</span>
+                        </button>
+                        <button type="button" class="prks-workspace-tab__close" aria-label="Close Concept B">×</button>
+                    </div>
+                    <div class="prks-workspace-tab is-parked">
+                        <button type="button" class="prks-workspace-tab__activate" role="tab" aria-selected="false" tabindex="-1">
+                            <span class="prks-workspace-tab__title">Search</span>
+                        </button>
+                        <button type="button" class="prks-workspace-tab__close" aria-label="Close Search">×</button>
+                    </div>
+                </div>
+                <button type="button" class="prks-icon-btn prks-icon-btn--ghost" aria-label="Open a new tab">+</button>
             </div>
             <div class="prks-row" style="align-items:stretch;min-height:120px;margin-top:var(--space-md)">
                 <div class="prks-tile prks-tile--main prks-gallery__demo-tile" style="flex:1">

@@ -24,7 +24,8 @@ class FrontendWorkSelectionTests(unittest.TestCase):
         src = _read(_CARDS)
         self.assertIn('data-work-id="${wid}"', src)
         self.assertIn("project-card--work-card", src)
-        self.assertIn("onclick=\"window.location.hash='#/works/${wid}'\"", src)
+        self.assertIn('data-prks-route="#/works/${wid}"', src)
+        self.assertNotIn("onclick=\"window.location.hash='#/works/${wid}'\"", src)
         self.assertNotIn('type="checkbox"', src)
         self.assertNotIn("onclick.split", src)
 

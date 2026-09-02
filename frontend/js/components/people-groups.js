@@ -404,7 +404,7 @@ function renderGroupTreeRoots(groups, options = {}) {
         let html = `
             <div class="prks-group-tree__row${matchClass}" data-group-id="${nodeIdAttr}" role="treeitem" aria-expanded="${hasChildren ? (expanded ? 'true' : 'false') : 'false'}" style="--depth:${depth}">
                 ${toggleHtml}
-                <a class="prks-group-tree__link" href="${hash}" data-prks-middleclick-nav="1" onauxclick="return typeof prksMaybeOpenHashInNewTab==='function'&&prksMaybeOpenHashInNewTab(event,'${hash}')">
+                <a class="prks-group-tree__link" href="${hash}">
                     <span class="prks-group-tree__icon">${typeof prksIcon === 'function' ? prksIcon('folders') : ''}</span>
                     <span class="prks-group-tree__title">${escapeHtmlGroup(node.name || 'Group')}</span>
                 </a>
@@ -627,8 +627,7 @@ async function mountPersonGroupEditPanel(g) {
                     return;
                 }
                 window.__prksPersonGroupDetailEditing = false;
-                window.location.hash = `#/people/groups/${g.id}`;
-                window.location.reload();
+                if (typeof prksNavigate === 'function') prksNavigate('#/people/groups/' + encodeURIComponent(g.id));
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not save group.', 'Error');
@@ -655,8 +654,7 @@ async function mountPersonGroupEditPanel(g) {
                     await prksAlertMessage(data.error || 'Could not delete.', 'Error');
                     return;
                 }
-                window.location.hash = '#/people/groups';
-                window.location.reload();
+                if (typeof prksNavigate === 'function') prksNavigate('#/people/groups');
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not delete group.', 'Error');
@@ -692,8 +690,7 @@ function mountPersonGroupMemberRemoveButtons(g) {
                     await prksAlertMessage(data.error || 'Could not remove member.', 'Error');
                     return;
                 }
-                window.location.hash = `#/people/groups/${g.id}`;
-                window.location.reload();
+                if (typeof prksNavigate === 'function') prksNavigate('#/people/groups/' + encodeURIComponent(g.id));
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not remove member.', 'Error');
@@ -731,8 +728,7 @@ async function mountPersonGroupAddMemberControls(g) {
                     await prksAlertMessage(data.error || 'Could not add member.', 'Error');
                     return;
                 }
-                window.location.hash = `#/people/groups/${g.id}`;
-                window.location.reload();
+                if (typeof prksNavigate === 'function') prksNavigate('#/people/groups/' + encodeURIComponent(g.id));
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not add member.', 'Error');

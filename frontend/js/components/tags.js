@@ -33,7 +33,7 @@ function wireTagCloudNavigation(root) {
         const el = e.target.closest('[data-tag-nav]');
         if (!el) return;
         const enc = el.getAttribute('data-tag-nav');
-        if (enc != null) window.location.hash = '#/search?tag=' + enc;
+        if (enc != null && typeof prksNavigate === 'function') prksNavigate('#/search?tag=' + enc);
     };
     root.onkeydown = (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -41,7 +41,7 @@ function wireTagCloudNavigation(root) {
         if (!el) return;
         e.preventDefault();
         const enc = el.getAttribute('data-tag-nav');
-        if (enc != null) window.location.hash = '#/search?tag=' + enc;
+        if (enc != null && typeof prksNavigate === 'function') prksNavigate('#/search?tag=' + enc);
     };
 }
 

@@ -853,3 +853,217 @@ class DesignSystemGalleryTests(_BrowserE2E):
                     self.assertLessEqual(overflow, 2, "theme=%s width=%s overflow=%s" % (theme, width, overflow))
             finally:
                 page.close()
+
+
+def _workspace_tab_count(page):
+    return page.locator(".prks-workspace-tab").count()
+
+
+def _main_tab_title(page):
+    return page.locator(".prks-workspace-tab.is-main .prks-workspace-tab__title").inner_text()
+
+
+def _open_recent_work_card(page, title):
+    page.locator('#sidebar a.nav-link[href="#/folders"]').click()
+    page.wait_for_function("() => location.hash === '#/folders'")
+    page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]').click()
+    page.locator(".card-title", has_text=title).wait_for()
+
+
+class WorkspaceTabsTests(_BrowserE2E):
+    def test_ctrl_click_opens_background_work_without_fetch_or_browser_page(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        extra_pages = []
+        page.context.on("page", extra_pages.append)
+        detail_gets = []
+
+        def on_request(req):
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/works/%s" % work_id:
+                detail_gets.append(req.url)
+
+        page.on("request", on_request)
+        _open_recent_work_card(page, WORK_A_TITLE)
+        self.assertEqual(_workspace_tab_count(page), 1)
+        page.locator(".card-title", has_text=WORK_A_TITLE).click(modifiers=["Control"])
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        self.assertEqual(page.evaluate("() => location.hash"), "#/folders")
+        self.assertEqual(_main_tab_title(page), "Folders")
+        self.assertEqual(page.locator(".work-detail").count(), 0)
+        self.assertEqual(detail_gets, [])
+        self.assertEqual(extra_pages, [])
+        self.assertEqual(len(page.context.pages), 1)
+
+        page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        page.wait_for_selector(".work-detail")
+        self.assertTrue(any(work_id in u for u in detail_gets))
+        page.locator(".prks-workspace-tab.is-main .prks-workspace-tab__title", has_text=WORK_A_TITLE).wait_for()
+        self.assertEqual(page.locator(".prks-folder-library").count(), 0)
+
+        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash === '#/folders'")
+        self.assertEqual(page.locator(".work-detail").count(), 0)
+        self.assertEqual(page.locator("#pdf-viewer").count(), 0)
+
+    def test_middle_click_opens_background_person(self):
+        server, page, _collector = self._start_app()
+        person_id = server.ids["person"]
+        extra_pages = []
+        page.context.on("page", extra_pages.append)
+        person_gets = []
+
+        def on_request(req):
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/persons/%s" % person_id:
+                person_gets.append(req.url)
+
+        page.on("request", on_request)
+        page.locator('#sidebar a.nav-link[href="#/people"]').click()
+        page.wait_for_function("() => location.hash === '#/people'")
+        page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).wait_for()
+        before = _workspace_tab_count(page)
+        page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).click(button="middle")
+        page.wait_for_function(
+            "n => document.querySelectorAll('.prks-workspace-tab').length === n",
+            arg=before + 1,
+        )
+        self.assertEqual(page.evaluate("() => location.hash"), "#/people")
+        self.assertEqual(page.locator(".person-profile").count(), 0)
+        self.assertEqual(person_gets, [])
+        self.assertEqual(extra_pages, [])
+        self.assertEqual(len(page.context.pages), 1)
+
+    def test_close_selects_right_neighbor_then_home(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        person_id = server.ids["person"]
+        page.wait_for_selector(".prks-workspace-tab")
+        page.evaluate(
+            """async ({ workId, personId }) => {
+                await window.prksNavigate('#/people/' + personId, { target: 'new-tab', activate: false });
+                await window.prksNavigate('#/works/' + workId, { target: 'new-tab', activate: false });
+            }""",
+            arg={"workId": work_id, "personId": person_id},
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 3")
+        tabs = page.locator(".prks-workspace-tab")
+        tabs.nth(1).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        tabs.nth(1).locator(".prks-workspace-tab__close").click()
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        self.assertIn("/works/", page.evaluate("() => location.hash"))
+        self.assertEqual(_workspace_tab_count(page), 2)
+        hash_before_parked = page.evaluate("() => location.hash")
+        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__close").click()
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 1")
+        self.assertEqual(page.evaluate("() => location.hash"), hash_before_parked)
+        page.locator(".prks-workspace-tab__close").click()
+        page.wait_for_function("() => location.hash === '#/folders'")
+        self.assertEqual(_workspace_tab_count(page), 1)
+        self.assertEqual(_main_tab_title(page), "Folders")
+
+    def test_new_tab_palette_opens_person_as_main(self):
+        server, page, _collector = self._start_app()
+        page.wait_for_selector("#prks-workspace-new-tab")
+        page.locator("#prks-workspace-new-tab").click()
+        page.wait_for_selector("#prks-command-palette:not([hidden])")
+        self.assertIn("Open in new tab", page.locator("#prks-command-palette-title").inner_text())
+        page.locator("#prks-command-palette-input").fill(PERSON_DISPLAY)
+        label = page.locator(
+            ".prks-command-palette__option-label",
+            has_text=re.compile("^" + re.escape(PERSON_DISPLAY) + "$"),
+        )
+        label.wait_for()
+        page.locator(".prks-command-palette__option").filter(has=label).click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        self.assertGreaterEqual(_workspace_tab_count(page), 2)
+        page.locator(".person-profile__summary").wait_for()
+        self.assertNotEqual(page.evaluate("() => location.hash"), "#/folders")
+        self.assertEqual(page.locator(".prks-route-loading").count(), 0)
+
+    def test_pending_research_notes_flush_on_tab_switch(self):
+        server, page, _collector = self._start_app()
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector(".CodeMirror")
+        page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        unique = "FAST-SWITCH-NOTE-%s" % int(time.time() * 1000)
+        page.locator(".CodeMirror").click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text(unique)
+        page.locator("#editor-status", has_text="Drafting").wait_for()
+        with page.expect_response(
+            lambda r: r.request.method == "PATCH" and "/api/works/" in r.url and r.ok
+        ):
+            page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_selector(".CodeMirror")
+        page.wait_for_function(
+            """(text) => {
+                const ed = window.workNotesEasyMDE;
+                return !!(ed && ed.value && ed.value().indexOf(text) !== -1);
+            }""",
+            arg=unique,
+        )
+
+    def test_pdf_unmounts_when_parked_and_remounts(self):
+        server, page, _collector = self._start_app()
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: true })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        self.assertEqual(page.locator("#pdf-viewer").count(), 0)
+        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        _wait_pdf_viewer(page)
+
+    def test_tab_switch_does_not_rewrite_contextual_back(self):
+        server, page, _collector = self._start_app()
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector(".prks-nav-back")
+        work_back = page.locator(".prks-nav-back").get_attribute("href")
+        page.evaluate(
+            """async (pid) => {
+                await window.prksNavigate('#/people', { target: 'new-tab', activate: true });
+                await window.prksNavigate('#/people/' + pid);
+            }""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.wait_for_selector(".prks-nav-back")
+        person_back = page.locator(".prks-nav-back").get_attribute("href")
+        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        page.wait_for_selector(".prks-nav-back")
+        self.assertEqual(page.locator(".prks-nav-back").get_attribute("href"), work_back)
+        page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.wait_for_selector(".prks-nav-back")
+        self.assertEqual(page.locator(".prks-nav-back").get_attribute("href"), person_back)
+
+    def test_browser_back_forward_keeps_parked_tab(self):
+        server, page, _collector = self._start_app()
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        page.locator(".prks-person-chip").first.click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.evaluate("() => window.prksNavigate('#/concepts', { target: 'new-tab', activate: false })")
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        page.go_back()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        self.assertEqual(_workspace_tab_count(page), 2)
+        page.go_forward()
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        self.assertEqual(_workspace_tab_count(page), 2)

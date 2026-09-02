@@ -459,7 +459,7 @@ function buildPersonListDetailsHtml(p, options = {}) {
         const tags = p.groups
             .map(
                 (g) =>
-                    `<span class="tag" onclick="event.stopPropagation();window.location.hash='#/people/groups/${escapeHtmlPerson(g.id)}'">${escapeHtmlPerson(g.name)}</span>`
+                    `<span class="tag" data-prks-route="#/people/groups/${escapeHtmlPerson(g.id)}">${escapeHtmlPerson(g.name)}</span>`
             )
             .join(' ');
         metaBits.push(`<span class="prks-people-list__groups">${tags}</span>`);
@@ -508,7 +508,7 @@ function buildPersonListRowHtml(p, options = {}) {
             ${removeHtml}
             <span class="prks-people-list__toggle-spacer" aria-hidden="true"></span>
             <div class="prks-people-list__body">
-                <a class="prks-people-list__link" href="${hash}" data-prks-middleclick-nav="1" onauxclick="return typeof prksMaybeOpenHashInNewTab==='function'&&prksMaybeOpenHashInNewTab(event,'${hash}')">
+                <a class="prks-people-list__link" href="${hash}">
                     <span class="prks-people-list__icon">${typeof prksIcon === 'function' ? prksIcon('user', { size: 16 }) : ''}</span>
                     <span class="prks-people-list__title-row">
                     <span class="prks-people-list__title">${escapeHtmlPerson(name)}</span>
@@ -532,7 +532,6 @@ function prksPersonViewInGraph() {
             ? window.prksGraphFocusHash('person', p.id)
             : '#/graph?focus=' + encodeURIComponent('person:' + p.id);
     if (typeof window.prksNavigate === 'function') window.prksNavigate(hash);
-    else window.location.hash = hash;
 }
 window.prksPersonViewInGraph = prksPersonViewInGraph;
 
@@ -738,11 +737,7 @@ async function deletePerson() {
         window.currentPerson = null;
         window.__prksPersonDetailEditing = false;
         window.__prksPersonWorksEditing = false;
-        const prev = window.location.hash || '';
-        window.location.hash = '#/people';
-        if (prev === '#/people' && typeof handleRoute === 'function') {
-            await handleRoute();
-        }
+        if (typeof prksNavigate === 'function') prksNavigate('#/people');
     } catch (_e) {
         await prksAlertMessage('Could not delete person.', 'Error');
     }
@@ -1069,7 +1064,7 @@ function renderPersonDetails(person, container) {
         const tags = person.groups
             .map(
                 (g) =>
-                    `<span class="tag" onclick="window.location.hash='#/people/groups/${escapeHtmlPerson(g.id)}'">${escapeHtmlPerson(g.name)}</span>`
+                    `<span class="tag" data-prks-route="#/people/groups/${escapeHtmlPerson(g.id)}">${escapeHtmlPerson(g.name)}</span>`
             )
             .join(' ');
         groupsHtml = `<p class="meta-row person-profile__groups">${tags}</p>`;

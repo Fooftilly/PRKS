@@ -36,6 +36,7 @@
             navHref: '#/folders',
             fallbackBack: '#/folders',
             sectionHash: '#/folders',
+            tabIcon: 'folder',
         },
         'folder-detail': {
             title: 'Folder',
@@ -45,6 +46,7 @@
             fallbackBack: '#/folders',
             sectionHash: '#/folders',
             detail: true,
+            tabIcon: 'folder',
         },
         recent: {
             title: 'Recent',
@@ -53,6 +55,7 @@
             navHref: '#/recent',
             fallbackBack: '#/folders',
             sectionHash: '#/recent',
+            tabIcon: 'clock',
         },
         'saved-views': {
             title: 'Saved Views',
@@ -61,6 +64,7 @@
             navHref: '#/views',
             fallbackBack: '#/views',
             sectionHash: '#/views',
+            tabIcon: 'bookmark',
         },
         'saved-view-detail': {
             title: 'Saved View',
@@ -70,6 +74,7 @@
             fallbackBack: '#/views',
             sectionHash: '#/views',
             detail: true,
+            tabIcon: 'bookmark',
         },
         types: {
             title: 'File Types',
@@ -78,6 +83,7 @@
             navHref: '#/types',
             fallbackBack: '#/types',
             sectionHash: '#/types',
+            tabIcon: 'library',
         },
         'type-detail': {
             title: 'File Type',
@@ -87,6 +93,7 @@
             fallbackBack: '#/types',
             sectionHash: '#/types',
             detail: true,
+            tabIcon: 'library',
         },
         playlists: {
             title: 'Playlists',
@@ -95,6 +102,7 @@
             navHref: '#/playlists',
             fallbackBack: '#/playlists',
             sectionHash: '#/playlists',
+            tabIcon: 'clapperboard',
         },
         'playlist-detail': {
             title: 'Playlist',
@@ -104,6 +112,7 @@
             fallbackBack: '#/playlists',
             sectionHash: '#/playlists',
             detail: true,
+            tabIcon: 'clapperboard',
         },
         tags: {
             title: 'Tags',
@@ -112,6 +121,7 @@
             navHref: '#/tags',
             fallbackBack: '#/folders',
             sectionHash: '#/tags',
+            tabIcon: 'tags',
         },
         publishers: {
             title: 'Publishers',
@@ -120,6 +130,7 @@
             navHref: '#/publishers',
             fallbackBack: '#/folders',
             sectionHash: '#/publishers',
+            tabIcon: 'building-2',
         },
         people: {
             title: 'People',
@@ -128,6 +139,7 @@
             navHref: '#/people',
             fallbackBack: '#/people',
             sectionHash: '#/people',
+            tabIcon: 'users',
         },
         person: {
             title: 'Person',
@@ -137,6 +149,7 @@
             fallbackBack: '#/people',
             sectionHash: '#/people',
             detail: true,
+            tabIcon: 'user',
         },
         'people-role': {
             title: 'People',
@@ -145,6 +158,7 @@
             navHref: null,
             fallbackBack: '#/people',
             sectionHash: '#/people',
+            tabIcon: 'users',
         },
         'people-groups': {
             title: 'Groups',
@@ -153,6 +167,7 @@
             navHref: '#/people/groups',
             fallbackBack: '#/people/groups',
             sectionHash: '#/people/groups',
+            tabIcon: 'folders',
         },
         'person-group-detail': {
             title: 'Group',
@@ -162,6 +177,7 @@
             fallbackBack: '#/people/groups',
             sectionHash: '#/people/groups',
             detail: true,
+            tabIcon: 'folders',
         },
         concepts: {
             title: 'Concepts',
@@ -170,6 +186,7 @@
             navHref: '#/concepts',
             fallbackBack: '#/concepts',
             sectionHash: '#/concepts',
+            tabIcon: 'network',
         },
         'concept-detail': {
             title: 'Concept',
@@ -179,6 +196,7 @@
             fallbackBack: '#/concepts',
             sectionHash: '#/concepts',
             detail: true,
+            tabIcon: 'network',
         },
         positions: {
             title: 'Positions',
@@ -187,6 +205,7 @@
             navHref: '#/positions',
             fallbackBack: '#/positions',
             sectionHash: '#/positions',
+            tabIcon: 'flag',
         },
         'position-detail': {
             title: 'Position',
@@ -196,6 +215,7 @@
             fallbackBack: '#/positions',
             sectionHash: '#/positions',
             detail: true,
+            tabIcon: 'flag',
         },
         arguments: {
             title: 'Arguments & Stances',
@@ -204,6 +224,7 @@
             navHref: '#/arguments',
             fallbackBack: '#/arguments',
             sectionHash: '#/arguments',
+            tabIcon: 'messages-square',
         },
         'argument-detail': {
             title: 'Argument',
@@ -213,6 +234,7 @@
             fallbackBack: '#/arguments',
             sectionHash: '#/arguments',
             detail: true,
+            tabIcon: 'messages-square',
         },
         'research-graph': {
             title: 'Research Graph',
@@ -221,6 +243,7 @@
             navHref: '#/graph',
             fallbackBack: '#/graph',
             sectionHash: '#/graph',
+            tabIcon: 'share-2',
         },
         progress: {
             title: 'Progress',
@@ -229,6 +252,7 @@
             navHref: null,
             fallbackBack: '#/folders',
             sectionHash: '#/progress',
+            tabIcon: 'list',
         },
         'processing-files': {
             title: 'Files for Processing',
@@ -237,6 +261,7 @@
             navHref: '#/processing-files',
             fallbackBack: '#/folders',
             sectionHash: '#/processing-files',
+            tabIcon: 'inbox',
         },
         search: {
             title: 'Search',
@@ -245,15 +270,17 @@
             navHref: null,
             fallbackBack: '#/folders',
             sectionHash: '#/search',
+            tabIcon: 'search',
         },
         work: {
             title: 'File',
-            loadingTitle: 'File',
+            loadingTitle: 'Work',
             backLabel: 'File',
             navHref: '#/folders',
             fallbackBack: '#/folders',
             sectionHash: '#/folders',
             detail: true,
+            tabIcon: 'file-text',
         },
         unknown: {
             title: 'Section unavailable',
@@ -262,6 +289,7 @@
             navHref: null,
             fallbackBack: '#/folders',
             sectionHash: null,
+            tabIcon: 'file',
         },
     };
 
@@ -1048,21 +1076,25 @@
         container.insertAdjacentHTML('afterbegin', '<div class="prks-nav-back-row">' + html + '</div>');
     }
 
-    function prksDocumentTitleText(route, options) {
+    function prksResolvedRouteTitle(route, options) {
         const opts = options || {};
         if (opts.notFound) {
-            return String(opts.notFoundTitle || 'Not found') + PRKS_TITLE_SUFFIX;
+            return String(opts.notFoundTitle || 'Not found');
         }
         if (route && route.name === 'unknown') {
-            return 'Section unavailable' + PRKS_TITLE_SUFFIX;
+            return 'Section unavailable';
         }
         if (route && route.name === 'search') {
-            return 'Search' + PRKS_TITLE_SUFFIX;
+            return 'Search';
         }
         const entity = opts.entityTitle != null ? String(opts.entityTitle).trim() : '';
-        if (entity) return entity + PRKS_TITLE_SUFFIX;
+        if (entity) return entity;
         const meta = prksMeta(route);
-        const base = meta.title || 'PRKS';
+        return meta.title || 'PRKS';
+    }
+
+    function prksDocumentTitleText(route, options) {
+        const base = prksResolvedRouteTitle(route, options);
         if (base === 'PRKS') return 'PRKS';
         return base + PRKS_TITLE_SUFFIX;
     }
@@ -1078,6 +1110,11 @@
         return prksMeta(route).loadingTitle || 'Loading';
     }
 
+    function prksRouteTabIcon(hash) {
+        const route = prksParseRoute(hash);
+        return prksMeta(route).tabIcon || 'file-text';
+    }
+
     function prksPublishRouteSidebar(data, routeGen) {
         if (!prksIsRouteGenCurrent(routeGen)) return false;
         root.__prksRouteSidebar = data && typeof data === 'object' ? data : {};
@@ -1091,6 +1128,9 @@
     }
 
     function prksNavigate(hash, options) {
+        if (typeof root.prksWorkspaceNavigate === 'function' && root.__prksWorkspaceReady) {
+            return root.prksWorkspaceNavigate(hash, options);
+        }
         const route = prksParseRoute(hash);
         const target = route.canonicalHash || PRKS_HOME_HASH;
         if (!target || target.charAt(0) !== '#' || target.charAt(1) !== '/') return;
@@ -1144,6 +1184,13 @@
         if (!prksIsRouteGenCurrent(routeGen)) return false;
         const opts = options || {};
         prksSetResolvedDocumentTitle(route, opts, routeGen);
+        if (typeof root.prksWorkspaceSetResolvedTitle === 'function') {
+            root.prksWorkspaceSetResolvedTitle(
+                route.canonicalHash || route.hash,
+                prksResolvedRouteTitle(route, opts),
+                routeGen
+            );
+        }
         if (!prksIsRouteGenCurrent(routeGen)) return false;
         prksMountContextualBack(contentDiv, route, routeGen);
         const restored = prksRestoreRouteState(route, routeGen);
@@ -1184,8 +1231,10 @@
         prksContextualBackHtml: prksContextualBackHtml,
         prksMountContextualBack: prksMountContextualBack,
         prksSetResolvedDocumentTitle: prksSetResolvedDocumentTitle,
+        prksResolvedRouteTitle: prksResolvedRouteTitle,
         prksDocumentTitleText: prksDocumentTitleText,
         prksRouteLoadingTitle: prksRouteLoadingTitle,
+        prksRouteTabIcon: prksRouteTabIcon,
         prksPublishRouteSidebar: prksPublishRouteSidebar,
         prksAssignRouteEntity: prksAssignRouteEntity,
         prksIsRouteGenCurrent: prksIsRouteGenCurrent,
