@@ -20,16 +20,29 @@
 
     function renderPositionsIndex(items, container) {
         const list = Array.isArray(items) ? items : [];
+        const icon = typeof root.prksIcon === 'function' ? root.prksIcon('flag', { size: 'sm' }) : '';
+        const rowHtml =
+            typeof root.prksResearchIndexRowHtml === 'function' ? root.prksResearchIndexRowHtml : null;
         const rows = list.length
             ? list
                   .map(function (p) {
-                      return (
-                          '<div class="project-card"><a href="#/positions/' +
-                          encodeURIComponent(p.id) +
-                          '"><strong>' +
-                          esc(p.name || 'Position') +
-                          '</strong></a></div>'
-                      );
+                      const excerpt = String(p.description || '')
+                          .replace(/\s+/g, ' ')
+                          .trim();
+                      const clip =
+                          excerpt.length > 160 ? excerpt.slice(0, 159).trim() + '…' : excerpt;
+                      return rowHtml
+                          ? rowHtml({
+                                href: '#/positions/' + encodeURIComponent(p.id),
+                                icon: icon,
+                                title: esc(p.name || 'Position'),
+                                meta: clip ? [esc(clip)] : [],
+                            })
+                          : '<a class="prks-list-row prks-research-row" href="#/positions/' +
+                            encodeURIComponent(p.id) +
+                            '">' +
+                            esc(p.name || 'Position') +
+                            '</a>';
                   })
                   .join('')
             : '<p class="meta-row">No Positions yet. Create one to use as an Argument target.</p>';
@@ -39,7 +52,7 @@
             ' Positions</h2>' +
             '<div class="page-header__actions">' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-new">New Position</button>' +
-            '</div></div></div><div class="list-view">' +
+            '</div></div></div><div class="list-view prks-research-index">' +
             rows +
             '</div>';
         const btn = container.querySelector('#prks-position-new');

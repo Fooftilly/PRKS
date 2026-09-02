@@ -7,7 +7,7 @@ from pathlib import Path
 
 from backend.db_manager import PRKSDatabase
 from backend.research_index import PRKSResearchIndex
-from backend.research_network import save_work_notes
+from backend.research_network import create_argument, create_position, save_work_notes
 from backend.storage.config import StorageConfig
 
 REPO = Path(__file__).resolve().parents[2]
@@ -45,7 +45,14 @@ def seed_library(storage_root: str) -> dict:
         doc_type="article",
         status="Not Started",
     )
-    person_id = db.add_person(first_name=PERSON_FIRST, last_name=PERSON_LAST)
+    person_id = db.add_person(
+        first_name=PERSON_FIRST,
+        last_name=PERSON_LAST,
+        about="E2E fixture author used for People profile and graph focus.",
+        link_wikipedia="https://example.com/wiki/e2e-author",
+        birth_date="1903",
+        death_date="1969",
+    )
     db.add_role(person_id, work_a, "Author")
     # Work nodes appear in the graph via explicit note markup / argument sources.
     seed_notes = "Initial research notes.\n\n[[concept:E2E Fixture Concept]]"
@@ -60,3 +67,25 @@ def seed_library(storage_root: str) -> dict:
         "work_b_title": WORK_B_TITLE,
         "person_display": PERSON_DISPLAY,
     }
+
+
+GRAPH_CONCEPT_A = "Culture"
+GRAPH_CONCEPT_B = "Philosophy"
+GRAPH_UNRELATED_POSITION = "Unrelated Position"
+GRAPH_UNRELATED_ARGUMENT = "Unrelated Argument"
+
+
+def seed_graph_context_library(storage_root: str) -> dict:
+    ids = seed_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    notes = "[[concept:%s]]\n\n[[concept:%s]]\n" % (GRAPH_CONCEPT_A, GRAPH_CONCEPT_B)
+    save_work_notes(db, ids["work_a"], notes)
+    PRKSResearchIndex(storage=cfg).sync_work(ids["work_a"], notes, db)
+    pos = create_position(db, GRAPH_UNRELATED_POSITION)
+    arg = create_argument(db, name=GRAPH_UNRELATED_ARGUMENT, kind="argument")
+    ids["position"] = pos["id"]
+    ids["argument"] = arg["id"]
+    ids["concept_a"] = GRAPH_CONCEPT_A
+    ids["concept_b"] = GRAPH_CONCEPT_B
+    return ids

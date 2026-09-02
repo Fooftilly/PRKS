@@ -398,20 +398,31 @@ function prksOpenResearchPicker(opts) {
     overlay.className = 'prks-research-picker';
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'prks-research-picker-title');
+    overlay.tabIndex = -1;
+    const extra = opts.extraHtml
+        ? '<div class="prks-research-picker__actions-start">' + opts.extraHtml + '</div>'
+        : '';
     overlay.innerHTML =
-        '<div class="prks-research-picker__panel">' +
-        '<p class="prks-research-picker__title">' +
+        '<div class="prks-dialog prks-research-picker__dialog">' +
+        '<div class="prks-dialog__header">' +
+        '<h2 class="prks-dialog__title" id="prks-research-picker-title">' +
         prksEscapeHtmlLite(opts.title || '') +
-        '</p>' +
-        '<input type="search" class="prks-research-picker__q" placeholder="Search…" autocomplete="off">' +
+        '</h2>' +
+        '<button type="button" class="prks-icon-btn prks-research-picker__close" aria-label="Close">&times;</button>' +
+        '</div>' +
+        '<div class="prks-dialog__body">' +
+        '<input type="search" class="prks-input prks-research-picker__q" placeholder="Search…" autocomplete="off">' +
         '<div class="prks-research-picker__list" role="listbox"></div>' +
-        (opts.extraHtml || '') +
-        '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm prks-research-picker__close">Close</button>' +
+        '</div>' +
+        '<div class="prks-dialog__actions prks-research-picker__actions">' +
+        extra +
+        '<button type="button" class="prks-btn prks-btn--secondary prks-research-picker__close">Close</button>' +
+        '</div>' +
         '</div>';
     d.body.appendChild(overlay);
     const q = overlay.querySelector('.prks-research-picker__q');
     const list = overlay.querySelector('.prks-research-picker__list');
-    const closeBtn = overlay.querySelector('.prks-research-picker__close');
     function render() {
         const query = (q.value || '').trim().toLowerCase();
         const rows = opts.items() || [];
@@ -428,38 +439,71 @@ function prksOpenResearchPicker(opts) {
         }
         let html = filtered
             .map(function (r) {
+                const kind = r.kind
+                    ? '<span class="prks-research-row__kicker">' +
+                      prksEscapeHtmlLite(r.kind) +
+                      '</span>'
+                    : '';
                 return (
-                    '<button type="button" class="prks-research-picker__item" data-id="' +
+                    '<button type="button" class="prks-list-row prks-research-row prks-research-picker__item" data-id="' +
                     prksEscapeAttr(r.id) +
-                    '">' +
+                    '"' +
+                    (r.pickType
+                        ? ' data-pick-type="' + prksEscapeAttr(r.pickType) + '"'
+                        : '') +
+                    '><span class="prks-research-row__body">' +
+                    kind +
+                    '<span class="prks-research-row__title">' +
                     prksEscapeHtmlLite(r.label) +
-                    '</button>'
+                    '</span></span></button>'
                 );
             })
             .join('');
-        if (opts.createLabel && (q.value || '').trim()) {
+        const typed = (q.value || '').trim();
+        if (typed && typeof opts.createItems === 'function') {
+            html += (opts.createItems(typed) || [])
+                .map(function (row) {
+                    return (
+                        '<button type="button" class="prks-list-row prks-research-row prks-research-picker__item prks-research-picker__create" data-create="' +
+                        prksEscapeAttr(row.kind || '1') +
+                        '">' +
+                        prksEscapeHtmlLite(row.label || '') +
+                        '</button>'
+                    );
+                })
+                .join('');
+        } else if (opts.createLabel && typed) {
             html +=
-                '<button type="button" class="prks-research-picker__item prks-research-picker__create" data-create="1">' +
-                prksEscapeHtmlLite(opts.createLabel((q.value || '').trim())) +
+                '<button type="button" class="prks-list-row prks-research-row prks-research-picker__item prks-research-picker__create" data-create="1">' +
+                prksEscapeHtmlLite(opts.createLabel(typed)) +
                 '</button>';
         }
         if (!html) html = '<p class="meta-row">No matches.</p>';
         list.innerHTML = html;
     }
-    function pick(id, createName) {
+    function pick(id, createName, createKind, pickType) {
         prksCloseResearchPicker();
-        if (createName && typeof opts.onCreate === 'function') opts.onCreate(createName);
-        else if (id && typeof opts.onPick === 'function') opts.onPick(id);
+        if (createName && typeof opts.onCreate === 'function') opts.onCreate(createName, createKind);
+        else if (id && typeof opts.onPick === 'function') opts.onPick(id, pickType);
     }
     list.addEventListener('click', function (e) {
         const btn = e.target.closest && e.target.closest('button[data-id], button[data-create]');
         if (!btn) return;
-        if (btn.getAttribute('data-create') === '1') pick('', (q.value || '').trim());
-        else pick(btn.getAttribute('data-id'));
+        const createKind = btn.getAttribute('data-create');
+        if (createKind) pick('', (q.value || '').trim(), createKind);
+        else pick(btn.getAttribute('data-id'), '', '', btn.getAttribute('data-pick-type'));
     });
-    if (closeBtn) closeBtn.addEventListener('click', prksCloseResearchPicker);
+    overlay.querySelectorAll('.prks-research-picker__close').forEach(function (btn) {
+        btn.addEventListener('click', prksCloseResearchPicker);
+    });
     overlay.addEventListener('click', function (e) {
         if (e.target === overlay) prksCloseResearchPicker();
+    });
+    overlay.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            prksCloseResearchPicker();
+        }
     });
     q.addEventListener('input', render);
     q.addEventListener('keydown', function (e) {
@@ -492,7 +536,7 @@ function prksOpenConceptPicker(cm) {
         title: 'Insert Concept',
         items: items,
         createLabel: function (name) {
-            return 'Insert [[concept:' + name + ']]';
+            return 'Create “' + name + '”';
         },
         onPick: function (id) {
             const rows = window.__prksConceptHintList || [];
@@ -516,43 +560,18 @@ function prksOpenArgumentPicker(cm, work) {
         return (window.__prksArgumentHintList || []).map(function (a) {
             return {
                 id: a.id,
-                label: (a.kind === 'stance' ? 'Stance: ' : 'Argument: ') + (a.name || a.id),
-                haystack: (a.name || '') + ' ' + (a.id || ''),
+                label: a.name || a.id,
+                kind: a.kind === 'stance' ? 'Stance' : 'Argument',
+                haystack: (a.name || '') + ' ' + (a.id || '') + ' ' + (a.kind || ''),
             };
         });
     };
-    const extra =
-        '<div class="prks-research-picker__actions">' +
-        '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-new="argument">New Argument</button> ' +
-        '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-new="stance">New Stance</button>' +
-        '</div>';
-    prksOpenResearchPicker({
-        title: 'Insert Argument / Stance',
-        items: items,
-        extraHtml: extra,
-        onPick: function (id) {
-            const rows = window.__prksArgumentHintList || [];
-            let name = id;
-            for (let i = 0; i < rows.length; i++) {
-                if (rows[i].id === id) {
-                    name = rows[i].name || id;
-                    break;
-                }
-            }
-            prksInsertNotesMarkup(cm, '[[argument:' + id + '|' + name + ']]');
-        },
-    });
-    const overlay = document.getElementById('prks-research-picker');
-    if (!overlay) return;
-    overlay.addEventListener('click', function (e) {
-        const btn = e.target.closest && e.target.closest('[data-new]');
-        if (!btn) return;
-        const kind = btn.getAttribute('data-new');
-        prksCloseResearchPicker();
+    function insertCreatedArgument(kind, name) {
         void (async function () {
             if (typeof window.prksCreateArgumentFromWork !== 'function') return;
             const created = await window.prksCreateArgumentFromWork({
                 kind: kind,
+                name: name || '',
                 workId: work && work.id,
                 pages: prksCurrentPdfPagesForWork(work && work.id),
             });
@@ -567,6 +586,30 @@ function prksOpenArgumentPicker(cm, work) {
                 }
             }
         })();
+    }
+    prksOpenResearchPicker({
+        title: 'Insert Argument / Stance',
+        items: items,
+        createItems: function (name) {
+            return [
+                { kind: 'argument', label: 'Create Argument “' + name + '”' },
+                { kind: 'stance', label: 'Create Stance “' + name + '”' },
+            ];
+        },
+        onPick: function (id) {
+            const rows = window.__prksArgumentHintList || [];
+            let name = id;
+            for (let i = 0; i < rows.length; i++) {
+                if (rows[i].id === id) {
+                    name = rows[i].name || id;
+                    break;
+                }
+            }
+            prksInsertNotesMarkup(cm, '[[argument:' + id + '|' + name + ']]');
+        },
+        onCreate: function (name, kind) {
+            insertCreatedArgument(kind === 'stance' ? 'stance' : 'argument', name);
+        },
     });
 }
 

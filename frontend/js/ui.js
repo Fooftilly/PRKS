@@ -1675,6 +1675,8 @@ function inferRightPanelListMode(h) {
                 return 'people-group';
             case 'person':
                 return 'person';
+            case 'research-graph':
+                return 'graph';
             case 'recent':
                 return 'recent';
             case 'progress':
@@ -1702,6 +1704,7 @@ function inferRightPanelListMode(h) {
     if (h === '#/people/groups') return 'people-groups';
     if (h.startsWith('#/people/groups/')) return 'people-group';
     if (h.startsWith('#/people/')) return 'person';
+    if (h === '#/graph' || h.startsWith('#/graph?')) return 'graph';
     if (h === '#/recent') return 'recent';
     if (h.startsWith('#/progress')) return 'progress';
     if (h === '#/processing-files') return 'processing-files';
@@ -1727,6 +1730,11 @@ const PRKS_RIGHT_PANEL_HIDE_LIST_MODES = new Set([
     'default'
 ]);
 
+function isResearchGraphHash(h) {
+    if (typeof prksParseRoute === 'function') return prksParseRoute(h).name === 'research-graph';
+    return !!(h && (h === '#/graph' || h.startsWith('#/graph?')));
+}
+
 function prksRightPanelHasActionableContent(hash) {
     const h = hash || '';
     if (window.currentWork) return true;
@@ -1734,6 +1742,7 @@ function prksRightPanelHasActionableContent(hash) {
     if (window.currentPerson && isPersonDetailHash(h)) return true;
     if (window.currentPersonGroup && isPersonGroupDetailHash(h)) return true;
     if (window.currentPlaylist && (h.startsWith('#/playlists/') || h === '#/playlists')) return true;
+    if (isResearchGraphHash(h)) return true;
     return false;
 }
 
@@ -1760,6 +1769,10 @@ function renderRouteContextSidebar(mode) {
     const ctx = window.__prksRouteSidebar || {};
     const link = (href, label) =>
         `<p class="route-sidebar__action"><a href="${href}" class="route-sidebar__link">${label}</a></p>`;
+
+    if (mode === 'graph') {
+        return '<div id="prks-graph-inspector" class="right-panel-stack research-graph__inspector" aria-live="polite"></div>';
+    }
 
     if (mode === 'library') {
         const n = ctx.folderCount != null ? Number(ctx.folderCount) : null;
@@ -2236,6 +2249,9 @@ function updatePanelContent(tabId) {
         }
         const mode = inferRightPanelListMode(window.location.hash || '');
         panel.innerHTML = renderRouteContextSidebar(mode);
+        if (mode === 'graph' && typeof window.renderGraphInspector === 'function') {
+            window.renderGraphInspector();
+        }
         if (mode === 'playlists' && typeof window.prksBindPlaylistsIndexCreateBtn === 'function') {
             window.prksBindPlaylistsIndexCreateBtn();
         }

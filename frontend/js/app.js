@@ -1384,6 +1384,7 @@ async function handleRoute() {
     window.__prksPersonDetailEditing = false;
     window.__prksPersonWorksEditing = false;
     window.__prksPersonGroupDetailEditing = false;
+    window.__prksArgumentDetailEditing = false;
     window.__prksCurrentSavedView = null;
     window.__prksRouteSidebar = {};
 

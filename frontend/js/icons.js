@@ -129,6 +129,46 @@
     }
 
     /**
+     * SVG data URI for Cytoscape background-image. Empty when Lucide/DOM missing.
+     * @param {string} name Lucide icon name or PRKS_ICON key
+     * @param {string} [stroke] CSS color
+     * @returns {string}
+     */
+    function prksLucideSvgDataUri(name, stroke) {
+        const lucide = global.lucide;
+        if (typeof document === 'undefined' || !lucide || typeof lucide.createElement !== 'function') {
+            return '';
+        }
+        const lucideName = prksResolveIconName(name);
+        const pascal = String(lucideName)
+            .split('-')
+            .map(function (part) {
+                return part ? part.charAt(0).toUpperCase() + part.slice(1) : '';
+            })
+            .join('');
+        const iconNode = (lucide.icons && lucide.icons[pascal]) || lucide[pascal];
+        if (!iconNode) return '';
+        let svg = null;
+        try {
+            svg = lucide.createElement(iconNode, {
+                xmlns: 'http://www.w3.org/2000/svg',
+                width: '64',
+                height: '64',
+                viewBox: '-3 -3 30 30',
+                stroke: stroke || 'currentColor',
+                fill: 'none',
+                'stroke-width': '2.4',
+                'stroke-linecap': 'round',
+                'stroke-linejoin': 'round',
+            });
+        } catch (_e) {
+            return '';
+        }
+        if (!svg || !svg.outerHTML) return '';
+        return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg.outerHTML);
+    }
+
+    /**
      * Replace data-lucide placeholders with SVG under root (or whole document).
      * @param {Element|Document|undefined} root
      */
@@ -163,6 +203,7 @@
     global.prksTagSearchIconHtml = prksTagSearchIconHtml;
     global.prksTagPlusIconHtml = prksTagPlusIconHtml;
     global.prksPageHeaderIconHtml = prksPageHeaderIconHtml;
+    global.prksLucideSvgDataUri = prksLucideSvgDataUri;
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => prksRefreshIcons());

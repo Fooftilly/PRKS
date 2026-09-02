@@ -6,7 +6,13 @@ import re
 import unittest
 from urllib.parse import unquote
 
-from tests.e2e.fixtures import MINIMAL_PDF, PERSON_DISPLAY, WORK_A_TITLE, seed_library
+from tests.e2e.fixtures import (
+    MINIMAL_PDF,
+    PERSON_DISPLAY,
+    WORK_A_TITLE,
+    seed_graph_context_library,
+    seed_library,
+)
 from tests.e2e.harness import (
     AppServer,
     FixtureServer,
@@ -75,8 +81,8 @@ def tearDownModule():
 
 
 class _BrowserE2E(unittest.TestCase):
-    def _start_app(self):
-        server = AppServer(seed_fn=seed_library)
+    def _start_app(self, seed_fn=seed_library):
+        server = AppServer(seed_fn=seed_fn)
         self.addCleanup(server.stop)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin)
@@ -204,6 +210,28 @@ class PersonGraphFocusTests(_BrowserE2E):
         page.wait_for_function("() => location.hash === '#/people'")
         page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).click()
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.locator(".person-profile__summary").wait_for()
+        page.locator(".person-profile__about").wait_for()
+        page.locator(".person-external-links", has_text="References").wait_for()
+        page.locator("#person-profile-works-heading", has_text="Linked files").wait_for()
+        self.assertTrue(page.locator(".person-sidebar-summary").count() >= 1)
+        self.assertTrue(page.locator(".person-sidebar__stats").count() >= 1)
+        self.assertGreaterEqual(
+            page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").count(),
+            1,
+        )
+        self.assertIn(
+            "Edit using template",
+            page.locator(".person-sidebar-summary").inner_text(),
+        )
+        self.assertNotIn(
+            "Biography, portrait, and external links are in the main column.",
+            page.locator(".person-sidebar-summary").inner_text(),
+        )
+        page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
+        page.wait_for_selector("#pd-first-name")
+        page.locator(".person-panel-edit button", has_text="Cancel").click()
+        page.locator("#prks-person-view-graph").wait_for()
         page.locator("#prks-person-view-graph").click()
         page.wait_for_function(
             """(pid) => {
@@ -245,6 +273,160 @@ class PersonGraphFocusTests(_BrowserE2E):
         page.wait_for_function("() => window.__prksResearchGraphCy == null")
         page.wait_for_selector(".prks-folder-library, #page-content")
         self.assertNotIn("graph", page.evaluate("() => location.hash"))
+
+
+class ResearchGraphContextTests(_BrowserE2E):
+    def test_node_selection_dims_without_mass_edge_labels(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_id = server.ids["work_a"]
+        _expand_research(page)
+        page.locator('#prks-nav-research-children a.nav-link[href="#/graph"]').click()
+        page.wait_for_function("() => location.hash === '#/graph' || location.hash.indexOf('#/graph?') === 0")
+        page.wait_for_function("() => window.__prksResearchGraphCy && window.__prksResearchGraphCy.nodes().length > 0")
+        work_node = "work:" + work_id
+        page.evaluate(
+            """(wid) => {
+                window.selectGraphNode(wid, { center: false });
+            }""",
+            arg=work_node,
+        )
+        state = page.evaluate(
+            """(wid) => {
+                const cy = window.__prksResearchGraphCy;
+                const mention = cy.edges().filter(function (e) {
+                    return e.data('type') === 'mentions_concept' && e.source().id() === wid;
+                });
+                const labeled = cy.edges().filter(function (e) {
+                    return e.hasClass('graph-edge--label-on');
+                });
+                const dimmed = cy.nodes().filter(function (n) {
+                    return n.hasClass('graph-dim');
+                });
+                const focusEdges = cy.edges().filter(function (e) {
+                    return e.hasClass('graph-focus');
+                });
+                const sample = cy.edges()[0];
+                return {
+                    selected: window.getSelectedGraphNodeId(),
+                    mentionCount: mention.length,
+                    labeled: labeled.map(function (e) { return e.id(); }),
+                    dimmed: dimmed.map(function (n) { return n.id(); }),
+                    focusEdges: focusEdges.map(function (e) { return e.id(); }),
+                    rotation: sample ? sample.style('text-rotation') : '',
+                };
+            }""",
+            arg=work_node,
+        )
+        self.assertEqual(state["selected"], work_node)
+        self.assertEqual(state["mentionCount"], 2)
+        self.assertEqual(state["labeled"], [])
+        self.assertEqual(len(state["focusEdges"]), 2)
+        self.assertTrue(any("position:" in n or "argument:" in n for n in state["dimmed"]))
+        hover = page.evaluate(
+            """(wid) => {
+                const cy = window.__prksResearchGraphCy;
+                const mention = cy.edges().filter(function (e) {
+                    return e.data('type') === 'mentions_concept' && e.source().id() === wid;
+                });
+                const first = mention[0];
+                const firstId = first.id();
+                cy.getElementById(firstId).emit('mouseover');
+                const labeled = cy.edges().filter(function (e) {
+                    return e.hasClass('graph-edge--label-on');
+                });
+                return {
+                    labeled: labeled.map(function (e) {
+                        return { id: e.id(), label: e.data('canvasLabel') };
+                    }),
+                    rotation: first.style('text-rotation'),
+                };
+            }""",
+            arg=work_node,
+        )
+        self.assertEqual(len(hover["labeled"]), 1)
+        self.assertTrue(str(hover["labeled"][0]["label"]).startswith("Note mention"))
+        self.assertEqual(hover["rotation"], "none")
+        page.evaluate(
+            """(eid) => { window.selectGraphEdge(eid); }""",
+            arg=hover["labeled"][0]["id"],
+        )
+        page.locator("#prks-graph-inspector-title", has_text="Mentioned in research notes").wait_for()
+        inspector = page.locator("#prks-graph-inspector").inner_text()
+        self.assertIn("Mentioned in research notes", inspector)
+        self.assertIn(WORK_A_TITLE, inspector)
+        self.assertTrue("Culture" in inspector or "Philosophy" in inspector)
+        page.evaluate("() => window.clearGraphSelection()")
+        cleared = page.evaluate(
+            """() => ({
+                node: window.getSelectedGraphNodeId(),
+                edge: window.getSelectedGraphEdgeId(),
+                labeled: window.__prksResearchGraphCy.edges().filter(function (e) {
+                    return e.hasClass('graph-edge--label-on');
+                }).length,
+                dimmed: window.__prksResearchGraphCy.nodes().filter(function (n) {
+                    return n.hasClass('graph-dim');
+                }).length,
+            })"""
+        )
+        self.assertEqual(cleared["node"], "")
+        self.assertEqual(cleared["edge"], "")
+        self.assertEqual(cleared["labeled"], 0)
+        self.assertEqual(cleared["dimmed"], 0)
+
+
+class ResearchPickerTests(_BrowserE2E):
+    def test_insert_concept_and_argument_pickers(self):
+        server, page, _collector = self._start_app()
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector(".editor-toolbar button.prks-insert-concept")
+        page.evaluate(
+            """() => {
+                localStorage.setItem('prks-theme', 'dark');
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }"""
+        )
+        page.locator(".editor-toolbar button.prks-insert-concept").click()
+        page.wait_for_selector("#prks-research-picker .prks-dialog")
+        q = page.locator("#prks-research-picker input.prks-input")
+        self.assertTrue(q.count() >= 1)
+        bg = page.evaluate(
+            """() => {
+                const el = document.querySelector('#prks-research-picker input.prks-input');
+                return el ? getComputedStyle(el).backgroundColor : '';
+            }"""
+        )
+        self.assertNotEqual(bg, "rgb(255, 255, 255)")
+        self.assertNotEqual(bg, "rgba(0, 0, 0, 0)")
+        q.fill("E2E")
+        q.press("Enter")
+        page.wait_for_function("() => !document.getElementById('prks-research-picker')")
+        saved = page.evaluate("() => window.workNotesEasyMDE && window.workNotesEasyMDE.value()")
+        self.assertIn("[[concept:", saved)
+        page.locator(".editor-toolbar button.prks-insert-argument").click()
+        page.wait_for_selector("#prks-research-picker .prks-dialog")
+        page.locator("#prks-research-picker input.prks-input").fill("E2E Picker Argument")
+        page.locator("#prks-research-picker [data-create='argument']").click()
+        page.wait_for_function("() => !document.getElementById('prks-research-picker')")
+        page.wait_for_function(
+            """() => {
+                const v = window.workNotesEasyMDE && window.workNotesEasyMDE.value();
+                return v && v.indexOf('[[argument:') !== -1 && v.indexOf('E2E Picker Argument') !== -1;
+            }"""
+        )
+        page.locator(".editor-toolbar button.prks-insert-argument").click()
+        page.wait_for_selector("#prks-research-picker")
+        page.locator("#prks-research-picker input.prks-input").fill("E2E Search Created Stance")
+        self.assertGreaterEqual(page.locator("#prks-research-picker [data-create='stance']").count(), 1)
+        self.assertEqual(page.locator("#prks-research-picker [data-new]").count(), 0)
+        page.locator("#prks-research-picker [data-create='stance']").click()
+        page.wait_for_function("() => !document.getElementById('prks-research-picker')")
+        page.wait_for_function(
+            """() => {
+                const v = window.workNotesEasyMDE && window.workNotesEasyMDE.value();
+                return v && v.indexOf('E2E Search Created Stance') !== -1;
+            }"""
+        )
+        page.keyboard.press("Escape")
 
 
 def _wait_pdf_viewer(page):
@@ -500,6 +682,7 @@ _GALLERY_SECTIONS = (
     "panels",
     "states",
     "dialogs",
+    "research",
     "workspace",
 )
 

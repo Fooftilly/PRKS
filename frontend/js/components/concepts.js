@@ -41,6 +41,39 @@
         return root.prksPromptTextDialog(opts);
     }
 
+    function researchIndexRowHtml(opts) {
+        const o = opts || {};
+        const icon = o.icon
+            ? '<span class="prks-research-row__icon" aria-hidden="true">' + o.icon + '</span>'
+            : '';
+        const kind = o.kind
+            ? '<span class="prks-research-row__kind">' + o.kind + '</span>'
+            : '';
+        const meta = (o.meta || []).filter(Boolean);
+        const metaHtml = meta.length
+            ? '<span class="prks-research-row__meta">' +
+              meta
+                  .map(function (m) {
+                      return '<span class="prks-research-row__meta-item">' + m + '</span>';
+                  })
+                  .join('') +
+              '</span>'
+            : '';
+        return (
+            '<a class="prks-list-row prks-research-row" href="' +
+            o.href +
+            '">' +
+            icon +
+            '<span class="prks-research-row__body"><span class="prks-research-row__title-line"><span class="prks-research-row__title">' +
+            o.title +
+            '</span>' +
+            kind +
+            '</span>' +
+            metaHtml +
+            '</span></a>'
+        );
+    }
+
     function renderConceptsIndex(items, container) {
         const list = Array.isArray(items) ? items : [];
         const icon = typeof root.prksIcon === 'function' ? root.prksIcon('network', { size: 'sm' }) : '';
@@ -48,28 +81,24 @@
             ? list
                   .map(function (c) {
                       const id = String(c.id || '');
-                      const parents = (c.parents || [])
+                      const parentNames = (c.parents || [])
                           .map(function (p) {
                               return esc(p.name || p.id);
                           })
-                          .join(', ') || '—';
-                      return (
-                          '<div class="project-card">' +
-                          '<a href="#/concepts/' +
-                          encodeURIComponent(id) +
-                          '"><strong>' +
-                          icon +
-                          ' ' +
-                          esc(c.name || 'Concept') +
-                          '</strong></a>' +
-                          '<p class="meta-row">Parents: ' +
-                          parents +
-                          ' · Subconcepts: ' +
-                          esc(String(c.subconcept_count || 0)) +
-                          ' · Notes: ' +
-                          esc(String(c.mention_count || 0)) +
-                          '</p></div>'
-                      );
+                          .filter(Boolean);
+                      const parentLabel = parentNames.length ? parentNames.join(', ') : 'No parent';
+                      const subs = Number(c.subconcept_count) || 0;
+                      const notes = Number(c.mention_count) || 0;
+                      return researchIndexRowHtml({
+                          href: '#/concepts/' + encodeURIComponent(id),
+                          icon: icon,
+                          title: esc(c.name || 'Concept'),
+                          meta: [
+                              parentLabel,
+                              String(subs) + (subs === 1 ? ' subconcept' : ' subconcepts'),
+                              String(notes) + (notes === 1 ? ' note mention' : ' note mentions'),
+                          ],
+                      });
                   })
                   .join('')
             : '<p class="meta-row">No Concepts yet. Type <code>[[concept:Name]]</code> in research notes, or create one here.</p>';
@@ -79,7 +108,7 @@
             ' Concepts</h2>' +
             '<div class="page-header__actions">' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-new">New Concept</button>' +
-            '</div></div></div><div class="list-view">' +
+            '</div></div></div><div class="list-view prks-research-index">' +
             rows +
             '</div>';
         const btn = container.querySelector('#prks-concept-new');
@@ -305,6 +334,7 @@
         renderConceptNotFound: renderConceptNotFound,
         prksCreateConceptFlow: createConceptFlow,
         prksResearchMarkdownHtml: md,
+        prksResearchIndexRowHtml: researchIndexRowHtml,
     };
     Object.keys(api).forEach(function (k) {
         root[k] = api[k];

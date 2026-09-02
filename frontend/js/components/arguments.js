@@ -18,81 +18,48 @@
         return '<p>' + esc(text || '') + '</p>';
     }
 
-    function targetLine(t) {
-        const label = esc(t.verdict_label || t.verdict_id || '');
-        if (t.type === 'position') {
-            return (
-                label +
-                '   Position: <a href="#/positions/' +
-                encodeURIComponent(t.id) +
-                '">' +
-                esc(t.name || t.id) +
-                '</a>'
-            );
-        }
-        return (
-            label +
-            '   Argument: <a href="#/arguments/' +
-            encodeURIComponent(t.id) +
-            '">' +
-            esc(t.name || t.id) +
-            '</a>'
-        );
-    }
-
-    function sourceLine(s) {
-        const authors = (s.authors || [])
-            .map(function (a) {
-                const n = ((a.first_name || '') + ' ' + (a.last_name || '')).trim() || a.credit_name || '';
-                return esc(n);
-            })
-            .filter(Boolean)
-            .join(', ');
-        const pages = s.pages ? ' pp. ' + esc(s.pages) : '';
-        return (
-            (authors ? authors + ' · ' : '') +
-            '<a href="#/works/' +
-            encodeURIComponent(s.work_id) +
-            '">' +
-            esc(s.work_title || s.work_id) +
-            '</a>' +
-            pages
-        );
-    }
-
     function renderArgumentsIndex(items, container, filterKind) {
         const list = Array.isArray(items) ? items : [];
         const kind = filterKind || 'all';
+        const iconArg =
+            typeof root.prksIcon === 'function' ? root.prksIcon('messages-square', { size: 'sm' }) : '';
+        const rowHtml =
+            typeof root.prksResearchIndexRowHtml === 'function' ? root.prksResearchIndexRowHtml : null;
         const rows = list.length
             ? list
                   .map(function (a) {
-                      const responds = (a.targets || []).map(targetLine).join('<br>') || '—';
-                      const sources = (a.sources || []).map(sourceLine).join('<br>') || '—';
-                      return (
-                          '<div class="project-card"><a href="#/arguments/' +
-                          encodeURIComponent(a.id) +
-                          '"><strong>' +
-                          esc(a.name || a.id) +
-                          '</strong></a>' +
-                          '<p class="meta-row">' +
-                          esc(a.kind === 'stance' ? 'Stance' : 'Argument') +
-                          ' · Responses: ' +
-                          esc(String(a.response_count || 0)) +
-                          '</p>' +
-                          '<p class="meta-row">Responds to: ' +
-                          responds +
-                          '</p>' +
-                          '<p class="meta-row">Sources: ' +
-                          sources +
-                          '</p></div>'
-                      );
+                      const responses = Number(a.response_count) || 0;
+                      const targets = Array.isArray(a.targets) ? a.targets.length : 0;
+                      const sources = Array.isArray(a.sources) ? a.sources.length : 0;
+                      const kindLabel = a.kind === 'stance' ? 'Stance' : 'Argument';
+                      return rowHtml
+                          ? rowHtml({
+                                href: '#/arguments/' + encodeURIComponent(a.id),
+                                icon: iconArg,
+                                title: esc(a.name || a.id),
+                                kind: esc(kindLabel),
+                                meta: [
+                                    String(responses) +
+                                        (responses === 1 ? ' response' : ' responses'),
+                                    String(targets) + (targets === 1 ? ' target' : ' targets'),
+                                    String(sources) + (sources === 1 ? ' source' : ' sources'),
+                                ],
+                            })
+                          : '<a class="prks-list-row prks-research-row" href="#/arguments/' +
+                            encodeURIComponent(a.id) +
+                            '">' +
+                            esc(a.name || a.id) +
+                            '</a>';
                   })
                   .join('')
             : '<p class="meta-row">No Arguments or Stances yet.</p>';
         function btn(k, label) {
+            const on = kind === k;
             return (
-                '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" aria-pressed="' +
-                (kind === k ? 'true' : 'false') +
+                '<button type="button" class="prks-tab' +
+                (on ? ' is-active' : '') +
+                '" aria-selected="' +
+                (on ? 'true' : 'false') +
                 '" data-arg-filter="' +
                 k +
                 '">' +
@@ -108,13 +75,11 @@
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-argument-new">New Argument</button>' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-stance-new">New Stance</button>' +
             '</div></div></div>' +
-            '<p>' +
+            '<div class="prks-tabs" role="tablist" aria-label="Argument kind">' +
             btn('all', 'All') +
-            ' ' +
             btn('argument', 'Arguments') +
-            ' ' +
             btn('stance', 'Stances') +
-            '</p><div class="list-view">' +
+            '</div><div class="list-view prks-research-index">' +
             rows +
             '</div>';
         container.querySelectorAll('[data-arg-filter]').forEach(function (el) {
@@ -153,33 +118,49 @@
             '<p class="meta-row"><a class="prks-btn prks-btn--secondary" href="#/arguments">Back to Arguments &amp; Stances</a></p>';
     }
 
+    function researchLinkRow(href, title, kind, meta) {
+        const rowHtml =
+            typeof root.prksResearchIndexRowHtml === 'function' ? root.prksResearchIndexRowHtml : null;
+        const metaItems = (meta || []).filter(Boolean);
+        if (rowHtml) {
+            return rowHtml({
+                href: href,
+                title: esc(title),
+                kind: kind ? esc(kind) : '',
+                meta: metaItems.map(function (m) { return esc(m); }),
+            });
+        }
+        return (
+            '<a class="prks-list-row prks-research-row" href="' +
+            href +
+            '">' +
+            esc(title) +
+            '</a>'
+        );
+    }
+
+    function sourceAuthorsLabel(s) {
+        return (s.authors || [])
+            .map(function (a) {
+                return (((a.first_name || '') + ' ' + (a.last_name || '')).trim() || a.credit_name || '');
+            })
+            .filter(Boolean)
+            .join(', ');
+    }
+
     function renderArgumentDetail(argument, container) {
         const a = argument || {};
         const kindLabel = a.kind === 'stance' ? 'Stance' : 'Argument';
+        const editing = window.__prksArgumentDetailEditing === true;
         const verdicts = a.verdicts || [];
-        const responses = (a.responses || []).map(function (r) {
-            return (
-                '<p>' +
-                esc(r.verdict_label || r.verdict_id || '') +
-                '   <a href="#/arguments/' +
-                encodeURIComponent(r.id) +
-                '">' +
-                esc(r.name || r.id) +
-                '</a></p>'
-            );
-        }).join('') || '<p class="meta-row">None</p>';
-        const mentions = (a.mentions || [])
-            .map(function (m) {
-                return (
-                    '<div class="project-card"><a href="#/works/' +
-                    encodeURIComponent(m.work_id) +
-                    '">' +
-                    esc(m.title || m.work_id) +
-                    '</a></div>'
-                );
-            })
-            .join('') || '<p class="meta-row">Not mentioned in research notes.</p>';
-        const verdictOpts = function (selected) {
+
+        function graphHash() {
+            return typeof root.prksGraphFocusHash === 'function'
+                ? root.prksGraphFocusHash('argument', a.id)
+                : '#/graph?focus=' + encodeURIComponent('argument:' + a.id);
+        }
+
+        function verdictOpts(selected) {
             return verdicts
                 .map(function (v) {
                     const id = v.id || '';
@@ -187,63 +168,120 @@
                     return '<option value="' + esc(id) + '"' + sel + '>' + esc(v.label || id) + '</option>';
                 })
                 .join('');
-        };
-        const targetRows = (a.targets || [])
-            .map(function (t, i) {
-                return (
-                    '<div class="prks-arg-row" data-i="' +
-                    i +
-                    '">' +
-                    '<select data-field="type"><option value="position"' +
-                    (t.type === 'position' ? ' selected' : '') +
-                    '>Position</option><option value="argument"' +
-                    (t.type === 'argument' ? ' selected' : '') +
-                    '>Argument</option></select> ' +
-                    '<input type="text" data-field="id" value="' +
-                    esc(t.id || '') +
-                    '" placeholder="P-… or A-…"> ' +
-                    '<select data-field="verdict">' +
-                    verdictOpts(t.verdict_id) +
-                    '</select> ' +
-                    '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-remove="target">Remove</button>' +
-                    '</div>'
-                );
-            })
-            .join('');
-        const sourceRows = (a.sources || [])
-            .map(function (s, i) {
-                return (
-                    '<div class="prks-arg-row" data-i="' +
-                    i +
-                    '">' +
-                    '<input type="text" data-field="work_id" value="' +
-                    esc(s.work_id || '') +
-                    '" placeholder="Work id"> ' +
-                    '<input type="text" data-field="pages" value="' +
-                    esc(s.pages || '') +
-                    '" placeholder="pages" maxlength="100"> ' +
-                    '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-remove="source">Remove</button>' +
-                    '</div>'
-                );
-            })
-            .join('');
-        container.innerHTML =
+        }
+
+        const header =
             '<div class="prks-page-header page-header"><div class="page-header__title-row"><div>' +
             '<p class="saved-view-detail__kicker">' +
             esc(kindLabel) +
             '</p><h2 class="prks-page-title">' +
             esc(a.name || a.id) +
             '</h2></div><div class="page-header__actions">' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-view-graph">View in graph</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-response">New response argument</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-delete">Delete</button>' +
-            '</div></div></div>' +
+            (editing
+                ? '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-cancel">Cancel</button>'
+                : '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-view-graph">View in graph</button>' +
+                  '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-edit">Edit</button>' +
+                  '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-response">New response</button>' +
+                  '<button type="button" class="prks-btn prks-btn--danger" id="prks-arg-delete">Delete</button>') +
+            '</div></div></div>';
+
+        if (!editing) {
+            const bodyText = String(a.main_text || '').trim();
+            const targets = (a.targets || [])
+                .map(function (t) {
+                    const href =
+                        t.type === 'position'
+                            ? '#/positions/' + encodeURIComponent(t.id)
+                            : '#/arguments/' + encodeURIComponent(t.id);
+                    const kind = t.type === 'position' ? 'Position' : t.kind === 'stance' ? 'Stance' : 'Argument';
+                    return researchLinkRow(href, t.name || t.id, kind, [t.verdict_label || t.verdict_id || '']);
+                })
+                .join('') || '<p class="meta-row">None yet.</p>';
+            const sources = (a.sources || [])
+                .map(function (s) {
+                    const authors = sourceAuthorsLabel(s);
+                    const pages = s.pages ? 'pp. ' + String(s.pages) : '';
+                    return researchLinkRow(
+                        '#/works/' + encodeURIComponent(s.work_id),
+                        s.work_title || s.work_id,
+                        '',
+                        [authors, pages].filter(Boolean)
+                    );
+                })
+                .join('') || '<p class="meta-row">None yet.</p>';
+            const responses = (a.responses || [])
+                .map(function (r) {
+                    const kind = r.kind === 'stance' ? 'Stance' : 'Argument';
+                    return researchLinkRow(
+                        '#/arguments/' + encodeURIComponent(r.id),
+                        r.name || r.id,
+                        kind,
+                        [r.verdict_label || r.verdict_id || '']
+                    );
+                })
+                .join('') || '<p class="meta-row">None yet.</p>';
+            const mentions = (a.mentions || [])
+                .map(function (m) {
+                    return researchLinkRow(
+                        '#/works/' + encodeURIComponent(m.work_id),
+                        m.title || m.work_id,
+                        '',
+                        []
+                    );
+                })
+                .join('') || '<p class="meta-row">Not mentioned in research notes.</p>';
+            container.innerHTML =
+                header +
+                '<div class="research-entity">' +
+                '<section class="research-entity__section" aria-labelledby="prks-arg-text-h">' +
+                '<h3 id="prks-arg-text-h">Main text</h3>' +
+                '<div class="research-md">' +
+                (bodyText ? md(a.main_text) : '<p class="meta-row">No main text yet.</p>') +
+                '</div></section>' +
+                '<section class="research-entity__section" aria-labelledby="prks-arg-targets-h">' +
+                '<h3 id="prks-arg-targets-h">Responds to</h3>' +
+                '<div class="list-view prks-research-index">' +
+                targets +
+                '</div></section>' +
+                '<section class="research-entity__section" aria-labelledby="prks-arg-sources-h">' +
+                '<h3 id="prks-arg-sources-h">Sources</h3>' +
+                '<p class="meta-row">Works where this was made or taken.</p>' +
+                '<div class="list-view prks-research-index">' +
+                sources +
+                '</div></section>' +
+                '<section class="research-entity__section" aria-labelledby="prks-arg-resp-h">' +
+                '<h3 id="prks-arg-resp-h">Responses</h3>' +
+                '<div class="list-view prks-research-index">' +
+                responses +
+                '</div></section>' +
+                '<section class="research-entity__section" aria-labelledby="prks-arg-mentions-h">' +
+                '<h3 id="prks-arg-mentions-h">Mentioned in notes</h3>' +
+                '<div class="list-view prks-research-index">' +
+                mentions +
+                '</div></section></div>';
+            bindArgumentRead(a, container, graphHash);
+            if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
+            return;
+        }
+
+        const targetRows = (a.targets || [])
+            .map(function (t, i) {
+                return targetRowHtml(t, i, verdictOpts);
+            })
+            .join('');
+        const sourceRows = (a.sources || [])
+            .map(function (s, i) {
+                return sourceRowHtml(s, i);
+            })
+            .join('');
+        container.innerHTML =
+            header +
             '<form id="prks-arg-form" class="prks-arg-form form-pane">' +
             '<label class="form-field-label" for="prks-arg-name">Name</label>' +
             '<input type="text" id="prks-arg-name" value="' +
             esc(a.name || '') +
             '">' +
-            '<label class="form-field-label" for="prks-arg-kind">Argument / Stance</label>' +
+            '<label class="form-field-label" for="prks-arg-kind">Kind</label>' +
             '<select id="prks-arg-kind">' +
             '<option value="argument"' +
             (a.kind !== 'stance' ? ' selected' : '') +
@@ -257,90 +295,83 @@
             '</textarea>' +
             '<h3>Responds to</h3>' +
             '<div id="prks-arg-targets">' +
-            (targetRows || '<p class="meta-row">None</p>') +
+            (targetRows || '<p class="meta-row">None yet.</p>') +
             '</div>' +
             '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="prks-arg-add-target">Add target</button>' +
-            '<h3>Where made/taken</h3>' +
+            '<h3>Sources</h3>' +
+            '<p class="meta-row">Works where this was made or taken.</p>' +
             '<div id="prks-arg-sources">' +
-            (sourceRows || '<p class="meta-row">None</p>') +
+            (sourceRows || '<p class="meta-row">None yet.</p>') +
             '</div>' +
             '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="prks-arg-add-source">Add source</button>' +
             '<p class="prks-arg-form__actions"><button type="submit" class="prks-btn prks-btn--primary">Save</button></p>' +
-            '</form>' +
-            '<h3>Counter/Response Arguments</h3>' +
-            responses +
-            '<h3>Mentioned in notes</h3>' +
-            mentions;
+            '</form>';
+        bindArgumentEdit(a, container, verdictOpts, graphHash);
+        if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
+    }
+
+    function targetRowHtml(t, i, verdictOpts) {
+        const row = t || {};
+        const type = row.type === 'argument' ? 'argument' : 'position';
+        const kindLabel = type === 'position' ? 'Position' : row.kind === 'stance' ? 'Stance' : 'Argument';
+        const name = row.name || row.id || 'Choose…';
+        return (
+            '<div class="prks-arg-row" data-i="' +
+            i +
+            '">' +
+            '<input type="hidden" data-field="type" value="' +
+            esc(type) +
+            '">' +
+            '<input type="hidden" data-field="id" value="' +
+            esc(row.id || '') +
+            '">' +
+            '<span class="prks-research-row__kicker">' +
+            esc(kindLabel) +
+            '</span>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-arg-rel__pick" data-pick="target">' +
+            esc(name) +
+            '</button>' +
+            '<select data-field="verdict">' +
+            verdictOpts(row.verdict_id) +
+            '</select>' +
+            '<button type="button" class="prks-btn prks-btn--ghost prks-btn--sm" data-remove="target">Remove</button>' +
+            '</div>'
+        );
+    }
+
+    function sourceRowHtml(s, i) {
+        const row = s || {};
+        const name = row.work_title || row.work_id || 'Choose a work…';
+        return (
+            '<div class="prks-arg-row" data-i="' +
+            i +
+            '">' +
+            '<input type="hidden" data-field="work_id" value="' +
+            esc(row.work_id || '') +
+            '">' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-arg-rel__pick" data-pick="source">' +
+            esc(name) +
+            '</button>' +
+            '<input type="text" data-field="pages" value="' +
+            esc(row.pages || '') +
+            '" placeholder="pages" maxlength="100" aria-label="Pages">' +
+            '<button type="button" class="prks-btn prks-btn--ghost prks-btn--sm" data-remove="source">Remove</button>' +
+            '</div>'
+        );
+    }
+
+    function bindArgumentRead(a, container, graphHash) {
         const viewGraph = container.querySelector('#prks-arg-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
-                const hash =
-                    typeof root.prksGraphFocusHash === 'function'
-                        ? root.prksGraphFocusHash('argument', a.id)
-                        : '#/graph?focus=' + encodeURIComponent('argument:' + a.id);
-                if (typeof root.prksNavigate === 'function') root.prksNavigate(hash);
+                if (typeof root.prksNavigate === 'function') root.prksNavigate(graphHash());
             });
         }
-        const kindSel = container.querySelector('#prks-arg-kind');
-        function defaultVerdict() {
-            const kind = kindSel && kindSel.value === 'stance' ? 'stance' : 'argument';
-            if (kind === 'stance') return 'holds';
-            return 'supports';
-        }
-        function addTargetRow(preset) {
-            const wrap = container.querySelector('#prks-arg-targets');
-            if (!wrap) return;
-            if (wrap.querySelector('.meta-row')) wrap.innerHTML = '';
-            const div = document.createElement('div');
-            div.className = 'prks-arg-row';
-            const t = preset || {};
-            div.innerHTML =
-                '<select data-field="type"><option value="position"' +
-                (t.type !== 'argument' ? ' selected' : '') +
-                '>Position</option><option value="argument"' +
-                (t.type === 'argument' ? ' selected' : '') +
-                '>Argument</option></select> ' +
-                '<input type="text" data-field="id" value="' +
-                esc(t.id || '') +
-                '" placeholder="P-… or A-…"> ' +
-                '<select data-field="verdict">' +
-                verdictOpts(t.verdict_id || defaultVerdict()) +
-                '</select> ' +
-                '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-remove="target">Remove</button>';
-            wrap.appendChild(div);
-        }
-        function addSourceRow(preset) {
-            const wrap = container.querySelector('#prks-arg-sources');
-            if (!wrap) return;
-            if (wrap.querySelector('.meta-row')) wrap.innerHTML = '';
-            const s = preset || {};
-            const div = document.createElement('div');
-            div.className = 'prks-arg-row';
-            div.innerHTML =
-                '<input type="text" data-field="work_id" value="' +
-                esc(s.work_id || '') +
-                '" placeholder="Work id"> ' +
-                '<input type="text" data-field="pages" value="' +
-                esc(s.pages || '') +
-                '" placeholder="pages" maxlength="100"> ' +
-                '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-remove="source">Remove</button>';
-            wrap.appendChild(div);
-        }
-        const addT = container.querySelector('#prks-arg-add-target');
-        const addS = container.querySelector('#prks-arg-add-source');
-        if (addT) addT.addEventListener('click', function () { addTargetRow(); });
-        if (addS) addS.addEventListener('click', function () { addSourceRow(); });
-        container.addEventListener('click', function (e) {
-            const btn = e.target.closest && e.target.closest('[data-remove]');
-            if (!btn) return;
-            const row = btn.closest('.prks-arg-row');
-            if (row && row.parentNode) row.parentNode.removeChild(row);
-        });
-        const form = container.querySelector('#prks-arg-form');
-        if (form) {
-            form.addEventListener('submit', function (e) {
-                e.preventDefault();
-                void saveArgumentForm(a.id, container);
+        const edit = container.querySelector('#prks-arg-edit');
+        if (edit) {
+            edit.addEventListener('click', function () {
+                window.__prksArgumentDetailEditing = true;
+                renderArgumentDetail(a, container);
             });
         }
         const resp = container.querySelector('#prks-arg-response');
@@ -366,7 +397,174 @@
                 void deleteArgument(a);
             });
         }
-        if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
+    }
+
+    function bindArgumentEdit(a, container, verdictOpts) {
+        const kindSel = container.querySelector('#prks-arg-kind');
+        function defaultVerdict() {
+            const kind = kindSel && kindSel.value === 'stance' ? 'stance' : 'argument';
+            if (kind === 'stance') return 'holds';
+            return 'supports';
+        }
+        function clearEmpty(wrap) {
+            if (wrap && wrap.querySelector('.meta-row') && !wrap.querySelector('.prks-arg-row')) {
+                wrap.innerHTML = '';
+            }
+        }
+        function addTargetRow(preset) {
+            const wrap = container.querySelector('#prks-arg-targets');
+            if (!wrap) return;
+            clearEmpty(wrap);
+            const t = preset || {};
+            if (!t.verdict_id) t.verdict_id = defaultVerdict();
+            wrap.insertAdjacentHTML('beforeend', targetRowHtml(t, wrap.querySelectorAll('.prks-arg-row').length, verdictOpts));
+        }
+        function addSourceRow(preset) {
+            const wrap = container.querySelector('#prks-arg-sources');
+            if (!wrap) return;
+            clearEmpty(wrap);
+            wrap.insertAdjacentHTML(
+                'beforeend',
+                sourceRowHtml(preset || {}, wrap.querySelectorAll('.prks-arg-row').length)
+            );
+        }
+        function openTargetPicker(row) {
+            if (typeof root.prksOpenResearchPicker !== 'function' && typeof prksOpenResearchPicker !== 'function') {
+                return;
+            }
+            const open = root.prksOpenResearchPicker || prksOpenResearchPicker;
+            void (async function () {
+                const [args, positions] = await Promise.all([
+                    typeof root.fetchArguments === 'function' ? root.fetchArguments() : [],
+                    typeof root.fetchPositions === 'function' ? root.fetchPositions() : [],
+                ]);
+                const selfId = String(a.id || '');
+                const items = function () {
+                    const out = [];
+                    (positions || []).forEach(function (p) {
+                        out.push({
+                            id: p.id,
+                            label: p.name || p.id,
+                            kind: 'Position',
+                            pickType: 'position',
+                            haystack: (p.name || '') + ' ' + (p.id || ''),
+                        });
+                    });
+                    (args || []).forEach(function (x) {
+                        if (String(x.id) === selfId) return;
+                        out.push({
+                            id: x.id,
+                            label: x.name || x.id,
+                            kind: x.kind === 'stance' ? 'Stance' : 'Argument',
+                            pickType: 'argument',
+                            haystack: (x.name || '') + ' ' + (x.id || '') + ' ' + (x.kind || ''),
+                        });
+                    });
+                    return out;
+                };
+                open({
+                    title: 'Responds to',
+                    items: items,
+                    onPick: function (id, pickType) {
+                        const type = pickType === 'argument' ? 'argument' : 'position';
+                        const typeEl = row.querySelector('[data-field="type"]');
+                        const idEl = row.querySelector('[data-field="id"]');
+                        const pickBtn = row.querySelector('[data-pick="target"]');
+                        const kicker = row.querySelector('.prks-research-row__kicker');
+                        if (typeEl) typeEl.value = type;
+                        if (idEl) idEl.value = id;
+                        let label = id;
+                        let kindLabel = type === 'position' ? 'Position' : 'Argument';
+                        items().forEach(function (it) {
+                            if (it.id === id) {
+                                label = it.label;
+                                kindLabel = it.kind;
+                            }
+                        });
+                        if (pickBtn) pickBtn.textContent = label;
+                        if (kicker) kicker.textContent = kindLabel;
+                    },
+                });
+            })();
+        }
+        function openSourcePicker(row) {
+            const open = (root.prksOpenResearchPicker || (typeof prksOpenResearchPicker === 'function' ? prksOpenResearchPicker : null));
+            if (!open) return;
+            void (async function () {
+                const works = typeof root.fetchWorks === 'function' ? await root.fetchWorks() : [];
+                const items = function () {
+                    return (works || []).map(function (w) {
+                        return {
+                            id: w.id,
+                            label: w.title || w.id,
+                            kind: 'Work',
+                            pickType: 'work',
+                            haystack: (w.title || '') + ' ' + (w.id || ''),
+                        };
+                    });
+                };
+                open({
+                    title: 'Source work',
+                    items: items,
+                    onPick: function (id) {
+                        const idEl = row.querySelector('[data-field="work_id"]');
+                        const pickBtn = row.querySelector('[data-pick="source"]');
+                        if (idEl) idEl.value = id;
+                        let label = id;
+                        items().forEach(function (it) {
+                            if (it.id === id) label = it.label;
+                        });
+                        if (pickBtn) pickBtn.textContent = label;
+                    },
+                });
+            })();
+        }
+        const cancel = container.querySelector('#prks-arg-cancel');
+        if (cancel) {
+            cancel.addEventListener('click', function () {
+                window.__prksArgumentDetailEditing = false;
+                renderArgumentDetail(a, container);
+            });
+        }
+        const addT = container.querySelector('#prks-arg-add-target');
+        const addS = container.querySelector('#prks-arg-add-source');
+        if (addT) {
+            addT.addEventListener('click', function () {
+                addTargetRow();
+                const rows = container.querySelectorAll('#prks-arg-targets .prks-arg-row');
+                const last = rows[rows.length - 1];
+                if (last) openTargetPicker(last);
+            });
+        }
+        if (addS) {
+            addS.addEventListener('click', function () {
+                addSourceRow();
+                const rows = container.querySelectorAll('#prks-arg-sources .prks-arg-row');
+                const last = rows[rows.length - 1];
+                if (last) openSourcePicker(last);
+            });
+        }
+        const form = container.querySelector('#prks-arg-form');
+        if (form) {
+            form.addEventListener('click', function (e) {
+                const pick = e.target.closest && e.target.closest('[data-pick]');
+                if (pick) {
+                    const row = pick.closest('.prks-arg-row');
+                    if (!row) return;
+                    if (pick.getAttribute('data-pick') === 'target') openTargetPicker(row);
+                    else openSourcePicker(row);
+                    return;
+                }
+                const btn = e.target.closest && e.target.closest('[data-remove]');
+                if (!btn) return;
+                const row = btn.closest('.prks-arg-row');
+                if (row && row.parentNode) row.parentNode.removeChild(row);
+            });
+            form.addEventListener('submit', function (e) {
+                e.preventDefault();
+                void saveArgumentForm(a.id, container);
+            });
+        }
     }
 
     async function saveArgumentForm(id, container) {
@@ -394,6 +592,7 @@
             });
             await root.putArgumentTargets(id, targets);
             await root.putArgumentSources(id, sources);
+            window.__prksArgumentDetailEditing = false;
             if (typeof root.prksNavigate === 'function') {
                 root.prksNavigate(root.location.hash, { replace: true });
             }
@@ -444,7 +643,8 @@
     async function createArgumentFromWork(options) {
         const opts = options || {};
         const kind = opts.kind === 'stance' ? 'stance' : 'argument';
-        const name = await promptArgumentName(kind);
+        const provided = opts.name != null ? String(opts.name).trim() : '';
+        const name = provided || (await promptArgumentName(kind));
         if (!name) return null;
         const payload = {
             name: String(name).trim(),

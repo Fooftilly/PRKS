@@ -24,6 +24,8 @@ _REQUIRED_DESIGN_HEADINGS = (
     "Local / content tabs versus workspace tabs",
     "Future workspace / tab visual contract",
     "Inline-style policy",
+    "Research entities",
+    "Research visualization",
     "Documented exceptions",
 )
 
@@ -92,6 +94,8 @@ _REQUIRED_PRIMITIVES = (
     ".prks-panel",
     ".prks-card",
     ".prks-list-row",
+    ".prks-dialog",
+    ".prks-filter-toggle",
     ".prks-tabs",
     ".prks-tab",
     ".prks-tag",
@@ -125,6 +129,7 @@ _GALLERY_SECTIONS = (
     "panels",
     "states",
     "dialogs",
+    "research",
     "workspace",
 )
 
@@ -331,6 +336,17 @@ class DesignSystemContractTests(unittest.TestCase):
             "#right-panel",
         ):
             self.assertNotIn(banned, block, banned)
+
+    def test_section_15_is_last_stylesheet_section(self):
+        css = _read(_CSS)
+        start = css.find("/* 15 Reduced motion */")
+        self.assertGreater(start, 0)
+        rest = css[start:]
+        self.assertEqual(rest.count("/* "), 1)
+        self.assertNotIn(".prks-research-picker", rest)
+        self.assertNotIn(".research-graph", rest)
+        trailing = rest[rest.rfind("}") + 1 :].strip()
+        self.assertEqual(trailing, "")
 
 
 if __name__ == "__main__":

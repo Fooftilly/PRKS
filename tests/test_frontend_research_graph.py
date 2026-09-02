@@ -104,7 +104,30 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("fetchResearchGraph", _read(_API))
         self.assertIn("/api/research-graph", _read(_API))
 
-    def test_no_schema_bump(self):
+    def test_person_profile_hierarchy(self):
+        people = _read(_PEOPLE)
+        sidebar = people.split("function renderPersonProfileDetailsSidebarHtml", 1)[1].split(
+            "function renderPersonProfileEditFormHtml", 1
+        )[0]
+        self.assertNotIn("Biography, portrait, and external links are in the main column.", sidebar)
+        self.assertIn("prks-btn--primary", sidebar)
+        self.assertIn("Edit using template", sidebar)
+        self.assertIn("person-sidebar__danger", sidebar)
+        self.assertIn("openPersonProfileEdit()", sidebar)
+        self.assertIn("prks-person-view-graph", sidebar)
+        detail = people.split("function renderPersonDetails", 1)[1]
+        self.assertIn("person-profile__summary", detail)
+        self.assertIn("person-profile__about", detail)
+        self.assertIn("person-profile__works-head", detail)
+        self.assertIn("personRoleBlockHtml", detail)
+        self.assertIn("person-profile__role-block", people)
+        self.assertIn("prksUniquePersonWorks", detail)
+        self.assertIn("prksPersonWorkRolesById", detail)
+        read_branch = detail.split("} else {", 1)[1].split("} else {", 1)[0]
+        self.assertIn("uniqueWorks", read_branch)
+        self.assertNotIn("acc[role].push(w)", read_branch)
+        self.assertIn("prks-people-list__lifespan", people)
+        self.assertNotIn("/api/persons/", people.split("function buildPersonListRowHtml", 1)[1].split("window.buildPersonListRowHtml", 1)[0])
         self.assertIn("LATEST_SCHEMA_VERSION = 13", _read(_SCHEMA))
 
     def test_docs(self):
@@ -122,6 +145,32 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn(".research-graph", css)
         self.assertIn(".research-graph__inspector", css)
         self.assertIn(".research-graph__legend", css)
+        self.assertIn(".prks-filter-toggle", css)
+        graph = _read(_GRAPH)
+        self.assertIn("'text-rotation': 'none'", graph)
+        self.assertNotIn("'text-rotation': 'autorotate'", graph)
+        self.assertIn("canvasLabel", graph)
+        self.assertIn("graph-dim", graph)
+        self.assertIn("nodeDimensionsIncludeLabels: true", graph)
+        self.assertIn("id=\"prks-graph-fit\">Fit", graph)
+        self.assertIn("legendIcon", graph)
+        self.assertIn("legendIcon('network'", graph)
+        self.assertIn("prksLucideSvgDataUri", graph)
+        self.assertIn("background-image", graph)
+        self.assertIn("background-clip", graph)
+        self.assertIn("shape: 'ellipse'", graph)
+        self.assertIn("doc-meta-card", graph)
+        self.assertIn("renderGraphInspector", graph)
+        self.assertNotIn('prks-panel__header">Inspector', graph)
+        self.assertNotIn(
+            '<div class="doc-meta-card"><p class="person-sidebar__section-label"',
+            graph,
+        )
+        ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
+        self.assertIn("case 'research-graph':", ui)
+        self.assertIn("return 'graph'", ui)
+        self.assertIn("isResearchGraphHash", ui)
+        self.assertIn('id="prks-graph-inspector"', ui)
 
     def test_node_selftest(self):
         node = shutil.which("node")

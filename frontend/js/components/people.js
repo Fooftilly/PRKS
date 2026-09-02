@@ -408,7 +408,7 @@ function renderPersonExternalLinksList(person) {
         .join('');
     return `
         <div class="person-external-links">
-            <h4>External references</h4>
+            <h4>References</h4>
             <ul class="person-link-list">${lis}</ul>
         </div>`;
 }
@@ -424,7 +424,7 @@ function truncatePersonPreviewText(text, maxLen) {
 function personExternalRefsSummary(person) {
     const bits = [];
     if (safeHttpUrl(person.link_wikipedia)) bits.push('Wikipedia');
-    if (safeHttpUrl(person.link_stanford_encyclopedia)) bits.push('Stanford Enc.');
+    if (safeHttpUrl(person.link_stanford_encyclopedia)) bits.push('SEP');
     if (safeHttpUrl(person.link_iep)) bits.push('IEP');
     const otherLines = (person.links_other || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const otherHttp = otherLines.filter(l => parsePersonOtherLinkLine(l) || safeHttpUrl(l)).length;
@@ -432,30 +432,29 @@ function personExternalRefsSummary(person) {
     return bits.length ? bits.join(' · ') : '';
 }
 
+function personReferenceCount(person) {
+    let n = 0;
+    if (safeHttpUrl(person.link_wikipedia)) n += 1;
+    if (safeHttpUrl(person.link_stanford_encyclopedia)) n += 1;
+    if (safeHttpUrl(person.link_iep)) n += 1;
+    const otherLines = (person.links_other || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    otherLines.forEach((line) => {
+        if (parsePersonOtherLinkLine(line) || safeHttpUrl(line)) n += 1;
+    });
+    return n;
+}
+
 /** Metadata block for person list rows (no title). */
 function buildPersonListDetailsHtml(p, options = {}) {
     const showGroups = options.showGroups !== false;
-    const lifespan = personLifespanDisplay(p);
-    const aliasesRaw = (p.aliases || '').trim();
-    const aliasesPreview = truncatePersonPreviewText(aliasesRaw, 100);
-    const aboutPreview = truncatePersonPreviewText(p.about || '', 220);
+    const aboutPreview = truncatePersonPreviewText(p.about || '', 180);
     const refsSummary = personExternalRefsSummary(p);
 
     let body = '';
-    if (lifespan) {
-        body += `<p class="meta-row person-card-lifespan">${escapeHtmlPerson(lifespan)}</p>`;
-    }
-    if (aliasesPreview) {
-        body += `<p class="meta-row person-card-aliases"><span class="person-card-label">Also known as</span> ${escapeHtmlPerson(aliasesPreview)}</p>`;
-    }
     if (aboutPreview) {
         body += `<p class="meta-row person-card-about">${escapeHtmlPerson(aboutPreview)}</p>`;
-    } else if (!lifespan && !aliasesPreview && !refsSummary) {
-        body += `<p class="meta-row person-card-about person-card-about--empty">No biography or links yet.</p>`;
     }
-    if (refsSummary) {
-        body += `<p class="meta-row person-card-refs"><span class="person-card-label">References</span> ${escapeHtmlPerson(refsSummary)}</p>`;
-    }
+    const metaBits = [];
     if (showGroups && Array.isArray(p.groups) && p.groups.length > 0) {
         const tags = p.groups
             .map(
@@ -463,7 +462,17 @@ function buildPersonListDetailsHtml(p, options = {}) {
                     `<span class="tag" onclick="event.stopPropagation();window.location.hash='#/people/groups/${escapeHtmlPerson(g.id)}'">${escapeHtmlPerson(g.name)}</span>`
             )
             .join(' ');
-        body += `<p class="meta-row person-card-groups"><span class="person-card-label">Groups</span> ${tags}</p>`;
+        metaBits.push(`<span class="prks-people-list__groups">${tags}</span>`);
+    }
+    if (refsSummary) {
+        metaBits.push(
+            `<span class="prks-people-list__refs">${escapeHtmlPerson(refsSummary)}</span>`
+        );
+    }
+    if (metaBits.length) {
+        body += `<p class="meta-row prks-people-list__meta-line">${metaBits.join('')}</p>`;
+    } else if (!aboutPreview) {
+        body += `<p class="meta-row person-card-about person-card-about--empty">No biography or links yet.</p>`;
     }
     return body;
 }
@@ -489,6 +498,10 @@ function buildPersonListRowHtml(p, options = {}) {
     const detailsBlock = details
         ? `<div class="prks-people-list__details">${details}</div>`
         : '';
+    const lifespan = personLifespanDisplay(p);
+    const lifespanHtml = lifespan
+        ? `<span class="prks-people-list__lifespan">${escapeHtmlPerson(lifespan)}</span>`
+        : '';
 
     return `
         <div class="prks-people-list__row${removableClass}" role="listitem" data-person-id="${idAttr}">
@@ -497,7 +510,10 @@ function buildPersonListRowHtml(p, options = {}) {
             <div class="prks-people-list__body">
                 <a class="prks-people-list__link" href="${hash}" data-prks-middleclick-nav="1" onauxclick="return typeof prksMaybeOpenHashInNewTab==='function'&&prksMaybeOpenHashInNewTab(event,'${hash}')">
                     <span class="prks-people-list__icon">${typeof prksIcon === 'function' ? prksIcon('user', { size: 16 }) : ''}</span>
+                    <span class="prks-people-list__title-row">
                     <span class="prks-people-list__title">${escapeHtmlPerson(name)}</span>
+                    ${lifespanHtml}
+                    </span>
                 </a>
                 ${detailsBlock}
             </div>
@@ -780,13 +796,13 @@ function prksPersonWorkRolesById(person) {
 
 function renderPersonProfileDetailsSidebarHtml(person) {
     if (!person) return '';
-    const display = `${(person.first_name || '').trim()} ${(person.last_name || '').trim()}`.trim() || 'Person';
-    const name = escapeHtmlPerson(display);
     const nWorks = prksUniquePersonWorks(person).length;
+    const nGroups = Array.isArray(person.groups) ? person.groups.length : 0;
+    const nRefs = personReferenceCount(person);
     const editingWorks = window.__prksPersonWorksEditing === true;
     const worksEditBtn =
         nWorks > 0 || editingWorks
-            ? `<button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" onclick="prksTogglePersonWorksEdit()">${
+            ? `<button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" onclick="prksTogglePersonWorksEdit()">${
                   editingWorks ? 'Done' : 'Edit works'
               }</button>`
             : '';
@@ -798,15 +814,20 @@ function renderPersonProfileDetailsSidebarHtml(person) {
         : '<p class="meta-row">Deletion blocked while linked files exist.</p>';
     return `
         <div class="doc-meta-card person-sidebar-summary">
-            <h3>${name}</h3>
-            <p class="meta-row">Biography, portrait, and external links are in the main column.</p>
-            <p class="route-sidebar__meta">${nWorks} linked file${nWorks === 1 ? '' : 's'}</p>
-            ${worksEditBtn}
-            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
+            <p class="saved-view-detail__kicker">Profile</p>
+            <ul class="person-sidebar__stats">
+                <li>${nWorks} linked file${nWorks === 1 ? '' : 's'}</li>
+                <li>${nGroups} group${nGroups === 1 ? '' : 's'}</li>
+                <li>${nRefs} reference${nRefs === 1 ? '' : 's'}</li>
+            </ul>
             <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" onclick="openPersonProfileEdit()">Edit profile</button>
-            <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" onclick="openPersonProfileTemplateModal()">Edit profile using template</button>
+            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" onclick="openPersonProfileTemplateModal()">Edit using template</button>
+            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
+            ${worksEditBtn ? `<p class="person-sidebar__section-label">File relationships</p>${worksEditBtn}` : ''}
+            <div class="person-sidebar__danger">
             ${deleteBtn}
             ${deleteHint}
+            </div>
             <p class="route-sidebar__action"><a href="#/people" class="route-sidebar__link">All people</a></p>
         </div>`;
 }
@@ -950,6 +971,15 @@ async function savePersonProfile(personId) {
     }
 }
 
+function personRoleBlockHtml(heading, count, cardsHtml) {
+    return (
+        `<section class="person-profile__role-block">` +
+        `<h3 class="person-profile__role-heading"><span>${escapeHtmlPerson(heading)}</span><span class="person-profile__role-count">${count}</span></h3>` +
+        `<div class="card-grid">${cardsHtml}</div>` +
+        `</section>`
+    );
+}
+
 function renderPersonDetails(person, container) {
     if (!person) {
         window.currentPerson = null;
@@ -960,17 +990,18 @@ function renderPersonDetails(person, container) {
     window.currentPerson = person;
 
     const worksEditing = window.__prksPersonWorksEditing === true;
-    let worksHtml = `<div class="card-grid">`;
+    const rolesByWork = prksPersonWorkRolesById(person);
+    let worksHtml = '';
     if (person.works && person.works.length > 0) {
         if (worksEditing) {
             const groupedWorks = person.works.reduce((acc, w) => {
-                if (!acc[w.role_type]) acc[w.role_type] = [];
-                acc[w.role_type].push(w);
+                const role = (w && w.role_type) || 'Linked';
+                if (!acc[role]) acc[role] = [];
+                acc[role].push(w);
                 return acc;
             }, {});
-
             for (const [role, worksList] of Object.entries(groupedWorks)) {
-                worksHtml += `<h3 class="person-profile__role-heading">${escapeHtmlPerson(role)}</h3>`;
+                let cards = '';
                 worksList.forEach((w) => {
                     const card = typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w) : '';
                     const oi =
@@ -978,33 +1009,45 @@ function renderPersonDetails(person, container) {
                     const rt = escapeHtmlPerson(w.role_type || 'Linked');
                     const pid = escapeHtmlPerson(person.id);
                     const wid = escapeHtmlPerson(w.id);
-                    worksHtml += `<div class="person-profile__work-card-wrap">${card}<button type="button" class="person-profile__card-unlink" aria-label="Remove link to this file" data-work-id="${wid}" data-person-id="${pid}" data-role-type="${rt}" data-order-index="${escapeHtmlPerson(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></div>`;
+                    cards += `<div class="person-profile__work-card-wrap">${card}<button type="button" class="person-profile__card-unlink" aria-label="Remove link to this file" data-work-id="${wid}" data-person-id="${pid}" data-role-type="${rt}" data-order-index="${escapeHtmlPerson(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></div>`;
                 });
+                worksHtml += personRoleBlockHtml((role || 'Linked').toUpperCase(), worksList.length, cards);
             }
         } else {
             const uniqueWorks = prksUniquePersonWorks(person);
-            const rolesByWork = prksPersonWorkRolesById(person);
+            const groupedUnique = {};
             uniqueWorks.forEach((w) => {
                 const workId = w && w.id != null ? String(w.id).trim() : '';
-                const roleList = rolesByWork.get(workId) || [];
-                const credit = (person.works || [])
-                    .filter((x) => x && String(x.id) === workId)
-                    .map((x) => (x.credit_name != null ? String(x.credit_name).trim() : ''))
-                    .find(Boolean) || '';
-                const subtitle = credit
-                    ? `${credit} (${roleList.join(', ')})`
-                    : roleList.join(', ');
-                const card =
-                    typeof prksWorkCardHtml === 'function'
-                        ? prksWorkCardHtml(w, subtitle ? { subtitle } : {})
-                        : '';
-                worksHtml += `<div class="person-profile__work-card-wrap">${card}</div>`;
+                const roles = rolesByWork.get(workId) || [];
+                const primary = roles[0] || 'Linked';
+                if (!groupedUnique[primary]) groupedUnique[primary] = [];
+                groupedUnique[primary].push({ work: w, roles: roles });
             });
+            for (const [role, rows] of Object.entries(groupedUnique)) {
+                let cards = '';
+                rows.forEach((row) => {
+                    const w = row.work;
+                    const workId = w && w.id != null ? String(w.id).trim() : '';
+                    const roleList = row.roles || [];
+                    const credit = (person.works || [])
+                        .filter((x) => x && String(x.id) === workId)
+                        .map((x) => (x.credit_name != null ? String(x.credit_name).trim() : ''))
+                        .find(Boolean) || '';
+                    const subtitle = credit
+                        ? `${credit} (${roleList.join(', ')})`
+                        : roleList.join(', ');
+                    const card =
+                        typeof prksWorkCardHtml === 'function'
+                            ? prksWorkCardHtml(w, subtitle ? { subtitle: subtitle } : {})
+                            : '';
+                    cards += `<div class="person-profile__work-card-wrap">${card}</div>`;
+                });
+                worksHtml += personRoleBlockHtml((role || 'Linked').toUpperCase(), rows.length, cards);
+            }
         }
     } else {
-        worksHtml += '<p class="prks-inline-message">This person is not linked to any files.</p>';
+        worksHtml = '<p class="prks-inline-message">This person is not linked to any files.</p>';
     }
-    worksHtml += `</div>`;
 
     const portraitApi = personProfileImageSrc(person);
     const heroNoPhotoClass = portraitApi ? '' : ' person-profile__hero--no-photo';
@@ -1015,7 +1058,11 @@ function renderPersonDetails(person, container) {
     const linksBlock = renderPersonExternalLinksList(person);
     const lifespan = personLifespanDisplay(person);
     const lifespanHtml = lifespan
-        ? `<p class="meta-row person-lifespan"><strong>Lifetime:</strong> ${escapeHtmlPerson(lifespan)}</p>`
+        ? `<p class="person-profile__lifespan">${escapeHtmlPerson(lifespan)}</p>`
+        : '';
+    const aliasesRaw = (person.aliases || '').trim();
+    const aliasesHtml = aliasesRaw
+        ? `<p class="meta-row person-profile__aliases"><span class="person-card-label">Also known as</span> ${escapeHtmlPerson(aliasesRaw)}</p>`
         : '';
     let groupsHtml = '';
     if (Array.isArray(person.groups) && person.groups.length > 0) {
@@ -1025,8 +1072,13 @@ function renderPersonDetails(person, container) {
                     `<span class="tag" onclick="window.location.hash='#/people/groups/${escapeHtmlPerson(g.id)}'">${escapeHtmlPerson(g.name)}</span>`
             )
             .join(' ');
-        groupsHtml = `<p class="meta-row"><strong>Groups:</strong> ${tags}</p>`;
+        groupsHtml = `<p class="meta-row person-profile__groups">${tags}</p>`;
     }
+    const aboutText = (person.about || '').trim();
+    const aboutHtml = aboutText
+        ? `<section class="person-profile__about" aria-labelledby="person-profile-about-heading"><h3 id="person-profile-about-heading">About</h3><p class="person-profile__about-text">${escapeHtmlPerson(aboutText)}</p></section>`
+        : '';
+    const nWorks = prksUniquePersonWorks(person).length;
 
     container.innerHTML = `
         <div class="prks-page-header page-header page-header--split">
@@ -1037,18 +1089,20 @@ function renderPersonDetails(person, container) {
                 <div class="person-profile__hero${heroNoPhotoClass}">
                     ${portraitCol}
                     <div class="person-profile__info">
-                        <div class="doc-meta-card">
-                            <h3>About</h3>
+                        <div class="person-profile__summary">
                             ${lifespanHtml}
+                            ${aliasesHtml}
                             ${groupsHtml}
-                            <p class="person-profile__about-text">${escapeHtmlPerson(person.about || 'No details available.')}</p>
-                            <p class="meta-row"><strong>Aliases:</strong> ${escapeHtmlPerson(person.aliases || 'None')}</p>
                         </div>
+                        ${aboutHtml}
                         ${linksBlock}
                     </div>
                 </div>
                 <section class="person-profile__works${worksEditing ? ' person-profile__works--editing' : ''}" aria-labelledby="person-profile-works-heading">
+                    <div class="person-profile__works-head">
                     <h2 id="person-profile-works-heading" class="person-profile__works-title">Linked files</h2>
+                    <span class="person-profile__works-count">${nWorks}</span>
+                    </div>
                     ${worksHtml}
                 </section>
             </div>

@@ -794,6 +794,35 @@ Do not delete a legacy rule first and then repair every broken page.
 
 ---
 
+## Research entities
+
+Concept, Position, Argument/Stance, and People indexes use dense `.prks-list-row` / `.prks-research-row` grammar:
+
+```text
+icon + title (+ kind)
+secondary descriptive line / relationship metadata
+```
+
+Metadata is split into compact items, not one punctuation-heavy sentence. Indexes stay one list request. Do not fetch per-row extras.
+
+Research insertion pickers use canonical dialog / field / list / action primitives (`.prks-dialog`, `.prks-input`, `.prks-list-row`, `.prks-btn`). `.prks-research-picker` is overlay/sizing/behavior only, not a second visual system.
+
+Argument/Stance detail is read-first. Relationships are named rows, not raw ids. Edit uses the same research picker as note insertion.
+
+Graph inspector selection uses one `doc-meta-card` (identity, action, neighbor lists). Do not wrap each neighbor group in another bordered card.
+
+Profile pages separate summary metadata (lifespan, aliases, groups) from long-form biography and from external references.
+
+## Research visualization
+
+The Research Graph is allowed a full-width canvas. Chrome around it (header, find, filters, legend) uses page / toolbar / field / panel / filter-toggle primitives. Selection details live in the application right panel (`doc-meta-card` / `right-panel-stack`), the same auxiliary column as Work and Person — not a second boxed inspector beside the canvas.
+
+Graph node colors are domain visualization (documented exception). Node types use the same Lucide icons as Research / People navigation (Concept `network`, Position `flag`, Argument/Stance `messages-square`, Work `file-text`, Person `user`) on a muted surface with a semantic border.
+
+Full relation descriptions belong in the inspector. Canvas edge labels are exceptional: short, horizontal (`text-rotation: none`), and only for the hovered or selected edge. Selecting a node highlights incident edges and dims the rest; it does not mass-label those edges.
+
+---
+
 ## Third-party integration boundaries
 
 ### EasyMDE
@@ -807,6 +836,12 @@ EasyMDE owns: editor mechanics.
 PRKS owns: viewer chrome, toolbar integration, pane border/surface, sync indicators, surrounding layout.
 
 EmbedPDF owns: rendering, selection, annotation mechanics.
+
+### Research Graph / Cytoscape
+
+PRKS owns: page chrome, filters, legend, canvas frame, and the right-panel selection inspector.
+
+Cytoscape owns: layout, hit-testing, and in-canvas node/edge drawing. Style/config for those live in `research-graph.js`, not a parallel CSS theme.
 
 Do not modify their behavior during visual normalization. Do not try to make them disappear into generic HTML styling.
 

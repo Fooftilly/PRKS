@@ -250,11 +250,18 @@ assert(rows, 'mention edge class', mentionEdge && mentionEdge.classes.indexOf('g
 assertEq(rows, 'verdict label', sourceEdge.data.pages, '12-14');
 assertEq(
     rows,
-    'mention display label',
-    g.displayLabelForEdge(fixture.edges[2]),
-    'Mentioned in research notes (3)'
+    'mention inspector label',
+    g.inspectorLabelForEdge(fixture.edges[2]),
+    'Mentioned in research notes'
+);
+assertEq(
+    rows,
+    'mention canvas label',
+    g.canvasLabelForEdge(fixture.edges[2]),
+    'Note mention ×3'
 );
 assertEq(rows, 'source display label', g.displayLabelForEdge(fixture.edges[1]), 'Made/taken in');
+assertEq(rows, 'source canvas label', g.canvasLabelForEdge(fixture.edges[1]), 'Source');
 assertEq(rows, 'verdict display label', g.displayLabelForEdge(fixture.edges[0]), 'Supports');
 assertEq(rows, 'concept route', nodeEl.data.route, '#/concepts/C-1');
 assert(rows, 'source vs mention distinct classes', sourceEdge.classes !== mentionEdge.classes);
@@ -293,6 +300,50 @@ assert(
     rows,
     'inspector note-linked works',
     insp.stats.some((s) => s.label === 'Note-linked works' && s.value === 1)
+);
+
+assert(
+    rows,
+    'node select does not mass-label incident edges',
+    g.edgeShouldShowCanvasLabel(mentionEdge.data.id, {
+        selectedNodeId: 'work:W-1',
+        selectedEdgeId: '',
+        hoverEdgeId: '',
+    }) === false
+);
+assert(
+    rows,
+    'hovered edge shows canvas label',
+    g.edgeShouldShowCanvasLabel(mentionEdge.data.id, {
+        selectedNodeId: 'work:W-1',
+        selectedEdgeId: '',
+        hoverEdgeId: mentionEdge.data.id,
+    }) === true
+);
+assert(
+    rows,
+    'selected edge shows canvas label',
+    g.edgeShouldShowCanvasLabel(mentionEdge.data.id, {
+        selectedNodeId: '',
+        selectedEdgeId: mentionEdge.data.id,
+        hoverEdgeId: '',
+    }) === true
+);
+const ctx = g.selectionContextIds(fixture, 'work:W-1', '');
+assert(rows, 'work context includes concept', !!ctx.nodeIds['concept:C-1']);
+assert(rows, 'work context includes mention edge', !!ctx.edgeIds[mentionEdge.data.id]);
+assert(rows, 'work context dims unrelated position', !ctx.nodeIds['position:P-1']);
+const edgeInsp = g.inspectorEdgeModel(fixture, mentionEdge.data.id);
+assertEq(rows, 'edge inspector relation', edgeInsp && edgeInsp.relation, 'Mentioned in research notes');
+assertEq(rows, 'edge inspector source', edgeInsp && edgeInsp.source && edgeInsp.source.id, 'work:W-1');
+assertEq(rows, 'edge inspector target', edgeInsp && edgeInsp.target && edgeInsp.target.id, 'concept:C-1');
+const styles = g.cytoscapeStyle();
+const edgeBase = styles.find((s) => s.selector === 'edge');
+assertEq(rows, 'edge labels do not autorotate', edgeBase && edgeBase.style['text-rotation'], 'none');
+assert(
+    rows,
+    'label-on uses canvasLabel',
+    styles.some((s) => s.selector === 'edge.graph-edge--label-on' && s.style.label === 'data(canvasLabel)')
 );
 
 g.openSelectedRecord(fixture.nodes[0]);

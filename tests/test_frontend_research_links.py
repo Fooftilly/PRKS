@@ -51,6 +51,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
         )[0]
         self.assertNotIn("prksNavigate", create)
         self.assertIn("opts.workId", create)
+        self.assertIn("opts.name", create)
 
     def test_routes_wired(self):
         app = _read(_APP)
@@ -83,13 +84,56 @@ class FrontendResearchLinksTests(unittest.TestCase):
             self.assertNotIn("window.prompt", src, path)
         self.assertIn("prksPromptTextDialog", src)
 
+    def test_research_picker_uses_canonical_dialog(self):
+        works = _read(_WORKS)
+        picker = works.split("function prksOpenResearchPicker", 1)[1].split(
+            "function prksOpenConceptPicker", 1
+        )[0]
+        self.assertIn('class="prks-dialog prks-research-picker__dialog"', picker)
+        self.assertIn("prks-dialog__header", picker)
+        self.assertIn("prks-dialog__title", picker)
+        self.assertIn("prks-dialog__body", picker)
+        self.assertIn("prks-dialog__actions", picker)
+        self.assertIn('class="prks-input prks-research-picker__q"', picker)
+        self.assertIn("prks-list-row", picker)
+        self.assertNotIn("prks-research-picker__panel", picker)
+        self.assertIn('Create “', works)
+        self.assertIn("createItems", works)
+        self.assertIn("Create Argument", works)
+        self.assertIn("Create Stance", works)
+        arg_picker = works.split("function prksOpenArgumentPicker", 1)[1].split(
+            "async function deleteWork", 1
+        )[0]
+        self.assertNotIn("data-new=", arg_picker)
+        self.assertNotIn("extraHtml", arg_picker)
+
+    def test_research_indexes_use_dense_rows(self):
+        concepts = _read(_CONCEPTS)
+        positions = _read(_POSITIONS)
+        args = _read(_ARGS)
+        self.assertIn("prks-research-row", concepts)
+        self.assertIn("prksResearchIndexRowHtml", concepts)
+        self.assertIn("No parent", concepts)
+        self.assertNotIn("Parents:", concepts.split("function renderConceptsIndex", 1)[1].split("function createConceptFlow", 1)[0])
+        self.assertIn("prks-research-row", positions)
+        self.assertIn("prks-research-row", args)
+        self.assertIn("prks-tab", args)
+        self.assertIn("prks-tabs", args)
+
     def test_argument_editor_uses_form_pane_controls(self):
         args = _read(_ARGS)
         self.assertIn('class="prks-arg-form form-pane"', args)
         self.assertIn('class="prks-btn prks-btn--primary"', args)
+        self.assertIn("research-entity", args)
+        self.assertIn("prks-arg-edit", args)
+        self.assertIn("__prksArgumentDetailEditing", args)
+        self.assertIn("prksOpenResearchPicker", args)
+        self.assertNotIn('placeholder="Work id"', args)
+        self.assertNotIn("P-… or A-…", args)
         css = _read(os.path.join(_FRONTEND, "css", "style.css"))
         self.assertIn(".prks-arg-form input[type=\"text\"]", css)
         self.assertIn("background: var(--surface-muted)", css)
+        self.assertIn(".research-entity", css)
 
 
 if __name__ == "__main__":

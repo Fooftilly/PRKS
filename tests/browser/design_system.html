@@ -87,6 +87,7 @@
             <a href="#panels">Panels</a>
             <a href="#states">Empty/loading/error</a>
             <a href="#dialogs">Dialogs</a>
+            <a href="#research">Research</a>
             <a href="#workspace">Workspace (future)</a>
         </nav>
 
@@ -319,6 +320,70 @@
                     <div class="prks-dialog__actions">
                         <button type="button" class="prks-btn prks-btn--secondary">Cancel</button>
                         <button type="button" class="prks-btn prks-btn--danger">Close without saving</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="research" data-gallery-section="research">
+            <h2>Research lists / picker / graph chrome</h2>
+            <a class="prks-list-row prks-research-row" href="#research">
+                <span class="prks-research-row__icon"><i data-lucide="network" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span>
+                <span class="prks-research-row__body">
+                    <span class="prks-research-row__title-line">
+                        <span class="prks-research-row__title">Culture</span>
+                    </span>
+                    <span class="prks-research-row__meta">
+                        <span class="prks-research-row__meta-item">No parent</span>
+                        <span class="prks-research-row__meta-item">0 subconcepts</span>
+                        <span class="prks-research-row__meta-item">1 note mention</span>
+                    </span>
+                </span>
+            </a>
+            <div class="prks-toolbar" style="margin-top:var(--space-md)">
+                <input class="prks-input" style="max-width:16rem" placeholder="Find node…">
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm">Fit</button>
+                <label class="prks-filter-toggle"><input type="checkbox" checked> <span>Concepts</span></label>
+            </div>
+            <div class="prks-dialog prks-research-picker__dialog" style="max-width:420px;margin-top:var(--space-md)">
+                <div class="prks-dialog__header">
+                    <h3 class="prks-dialog__title">Insert Argument / Stance</h3>
+                    <button type="button" class="prks-icon-btn" aria-label="Close">&times;</button>
+                </div>
+                <div class="prks-dialog__body">
+                    <input class="prks-input prks-research-picker__q" placeholder="Search…">
+                    <div class="prks-research-picker__list">
+                        <button type="button" class="prks-list-row prks-research-row">
+                            <span class="prks-research-row__body">
+                                <span class="prks-research-row__kicker">Argument</span>
+                                <span class="prks-research-row__title">asd</span>
+                            </span>
+                        </button>
+                        <button type="button" class="prks-list-row prks-research-row prks-research-picker__create">Create Argument “Critical Theory”</button>
+                    </div>
+                </div>
+                <div class="prks-dialog__actions prks-research-picker__actions">
+                    <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm">Close</button>
+                </div>
+            </div>
+            <div class="right-panel-stack research-graph__inspector" style="max-width:280px;margin-top:var(--space-md)">
+                <div class="doc-meta-card">
+                    <p class="saved-view-detail__kicker">Person</p>
+                    <p class="card-title" id="prks-gallery-graph-inspector-title">Theodor Adorno</p>
+                    <ul class="person-sidebar__stats">
+                        <li><span class="research-graph__stat-label">Authored works</span> 1</li>
+                    </ul>
+                    <div class="research-graph__inspector-actions">
+                        <button type="button" class="prks-btn prks-btn--primary">Open Person</button>
+                    </div>
+                    <p class="person-sidebar__section-label">Authored works</p>
+                    <div class="research-graph__neighbors">
+                        <button type="button" class="prks-list-row research-graph__neighbor">
+                            <span class="prks-research-row__body">
+                                <span class="prks-research-row__title">ebook1</span>
+                                <span class="prks-research-row__meta"><span class="prks-research-row__meta-item">Author</span></span>
+                            </span>
+                        </button>
                     </div>
                 </div>
             </div>

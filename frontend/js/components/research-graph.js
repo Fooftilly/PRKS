@@ -25,6 +25,8 @@
     let filters = Object.assign({}, DEFAULT_FILTERS);
     let includePeople = false;
     let selectedId = '';
+    let selectedEdgeId = '';
+    let hoverEdgeId = '';
     let findQuery = '';
     let findHits = [];
     let findIndex = -1;
@@ -56,7 +58,7 @@
         }
     }
 
-    function displayLabelForEdge(edge) {
+    function inspectorLabelForEdge(edge) {
         const t = edge && edge.type;
         if (t === 'concept_parent') return 'Subconcept of';
         if (t === 'argument_position' || t === 'argument_argument') {
@@ -64,11 +66,29 @@
         }
         if (t === 'argument_source') return 'Made/taken in';
         if (t === 'mentions_concept' || t === 'mentions_argument') {
-            const n = Number(edge.count) || 0;
-            return n > 1 ? 'Mentioned in research notes (' + n + ')' : 'Mentioned in research notes';
+            return 'Mentioned in research notes';
         }
         if (t === 'work_author') return 'Author';
         return t || '';
+    }
+
+    function canvasLabelForEdge(edge) {
+        const t = edge && edge.type;
+        if (t === 'concept_parent') return 'Subconcept';
+        if (t === 'argument_position' || t === 'argument_argument') {
+            return String(edge.verdict_label || edge.verdict_id || 'Responds to');
+        }
+        if (t === 'argument_source') return 'Source';
+        if (t === 'mentions_concept' || t === 'mentions_argument') {
+            const n = Number(edge.count) || 0;
+            return n > 1 ? 'Note mention ×' + n : 'Note mention';
+        }
+        if (t === 'work_author') return 'Author';
+        return t || '';
+    }
+
+    function displayLabelForEdge(edge) {
+        return inspectorLabelForEdge(edge);
     }
 
     function nodeClasses(node) {
@@ -122,7 +142,9 @@
                     verdict_label: e.verdict_label || '',
                     pages: e.pages || '',
                     count: e.count || 0,
-                    displayLabel: displayLabelForEdge(e),
+                    canvasLabel: canvasLabelForEdge(e),
+                    inspectorLabel: inspectorLabelForEdge(e),
+                    displayLabel: inspectorLabelForEdge(e),
                 },
                 classes: edgeClasses(e),
             });
@@ -213,6 +235,53 @@
             if (nodes[i].id === id) return nodes[i];
         }
         return null;
+    }
+
+    function edgeById(data, id) {
+        const edges = Array.isArray(data && data.edges) ? data.edges : [];
+        for (let i = 0; i < edges.length; i++) {
+            if (edges[i].id === id) return edges[i];
+        }
+        return null;
+    }
+
+    function selectionContextIds(data, nodeId, edgeId) {
+        const nodeIds = {};
+        const edgeIds = {};
+        function addNode(id) {
+            if (id) nodeIds[id] = true;
+        }
+        function addEdge(id) {
+            if (id) edgeIds[id] = true;
+        }
+        if (edgeId) {
+            const e = edgeById(data, edgeId);
+            if (e) {
+                addEdge(e.id);
+                addNode(e.source);
+                addNode(e.target);
+            }
+        }
+        if (nodeId) {
+            addNode(nodeId);
+            const edges = Array.isArray(data && data.edges) ? data.edges : [];
+            for (let i = 0; i < edges.length; i++) {
+                const e = edges[i];
+                if (e.source === nodeId || e.target === nodeId) {
+                    addEdge(e.id);
+                    addNode(e.source);
+                    addNode(e.target);
+                }
+            }
+        }
+        return { nodeIds: nodeIds, edgeIds: edgeIds };
+    }
+
+    function edgeShouldShowCanvasLabel(edgeId, ctx) {
+        if (!edgeId || !ctx) return false;
+        if (ctx.hoverEdgeId && edgeId === ctx.hoverEdgeId) return true;
+        if (ctx.selectedEdgeId && edgeId === ctx.selectedEdgeId) return true;
+        return false;
     }
 
     function neighborGroups(data, nodeId) {
@@ -316,7 +385,7 @@
                     return {
                         id: row.id,
                         label: n ? n.label : row.id,
-                        hint: displayLabelForEdge(row.edge),
+                        hint: inspectorLabelForEdge(row.edge),
                     };
                 }),
             });
@@ -344,6 +413,34 @@
         };
     }
 
+    function inspectorEdgeModel(data, edgeId) {
+        const edge = edgeById(data, edgeId);
+        if (!edge) return null;
+        const source = nodeById(data, edge.source);
+        const target = nodeById(data, edge.target);
+        const relation = inspectorLabelForEdge(edge);
+        let kicker = 'Relation';
+        if (edge.type === 'argument_source') kicker = 'Source';
+        const stats = [];
+        if (edge.type === 'mentions_concept' || edge.type === 'mentions_argument') {
+            stats.push({ label: 'Occurrences', value: Number(edge.count) || 1 });
+        }
+        if (edge.pages) {
+            stats.push({ label: 'Pages', value: edge.pages });
+        }
+        return {
+            id: edge.id,
+            type: edge.type,
+            kicker: kicker,
+            relation: relation,
+            source: source,
+            target: target,
+            stats: stats,
+            openSourceLabel: source ? openLabel(source) : '',
+            openTargetLabel: target ? openLabel(target) : '',
+        };
+    }
+
     function openSelectedRecord(nodeOrId) {
         const node = typeof nodeOrId === 'string' ? nodeById(snapshot, nodeOrId) : nodeOrId;
         if (!node || !node.route) return false;
@@ -354,11 +451,41 @@
         return false;
     }
 
+    function nodeIconStyle(lucideName, borderColor, extra) {
+        const uri =
+            typeof root.prksLucideSvgDataUri === 'function'
+                ? root.prksLucideSvgDataUri(lucideName, borderColor)
+                : '';
+        const style = Object.assign(
+            {
+                shape: 'ellipse',
+                width: 42,
+                height: 42,
+                'border-width': 2,
+                'border-color': borderColor,
+            },
+            extra || {}
+        );
+        if (uri) {
+            style['background-image'] = 'url("' + uri.replace(/"/g, '%22') + '")';
+            style['background-fit'] = 'none';
+            style['background-clip'] = 'none';
+            style['background-width'] = '58%';
+            style['background-height'] = '58%';
+            style['background-position-x'] = '50%';
+            style['background-position-y'] = '50%';
+        }
+        return style;
+    }
+
     function cytoscapeStyle() {
         const text = token('--text-primary', '#1e293b');
         const secondary = token('--text-secondary', '#475569');
         const accent = token('--accent', '#6d6cf7');
+        const accentSoft = token('--accent-soft', '#ececff');
         const surface = token('--surface', '#f8fafc');
+        const muted = token('--surface-muted', '#f1f5f9');
+        const border = token('--border', '#e2e8f0');
         const planned = token('--status-planned-border', '#7c3aed');
         const progress = token('--status-progress-border', '#ca8a04');
         const completed = token('--status-completed-border', '#16a34a');
@@ -369,65 +496,76 @@
                 style: {
                     label: 'data(label)',
                     color: text,
-                    'font-size': 10,
+                    'font-size': 11,
                     'font-family': token('--font-family', 'Inter, sans-serif'),
                     'text-valign': 'bottom',
                     'text-halign': 'center',
-                    'text-margin-y': 6,
+                    'text-margin-y': 8,
                     'text-wrap': 'ellipsis',
                     'text-max-width': 110,
-                    'background-color': accent,
+                    'background-color': surface,
                     'border-width': 2,
-                    'border-color': text,
+                    'border-color': border,
                     width: 28,
                     height: 28,
+                    opacity: 1,
                     'overlay-opacity': 0,
                 },
             },
             {
                 selector: 'node.graph-node--concept',
-                style: { shape: 'ellipse', 'background-color': accent },
+                style: nodeIconStyle('network', accent),
             },
             {
                 selector: 'node.graph-node--position',
-                style: { shape: 'diamond', 'background-color': planned, width: 30, height: 30 },
+                style: nodeIconStyle('flag', planned),
             },
             {
                 selector: 'node.graph-node--argument',
-                style: { shape: 'round-rectangle', 'background-color': progress, width: 34, height: 22 },
+                style: nodeIconStyle('messages-square', progress),
             },
             {
                 selector: 'node.graph-node--stance',
-                style: { shape: 'round-tag', 'background-color': completed, width: 34, height: 22 },
+                style: nodeIconStyle('messages-square', completed),
             },
             {
                 selector: 'node.graph-node--work',
-                style: { shape: 'rectangle', 'background-color': secondary, width: 26, height: 32 },
+                style: nodeIconStyle('file-text', secondary, { 'background-color': muted }),
             },
             {
                 selector: 'node.graph-node--person',
-                style: { shape: 'round-octagon', 'background-color': paused, width: 28, height: 28 },
+                style: nodeIconStyle('user', paused),
             },
             {
-                selector: 'node:selected',
-                style: { 'border-width': 3, 'border-color': accent, 'background-color': surface },
+                selector: 'node:selected, node.graph-node--selected',
+                style: {
+                    'border-width': 3,
+                    'border-color': accent,
+                    'background-color': accentSoft,
+                },
+            },
+            {
+                selector: 'node.graph-dim',
+                style: { opacity: 0.3 },
             },
             {
                 selector: 'edge',
                 style: {
                     label: '',
-                    color: secondary,
+                    color: text,
                     'font-size': 9,
-                    'text-rotation': 'autorotate',
-                    'text-background-color': surface,
-                    'text-background-opacity': 0.85,
-                    'text-background-padding': 2,
+                    'text-rotation': 'none',
+                    'text-background-color': muted,
+                    'text-background-opacity': 1,
+                    'text-background-padding': 3,
+                    'text-background-shape': 'roundrectangle',
                     'curve-style': 'bezier',
                     'target-arrow-shape': 'triangle',
                     'arrow-scale': 0.8,
                     width: 1.5,
                     'line-color': secondary,
                     'target-arrow-color': secondary,
+                    opacity: 1,
                     'overlay-opacity': 0,
                 },
             },
@@ -459,11 +597,15 @@
             },
             {
                 selector: 'edge.graph-edge--label-on',
-                style: { label: 'data(displayLabel)' },
+                style: { label: 'data(canvasLabel)' },
             },
             {
-                selector: 'edge:selected',
-                style: { label: 'data(displayLabel)', width: 3 },
+                selector: 'edge.graph-focus',
+                style: { width: 2.75, opacity: 1 },
+            },
+            {
+                selector: 'edge.graph-dim',
+                style: { opacity: 0.15 },
             },
         ];
     }
@@ -489,18 +631,43 @@
         root.__prksResearchGraphCy = null;
     }
 
-    function updateEdgeLabels(cy, selId, hoverEdgeId) {
+    function updateEdgeLabels(cy) {
         if (!cy) return;
+        const ctx = {
+            hoverEdgeId: hoverEdgeId,
+            selectedEdgeId: selectedEdgeId,
+        };
         cy.edges().forEach(function (e) {
-            const src = e.source().id();
-            const tgt = e.target().id();
-            const on =
-                e.selected() ||
-                e.id() === hoverEdgeId ||
-                (selId && (src === selId || tgt === selId));
-            if (on) e.addClass('graph-edge--label-on');
+            if (edgeShouldShowCanvasLabel(e.id(), ctx)) e.addClass('graph-edge--label-on');
             else e.removeClass('graph-edge--label-on');
         });
+    }
+
+    function applySelectionContext(cy) {
+        if (!cy) return;
+        const hasFocus = !!(selectedId || selectedEdgeId);
+        const ctx = selectionContextIds(snapshot, selectedId, selectedEdgeId);
+        cy.batch(function () {
+            cy.nodes().forEach(function (n) {
+                const keep = !hasFocus || ctx.nodeIds[n.id()];
+                if (keep) n.removeClass('graph-dim');
+                else n.addClass('graph-dim');
+                if (selectedId && n.id() === selectedId) n.addClass('graph-node--selected');
+                else n.removeClass('graph-node--selected');
+            });
+            cy.edges().forEach(function (e) {
+                const keep = !hasFocus || ctx.edgeIds[e.id()];
+                if (keep) {
+                    e.removeClass('graph-dim');
+                    if (hasFocus) e.addClass('graph-focus');
+                    else e.removeClass('graph-focus');
+                } else {
+                    e.addClass('graph-dim');
+                    e.removeClass('graph-focus');
+                }
+            });
+        });
+        updateEdgeLabels(cy);
     }
 
     function centerNode(cy, id) {
@@ -522,74 +689,205 @@
 
     function selectNode(id, opts) {
         selectedId = id || '';
+        selectedEdgeId = '';
+        hoverEdgeId = '';
         const cy = liveCy;
-        if (cy && id) {
+        if (cy) {
             cy.elements().unselect();
-            const el = cy.getElementById(id);
-            if (el && el.length && !el.empty()) {
-                el.select();
-                if (!opts || opts.center !== false) centerNode(cy, id);
+            if (id) {
+                const el = cy.getElementById(id);
+                if (el && el.length && !el.empty()) {
+                    el.select();
+                    if (!opts || opts.center !== false) centerNode(cy, id);
+                }
             }
-            updateEdgeLabels(cy, selectedId, '');
+            applySelectionContext(cy);
         }
         renderInspector();
         return selectedId;
     }
 
+    function selectEdge(id) {
+        selectedEdgeId = id || '';
+        selectedId = '';
+        const cy = liveCy;
+        if (cy) {
+            cy.elements().unselect();
+            if (id) {
+                const el = cy.getElementById(id);
+                if (el && el.length && !el.empty()) el.select();
+            }
+            applySelectionContext(cy);
+        }
+        renderInspector();
+        return selectedEdgeId;
+    }
+
+    function clearGraphSelection() {
+        selectedId = '';
+        selectedEdgeId = '';
+        hoverEdgeId = '';
+        const cy = liveCy;
+        if (cy) {
+            cy.elements().unselect();
+            applySelectionContext(cy);
+        }
+        renderInspector();
+    }
+
+    function inspectorEl() {
+        if (typeof document !== 'undefined' && document.getElementById) {
+            const panel = document.getElementById('prks-graph-inspector');
+            if (panel) return panel;
+        }
+        if (liveDom && liveDom.querySelector) return liveDom.querySelector('#prks-graph-inspector');
+        return null;
+    }
+
+    function inspectorClick(ev) {
+        const t = ev.target;
+        if (!t || !t.closest) return;
+        const hit = t.closest('[data-graph-node]');
+        if (hit) {
+            ev.preventDefault();
+            chooseFindHit(hit.getAttribute('data-graph-node'));
+            return;
+        }
+        if (t.id === 'prks-graph-open' || t.closest('#prks-graph-open')) {
+            ev.preventDefault();
+            openSelectedRecord(selectedId);
+            return;
+        }
+        const openBtn = t.closest('[data-graph-open]');
+        if (openBtn) {
+            ev.preventDefault();
+            openSelectedRecord(openBtn.getAttribute('data-graph-open'));
+        }
+    }
+
+    function ensureInspectorBound(el) {
+        if (!el || typeof el.addEventListener !== 'function') return;
+        if (el.getAttribute && el.getAttribute('data-graph-inspector-bound') === '1') return;
+        if (el.setAttribute) el.setAttribute('data-graph-inspector-bound', '1');
+        el.addEventListener('click', inspectorClick);
+    }
+
     function paintInspector(html) {
-        if (!liveDom) return;
-        const el = liveDom.querySelector('#prks-graph-inspector');
-        if (el) el.innerHTML = html;
+        const el = inspectorEl();
+        if (!el) return;
+        el.innerHTML = html;
+        ensureInspectorBound(el);
+    }
+
+    function inspectorStatsHtml(stats) {
+        if (!stats || !stats.length) return '';
+        let html = '<ul class="person-sidebar__stats">';
+        for (let i = 0; i < stats.length; i++) {
+            html +=
+                '<li><span class="research-graph__stat-label">' +
+                esc(stats[i].label) +
+                '</span> ' +
+                esc(String(stats[i].value)) +
+                '</li>';
+        }
+        html += '</ul>';
+        return html;
+    }
+
+    function inspectorNeighborHtml(item) {
+        return (
+            '<button type="button" class="prks-list-row research-graph__neighbor" data-graph-node="' +
+            esc(item.id) +
+            '"><span class="prks-research-row__body"><span class="prks-research-row__title">' +
+            esc(item.label) +
+            '</span>' +
+            (item.hint
+                ? '<span class="prks-research-row__meta"><span class="prks-research-row__meta-item">' +
+                  esc(item.hint) +
+                  '</span></span>'
+                : '') +
+            '</span></button>'
+        );
     }
 
     function renderInspector() {
-        const model = inspectorModel(snapshot, selectedId);
+        const edgeModel = selectedEdgeId ? inspectorEdgeModel(snapshot, selectedEdgeId) : null;
+        const model = !edgeModel ? inspectorModel(snapshot, selectedId) : null;
         let html = '';
         if (statusMessage) {
-            html += '<p class="meta-row" role="status">' + esc(statusMessage) + '</p>';
+            html += '<p class="prks-inline-message" role="status">' + esc(statusMessage) + '</p>';
+        }
+        if (edgeModel) {
+            html +=
+                '<div class="doc-meta-card">' +
+                '<p class="saved-view-detail__kicker">' +
+                esc(edgeModel.kicker) +
+                '</p><p class="card-title" id="prks-graph-inspector-title">' +
+                esc(edgeModel.relation) +
+                '</p>' +
+                '<p class="meta-row meta-row--compact research-graph__edge-ends">' +
+                '<span class="research-graph__edge-end">' +
+                esc(edgeModel.source ? edgeModel.source.label : '') +
+                '</span>' +
+                '<span class="research-graph__edge-arrow" aria-hidden="true"> → </span>' +
+                '<span class="research-graph__edge-end">' +
+                esc(edgeModel.target ? edgeModel.target.label : '') +
+                '</span></p>' +
+                inspectorStatsHtml(edgeModel.stats) +
+                '<div class="research-graph__inspector-actions">';
+            if (edgeModel.source) {
+                html +=
+                    '<button type="button" class="prks-btn prks-btn--secondary" data-graph-open="' +
+                    esc(edgeModel.source.id) +
+                    '">' +
+                    esc(edgeModel.openSourceLabel) +
+                    '</button>';
+            }
+            if (edgeModel.target) {
+                html +=
+                    '<button type="button" class="prks-btn prks-btn--secondary" data-graph-open="' +
+                    esc(edgeModel.target.id) +
+                    '">' +
+                    esc(edgeModel.openTargetLabel) +
+                    '</button>';
+            }
+            html += '</div></div>';
+            paintInspector(html);
+            return edgeModel;
         }
         if (!model) {
             html +=
+                '<div class="doc-meta-card">' +
                 '<p class="saved-view-detail__kicker">Selection</p>' +
-                '<p class="meta-row">Select a node to inspect relationships. Clicking a node does not leave the graph.</p>';
+                '<p class="meta-row">Select a node or edge. Relationships stay on the canvas as highlights, not mass labels.</p>' +
+                '</div>';
             paintInspector(html);
             return model;
         }
         html +=
+            '<div class="doc-meta-card">' +
             '<p class="saved-view-detail__kicker">' +
             esc(model.typeLabel) +
-            '</p><h3 id="prks-graph-inspector-title">' +
+            '</p><p class="card-title" id="prks-graph-inspector-title">' +
             esc(model.label) +
-            '</h3><ul class="research-graph__stats">';
-        for (let i = 0; i < model.stats.length; i++) {
-            html +=
-                '<li>' +
-                esc(model.stats[i].label) +
-                ': ' +
-                esc(String(model.stats[i].value)) +
-                '</li>';
-        }
-        html += '</ul>';
+            '</p>' +
+            inspectorStatsHtml(model.stats) +
+            '<div class="research-graph__inspector-actions">' +
+            '<button type="button" class="prks-btn prks-btn--primary" id="prks-graph-open">' +
+            esc(model.openLabel) +
+            '</button></div>';
         for (let g = 0; g < model.lists.length; g++) {
             const list = model.lists[g];
-            html += '<h4>' + esc(list.title) + '</h4><ul class="research-graph__neighbors">';
+            html +=
+                '<p class="person-sidebar__section-label">' +
+                esc(list.title) +
+                '</p><div class="research-graph__neighbors">';
             for (let j = 0; j < list.items.length; j++) {
-                const item = list.items[j];
-                html +=
-                    '<li><button type="button" class="research-graph__neighbor" data-graph-node="' +
-                    esc(item.id) +
-                    '">' +
-                    esc(item.label) +
-                    '</button>' +
-                    (item.hint ? '<span class="meta-row"> ' + esc(item.hint) + '</span>' : '') +
-                    '</li>';
+                html += inspectorNeighborHtml(list.items[j]);
             }
-            html += '</ul>';
+            html += '</div>';
         }
-        html +=
-            '<p><button type="button" class="prks-btn prks-btn--secondary" id="prks-graph-open">' +
-            esc(model.openLabel) +
-            '</button></p>';
+        html += '</div>';
         paintInspector(html);
         return model;
     }
@@ -609,7 +907,7 @@
         box.innerHTML = findHits
             .map(function (n, i) {
                 return (
-                    '<button type="button" class="research-graph__find-hit' + (i === findIndex ? ' is-active' : '') + '" role="option" aria-selected="' +
+                    '<button type="button" class="prks-list-row research-graph__find-hit' + (i === findIndex ? ' is-active' : '') + '" role="option" aria-selected="' +
                     (i === findIndex ? 'true' : 'false') +
                     '" data-graph-node="' +
                     esc(n.id) +
@@ -660,6 +958,12 @@
             if (t.id === 'prks-graph-open' || (t.closest && t.closest('#prks-graph-open'))) {
                 ev.preventDefault();
                 openSelectedRecord(selectedId);
+                return;
+            }
+            const openBtn = t.closest('[data-graph-open]');
+            if (openBtn) {
+                ev.preventDefault();
+                openSelectedRecord(openBtn.getAttribute('data-graph-open'));
                 return;
             }
             if (t.id === 'prks-graph-fit') {
@@ -715,9 +1019,15 @@
                     });
                     if (!still) {
                         selectedId = '';
+                        selectedEdgeId = '';
                         if (liveCy) liveCy.elements().unselect();
+                        applySelectionContext(liveCy);
                         renderInspector();
+                    } else {
+                        applySelectionContext(liveCy);
                     }
+                } else if (selectedEdgeId) {
+                    applySelectionContext(liveCy);
                 }
             });
         });
@@ -729,13 +1039,13 @@
         const loadError = opts && opts.loadError;
         function chk(key, label, on) {
             return (
-                '<label class="research-graph__filter"><input type="checkbox" data-graph-filter="' +
+                '<label class="prks-filter-toggle"><input type="checkbox" data-graph-filter="' +
                 key +
                 '"' +
                 (on ? ' checked' : '') +
-                '> ' +
+                '> <span>' +
                 esc(label) +
-                '</label>'
+                '</span></label>'
             );
         }
         let body = '';
@@ -747,12 +1057,21 @@
         } else {
             body =
                 '<div class="research-graph__stage">' +
-                '<div class="research-graph__canvas" id="prks-graph-canvas" role="img" aria-label="Research relationship graph"></div>' +
-                '<aside class="research-graph__inspector" id="prks-graph-inspector" aria-live="polite"></aside>' +
+                '<div class="prks-panel research-graph__canvas-wrap"><div class="research-graph__canvas" id="prks-graph-canvas" role="img" aria-label="Research relationship graph"></div></div>' +
                 '</div>' +
                 (derivedOff
                     ? '<p class="meta-row" role="status">Note-mention edges unavailable. Canonical relationships still shown.</p>'
                     : '');
+        }
+        function legendIcon(name, kind) {
+            const icon = typeof root.prksIcon === 'function' ? root.prksIcon(name, { size: 'sm' }) : '';
+            return (
+                '<span class="research-graph__legend-icon research-graph__legend-icon--' +
+                kind +
+                '" aria-hidden="true">' +
+                icon +
+                '</span>'
+            );
         }
         return (
             '<div class="research-graph">' +
@@ -761,9 +1080,9 @@
                 ? root.prksPageHeaderIconHtml('share-2')
                 : '') +
             ' Research Graph</h2></div></div>' +
-            '<div class="research-graph__toolbar">' +
+            '<div class="prks-toolbar research-graph__toolbar">' +
             '<label class="research-graph__find-label" for="prks-graph-find">Find node</label>' +
-            '<input id="prks-graph-find" type="search" autocomplete="off" placeholder="Find node…">' +
+            '<input id="prks-graph-find" class="prks-input" type="search" autocomplete="off" placeholder="Find node…">' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-graph-fit">Fit</button>' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-graph-reset">Reset layout</button>' +
             '</div>' +
@@ -775,42 +1094,74 @@
             chk('arguments', 'Arguments', filters.arguments) +
             chk('works', 'Works', filters.works) +
             chk('people', 'People', includePeople) +
+            '</div>' +
+            '<div class="research-graph__filters">' +
             '<span class="research-graph__filter-group">Relations</span>' +
             chk('hierarchy', 'Hierarchy', filters.hierarchy) +
-            chk('responds', 'Responds to', filters.responds) +
+            chk('responds', 'Responses', filters.responds) +
             chk('sources', 'Sources', filters.sources) +
             chk('mentions', 'Note mentions', filters.mentions) +
             '</div>' +
-            '<ul class="research-graph__legend" aria-label="Graph legend">' +
-            '<li><span class="research-graph__swatch research-graph__swatch--concept"></span> Concept</li>' +
-            '<li><span class="research-graph__swatch research-graph__swatch--position"></span> Position</li>' +
-            '<li><span class="research-graph__swatch research-graph__swatch--argument"></span> Argument</li>' +
-            '<li><span class="research-graph__swatch research-graph__swatch--stance"></span> Stance</li>' +
-            '<li><span class="research-graph__swatch research-graph__swatch--work"></span> Work</li>' +
-            '<li><span class="research-graph__swatch research-graph__swatch--person"></span> Person</li>' +
-            '<li><span class="research-graph__line research-graph__line--source"></span> Made/taken in</li>' +
-            '<li><span class="research-graph__line research-graph__line--mentions"></span> Mentioned in research notes</li>' +
-            '</ul>' +
+            '<div class="research-graph__legend" aria-label="Graph legend">' +
+            '<div class="research-graph__legend-group"><span class="research-graph__filter-group">Nodes</span>' +
+            '<ul>' +
+            '<li>' +
+            legendIcon('network', 'concept') +
+            ' Concept</li>' +
+            '<li>' +
+            legendIcon('flag', 'position') +
+            ' Position</li>' +
+            '<li>' +
+            legendIcon('messages-square', 'argument') +
+            ' Argument</li>' +
+            '<li>' +
+            legendIcon('messages-square', 'stance') +
+            ' Stance</li>' +
+            '<li>' +
+            legendIcon('file-text', 'work') +
+            ' Work</li>' +
+            '<li>' +
+            legendIcon('user', 'person') +
+            ' Person</li>' +
+            '</ul></div>' +
+            '<div class="research-graph__legend-group"><span class="research-graph__filter-group">Relations</span>' +
+            '<ul>' +
+            '<li><span class="research-graph__line research-graph__line--hierarchy"></span> Hierarchy</li>' +
+            '<li><span class="research-graph__line research-graph__line--responds"></span> Response</li>' +
+            '<li><span class="research-graph__line research-graph__line--source"></span> Source</li>' +
+            '<li><span class="research-graph__line research-graph__line--mentions"></span> Note mention</li>' +
+            '<li><span class="research-graph__line research-graph__line--author"></span> Author</li>' +
+            '</ul></div>' +
+            '</div>' +
             body +
             '</div>'
         );
     }
 
-    function rerunLayout() {
-        if (!liveCy) return;
-        const layout = liveCy.layout({
+    function coseLayoutOptions(randomize) {
+        return {
             name: 'cose',
             animate: false,
-            randomize: true,
+            randomize: !!randomize,
             fit: true,
-            padding: 36,
+            padding: 48,
+            nodeDimensionsIncludeLabels: true,
+            componentSpacing: 100,
+            nodeOverlap: 10,
+            gravity: 0.35,
+            numIter: 1400,
             nodeRepulsion: function () {
-                return 8000;
+                return 18000;
             },
             idealEdgeLength: function () {
-                return 90;
+                return 150;
             },
-        });
+        };
+    }
+
+    function rerunLayout() {
+        if (!liveCy) return;
+        const layout = liveCy.layout(coseLayoutOptions(true));
         layout.run();
     }
 
@@ -855,41 +1206,27 @@
             selectNode(id, { center: false });
         });
         liveCy.on('tap', 'edge', function (evt) {
-            evt.target.select();
-            updateEdgeLabels(liveCy, selectedId, evt.target.id());
+            selectEdge(evt.target.id());
         });
         liveCy.on('tap', function (evt) {
             if (evt.target === liveCy) {
-                selectedId = '';
-                liveCy.elements().unselect();
-                updateEdgeLabels(liveCy, '', '');
-                renderInspector();
+                clearGraphSelection();
             }
         });
         liveCy.on('mouseover', 'edge', function (evt) {
-            updateEdgeLabels(liveCy, selectedId, evt.target.id());
+            hoverEdgeId = evt.target.id();
+            updateEdgeLabels(liveCy);
         });
         liveCy.on('mouseout', 'edge', function () {
-            updateEdgeLabels(liveCy, selectedId, '');
+            hoverEdgeId = '';
+            updateEdgeLabels(liveCy);
         });
         liveCy.on('dbltap', 'node', function (evt) {
             openSelectedRecord(evt.target.id());
         });
         applyGraphFilters(liveCy, snapshot, filters);
         pendingFocus = pendingFocus || '';
-        const layout = liveCy.layout({
-            name: 'cose',
-            animate: false,
-            randomize: true,
-            fit: true,
-            padding: 36,
-            nodeRepulsion: function () {
-                return 8000;
-            },
-            idealEdgeLength: function () {
-                return 90;
-            },
-        });
+        const layout = liveCy.layout(coseLayoutOptions(true));
         layout.one('layoutstop', function () {
             applyFocusAfterLayout();
         });
@@ -958,6 +1295,8 @@
         pendingFocus = focus;
         statusMessage = '';
         selectedId = '';
+        selectedEdgeId = '';
+        hoverEdgeId = '';
         findQuery = '';
         findHits = [];
         findIndex = -1;
@@ -994,8 +1333,17 @@
         getSelectedGraphNodeId: function () {
             return selectedId;
         },
+        getSelectedGraphEdgeId: function () {
+            return selectedEdgeId;
+        },
         toCytoscapeElements: toCytoscapeElements,
         displayLabelForEdge: displayLabelForEdge,
+        canvasLabelForEdge: canvasLabelForEdge,
+        inspectorLabelForEdge: inspectorLabelForEdge,
+        cytoscapeStyle: cytoscapeStyle,
+        edgeShouldShowCanvasLabel: edgeShouldShowCanvasLabel,
+        selectionContextIds: selectionContextIds,
+        inspectorEdgeModel: inspectorEdgeModel,
         nodeClasses: nodeClasses,
         edgeClasses: edgeClasses,
         visibleGraph: visibleGraph,
@@ -1005,6 +1353,9 @@
         neighborGroups: neighborGroups,
         openSelectedRecord: openSelectedRecord,
         selectGraphNode: selectNode,
+        selectGraphEdge: selectEdge,
+        clearGraphSelection: clearGraphSelection,
+        renderGraphInspector: renderInspector,
         defaultGraphFilters: function () {
             return Object.assign({}, DEFAULT_FILTERS);
         },
