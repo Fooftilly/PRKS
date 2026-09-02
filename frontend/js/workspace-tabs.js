@@ -304,19 +304,24 @@
             const opts = options || {};
             const shouldActivate = opts.activate === true;
             const route = canonical(hash);
-            const tab = makeTab(route);
-            state.tabs.push(tab);
-            if (shouldActivate) {
+            if (!shouldActivate) {
+                const tab = makeTab(route);
+                state.tabs.push(tab);
+                onChange();
+                announce(tab.title);
+                return Promise.resolve(copyTab(tab));
+            }
+            return awaitLeave(route).then(function (ok) {
+                if (!ok) return false;
+                const tab = makeTab(route);
+                state.tabs.push(tab);
                 setMain(tab.id);
                 commitUrl(tab, 'replace');
                 onChange();
                 return Promise.resolve(invokeRender({ workspaceSwitch: true })).then(function () {
                     return copyTab(tab);
                 });
-            }
-            onChange();
-            announce(tab.title);
-            return Promise.resolve(copyTab(tab));
+            });
         }
 
         function navigate(hash, options) {

@@ -86,6 +86,7 @@ function makeHarness(opts) {
     const hist = makeHistory(opts.hash || '#/folders');
     const renders = [];
     let canLeave = true;
+    let canLeaveCalls = 0;
     let titleGenOk = null;
     const ws = createPrksWorkspaceTabs({
         parseRoute: nav.prksParseRoute,
@@ -94,6 +95,7 @@ function makeHarness(opts) {
         homeHash: '#/folders',
         historyAdapter: hist,
         canLeave: function () {
+            canLeaveCalls += 1;
             return canLeave;
         },
         isRouteGenCurrent: function (g) {
@@ -112,6 +114,9 @@ function makeHarness(opts) {
         renders: renders,
         setCanLeave: function (v) {
             canLeave = v;
+        },
+        canLeaveCalls: function () {
+            return canLeaveCalls;
         },
         setTitleGen: function (g) {
             titleGenOk = g;
@@ -272,6 +277,51 @@ async function run() {
     assertEq('leave cancel tabs', leave.ws.snapshot().tabs.length, frozen.tabs.length);
     assertEq('leave cancel href', leave.hist.getHref(), hrefLeave);
     assertEq('leave cancel no render', leave.renders.length, rendersLeave);
+
+    const deniedNew = makeHarness({ hash: '#/works/WA' });
+    deniedNew.setCanLeave(false);
+    const deniedSnap = jsonClone(deniedNew.ws.snapshot());
+    const deniedHref = deniedNew.hist.getHref();
+    const deniedPushes = deniedNew.hist.stats().pushes;
+    const deniedReplaces = deniedNew.hist.stats().replaces;
+    const deniedRenders = deniedNew.renders.length;
+    const deniedLeaveCalls = deniedNew.canLeaveCalls();
+    const deniedResult = await deniedNew.ws.navigate('#/people/P1', {
+        target: 'new-tab',
+        activate: true,
+    });
+    const deniedAfter = deniedNew.ws.snapshot();
+    assertEq('activated new-tab denied result', deniedResult, false);
+    assertEq('activated new-tab denied tab count', deniedAfter.tabs.length, deniedSnap.tabs.length);
+    assertEq('activated new-tab denied main', deniedAfter.mainTabId, deniedSnap.mainTabId);
+    assertEq('activated new-tab denied focused', deniedAfter.focusedTabId, deniedSnap.focusedTabId);
+    assertEq('activated new-tab denied href', deniedNew.hist.getHref(), deniedHref);
+    assertEq('activated new-tab denied pushes', deniedNew.hist.stats().pushes, deniedPushes);
+    assertEq('activated new-tab denied replaces', deniedNew.hist.stats().replaces, deniedReplaces);
+    assertEq('activated new-tab denied renders', deniedNew.renders.length, deniedRenders);
+    assert('activated new-tab called canLeave', deniedNew.canLeaveCalls() > deniedLeaveCalls);
+
+    const bgDenied = makeHarness({ hash: '#/works/WA' });
+    bgDenied.setCanLeave(false);
+    const bgDeniedMain = bgDenied.ws.snapshot().mainTabId;
+    const bgDeniedFocused = bgDenied.ws.snapshot().focusedTabId;
+    const bgDeniedHref = bgDenied.hist.getHref();
+    const bgDeniedRenders = bgDenied.renders.length;
+    const bgDeniedLeaveCalls = bgDenied.canLeaveCalls();
+    const bgDeniedTabs = bgDenied.ws.snapshot().tabs.length;
+    const bgDeniedResult = await bgDenied.ws.navigate('#/people/P1', {
+        target: 'new-tab',
+        activate: false,
+    });
+    const bgDeniedAfter = bgDenied.ws.snapshot();
+    assert('background new-tab while leave denied created tab', !!bgDeniedResult);
+    assertEq('background new-tab while leave denied tab count', bgDeniedAfter.tabs.length, bgDeniedTabs + 1);
+    assertEq('background new-tab while leave denied parked', bgDeniedAfter.tabs[1].id === bgDeniedAfter.mainTabId, false);
+    assertEq('background new-tab while leave denied main', bgDeniedAfter.mainTabId, bgDeniedMain);
+    assertEq('background new-tab while leave denied focused', bgDeniedAfter.focusedTabId, bgDeniedFocused);
+    assertEq('background new-tab while leave denied href', bgDenied.hist.getHref(), bgDeniedHref);
+    assertEq('background new-tab while leave denied renders', bgDenied.renders.length, bgDeniedRenders);
+    assertEq('background new-tab did not call canLeave', bgDenied.canLeaveCalls(), bgDeniedLeaveCalls);
 
     const titles = makeHarness();
     await titles.ws.navigate('#/works/W1', { target: 'new-tab', activate: false });

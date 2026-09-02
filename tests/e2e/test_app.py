@@ -1071,3 +1071,66 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.go_forward()
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
         self.assertEqual(_workspace_tab_count(page), 2)
+
+    def test_pdf_leave_guard_skips_parked_open_blocks_activated(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        person_id = server.ids["person"]
+        work_hash = "#/works/" + work_id
+        person_gets = []
+
+        def on_request(req):
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/persons/%s" % person_id:
+                person_gets.append(req.url)
+
+        page.on("request", on_request)
+        dialogs = []
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.wait_for_selector("a.work-linked-persons__chip-link")
+        page.evaluate(
+            """() => {
+                window.prksHasPendingWorkAnnotationSync = function () { return true; };
+            }"""
+        )
+        tabs_before = _workspace_tab_count(page)
+        denied = page.evaluate(
+            """async (pid) => {
+                return await window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: true });
+            }""",
+            arg=person_id,
+        )
+        self.assertFalse(denied)
+        self.assertEqual(_workspace_tab_count(page), tabs_before)
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertGreaterEqual(page.locator(".work-detail").count(), 1)
+        self.assertEqual(page.locator(".person-profile").count(), 0)
+        self.assertEqual(person_gets, [])
+        self.assertEqual(len(dialogs), 1)
+        self.assertIn("PDF annotation sync", dialogs[0])
+
+        page.locator("a.work-linked-persons__chip-link", has_text=PERSON_DISPLAY).click(
+            modifiers=["Control"]
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(_workspace_tab_count(page), tabs_before + 1)
+        self.assertGreaterEqual(page.locator(".work-detail").count(), 1)
+        self.assertEqual(page.locator(".person-profile").count(), 0)
+        self.assertEqual(person_gets, [])
+        self.assertEqual(len(dialogs), 1)
+
+        page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
+        self.assertEqual(len(dialogs), 2)
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(_workspace_tab_count(page), tabs_before + 1)
+        self.assertGreaterEqual(page.locator(".work-detail").count(), 1)
+        self.assertEqual(page.locator(".person-profile").count(), 0)
+        self.assertEqual(person_gets, [])
