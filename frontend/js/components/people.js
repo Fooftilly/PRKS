@@ -729,7 +729,7 @@ async function deletePerson() {
     });
     if (!confirmed) return;
     try {
-        const res = await fetch(`/api/persons/${encodeURIComponent(personId)}`, { method: 'DELETE' });
+        const res = await prksRequest(`/api/persons/${encodeURIComponent(personId)}`, { method: 'DELETE' });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
             await prksAlertMessage(body.error || 'Could not delete person.', 'Could not delete');
@@ -933,7 +933,7 @@ async function savePersonProfile(personId) {
         btn.textContent = 'Saving…';
     }
     try {
-        const res = await fetch(`/api/persons/${personId}`, {
+        const res = await prksRequest(`/api/persons/${personId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)

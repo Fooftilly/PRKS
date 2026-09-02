@@ -22,21 +22,37 @@ function prksPlWorkSubtitle(w) {
     return channel || published || '';
 }
 
-async function fetchPlaylists() {
-    const res = await fetch('/api/playlists');
-    if (!res.ok) return [];
-    const data = await res.json().catch(() => []);
-    return Array.isArray(data) ? data : [];
+async function fetchPlaylists(options) {
+    const signal = options && options.signal;
+    try {
+        const res = await prksRequest(
+            '/api/playlists',
+            { signal: signal },
+            { freshForMs: typeof PRKS_REQUEST_BURST_FRESH_MS === 'number' ? PRKS_REQUEST_BURST_FRESH_MS : 1500 }
+        );
+        if (!res.ok) return [];
+        const data = await res.json().catch(() => []);
+        return Array.isArray(data) ? data : [];
+    } catch (e) {
+        if (typeof prksIsAbortError === 'function' && prksIsAbortError(e)) return [];
+        throw e;
+    }
 }
 
-async function fetchPlaylistDetails(id) {
-    const res = await fetch('/api/playlists/' + encodeURIComponent(id));
-    if (!res.ok) return null;
-    return await res.json().catch(() => null);
+async function fetchPlaylistDetails(id, options) {
+    const signal = options && options.signal;
+    try {
+        const res = await prksRequest('/api/playlists/' + encodeURIComponent(id), { signal: signal });
+        if (!res.ok) return null;
+        return await res.json().catch(() => null);
+    } catch (e) {
+        if (typeof prksIsAbortError === 'function' && prksIsAbortError(e)) return null;
+        throw e;
+    }
 }
 
 async function createPlaylist(title, description) {
-    const res = await fetch('/api/playlists', {
+    const res = await prksRequest('/api/playlists', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, description }),
@@ -47,7 +63,7 @@ async function createPlaylist(title, description) {
 }
 
 async function addWorkToPlaylist(playlistId, workId) {
-    const res = await fetch(`/api/playlists/${encodeURIComponent(playlistId)}/items`, {
+    const res = await prksRequest(`/api/playlists/${encodeURIComponent(playlistId)}/items`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ work_id: workId }),
@@ -57,7 +73,7 @@ async function addWorkToPlaylist(playlistId, workId) {
 }
 
 async function removeWorkFromPlaylist(playlistId, workId) {
-    const res = await fetch(
+    const res = await prksRequest(
         `/api/playlists/${encodeURIComponent(playlistId)}/items/${encodeURIComponent(workId)}`,
         { method: 'DELETE' }
     );
@@ -65,7 +81,7 @@ async function removeWorkFromPlaylist(playlistId, workId) {
 }
 
 async function reorderPlaylist(playlistId, workIds) {
-    const res = await fetch(`/api/playlists/${encodeURIComponent(playlistId)}/reorder`, {
+    const res = await prksRequest(`/api/playlists/${encodeURIComponent(playlistId)}/reorder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ work_ids: workIds }),
@@ -284,7 +300,7 @@ function renderPlaylistDetail(pl, container) {
             const nextTitle = inp ? String(inp.value || '').trim() : '';
             if (!wid || !nextTitle) return;
             try {
-                const res = await fetch(`/api/works/${encodeURIComponent(wid)}`, {
+                const res = await prksRequest(`/api/works/${encodeURIComponent(wid)}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title: nextTitle }),

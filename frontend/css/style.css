@@ -4860,6 +4860,12 @@ body {
     white-space: normal;
     word-break: break-all;
 }
+.prks-perf-client {
+    margin-top: 12px;
+}
+.prks-perf-client .prks-settings-section__title {
+    margin-top: 0;
+}
 .prks-backup-file-input {
     position: absolute;
     width: 1px;

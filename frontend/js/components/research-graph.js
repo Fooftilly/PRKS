@@ -34,6 +34,7 @@
     let pendingFocus = '';
     let boundKeyHandler = null;
     let reloadGeneration = 0;
+    let graphRouteSignal = null;
 
     function esc(s) {
         if (typeof root.prksEscapeHtml === 'function') return root.prksEscapeHtml(s);
@@ -1256,7 +1257,7 @@
         const host = originDom.parentNode;
         const gen = (reloadGeneration += 1);
         try {
-            const data = await root.fetchResearchGraph({ people: wantPeople });
+            const data = await root.fetchResearchGraph({ people: wantPeople, signal: graphRouteSignal });
             if (graphReloadIsStale(gen, originDom)) return false;
             includePeople = wantPeople;
             filters.people = wantPeople;
@@ -1276,6 +1277,7 @@
             return true;
         } catch (e) {
             if (graphReloadIsStale(gen, originDom)) return false;
+            if (typeof root.prksIsAbortError === 'function' && root.prksIsAbortError(e)) return false;
             includePeople = prevPeople;
             filters.people = prevPeople;
             syncPeopleCheckbox();
@@ -1288,6 +1290,7 @@
     async function renderResearchGraph(container, opts) {
         destroyResearchGraph();
         const options = opts || {};
+        graphRouteSignal = options.signal || null;
         const focus = String(options.focus || '');
         includePeople = peopleRequiredForFocus(focus);
         filters = Object.assign({}, DEFAULT_FILTERS);
@@ -1304,7 +1307,7 @@
         container.innerHTML = shellHtml({});
         try {
             const data = await (typeof root.fetchResearchGraph === 'function'
-                ? root.fetchResearchGraph({ people: includePeople })
+                ? root.fetchResearchGraph({ people: includePeople, signal: options.signal })
                 : Promise.resolve({ nodes: [], edges: [], meta: {} }));
             if (options.stale && options.stale()) return;
             snapshot = data;
@@ -1317,6 +1320,7 @@
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
         } catch (e) {
             if (options.stale && options.stale()) return;
+            if (typeof root.prksIsAbortError === 'function' && root.prksIsAbortError(e)) return;
             const tooLarge = e && e.code === 'graph_too_large';
             container.innerHTML = shellHtml({ tooLarge: tooLarge, loadError: !tooLarge });
             bindShell(container);

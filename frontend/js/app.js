@@ -1001,6 +1001,32 @@ function initPrksExistingPdfLinearizeAction() {
 }
 
 let __prksPerfSnapshot = null;
+let __prksClientRequestSnapshot = null;
+
+function prksFormatClientRequestReport(client) {
+    if (!client || typeof client !== 'object') return '';
+    const counts = client.counts || {};
+    const current = client.current || {};
+    const peaks = client.peaks || {};
+    const waits = client.waits || {};
+    const avoided = Number(counts.dedupeJoins || 0) + Number(counts.burstCacheHits || 0) + Number(counts.coalescedMutations || 0);
+    return [
+        'Client request coordinator',
+        'Client requests: ' + String(counts.started || 0),
+        'Network requests avoided: ' + String(avoided) +
+            ' (deduped ' + String(counts.dedupeJoins || 0) +
+            ', cache ' + String(counts.burstCacheHits || 0) +
+            ', coalesced ' + String(counts.coalescedMutations || 0) + ')',
+        'Retries: ' + String(counts.retries || 0),
+        'Aborted obsolete reads: ' + String(counts.aborted || 0),
+        'Now: reads ' + String(current.activeReads || 0) + '/4, mutations ' +
+            String(current.activeMutation || 0) + '/1, queued reads ' +
+            String((current.queuedForegroundReads || 0) + (current.queuedBackgroundReads || 0)) +
+            ', queued mutations ' + String(current.queuedMutations || 0),
+        'Peak mutation queue: ' + String(peaks.queuedMutations || 0),
+        'Average read queue wait: ' + prksFormatPerfMs(waits.readAverageMs) + ' ms',
+    ].join('\n');
+}
 
 function prksFormatPerfSeconds(s) {
     s = Math.max(0, Math.floor(Number(s) || 0));
@@ -1070,6 +1096,11 @@ function prksFormatPerformanceReport(snap) {
         hits + ' hits / ' + misses + ' misses' +
         (rate == null ? '' : ' — ' + rate + '% hit rate')
     );
+    const clientText = prksFormatClientRequestReport(__prksClientRequestSnapshot);
+    if (clientText) {
+        lines.push('');
+        lines.push(clientText);
+    }
     return lines.join('\n');
 }
 
@@ -1157,6 +1188,33 @@ function prksRenderPerformanceDiagnostics(snap) {
             ? ('Thumbnail cache: ' + hits + ' hits / ' + misses + ' misses — ' + rate + '% hit rate.')
             : 'Thumbnail cache: no thumbnail requests yet.';
     }
+    const clientBody = document.getElementById('prks-perf-client-body');
+    if (clientBody) {
+        const client = __prksClientRequestSnapshot;
+        if (!client || typeof client !== 'object') {
+            clientBody.textContent = 'Client request coordinator: no measurements yet.';
+        } else {
+            const counts = client.counts || {};
+            const current = client.current || {};
+            const peaks = client.peaks || {};
+            const waits = client.waits || {};
+            const maxReads = typeof PRKS_REQUEST_MAX_READS === 'number' ? PRKS_REQUEST_MAX_READS : 4;
+            clientBody.textContent =
+                'Client requests: ' + String(counts.started || 0) + '. ' +
+                'Network requests avoided: ' +
+                String(counts.dedupeJoins || 0) + ' in-flight deduplicated, ' +
+                String(counts.burstCacheHits || 0) + ' burst-cache hits, ' +
+                String(counts.coalescedMutations || 0) + ' autosaves coalesced. ' +
+                'Retries: ' + String(counts.retries || 0) + '. ' +
+                'Aborted obsolete reads: ' + String(counts.aborted || 0) + '. ' +
+                'Now: Reads ' + String(current.activeReads || 0) + '/' + String(maxReads) +
+                ', Mutations ' + String(current.activeMutation || 0) + '/1' +
+                ', Queued reads ' + String((current.queuedForegroundReads || 0) + (current.queuedBackgroundReads || 0)) +
+                ', Queued mutations ' + String(current.queuedMutations || 0) + '. ' +
+                'Peak mutation queue: ' + String(peaks.queuedMutations || 0) + '. ' +
+                'Average read queue wait: ' + prksFormatPerfMs(waits.readAverageMs) + ' ms.';
+        }
+    }
 }
 
 async function prksLoadPerformanceDiagnostics() {
@@ -1166,6 +1224,8 @@ async function prksLoadPerformanceDiagnostics() {
             throw new Error('Performance API unavailable.');
         }
         const snap = await prksGetPerformanceDiagnostics();
+        __prksClientRequestSnapshot =
+            typeof prksRequestCoordinatorSnapshot === 'function' ? prksRequestCoordinatorSnapshot() : null;
         prksRenderPerformanceDiagnostics(snap);
         if (statusEl) statusEl.textContent = '';
     } catch (e) {
@@ -1194,6 +1254,9 @@ function initPrksPerformanceDiagnostics() {
                     throw new Error('Performance API unavailable.');
                 }
                 await prksResetPerformanceDiagnostics();
+                if (typeof prksResetRequestCoordinatorDiagnostics === 'function') {
+                    prksResetRequestCoordinatorDiagnostics();
+                }
                 await prksLoadPerformanceDiagnostics();
                 if (statusEl) statusEl.textContent = 'Measurements reset.';
             } catch (e) {
@@ -1360,6 +1423,13 @@ async function handleRoute() {
 
     const contentDiv = document.getElementById('page-content');
     if (!contentDiv) return;
+
+    const previousRouteAbort = window.__prksRouteAbortController;
+    if (previousRouteAbort) previousRouteAbort.abort();
+    const routeAbortController = new AbortController();
+    window.__prksRouteAbortController = routeAbortController;
+    const routeSignal = routeAbortController.signal;
+
     window.__prksRouteGen = (window.__prksRouteGen || 0) + 1;
     const routeGen = window.__prksRouteGen;
     if (window.annotationSyncInterval) {
@@ -1406,7 +1476,7 @@ async function handleRoute() {
     try {
         switch (route.name) {
             case 'folders': {
-                const folders = await fetchFolders();
+                const folders = await fetchFolders({ signal: routeSignal });
                 if (stale()) return;
                 publishSidebar({ folderCount: folders.length });
                 renderDashboard(folders, contentDiv);
@@ -1414,7 +1484,7 @@ async function handleRoute() {
             }
             case 'playlists': {
                 if (typeof fetchPlaylists === 'function' && typeof renderPlaylistsIndex === 'function') {
-                    const pls = await fetchPlaylists();
+                    const pls = await fetchPlaylists({ signal: routeSignal });
                     if (stale()) return;
                     renderPlaylistsIndex(pls, contentDiv);
                 } else {
@@ -1426,7 +1496,7 @@ async function handleRoute() {
             case 'playlist-detail': {
                 const plId = route.params.playlistId;
                 if (typeof fetchPlaylistDetails === 'function' && typeof renderPlaylistDetail === 'function') {
-                    const pl = await fetchPlaylistDetails(plId);
+                    const pl = await fetchPlaylistDetails(plId, { signal: routeSignal });
                     if (stale()) return;
                     window.currentPlaylist = pl;
                     window.__prksPlaylistDetailEditing = false;
@@ -1450,7 +1520,7 @@ async function handleRoute() {
                 break;
             }
             case 'folder-detail': {
-                const folder = await fetchFolderDetails(route.params.folderId);
+                const folder = await fetchFolderDetails(route.params.folderId, { signal: routeSignal });
                 if (stale()) return;
                 renderFolderDetails(folder, contentDiv);
                 titleOpts = folder
@@ -1459,14 +1529,14 @@ async function handleRoute() {
                 break;
             }
             case 'people': {
-                const persons = await fetchPersons();
+                const persons = await fetchPersons({ signal: routeSignal });
                 if (stale()) return;
                 renderPeopleList(persons, contentDiv);
                 break;
             }
             case 'people-role': {
                 const roleFilter = route.params.knownRole ? route.params.role : null;
-                const persons = await fetchPersons();
+                const persons = await fetchPersons({ signal: routeSignal });
                 if (stale()) return;
                 publishSidebar({ role: roleFilter || route.params.role || 'Unknown role' });
                 if (roleFilter) {
@@ -1478,14 +1548,14 @@ async function handleRoute() {
                 break;
             }
             case 'people-groups': {
-                const groups = await fetchPersonGroups();
+                const groups = await fetchPersonGroups({ signal: routeSignal });
                 if (stale()) return;
                 publishSidebar({ groupCount: Array.isArray(groups) ? groups.length : 0 });
                 renderPersonGroupsPage(groups, contentDiv);
                 break;
             }
             case 'person-group-detail': {
-                const group = route.params.groupId ? await fetchPersonGroupDetails(route.params.groupId) : null;
+                const group = route.params.groupId ? await fetchPersonGroupDetails(route.params.groupId, { signal: routeSignal }) : null;
                 if (stale()) return;
                 if (!group) {
                     contentDiv.innerHTML =
@@ -1504,14 +1574,14 @@ async function handleRoute() {
                 break;
             }
             case 'recent': {
-                const works = await fetchRecent();
+                const works = await fetchRecent({ signal: routeSignal });
                 if (stale()) return;
                 publishSidebar({ workCount: works.length });
                 renderRecent(works, contentDiv);
                 break;
             }
             case 'saved-views': {
-                const views = typeof fetchSavedViews === 'function' ? await fetchSavedViews() : [];
+                const views = typeof fetchSavedViews === 'function' ? await fetchSavedViews({ signal: routeSignal }) : [];
                 if (stale()) return;
                 if (typeof renderSavedViewsIndex === 'function') {
                     renderSavedViewsIndex(views, contentDiv);
@@ -1523,7 +1593,7 @@ async function handleRoute() {
             }
             case 'saved-view-detail': {
                 const viewId = route.params.viewId;
-                const view = typeof fetchSavedView === 'function' ? await fetchSavedView(viewId) : null;
+                const view = typeof fetchSavedView === 'function' ? await fetchSavedView(viewId, { signal: routeSignal }) : null;
                 if (stale()) return;
                 window.__prksCurrentSavedView = view || null;
                 if (!view) {
@@ -1540,7 +1610,7 @@ async function handleRoute() {
                     typeof prksSearchOptionsFromDefinition === 'function'
                         ? prksSearchOptionsFromDefinition(view.search || {})
                         : { q: '', tag: null, options: {} };
-                const results = await fetchSearch(mapped.q, mapped.tag, mapped.options);
+                const results = await fetchSearch(mapped.q, mapped.tag, Object.assign({}, mapped.options, { signal: routeSignal }));
                 if (stale()) return;
                 if (typeof renderSavedViewDetail === 'function') {
                     renderSavedViewDetail(view, results, contentDiv);
@@ -1550,7 +1620,7 @@ async function handleRoute() {
             }
             case 'progress': {
                 const status = route.params.status;
-                const works = await fetchWorks();
+                const works = await fetchWorks({ signal: routeSignal });
                 if (stale()) return;
                 publishSidebar({ status });
                 renderProgressByStatus(works, status, contentDiv);
@@ -1558,10 +1628,10 @@ async function handleRoute() {
             }
             case 'processing-files': {
                 if (typeof prksRenderProcessingFilesPageWithFetch === 'function') {
-                    await prksRenderProcessingFilesPageWithFetch(contentDiv, { rescan: true, routeGen });
+                    await prksRenderProcessingFilesPageWithFetch(contentDiv, { rescan: true, routeGen, signal: routeSignal });
                     if (stale()) return;
                 } else {
-                    const rows = await fetchProcessingFiles({ rescan: true });
+                    const rows = await fetchProcessingFiles({ rescan: true, signal: routeSignal });
                     if (stale()) return;
                     publishSidebar({ pendingCount: Array.isArray(rows) ? rows.length : 0 });
                     if (typeof renderProcessingFilesPage === 'function') {
@@ -1579,7 +1649,7 @@ async function handleRoute() {
                 const author = route.params.author || '';
                 const publisher = route.params.publisher || '';
                 const any = route.params.any || '';
-                const results = await fetchSearch(query, tag, { author, publisher, any });
+                const results = await fetchSearch(query, tag, { author, publisher, any, signal: routeSignal });
                 if (stale()) return;
                 publishSidebar({
                     query,
@@ -1593,34 +1663,34 @@ async function handleRoute() {
             }
             case 'tags': {
                 if (typeof renderTagsPage === 'function') {
-                    await renderTagsPage(contentDiv, routeGen);
+                    await renderTagsPage(contentDiv, routeGen, { signal: routeSignal });
                     if (stale()) return;
                 }
                 break;
             }
             case 'publishers': {
                 if (typeof renderPublishersPage === 'function') {
-                    await renderPublishersPage(contentDiv, routeGen);
+                    await renderPublishersPage(contentDiv, routeGen, { signal: routeSignal });
                     if (stale()) return;
                 }
                 break;
             }
             case 'types': {
-                const works = await fetchWorks();
+                const works = await fetchWorks({ signal: routeSignal });
                 if (stale()) return;
                 renderTypesIndex(works, contentDiv);
                 break;
             }
             case 'type-detail': {
-                const works = await fetchWorks();
+                const works = await fetchWorks({ signal: routeSignal });
                 if (stale()) return;
                 renderWorksByDocType(works, route.params.docType, contentDiv);
                 break;
             }
             case 'work': {
-                const work = await fetchWorkDetails(route.params.workId);
+                const work = await fetchWorkDetails(route.params.workId, { signal: routeSignal });
                 if (stale()) return;
-                await renderWorkDetails(work, contentDiv, routeGen);
+                await renderWorkDetails(work, contentDiv, routeGen, { signal: routeSignal });
                 if (stale()) return;
                 titleOpts = work
                     ? { entityTitle: String(work.title || '').trim() || 'File' }
@@ -1628,14 +1698,14 @@ async function handleRoute() {
                 break;
             }
             case 'concepts': {
-                const items = typeof fetchConcepts === 'function' ? await fetchConcepts() : [];
+                const items = typeof fetchConcepts === 'function' ? await fetchConcepts({ signal: routeSignal }) : [];
                 if (stale()) return;
                 if (typeof renderConceptsIndex === 'function') renderConceptsIndex(items, contentDiv);
                 else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concepts</h2></div>';
                 break;
             }
             case 'concept-detail': {
-                const item = typeof fetchConcept === 'function' ? await fetchConcept(route.params.conceptId) : null;
+                const item = typeof fetchConcept === 'function' ? await fetchConcept(route.params.conceptId, { signal: routeSignal }) : null;
                 if (stale()) return;
                 if (!item) {
                     if (typeof renderConceptNotFound === 'function') renderConceptNotFound(contentDiv);
@@ -1648,14 +1718,14 @@ async function handleRoute() {
                 break;
             }
             case 'positions': {
-                const items = typeof fetchPositions === 'function' ? await fetchPositions() : [];
+                const items = typeof fetchPositions === 'function' ? await fetchPositions({ signal: routeSignal }) : [];
                 if (stale()) return;
                 if (typeof renderPositionsIndex === 'function') renderPositionsIndex(items, contentDiv);
                 else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Positions</h2></div>';
                 break;
             }
             case 'position-detail': {
-                const item = typeof fetchPosition === 'function' ? await fetchPosition(route.params.positionId) : null;
+                const item = typeof fetchPosition === 'function' ? await fetchPosition(route.params.positionId, { signal: routeSignal }) : null;
                 if (stale()) return;
                 if (!item) {
                     if (typeof renderPositionNotFound === 'function') renderPositionNotFound(contentDiv);
@@ -1669,14 +1739,14 @@ async function handleRoute() {
             }
             case 'arguments': {
                 const kind = route.params.kind || '';
-                const items = typeof fetchArguments === 'function' ? await fetchArguments(kind || undefined) : [];
+                const items = typeof fetchArguments === 'function' ? await fetchArguments(kind || undefined, { signal: routeSignal }) : [];
                 if (stale()) return;
                 if (typeof renderArgumentsIndex === 'function') renderArgumentsIndex(items, contentDiv, kind || 'all');
                 else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Arguments &amp; Stances</h2></div>';
                 break;
             }
             case 'argument-detail': {
-                const item = typeof fetchArgument === 'function' ? await fetchArgument(route.params.argumentId) : null;
+                const item = typeof fetchArgument === 'function' ? await fetchArgument(route.params.argumentId, { signal: routeSignal }) : null;
                 if (stale()) return;
                 if (!item) {
                     if (typeof renderArgumentNotFound === 'function') renderArgumentNotFound(contentDiv);
@@ -1694,6 +1764,7 @@ async function handleRoute() {
                         focus: route.params.focus || '',
                         routeGen: routeGen,
                         stale: stale,
+                        signal: routeSignal,
                     });
                 } else {
                     contentDiv.innerHTML =
@@ -1702,7 +1773,7 @@ async function handleRoute() {
                 break;
             }
             case 'person': {
-                const person = await fetchPersonDetails(route.params.personId);
+                const person = await fetchPersonDetails(route.params.personId, { signal: routeSignal });
                 if (stale()) return;
                 publishSidebar(
                     person
@@ -1744,6 +1815,7 @@ async function handleRoute() {
         }
     } catch (_e) {
         if (stale()) return;
+        if (typeof prksIsAbortError === 'function' && prksIsAbortError(_e)) return;
         if (typeof prksRenderRouteError === 'function') prksRenderRouteError(contentDiv);
         else contentDiv.innerHTML = '<p class="prks-inline-message">Could not load this view.</p>';
         if (typeof prksFinishRouteRender === 'function') {
@@ -1954,7 +2026,7 @@ function initForms() {
 
         let res;
         try {
-            res = await fetch('/api/works', {
+            res = await prksRequest('/api/works', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
@@ -1978,7 +2050,7 @@ function initForms() {
         if (newId && typeof uploadTagsSelected !== 'undefined' && uploadTagsSelected.length) {
             for (const t of uploadTagsSelected) {
                 try {
-                    const tr = await fetch(`/api/works/${encodeURIComponent(newId)}/tags`, {
+                    const tr = await prksRequest(`/api/works/${encodeURIComponent(newId)}/tags`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ tag_id: t.id }),
@@ -2126,7 +2198,7 @@ function initForms() {
                     return raw || null;
                 })()
             };
-            const res = await fetch('/api/folders', {
+            const res = await prksRequest('/api/folders', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -2200,7 +2272,7 @@ function initForms() {
             const old = playlistBtn.textContent;
             playlistBtn.textContent = 'Creating…';
             try {
-                const res = await fetch('/api/playlists', {
+                const res = await prksRequest('/api/playlists', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title, description }),
@@ -2214,7 +2286,7 @@ function initForms() {
                 const pending = window.__prksPendingPlaylistAttach;
                 if (pending && pending.workId) {
                     try {
-                        await fetch(`/api/playlists/${encodeURIComponent(data.id)}/items`, {
+                        await prksRequest(`/api/playlists/${encodeURIComponent(data.id)}/items`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ work_id: pending.workId }),
@@ -2293,7 +2365,7 @@ function initForms() {
                 return;
             }
             try {
-                const res = await fetch('/api/persons', {
+                const res = await prksRequest('/api/persons', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
@@ -2328,7 +2400,7 @@ function initForms() {
             }
             if (parentHid) payload.parent_id = parentHid;
             else if (parentSearch) payload.parent_name = parentSearch;
-            const res = await fetch('/api/person-groups', {
+            const res = await prksRequest('/api/person-groups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -2380,7 +2452,7 @@ function initForms() {
             return;
         }
         try {
-            const res = await fetch('/api/roles', {
+            const res = await prksRequest('/api/roles', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)

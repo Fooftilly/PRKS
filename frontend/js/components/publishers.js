@@ -124,7 +124,7 @@ function prksEnsurePublishersPageDelegated(container) {
             const name = input ? String(input.value || '').trim() : '';
             if (!name) return;
             try {
-                const res = await fetch('/api/publishers', {
+                const res = await prksRequest('/api/publishers', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name }),
@@ -166,7 +166,7 @@ function prksEnsurePublishersPageDelegated(container) {
             });
             if (!confirmed) return;
             try {
-                const res = await fetch('/api/publishers/' + encodeURIComponent(pub.id), {
+                const res = await prksRequest('/api/publishers/' + encodeURIComponent(pub.id), {
                     method: 'DELETE',
                 });
                 const errData = await res.json().catch(() => ({}));
@@ -190,7 +190,7 @@ function prksEnsurePublishersPageDelegated(container) {
             const alias = String(input.value || '').trim();
             if (!alias) return;
             try {
-                const res = await fetch(`/api/publishers/${encodeURIComponent(pub.id)}/aliases`, {
+                const res = await prksRequest(`/api/publishers/${encodeURIComponent(pub.id)}/aliases`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ alias }),
@@ -214,7 +214,7 @@ function prksEnsurePublishersPageDelegated(container) {
             const alias = rm.getAttribute('data-publisher-alias-remove');
             if (alias == null) return;
             try {
-                const res = await fetch(
+                const res = await prksRequest(
                     `/api/publishers/${encodeURIComponent(pub.id)}/aliases?alias=${encodeURIComponent(alias)}`,
                     { method: 'DELETE' }
                 );
@@ -231,9 +231,9 @@ function prksEnsurePublishersPageDelegated(container) {
     });
 }
 
-async function renderPublishersPage(container, routeGen) {
+async function renderPublishersPage(container, routeGen, requestCtx) {
     prksPublishersPageCtx.containerEl = container;
-    const publishers = await fetchPublishersInUse();
+    const publishers = await fetchPublishersInUse({ signal: requestCtx && requestCtx.signal });
     if (typeof prksIsRouteGenCurrent === 'function' && typeof routeGen === 'number' && !prksIsRouteGenCurrent(routeGen)) {
         return;
     }

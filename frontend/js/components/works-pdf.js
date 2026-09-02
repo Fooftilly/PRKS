@@ -930,7 +930,11 @@ async function setupAnnotationPersistence(viewer, workId) {
         workId: String(workId),
     };
     try {
-        const savedRes = await fetch(`/api/works/${workId}/annotations`, { cache: 'no-store' });
+        const savedRes = await prksRequest(`/api/works/${workId}/annotations`, { cache: 'no-store' }, {
+            dedupe: false,
+            retry: false,
+            freshForMs: 0,
+        });
         const savedData = await savedRes.json();
         const saved = JSON.parse(savedData.annotations_json || '[]');
         if (Array.isArray(saved) && saved.length > 0) {
@@ -943,10 +947,14 @@ async function setupAnnotationPersistence(viewer, workId) {
         const buffer = await viewer.saveCopy();
         if (!buffer || !buffer.byteLength) return;
         const b64 = arrayBufferToBase64(buffer);
-        const pdfRes = await fetch(`/api/works/${workId}/pdf`, {
+        const pdfRes = await prksRequest(`/api/works/${workId}/pdf`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ file_b64: b64, save_token: saveToken }),
+        }, {
+            dedupe: false,
+            retry: false,
+            freshForMs: 0,
         });
         if (!pdfRes.ok) {
             throw new Error(`PDF save failed (${pdfRes.status})`);
@@ -959,10 +967,14 @@ async function setupAnnotationPersistence(viewer, workId) {
         const userItems = sortAnnotationsByPage(itemsFound.filter(prksIsUserMarkupAnnotation));
         const serialized = JSON.stringify(userItems);
         renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId);
-        const annRes = await fetch(`/api/works/${workId}/annotations`, {
+        const annRes = await prksRequest(`/api/works/${workId}/annotations`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ annotations_json: serialized, save_token: saveToken }),
+        }, {
+            dedupe: false,
+            retry: false,
+            freshForMs: 0,
         });
         if (!annRes.ok) {
             throw new Error(`Annotation save failed (${annRes.status})`);
@@ -973,9 +985,10 @@ async function setupAnnotationPersistence(viewer, workId) {
         const tries = 8;
         for (let attempt = 0; attempt < tries; attempt++) {
             try {
-                const probe = await fetch(
+                const probe = await prksRequest(
                     `/api/works/${workId}/save-confirm?token=${encodeURIComponent(saveToken)}&t=${Date.now()}`,
-                    { cache: 'no-store' }
+                    { cache: 'no-store' },
+                    { dedupe: false, retry: false, freshForMs: 0 }
                 );
                 if (probe.ok) {
                     const body = await probe.json().catch(() => ({}));

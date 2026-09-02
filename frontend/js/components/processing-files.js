@@ -164,7 +164,7 @@ async function prksProcessingQuickCreateFolder(card) {
         return;
     }
     try {
-        const res = await fetch('/api/folders', {
+        const res = await prksRequest('/api/folders', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title, description: 'Quick-created from processing inbox' }),
@@ -241,7 +241,7 @@ function prksProcessingAttachTagCombobox(card) {
                 ev.preventDefault();
                 void (async () => {
                     try {
-                        const res = await fetch('/api/tags', {
+                        const res = await prksRequest('/api/tags', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ name: val, color: '#6d6cf7' }),
@@ -672,11 +672,12 @@ function prksProcessingCardHtml(file) {
 
 async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
     const routeGen = options.routeGen;
+    const requestSignal = options.signal;
     const [items, people, folders, tags] = await Promise.all([
         fetchProcessingFiles(options),
-        fetchPersons(),
-        fetchFolders(),
-        fetchTags({ used: false }),
+        fetchPersons({ signal: requestSignal }),
+        fetchFolders({ signal: requestSignal }),
+        fetchTags({ used: false, signal: requestSignal }),
     ]);
     if (typeof prksIsRouteGenCurrent === 'function' && typeof routeGen === 'number' && !prksIsRouteGenCurrent(routeGen)) {
         return;

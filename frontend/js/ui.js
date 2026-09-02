@@ -1191,7 +1191,7 @@ function prksPromptTextDialog(options = {}) {
 }
 
 async function prksPatchRoleCreditName(workId, personId, roleType, orderIndex, creditName) {
-    const res = await fetch(`/api/works/${encodeURIComponent(workId)}/roles`, {
+    const res = await prksRequest(`/api/works/${encodeURIComponent(workId)}/roles`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1275,7 +1275,7 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
     }
     const { first_name, last_name } = prksSplitTypedPersonName(trimmed);
     try {
-        const res = await fetch('/api/persons', {
+        const res = await prksRequest('/api/persons', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1387,7 +1387,7 @@ async function addRoleToWorkFromMetaEditor(workId) {
             personId,
             'meta-role-person-search'
         );
-        const res = await fetch('/api/roles', {
+        const res = await prksRequest('/api/roles', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2047,11 +2047,20 @@ function initPrksPrivateNotesEditor(entityType, entityId) {
     const persist = async () => {
         const url = entityType === 'work' ? `/api/works/${entityId}` : `/api/folders/${entityId}`;
         try {
-            const res = await fetch(url, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ private_notes: ta.value }),
-            });
+            const res = await prksRequest(
+                url,
+                {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ private_notes: ta.value }),
+                },
+                {
+                    coalesceKey:
+                        entityType === 'work'
+                            ? 'private-notes:work:' + entityId
+                            : 'private-notes:folder:' + entityId,
+                }
+            );
             if (!res.ok) throw new Error('save failed');
             if (statusEl) {
                 statusEl.textContent = 'Saved';
@@ -2363,7 +2372,7 @@ async function mountPlaylistEditSidebar(pl) {
                 return;
             }
             try {
-                const res = await fetch('/api/playlists/' + encodeURIComponent(pl.id), {
+                const res = await prksRequest('/api/playlists/' + encodeURIComponent(pl.id), {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title, description, original_url: originalUrl }),
@@ -2560,7 +2569,7 @@ async function submitWorkMetaEdit(workId) {
     }
 
     try {
-        const saveRes = await fetch(`/api/works/${workId}`, {
+        const saveRes = await prksRequest(`/api/works/${workId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -2679,7 +2688,7 @@ async function prksRemoveWorkRoleLink(btn) {
     });
     let res;
     try {
-        res = await fetch(`/api/works/${encodeURIComponent(workId)}/roles?${params}`, { method: 'DELETE' });
+        res = await prksRequest(`/api/works/${encodeURIComponent(workId)}/roles?${params}`, { method: 'DELETE' });
     } catch (e) {
         console.error(e);
         await prksAlertMessage('Could not remove link.', 'Error');
@@ -3160,7 +3169,7 @@ async function prksAttachExistingTag(entityType, entityId, tagId) {
     try {
         const url =
             entityType === 'work' ? `/api/works/${entityId}/tags` : `/api/folders/${entityId}/tags`;
-        const res = await fetch(url, {
+        const res = await prksRequest(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ tag_id: tagId }),
@@ -3206,7 +3215,7 @@ async function prksSubmitNewTag(entityType, entityId, name) {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
     try {
-        const res = await fetch('/api/tags', {
+        const res = await prksRequest('/api/tags', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: trimmed, color: '#6d6cf7' }),
@@ -3529,7 +3538,7 @@ async function mountFolderLibraryAttachControls(folder) {
 
 async function prksRemoveWorkTag(workId, tagId) {
     try {
-        await fetch(
+        await prksRequest(
             `/api/works/${encodeURIComponent(workId)}/tags/${encodeURIComponent(tagId)}`,
             { method: 'DELETE' }
         );
@@ -3788,7 +3797,7 @@ function initUploadTagCombobox() {
                 ev.preventDefault();
                 void (async () => {
                     try {
-                        const res = await fetch('/api/tags', {
+                        const res = await prksRequest('/api/tags', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ name: val, color: '#6d6cf7' }),
@@ -4197,7 +4206,7 @@ async function quickCreateFolder() {
     }
     
     const payload = { title: title, description: "Quick created via upload" };
-    const res = await fetch('/api/folders', {
+    const res = await prksRequest('/api/folders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -4598,7 +4607,7 @@ function initUploadDragAndDrop() {
             async function quickCreate(title) {
                 const t = String(title || '').trim();
                 if (!t) return null;
-                const res = await fetch('/api/playlists', {
+                const res = await prksRequest('/api/playlists', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title: t, description: '' }),

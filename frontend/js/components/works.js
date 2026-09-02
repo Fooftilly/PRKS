@@ -621,7 +621,7 @@ async function deleteWork(w_id) {
     });
     if (!confirmed) return;
     try {
-        const res = await fetch('/api/works/' + encodeURIComponent(w_id), { method: 'DELETE' });
+        const res = await prksRequest('/api/works/' + encodeURIComponent(w_id), { method: 'DELETE' });
         if (!res.ok) {
             await prksAlertMessage('Error deleting file!', 'Error');
             return;
@@ -637,7 +637,8 @@ function prksRouteStale(routeGen) {
     return typeof routeGen === 'number' && routeGen !== window.__prksRouteGen;
 }
 
-async function renderWorkDetails(work, container, routeGen) {
+async function renderWorkDetails(work, container, routeGen, requestCtx) {
+    const routeSignal = requestCtx && requestCtx.signal;
     if (!work) {
         container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">File not found.</p>';
         return;
@@ -783,7 +784,7 @@ async function renderWorkDetails(work, container, routeGen) {
             if (shouldCollapse) wsEarly.classList.add('work-workspace--notes-collapsed');
         }
         try {
-            const works = await fetchWorks();
+            const works = await fetchWorks({ signal: routeSignal });
             if (prksRouteStale(routeGen)) return;
             window.__prksWikiTitleMap = prksBuildWorkTitleLowerToIdMap(works);
             window.__prksWikiWorkList = prksBuildWikiAutocompleteWorkList(works);
@@ -794,14 +795,14 @@ async function renderWorkDetails(work, container, routeGen) {
         }
         try {
             if (typeof fetchConcepts === 'function') {
-                window.__prksConceptHintList = await fetchConcepts();
+                window.__prksConceptHintList = await fetchConcepts({ signal: routeSignal });
             }
         } catch (_e) {
             window.__prksConceptHintList = [];
         }
         try {
             if (typeof fetchArguments === 'function') {
-                window.__prksArgumentHintList = await fetchArguments();
+                window.__prksArgumentHintList = await fetchArguments(undefined, { signal: routeSignal });
             }
         } catch (_e) {
             window.__prksArgumentHintList = [];
@@ -812,7 +813,11 @@ async function renderWorkDetails(work, container, routeGen) {
         setupWorkNotesCollapseToggle(work.id);
     }, 200);
 
-    fetch('/api/works/' + encodeURIComponent(work.id) + '/related_folders')
+    prksRequest(
+        '/api/works/' + encodeURIComponent(work.id) + '/related_folders',
+        { signal: routeSignal },
+        { priority: 'background' }
+    )
         .then((r) => (r.ok ? r.json() : []))
         .then((related) => {
             if (prksRouteStale(routeGen)) return;
@@ -833,7 +838,10 @@ async function renderWorkDetails(work, container, routeGen) {
                 target.appendChild(span);
             }
         })
-        .catch((err) => console.error('related folders fetch failed', err));
+        .catch((err) => {
+            if (typeof prksIsAbortError === 'function' && prksIsAbortError(err)) return;
+            console.error('related folders fetch failed', err);
+        });
 }
 
 /** EasyMDE toolbar uses Font Awesome class names; PRKS does not load that webfont. Map buttons to Lucide. */
@@ -1052,11 +1060,17 @@ function initEasyMDE(work) {
         clearTimeout(window.saveNotesTimeout);
         window.saveNotesTimeout = setTimeout(async () => {
             try {
-                const res = await fetch('/api/works/' + encodeURIComponent(work.id), {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text_content: content })
-                });
+                const res = await prksRequest(
+                    '/api/works/' + encodeURIComponent(work.id),
+                    {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text_content: content })
+                    },
+                    {
+                        coalesceKey: 'work-research-notes:' + work.id
+                    }
+                );
                 if (statusEl) {
                     statusEl.innerText = res.ok ? 'All changes saved' : 'Error saving changes';
                 }
@@ -1468,7 +1482,7 @@ async function copyBibTeX(workId, btn) {
         restore();
     }
     try {
-        const res = await fetch('/api/bibtex/' + encodeURIComponent(workId));
+        const res = await prksRequest('/api/bibtex/' + encodeURIComponent(workId));
         if (!res.ok) throw new Error('bibtex fetch failed');
         const text = await res.text();
         await prksCopyBibTeXToClipboard(text);

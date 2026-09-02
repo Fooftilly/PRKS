@@ -793,7 +793,7 @@ function renderFolderDetails(folder, container) {
 
 async function prksRemoveFolderTag(folderId, tagId) {
     try {
-        const res = await fetch(
+        const res = await prksRequest(
             `/api/folders/${encodeURIComponent(folderId)}/tags/${encodeURIComponent(tagId)}`,
             { method: 'DELETE' }
         );
@@ -814,7 +814,7 @@ async function deleteFolder(f_id) {
     });
     if (!confirmed) return;
     try {
-        const res = await fetch('/api/folders/' + encodeURIComponent(f_id), { method: 'DELETE' });
+        const res = await prksRequest('/api/folders/' + encodeURIComponent(f_id), { method: 'DELETE' });
         if (res.ok) {
             window.location.hash = '#/folders';
         } else {

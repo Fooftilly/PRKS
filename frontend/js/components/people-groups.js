@@ -616,7 +616,7 @@ async function mountPersonGroupEditPanel(g) {
             }
             btn.disabled = true;
             try {
-                const res = await fetch(`/api/person-groups/${encodeURIComponent(g.id)}`, {
+                const res = await prksRequest(`/api/person-groups/${encodeURIComponent(g.id)}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -649,7 +649,7 @@ async function mountPersonGroupEditPanel(g) {
             });
             if (!confirmed) return;
             try {
-                const res = await fetch(`/api/person-groups/${encodeURIComponent(g.id)}`, { method: 'DELETE' });
+                const res = await prksRequest(`/api/person-groups/${encodeURIComponent(g.id)}`, { method: 'DELETE' });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) {
                     await prksAlertMessage(data.error || 'Could not delete.', 'Error');
@@ -683,7 +683,7 @@ function mountPersonGroupMemberRemoveButtons(g) {
             });
             if (!confirmed) return;
             try {
-                const res = await fetch(
+                const res = await prksRequest(
                     `/api/person-groups/${encodeURIComponent(g.id)}/members/${encodeURIComponent(pid)}`,
                     { method: 'DELETE' }
                 );
@@ -721,7 +721,7 @@ async function mountPersonGroupAddMemberControls(g) {
                 return;
             }
             try {
-                const res = await fetch(`/api/person-groups/${encodeURIComponent(g.id)}/members`, {
+                const res = await prksRequest(`/api/person-groups/${encodeURIComponent(g.id)}/members`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ person_id: pid })
@@ -887,7 +887,7 @@ async function prksMountPersonProfileGroupPicker(person) {
             return;
         }
         try {
-            const res = await fetch('/api/person-groups', {
+            const res = await prksRequest('/api/person-groups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: typed, description: '' })

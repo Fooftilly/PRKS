@@ -290,7 +290,7 @@ function prksWireTagsPageMergePanel() {
             const target = prksTagMergeTarget();
             if (!source || !target) return;
             try {
-                const res = await fetch('/api/tags/merge', {
+                const res = await prksRequest('/api/tags/merge', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -355,7 +355,7 @@ function prksWireTagsPageAliasPanel(container) {
             });
             if (!confirmed) return;
             try {
-                const res = await fetch(`/api/tags/${encodeURIComponent(tag.id)}`, { method: 'DELETE' });
+                const res = await prksRequest(`/api/tags/${encodeURIComponent(tag.id)}`, { method: 'DELETE' });
                 const errData = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(errData.error || 'Delete failed');
                 window.__prksAllTagsCache = null;
@@ -380,7 +380,7 @@ function prksWireTagsPageAliasPanel(container) {
             const alias = String(input.value || '').trim();
             if (!alias) return;
             try {
-                const res = await fetch(`/api/tags/${encodeURIComponent(tag.id)}/aliases`, {
+                const res = await prksRequest(`/api/tags/${encodeURIComponent(tag.id)}/aliases`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ alias }),
@@ -408,7 +408,7 @@ function prksWireTagsPageAliasPanel(container) {
             const alias = btn.getAttribute('data-alias-remove');
             if (alias == null) return;
             try {
-                const res = await fetch(
+                const res = await prksRequest(
                     `/api/tags/${encodeURIComponent(tag.id)}/aliases?alias=${encodeURIComponent(alias)}`,
                     { method: 'DELETE' }
                 );
@@ -426,9 +426,9 @@ function prksWireTagsPageAliasPanel(container) {
     }
 }
 
-async function renderTagsPage(container, routeGen) {
+async function renderTagsPage(container, routeGen, requestCtx) {
     prksTagsPageCtx.containerEl = container;
-    const tags = await fetchTags({ used: true });
+    const tags = await fetchTags({ used: true, signal: requestCtx && requestCtx.signal });
     if (typeof prksIsRouteGenCurrent === 'function' && typeof routeGen === 'number' && !prksIsRouteGenCurrent(routeGen)) {
         return;
     }
