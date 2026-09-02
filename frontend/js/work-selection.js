@@ -106,14 +106,14 @@
         bar.innerHTML =
             '<span class="prks-bulk-toolbar__count" data-bulk-count>0 selected</span>' +
             '<div class="prks-bulk-toolbar__actions prks-bulk-toolbar__actions--desktop">' +
-            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-bulk-open="status">Status</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-bulk-open="folder">Folder</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-bulk-open="tags">Tags</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-bulk-open="status">Status</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-bulk-open="folder">Folder</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-bulk-open="tags">Tags</button>' +
             '</div>' +
-            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm prks-bulk-toolbar__organize" data-bulk-open="organize">Organize…</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-bulk-select-all>Select all visible</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-bulk-clear>Clear</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm prks-bulk-toolbar__exit" data-bulk-exit aria-label="Exit selection">&times;</button>';
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm prks-bulk-toolbar__organize" data-bulk-open="organize">Organize…</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-bulk-select-all>Select all visible</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-bulk-clear>Clear</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm prks-bulk-toolbar__exit" data-bulk-exit aria-label="Exit selection">&times;</button>';
         document.body.appendChild(bar);
         bar.addEventListener('click', onToolbarClick);
         return bar;
@@ -138,8 +138,8 @@
             '<p class="prks-bulk-sheet__confirm"></p>' +
             '<p class="prks-bulk-sheet__error" role="alert"></p>' +
             '<div class="prks-bulk-sheet__actions">' +
-            '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn" data-bulk-cancel="1">Cancel</button>' +
-            '<button type="button" class="prks-btn prks-btn--primary add-new-btn" data-bulk-apply="1">Apply</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary" data-bulk-cancel="1">Cancel</button>' +
+            '<button type="button" class="prks-btn prks-btn--primary" data-bulk-apply="1">Apply</button>' +
             '</div>' +
             '</div>';
         document.body.appendChild(sheet);
@@ -248,7 +248,7 @@
         if (!header) return;
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'ribbon-btn ribbon-btn--sm prks-work-select-btn';
+        btn.className = 'prks-btn prks-btn--secondary prks-btn--sm prks-work-select-btn';
         btn.textContent = 'Select';
         btn.setAttribute('aria-pressed', 'false');
         btn.addEventListener('click', function (e) {
@@ -623,9 +623,9 @@
     function renderOrganizeBody() {
         return (
             '<div class="prks-bulk-organize-actions">' +
-            '<button type="button" class="prks-btn prks-btn--primary add-new-btn" data-bulk-open="status">Status</button>' +
-            '<button type="button" class="prks-btn prks-btn--primary add-new-btn" data-bulk-open="folder">Folder</button>' +
-            '<button type="button" class="prks-btn prks-btn--primary add-new-btn" data-bulk-open="tags">Tags</button>' +
+            '<button type="button" class="prks-btn prks-btn--primary" data-bulk-open="status">Status</button>' +
+            '<button type="button" class="prks-btn prks-btn--primary" data-bulk-open="folder">Folder</button>' +
+            '<button type="button" class="prks-btn prks-btn--primary" data-bulk-open="tags">Tags</button>' +
             '</div>'
         );
     }

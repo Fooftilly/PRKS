@@ -222,8 +222,8 @@ function prksConfirmDialog(options = {}) {
         }
         if (okBtn) {
             okBtn.textContent = confirmLabel;
-            okBtn.classList.remove('add-new-btn', 'btn-danger-outline');
-            okBtn.classList.add(danger ? 'btn-danger-outline' : 'add-new-btn');
+            okBtn.classList.remove('prks-btn--primary', 'prks-btn--danger');
+            okBtn.classList.add(danger ? 'prks-btn--danger' : 'prks-btn--primary');
         }
 
         prksModalConfirmResolve = resolve;
@@ -1163,8 +1163,8 @@ function prksPromptTextDialog(options = {}) {
         cancelBtn.textContent = cancelLabel;
         if (actions) actions.classList.remove('prks-modal-confirm__actions--alertOnly');
         okBtn.textContent = okLabel;
-        okBtn.classList.remove('add-new-btn', 'btn-danger-outline');
-        okBtn.classList.add('add-new-btn');
+        okBtn.classList.remove('prks-btn--danger');
+        okBtn.classList.add('prks-btn--primary');
         prksModalConfirmAlertOnly = false;
 
         if (!multiline) {
@@ -1812,7 +1812,7 @@ function renderRouteContextSidebar(mode) {
                 ${prksRouteSidebarTitleRow('Playlists', 'route-new-playlist', 'How to create a playlist')}
                 <p class="route-sidebar__lede">Ordered collections of videos (courses, lecture series). Open a playlist to reorder items or add new videos.</p>
                 <p class="route-sidebar__action route-sidebar__action--block">
-                    <button type="button" class="prks-btn prks-btn--primary add-new-btn route-sidebar__new-playlist-btn" id="prks-create-playlist-btn">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New playlist</button>
+                    <button type="button" class="prks-btn prks-btn--primary route-sidebar__new-playlist-btn" id="prks-create-playlist-btn">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New playlist</button>
                 </p>
             </div>`;
     }
@@ -2076,7 +2076,7 @@ function prksWorkPanelActionsHtml() {
         '<button type="button" class="tab-btn copy-bibtex-btn" aria-live="polite">' +
         (typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : '') +
         ' Copy BibTeX</button>' +
-        '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn delete-work-btn" title="Delete this file">' +
+        '<button type="button" class="prks-btn prks-btn--secondary delete-work-btn" title="Delete this file">' +
         (typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : '') +
         ' Delete File</button>' +
         '</div>'
@@ -2260,7 +2260,7 @@ function renderPlaylistSummarySidebarHtml(pl) {
             <div class="doc-meta-card">
                 <div class="card-heading-row">
                     <h3>Playlist</h3>
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-playlist-edit-btn">Edit</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-playlist-edit-btn">Edit</button>
                 </div>
                 <p class="card-title">${title}</p>
                 ${desc ? `<p class="meta-row meta-row--compact">${desc}</p>` : '<p class="meta-row meta-row--compact meta-row--muted-italic">No description.</p>'}
@@ -2289,9 +2289,9 @@ function renderPlaylistEditSidebarHtml(pl) {
                 <textarea id="prks-playlist-edit-desc" class="textarea-sm">${desc}</textarea>
                 <label for="prks-playlist-edit-original-url">Original playlist URL</label>
                 <input type="url" id="prks-playlist-edit-original-url" value="${originalUrl}" placeholder="https://..." autocomplete="off">
-                <div class="prks-form-actions form-actions">
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn form-actions__btn--secondary" id="prks-playlist-edit-cancel">Cancel</button>
-                    <button type="button" class="prks-btn prks-btn--primary add-new-btn form-actions__btn form-actions__btn--primary" id="prks-playlist-edit-save">Save</button>
+                <div class="prks-form-actions prks-form-actions--split form-actions">
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-playlist-edit-cancel">Cancel</button>
+                    <button type="button" class="prks-btn prks-btn--primary" id="prks-playlist-edit-save">Save</button>
                 </div>
                 <p class="meta-row meta-row--spaced" id="prks-playlist-edit-status" aria-live="polite"></p>
             </div>
@@ -2407,7 +2407,7 @@ async function mountPlaylistEditSidebar(pl) {
 
                 const btn = document.createElement('button');
                 btn.type = 'button';
-                btn.className = 'ribbon-btn';
+                btn.className = 'prks-btn prks-btn--secondary prks-btn--sm';
                 btn.textContent = 'Add';
                 btn.style.flex = '0 0 auto';
                 btn.onmousedown = (ev) => ev.preventDefault();
@@ -2875,7 +2875,7 @@ function renderFolderDetailsPanel(folder) {
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Hierarchy</h3>
-                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-folder-parent-edit-btn" aria-expanded="${
+                <button type="button" class="prks-btn prks-btn--secondary" id="prks-folder-parent-edit-btn" aria-expanded="${
                     parentEditing ? 'true' : 'false'
                 }">${parentEditing ? 'Done' : 'Move folder'}</button>
             </div>
@@ -2891,10 +2891,10 @@ function renderFolderDetailsPanel(folder) {
                     <div id="prks-folder-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
                 <div class="prks-work-folder-controls">
-                    <button type="button" class="prks-btn prks-btn--primary add-new-btn" id="prks-folder-parent-save-btn">Move here</button>
+                    <button type="button" class="prks-btn prks-btn--primary" id="prks-folder-parent-save-btn">Move here</button>
                     ${
                         folder.parent
-                            ? '<button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-folder-parent-top-btn">Make top-level</button>'
+                            ? '<button type="button" class="prks-btn prks-btn--secondary" id="prks-folder-parent-top-btn">Make top-level</button>'
                             : ''
                     }
                 </div>
@@ -2904,7 +2904,7 @@ function renderFolderDetailsPanel(folder) {
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Folder files</h3>
-                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn" id="prks-folder-library-edit-btn">${editLabel}</button>
+                <button type="button" class="prks-btn prks-btn--secondary" id="prks-folder-library-edit-btn">${editLabel}</button>
             </div>
             <p class="meta-row">Add existing files from your library.</p>
             ${searchBlock}
@@ -3459,8 +3459,7 @@ async function mountFolderLibraryAttachControls(folder) {
                 if (!wf) {
                     const btn = document.createElement('button');
                     btn.type = 'button';
-                    btn.className = 'ribbon-btn';
-                    btn.style.marginTop = '0';
+                    btn.className = 'prks-btn prks-btn--secondary prks-btn--sm';
                     btn.textContent = 'Add';
                     btn.onclick = async () => {
                         try {
@@ -3482,8 +3481,7 @@ async function mountFolderLibraryAttachControls(folder) {
                 } else {
                     const btn = document.createElement('button');
                     btn.type = 'button';
-                    btn.className = 'ribbon-btn';
-                    btn.style.marginTop = '0';
+                    btn.className = 'prks-btn prks-btn--secondary prks-btn--sm';
                     btn.textContent = 'Move here';
                     btn.onclick = async () => {
                         try {
@@ -3647,7 +3645,7 @@ function renderWorkMetaEditTab(work) {
                             <div id="meta-role-person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                         </div>
                     </div>
-                    <button type="button" id="meta-role-add-btn" onclick="addRoleToWorkFromMetaEditor('${work.id}')" class="prks-btn prks-btn--secondary ribbon-btn">+ Link</button>
+                    <button type="button" id="meta-role-add-btn" onclick="addRoleToWorkFromMetaEditor('${work.id}')" class="prks-btn prks-btn--secondary">+ Link</button>
                 </div>
                 <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles prks-upload-person-stack__roles--tiles-2row">
                     <div class="prks-upload-role-seg" id="meta-role-seg-mount"></div>
@@ -3656,9 +3654,9 @@ function renderWorkMetaEditTab(work) {
             </div>
             <div id="meta-linked-persons-list" class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work)}</div>
             
-            <div class="prks-form-actions form-actions">
-                <button class="prks-btn prks-btn--secondary ribbon-btn form-actions__btn form-actions__btn--secondary" onclick="toggleWorkMetaEdit(false)">Cancel</button>
-                <button id="inline-save-metadata-btn" class="prks-btn prks-btn--primary add-new-btn form-actions__btn form-actions__btn--primary" onclick="submitWorkMetaEdit('${work.id}')">Save Changes</button>
+            <div class="prks-form-actions prks-form-actions--split form-actions">
+                <button class="prks-btn prks-btn--secondary" onclick="toggleWorkMetaEdit(false)">Cancel</button>
+                <button id="inline-save-metadata-btn" class="prks-btn prks-btn--primary" onclick="submitWorkMetaEdit('${work.id}')">Save Changes</button>
             </div>
         </div>
     `;
@@ -3677,7 +3675,7 @@ function prksAnnotationsTabHintButton(hintType, ariaLabel) {
 
 function prksRouteSidebarTitleRow(titleInnerHtml, hintType, ariaLabel) {
     const btn = hintType ? prksHintBtnHtml(hintType, ariaLabel, 'route-sidebar__hint-btn') : '';
-    return `<div class="route-sidebar__title-row"><h2 class="route-sidebar__title">${titleInnerHtml}</h2>${btn}</div>`;
+    return `<div class="route-sidebar__title-row"><h2 class="prks-page-title route-sidebar__title">${titleInnerHtml}</h2>${btn}</div>`;
 }
 
 function renderWorkAnnotationsTab(work) {
@@ -3705,9 +3703,9 @@ function renderWorkAnnotationsTab(work) {
                     <label for="pdf-annotation-editor-text">Comment</label>
                     <textarea id="pdf-annotation-editor-text" class="textarea-md" placeholder="Add a note/comment for this annotation…"></textarea>
                     <div class="pdf-annotation-editor__actions">
-                        <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" onclick="window.closePdfAnnotationEditor && window.closePdfAnnotationEditor()">Cancel</button>
-                        <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" onclick="window.deletePdfAnnotationFromEditor && window.deletePdfAnnotationFromEditor()">Delete annotation</button>
-                        <button type="button" class="prks-btn prks-btn--primary add-new-btn" onclick="window.savePdfAnnotationComment && window.savePdfAnnotationComment()">Save comment</button>
+                        <button type="button" class="prks-btn prks-btn--secondary" onclick="window.closePdfAnnotationEditor && window.closePdfAnnotationEditor()">Cancel</button>
+                        <button type="button" class="prks-btn prks-btn--secondary" onclick="window.deletePdfAnnotationFromEditor && window.deletePdfAnnotationFromEditor()">Delete annotation</button>
+                        <button type="button" class="prks-btn prks-btn--primary" onclick="window.savePdfAnnotationComment && window.savePdfAnnotationComment()">Save comment</button>
                     </div>
                 </div>
             </section>

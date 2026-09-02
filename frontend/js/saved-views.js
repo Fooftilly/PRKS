@@ -381,20 +381,20 @@
                                 <p class="meta-row saved-views-page__summary">${summary}</p>
                             </a>
                             <div class="saved-views-page__row-actions">
-                                <a class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" href="${path}">Open</a>
-                                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-sv-edit="${idAttr}">Edit</button>
-                                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-sv-delete="${idAttr}">Delete</button>
+                                <a class="prks-btn prks-btn--secondary prks-btn--sm" href="${path}">Open</a>
+                                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-sv-edit="${idAttr}">Edit</button>
+                                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-sv-delete="${idAttr}">Delete</button>
                             </div>
                         </div>`;
                   })
                   .join('')
             : `<p class="meta-row saved-views-page__empty">No Saved Views yet.</p>
                <p class="meta-row">${esc(EMPTY_HINT)}</p>
-               <p><button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-saved-views-empty-search">Search or jump</button></p>`;
+               <p><button type="button" class="prks-btn prks-btn--secondary" id="prks-saved-views-empty-search">Search or jump</button></p>`;
         container.innerHTML = `
             <div class="saved-views-page">
                 <div class="prks-page-header page-header">
-                    <h2>${typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('bookmark') : ''} Saved Views</h2>
+                    <h2 class="prks-page-title">${typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('bookmark') : ''} Saved Views</h2>
                 </div>
                 <div class="list-view saved-views-page__list">
                     ${rowsHtml}
@@ -491,9 +491,9 @@
     function renderSavedViewNotFound(container) {
         container.innerHTML = `
             <div class="prks-page-header page-header">
-                <h2>Saved View not found.</h2>
+                <h2 class="prks-page-title">Saved View not found.</h2>
             </div>
-            <p class="meta-row"><a class="prks-btn prks-btn--secondary ribbon-btn" href="#/views">Back to Saved Views</a></p>
+            <p class="meta-row"><a class="prks-btn prks-btn--secondary" href="#/views">Back to Saved Views</a></p>
         `;
     }
 
@@ -511,12 +511,12 @@
                     <div class="page-header__title-row">
                         <div>
                             <p class="saved-view-detail__kicker">Saved View</p>
-                            <h2>${name}</h2>
+                            <h2 class="prks-page-title">${name}</h2>
                         </div>
                         <div class="page-header__actions">
-                            <a class="prks-btn prks-btn--secondary ribbon-btn" href="${esc(searchHash)}">Open as Search</a>
-                            <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-saved-view-edit">Edit</button>
-                            <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-saved-view-delete" data-sv-delete="${idAttr}">Delete</button>
+                            <a class="prks-btn prks-btn--secondary" href="${esc(searchHash)}">Open as Search</a>
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-saved-view-edit">Edit</button>
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-saved-view-delete" data-sv-delete="${idAttr}">Delete</button>
                         </div>
                     </div>
                 </div>

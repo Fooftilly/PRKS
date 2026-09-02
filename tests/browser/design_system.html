@@ -51,6 +51,7 @@
         }
         .prks-gallery-nav { display: flex; flex-wrap: wrap; gap: var(--space-xs); font-size: var(--text-xs); }
         .prks-gallery-nav a { color: var(--accent); }
+        .prks-gallery__entity-grid { max-width: 28rem; }
     </style>
 </head>
 <body class="prks-gallery">
@@ -69,6 +70,7 @@
             <a href="#typography">Typography</a>
             <a href="#surfaces">Surfaces</a>
             <a href="#buttons">Buttons</a>
+            <a href="#entity-choice">Entity choice</a>
             <a href="#icon-buttons">Icon buttons</a>
             <a href="#fields">Fields</a>
             <a href="#segmented">Segmented</a>
@@ -125,6 +127,14 @@
                 <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm">Small</button>
                 <button type="button" class="prks-btn prks-btn--secondary prks-btn--lg">Large</button>
                 <button type="button" class="prks-btn prks-btn--secondary"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i> With icon</button>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="entity-choice" data-gallery-section="entity-choice">
+            <h2>Entity choice</h2>
+            <div class="modal-grid-2 prks-gallery__entity-grid">
+                <button type="button" class="prks-entity-choice"><i data-lucide="folder" class="prks-icon" aria-hidden="true"></i> New Folder</button>
+                <button type="button" class="prks-entity-choice"><i data-lucide="file-plus" class="prks-icon" aria-hidden="true"></i> New File</button>
             </div>
         </section>
 

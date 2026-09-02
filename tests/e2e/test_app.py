@@ -483,6 +483,7 @@ _GALLERY_SECTIONS = (
     "typography",
     "surfaces",
     "buttons",
+    "entity-choice",
     "icon-buttons",
     "fields",
     "segmented",

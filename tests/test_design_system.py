@@ -83,6 +83,7 @@ _REQUIRED_PRIMITIVES = (
     ".prks-btn--secondary",
     ".prks-btn--ghost",
     ".prks-btn--danger",
+    ".prks-entity-choice",
     ".prks-icon-btn",
     ".prks-field",
     ".prks-input",
@@ -107,6 +108,7 @@ _GALLERY_SECTIONS = (
     "typography",
     "surfaces",
     "buttons",
+    "entity-choice",
     "icon-buttons",
     "fields",
     "segmented",
@@ -226,6 +228,52 @@ class DesignSystemContractTests(unittest.TestCase):
                     continue
                 violations.append("%s: %s" % (rel, raw[:160]))
         self.assertEqual(violations, [], "\n".join(violations[:40]))
+
+    def test_legacy_button_classes_have_no_visual_ownership(self):
+        css = _read(_CSS)
+        for name in (".add-new-btn", ".btn-danger-outline", ".create-entity-btn", ".form-actions__btn"):
+            self.assertNotIn(name, css, name)
+        for path in _iter_first_party_templates():
+            src = _read(path)
+            rel = os.path.relpath(path, _PROJECT_DIR)
+            for token in ("add-new-btn", "btn-danger-outline", "create-entity-btn", "form-actions__btn"):
+                self.assertNotIn(token, src, "%s: %s" % (rel, token))
+        self.assertIn(".prks-entity-choice", css)
+        self.assertIn("prks-entity-choice", _read(_INDEX))
+        chooser = _read(_INDEX).split("master-add-modal", 1)[1].split("work-modal", 1)[0]
+        self.assertNotIn("prks-btn--primary", chooser)
+
+    def test_ribbon_btn_is_top_ribbon_fitting_only(self):
+        css = _read(_CSS)
+        for match in re.finditer(r"^[ \t]*[^{}@/\n][^{]*\{", css, re.M):
+            sel = match.group(0)
+            if not re.search(r"(?<![\w-])\.ribbon-btn(?!__)", sel):
+                continue
+            self.assertIn("top-ribbon", sel, "unscoped ribbon-btn rule: %s" % sel.strip())
+            start = match.end()
+            end = css.find("}", start)
+            body = css[start:end]
+            for prop in ("background", "border:", "font-size", "box-shadow", "min-height"):
+                self.assertNotIn(prop, body, "%s in %s" % (prop, sel.strip()))
+
+    def test_generic_page_header_has_one_visual_source(self):
+        css = _read(_CSS)
+        self.assertEqual(len(re.findall(r"(?<![\w-])\.page-header\s*\{", css)), 1)
+        self.assertEqual(len(re.findall(r"(?<![\w-])\.page-header h2\s*\{", css)), 0)
+        self.assertIn(".prks-page-header,", css)
+        self.assertIn(".prks-page-title,", css)
+
+    def test_canonical_button_semantics_not_overridden_by_compat_classes(self):
+        css = _read(_CSS)
+        primary_pos = css.find(".prks-btn--primary {")
+        self.assertGreater(primary_pos, 0)
+        later = css[primary_pos + 1 :]
+        self.assertNotIn(".add-new-btn {", later)
+        self.assertNotIn(".btn-danger-outline {", later)
+        self.assertNotIn(".create-entity-btn {", later)
+        danger_pos = css.find(".prks-btn--danger {")
+        self.assertGreater(danger_pos, 0)
+        self.assertNotIn("background: var(--accent)", css[danger_pos : danger_pos + 220])
 
 
 if __name__ == "__main__":

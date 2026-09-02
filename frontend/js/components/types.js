@@ -66,8 +66,8 @@ function renderTypesIndex(works, container) {
 
     container.innerHTML = `
         <div class="types-page">
-            <div class="page-header tags-page__header">
-                <h2>File types</h2>
+            <div class="prks-page-header page-header tags-page__header">
+                <h2 class="prks-page-title">File types</h2>
                 <p class="tags-page__sub types-page__sub">Browse files by BibTeX document type. Click row to open matching files.</p>
             </div>
             <div class="list-view types-page__list">
@@ -94,8 +94,8 @@ function renderWorksByDocType(works, docType, container) {
 
     container.innerHTML = `
         <div class="types-page types-page--detail">
-            <div class="page-header types-page__detail-header">
-                <h2>Files</h2>
+            <div class="prks-page-header page-header types-page__detail-header">
+                <h2 class="prks-page-title">Files</h2>
                 <div class="types-page__detail-type">${typeBadge}</div>
             </div>
         <div class="card-grid types-page__detail-grid">

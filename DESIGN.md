@@ -388,7 +388,15 @@ Rules:
 - disabled treatment is identical
 - one primary per local action group
 
-Legacy families (`ribbon-btn`, `add-new-btn`, `form-actions__btn`, `create-entity-btn`, `btn-danger-outline`, page-specific `*-btn`) must map onto these variants. During migration they may alias the canonical declarations. They must not own a separate visual system.
+Legacy visual families (`ribbon-btn` as a generic gray button, `add-new-btn`, `form-actions__btn`, `create-entity-btn`, `btn-danger-outline`) are retired. Appearance comes from `.prks-btn` + a semantic variant. `ribbon-btn` may remain only on top-ribbon commands as a structural modifier for icon/label fitting. `ribbon-btn__icon` / `ribbon-btn__label` are layout slots, not a second type system.
+
+### Entity choice
+
+```text
+.prks-entity-choice
+```
+
+Selectable tiles in the Create New Entity chooser. They are not the single primary commit action, so they must not use `.prks-btn--primary`.
 
 ### Icon buttons
 
@@ -417,6 +425,7 @@ Do not use raw `<button style="background:none;border:none">` for new UI.
 .prks-select
 .prks-textarea
 .prks-form-actions
+.prks-form-actions--split
 ```
 
 All controls share height, border, background, text, focus ring, disabled state, and error state. Textareas use the same border/surface/focus language but are not forced to fixed control height.
@@ -424,6 +433,8 @@ All controls share height, border, background, text, focus ring, disabled state,
 Preserve specialized EasyMDE, combobox, and segmented controls; their outer visual treatment must conform.
 
 `.prks-field__label` is `text-xs` / 600. Do not uppercase it.
+
+`.prks-form-actions--split` is an optional layout modifier: secondary `flex: 1`, primary `flex: 2`. Use it only when a form genuinely needs that ratio. It must not change control height, type, border, or color.
 
 ### Segmented controls
 
@@ -811,6 +822,8 @@ Do not modify their behavior during visual normalization. Do not try to make the
 
 It uses the exact production classes. It must not define a second private design system.
 
+The gallery’s own `<style>` block may own **fixture layout only** (max width, section arrangement, swatch specimen dimensions). Inline styles in this fixture that demonstrate token values or swatch colors are outside the production inline-style policy.
+
 Themes: `?theme=light` and `?theme=dark` (deterministic).
 
 Representative container widths for review: 1440, 900, 600, 390.
@@ -852,6 +865,10 @@ Each exception states the component, the rule being broken, why, and whether it 
 | Native checkbox / radio UA styling | Fully tokenized form controls | Native form widgets retain UA metrics; custom check glyphs in role pickers stay square | Permanent |
 | Markdown preview typography | UI type scale | Rendered note content may use document-like sizes inside the preview | Permanent |
 | Icon numeric `size` | Spacing/control tokens | Geometry, not spacing; expressed as `--prks-icon-size` | Permanent |
+| Tag cloud / type-list sizes below `--text-2xs` | UI type scale | Density and `--tag-scale` calculations, not ordinary chrome type | Permanent |
+| Top-ribbon `.ribbon-btn` padding `7px 9px` | Control padding tokens | Ribbon fitting at narrow widths; not a second button type scale | Permanent |
+| Work `.page-header--work` padding `4px 6px` | Page-header padding | Workspace chrome tightness around the PDF/notes split | Permanent |
+| Component gallery fixture | Production inline-style policy | Gallery `<style>` and token/swatch inline styles are test-fixture layout only | Permanent |
 | Future overlay shadow | `--shadow-*` is `none` | If a floating overlay later needs a shadow, document it here before shipping | Reserved |
 
 ---

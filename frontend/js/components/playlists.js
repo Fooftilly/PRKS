@@ -122,8 +122,8 @@ function renderPlaylistsIndex(playlists, container) {
         : `<p class="meta-row playlists-page__empty">No playlists yet.</p>`;
     container.innerHTML = `
         <div class="playlists-page">
-            <div class="page-header tags-page__header">
-                <h2>Playlists</h2>
+            <div class="prks-page-header page-header tags-page__header">
+                <h2 class="prks-page-title">Playlists</h2>
                 <p class="tags-page__sub playlists-page__sub">Open playlist row to view or edit ordered items.</p>
             </div>
             <div class="list-view playlists-page__list">
@@ -151,17 +151,17 @@ function prksPlPlaylistItemActionsHtml(w, idx, ren) {
     const icon = (name) => (typeof prksIcon === 'function' ? prksIcon(name, { size: 'sm' }) : '');
     return `
         <div class="prks-playlist-item__actions">
-            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-pl-up="${idx}" title="Move up" aria-label="Move up">${icon('arrowUp')}</button>
-            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-pl-down="${idx}" title="Move down" aria-label="Move down">${icon('arrowDown')}</button>
+            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-up="${idx}" title="Move up" aria-label="Move up">${icon('arrowUp')}</button>
+            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-down="${idx}" title="Move down" aria-label="Move down">${icon('arrowDown')}</button>
             ${
                 ren[String(w.id)] === true
                     ? `
-                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-pl-rename-save="${wid}" title="Save title" aria-label="Save title">${icon('check')}</button>
-                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-pl-rename-cancel="${wid}" title="Cancel rename" aria-label="Cancel rename">${icon('x')}</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-rename-save="${wid}" title="Save title" aria-label="Save title">${icon('check')}</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-rename-cancel="${wid}" title="Cancel rename" aria-label="Cancel rename">${icon('x')}</button>
             `
-                    : `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-pl-rename="${wid}" title="Rename title" aria-label="Rename title">${icon('pencil')}</button>`
+                    : `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-rename="${wid}" title="Rename title" aria-label="Rename title">${icon('pencil')}</button>`
             }
-            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" data-pl-remove="${wid}" title="Remove from playlist" aria-label="Remove from playlist">${icon('x')}</button>
+            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-remove="${wid}" title="Remove from playlist" aria-label="Remove from playlist">${icon('x')}</button>
         </div>`;
 }
 
@@ -192,7 +192,7 @@ function prksPlPlaylistItemBodyHtml(w, ren, editing) {
 
 function renderPlaylistDetail(pl, container) {
     if (!pl) {
-        container.innerHTML = '<div class="prks-page-header page-header"><h2>Playlist not found</h2></div>';
+        container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Playlist not found</h2></div>';
         return;
     }
     const items = Array.isArray(pl.items) ? pl.items : [];
@@ -205,7 +205,7 @@ function renderPlaylistDetail(pl, container) {
     container.innerHTML = `
         <div class="prks-playlist-detail${editingClass}">
             <div class="prks-page-header page-header prks-playlist-detail__header">
-                <h2>${prksPlEsc(pl.title || 'Playlist')}</h2>
+                <h2 class="prks-page-title">${prksPlEsc(pl.title || 'Playlist')}</h2>
                 <a class="route-sidebar__link" href="#/playlists">All playlists</a>
             </div>
             ${pl.description ? `<p class="meta-row prks-playlist-detail__desc">${prksPlEsc(pl.description)}</p>` : ''}
@@ -385,7 +385,7 @@ function renderPlaylistAttachControlsHtml(work) {
         <div class="doc-meta-card">
             <div class="prks-panel-heading-row">
                 <h3>Playlist</h3>
-                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-work-playlist-edit-btn">${editing ? 'Done' : 'Edit'}</button>
+                <button type="button" class="prks-btn prks-btn--secondary" id="prks-work-playlist-edit-btn">${editing ? 'Done' : 'Edit'}</button>
             </div>
             <p class="meta-row">Group this video into a course playlist.</p>
             <p class="meta-row meta-row--follow">${currentLine}</p>
@@ -402,9 +402,9 @@ function renderPlaylistAttachControlsHtml(work) {
                     <div id="prks-work-playlist-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                 </div>
                 <div class="prks-playlist-actions">
-                    <button type="button" class="prks-btn prks-btn--primary add-new-btn" id="prks-work-playlist-set-btn">Set playlist</button>
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-work-playlist-clear-btn">Clear</button>
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-work-playlist-new-btn">New…</button>
+                    <button type="button" class="prks-btn prks-btn--primary" id="prks-work-playlist-set-btn">Set playlist</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-work-playlist-clear-btn">Clear</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-work-playlist-new-btn">New…</button>
                 </div>
             `
                     : ''
@@ -450,11 +450,11 @@ async function mountPlaylistAttachControls(work) {
                 navHost.innerHTML = `
                     <div class="prks-playlist-nav-row">
                         <div class="prks-cluster">
-                            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" id="prks-work-playlist-prev-btn" ${prevDisabled}>
+                            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="prks-work-playlist-prev-btn" ${prevDisabled}>
                                 <span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('chevronLeft', { size: 'ribbon' }) : ''}</span>
                                 <span class="ribbon-btn__label">Prev</span>
                             </button>
-                            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" id="prks-work-playlist-next-btn" ${nextDisabled}>
+                            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="prks-work-playlist-next-btn" ${nextDisabled}>
                                 <span class="ribbon-btn__label">Next</span>
                                 <span class="ribbon-btn__icon">${typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 'ribbon' }) : ''}</span>
                             </button>

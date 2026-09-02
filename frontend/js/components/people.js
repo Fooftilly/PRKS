@@ -670,7 +670,7 @@ function renderPeopleList(persons, container, options = {}) {
     container.innerHTML = `
         <div class="prks-people-library">
         <div class="prks-page-header page-header prks-people-library__header">
-            <h2>People${escapeHtmlPerson(titleExtra)}</h2>
+            <h2 class="prks-page-title">People${escapeHtmlPerson(titleExtra)}</h2>
         </div>
         ${searchToolbar}
         ${listHost}
@@ -786,13 +786,13 @@ function renderPersonProfileDetailsSidebarHtml(person) {
     const editingWorks = window.__prksPersonWorksEditing === true;
     const worksEditBtn =
         nWorks > 0 || editingWorks
-            ? `<button type="button" class="prks-btn prks-btn--primary add-new-btn person-sidebar__cta" onclick="prksTogglePersonWorksEdit()">${
+            ? `<button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" onclick="prksTogglePersonWorksEdit()">${
                   editingWorks ? 'Done' : 'Edit works'
               }</button>`
             : '';
     const deleteBtn = nWorks === 0
-        ? `<button type="button" class="prks-btn prks-btn--danger btn-danger-outline person-sidebar__cta" onclick="deletePerson()">Delete person</button>`
-        : `<button type="button" class="prks-btn prks-btn--danger btn-danger-outline person-sidebar__cta" disabled title="Unlink all files first">Delete person</button>`;
+        ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__cta" onclick="deletePerson()">Delete person</button>`
+        : `<button type="button" class="prks-btn prks-btn--danger person-sidebar__cta" disabled title="Unlink all files first">Delete person</button>`;
     const deleteHint = nWorks === 0
         ? '<p class="meta-row">No linked files. Deletion allowed.</p>'
         : '<p class="meta-row">Deletion blocked while linked files exist.</p>';
@@ -802,9 +802,9 @@ function renderPersonProfileDetailsSidebarHtml(person) {
             <p class="meta-row">Biography, portrait, and external links are in the main column.</p>
             <p class="route-sidebar__meta">${nWorks} linked file${nWorks === 1 ? '' : 's'}</p>
             ${worksEditBtn}
-            <button type="button" class="prks-btn prks-btn--secondary ribbon-btn person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
-            <button type="button" class="prks-btn prks-btn--primary add-new-btn person-sidebar__cta" onclick="openPersonProfileEdit()">Edit profile</button>
-            <button type="button" class="prks-btn prks-btn--primary add-new-btn person-sidebar__cta" onclick="openPersonProfileTemplateModal()">Edit profile using template</button>
+            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
+            <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" onclick="openPersonProfileEdit()">Edit profile</button>
+            <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" onclick="openPersonProfileTemplateModal()">Edit profile using template</button>
             ${deleteBtn}
             ${deleteHint}
             <p class="route-sidebar__action"><a href="#/people" class="route-sidebar__link">All people</a></p>
@@ -862,9 +862,9 @@ function renderPersonProfileEditFormHtml(person) {
                         <input type="hidden" id="pd-group-pick-id" value="">
                         <div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                     </div>
-                    <button type="button" class="prks-btn prks-btn--primary add-new-btn person-groups-fieldset__action" id="pd-group-add-btn">Add group</button>
+                    <button type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action" id="pd-group-add-btn">Add group</button>
                 </fieldset>
-                <button type="button" id="pd-save-btn" class="prks-btn prks-btn--primary add-new-btn person-groups-fieldset__action" onclick="savePersonProfile('${id}')">Save profile</button>
+                <button type="button" id="pd-save-btn" class="prks-btn prks-btn--primary person-groups-fieldset__action" onclick="savePersonProfile('${id}')">Save profile</button>
             </div>
         </div>`;
 }
@@ -954,7 +954,7 @@ function renderPersonDetails(person, container) {
     if (!person) {
         window.currentPerson = null;
         window.__prksPersonWorksEditing = false;
-        container.innerHTML = '<h2>Person not found</h2>';
+        container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Person not found</h2></div>';
         return;
     }
     window.currentPerson = person;
@@ -1030,7 +1030,7 @@ function renderPersonDetails(person, container) {
 
     container.innerHTML = `
         <div class="prks-page-header page-header page-header--split">
-            <h2>${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('user') : ''} ${escapeHtmlPerson(person.first_name || '')} ${escapeHtmlPerson(person.last_name)}</h2>
+            <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('user') : ''} ${escapeHtmlPerson(person.first_name || '')} ${escapeHtmlPerson(person.last_name)}</h2>
         </div>
         <div class="document-view document-view--person">
             <div class="doc-content person-profile">

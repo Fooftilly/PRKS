@@ -37,7 +37,7 @@
                         <p class="sidebar-caption-sm">Knowledge System</p>
                     </div>
                 </a>
-                <button onclick="openModal('settings-modal')" class="prks-icon-btn prks-icon-btn--ghost ribbon-btn settings-btn" title="Settings" aria-label="Settings"><span class="ribbon-btn__icon"><i data-lucide="settings" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
+                <button onclick="openModal('settings-modal')" class="prks-icon-btn prks-icon-btn--ghost settings-btn" title="Settings" aria-label="Settings"><span class="ribbon-btn__icon"><i data-lucide="settings" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
             </div>
 
             <ul class="nav-menu">
@@ -146,7 +146,7 @@
                     <button
                         type="button"
                         id="prks-mobile-nav-btn"
-                        class="prks-btn prks-btn--secondary prks-icon-btn prks-icon-btn--ghost ribbon-btn"
+                        class="prks-icon-btn prks-icon-btn--ghost"
                         aria-label="Open navigation"
                         aria-expanded="false"
                         aria-controls="sidebar"
@@ -172,7 +172,7 @@
                     <button
                         type="button"
                         id="prks-mobile-details-btn"
-                        class="prks-btn prks-btn--secondary prks-icon-btn prks-icon-btn--ghost ribbon-btn"
+                        class="prks-icon-btn prks-icon-btn--ghost"
                         aria-label="Open details panel"
                         aria-expanded="false"
                         aria-controls="right-panel"
@@ -217,7 +217,7 @@
                 Are you sure you want to close this window without saving the changes?
             </p>
             <div class="prks-modal-unsaved-confirm__actions">
-                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-modal-unsaved-confirm-cancel">Cancel</button>
+                <button type="button" class="prks-btn prks-btn--secondary" id="prks-modal-unsaved-confirm-cancel">Cancel</button>
                 <button type="button" class="prks-btn prks-btn--danger" id="prks-modal-unsaved-confirm-discard">Close without saving</button>
             </div>
         </div>
@@ -237,8 +237,8 @@
             <h3 id="prks-modal-confirm-title" class="prks-modal-confirm__title">Confirm</h3>
             <p id="prks-modal-confirm-desc" class="prks-modal-confirm__desc"></p>
             <div class="prks-modal-confirm__actions">
-                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-modal-confirm-cancel">Cancel</button>
-                <button type="button" class="prks-btn prks-btn--primary add-new-btn" id="prks-modal-confirm-ok">OK</button>
+                <button type="button" class="prks-btn prks-btn--secondary" id="prks-modal-confirm-cancel">Cancel</button>
+                <button type="button" class="prks-btn prks-btn--primary" id="prks-modal-confirm-ok">OK</button>
             </div>
         </div>
     </div>
@@ -284,14 +284,14 @@
                 <h4 id="prks-settings-bibtex-heading" class="prks-settings-section__title">BibTeX / BibLaTeX export</h4>
                 <p class="prks-settings-hint">When a toggle is on, that field is included when you copy BibTeX. Turn off to keep data in the app but omit it from export. Stored with your library for all devices using this server.</p>
                 <div class="prks-bibtex-export-toggles" id="prks-bibtex-export-fields" role="group" aria-label="Fields to include in BibTeX export"></div>
-                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn prks-bibtex-export-reset" id="prks-bibtex-export-reset">Restore export defaults</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-bibtex-export-reset" id="prks-bibtex-export-reset">Restore export defaults</button>
             </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-backup-heading">
                 <h4 id="prks-settings-backup-heading" class="prks-settings-section__title">Backup &amp; restore</h4>
                 <p class="prks-settings-hint">Create a verified backup of your PRKS library. Includes database, PDFs and managed person files. Search index and thumbnails are rebuilt automatically.</p>
                 <div class="prks-backup-restore-row">
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-backup-download-btn">Download backup</button>
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn hidden" id="prks-backup-cancel-btn">Stop backup</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-download-btn">Download backup</button>
+                    <button type="button" class="prks-btn prks-btn--secondary hidden" id="prks-backup-cancel-btn">Stop backup</button>
                 </div>
                 <div id="prks-backup-progress" class="prks-backup-progress hidden">
                     <progress id="prks-backup-progress-bar" max="100" value="0"></progress>
@@ -302,27 +302,27 @@
                 <p class="prks-settings-hint">Before restoring, download a backup of the current library if you may want to return to it.</p>
                 <div class="prks-backup-restore-row">
                     <input type="file" id="prks-backup-file-input" class="prks-backup-file-input" accept=".prks-backup,application/octet-stream,application/zip">
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-backup-choose-btn">Choose backup…</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-choose-btn">Choose backup…</button>
                     <span class="prks-settings-hint" id="prks-backup-file-label">No file selected</span>
                 </div>
-                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-backup-verify-btn">Verify backup</button>
+                <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-verify-btn">Verify backup</button>
                 <p class="prks-settings-hint" id="prks-backup-restore-status" aria-live="polite"></p>
                 <div id="prks-backup-verified-panel" class="prks-backup-verified-panel hidden">
                     <p class="prks-backup-verified-title">Backup verified</p>
                     <ul class="prks-backup-summary" id="prks-backup-summary"></ul>
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-backup-restore-btn">Restore this backup</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-restore-btn">Restore this backup</button>
                 </div>
             </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-pdf-index-heading">
                 <h4 id="prks-settings-pdf-index-heading" class="prks-settings-section__title">PDF text index</h4>
                 <p class="prks-settings-hint">PDF text search is maintained automatically. Use a full rebuild if PDF search results seem incomplete or stale.</p>
-                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-reindex-pdf-text-btn">Rebuild PDF text index</button>
+                <button type="button" class="prks-btn prks-btn--secondary" id="prks-reindex-pdf-text-btn">Rebuild PDF text index</button>
                 <p class="prks-settings-hint" id="prks-reindex-pdf-text-status" aria-live="polite"></p>
             </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-pdf-linearize-heading">
                 <h4 id="prks-settings-pdf-linearize-heading" class="prks-settings-section__title">PDF linearization</h4>
                 <p class="prks-settings-hint">Optimize existing library PDFs for progressive loading. Only non-linearized PDFs are processed.</p>
-                <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-linearize-existing-pdfs-btn">Linearize existing PDFs</button>
+                <button type="button" class="prks-btn prks-btn--secondary" id="prks-linearize-existing-pdfs-btn">Linearize existing PDFs</button>
                 <p class="prks-settings-hint" id="prks-linearize-existing-pdfs-status" aria-live="polite"></p>
             </section>
             <section class="prks-settings-section" aria-labelledby="prks-settings-perf-heading">
@@ -351,9 +351,9 @@
                 <p class="prks-settings-hint" id="prks-perf-spans"></p>
                 <p class="prks-settings-hint" id="prks-perf-thumbs"></p>
                 <div class="prks-backup-restore-row">
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-perf-refresh-btn">Refresh</button>
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-perf-reset-btn">Reset</button>
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-perf-copy-btn">Copy report</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-refresh-btn">Refresh</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-reset-btn">Reset</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-copy-btn">Copy report</button>
                 </div>
                 <p class="prks-settings-hint" id="prks-perf-status" aria-live="polite"></p>
             </section>
@@ -409,7 +409,7 @@
             <label for="prks-restore-confirm-input" class="prks-settings-section__title">Type RESTORE to confirm</label>
             <input type="text" id="prks-restore-confirm-input" class="prks-settings-text-input" autocomplete="off" spellcheck="false" placeholder="RESTORE">
             <p class="prks-settings-hint" id="prks-restore-confirm-status" aria-live="polite"></p>
-            <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="prks-restore-confirm-submit" disabled>Restore this backup</button>
+            <button type="button" class="prks-btn prks-btn--secondary" id="prks-restore-confirm-submit" disabled>Restore this backup</button>
         </div>
     </div>
 
@@ -419,10 +419,10 @@
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
         <div class="modal-body modal-grid-2">
-            <button onclick="openModal('folder-modal')" class="prks-btn prks-btn--primary add-new-btn create-entity-btn"><i data-lucide="folder" class="prks-icon" aria-hidden="true"></i> New Folder</button>
-            <button onclick="openModal('work-modal')" class="prks-btn prks-btn--primary add-new-btn create-entity-btn"><i data-lucide="file-plus" class="prks-icon" aria-hidden="true"></i> New File</button>
-            <button onclick="openModal('person-modal')" class="prks-btn prks-btn--primary add-new-btn create-entity-btn"><i data-lucide="users" class="prks-icon" aria-hidden="true"></i> New Author</button>
-            <button onclick="openModal('role-modal')" class="prks-btn prks-btn--primary add-new-btn create-entity-btn"><i data-lucide="link" class="prks-icon" aria-hidden="true"></i> Link Person to Work</button>
+            <button type="button" onclick="openModal('folder-modal')" class="prks-entity-choice"><i data-lucide="folder" class="prks-icon" aria-hidden="true"></i> New Folder</button>
+            <button type="button" onclick="openModal('work-modal')" class="prks-entity-choice"><i data-lucide="file-plus" class="prks-icon" aria-hidden="true"></i> New File</button>
+            <button type="button" onclick="openModal('person-modal')" class="prks-entity-choice"><i data-lucide="users" class="prks-icon" aria-hidden="true"></i> New Author</button>
+            <button type="button" onclick="openModal('role-modal')" class="prks-entity-choice"><i data-lucide="link" class="prks-icon" aria-hidden="true"></i> Link Person to Work</button>
         </div>
     </div>
 
@@ -436,7 +436,7 @@
                 <!-- Left: Preview -->
                 <div class="preview-pane" id="upload-drop-zone">
                     <div id="upload-pdf-preview-actions" class="upload-pdf-preview-actions hidden" role="toolbar" aria-label="PDF preview actions">
-                        <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" id="upload-pdf-remove-btn" title="Clear preview to choose a different PDF">Remove PDF</button>
+                        <button type="button" class="prks-btn prks-btn--secondary" id="upload-pdf-remove-btn" title="Clear preview to choose a different PDF">Remove PDF</button>
                     </div>
                     <div id="upload-viewer" class="hidden"></div>
                     <div id="drop-zone-prompt" class="drop-zone">
@@ -521,7 +521,7 @@
                             <input type="hidden" id="work-folder-id">
                             <div id="folder-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                         </div>
-                        <button type="button" onclick="quickCreateFolder()" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm" title="Create New Folder" aria-label="Create New Folder"><span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span></button>
+                        <button type="button" onclick="quickCreateFolder()" class="prks-btn prks-btn--secondary prks-btn--sm" title="Create New Folder" aria-label="Create New Folder"><span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span></button>
                     </div>
 
                     <label for="work-doc-type-trigger">Document type (BibLaTeX)</label>
@@ -558,7 +558,7 @@
                                     <div id="person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                                 </div>
                             </div>
-                            <button type="button" onclick="addRoleToUploadList()" class="prks-btn prks-btn--secondary ribbon-btn"><span class="ribbon-btn__icon"><i data-lucide="link" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="ribbon-btn__label">Link</span></button>
+                            <button type="button" onclick="addRoleToUploadList()" class="prks-btn prks-btn--secondary"><span class="ribbon-btn__icon"><i data-lucide="link" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="ribbon-btn__label">Link</span></button>
                         </div>
                         <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles">
                             <div class="prks-upload-role-seg" id="upload-role-seg-mount"></div>
@@ -656,7 +656,7 @@
                     <label for="work-abstract">Abstract / Preface</label>
                     <textarea id="work-abstract" class="textarea-lg textarea-flex" placeholder="Briefly describe why this document is relevant, or use paper abstract..."></textarea>
                     
-                    <button id="save-work-btn" class="prks-btn prks-btn--primary add-new-btn">Add File</button>
+                    <button id="save-work-btn" class="prks-btn prks-btn--primary">Add File</button>
                     <div id="upload-status-msg" class="upload-status hidden"></div>
                 </div>
             </div>
@@ -686,7 +686,7 @@
                 </div>
                 <label for="folder-description">Description</label>
                 <textarea id="folder-description" placeholder="Optional description…"></textarea>
-                <button id="save-folder-btn" class="prks-btn prks-btn--primary add-new-btn">Save Folder</button>
+                <button id="save-folder-btn" class="prks-btn prks-btn--primary">Save Folder</button>
             </div>
         </div>
     </div>
@@ -703,7 +703,7 @@
                 <input type="text" id="playlist-title" placeholder="e.g. Philosophy Lectures" autocomplete="off">
                 <label for="playlist-description">Description</label>
                 <textarea id="playlist-description" class="textarea-sm" placeholder="Optional description…"></textarea>
-                <button id="save-playlist-btn" class="prks-btn prks-btn--primary add-new-btn">Create playlist</button>
+                <button id="save-playlist-btn" class="prks-btn prks-btn--primary">Create playlist</button>
                 <p id="playlist-error" class="folder-field-error hidden" role="alert" aria-live="polite"></p>
             </div>
         </div>
@@ -742,7 +742,7 @@
                     <label for="saved-view-publisher">Publisher</label>
                     <input type="text" id="saved-view-publisher" maxlength="200" autocomplete="off">
                 </div>
-                <button type="button" id="save-saved-view-btn" class="prks-btn prks-btn--primary add-new-btn">Save View</button>
+                <button type="button" id="save-saved-view-btn" class="prks-btn prks-btn--primary">Save View</button>
             </div>
         </div>
     </div>
@@ -769,7 +769,7 @@
                 </div>
                 <label for="group-description">Description</label>
                 <textarea id="group-description" placeholder="Optional"></textarea>
-                <button type="button" id="save-group-btn" class="prks-btn prks-btn--primary add-new-btn">Create group</button>
+                <button type="button" id="save-group-btn" class="prks-btn prks-btn--primary">Create group</button>
             </div>
         </div>
     </div>
@@ -809,7 +809,7 @@
                 <input type="url" id="person-link-iep" placeholder="https://iep.utm.edu/…">
                 <label for="person-links-other">Other links</label>
                 <textarea id="person-links-other" class="textarea-sm" placeholder="One URL per line, or [Title](https://...)"></textarea>
-                <button id="save-person-btn" class="prks-btn prks-btn--primary add-new-btn">Save Person</button>
+                <button id="save-person-btn" class="prks-btn prks-btn--primary">Save Person</button>
             </div>
         </div>
     </div>
@@ -843,9 +843,9 @@
                 </div>
                 <label for="person-template-json">Profile template</label>
                 <textarea id="person-template-json" class="textarea-sm" placeholder='Use "Reload template from profile" to fill JSON from the open person’s current fields.'></textarea>
-                <div class="prks-form-actions form-actions">
-                    <button type="button" class="prks-btn prks-btn--secondary form-actions__btn form-actions__btn--secondary" onclick="insertPersonProfileTemplateFromCurrentData()">Reload template from profile</button>
-                    <button type="button" class="prks-btn prks-btn--primary add-new-btn form-actions__btn form-actions__btn--primary" onclick="applyPersonProfileTemplateFromModal()">Apply template</button>
+                <div class="prks-form-actions prks-form-actions--split form-actions">
+                    <button type="button" class="prks-btn prks-btn--secondary" onclick="insertPersonProfileTemplateFromCurrentData()">Reload template from profile</button>
+                    <button type="button" class="prks-btn prks-btn--primary" onclick="applyPersonProfileTemplateFromModal()">Apply template</button>
                 </div>
                 <p id="person-template-feedback" class="prks-inline-message"></p>
             </div>
@@ -896,7 +896,7 @@
                     <div id="role-link-credit-aliases" class="prks-role-credit-picker__aliases" hidden role="group" aria-label="Known aliases"></div>
                     <p class="meta-row meta-row--hint meta-row--compact">Check the box to override; pick an alias or type a name.</p>
                 </div>
-                <button id="save-role-btn" class="prks-btn prks-btn--primary add-new-btn">Create Link</button>
+                <button id="save-role-btn" class="prks-btn prks-btn--primary">Create Link</button>
             </div>
         </div>
     </div>

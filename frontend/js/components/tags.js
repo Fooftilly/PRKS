@@ -475,8 +475,8 @@ async function renderTagsPage(container, routeGen) {
 
     container.innerHTML = `
         <div class="tags-page">
-            <div class="page-header tags-page__header">
-                <h2>All tags</h2>
+            <div class="prks-page-header page-header tags-page__header">
+                <h2 class="prks-page-title">All tags</h2>
                 <p class="tags-page__sub">Tags currently used on at least one file or folder. Click a name to list matching files. Use ⋯ for alternate names (e.g. other languages). Use → to merge this tag into another; the merged name becomes an alias and no longer appears as its own tag.</p>
             </div>
             <div id="tags-page-cloud" class="tag-cloud tag-cloud--page">${chips}</div>
@@ -495,7 +495,7 @@ async function renderTagsPage(container, routeGen) {
                             <button type="button" id="tags-page-alias-add-btn" class="tags-page-alias-add__submit">Add alias</button>
                         </div>
                         <div class="tags-page-alias-delete">
-                            <button type="button" id="tags-page-alias-delete-btn" class="prks-btn prks-btn--danger btn-danger-outline">Delete tag</button>
+                            <button type="button" id="tags-page-alias-delete-btn" class="prks-btn prks-btn--danger">Delete tag</button>
                         </div>
                     </div>
                 </div>

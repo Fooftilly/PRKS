@@ -1285,7 +1285,7 @@ function prksRenderRouteLoading(contentDiv, hash) {
     const title = prksRouteTitleFromHash(hash);
     contentDiv.setAttribute('aria-busy', 'true');
     contentDiv.innerHTML = `
-        <div class="prks-page-header page-header"><h2>${title}</h2></div>
+        <div class="prks-page-header page-header"><h2 class="prks-page-title">${title}</h2></div>
         <div class="prks-route-loading" role="status" aria-live="polite">
             <p class="meta-row">Loading view...</p>
             <div class="prks-route-loading__bar"></div>
@@ -1418,7 +1418,7 @@ async function handleRoute() {
                     renderPlaylistsIndex(pls, contentDiv);
                 } else {
                     contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2>Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
+                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
                 }
                 break;
             }
@@ -1444,7 +1444,7 @@ async function handleRoute() {
                         : { notFound: true, notFoundTitle: 'Playlist not found' };
                 } else {
                     contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2>Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
+                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
                 }
                 break;
             }
@@ -1472,7 +1472,7 @@ async function handleRoute() {
                     renderPeopleList(persons, contentDiv, { roleFilter });
                 } else {
                     contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2>People</h2></div><p class="prks-inline-message">Unknown role filter.</p>';
+                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">People</h2></div><p class="prks-inline-message">Unknown role filter.</p>';
                 }
                 break;
             }
@@ -1488,7 +1488,7 @@ async function handleRoute() {
                 if (stale()) return;
                 if (!group) {
                     contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2>Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
+                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
                     titleOpts = { notFound: true, notFoundTitle: 'Group not found' };
                 } else {
                     window.currentPersonGroup = group;
@@ -1516,7 +1516,7 @@ async function handleRoute() {
                     renderSavedViewsIndex(views, contentDiv);
                 } else {
                     contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2>Saved Views</h2></div><p class="meta-row">Saved Views UI unavailable.</p>';
+                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">Saved Views</h2></div><p class="meta-row">Saved Views UI unavailable.</p>';
                 }
                 break;
             }
@@ -1530,7 +1530,7 @@ async function handleRoute() {
                         renderSavedViewNotFound(contentDiv);
                     } else {
                         contentDiv.innerHTML =
-                            '<div class="prks-page-header page-header"><h2>Saved View not found.</h2></div><p class="meta-row"><a href="#/views">Back to Saved Views</a></p>';
+                            '<div class="prks-page-header page-header"><h2 class="prks-page-title">Saved View not found.</h2></div><p class="meta-row"><a href="#/views">Back to Saved Views</a></p>';
                     }
                     titleOpts = { notFound: true, notFoundTitle: 'Saved View not found' };
                     break;
@@ -1567,7 +1567,7 @@ async function handleRoute() {
                         renderProcessingFilesPage(rows, contentDiv);
                     } else {
                         contentDiv.innerHTML =
-                            '<div class="prks-page-header page-header"><h2>Files for Processing</h2></div><p class="meta-row">Processing inbox UI unavailable.</p>';
+                            '<div class="prks-page-header page-header"><h2 class="prks-page-title">Files for Processing</h2></div><p class="meta-row">Processing inbox UI unavailable.</p>';
                     }
                 }
                 break;
@@ -1630,7 +1630,7 @@ async function handleRoute() {
                 const items = typeof fetchConcepts === 'function' ? await fetchConcepts() : [];
                 if (stale()) return;
                 if (typeof renderConceptsIndex === 'function') renderConceptsIndex(items, contentDiv);
-                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2>Concepts</h2></div>';
+                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concepts</h2></div>';
                 break;
             }
             case 'concept-detail': {
@@ -1638,7 +1638,7 @@ async function handleRoute() {
                 if (stale()) return;
                 if (!item) {
                     if (typeof renderConceptNotFound === 'function') renderConceptNotFound(contentDiv);
-                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2>Concept not found.</h2></div>';
+                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concept not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Concept not found' };
                 } else {
                     if (typeof renderConceptDetail === 'function') renderConceptDetail(item, contentDiv);
@@ -1650,7 +1650,7 @@ async function handleRoute() {
                 const items = typeof fetchPositions === 'function' ? await fetchPositions() : [];
                 if (stale()) return;
                 if (typeof renderPositionsIndex === 'function') renderPositionsIndex(items, contentDiv);
-                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2>Positions</h2></div>';
+                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Positions</h2></div>';
                 break;
             }
             case 'position-detail': {
@@ -1658,7 +1658,7 @@ async function handleRoute() {
                 if (stale()) return;
                 if (!item) {
                     if (typeof renderPositionNotFound === 'function') renderPositionNotFound(contentDiv);
-                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2>Position not found.</h2></div>';
+                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Position not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Position not found' };
                 } else {
                     if (typeof renderPositionDetail === 'function') renderPositionDetail(item, contentDiv);
@@ -1671,7 +1671,7 @@ async function handleRoute() {
                 const items = typeof fetchArguments === 'function' ? await fetchArguments(kind || undefined) : [];
                 if (stale()) return;
                 if (typeof renderArgumentsIndex === 'function') renderArgumentsIndex(items, contentDiv, kind || 'all');
-                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2>Arguments &amp; Stances</h2></div>';
+                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Arguments &amp; Stances</h2></div>';
                 break;
             }
             case 'argument-detail': {
@@ -1679,7 +1679,7 @@ async function handleRoute() {
                 if (stale()) return;
                 if (!item) {
                     if (typeof renderArgumentNotFound === 'function') renderArgumentNotFound(contentDiv);
-                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2>Argument not found.</h2></div>';
+                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Argument not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Argument not found' };
                 } else {
                     if (typeof renderArgumentDetail === 'function') renderArgumentDetail(item, contentDiv);
@@ -1696,7 +1696,7 @@ async function handleRoute() {
                     });
                 } else {
                     contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2>Research Graph</h2></div><p class="meta-row">Graph UI unavailable.</p>';
+                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">Research Graph</h2></div><p class="meta-row">Graph UI unavailable.</p>';
                 }
                 break;
             }
@@ -1735,7 +1735,7 @@ async function handleRoute() {
                 window.currentWork = null;
                 updatePanelContent('details');
                 contentDiv.innerHTML =
-                    '<div class="prks-page-header page-header"><h2>Section In Development</h2></div><p class="prks-dev-path-msg prks-inline-message"></p>';
+                    '<div class="prks-page-header page-header"><h2 class="prks-page-title">Section In Development</h2></div><p class="prks-dev-path-msg prks-inline-message"></p>';
                 const devPathEl = contentDiv.querySelector('.prks-dev-path-msg');
                 if (devPathEl) devPathEl.textContent = `The requested path (${route.hash}) is not yet fully implemented.`;
                 break;

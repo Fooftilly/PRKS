@@ -258,7 +258,7 @@ async function renderPublishersPage(container, routeGen) {
                           `<p class="meta-row publishers-page__list-stats">${count} file${count === 1 ? '' : 's'}${aliases ? ` · ${aliases} alias${aliases === 1 ? '' : 'es'}` : ''}</p>` +
                           `</div>` +
                           `<div class="publishers-page__list-actions">` +
-                          `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm ribbon-btn ribbon-btn--sm publishers-page__alias-btn" data-publisher-alias-edit="${idEsc}" title="Aliases" aria-label="Edit aliases for ${nm}">⋯<span>Aliases</span></button>` +
+                          `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm publishers-page__alias-btn" data-publisher-alias-edit="${idEsc}" title="Aliases" aria-label="Edit aliases for ${nm}">⋯<span>Aliases</span></button>` +
                           `</div>` +
                           `</div>`
                       );
@@ -267,9 +267,9 @@ async function renderPublishersPage(container, routeGen) {
 
     container.innerHTML = `
         <div class="tags-page publishers-page">
-            <div class="page-header tags-page__header publishers-page__header">
+            <div class="prks-page-header page-header tags-page__header publishers-page__header">
                 <div class="publishers-page__header-lede">
-                    <h2>Publishers</h2>
+                    <h2 class="prks-page-title">Publishers</h2>
                     <p class="tags-page__sub publishers-page__sub">Canonical names and alternate spellings for search. Files still store whatever publisher string each book has; search matches a substring on that field, or treats exact matches as the same publisher when you define aliases (e.g. “OUP” and “Oxford University Press”). Click row to view files; use <strong>Aliases</strong> to edit variants.</p>
                 </div>
                 <div class="publishers-page__add">
@@ -301,7 +301,7 @@ async function renderPublishersPage(container, routeGen) {
                             <button type="button" id="publishers-page-alias-add-btn" class="tags-page-alias-add__submit">Add alias</button>
                         </div>
                         <div class="tags-page-alias-delete">
-                            <button type="button" id="publishers-page-delete-btn" class="prks-btn prks-btn--danger btn-danger-outline">Delete publisher</button>
+                            <button type="button" id="publishers-page-delete-btn" class="prks-btn prks-btn--danger">Delete publisher</button>
                         </div>
                     </div>
                 </div>

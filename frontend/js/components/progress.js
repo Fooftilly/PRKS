@@ -37,7 +37,7 @@ function renderProgressByStatus(works, status, container) {
         .filter((w) => w && w.status === status)
         .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
 
-    let html = `<div class="prks-page-header page-header"><h2>${title}</h2></div><div class="card-grid">`;
+    let html = `<div class="prks-page-header page-header"><h2 class="prks-page-title">${title}</h2></div><div class="card-grid">`;
     if (list.length > 0) {
         list.forEach((w) => {
             const subtitle = w.abstract ? w.abstract.substring(0, 100) + '…' : '';

@@ -86,7 +86,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
     def test_argument_editor_uses_form_pane_controls(self):
         args = _read(_ARGS)
         self.assertIn('class="prks-arg-form form-pane"', args)
-        self.assertIn('class="prks-btn prks-btn--primary add-new-btn"', args)
+        self.assertIn('class="prks-btn prks-btn--primary"', args)
         css = _read(os.path.join(_FRONTEND, "css", "style.css"))
         self.assertIn(".prks-arg-form input[type=\"text\"]", css)
         self.assertIn("background: var(--surface-muted)", css)
