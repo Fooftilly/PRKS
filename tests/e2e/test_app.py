@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import unittest
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 from tests.e2e.fixtures import (
     MINIMAL_PDF,
@@ -634,6 +635,128 @@ class PdfPersistenceTests(_BrowserE2E):
         _open_annotations_tab(page)
         page.wait_for_selector("#annotation-fallback-list")
         self.assertEqual(page.locator(".annotation-row").count(), 0)
+
+
+def _release_held_routes(held):
+    for route in held:
+        try:
+            route.abort("canceled")
+        except Exception:
+            try:
+                route.fallback()
+            except Exception:
+                pass
+
+
+class RequestCoordinatorTests(_BrowserE2E):
+    def test_identical_work_detail_gets_dedupe_to_one_network_request(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        seen = []
+
+        def on_request(req):
+            if req.method == "GET" and urlparse(req.url).path == "/api/works/" + work_id:
+                seen.append(req.url)
+
+        page.on("request", on_request)
+        result = page.evaluate(
+            """async (id) => {
+                const rows = await Promise.all([
+                    fetchWorkDetails(id),
+                    fetchWorkDetails(id),
+                    fetchWorkDetails(id),
+                ]);
+                return {
+                    ids: rows.map(function (r) { return r && r.id; }),
+                    titles: rows.map(function (r) { return r && r.title; }),
+                };
+            }""",
+            work_id,
+        )
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(result["ids"], [work_id, work_id, work_id])
+        self.assertTrue(all(t == WORK_A_TITLE for t in result["titles"]))
+
+    def test_catalog_burst_cache_skips_immediate_repeat_get(self):
+        server, page, _collector = self._start_app()
+        seen = []
+
+        def on_request(req):
+            if req.method == "GET" and urlparse(req.url).path == "/api/works":
+                seen.append(req.url)
+
+        page.on("request", on_request)
+        page.evaluate(
+            """async () => {
+                await prksRequest('/api/diagnostics/performance/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                });
+            }"""
+        )
+        first = page.evaluate("async () => (await fetchWorks()).length")
+        after_first = len(seen)
+        self.assertGreaterEqual(after_first, 1)
+        second = page.evaluate("async () => (await fetchWorks()).length")
+        self.assertEqual(len(seen), after_first)
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(first, 1)
+        page.evaluate(
+            """async () => {
+                await prksRequest('/api/diagnostics/performance/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                });
+            }"""
+        )
+        third = page.evaluate("async () => (await fetchWorks()).length")
+        self.assertEqual(len(seen), after_first + 1)
+        self.assertEqual(third, first)
+
+    def test_route_abort_does_not_stale_paint_or_warn(self):
+        server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
+        held = []
+        client_errors = []
+
+        def on_request(req):
+            if req.method == "POST" and urlparse(req.url).path == "/api/client-errors":
+                client_errors.append(req.url)
+
+        def hold_details(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/works/" + work_id:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.on("request", on_request)
+        page.route("**/api/works/*", hold_details)
+        try:
+            page.evaluate(
+                "id => { location.hash = '#/works/' + encodeURIComponent(id); }",
+                work_id,
+            )
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "work-detail GET was not intercepted")
+            page.locator('#sidebar a.nav-link[href="#/folders"]').click()
+            page.wait_for_function("() => location.hash === '#/folders'")
+            page.wait_for_selector(".prks-folder-library")
+            self.assertEqual(page.locator(".api-warning-banner").count(), 0)
+            self.assertEqual(page.locator("#page-content .work-workspace").count(), 0)
+            self.assertEqual(page.locator("#page-content .page-header--work-title").count(), 0)
+            self.assertEqual(client_errors, [])
+        finally:
+            _release_held_routes(held)
+            try:
+                page.unroute("**/api/works/*", hold_details)
+            except Exception:
+                pass
 
 
 class MarkdownFixtureTests(_BrowserE2E):

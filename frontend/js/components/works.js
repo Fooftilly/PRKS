@@ -795,16 +795,22 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
         }
         try {
             if (typeof fetchConcepts === 'function') {
-                window.__prksConceptHintList = await fetchConcepts({ signal: routeSignal });
+                const concepts = await fetchConcepts({ signal: routeSignal });
+                if (prksRouteStale(routeGen)) return;
+                window.__prksConceptHintList = concepts;
             }
         } catch (_e) {
+            if (prksRouteStale(routeGen)) return;
             window.__prksConceptHintList = [];
         }
         try {
             if (typeof fetchArguments === 'function') {
-                window.__prksArgumentHintList = await fetchArguments(undefined, { signal: routeSignal });
+                const argumentsList = await fetchArguments(undefined, { signal: routeSignal });
+                if (prksRouteStale(routeGen)) return;
+                window.__prksArgumentHintList = argumentsList;
             }
         } catch (_e) {
+            if (prksRouteStale(routeGen)) return;
             window.__prksArgumentHintList = [];
         }
         if (prksRouteStale(routeGen)) return;

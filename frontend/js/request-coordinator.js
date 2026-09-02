@@ -517,7 +517,7 @@
             if (!(freshForMs > 0) || !response || !response.ok) return;
             if (!isJsonContentType(response.headers)) return;
             const size = contentLengthBytes(response.headers);
-            if (size != null && size > PRKS_REQUEST_CACHE_MAX_BYTES) return;
+            if (size == null || size < 0 || size > PRKS_REQUEST_CACHE_MAX_BYTES) return;
             cacheSet(key, response, freshForMs, nowMs);
         }
 

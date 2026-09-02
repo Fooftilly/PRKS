@@ -15,6 +15,10 @@ PRKS is a self-hosted web application for organizing research materials: PDFs, M
 
 The HTTP server and SQLite access use the Python standard library.
 
+Ordinary UI `/api` calls go UI → Client Request Coordinator → threaded PRKS HTTP
+server → `LibraryAccessGate`. The coordinator cache is memory-only and short-lived.
+It is not offline support.
+
 ## Quick start (local)
 
 From the repository root:
@@ -250,7 +254,7 @@ There is no remote telemetry. `POST /api/client-errors` is same-application meta
 
 Use **Settings → Performance diagnostics** to see what is slow in this PRKS process.
 
-Measurements live only in memory. They reset when PRKS restarts or when you click **Reset**. They are not written to disk, not included in backups, and contain aggregate operational metadata only: safe route templates, HTTP method/status, durations, counts, and response sizes. They never include search terms, query strings, request bodies, titles, notes, filenames, paths, SQL, or person names. A copied report is safe to paste into a bug report.
+Measurements live only in memory. They reset when PRKS restarts or when you click **Reset**. They are not written to disk, not included in backups, and contain aggregate operational metadata only: safe route templates, HTTP method/status, durations, counts, and response sizes. They never include search terms, query strings, request bodies, titles, notes, filenames, paths, SQL, or person names. The same Settings page also shows Client request coordinator counters (in-flight occupancy, retries, dedupe joins, burst-cache hits). Those are memory-only too and never include URLs, query strings, bodies, or entity ids. A copied report is safe to paste into a bug report.
 
 The table lists API routes with:
 
@@ -337,6 +341,7 @@ python tests/browser/pointer_capture.py
 | `backend/research_index.py` | Disposable derived note-reference index. |
 | `backend/db_schema.sql` | Complete latest schema for fresh databases. |
 | `frontend/` | Static SPA (HTML, CSS, JS), PWA assets. |
+| `frontend/js/request-coordinator.js` | Client request coordinator for ordinary same-origin `/api` traffic. |
 | `data/` | Default production database and files (gitignored as appropriate). |
 | `data_testing/` | Test fixtures and isolated DB/PDFs for automated tests. |
 | `tests/` | `unittest` modules. |

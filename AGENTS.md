@@ -228,3 +228,28 @@ Research Graph.
 The research graph and research-reference index are read-only projections. Their
 presence or absence must never authorize deletion or other canonical mutation.
 
+## Client request coordinator
+
+Ordinary first-party `/api` traffic from `frontend/js` uses `prksRequest()`. Do not
+call `fetch()` for those requests. Raw `fetch()` is a reviewed bypass only:
+`POST /api/client-errors` keepalive, backup progress/stage/restore, and external
+YouTube oEmbed. The coordinator does not assign or replace `window.fetch`.
+
+Reads are bounded (foreground 4, background 1). Mutations are serialized (max 1)
+and never automatically retried. Safe GET retry covers network errors and
+502/503/504 only, up to the initial attempt plus two retries.
+
+Only complete-value autosaves may set `coalesceKey` (research notes and private
+notes). Creates, deletes, relationships, bulk, reorder, PDF, and backup must not.
+
+`window.__prksRouteAbortController` is for route reads. Canonical writes survive
+navigation. Route generation (`window.__prksRouteGen` / `prksRouteStale`) still
+guards paint after abort.
+
+Coordinator diagnostics are aggregate counters and occupancy only. They must never
+contain private URL, query, body, Work ID, search text, or coalesce-key content.
+
+Persistent cache, IndexedDB, outbox, and offline synchronization do not belong in
+`frontend/js/request-coordinator.js`. The burst catalog cache is memory-only and
+short-lived. It is not offline support.
+
