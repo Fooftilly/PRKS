@@ -524,7 +524,11 @@ These are different concepts. Mixing them will break the later workspace project
 .prks-splitter
 ```
 
-The component gallery shows the accessible tab-strip structure (activation control + close control). Tiled v1 ships one Secondary on the right. Recursive splits and draggable splitters are not implemented.
+The component gallery shows the accessible tab-strip structure (activation control, optional Split action, close control). Tiled v1 ships one Secondary on the right. Recursive splits and draggable splitters are not implemented.
+
+User-facing copy uses **Split view**. Internal architecture still says tile / Secondary / `secondaryTree`.
+
+Parked tile-capable tabs expose a Split action that calls `prksWorkspaceTileTab(tabId)` (no duplicate tab). The workspace Split control is state-aware: **Split** opens the picker, **Show split** restores a parked Secondary, **Hide split** stacks the view. Clicking a parked tab's main area still makes it Main.
 
 ### Workspace / tab visual contract
 
@@ -539,7 +543,7 @@ Tiled v1: Main occupies the left master column; one Secondary occupies the right
 | Main tab | Strongest selected indication (accent border/background) |
 | Tiled secondary tab | Visible as a tile, not visually equal to main |
 | Focused secondary tile | Subtle focus indicator; does not imply promotion to main |
-| Parked / open tab | Normal tab-strip state |
+| Parked / open tab | Normal tab-strip state; tile-capable parked tabs show a quiet Split action |
 | Dirty / queued / syncing / error | Small semantic state marker (icon + not color alone) |
 
 Tiling v1:

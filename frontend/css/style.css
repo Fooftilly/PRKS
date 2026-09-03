@@ -673,6 +673,22 @@ body {
 
 .prks-workspace-tabs-shell #prks-workspace-tile-layout {
     margin-right: 0;
+    width: auto;
+    min-width: var(--control-height-md);
+    gap: var(--space-xs);
+    padding: 0 var(--space-sm);
+}
+
+.prks-workspace-split-btn.is-active,
+.prks-workspace-split-btn[aria-pressed="true"] {
+    background: var(--surface-selected);
+    color: var(--text-primary);
+}
+
+.prks-workspace-split-btn__label {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    white-space: nowrap;
 }
 
 .prks-workspace-tab {
@@ -734,10 +750,42 @@ body {
     cursor: pointer;
 }
 
+.prks-workspace-tab__split {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: var(--control-height-sm);
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.prks-workspace-tab__split-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: var(--control-height-sm);
+    color: var(--text-tertiary);
+    pointer-events: none;
+}
+
 .prks-workspace-tab__close:hover,
-.prks-workspace-tab__close:focus-visible {
+.prks-workspace-tab__close:focus-visible,
+.prks-workspace-tab__split:hover,
+.prks-workspace-tab__split:focus-visible {
     color: var(--text-primary);
     background: var(--hover-overlay);
+}
+
+.prks-workspace-tab__split:focus-visible,
+.prks-workspace-tab__close:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
 }
 
 .prks-workspace-tab.is-main,
@@ -773,6 +821,15 @@ body {
 @container prks-main (max-width: 720px) {
     .prks-workspace-tab {
         max-width: 8.5rem;
+    }
+
+    .prks-workspace-split-btn__label {
+        display: none;
+    }
+
+    .prks-workspace-tabs-shell #prks-workspace-tile-layout {
+        padding: 0;
+        width: var(--control-height-md);
     }
 }
 
@@ -2940,6 +2997,21 @@ body {
 }
 
 .prks-command-palette__status[hidden] {
+    display: none !important;
+}
+
+.prks-command-palette__hints {
+    margin: 0;
+    padding: 8px 18px 12px;
+    border-top: 1px solid var(--border);
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.prks-command-palette__hints[hidden] {
     display: none !important;
 }
 

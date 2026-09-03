@@ -115,8 +115,8 @@
             const hide = doc().createElement('button');
             hide.type = 'button';
             hide.className = 'prks-icon-btn prks-icon-btn--ghost prks-tile-header__hide';
-            hide.setAttribute('aria-label', 'Hide tile');
-            hide.title = 'Hide';
+            hide.setAttribute('aria-label', 'Hide split view');
+            hide.title = 'Hide split view';
             hide.innerHTML = iconHtml('x');
             hide.addEventListener('click', function (e) {
                 e.preventDefault();

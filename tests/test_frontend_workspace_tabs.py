@@ -115,6 +115,9 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("prksWorkspaceMakeMain", src)
         self.assertIn("target: 'tile'", src)
         self.assertIn("prksWorkspaceHostForTab", src)
+        self.assertIn("prksWorkspaceFindTabByRoute", src)
+        self.assertIn("prks-workspace-tab__split", src)
+        self.assertIn("Open split view", _read(_INDEX))
         self.assertIn("prks-workspace-canvas", tiling)
         self.assertIn("prks-tile--main", tiling)
         self.assertIn("prks-tile--secondary", tiling)
@@ -196,7 +199,8 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         readme = _read(_README)
         self.assertIn("Workspace tabs", readme)
         self.assertIn("stacked", readme.lower())
-        self.assertIn("Open as tile", readme)
+        self.assertIn("Open in split view", readme)
+        self.assertIn("Split view", readme)
 
     def test_node_selftest(self):
         node = shutil.which("node")

@@ -822,6 +822,7 @@
         if (section === 'open') return 'Quick open';
         if (section === 'search') return 'Search';
         if (section === 'actions') return 'Actions';
+        if (section === 'open-tabs') return 'Open tabs';
         return '';
     }
 
@@ -834,6 +835,7 @@
             list: d.getElementById('prks-command-palette-results'),
             title: d.getElementById('prks-command-palette-title'),
             status: d.getElementById('prks-command-palette-status'),
+            hints: d.getElementById('prks-command-palette-hints'),
         };
     }
 
@@ -850,6 +852,66 @@
         const msg = text ? String(text) : '';
         parts.status.textContent = msg;
         setHidden(parts.status, !msg);
+    }
+
+    function rowCanBeSecondary(row) {
+        if (!row) return false;
+        if (row.workspaceTabId) return true;
+        if (row.kind === 'modal' || row.kind === 'context') return false;
+        if (row.kind === 'search') return false;
+        if (row.kind !== 'navigate' && row.kind !== 'open') return false;
+        const hash = String(row.hash || '');
+        if (!hash) return false;
+        return typeof root.prksRouteSupportsTile === 'function' && root.prksRouteSupportsTile(hash);
+    }
+
+    function openTabRows(rawQuery) {
+        if (typeof root.prksWorkspaceSnapshot !== 'function') return [];
+        const snap = root.prksWorkspaceSnapshot();
+        if (!snap || !Array.isArray(snap.tabs)) return [];
+        const visual =
+            typeof root.prksWorkspaceVisualTiled === 'function' ? !!root.prksWorkspaceVisualTiled() : snap.mode === 'tiled';
+        const sec = snap.secondaryTree && snap.secondaryTree.type === 'leaf' ? snap.secondaryTree.tabId : null;
+        const q = normalizeQuery(rawQuery);
+        const out = [];
+        for (let i = 0; i < snap.tabs.length; i++) {
+            const tab = snap.tabs[i];
+            if (!tab || tab.id === snap.mainTabId) continue;
+            if (visual && tab.id === sec) continue;
+            if (typeof root.prksRouteSupportsTile === 'function' && !root.prksRouteSupportsTile(tab.route)) continue;
+            if (q && bestScore([String(tab.title || '')], q) <= 0) continue;
+            out.push({
+                id: 'ws-tab-' + tab.id,
+                kind: 'open',
+                label: tab.title || 'Page',
+                icon: tab.icon || 'file-text',
+                hash: tab.route,
+                section: 'open-tabs',
+                workspaceTabId: tab.id,
+            });
+        }
+        return out;
+    }
+
+    function executeTileSelection(row, hash) {
+        const tabId = row && row.workspaceTabId ? row.workspaceTabId : null;
+        if (tabId && typeof root.prksWorkspaceTileTab === 'function') {
+            root.prksWorkspaceTileTab(tabId);
+            return;
+        }
+        if (typeof root.prksWorkspaceFindTabByRoute === 'function') {
+            const existing = root.prksWorkspaceFindTabByRoute(hash, {
+                excludeMain: true,
+                excludeVisibleSecondary: true,
+            });
+            if (existing && existing.id && typeof root.prksWorkspaceTileTab === 'function') {
+                root.prksWorkspaceTileTab(existing.id);
+                return;
+            }
+        }
+        if (typeof root.prksNavigate === 'function') {
+            root.prksNavigate(hash, { target: 'tile' });
+        }
     }
 
     function assembleResults() {
@@ -979,6 +1041,11 @@
         for (let i = 0; i < search.length; i++) combined.push(search[i]);
 
         state.emptyCreate = state.scope === 'create' && combined.length === 0 && !!q;
+        if (state.navigationTarget === 'tile') {
+            const openTabs = openTabRows(qRaw);
+            const filtered = combined.filter(rowCanBeSecondary);
+            return openTabs.concat(filtered);
+        }
         return combined;
     }
 
@@ -993,6 +1060,8 @@
         let html = '';
         if (state.emptyCreate) {
             html = '<p class="prks-command-palette__empty">No create command matches.</p>';
+        } else if (!rows.length && state.navigationTarget === 'tile') {
+            html = '<p class="prks-command-palette__empty">Search for a page that can open in split view.</p>';
         } else {
             let lastSection = '';
             for (let i = 0; i < rows.length; i++) {
@@ -1074,11 +1143,13 @@
             else if (newTabMode) target = 'new-tab';
             const activate = newTabMode && !background && target === 'new-tab';
             closePalette({ restoreFocus: false });
+            if (target === 'tile') {
+                executeTileSelection(row, hash);
+                return;
+            }
             if (typeof root.prksNavigate === 'function') {
                 if (target === 'new-tab') {
                     root.prksNavigate(hash, { target: 'new-tab', activate: activate });
-                } else if (target === 'tile') {
-                    root.prksNavigate(hash, { target: 'tile' });
                 } else {
                     const focused =
                         typeof root.prksGetFocusedTabContext === 'function' ? root.prksGetFocusedTabContext() : null;
@@ -1275,6 +1346,19 @@
         }
     }
 
+    function paletteHintText() {
+        const mod = isMacPlatform() ? '⌘' : 'Ctrl';
+        return 'Enter  Open   ' + mod + '+Enter  New tab   Alt+Enter  Split';
+    }
+
+    function syncPaletteHints() {
+        const parts = paletteEls();
+        if (!parts.hints) return;
+        const hide = !state.open || state.scope === 'create';
+        setHidden(parts.hints, hide);
+        if (!hide) parts.hints.textContent = paletteHintText();
+    }
+
     function syncShortcutHint() {
         const d = doc();
         const hint = d && d.querySelector('[data-palette-shortcut-hint]');
@@ -1341,12 +1425,18 @@
             className: 'prks-command-palette__status',
             hidden: true,
         });
+        const hints = el('p', {
+            id: 'prks-command-palette-hints',
+            className: 'prks-command-palette__hints',
+            hidden: true,
+        });
         inputRow.appendChild(iconWrap);
         inputRow.appendChild(input);
         panel.appendChild(title);
         panel.appendChild(inputRow);
         panel.appendChild(list);
         panel.appendChild(status);
+        panel.appendChild(hints);
         wrap.appendChild(scrim);
         wrap.appendChild(panel);
         d.body.appendChild(wrap);
@@ -1462,7 +1552,7 @@
         if (parts.title) {
             if (state.scope === 'create') parts.title.textContent = 'Create…';
             else if (state.navigationTarget === 'new-tab') parts.title.textContent = 'Open in new tab';
-            else if (state.navigationTarget === 'tile') parts.title.textContent = 'Open as tile';
+            else if (state.navigationTarget === 'tile') parts.title.textContent = 'Open in split view';
             else parts.title.textContent = 'Search or jump';
         }
         parts.input.setAttribute(
@@ -1472,12 +1562,13 @@
                 : state.navigationTarget === 'new-tab'
                   ? 'Open in new tab…'
                   : state.navigationTarget === 'tile'
-                    ? 'Open as tile…'
+                    ? 'Open in split view…'
                     : 'Search or jump…'
         );
         setHidden(parts.root, false);
         parts.root.classList.toggle('prks-command-palette--create', state.scope === 'create');
         renderResults();
+        syncPaletteHints();
         const focusInput = function () {
             if (parts.input && typeof parts.input.focus === 'function') parts.input.focus();
         };
@@ -1507,6 +1598,7 @@
         }
         if (parts.list) parts.list.innerHTML = '';
         setStatus('');
+        syncPaletteHints();
         if (parts.root) {
             setHidden(parts.root, true);
             parts.root.classList.remove('prks-command-palette--create');

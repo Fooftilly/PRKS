@@ -989,6 +989,52 @@ Promise.resolve()
                 assert('saved view not matched by definition', leak.length === 0);
                 root.prksCloseCommandPalette();
 
+                const tileCalls = [];
+                root.prksWorkspaceSnapshot = function () {
+                    return {
+                        mode: 'stacked',
+                        mainTabId: 'tab-1',
+                        focusedTabId: 'tab-1',
+                        secondaryTree: null,
+                        tabs: [
+                            { id: 'tab-1', title: 'Work A', route: '#/works/WA', icon: 'file-text' },
+                            { id: 'tab-2', title: 'Work B', route: '#/works/WB', icon: 'file-text' },
+                            { id: 'tab-3', title: 'Folders', route: '#/folders', icon: 'folder' },
+                        ],
+                    };
+                };
+                root.prksWorkspaceVisualTiled = function () { return false; };
+                root.prksWorkspaceTileTab = function (id) {
+                    tileCalls.push(id);
+                    return Promise.resolve(true);
+                };
+                root.prksWorkspaceFindTabByRoute = function (hash, opts) {
+                    const snap = root.prksWorkspaceSnapshot();
+                    for (let i = 0; i < snap.tabs.length; i++) {
+                        const t = snap.tabs[i];
+                        if (opts && opts.excludeMain && t.id === snap.mainTabId) continue;
+                        if (t.route === hash) return t;
+                    }
+                    return null;
+                };
+                root.prksOpenCommandPalette({ navigationTarget: 'tile' });
+                assertEq('split palette title', document.getElementById('prks-command-palette-title').textContent, 'Open in split view');
+                const splitRows = root.prksCommandPaletteGetResults();
+                assert('open tabs heading first', splitRows[0] && splitRows[0].section === 'open-tabs');
+                assert('open tab is B', splitRows.some(function (r) { return r.workspaceTabId === 'tab-2'; }));
+                assert('open tabs skip main', !splitRows.some(function (r) { return r.workspaceTabId === 'tab-1'; }));
+                assert('open tabs skip folders tab', !splitRows.some(function (r) { return r.workspaceTabId === 'tab-3'; }));
+                assert('split palette no folders goto', !splitRows.some(function (r) { return r.id === 'navigate-folders'; }));
+                assert('split palette no people list', !splitRows.some(function (r) { return r.id === 'navigate-people'; }));
+                assert('split palette no search-all', !splitRows.some(function (r) { return r.id === 'search-all'; }));
+                navCalls.length = 0;
+                tileCalls.length = 0;
+                const idxB = splitRows.findIndex(function (r) { return r.workspaceTabId === 'tab-2'; });
+                for (let i = 0; i < idxB; i++) root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+                root.prksCommandPaletteHandleKey(keyEvent('Enter'));
+                assert('split open-tab uses tileTab', tileCalls[0] === 'tab-2');
+                assert('split open-tab no navigate', navCalls.length === 0);
+
                 const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'command-palette.js'), 'utf8');
                 assert('no eval', src.indexOf('eval(') < 0);
                 assert('no new Function', src.indexOf('new Function') < 0);

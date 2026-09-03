@@ -798,10 +798,19 @@ async function run() {
     const tileTabH = makeHarness({ hash: '#/works/WA' });
     await tileTabH.ws.navigate('#/works/WZ', { target: 'new-tab', activate: false });
     const parkedZ = tileTabH.ws.snapshot().tabs[1].id;
+    const zHist = tileTabH.ws.snapshot().tabs[1].history.slice();
     await tileTabH.ws.tileTab(parkedZ);
     assertEq('tileTab mode', tileTabH.ws.snapshot().mode, 'tiled');
     assertEq('tileTab secondary', tileTabH.ws.snapshot().secondaryTree.tabId, parkedZ);
     assertEq('tileTab no duplicate', tileTabH.ws.snapshot().tabs.length, 2);
+    const zAfter = tileTabH.ws.snapshot().tabs.find(function (t) { return t.id === parkedZ; });
+    assert('tileTab same history', JSON.stringify(zAfter.history) === JSON.stringify(zHist));
+    const foundZ = tileTabH.ws.findTabByRoute('#/works/WZ', { excludeMain: true, excludeVisibleSecondary: true });
+    assertEq('findTabByRoute skips visible secondary', foundZ, null);
+    await tileTabH.ws.setMode('stacked');
+    const foundParked = tileTabH.ws.findTabByRoute('#/works/WZ', { excludeMain: true, excludeVisibleSecondary: true });
+    assert('findTabByRoute parked', !!(foundParked && foundParked.id === parkedZ));
+    assertEq('findTabByRoute skips main', tileTabH.ws.findTabByRoute('#/works/WA', { excludeMain: true }) === null, true);
     }
 
     console.log('\n' + passed + ' passed, ' + failed + ' failed');

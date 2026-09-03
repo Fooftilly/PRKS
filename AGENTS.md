@@ -171,6 +171,10 @@ Ctrl/Cmd-click and middle-click target a background PRKS tab.
 
 Alt-click and `prksNavigate(..., { target: "tile" })` open a Secondary tile when the route is tile-capable.
 
+User-facing copy says "Split view" / "Open in split view". Internal APIs stay `tile`, `secondaryTree`, and `target: "tile"`.
+
+Existing parked tabs should be tiled through `prksWorkspaceTileTab(tabId)`, not duplicated through `navigate(... { target: "tile" })`.
+
 Parked tabs must perform no API requests and own no live DOM/resources.
 
 Stacked mode mounts one TabContext (Main). Tiled v1 mounts at most two: Main and one Secondary. Do not introduce a third mounted context until recursive tiling is implemented.

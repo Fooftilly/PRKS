@@ -2066,3 +2066,189 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertIn(work_b, page.evaluate("() => location.hash"))
         self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
 
+    def test_parked_tab_split_action_reuses_tab(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_a = server.ids["work_a"]
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        before = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const parked = snap.tabs.find(function (t) { return t.id !== snap.mainTabId; });
+                return {
+                    tabCount: snap.tabs.length,
+                    parkedId: parked && parked.id,
+                    parkedHistory: parked && parked.history.slice(),
+                    hash: location.hash,
+                };
+            }"""
+        )
+        split = page.locator(".prks-workspace-tab.is-parked .prks-workspace-tab__split")
+        self.assertEqual(split.count(), 1)
+        self.assertEqual(page.locator(".prks-workspace-tab.is-parked .prks-workspace-tab__split button").count(), 0)
+        self.assertIn("Open", split.get_attribute("aria-label") or "")
+        split.focus()
+        page.keyboard.press("Enter")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.wait_for_selector(".prks-tile--secondary .work-detail")
+        after = _workspace_ids(page)
+        self.assertEqual(after["mode"], "tiled")
+        self.assertEqual(after["mountedCount"], 2)
+        self.assertIn(work_a, after["hash"])
+        self.assertEqual(after["secondaryTabId"], before["parkedId"])
+        self.assertEqual(after["focusedTabId"], before["parkedId"])
+        self.assertNotEqual(after["mainTabId"], after["secondaryTabId"])
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(len(snap["tabs"]), before["tabCount"])
+        parked = [t for t in snap["tabs"] if t["id"] == before["parkedId"]][0]
+        self.assertEqual(parked["history"], before["parkedHistory"])
+        self.assertEqual(page.locator(".prks-tile--secondary .work-detail").count(), 1)
+
+    def test_split_control_opens_palette_without_alt(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        work_hash = page.evaluate("() => location.hash")
+        page.locator("#prks-workspace-tile-layout").click()
+        page.wait_for_selector("#prks-command-palette:not([hidden])")
+        self.assertIn("Open in split view", page.locator("#prks-command-palette-title").text_content())
+        page.locator("#prks-command-palette-input").fill(WORK_B_TITLE)
+        work_label = page.locator(
+            ".prks-command-palette__option-label",
+            has_text=re.compile("^" + re.escape(WORK_B_TITLE) + "$"),
+        )
+        work_label.wait_for()
+        page.locator(".prks-command-palette__option").filter(has=work_label).click()
+        page.wait_for_function("() => document.querySelectorAll('.work-detail').length === 2")
+        ids = _workspace_ids(page)
+        self.assertEqual(ids["mode"], "tiled")
+        self.assertEqual(ids["hash"], work_hash)
+        self.assertEqual(ids["mountedCount"], 2)
+        self.assertEqual(len(page.context.pages), 1)
+        self.assertIn(work_b, page.evaluate("() => window.prksWorkspaceSnapshot().tabs.map(t => t.route).join(' ')"))
+
+    def test_split_palette_reuses_open_tab(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        b_id = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.tabs.find(function (t) { return t.id !== snap.mainTabId; }).id;
+            }"""
+        )
+        page.locator("#prks-workspace-tile-layout").click()
+        page.wait_for_selector("#prks-command-palette:not([hidden])")
+        heading = page.locator(".prks-command-palette__heading", has_text="Open tabs")
+        heading.wait_for()
+        page.locator(".prks-command-palette__option").first.click()
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(len(snap["tabs"]), 2)
+        self.assertEqual(snap["secondaryTree"]["tabId"], b_id)
+
+    def test_parked_split_replacement_leave_guard(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 3")
+        dialogs = []
+        accept_next = {"v": False}
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            if accept_next["v"]:
+                dialog.accept()
+            else:
+                dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(snap.secondaryTree.tabId);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && ctx && c.tabId === ctx.tabId);
+                };
+            }"""
+        )
+        before = _workspace_ids(page)
+        page.locator(".prks-workspace-tab.is-parked .prks-workspace-tab__split").click()
+        self.assertEqual(len(dialogs), 1)
+        after = _workspace_ids(page)
+        self.assertEqual(after["secondaryTabId"], before["secondaryTabId"])
+        self.assertEqual(after["mainTabId"], before["mainTabId"])
+        self.assertEqual(after["hash"], before["hash"])
+        self.assertEqual(after["mountedCount"], 2)
+        accept_next["v"] = True
+        page.locator(".prks-workspace-tab.is-parked .prks-workspace-tab__split").click()
+        page.wait_for_function(
+            """(prev) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.secondaryTree && snap.secondaryTree.tabId !== prev;
+            }""",
+            arg=before["secondaryTabId"],
+        )
+        replaced = _workspace_ids(page)
+        self.assertEqual(replaced["mainTabId"], before["mainTabId"])
+        self.assertNotEqual(replaced["secondaryTabId"], before["secondaryTabId"])
+        self.assertEqual(replaced["hash"], before["hash"])
+
+    def test_folders_parked_tab_has_no_split_action(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate("() => window.prksNavigate('#/folders', { target: 'new-tab', activate: false })")
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        self.assertEqual(page.locator(".prks-workspace-tab.is-parked .prks-workspace-tab__split").count(), 0)
+        page.locator("#prks-workspace-tile-layout").click()
+        page.wait_for_selector("#prks-command-palette:not([hidden])")
+        labels = page.locator(".prks-command-palette__option-label").all_text_contents()
+        self.assertFalse(any(t.strip() == "Folders" for t in labels))
+
+    def test_narrow_split_announces_instead_of_hiding(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.evaluate("() => window.prksWorkspaceSetNarrowFallback(true)")
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === false")
+        btn = page.locator("#prks-workspace-tile-layout")
+        self.assertEqual(btn.get_attribute("aria-pressed"), "false")
+        self.assertIn("unavailable", (btn.get_attribute("aria-label") or "").lower())
+        btn.click()
+        page.wait_for_function(
+            """() => (document.getElementById('prks-workspace-live') || {}).textContent.indexOf('wider window') !== -1"""
+        )
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mode"), "tiled")
+        self.assertFalse(page.evaluate("() => window.prksWorkspaceVisualTiled()"))
+

@@ -256,6 +256,22 @@
             };
         }
 
+        function findTabByRoute(hash, options) {
+            const route = canonical(hash);
+            const opts = options || {};
+            const visual = visualTiled();
+            const sec = secondaryTabId();
+            for (let i = 0; i < state.tabs.length; i++) {
+                const tab = state.tabs[i];
+                if (canonical(tab.route) !== route) continue;
+                if (opts.excludeMain && tab.id === state.mainTabId) continue;
+                if (opts.excludeVisibleSecondary && visual && tab.id === sec) continue;
+                if (opts.excludeTabId && tab.id === opts.excludeTabId) continue;
+                return copyTab(tab);
+            }
+            return null;
+        }
+
         function snapshot() {
             return {
                 version: state.version,
@@ -546,12 +562,13 @@
             if (narrowFallback) {
                 state.focusedTabId = state.mainTabId;
                 paint();
+                announce('', 'narrow');
                 return Promise.resolve(copyTab(tab));
             }
             state.focusedTabId = tab.id;
             paint();
             mountContext(tab.id);
-            announce(tab.title, 'tile');
+            announce(tab.title, 'split');
             return Promise.resolve(
                 invokeRender({
                     workspaceSwitch: true,
@@ -574,6 +591,7 @@
                 if (narrowFallback) {
                     state.focusedTabId = state.mainTabId;
                     paint();
+                    announce('', 'narrow');
                     return Promise.resolve(copyTab(tab));
                 }
                 state.focusedTabId = tab.id;
@@ -1063,6 +1081,7 @@
             focusTab: focusTab,
             makeMain: makeMain,
             tileTab: tileTab,
+            findTabByRoute: findTabByRoute,
             setMode: setMode,
             setNarrowFallback: setNarrowFallback,
             setResolvedTitle: setResolvedTitle,
@@ -1132,17 +1151,56 @@
         return document.getElementById('prks-workspace-live');
     }
 
+    function paintSplitControl() {
+        if (typeof document === 'undefined' || !production) return;
+        const btn = document.getElementById('prks-workspace-tile-layout');
+        if (!btn) return;
+        const snap = production.snapshot();
+        const hasLeaf = !!(snap.secondaryTree && snap.secondaryTree.type === 'leaf' && snap.secondaryTree.tabId);
+        const visual =
+            typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
+        const labelEl = btn.querySelector('.prks-workspace-split-btn__label');
+        const narrowBlocked = hasLeaf && snap.mode === MODE_TILED && !visual;
+        btn.classList.toggle('is-active', visual);
+        btn.setAttribute('aria-pressed', visual ? 'true' : 'false');
+        if (narrowBlocked) {
+            if (labelEl) labelEl.textContent = 'Show split';
+            btn.setAttribute('aria-label', 'Split unavailable at this width');
+            btn.setAttribute('title', 'Split unavailable at this width');
+            return;
+        }
+        if (visual) {
+            if (labelEl) labelEl.textContent = 'Hide split';
+            btn.setAttribute('aria-label', 'Hide split view');
+            btn.setAttribute('title', 'Hide split view');
+            return;
+        }
+        if (hasLeaf) {
+            if (labelEl) labelEl.textContent = 'Show split';
+            btn.setAttribute('aria-label', 'Show split view');
+            btn.setAttribute('title', 'Show split view');
+            return;
+        }
+        if (labelEl) labelEl.textContent = 'Split';
+        btn.setAttribute('aria-label', 'Open split view');
+        btn.setAttribute('title', 'Open a page beside the Main tab');
+    }
+
     function announce(title, kind) {
         const el = liveEl();
         if (!el) return;
         const label = String(title || 'page');
         el.textContent = '';
         if (kind === 'promote') {
-            el.textContent = 'Opened as main because this view is not available in a tile yet.';
+            el.textContent = 'Opened as main because this view is not available in split view yet.';
             return;
         }
-        if (kind === 'tile') {
-            el.textContent = 'Opened ' + label + ' as a tile';
+        if (kind === 'narrow') {
+            el.textContent = 'Split view needs a wider window. The tab remains open.';
+            return;
+        }
+        if (kind === 'split' || kind === 'tile') {
+            el.textContent = 'Opened ' + label + ' in split view';
             return;
         }
         el.textContent = 'Opened ' + label + ' in a new PRKS tab';
@@ -1195,6 +1253,33 @@
             });
             activate.addEventListener('keydown', onTabKeydown);
 
+            wrap.appendChild(activate);
+
+            if (isTiled) {
+                const mark = document.createElement('span');
+                mark.className = 'prks-workspace-tab__split-mark';
+                mark.setAttribute('aria-hidden', 'true');
+                mark.innerHTML = iconHtml('columns-2');
+                wrap.appendChild(mark);
+            } else if (
+                isParked &&
+                typeof root.prksRouteSupportsTile === 'function' &&
+                root.prksRouteSupportsTile(tab.route)
+            ) {
+                const split = document.createElement('button');
+                split.type = 'button';
+                split.className = 'prks-workspace-tab__split';
+                split.setAttribute('aria-label', 'Open ' + tab.title + ' in split view');
+                split.title = 'Open in split view';
+                split.innerHTML = iconHtml('columns-2');
+                split.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void production.tileTab(tab.id);
+                });
+                wrap.appendChild(split);
+            }
+
             const close = document.createElement('button');
             close.type = 'button';
             close.className = 'prks-workspace-tab__close';
@@ -1207,12 +1292,12 @@
                 void production.closeTab(tab.id);
             });
 
-            wrap.appendChild(activate);
             wrap.appendChild(close);
             list.appendChild(wrap);
             if (isMain) tabFocusIndex = i;
         });
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(list);
+        paintSplitControl();
         const mainBtn = list.querySelector('.prks-workspace-tab.is-main .prks-workspace-tab__activate');
         if (mainBtn && typeof mainBtn.scrollIntoView === 'function') {
             mainBtn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -1384,10 +1469,16 @@
             if (!production) return;
             const snap = production.snapshot();
             const hasLeaf = !!(snap.secondaryTree && snap.secondaryTree.type === 'leaf' && snap.secondaryTree.tabId);
+            const visual =
+                typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
             if (!hasLeaf) {
                 if (typeof root.prksOpenCommandPalette === 'function') {
                     root.prksOpenCommandPalette({ scope: 'all', navigationTarget: 'tile' });
                 }
+                return;
+            }
+            if (snap.mode === MODE_TILED && !visual) {
+                announce('', 'narrow');
                 return;
             }
             if (snap.mode === MODE_STACKED) {
@@ -1587,6 +1678,16 @@
         return production.snapshot();
     }
 
+    function prksWorkspaceFindTabByRoute(hash, options) {
+        if (!production || typeof production.findTabByRoute !== 'function') return null;
+        return production.findTabByRoute(hash, options);
+    }
+
+    function prksWorkspaceVisualTiled() {
+        if (!production || typeof production.visualTiled !== 'function') return false;
+        return production.visualTiled();
+    }
+
     function prksNavigate(hash, options) {
         if (productionReady && production) return production.navigate(hash, options);
         if (typeof priorNavigate === 'function') return priorNavigate(hash, options);
@@ -1609,6 +1710,8 @@
         prksWorkspaceFocusTab: prksWorkspaceFocusTab,
         prksWorkspaceMakeMain: prksWorkspaceMakeMain,
         prksWorkspaceTileTab: prksWorkspaceTileTab,
+        prksWorkspaceFindTabByRoute: prksWorkspaceFindTabByRoute,
+        prksWorkspaceVisualTiled: prksWorkspaceVisualTiled,
         prksWorkspaceSetMode: prksWorkspaceSetMode,
         prksWorkspaceSetNarrowFallback: prksWorkspaceSetNarrowFallback,
         prksWorkspaceSetResolvedTitle: prksWorkspaceSetResolvedTitle,
