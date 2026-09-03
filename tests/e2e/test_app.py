@@ -11,6 +11,7 @@ from tests.e2e.fixtures import (
     MINIMAL_PDF,
     PERSON_DISPLAY,
     WORK_A_TITLE,
+    WORK_B_TITLE,
     seed_graph_context_library,
     seed_library,
 )
@@ -707,6 +708,17 @@ def _release_held_routes(held):
                 pass
 
 
+def _continue_held_routes(held):
+    for route in list(held):
+        try:
+            route.continue_()
+        except Exception:
+            try:
+                route.fallback()
+            except Exception:
+                pass
+
+
 class RequestCoordinatorTests(_BrowserE2E):
     def test_identical_work_detail_gets_dedupe_to_one_network_request(self):
         server, page, _collector = self._start_app()
@@ -1373,3 +1385,182 @@ class TabContextHostRootTests(_BrowserE2E):
                 return !!(btn && btn.classList.contains('active'));
             }"""
         )
+
+    def test_work_meta_save_does_not_publish_into_other_work(self):
+        server, page, _collector = self._start_app()
+        work_a = server.ids["work_a"]
+        work_b = server.ids["work_b"]
+        held = []
+
+        def hold_patch(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "PATCH" and path == "/api/works/" + work_a:
+                held.append(route)
+                return
+            route.fallback()
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector(".work-detail")
+        page.locator("#panel-content button.inline-action-btn", has_text="Edit").click()
+        page.wait_for_selector("#meta-title")
+        page.fill("#meta-title", "E2E Research Work Saved")
+        page.route("**/api/works/*", hold_patch)
+        try:
+            page.locator("#inline-save-metadata-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Work A metadata PATCH was not intercepted")
+            page.evaluate(
+                """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: true })""",
+                arg=work_b,
+            )
+            page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+            page.wait_for_function(
+                "id => location.hash.indexOf('#/works/' + id) === 0",
+                arg=work_b,
+            )
+            page.wait_for_selector(".work-detail")
+            page.get_by_text(WORK_B_TITLE).first.wait_for()
+            before = page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+                    const panel = document.getElementById('panel-content');
+                    return {
+                        workId: work && work.id,
+                        title: work && work.title,
+                        tab: ctx && ctx.ui ? ctx.ui.rightPanelTab : null,
+                        panel: panel ? panel.innerText : '',
+                    };
+                }"""
+            )
+            self.assertEqual(before["workId"], work_b)
+            self.assertEqual(before["title"], WORK_B_TITLE)
+            _continue_held_routes(held)
+            page.wait_for_timeout(400)
+            after = page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+                    const panel = document.getElementById('panel-content');
+                    return {
+                        hash: location.hash,
+                        workId: work && work.id,
+                        title: work && work.title,
+                        tab: ctx && ctx.ui ? ctx.ui.rightPanelTab : null,
+                        panel: panel ? panel.innerText : '',
+                    };
+                }"""
+            )
+            self.assertIn(work_b, after["hash"])
+            self.assertEqual(after["workId"], work_b)
+            self.assertEqual(after["title"], WORK_B_TITLE)
+            self.assertEqual(after["tab"], before["tab"])
+            self.assertEqual(after["panel"], before["panel"])
+            self.assertNotIn("E2E Research Work Saved", after["panel"])
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/*", hold_patch)
+            except Exception:
+                pass
+        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function(
+            "id => location.hash.indexOf('#/works/' + id) === 0",
+            arg=work_a,
+        )
+        page.wait_for_selector(".work-detail")
+        self.assertGreaterEqual(page.locator(".work-detail").count(), 1)
+
+    def test_non_focused_work_render_does_not_steal_right_panel(self):
+        server, page, _collector = self._start_app()
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector(".work-detail")
+        page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
+        page.wait_for_selector("#annotation-fallback-list")
+        result = page.evaluate(
+            """async (workBId) => {
+                const focused = window.prksGetFocusedTabContext();
+                const beforeTab = focused && focused.ui ? focused.ui.rightPanelTab : null;
+                const beforeWork = focused && focused.getEntity ? focused.getEntity('work') : null;
+                const host = document.createElement('div');
+                host.id = 'prks-test-secondary-host';
+                host.style.display = 'none';
+                document.body.appendChild(host);
+                const ctxB = window.prksEnsureTabContext('prks-test-secondary');
+                ctxB.mount(host);
+                const workB = await fetchWorkDetails(workBId);
+                await renderWorkDetails(ctxB, workB, { generation: ctxB.generation });
+                const afterFocused = window.prksGetFocusedTabContext();
+                const afterWork = afterFocused && afterFocused.getEntity ? afterFocused.getEntity('work') : null;
+                const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
+                const out = {
+                    focusedTab: afterFocused && afterFocused.ui ? afterFocused.ui.rightPanelTab : null,
+                    focusedWorkId: afterWork && afterWork.id,
+                    beforeTab: beforeTab,
+                    beforeWorkId: beforeWork && beforeWork.id,
+                    bWorkId: ctxB.getEntity && ctxB.getEntity('work') && ctxB.getEntity('work').id,
+                    annotationsActive: !!(annBtn && annBtn.classList.contains('active')),
+                    annotationList: !!document.getElementById('annotation-fallback-list'),
+                };
+                if (typeof window.prksDestroyTabContext === 'function') {
+                    window.prksDestroyTabContext('prks-test-secondary');
+                }
+                if (host.parentNode) host.parentNode.removeChild(host);
+                return out;
+            }""",
+            arg=work_b,
+        )
+        self.assertEqual(result["beforeTab"], "annotations")
+        self.assertEqual(result["focusedTab"], "annotations")
+        self.assertEqual(result["focusedWorkId"], result["beforeWorkId"])
+        self.assertEqual(result["bWorkId"], work_b)
+        self.assertNotEqual(result["bWorkId"], result["focusedWorkId"])
+        self.assertTrue(result["annotationsActive"])
+        self.assertTrue(result["annotationList"])
+
+    def test_person_group_save_does_not_navigate_other_tab(self):
+        _server, page, _collector = self._start_app()
+        held = []
+        page.evaluate("() => window.prksNavigate('#/people/groups')")
+        page.wait_for_function("() => location.hash === '#/people/groups'")
+        page.wait_for_selector(".prks-group-library")
+        page.evaluate("() => openModal('group-modal')")
+        page.wait_for_selector("#group-name")
+        page.fill("#group-name", "E2E Owner Group")
+        page.locator("#save-group-btn").click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/groups/') === 0")
+        group_id = page.evaluate("() => location.hash.split('/')[3]")
+        page.locator("#panel-content button", has_text="Edit group").click()
+        page.wait_for_selector("#gd-save-btn")
+
+        def hold_group_patch(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "PATCH" and path == "/api/person-groups/" + group_id:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/person-groups/*", hold_group_patch)
+        try:
+            page.locator("#gd-save-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Person Group PATCH was not intercepted")
+            page.evaluate("() => window.prksNavigate('#/folders', { target: 'new-tab', activate: true })")
+            page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+            page.wait_for_function("() => location.hash === '#/folders'")
+            _continue_held_routes(held)
+            page.wait_for_timeout(400)
+            self.assertEqual(page.evaluate("() => location.hash"), "#/folders")
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/person-groups/*", hold_group_patch)
+            except Exception:
+                pass

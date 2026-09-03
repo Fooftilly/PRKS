@@ -79,6 +79,8 @@ class TestTabContextResourceAPI(unittest.TestCase):
             "prksFocusedTimer",
             "prksClearFocusedTimer",
             "prksFocusedRouteSidebar",
+            "prksTabContextIsFocused",
+            "prksApplyOwnedWorkEntity",
         ):
             self.assertIn(name, src, f"{name} not found in tab-context.js")
 
@@ -348,6 +350,44 @@ class TestRightPanelTabContextOwned(unittest.TestCase):
         with open(works_path, encoding="utf-8") as fh:
             works = fh.read()
         self.assertIn("ctx.ui.rightPanelTab", works)
+
+
+def _js_function_source(src, name):
+    m = re.search(r"(?:async\s+)?function\s+" + re.escape(name) + r"\s*\(", src)
+    if not m:
+        return ""
+    nxt = re.search(r"\n(?:async\s+)?function\s+\w+\s*\(", src[m.end() :])
+    end = m.end() + nxt.start() if nxt else len(src)
+    return src[m.start() : end]
+
+
+class TestWorkRefreshHelpersUseOwnedEntity(unittest.TestCase):
+    def test_role_and_tag_helpers_do_not_unconditionally_set_work(self):
+        ui_path = os.path.join(FRONTEND_JS, "ui.js")
+        with open(ui_path, encoding="utf-8") as fh:
+            ui = fh.read()
+        for name in ("prksRefreshUiAfterWorkRoleRemoved", "prksReloadEntityTagsUI"):
+            body = _js_function_source(ui, name)
+            self.assertTrue(body, name + " missing")
+            self.assertIn("prksApplyOwnedWorkEntity", body, name + " must apply owned Work")
+            self.assertNotIn("ctx.setEntity('work'", body, name + " still sets work unconditionally")
+        submit = _js_function_source(ui, "submitWorkMetaEdit")
+        self.assertIn("toggleWorkMetaEditForContext", submit)
+        self.assertNotIn("toggleWorkMetaEdit(false)", submit)
+
+    def test_work_render_and_route_right_panel_require_focus(self):
+        works_path = os.path.join(FRONTEND_JS, "components", "works.js")
+        with open(works_path, encoding="utf-8") as fh:
+            works = fh.read()
+        render = _js_function_source(works, "renderWorkDetails")
+        self.assertIn("prksTabContextIsFocused", render)
+        self.assertLess(render.find("prksTabContextIsFocused"), render.find("updatePanelContent"))
+        app_path = os.path.join(FRONTEND_JS, "app.js")
+        with open(app_path, encoding="utf-8") as fh:
+            app = fh.read()
+        route = _js_function_source(app, "prksRenderTabRoute")
+        self.assertIn("prksTabContextIsFocused", route)
+        self.assertIn("isFocused", route)
 
 
 if __name__ == "__main__":

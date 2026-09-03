@@ -477,6 +477,12 @@
         return prksGetFocusedTabContext();
     }
 
+    function prksTabContextIsFocused(ctx) {
+        if (!ctx || ctx.destroyed) return false;
+        const focused = prksGetFocusedTabContext();
+        return !!(focused && focused.tabId === ctx.tabId);
+    }
+
     function prksSetFocusedEntity(type, value) {
         const ctx = prksGetFocusedTabContext();
         if (ctx) ctx.setEntity(type, value);
@@ -554,6 +560,7 @@
         prksFocusedEntity: prksFocusedEntity,
         prksFocusedRouteRecord: prksFocusedRouteRecord,
         prksOwnerTabContext: prksOwnerTabContext,
+        prksTabContextIsFocused: prksTabContextIsFocused,
         prksSetFocusedEntity: prksSetFocusedEntity,
         prksApplyOwnedWorkEntity: prksApplyOwnedWorkEntity,
         prksFocusedRouteGeneration: prksFocusedRouteGeneration,

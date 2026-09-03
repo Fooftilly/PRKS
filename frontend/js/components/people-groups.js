@@ -586,6 +586,17 @@ function closePersonGroupEdit() {
 window.openPersonGroupEdit = openPersonGroupEdit;
 window.closePersonGroupEdit = closePersonGroupEdit;
 
+function prksNavigateIfOwnerFocused(ownerCtx, hash, expectedGroupId) {
+    if (!ownerCtx || ownerCtx.destroyed) return;
+    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (!focused || focused.tabId !== ownerCtx.tabId) return;
+    if (expectedGroupId != null && expectedGroupId !== '') {
+        const live = ownerCtx.getEntity ? ownerCtx.getEntity('personGroup') : null;
+        if (!live || String(live.id) !== String(expectedGroupId)) return;
+    }
+    if (typeof prksNavigate === 'function') prksNavigate(hash);
+}
+
 async function mountPersonGroupEditPanel(g) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const generation = ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined;
@@ -611,7 +622,7 @@ async function mountPersonGroupEditPanel(g) {
     const saveBtn = document.getElementById('gd-save-btn');
     if (saveBtn) {
         saveBtn.onclick = async () => {
-            const saveCtx = ownerCtx;
+            const saveCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : ownerCtx;
             const btn = document.getElementById('gd-save-btn');
             const name = document.getElementById('gd-name').value.trim();
             const description = document.getElementById('gd-description').value;
@@ -638,7 +649,11 @@ async function mountPersonGroupEditPanel(g) {
                     return;
                 }
                 if (saveCtx && saveCtx.ui) saveCtx.ui.personGroupEditing = false;
-                if (typeof prksNavigate === 'function') prksNavigate('#/people/groups/' + encodeURIComponent(g.id));
+                prksNavigateIfOwnerFocused(
+                    saveCtx,
+                    '#/people/groups/' + encodeURIComponent(g.id),
+                    g.id
+                );
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not save group.', 'Error');
@@ -651,6 +666,7 @@ async function mountPersonGroupEditPanel(g) {
     const delBtn = document.getElementById('gd-delete-btn');
     if (delBtn) {
         delBtn.onclick = async () => {
+            const delCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : ownerCtx;
             const confirmed = await prksConfirmDestructive({
                 title: `Delete group “${g.name}”?`,
                 message:
@@ -665,7 +681,7 @@ async function mountPersonGroupEditPanel(g) {
                     await prksAlertMessage(data.error || 'Could not delete.', 'Error');
                     return;
                 }
-                if (typeof prksNavigate === 'function') prksNavigate('#/people/groups');
+                prksNavigateIfOwnerFocused(delCtx, '#/people/groups');
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not delete group.', 'Error');
@@ -678,6 +694,7 @@ function mountPersonGroupMemberRemoveButtons(g) {
     document.querySelectorAll('[data-remove-member]').forEach((btn) => {
         btn.addEventListener('click', async (ev) => {
             ev.stopPropagation();
+            const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
             const pid = btn.getAttribute('data-remove-member');
             if (!pid) return;
             const member = (g.members || []).find((m) => String(m.id) === String(pid));
@@ -701,7 +718,11 @@ function mountPersonGroupMemberRemoveButtons(g) {
                     await prksAlertMessage(data.error || 'Could not remove member.', 'Error');
                     return;
                 }
-                if (typeof prksNavigate === 'function') prksNavigate('#/people/groups/' + encodeURIComponent(g.id));
+                prksNavigateIfOwnerFocused(
+                    ownerCtx,
+                    '#/people/groups/' + encodeURIComponent(g.id),
+                    g.id
+                );
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not remove member.', 'Error');
@@ -723,6 +744,7 @@ async function mountPersonGroupAddMemberControls(g) {
     const addBtn = document.getElementById('group-add-member-btn');
     if (addBtn) {
         addBtn.onclick = async () => {
+            const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
             const pid = document.getElementById('group-add-member-id').value;
             if (!pid) {
                 await prksAlertMessage('Choose a person from the search list.', 'Validation');
@@ -739,7 +761,11 @@ async function mountPersonGroupAddMemberControls(g) {
                     await prksAlertMessage(data.error || 'Could not add member.', 'Error');
                     return;
                 }
-                if (typeof prksNavigate === 'function') prksNavigate('#/people/groups/' + encodeURIComponent(g.id));
+                prksNavigateIfOwnerFocused(
+                    ownerCtx,
+                    '#/people/groups/' + encodeURIComponent(g.id),
+                    g.id
+                );
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not add member.', 'Error');

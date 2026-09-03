@@ -1824,7 +1824,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             default: {
                 ctx.setEntity('work', null);
-                updatePanelContent('details');
+                if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(ctx) : true) {
+                    updatePanelContent('details');
+                }
                 contentDiv.innerHTML =
                     '<div class="prks-page-header page-header"><h2 class="prks-page-title">Section In Development</h2></div><p class="prks-dev-path-msg prks-inline-message"></p>';
                 const devPathEl = contentDiv.querySelector('.prks-dev-path-msg');
@@ -1860,10 +1862,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
         contentDiv.prepend(bar);
     }
 
-    const isShell =
+    const isMain =
         typeof prksIsMainTabContext === 'function' ? prksIsMainTabContext(ctx) : true;
+    const isFocused =
+        typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(ctx) : isMain;
     const onWorkDetailPage = route.name === 'work' && ctx.getEntity('work');
-    if (isShell) {
+    if (isFocused) {
         let tab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
         if (!onWorkDetailPage && tab === 'annotations') {
             tab = 'details';
@@ -2254,15 +2258,13 @@ function initForms() {
                         'Error'
                     );
                 }
-                if (typeof fetchWorkDetails === 'function' && typeof updatePanelContent === 'function') {
+                if (typeof fetchWorkDetails === 'function') {
                     const _aw = await fetchWorkDetails(attachWid);
-                    if (typeof prksApplyOwnedWorkEntity === 'function') {
-                        prksApplyOwnedWorkEntity(ownerCtx, attachWid, _aw);
-                    }
-                    if (ownerCtx && ownerCtx.ui) ownerCtx.ui.workFolderEditing = false;
-                    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-                    if (focused && ownerCtx && focused.tabId === ownerCtx.tabId) {
-                        updatePanelContent('details');
+                    if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ownerCtx, attachWid, _aw)) {
+                        if (ownerCtx && ownerCtx.ui) ownerCtx.ui.workFolderEditing = false;
+                        if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(ownerCtx) : false) {
+                            updatePanelContent('details');
+                        }
                     }
                 }
                 return;

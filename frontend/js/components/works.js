@@ -772,15 +772,16 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         el.style.cursor = 'pointer';
     });
 
-    // Populate Right Panel
-    const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
-    updatePanelContent(panelTab);
-    if (typeof prksSyncRightPanelTabStrip === 'function') prksSyncRightPanelTabStrip(panelTab);
+    // Populate Right Panel only when this context is focused.
+    if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(ctx) : true) {
+        const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+        updatePanelContent(panelTab);
+        if (typeof prksSyncRightPanelTabStrip === 'function') prksSyncRightPanelTabStrip(panelTab);
 
-
-    const editBtn = document.getElementById('edit-metadata-btn');
-    if (editBtn) {
-        editBtn.onclick = () => toggleWorkMetaEdit(true);
+        const editBtn = document.getElementById('edit-metadata-btn');
+        if (editBtn) {
+            editBtn.onclick = () => toggleWorkMetaEdit(true);
+        }
     }
 
     if (work.file_path && pdfModule && isCurrent()) {
