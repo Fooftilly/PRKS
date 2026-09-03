@@ -1308,3 +1308,68 @@ class TabContextHostRootTests(_BrowserE2E):
             1,
         )
         self.assertEqual(page.evaluate("() => location.hash"), "#/folders")
+
+    def test_processing_files_refresh_keeps_tab_root(self):
+        _server, page, _collector = self._start_app()
+        page.locator('#sidebar a.nav-link[href="#/processing-files"]').click()
+        page.wait_for_function("() => location.hash === '#/processing-files'")
+        page.locator("#prks-processing-refresh").wait_for()
+        page.locator("h2.prks-page-title", has_text="Files for Processing").wait_for()
+        root_id = self._assert_single_mounted_root(page)
+        page.locator("#prks-processing-refresh").click()
+        page.wait_for_function(
+            """() => {
+                const b = document.getElementById('prks-processing-refresh');
+                return !!(b && !b.disabled && b.textContent && b.textContent.indexOf('Refresh') !== -1);
+            }"""
+        )
+        self._assert_single_mounted_root(page, root_id)
+        self.assertGreaterEqual(
+            page.locator("#page-content > .prks-tab-root #prks-processing-refresh").count(),
+            1,
+        )
+
+    def test_right_panel_tab_restored_per_context(self):
+        server, page, _collector = self._start_app()
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector(".work-detail")
+        page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
+        page.wait_for_selector("#annotation-fallback-list")
+        self.assertTrue(
+            page.locator('#right-panel .tab-btn[data-target="annotations"]').evaluate(
+                "el => el.classList.contains('active')"
+            )
+        )
+        page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: true })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.locator(".person-profile__summary").wait_for()
+        page.wait_for_function(
+            """() => {
+                const btn = document.querySelector('#right-panel .tab-btn[data-target="details"]');
+                return !!(btn && btn.classList.contains('active'));
+            }"""
+        )
+        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        page.wait_for_selector(".work-detail")
+        page.wait_for_function(
+            """() => {
+                const btn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
+                return !!(btn && btn.classList.contains('active'));
+            }"""
+        )
+        page.wait_for_selector("#annotation-fallback-list")
+        page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.locator(".person-profile__summary").wait_for()
+        page.wait_for_function(
+            """() => {
+                const btn = document.querySelector('#right-panel .tab-btn[data-target="details"]');
+                return !!(btn && btn.classList.contains('active'));
+            }"""
+        )

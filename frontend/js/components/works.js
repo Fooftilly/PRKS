@@ -773,7 +773,9 @@ async function renderWorkDetails(ctx, work, requestCtx) {
     });
 
     // Populate Right Panel
-    updatePanelContent('details');
+    const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+    updatePanelContent(panelTab);
+    if (typeof prksSyncRightPanelTabStrip === 'function') prksSyncRightPanelTabStrip(panelTab);
 
 
     const editBtn = document.getElementById('edit-metadata-btn');

@@ -379,15 +379,13 @@ function renderPlaylistDetail(ctx, pl, container) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
-function renderPlaylistAttachControlsHtml(work) {
+function renderPlaylistAttachControlsHtml(work, ownerCtx) {
     const wid = work && work.id ? String(work.id) : '';
     if (!wid) return '';
     const current = work && work.playlist_id ? String(work.playlist_id) : '';
     const currentTitle = work && work.playlist_title ? String(work.playlist_title) : '';
-    const editing =
-        window.__prksWorkPlaylistEdit &&
-        typeof window.__prksWorkPlaylistEdit === 'object' &&
-        window.__prksWorkPlaylistEdit[wid] === true;
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const editing = !!(ctx && ctx.ui && ctx.ui.workPlaylistEditing);
     const currentLine = current
         ? `Current: <strong>${prksPlEsc(currentTitle || current)}</strong>`
         : 'Not in a playlist.';
@@ -424,9 +422,10 @@ function renderPlaylistAttachControlsHtml(work) {
     `;
 }
 
-async function mountPlaylistAttachControls(work) {
+async function mountPlaylistAttachControls(work, ownerCtx) {
     const wid = work && work.id ? String(work.id) : '';
     if (!wid) return;
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const editBtn = document.getElementById('prks-work-playlist-edit-btn');
     const newBtn = document.getElementById('prks-work-playlist-new-btn');
     const status = document.getElementById('prks-work-playlist-status');
@@ -434,11 +433,11 @@ async function mountPlaylistAttachControls(work) {
     if (editBtn && editBtn.dataset.bound !== '1') {
         editBtn.dataset.bound = '1';
         editBtn.onclick = () => {
-            if (!window.__prksWorkPlaylistEdit || typeof window.__prksWorkPlaylistEdit !== 'object') {
-                window.__prksWorkPlaylistEdit = {};
+            if (ctx && ctx.ui) ctx.ui.workPlaylistEditing = !ctx.ui.workPlaylistEditing;
+            const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+            if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
+                updatePanelContent('details');
             }
-            window.__prksWorkPlaylistEdit[wid] = !(window.__prksWorkPlaylistEdit[wid] === true);
-            if (typeof updatePanelContent === 'function') updatePanelContent('details');
         };
     }
 
@@ -498,10 +497,7 @@ async function mountPlaylistAttachControls(work) {
     }
 
     // Only mount the editable controls when in edit mode.
-    const editing =
-        window.__prksWorkPlaylistEdit &&
-        typeof window.__prksWorkPlaylistEdit === 'object' &&
-        window.__prksWorkPlaylistEdit[wid] === true;
+    const editing = !!(ctx && ctx.ui && ctx.ui.workPlaylistEditing);
     if (!editing) return;
 
     const input = document.getElementById('prks-work-playlist-search');
@@ -512,6 +508,7 @@ async function mountPlaylistAttachControls(work) {
     if (!input || !hidden || !results || !setBtn || !clearBtn || !newBtn) return;
 
     const playlists = await fetchPlaylists();
+    if (typeof prksApplyOwnedWorkEntity === 'function' && !prksApplyOwnedWorkEntity(ctx, wid)) return;
     const rows = Array.isArray(playlists) ? playlists : [];
 
     // Pre-fill current playlist title in the input if present.
@@ -565,8 +562,12 @@ async function mountPlaylistAttachControls(work) {
             // Refresh current work so the UI shows the selected playlist title consistently.
             if (typeof fetchWorkDetails === 'function') {
                 const _pw = await fetchWorkDetails(wid);
-                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _pw);
-                if (typeof updatePanelContent === 'function') updatePanelContent('details');
+                if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _pw)) {
+                    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                    if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
+                        updatePanelContent('details');
+                    }
+                }
             }
         } catch (_e) {
             if (status) status.textContent = 'Could not set playlist.';
@@ -588,8 +589,12 @@ async function mountPlaylistAttachControls(work) {
             if (status) status.textContent = 'Removed from playlist.';
             if (typeof fetchWorkDetails === 'function') {
                 const _rmw = await fetchWorkDetails(wid);
-                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _rmw);
-                if (typeof updatePanelContent === 'function') updatePanelContent('details');
+                if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _rmw)) {
+                    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                    if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
+                        updatePanelContent('details');
+                    }
+                }
             }
         } catch (_e) {
             if (status) status.textContent = 'Could not remove.';

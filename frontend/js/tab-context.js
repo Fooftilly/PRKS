@@ -22,6 +22,8 @@
             playlistEditing: false,
             playlistRename: {},
             argumentEditing: false,
+            workFolderEditing: false,
+            workPlaylistEditing: false,
             currentSavedView: null,
             researchNotesHints: null,
         };
@@ -34,6 +36,8 @@
         ui.playlistEditing = false;
         ui.playlistRename = {};
         ui.argumentEditing = false;
+        ui.workFolderEditing = false;
+        ui.workPlaylistEditing = false;
         ui.currentSavedView = null;
         ui.researchNotesHints = null;
     }
@@ -479,6 +483,16 @@
         return value;
     }
 
+    function prksApplyOwnedWorkEntity(ownerCtx, expectedWorkId, fresh) {
+        if (!ownerCtx || ownerCtx.destroyed) return false;
+        const want = expectedWorkId != null ? String(expectedWorkId) : '';
+        if (!want) return false;
+        const live = typeof ownerCtx.getEntity === 'function' ? ownerCtx.getEntity('work') : null;
+        if (!live || String(live.id) !== want) return false;
+        if (fresh && typeof ownerCtx.setEntity === 'function') ownerCtx.setEntity('work', fresh);
+        return true;
+    }
+
     function prksFocusedResource(name) {
         const ctx = prksGetFocusedTabContext();
         return ctx ? ctx.getResource(String(name)) : undefined;
@@ -541,6 +555,7 @@
         prksFocusedRouteRecord: prksFocusedRouteRecord,
         prksOwnerTabContext: prksOwnerTabContext,
         prksSetFocusedEntity: prksSetFocusedEntity,
+        prksApplyOwnedWorkEntity: prksApplyOwnedWorkEntity,
         prksFocusedRouteGeneration: prksFocusedRouteGeneration,
         prksFocusedRouteIsCurrent: prksFocusedRouteIsCurrent,
         prksFocusedResource: prksFocusedResource,

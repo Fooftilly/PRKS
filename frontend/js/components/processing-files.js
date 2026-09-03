@@ -671,7 +671,19 @@ function prksProcessingCardHtml(file) {
 }
 
 async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
-    const routeGen = options.routeGen;
+    const ctx =
+        options.ctx ||
+        (typeof prksOwnerTabContext === 'function'
+            ? prksOwnerTabContext(container)
+            : typeof prksGetFocusedTabContext === 'function'
+              ? prksGetFocusedTabContext()
+              : null);
+    const generation =
+        typeof options.routeGen === 'number'
+            ? options.routeGen
+            : ctx
+              ? ctx.generation
+              : undefined;
     const requestSignal = options.signal;
     const [items, people, folders, tags] = await Promise.all([
         fetchProcessingFiles(options),
@@ -679,7 +691,7 @@ async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
         fetchFolders({ signal: requestSignal }),
         fetchTags({ used: false, signal: requestSignal }),
     ]);
-    if (typeof prksIsRouteGenCurrent === 'function' && typeof routeGen === 'number' && !prksIsRouteGenCurrent(routeGen)) {
+    if (ctx && typeof generation === 'number' && !ctx.isCurrent(generation)) {
         return;
     }
     window.__prksProcessingPeople = Array.isArray(people) ? people : [];
@@ -690,15 +702,14 @@ async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
         allFolders = window.__prksProcessingFolders;
         window.allFolders = allFolders;
     } catch (_e) {}
-    const _pfCtx = (opts && opts.ctx) || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    if (_pfCtx) {
-        if (!_pfCtx.routeSidebar || typeof _pfCtx.routeSidebar !== 'object') _pfCtx.routeSidebar = {};
-        _pfCtx.routeSidebar.pendingCount = Array.isArray(items) ? items.length : 0;
+    if (ctx) {
+        if (!ctx.routeSidebar || typeof ctx.routeSidebar !== 'object') ctx.routeSidebar = {};
+        ctx.routeSidebar.pendingCount = Array.isArray(items) ? items.length : 0;
     }
-    renderProcessingFilesPage(items, container);
+    renderProcessingFilesPage(items, container, ctx);
 }
 
-function renderProcessingFilesPage(items, container) {
+function renderProcessingFilesPage(items, container, ownerCtx) {
     const list = Array.isArray(items) ? items : [];
     const DEFAULT_VISIBLE = 25;
     const currentVisibleRaw = Number(container && container.dataset ? container.dataset.prksProcessingVisibleCount : 0);
@@ -744,7 +755,11 @@ function renderProcessingFilesPage(items, container) {
             const old = refreshBtn.textContent;
             refreshBtn.textContent = 'Scanning...';
             try {
-                await prksRenderProcessingFilesPageWithFetch(container, { rescan: true });
+                await prksRenderProcessingFilesPageWithFetch(container, {
+                    rescan: true,
+                    ctx: ownerCtx,
+                    routeGen: ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined,
+                });
             } finally {
                 refreshBtn.disabled = false;
                 refreshBtn.textContent = old;
@@ -757,7 +772,7 @@ function renderProcessingFilesPage(items, container) {
             const prevVisible = Number(container.dataset.prksProcessingVisibleCount || visibleCount);
             const nextVisible = Math.min(list.length, (Number.isFinite(prevVisible) ? prevVisible : visibleCount) + 25);
             container.dataset.prksProcessingVisibleCount = String(nextVisible);
-            renderProcessingFilesPage(list, container);
+            renderProcessingFilesPage(list, container, ownerCtx);
         });
     }
 
@@ -965,7 +980,11 @@ function renderProcessingFilesPage(items, container) {
                     await patchProcessingFile(fileId, payload);
                     await importProcessingFile(fileId);
                     if (msgEl) msgEl.textContent = 'Imported to library.';
-                    await prksRenderProcessingFilesPageWithFetch(container, { rescan: true });
+                    await prksRenderProcessingFilesPageWithFetch(container, {
+                        rescan: true,
+                        ctx: ownerCtx,
+                        routeGen: ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined,
+                    });
                 } catch (e) {
                     if (msgEl) msgEl.textContent = e && e.message ? e.message : 'Import failed.';
                     importBtn.disabled = false;

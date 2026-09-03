@@ -231,7 +231,15 @@ _ROUTE_RUNTIME_GLOBALS_RE = re.compile(
     r"__prksPdfLastPageDebounceClear|__prksAnnotationListCache|"
     r"__prksFlushWorkAnnotationPersistence|__prksPersonDetailEditing|"
     r"__prksPersonWorksEditing|__prksPlaylistDetailEditing|"
-    r"__prksArgumentDetailEditing)"
+    r"__prksArgumentDetailEditing|__prksWorkFolderEdit|"
+    r"__prksWorkPlaylistEdit|__prksPersonGroupDetailEditing)"
+)
+
+_FOCUSED_WORK_ENTITY_RE = re.compile(r"prksSetFocusedEntity\(\s*['\"]work['\"]")
+_RIGHT_PANEL_TAB_WRITE_RE = re.compile(r"ctx\.ui\.rightPanelTab\s*=")
+_RIGHT_PANEL_TAB_READ_RE = re.compile(r"(?:ctx|focusedCtx)\.ui\.rightPanelTab")
+_WORK_DETAIL_EDIT_GLOBALS_RE = re.compile(
+    r"__prksWorkFolderEdit|__prksWorkPlaylistEdit|__prksPersonGroupDetailEditing"
 )
 
 _PAGE_CONTENT_GET_RE = re.compile(r"getElementById\(\s*['\"]page-content['\"]\s*\)")
@@ -267,6 +275,12 @@ class TestRouteRuntimeGlobalsAbsent(unittest.TestCase):
             lines = "\n".join(f"  {r}:{n}: {l}" for r, n, l in hits[:20])
             self.fail(f"{len(hits)} route-runtime global(s):\n{lines}")
 
+    def test_no_work_or_person_group_edit_globals(self):
+        hits = _scan_frontend_js(_WORK_DETAIL_EDIT_GLOBALS_RE)
+        if hits:
+            lines = "\n".join(f"  {r}:{n}: {l}" for r, n, l in hits[:20])
+            self.fail(f"{len(hits)} Work/Person Group edit global(s):\n{lines}")
+
 
 class TestPdfRuntimeShape(unittest.TestCase):
     def test_resource_is_runtime_not_viewer(self):
@@ -277,6 +291,10 @@ class TestPdfRuntimeShape(unittest.TestCase):
         self.assertIn("ctx.setResource('pdf', runtime", src)
         self.assertIn("runtime.viewer = viewer", src)
         self.assertIn("openPdfAnnotationEditorById(ctx, info.annotationId)", src)
+        self.assertIn("runtime.annotationPersistence", src)
+        self.assertIn("prksPdfPersistenceStillLive", src)
+        self.assertIn("prksInstallPdfAnnotationPersistenceIfCurrent", src)
+        self.assertIn("if (!stillLive()) return", src)
         self.assertNotIn("window.prksHasPendingWorkAnnotationSync = function", src)
 
     def test_pdf_runtime_module_exports(self):
@@ -290,6 +308,9 @@ class TestPdfRuntimeShape(unittest.TestCase):
             "flushAnnotations",
             "flushLastPage",
             "getAnnotationHints",
+            "createPdfAnnotationPersistenceWorker",
+            "prksPdfPersistenceStillLive",
+            "prksInstallPdfAnnotationPersistenceIfCurrent",
         ):
             self.assertIn(name, src, name + " missing from pdf-work-runtime.js")
 
@@ -306,6 +327,27 @@ class TestPdfAndNotesIsolationSelftests(unittest.TestCase):
         result = subprocess.run(["node", script], capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             self.fail(result.stdout + "\n" + result.stderr)
+
+
+class TestNoAsyncWorkFocusedEntity(unittest.TestCase):
+    def test_no_prks_set_focused_entity_work_calls(self):
+        hits = _scan_frontend_js(_FOCUSED_WORK_ENTITY_RE)
+        if hits:
+            lines = "\n".join(f"  {r}:{n}: {l}" for r, n, l in hits[:20])
+            self.fail(f"{len(hits)} prksSetFocusedEntity('work' call(s):\n{lines}")
+
+
+class TestRightPanelTabContextOwned(unittest.TestCase):
+    def test_right_panel_tab_is_read_and_written(self):
+        ui_path = os.path.join(FRONTEND_JS, "ui.js")
+        with open(ui_path, encoding="utf-8") as fh:
+            ui = fh.read()
+        self.assertRegex(ui, _RIGHT_PANEL_TAB_WRITE_RE, "rightPanelTab never written in ui.js")
+        self.assertIn("focusedCtx.ui.rightPanelTab", ui, "getActiveRightPanelTab must read focusedCtx.ui.rightPanelTab")
+        works_path = os.path.join(FRONTEND_JS, "components", "works.js")
+        with open(works_path, encoding="utf-8") as fh:
+            works = fh.read()
+        self.assertIn("ctx.ui.rightPanelTab", works)
 
 
 if __name__ == "__main__":

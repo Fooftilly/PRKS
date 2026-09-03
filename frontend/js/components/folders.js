@@ -843,15 +843,13 @@ function prksWorkFolderEsc(s) {
         .replace(/"/g, '&quot;');
 }
 
-function renderFolderAttachControlsHtml(work) {
+function renderFolderAttachControlsHtml(work, ownerCtx) {
     const wid = work && work.id ? String(work.id) : '';
     if (!wid) return '';
     const current = work && work.folder_id ? String(work.folder_id) : '';
     const currentTitle = work && work.folder_title ? String(work.folder_title) : '';
-    const editing =
-        window.__prksWorkFolderEdit &&
-        typeof window.__prksWorkFolderEdit === 'object' &&
-        window.__prksWorkFolderEdit[wid] === true;
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const editing = !!(ctx && ctx.ui && ctx.ui.workFolderEditing);
     const currentSummary = current
         ? `<span class="meta-row">Folder:</span> <a href="#/folders/${encodeURIComponent(
               current
@@ -903,26 +901,24 @@ function renderFolderAttachControlsHtml(work) {
     `;
 }
 
-async function mountFolderAttachControlsForWork(work) {
+async function mountFolderAttachControlsForWork(work, ownerCtx) {
     const wid = work && work.id ? String(work.id) : '';
     if (!wid) return;
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const editBtn = document.getElementById('prks-work-folder-edit-btn');
     const status = document.getElementById('prks-work-folder-status');
     if (editBtn && editBtn.dataset.bound !== '1') {
         editBtn.dataset.bound = '1';
         editBtn.onclick = () => {
-            if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
-                window.__prksWorkFolderEdit = {};
+            if (ctx && ctx.ui) ctx.ui.workFolderEditing = !ctx.ui.workFolderEditing;
+            const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+            if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
+                updatePanelContent('details');
             }
-            window.__prksWorkFolderEdit[wid] = !(window.__prksWorkFolderEdit[wid] === true);
-            if (typeof updatePanelContent === 'function') updatePanelContent('details');
         };
     }
 
-    const editing =
-        window.__prksWorkFolderEdit &&
-        typeof window.__prksWorkFolderEdit === 'object' &&
-        window.__prksWorkFolderEdit[wid] === true;
+    const editing = !!(ctx && ctx.ui && ctx.ui.workFolderEditing);
     if (!editing) return;
 
     const input = document.getElementById('prks-work-folder-search');
@@ -934,6 +930,7 @@ async function mountFolderAttachControlsForWork(work) {
     if (!input || !hidden || !results || !setBtn || !clearBtn || !newBtn) return;
 
     let folderRows = await fetchFolders();
+    if (typeof prksApplyOwnedWorkEntity === 'function' && !prksApplyOwnedWorkEntity(ctx, wid)) return;
     if (!Array.isArray(folderRows)) folderRows = [];
 
     if (work && work.folder_id && work.folder_title && !String(input.value || '').trim()) {
@@ -949,12 +946,13 @@ async function mountFolderAttachControlsForWork(work) {
         if (status) status.textContent = message || 'Folder set.';
         if (typeof fetchWorkDetails === 'function') {
             const _fw = await fetchWorkDetails(wid);
-            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _fw);
-            if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
-                window.__prksWorkFolderEdit = {};
+            if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _fw)) {
+                if (ctx && ctx.ui) ctx.ui.workFolderEditing = false;
+                const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
+                    updatePanelContent('details');
+                }
             }
-            window.__prksWorkFolderEdit[wid] = false;
-            if (typeof updatePanelContent === 'function') updatePanelContent('details');
         }
     }
 
@@ -1053,12 +1051,13 @@ async function mountFolderAttachControlsForWork(work) {
             if (status) status.textContent = 'Folder updated.';
             if (typeof fetchWorkDetails === 'function') {
                 const _uw = await fetchWorkDetails(wid);
-                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _uw);
-                if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
-                    window.__prksWorkFolderEdit = {};
+                if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _uw)) {
+                    if (ctx && ctx.ui) ctx.ui.workFolderEditing = false;
+                    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                    if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
+                        updatePanelContent('details');
+                    }
                 }
-                window.__prksWorkFolderEdit[wid] = false;
-                if (typeof updatePanelContent === 'function') updatePanelContent('details');
             }
         } catch (e) {
             if (status) status.textContent = String((e && e.message) || 'Could not set folder.');
@@ -1074,8 +1073,12 @@ async function mountFolderAttachControlsForWork(work) {
             if (status) status.textContent = 'Removed from folder.';
             if (typeof fetchWorkDetails === 'function') {
                 const _rw = await fetchWorkDetails(wid);
-                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _rw);
-                if (typeof updatePanelContent === 'function') updatePanelContent('details');
+                if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _rw)) {
+                    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                    if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
+                        updatePanelContent('details');
+                    }
+                }
             }
         } catch (e) {
             if (status) status.textContent = String((e && e.message) || 'Could not clear.');

@@ -1356,6 +1356,7 @@ async function initWorkMetaRoleLinker(workId) {
 }
 
 async function addRoleToWorkFromMetaEditor(workId) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const personHidden = document.getElementById('meta-role-person-id');
     const personSearch = document.getElementById('meta-role-person-search');
     const roleHidden = document.getElementById('meta-role-type');
@@ -1406,7 +1407,12 @@ async function addRoleToWorkFromMetaEditor(workId) {
         }
         if (typeof fetchWorkDetails === 'function') {
             const _refreshed = await fetchWorkDetails(resolvedWorkId);
-            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _refreshed);
+            if (typeof prksApplyOwnedWorkEntity === 'function') {
+                prksApplyOwnedWorkEntity(ownerCtx, resolvedWorkId, _refreshed);
+            } else if (ownerCtx && typeof ownerCtx.setEntity === 'function') {
+                const live = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+                if (live && String(live.id) === String(resolvedWorkId)) ownerCtx.setEntity('work', _refreshed);
+            }
             if (list && _refreshed) {
                 list.innerHTML = buildWorkLinkedPersonsHtml(_refreshed);
             }
@@ -1506,9 +1512,12 @@ function initTabs() {
         btn.addEventListener('click', (e) => {
             const t = e.target;
             if (!t || !t.classList || !t.classList.contains('tab-btn')) return;
-            btns.forEach((b) => prksSetTabActive(b, false));
-            prksSetTabActive(t, true);
-            const target = t.getAttribute('data-target');
+            const target = t.getAttribute('data-target') || 'details';
+            const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+            if (ctx && ctx.ui) {
+                ctx.ui.rightPanelTab = target;
+            }
+            if (typeof prksSyncRightPanelTabStrip === 'function') prksSyncRightPanelTabStrip(target);
             updatePanelContent(target);
         });
     });
@@ -1533,12 +1542,13 @@ function activateRightPanelDetailsTab() {
 /** Match tab button selection to the panel content. */
 function prksSyncRightPanelTabStrip(tabId) {
     const rp = document.getElementById('right-panel');
-    if (!rp || rp.classList.contains('right-panel--single-pane')) return;
+    if (!rp) return;
     let want = tabId || 'details';
-    const visible = [...rp.querySelectorAll('.tabs .tab-btn')].filter((b) => !b.hidden);
+    const buttons = [...rp.querySelectorAll('.tabs .tab-btn')];
+    const visible = buttons.filter((b) => !b.hidden);
     const allowed = new Set(visible.map((b) => b.getAttribute('data-target')));
-    if (!allowed.has(want)) want = 'details';
-    visible.forEach((btn) => {
+    if (visible.length && !allowed.has(want)) want = 'details';
+    buttons.forEach((btn) => {
         prksSetTabActive(btn, btn.getAttribute('data-target') === want);
     });
 }
@@ -2018,6 +2028,10 @@ function renderRouteContextSidebar(mode) {
 }
 
 function getActiveRightPanelTab() {
+    const focusedCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (focusedCtx && focusedCtx.ui && focusedCtx.ui.rightPanelTab) {
+        return focusedCtx.ui.rightPanelTab;
+    }
     const active = document.querySelector('#right-panel .tab-btn.active');
     return (active && active.getAttribute('data-target')) || 'details';
 }
@@ -2113,15 +2127,15 @@ function prksWorkPanelActionsHtml() {
     );
 }
 
-function prksWorkRightPanelStackHtml(work, isEditing = false) {
+function prksWorkRightPanelStackHtml(work, isEditing = false, ownerCtx) {
     const notes = renderPrksPrivateNotesCard('work', work.id, work.private_notes);
     const inferred = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
     const playlistCard =
         inferred === 'video' && typeof renderPlaylistAttachControlsHtml === 'function'
-            ? renderPlaylistAttachControlsHtml(work)
+            ? renderPlaylistAttachControlsHtml(work, ownerCtx)
             : '';
     const folderCard =
-        typeof renderFolderAttachControlsHtml === 'function' ? renderFolderAttachControlsHtml(work) : '';
+        typeof renderFolderAttachControlsHtml === 'function' ? renderFolderAttachControlsHtml(work, ownerCtx) : '';
     return (
         '<div class="right-panel-stack">' +
         prksWorkPanelActionsHtml() +
@@ -2164,13 +2178,13 @@ function updatePanelContent(tabId) {
 
     if (_cw) {
         if (tabId === 'details') {
-            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, false);
+            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, false, focusedCtx);
             initPrksPrivateNotesEditor('work', _cw.id);
             if (typeof mountPlaylistAttachControls === 'function') {
-                void mountPlaylistAttachControls(_cw);
+                void mountPlaylistAttachControls(_cw, focusedCtx);
             }
             if (typeof mountFolderAttachControlsForWork === 'function') {
-                void mountFolderAttachControlsForWork(_cw);
+                void mountFolderAttachControlsForWork(_cw, focusedCtx);
             }
             initWorkTagCombobox(_cw.id);
             if (typeof initWorkDetailRightPanelActions === 'function') {
@@ -2237,7 +2251,9 @@ function updatePanelContent(tabId) {
             const g = _cpg;
             let topHtml;
             if (
-                window.__prksPersonGroupDetailEditing &&
+                focusedCtx &&
+                focusedCtx.ui &&
+                focusedCtx.ui.personGroupEditing &&
                 typeof renderPersonGroupEditSidebarHtml === 'function'
             ) {
                 topHtml = renderPersonGroupEditSidebarHtml(g);
@@ -2252,7 +2268,9 @@ function updatePanelContent(tabId) {
                     : '';
             panel.innerHTML = '<div class="right-panel-stack">' + topHtml + addMemberHtml + '</div>';
             if (
-                window.__prksPersonGroupDetailEditing &&
+                focusedCtx &&
+                focusedCtx.ui &&
+                focusedCtx.ui.personGroupEditing &&
                 typeof mountPersonGroupEditPanel === 'function'
             ) {
                 void mountPersonGroupEditPanel(g);
@@ -2495,18 +2513,19 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
 }
 
 function toggleWorkMetaEdit(isEditing) {
-    const _cw = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const _cw = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
     if (_cw) {
         const panel = document.getElementById('panel-content');
         if (panel) {
-            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, isEditing);
+            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, isEditing, ownerCtx);
             initPrksPrivateNotesEditor('work', _cw.id);
             if (!isEditing) initWorkTagCombobox(_cw.id);
             if (typeof mountPlaylistAttachControls === 'function') {
-                void mountPlaylistAttachControls(_cw);
+                void mountPlaylistAttachControls(_cw, ownerCtx);
             }
             if (typeof mountFolderAttachControlsForWork === 'function') {
-                void mountFolderAttachControlsForWork(_cw);
+                void mountFolderAttachControlsForWork(_cw, ownerCtx);
             }
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(_cw);
@@ -2529,6 +2548,7 @@ function toggleWorkMetaEdit(isEditing) {
 }
 
 async function submitWorkMetaEdit(workId) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const metaDoc = document.getElementById('meta-doc-type');
     const v = (id) => {
         const el = document.getElementById(id);
@@ -2600,13 +2620,17 @@ async function submitWorkMetaEdit(workId) {
             throw new Error(errData.error || `Server error ${saveRes.status}`);
         }
         const _saved = await fetchWorkDetails(workId);
-        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _saved);
+        if (typeof prksApplyOwnedWorkEntity === 'function') {
+            prksApplyOwnedWorkEntity(ownerCtx, workId, _saved);
+        }
         toggleWorkMetaEdit(false);
-        const headerTitle = document.querySelector('.page-header--work-title');
+        const headerTitle =
+            ownerCtx && ownerCtx.query
+                ? ownerCtx.query('.page-header--work-title')
+                : document.querySelector('.page-header--work-title');
         if (headerTitle && _saved) headerTitle.innerText = _saved.title;
-        const _slotCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-        const typeSlot = _slotCtx && _slotCtx.query
-            ? _slotCtx.query('[data-prks-role="work-header-doc-type-slot"]')
+        const typeSlot = ownerCtx && ownerCtx.query
+            ? ownerCtx.query('[data-prks-role="work-header-doc-type-slot"]')
             : document.querySelector('[data-prks-role="work-header-doc-type-slot"]');
         if (typeSlot && typeof prksDocTypeBadgeHtml === 'function' && _saved) {
             typeSlot.innerHTML = prksDocTypeBadgeHtml(_saved.doc_type);
@@ -2746,7 +2770,7 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx) {
             const tab =
                 typeof getActiveRightPanelTab === 'function' ? getActiveRightPanelTab() : 'details';
             if (panel && tab === 'details' && typeof prksWorkRightPanelStackHtml === 'function') {
-                panel.innerHTML = prksWorkRightPanelStackHtml(_refreshedW, false);
+                panel.innerHTML = prksWorkRightPanelStackHtml(_refreshedW, false, ctx);
                 if (typeof prksRefreshIcons === 'function') {
                     prksRefreshIcons(panel);
                 }
@@ -2755,10 +2779,10 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx) {
                 }
                 if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(_refreshedW.id);
                 if (typeof mountPlaylistAttachControls === 'function') {
-                    void mountPlaylistAttachControls(_refreshedW);
+                    void mountPlaylistAttachControls(_refreshedW, ctx);
                 }
                 if (typeof mountFolderAttachControlsForWork === 'function') {
-                    void mountFolderAttachControlsForWork(_refreshedW);
+                    void mountFolderAttachControlsForWork(_refreshedW, ctx);
                 }
                 if (typeof initWorkDetailRightPanelActions === 'function') {
                     initWorkDetailRightPanelActions(_refreshedW);
@@ -3162,14 +3186,14 @@ async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx) {
         if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('work', _tw);
         const panel = document.getElementById('panel-content');
         if (panel && getActiveRightPanelTab() === 'details' && _tw && _tw.id === entityId) {
-            panel.innerHTML = prksWorkRightPanelStackHtml(_tw, false);
+            panel.innerHTML = prksWorkRightPanelStackHtml(_tw, false, ctx);
             initPrksPrivateNotesEditor('work', entityId);
             initWorkTagCombobox(entityId);
             if (typeof mountPlaylistAttachControls === 'function') {
-                void mountPlaylistAttachControls(_tw);
+                void mountPlaylistAttachControls(_tw, ctx);
             }
             if (typeof mountFolderAttachControlsForWork === 'function') {
-                void mountFolderAttachControlsForWork(_tw);
+                void mountFolderAttachControlsForWork(_tw, ctx);
             }
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(_tw);

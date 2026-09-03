@@ -920,11 +920,18 @@ function prksEnsureAnnotationBeforeUnloadGuard() {
 }
 
 async function setupAnnotationPersistence(ctx, runtime, workId) {
+    const generation = ctx && typeof ctx.generation === 'number' ? ctx.generation : undefined;
     const viewer = runtime && runtime.viewer;
     if (!viewer || typeof viewer.saveCopy !== 'function' || typeof viewer.getAnnotations !== 'function') {
         return;
     }
     if (ctx && typeof ctx.clearTimer === 'function') ctx.clearTimer('annotationSyncInterval');
+
+    function stillLive() {
+        return typeof prksPdfPersistenceStillLive === 'function'
+            ? prksPdfPersistenceStillLive(ctx, generation, runtime)
+            : !!(runtime && !runtime._destroyed);
+    }
 
     const syncState = runtime.syncState || {
         workId: String(workId),
@@ -940,6 +947,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
     prksEnsureAnnotationBeforeUnloadGuard();
 
     function renderSyncIndicator() {
+        if (!stillLive()) return;
         const el = ctx && ctx.query ? ctx.query('[data-prks-role="annotation-sync-status"]') : null;
         if (!el) return;
         el.classList.remove(
@@ -963,31 +971,45 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
         el.textContent = t ? `PDF annotations saved at ${t}` : 'PDF annotations saved';
     }
 
-    runtime.annotationCache = {
-        allItems: [],
-        rawItems: [],
-        items: [],
-        docId: viewer.getDocumentId ? viewer.getDocumentId() : null,
-        workId: String(workId),
-    };
     try {
         const savedRes = await prksRequest(`/api/works/${workId}/annotations`, { cache: 'no-store' }, {
             dedupe: false,
             retry: false,
             freshForMs: 0,
         });
+        if (!stillLive()) return;
         const savedData = await savedRes.json();
+        if (!stillLive()) return;
         const saved = JSON.parse(savedData.annotations_json || '[]');
         if (Array.isArray(saved) && saved.length > 0) {
+            runtime.annotationCache = {
+                allItems: saved,
+                rawItems: saved,
+                items: saved,
+                docId: 'DB',
+                workId: String(workId),
+            };
             renderAnnotationFallbackList(saved, 'DB', workId, ctx);
         }
     } catch (_e) {}
+    if (!stillLive()) return;
+
+    runtime.annotationCache = runtime.annotationCache || {
+        allItems: [],
+        rawItems: [],
+        items: [],
+        docId: viewer.getDocumentId ? viewer.getDocumentId() : null,
+        workId: String(workId),
+    };
     renderSyncIndicator();
 
     async function exportAndPersistPdfCopy(saveToken) {
+        if (!stillLive()) return;
         const buffer = await viewer.saveCopy();
+        if (!stillLive()) return;
         if (!buffer || !buffer.byteLength) return;
         const b64 = arrayBufferToBase64(buffer);
+        if (!stillLive()) return;
         const pdfRes = await prksRequest(`/api/works/${workId}/pdf`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1003,11 +1025,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
     }
 
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {
+        if (!stillLive()) return;
         await exportAndPersistPdfCopy(saveToken);
+        if (!stillLive()) return;
         const itemsFound = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
         const userItems = sortAnnotationsByPage(itemsFound.filter(prksIsUserMarkupAnnotation));
         const serialized = JSON.stringify(userItems);
         renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId, ctx);
+        if (!stillLive()) return;
         const annRes = await prksRequest(`/api/works/${workId}/annotations`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1025,17 +1050,20 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
     async function confirmPersistedToken(saveToken) {
         const tries = 8;
         for (let attempt = 0; attempt < tries; attempt++) {
+            if (!stillLive()) return false;
             try {
                 const probe = await prksRequest(
                     `/api/works/${workId}/save-confirm?token=${encodeURIComponent(saveToken)}&t=${Date.now()}`,
                     { cache: 'no-store' },
                     { dedupe: false, retry: false, freshForMs: 0 }
                 );
+                if (!stillLive()) return false;
                 if (probe.ok) {
                     const body = await probe.json().catch(() => ({}));
                     if (body && body.saved === true) return true;
                 }
             } catch (_e) {}
+            if (!stillLive()) return false;
             const wait = attempt < 2 ? 250 : attempt < 5 ? 450 : 800;
             await new Promise((r) => setTimeout(r, wait));
         }
@@ -1045,18 +1073,18 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
     let queueRequested = false;
     let queueRunning = false;
     let queueDrainPromise = Promise.resolve();
-    let retryTimer = null;
-
-    function scheduleRetry() {
-        if (retryTimer != null) return;
-        retryTimer = setTimeout(() => {
-            retryTimer = null;
-            void requestFlush('retry');
-        }, 2200);
-    }
+    let worker = null;
 
     async function drainFlushQueue() {
         while (queueRequested) {
+            if (worker && worker.destroyed) {
+                queueRequested = false;
+                break;
+            }
+            if (!stillLive()) {
+                queueRequested = false;
+                break;
+            }
             queueRequested = false;
             syncState.inFlight = true;
             syncState.lastError = '';
@@ -1065,16 +1093,20 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
             syncState.activeToken = saveToken;
             try {
                 await runWorkAnnotationAndPdfPersistencePass(saveToken);
+                if (!stillLive()) break;
                 const confirmed = await confirmPersistedToken(saveToken);
+                if (!stillLive()) break;
                 if (!confirmed) throw new Error('Server confirmation timeout');
                 syncState.lastConfirmedToken = saveToken;
                 syncState.lastSuccessAt = Date.now();
                 syncState.pendingChanges = queueRequested;
                 syncState.lastError = '';
             } catch (err) {
-                syncState.pendingChanges = true;
-                syncState.lastError = err && err.message ? String(err.message) : 'Save failed';
-                scheduleRetry();
+                if (stillLive() && !(worker && worker.destroyed)) {
+                    syncState.pendingChanges = true;
+                    syncState.lastError = err && err.message ? String(err.message) : 'Save failed';
+                    if (worker && typeof worker.scheduleRetry === 'function') worker.scheduleRetry();
+                }
             } finally {
                 syncState.inFlight = false;
                 renderSyncIndicator();
@@ -1083,6 +1115,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
     }
 
     function requestFlush(_reason = 'manual') {
+        if (worker && worker.destroyed) return undefined;
+        if (!stillLive()) return undefined;
         syncState.pendingChanges = true;
         queueRequested = true;
         renderSyncIndicator();
@@ -1095,21 +1129,67 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
         return queueDrainPromise;
     }
 
-    runtime._flushAnnotationsImpl = async function () {
-        try {
-            syncState.localMutationSeen = true;
-            await requestFlush('manual');
-        } catch (_e) {}
-    };
-
-    if (typeof viewer.onAnnotationEvent === 'function') {
-        viewer.onAnnotationEvent((evt) => {
-            if (!evt || evt.committed !== true) return;
-            if (evt.kind !== 'create' && evt.kind !== 'update' && evt.kind !== 'delete') return;
-            syncState.localMutationSeen = true;
-            void requestFlush('annotation-event');
-        });
+    function onAnnotationEvent(evt) {
+        if (worker && worker.destroyed) return;
+        if (!stillLive()) return;
+        if (!evt || evt.committed !== true) return;
+        if (evt.kind !== 'create' && evt.kind !== 'update' && evt.kind !== 'delete') return;
+        syncState.localMutationSeen = true;
+        void requestFlush('annotation-event');
     }
+
+    const installed = typeof prksInstallPdfAnnotationPersistenceIfCurrent === 'function'
+        ? prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, function () {
+            worker =
+                typeof createPdfAnnotationPersistenceWorker === 'function'
+                    ? createPdfAnnotationPersistenceWorker({
+                          runtime: runtime,
+                          setTimer: function (timerId) {
+                              if (ctx && typeof ctx.setTimer === 'function') {
+                                  ctx.setTimer('annotationPersistenceRetry', timerId);
+                              }
+                          },
+                          clearTimer: function () {
+                              if (ctx && typeof ctx.clearTimer === 'function') {
+                                  ctx.clearTimer('annotationPersistenceRetry');
+                              }
+                          },
+                          onFlush: function (reason) {
+                              return requestFlush(reason);
+                          },
+                          onDestroy: function () {
+                              if (viewer && typeof viewer.offAnnotationEvent === 'function') {
+                                  try {
+                                      viewer.offAnnotationEvent(onAnnotationEvent);
+                                  } catch (_e) {}
+                              }
+                          },
+                      })
+                    : {
+                          destroyed: false,
+                          requestFlush: requestFlush,
+                          scheduleRetry: function () {},
+                          flush: function () {
+                              return requestFlush('manual');
+                          },
+                          destroy: function () {
+                              this.destroyed = true;
+                          },
+                      };
+            runtime.annotationPersistence = worker;
+            runtime._flushAnnotationsImpl = async function () {
+                if (!stillLive() || (worker && worker.destroyed)) return;
+                try {
+                    syncState.localMutationSeen = true;
+                    await requestFlush('manual');
+                } catch (_e) {}
+            };
+            if (typeof viewer.onAnnotationEvent === 'function') {
+                viewer.onAnnotationEvent(onAnnotationEvent);
+            }
+        })
+        : false;
+    if (!installed) return;
 }
 
 function prksPdfLastPageLocalKey(workId) {

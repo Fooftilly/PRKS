@@ -12,7 +12,7 @@ const {
     prksDestroyAllTabContexts,
     prksForEachMountedTabContext,
 } = tc;
-const { createWorkPdfRuntime, prksHasPendingWorkAnnotationSync } = pdfRt;
+const { createWorkPdfRuntime, prksHasPendingWorkAnnotationSync, createPdfAnnotationPersistenceWorker, prksPdfPersistenceStillLive, prksInstallPdfAnnotationPersistenceIfCurrent } = pdfRt;
 
 let passed = 0;
 let failed = 0;
@@ -141,28 +141,123 @@ assertEq('visibility flush visits both', visited, 2);
 assertEq('flush last A', flushPageA, 1);
 assertEq('flush last B', flushPageB, 1);
 
-const genA = ctxA.generation;
-let lateDestroyed = false;
-const lateViewer = {
-    destroy: function () {
-        lateDestroyed = true;
+let queuedRetry = [];
+let flushFromRetryA = 0;
+let flushFromRetryB = 0;
+const workerA = createPdfAnnotationPersistenceWorker({
+    runtime: rtA,
+    retryDelayMs: 1,
+    schedule: function (fn) {
+        queuedRetry.push(fn);
+        return queuedRetry.length;
     },
-};
-ctxA.beginRoute({ name: 'work', hash: '#/works/WA2' });
-assert('A generation advanced', ctxA.generation !== genA);
-assert('A pdf disposed', ctxA.getResource('pdf') === undefined);
-assertEq('B pdf still live after A dispose', ctxB.getResource('pdf').workId, 'WB');
-if (!ctxA.isCurrent(genA) || ctxA.getResource('pdf') !== rtA) {
-    lateViewer.destroy();
-}
-assert('late A viewer destroyed', lateDestroyed);
-assertEq('B pending still true', prksHasPendingWorkAnnotationSync(ctxB), true);
-assertEq('B cache still B', ctxB.getResource('pdf').annotationCache.workId, 'WB');
+    unschedule: function () {},
+    onFlush: function () {
+        flushFromRetryA += 1;
+    },
+});
+const workerB = createPdfAnnotationPersistenceWorker({
+    runtime: rtB,
+    retryDelayMs: 1,
+    schedule: function (fn) {
+        queuedRetry.push(fn);
+        return queuedRetry.length;
+    },
+    unschedule: function () {},
+    onFlush: function () {
+        flushFromRetryB += 1;
+    },
+});
+rtA.annotationPersistence = workerA;
+rtB.annotationPersistence = workerB;
+workerA.scheduleRetry();
+assert('A retry timer armed', workerA.retryTimer != null);
+rtA.destroy();
+assert('A worker destroyed', workerA.destroyed === true);
+queuedRetry.slice().forEach(function (fn) {
+    fn();
+});
+assertEq('destroyed A retry does not flush', flushFromRetryA, 0);
+assertEq('B retry flush untouched', flushFromRetryB, 0);
+assertEq('B pending still true after A retry fire', prksHasPendingWorkAnnotationSync(ctxB), true);
 
-prksDestroyAllTabContexts();
+const genBeforeInstall = ctxA.generation;
+let installedAfterStale = 0;
+ctxA.beginRoute({ name: 'work', hash: '#/works/WA-stale' });
+const staleRt = createWorkPdfRuntime({ workId: 'WA-stale' });
+assert(
+    'stale live check false',
+    prksPdfPersistenceStillLive(ctxA, genBeforeInstall, staleRt) === false
+);
+prksInstallPdfAnnotationPersistenceIfCurrent(ctxA, genBeforeInstall, staleRt, function () {
+    installedAfterStale += 1;
+    staleRt.annotationPersistence = { attached: true };
+});
+assertEq('stale GET does not install persistence', installedAfterStale, 0);
+assert('stale runtime has no worker', staleRt.annotationPersistence == null);
 
-if (failed) {
-    console.log(failed + ' failed, ' + passed + ' passed');
+(async function () {
+    function fakeAnnotationGetThenInstall(ctx, generation, runtime) {
+        return Promise.resolve({ annotations_json: '[]' }).then(function () {
+            if (!prksPdfPersistenceStillLive(ctx, generation, runtime)) return 'stale';
+            let attached = false;
+            prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, function () {
+                attached = true;
+                runtime.annotationPersistence = { attached: true };
+                runtime.viewerOn = true;
+            });
+            return attached ? 'installed' : 'skipped';
+        });
+    }
+
+    const genDuringGet = ctxA.generation;
+    const pendingRt = createWorkPdfRuntime({ workId: 'WA-get' });
+    ctxA.setResource('pdf', pendingRt, function () {
+        pendingRt.destroy();
+    });
+    const getInFlight = fakeAnnotationGetThenInstall(ctxA, genDuringGet, pendingRt);
+    ctxA.beginRoute({ name: 'work', hash: '#/works/WA-after-get' });
+    const getResult = await getInFlight;
+    assertEq('stale GET resolve does not attach worker', getResult, 'stale');
+    assert('pending runtime has no listener after stale GET', pendingRt.viewerOn !== true);
+    assert('pending runtime has no persistence after stale GET', pendingRt.annotationPersistence == null);
+
+    const rtLive = createWorkPdfRuntime({ workId: 'WA-live' });
+    ctxA.setResource('pdf', rtLive, function () {
+        rtLive.destroy();
+    });
+    let installedLive = 0;
+    prksInstallPdfAnnotationPersistenceIfCurrent(ctxA, ctxA.generation, rtLive, function () {
+        installedLive += 1;
+    });
+    assertEq('current ctx installs persistence', installedLive, 1);
+
+    const genA = ctxA.generation;
+    let lateDestroyed = false;
+    const lateViewer = {
+        destroy: function () {
+            lateDestroyed = true;
+        },
+    };
+    ctxA.beginRoute({ name: 'work', hash: '#/works/WA2' });
+    assert('A generation advanced', ctxA.generation !== genA);
+    assert('A pdf disposed', ctxA.getResource('pdf') === undefined);
+    assertEq('B pdf still live after A dispose', ctxB.getResource('pdf').workId, 'WB');
+    if (!ctxA.isCurrent(genA) || ctxA.getResource('pdf') !== rtA) {
+        lateViewer.destroy();
+    }
+    assert('late A viewer destroyed', lateDestroyed);
+    assertEq('B pending still true', prksHasPendingWorkAnnotationSync(ctxB), true);
+    assertEq('B cache still B', ctxB.getResource('pdf').annotationCache.workId, 'WB');
+
+    prksDestroyAllTabContexts();
+
+    if (failed) {
+        console.log(failed + ' failed, ' + passed + ' passed');
+        process.exit(1);
+    }
+    console.log('All ' + passed + ' PDF runtime isolation checks passed');
+})().catch(function (err) {
+    console.error(err && err.stack ? err.stack : err);
     process.exit(1);
-}
-console.log('All ' + passed + ' PDF runtime isolation checks passed');
+});

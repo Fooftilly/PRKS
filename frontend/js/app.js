@@ -1573,6 +1573,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     titleOpts = { notFound: true, notFoundTitle: 'Group not found' };
                 } else {
                     ctx.setEntity('personGroup', group);
+                    ctx.ui.personGroupEditing = false;
                     publishSidebar({
                         groupName: group.name,
                         memberCount: Array.isArray(group.members) ? group.members.length : 0,
@@ -1862,8 +1863,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const isShell =
         typeof prksIsMainTabContext === 'function' ? prksIsMainTabContext(ctx) : true;
     const onWorkDetailPage = route.name === 'work' && ctx.getEntity('work');
-    if (isShell && !onWorkDetailPage) {
-        updatePanelContent(getActiveRightPanelTab());
+    if (isShell) {
+        let tab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+        if (!onWorkDetailPage && tab === 'annotations') {
+            tab = 'details';
+            if (ctx.ui) ctx.ui.rightPanelTab = 'details';
+        }
+        if (typeof prksSyncRightPanelTabStrip === 'function') prksSyncRightPanelTabStrip(tab);
+        if (!onWorkDetailPage) {
+            updatePanelContent(tab);
+        }
     }
     if (stale()) return;
     if (typeof prksFinishRouteRender === 'function') {
@@ -2247,12 +2256,14 @@ function initForms() {
                 }
                 if (typeof fetchWorkDetails === 'function' && typeof updatePanelContent === 'function') {
                     const _aw = await fetchWorkDetails(attachWid);
-                    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _aw);
-                    if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
-                        window.__prksWorkFolderEdit = {};
+                    if (typeof prksApplyOwnedWorkEntity === 'function') {
+                        prksApplyOwnedWorkEntity(ownerCtx, attachWid, _aw);
                     }
-                    window.__prksWorkFolderEdit[attachWid] = false;
-                    updatePanelContent('details');
+                    if (ownerCtx && ownerCtx.ui) ownerCtx.ui.workFolderEditing = false;
+                    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                    if (focused && ownerCtx && focused.tabId === ownerCtx.tabId) {
+                        updatePanelContent('details');
+                    }
                 }
                 return;
             }
@@ -2444,6 +2455,7 @@ function initForms() {
     }
 
     document.getElementById('save-role-btn').onclick = async () => {
+        const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
         const person_id = document.getElementById('role-person-id').value;
         const work_id = document.getElementById('role-work-id').value;
         if (!person_id || !work_id) {
@@ -2503,34 +2515,39 @@ function initForms() {
             return;
         }
         closeModals();
-        const hash = window.location.hash || '';
-        const workIdFromHash =
-            typeof prksParseRoute === 'function'
-                ? prksParseRoute(hash).name === 'work'
-                    ? prksParseRoute(hash).params.workId || ''
-                    : ''
-                : hash.startsWith('#/works/')
-                  ? hash.split('/')[2]
-                  : '';
-        const _cwApp = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
-        const onThisWork =
-            workIdFromHash &&
-            String(workIdFromHash) === String(work_id) &&
-            _cwApp &&
-            String(_cwApp.id) === String(work_id);
-        if (onThisWork && typeof fetchWorkDetails === 'function') {
+        const expectedWork = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+        const ownsWork =
+            expectedWork &&
+            String(expectedWork.id) === String(work_id) &&
+            typeof prksApplyOwnedWorkEntity === 'function';
+        if (ownsWork && typeof fetchWorkDetails === 'function') {
             const _rw = await fetchWorkDetails(work_id);
-            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _rw);
-            const panel = document.getElementById('panel-content');
-            const tab = typeof getActiveRightPanelTab === 'function' ? getActiveRightPanelTab() : 'details';
-            if (panel && tab === 'details' && typeof prksWorkRightPanelStackHtml === 'function') {
-                panel.innerHTML = prksWorkRightPanelStackHtml(_rw, false);
-                if (typeof initPrksPrivateNotesEditor === 'function') {
-                    initPrksPrivateNotesEditor('work', _rw.id);
-                }
-                if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(_rw.id);
-                if (typeof initWorkDetailRightPanelActions === 'function') {
-                    initWorkDetailRightPanelActions(_rw);
+            if (prksApplyOwnedWorkEntity(ownerCtx, work_id, _rw)) {
+                const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                const tab = (ownerCtx.ui && ownerCtx.ui.rightPanelTab) || 'details';
+                const panel = document.getElementById('panel-content');
+                if (
+                    panel &&
+                    focused &&
+                    ownerCtx &&
+                    focused.tabId === ownerCtx.tabId &&
+                    tab === 'details' &&
+                    typeof prksWorkRightPanelStackHtml === 'function'
+                ) {
+                    panel.innerHTML = prksWorkRightPanelStackHtml(_rw, false, ownerCtx);
+                    if (typeof initPrksPrivateNotesEditor === 'function') {
+                        initPrksPrivateNotesEditor('work', _rw.id);
+                    }
+                    if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(_rw.id);
+                    if (typeof initWorkDetailRightPanelActions === 'function') {
+                        initWorkDetailRightPanelActions(_rw);
+                    }
+                    if (typeof mountPlaylistAttachControls === 'function') {
+                        void mountPlaylistAttachControls(_rw, ownerCtx);
+                    }
+                    if (typeof mountFolderAttachControlsForWork === 'function') {
+                        void mountFolderAttachControlsForWork(_rw, ownerCtx);
+                    }
                 }
             }
         } else {

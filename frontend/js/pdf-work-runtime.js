@@ -28,6 +28,99 @@
         };
     }
 
+    function prksPdfPersistenceStillLive(ctx, generation, runtime) {
+        if (!runtime || runtime._destroyed) return false;
+        if (ctx && ctx.destroyed) return false;
+        if (ctx && typeof ctx.isCurrent === 'function' && typeof generation === 'number' && !ctx.isCurrent(generation)) {
+            return false;
+        }
+        if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('pdf') !== runtime) {
+            return false;
+        }
+        return true;
+    }
+
+    function prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, installer) {
+        if (!prksPdfPersistenceStillLive(ctx, generation, runtime)) return false;
+        if (typeof installer === 'function') installer();
+        return true;
+    }
+
+    function createPdfAnnotationPersistenceWorker(options) {
+        const opts = options || {};
+        const runtime = opts.runtime || null;
+        const schedule = typeof opts.schedule === 'function' ? opts.schedule : setTimeout;
+        const unschedule = typeof opts.unschedule === 'function' ? opts.unschedule : clearTimeout;
+        const retryDelayMs = Number.isFinite(opts.retryDelayMs) ? opts.retryDelayMs : 2200;
+
+        const worker = {
+            destroyed: false,
+            retryTimer: null,
+            flushPasses: 0,
+            retriesFired: 0,
+        };
+
+        function isDead() {
+            return !!(worker.destroyed || (runtime && runtime._destroyed));
+        }
+
+        worker.requestFlush = function (reason) {
+            if (isDead()) return undefined;
+            worker.flushPasses += 1;
+            if (typeof opts.onFlush === 'function') return opts.onFlush(reason);
+            return undefined;
+        };
+
+        worker.scheduleRetry = function () {
+            if (isDead()) return;
+            if (worker.retryTimer != null) return;
+            const timerId = schedule(function () {
+                worker.retryTimer = null;
+                if (typeof opts.clearTimer === 'function') {
+                    try {
+                        opts.clearTimer();
+                    } catch (_e) {}
+                }
+                if (isDead()) return;
+                worker.retriesFired += 1;
+                void worker.requestFlush('retry');
+            }, retryDelayMs);
+            worker.retryTimer = timerId;
+            if (typeof opts.setTimer === 'function') {
+                try {
+                    opts.setTimer(timerId);
+                } catch (_e2) {}
+            }
+        };
+
+        worker.flush = function () {
+            return worker.requestFlush('manual');
+        };
+
+        worker.destroy = function () {
+            if (worker.destroyed) return;
+            worker.destroyed = true;
+            if (worker.retryTimer != null) {
+                try {
+                    unschedule(worker.retryTimer);
+                } catch (_e) {}
+                worker.retryTimer = null;
+            }
+            if (typeof opts.clearTimer === 'function') {
+                try {
+                    opts.clearTimer();
+                } catch (_e3) {}
+            }
+            if (typeof opts.onDestroy === 'function') {
+                try {
+                    opts.onDestroy();
+                } catch (_e4) {}
+            }
+        };
+
+        return worker;
+    }
+
     function createWorkPdfRuntime(options) {
         const opts = options || {};
         const workId = String(opts.workId || '');
@@ -105,6 +198,12 @@
         runtime.destroy = function () {
             if (runtime._destroyed) return;
             runtime._destroyed = true;
+            if (runtime.annotationPersistence && typeof runtime.annotationPersistence.destroy === 'function') {
+                try {
+                    runtime.annotationPersistence.destroy();
+                } catch (_e) {}
+            }
+            runtime.annotationPersistence = null;
             try {
                 runtime.flushLastPage();
             } catch (_e) {}
@@ -144,6 +243,9 @@
 
     const api = {
         createWorkPdfRuntime: createWorkPdfRuntime,
+        createPdfAnnotationPersistenceWorker: createPdfAnnotationPersistenceWorker,
+        prksPdfPersistenceStillLive: prksPdfPersistenceStillLive,
+        prksInstallPdfAnnotationPersistenceIfCurrent: prksInstallPdfAnnotationPersistenceIfCurrent,
         prksHasPendingWorkAnnotationSync: prksHasPendingWorkAnnotationSync,
         prksEmptyPdfAnnotationCache: emptyAnnotationCache,
     };

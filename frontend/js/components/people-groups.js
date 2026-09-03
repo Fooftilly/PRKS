@@ -560,21 +560,26 @@ function renderPersonGroupEditSidebarHtml(g) {
         </div>`;
 }
 
-function prksSyncPersonGroupMemberEditUi() {
-    const editing = window.__prksPersonGroupDetailEditing === true;
-    const view = document.querySelector('.document-view--group-detail');
+function prksSyncPersonGroupMemberEditUi(ownerCtx) {
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const editing = !!(ctx && ctx.ui && ctx.ui.personGroupEditing);
+    const view =
+        (ctx && ctx.query ? ctx.query('.document-view--group-detail') : null) ||
+        document.querySelector('.document-view--group-detail');
     if (view) view.classList.toggle('is-group-editing', editing);
 }
 
 function openPersonGroupEdit() {
-    window.__prksPersonGroupDetailEditing = true;
-    prksSyncPersonGroupMemberEditUi();
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (ctx && ctx.ui) ctx.ui.personGroupEditing = true;
+    prksSyncPersonGroupMemberEditUi(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
 
 function closePersonGroupEdit() {
-    window.__prksPersonGroupDetailEditing = false;
-    prksSyncPersonGroupMemberEditUi();
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (ctx && ctx.ui) ctx.ui.personGroupEditing = false;
+    prksSyncPersonGroupMemberEditUi(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
 
@@ -582,7 +587,12 @@ window.openPersonGroupEdit = openPersonGroupEdit;
 window.closePersonGroupEdit = closePersonGroupEdit;
 
 async function mountPersonGroupEditPanel(g) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const generation = ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined;
     const all = await prksEnsureAllGroupsCache();
+    if (ownerCtx && typeof generation === 'number' && typeof ownerCtx.isCurrent === 'function' && !ownerCtx.isCurrent(generation)) {
+        return;
+    }
     const descendants = prksCollectDescendantIds(g.id, all);
     descendants.add(g.id);
     prksBindGroupSearchCombobox('gd-parent-search', 'gd-parent-results', 'gd-parent-id', descendants);
@@ -601,6 +611,7 @@ async function mountPersonGroupEditPanel(g) {
     const saveBtn = document.getElementById('gd-save-btn');
     if (saveBtn) {
         saveBtn.onclick = async () => {
+            const saveCtx = ownerCtx;
             const btn = document.getElementById('gd-save-btn');
             const name = document.getElementById('gd-name').value.trim();
             const description = document.getElementById('gd-description').value;
@@ -626,7 +637,7 @@ async function mountPersonGroupEditPanel(g) {
                     await prksAlertMessage(data.error || 'Could not save group.', 'Could not save');
                     return;
                 }
-                window.__prksPersonGroupDetailEditing = false;
+                if (saveCtx && saveCtx.ui) saveCtx.ui.personGroupEditing = false;
                 if (typeof prksNavigate === 'function') prksNavigate('#/people/groups/' + encodeURIComponent(g.id));
             } catch (e) {
                 console.error(e);
