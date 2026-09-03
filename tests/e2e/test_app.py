@@ -41,6 +41,17 @@ def load_tests(loader, standard_tests, pattern):
     return standard_tests
 
 
+_GRAPH_HAS_NODES = """() => {
+    const d = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();
+    return !!(d && d.cy && d.cy.nodes().length > 0);
+}"""
+
+_GRAPH_DESTROYED = """() => {
+    const d = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();
+    return !d || !d.cy;
+}"""
+
+
 def _expand_research(page):
     toggle = page.locator('[data-nav-disclosure-toggle="research"]')
     if toggle.get_attribute("aria-expanded") != "true":
@@ -167,13 +178,14 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
         page.locator("h2", has_text="Culture Industry").wait_for()
         page.locator("#prks-concept-view-graph").click()
         page.wait_for_function("() => location.hash.indexOf('#/graph') === 0")
-        page.wait_for_function("() => window.__prksResearchGraphCy && window.__prksResearchGraphCy.nodes().length > 0")
-        page.locator("#prks-graph-find").fill("Culture Industry")
+        page.wait_for_function(_GRAPH_HAS_NODES)
+        page.locator('[data-prks-role="graph-find"]').fill("Culture Industry")
         page.locator(".research-graph__find-hit", has_text="Culture Industry").click()
         page.locator("#prks-graph-inspector-title", has_text="Culture Industry").wait_for()
         topo = page.evaluate(
             """() => {
-                const cy = window.__prksResearchGraphCy;
+                const d = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();
+                const cy = d && d.cy;
                 const nodes = cy.nodes().map(n => n.id());
                 const edges = cy.edges().map(e => ({
                     type: e.data('type'),
@@ -241,13 +253,14 @@ class PersonGraphFocusTests(_BrowserE2E):
             }""",
             arg=person_id,
         )
-        page.wait_for_function("() => window.__prksResearchGraphCy && window.__prksResearchGraphCy.nodes().length > 0")
+        page.wait_for_function(_GRAPH_HAS_NODES)
         people = page.locator('[data-graph-filter="people"]')
         self.assertTrue(people.is_checked())
         page.locator("#prks-graph-inspector-title", has_text=PERSON_DISPLAY).wait_for()
         topo = page.evaluate(
             """() => {
-                const cy = window.__prksResearchGraphCy;
+                const d = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();
+                const cy = d && d.cy;
                 const nodes = cy.nodes().map(n => n.id());
                 const edges = cy.edges().map(e => ({
                     type: e.data('type'),
@@ -271,7 +284,7 @@ class PersonGraphFocusTests(_BrowserE2E):
         self.assertEqual(len(authors), 1, topo["edges"])
         page.locator('#sidebar a.nav-link[href="#/folders"]').click()
         page.wait_for_function("() => location.hash === '#/folders'")
-        page.wait_for_function("() => window.__prksResearchGraphCy == null")
+        page.wait_for_function(_GRAPH_DESTROYED)
         page.wait_for_selector(".prks-folder-library, #page-content")
         self.assertNotIn("graph", page.evaluate("() => location.hash"))
 
@@ -283,7 +296,7 @@ class ResearchGraphContextTests(_BrowserE2E):
         _expand_research(page)
         page.locator('#prks-nav-research-children a.nav-link[href="#/graph"]').click()
         page.wait_for_function("() => location.hash === '#/graph' || location.hash.indexOf('#/graph?') === 0")
-        page.wait_for_function("() => window.__prksResearchGraphCy && window.__prksResearchGraphCy.nodes().length > 0")
+        page.wait_for_function(_GRAPH_HAS_NODES)
         work_node = "work:" + work_id
         page.evaluate(
             """(wid) => {
@@ -293,7 +306,8 @@ class ResearchGraphContextTests(_BrowserE2E):
         )
         state = page.evaluate(
             """(wid) => {
-                const cy = window.__prksResearchGraphCy;
+                const d = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();
+                const cy = d && d.cy;
                 const mention = cy.edges().filter(function (e) {
                     return e.data('type') === 'mentions_concept' && e.source().id() === wid;
                 });
@@ -325,7 +339,8 @@ class ResearchGraphContextTests(_BrowserE2E):
         self.assertTrue(any("position:" in n or "argument:" in n for n in state["dimmed"]))
         hover = page.evaluate(
             """(wid) => {
-                const cy = window.__prksResearchGraphCy;
+                const d = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();
+                const cy = d && d.cy;
                 const mention = cy.edges().filter(function (e) {
                     return e.data('type') === 'mentions_concept' && e.source().id() === wid;
                 });
@@ -358,16 +373,20 @@ class ResearchGraphContextTests(_BrowserE2E):
         self.assertTrue("Culture" in inspector or "Philosophy" in inspector)
         page.evaluate("() => window.clearGraphSelection()")
         cleared = page.evaluate(
-            """() => ({
-                node: window.getSelectedGraphNodeId(),
-                edge: window.getSelectedGraphEdgeId(),
-                labeled: window.__prksResearchGraphCy.edges().filter(function (e) {
-                    return e.hasClass('graph-edge--label-on');
-                }).length,
-                dimmed: window.__prksResearchGraphCy.nodes().filter(function (n) {
-                    return n.hasClass('graph-dim');
-                }).length,
-            })"""
+            """() => {
+                const d = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();
+                const cy = d && d.cy;
+                return {
+                    node: window.getSelectedGraphNodeId(),
+                    edge: window.getSelectedGraphEdgeId(),
+                    labeled: cy ? cy.edges().filter(function (e) {
+                        return e.hasClass('graph-edge--label-on');
+                    }).length : 0,
+                    dimmed: cy ? cy.nodes().filter(function (n) {
+                        return n.hasClass('graph-dim');
+                    }).length : 0,
+                };
+            }"""
         )
         self.assertEqual(cleared["node"], "")
         self.assertEqual(cleared["edge"], "")

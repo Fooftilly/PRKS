@@ -152,7 +152,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("canvasLabel", graph)
         self.assertIn("graph-dim", graph)
         self.assertIn("nodeDimensionsIncludeLabels: true", graph)
-        self.assertIn("id=\"prks-graph-fit\">Fit", graph)
+        self.assertIn('data-prks-role="graph-fit">Fit', graph)
         self.assertIn("legendIcon", graph)
         self.assertIn("legendIcon('network'", graph)
         self.assertIn("prksLucideSvgDataUri", graph)

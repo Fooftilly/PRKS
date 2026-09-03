@@ -371,11 +371,15 @@ function makeGraphHost() {
     const graphRoot = {
         addEventListener: noop,
         removeEventListener: noop,
-        querySelector: function (sel) {
-            if (sel === '#prks-graph-find') return { value: '', addEventListener: noop };
-            if (sel === '#prks-graph-find-results') return { innerHTML: '', hidden: true };
+            querySelector: function (sel) {
+            if (sel === '#prks-graph-find' || sel === '[data-prks-role="graph-find"]') {
+                return { value: '', addEventListener: noop };
+            }
+            if (sel === '#prks-graph-find-results' || sel === '[data-prks-role="graph-find-results"]') {
+                return { innerHTML: '', hidden: true };
+            }
             if (sel === '#prks-graph-inspector') return inspector;
-            if (sel === '#prks-graph-canvas') return canvas;
+            if (sel === '#prks-graph-canvas' || sel === '[data-prks-role="graph-canvas"]') return canvas;
             if (sel === '[data-graph-filter="people"]') return peopleBox;
             return null;
         },
@@ -389,7 +393,7 @@ function makeGraphHost() {
         innerHTML: '',
         querySelector: function (sel) {
             if (sel === '.research-graph') return graphRoot;
-            if (sel === '#prks-graph-canvas') return canvas;
+            if (sel === '#prks-graph-canvas' || sel === '[data-prks-role="graph-canvas"]') return canvas;
             return graphRoot.querySelector(sel);
         },
         querySelectorAll: function (sel) {

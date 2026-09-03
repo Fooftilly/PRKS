@@ -155,16 +155,18 @@ assert('A abort cleared', a.abortController === null);
 assert('A not mounted', a.mounted === false);
 assert('A entity cleared', a.entity === null);
 
+let disposedGraph = 0;
 b.setResource(
     'graph',
     { id: 'g' },
     function () {
-        disposedB += 1;
+        disposedGraph += 1;
     }
 );
 b.destroy();
 b.destroy();
-assertEq('destroy B disposer once', disposedB, 1);
+assertEq('destroy B pdf disposer once', disposedB, 1);
+assertEq('destroy B graph disposer once', disposedGraph, 1);
 assert('B destroyed flag', b.destroyed);
 
 const reg = prksEnsureTabContext('tab-reg');

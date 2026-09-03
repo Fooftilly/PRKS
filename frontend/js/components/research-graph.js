@@ -19,22 +19,7 @@
         mentions: true,
     };
 
-    let liveCy = null;
-    let liveDom = null;
-    let snapshot = null;
-    let filters = Object.assign({}, DEFAULT_FILTERS);
-    let includePeople = false;
-    let selectedId = '';
-    let selectedEdgeId = '';
-    let hoverEdgeId = '';
-    let findQuery = '';
-    let findHits = [];
-    let findIndex = -1;
-    let statusMessage = '';
-    let pendingFocus = '';
-    let boundKeyHandler = null;
-    let reloadGeneration = 0;
-    let graphRouteSignal = null;
+    let activeRuntime = null;
 
     function esc(s) {
         if (typeof root.prksEscapeHtml === 'function') return root.prksEscapeHtml(s);
@@ -442,8 +427,7 @@
         };
     }
 
-    function openSelectedRecord(nodeOrId) {
-        const node = typeof nodeOrId === 'string' ? nodeById(snapshot, nodeOrId) : nodeOrId;
+    function navigateToNode(node) {
         if (!node || !node.route) return false;
         if (typeof root.prksNavigate === 'function') {
             root.prksNavigate(node.route);
@@ -611,173 +595,25 @@
         ];
     }
 
-    function graphReloadIsStale(gen, originDom) {
-        return gen !== reloadGeneration || liveDom !== originDom;
-    }
-
-    function destroyResearchGraph() {
-        reloadGeneration += 1;
-        if (boundKeyHandler && liveDom) {
-            liveDom.removeEventListener('keydown', boundKeyHandler);
-            boundKeyHandler = null;
-        }
-        if (liveCy) {
-            try {
-                liveCy.destroy();
-            } catch (_e) {}
-            liveCy = null;
-        }
-        liveDom = null;
-        root.__prksResearchGraphLiveCount = 0;
-        root.__prksResearchGraphCy = null;
-    }
-
-    function updateEdgeLabels(cy) {
-        if (!cy) return;
-        const ctx = {
-            hoverEdgeId: hoverEdgeId,
-            selectedEdgeId: selectedEdgeId,
+    function coseLayoutOptions(randomize) {
+        return {
+            name: 'cose',
+            animate: false,
+            randomize: !!randomize,
+            fit: true,
+            padding: 48,
+            nodeDimensionsIncludeLabels: true,
+            componentSpacing: 100,
+            nodeOverlap: 10,
+            gravity: 0.35,
+            numIter: 1400,
+            nodeRepulsion: function () {
+                return 18000;
+            },
+            idealEdgeLength: function () {
+                return 150;
+            },
         };
-        cy.edges().forEach(function (e) {
-            if (edgeShouldShowCanvasLabel(e.id(), ctx)) e.addClass('graph-edge--label-on');
-            else e.removeClass('graph-edge--label-on');
-        });
-    }
-
-    function applySelectionContext(cy) {
-        if (!cy) return;
-        const hasFocus = !!(selectedId || selectedEdgeId);
-        const ctx = selectionContextIds(snapshot, selectedId, selectedEdgeId);
-        cy.batch(function () {
-            cy.nodes().forEach(function (n) {
-                const keep = !hasFocus || ctx.nodeIds[n.id()];
-                if (keep) n.removeClass('graph-dim');
-                else n.addClass('graph-dim');
-                if (selectedId && n.id() === selectedId) n.addClass('graph-node--selected');
-                else n.removeClass('graph-node--selected');
-            });
-            cy.edges().forEach(function (e) {
-                const keep = !hasFocus || ctx.edgeIds[e.id()];
-                if (keep) {
-                    e.removeClass('graph-dim');
-                    if (hasFocus) e.addClass('graph-focus');
-                    else e.removeClass('graph-focus');
-                } else {
-                    e.addClass('graph-dim');
-                    e.removeClass('graph-focus');
-                }
-            });
-        });
-        updateEdgeLabels(cy);
-    }
-
-    function centerNode(cy, id) {
-        if (!cy || !id) return false;
-        const el = cy.getElementById(id);
-        if (!el || !el.length || el.empty()) return false;
-        try {
-            cy.animate({
-                fit: { eles: el, padding: 80 },
-                duration: 180,
-            });
-        } catch (_e) {
-            try {
-                cy.fit(el, 80);
-            } catch (_e2) {}
-        }
-        return true;
-    }
-
-    function selectNode(id, opts) {
-        selectedId = id || '';
-        selectedEdgeId = '';
-        hoverEdgeId = '';
-        const cy = liveCy;
-        if (cy) {
-            cy.elements().unselect();
-            if (id) {
-                const el = cy.getElementById(id);
-                if (el && el.length && !el.empty()) {
-                    el.select();
-                    if (!opts || opts.center !== false) centerNode(cy, id);
-                }
-            }
-            applySelectionContext(cy);
-        }
-        renderInspector();
-        return selectedId;
-    }
-
-    function selectEdge(id) {
-        selectedEdgeId = id || '';
-        selectedId = '';
-        const cy = liveCy;
-        if (cy) {
-            cy.elements().unselect();
-            if (id) {
-                const el = cy.getElementById(id);
-                if (el && el.length && !el.empty()) el.select();
-            }
-            applySelectionContext(cy);
-        }
-        renderInspector();
-        return selectedEdgeId;
-    }
-
-    function clearGraphSelection() {
-        selectedId = '';
-        selectedEdgeId = '';
-        hoverEdgeId = '';
-        const cy = liveCy;
-        if (cy) {
-            cy.elements().unselect();
-            applySelectionContext(cy);
-        }
-        renderInspector();
-    }
-
-    function inspectorEl() {
-        if (typeof document !== 'undefined' && document.getElementById) {
-            const panel = document.getElementById('prks-graph-inspector');
-            if (panel) return panel;
-        }
-        if (liveDom && liveDom.querySelector) return liveDom.querySelector('#prks-graph-inspector');
-        return null;
-    }
-
-    function inspectorClick(ev) {
-        const t = ev.target;
-        if (!t || !t.closest) return;
-        const hit = t.closest('[data-graph-node]');
-        if (hit) {
-            ev.preventDefault();
-            chooseFindHit(hit.getAttribute('data-graph-node'));
-            return;
-        }
-        if (t.id === 'prks-graph-open' || t.closest('#prks-graph-open')) {
-            ev.preventDefault();
-            openSelectedRecord(selectedId);
-            return;
-        }
-        const openBtn = t.closest('[data-graph-open]');
-        if (openBtn) {
-            ev.preventDefault();
-            openSelectedRecord(openBtn.getAttribute('data-graph-open'));
-        }
-    }
-
-    function ensureInspectorBound(el) {
-        if (!el || typeof el.addEventListener !== 'function') return;
-        if (el.getAttribute && el.getAttribute('data-graph-inspector-bound') === '1') return;
-        if (el.setAttribute) el.setAttribute('data-graph-inspector-bound', '1');
-        el.addEventListener('click', inspectorClick);
-    }
-
-    function paintInspector(html) {
-        const el = inspectorEl();
-        if (!el) return;
-        el.innerHTML = html;
-        ensureInspectorBound(el);
     }
 
     function inspectorStatsHtml(stats) {
@@ -811,143 +647,244 @@
         );
     }
 
-    function renderInspector() {
-        const edgeModel = selectedEdgeId ? inspectorEdgeModel(snapshot, selectedEdgeId) : null;
-        const model = !edgeModel ? inspectorModel(snapshot, selectedId) : null;
-        let html = '';
-        if (statusMessage) {
-            html += '<p class="prks-inline-message" role="status">' + esc(statusMessage) + '</p>';
+    function reloadGraphFailureMessage(err) {
+        if (err && err.code === 'graph_too_large') {
+            return 'Graph is too large to render as a single snapshot.';
         }
-        if (edgeModel) {
-            html +=
-                '<div class="doc-meta-card">' +
-                '<p class="saved-view-detail__kicker">' +
-                esc(edgeModel.kicker) +
-                '</p><p class="card-title" id="prks-graph-inspector-title">' +
-                esc(edgeModel.relation) +
-                '</p>' +
-                '<p class="meta-row meta-row--compact research-graph__edge-ends">' +
-                '<span class="research-graph__edge-end">' +
-                esc(edgeModel.source ? edgeModel.source.label : '') +
-                '</span>' +
-                '<span class="research-graph__edge-arrow" aria-hidden="true"> → </span>' +
-                '<span class="research-graph__edge-end">' +
-                esc(edgeModel.target ? edgeModel.target.label : '') +
-                '</span></p>' +
-                inspectorStatsHtml(edgeModel.stats) +
-                '<div class="research-graph__inspector-actions">';
-            if (edgeModel.source) {
-                html +=
-                    '<button type="button" class="prks-btn prks-btn--secondary" data-graph-open="' +
-                    esc(edgeModel.source.id) +
-                    '">' +
-                    esc(edgeModel.openSourceLabel) +
-                    '</button>';
-            }
-            if (edgeModel.target) {
-                html +=
-                    '<button type="button" class="prks-btn prks-btn--secondary" data-graph-open="' +
-                    esc(edgeModel.target.id) +
-                    '">' +
-                    esc(edgeModel.openTargetLabel) +
-                    '</button>';
-            }
-            html += '</div></div>';
-            paintInspector(html);
-            return edgeModel;
-        }
-        if (!model) {
-            html +=
-                '<div class="doc-meta-card">' +
-                '<p class="saved-view-detail__kicker">Selection</p>' +
-                '<p class="meta-row">Select a node or edge. Relationships stay on the canvas as highlights, not mass labels.</p>' +
-                '</div>';
-            paintInspector(html);
-            return model;
-        }
-        html +=
-            '<div class="doc-meta-card">' +
-            '<p class="saved-view-detail__kicker">' +
-            esc(model.typeLabel) +
-            '</p><p class="card-title" id="prks-graph-inspector-title">' +
-            esc(model.label) +
-            '</p>' +
-            inspectorStatsHtml(model.stats) +
-            '<div class="research-graph__inspector-actions">' +
-            '<button type="button" class="prks-btn prks-btn--primary" id="prks-graph-open">' +
-            esc(model.openLabel) +
-            '</button></div>';
-        for (let g = 0; g < model.lists.length; g++) {
-            const list = model.lists[g];
-            html +=
-                '<p class="person-sidebar__section-label">' +
-                esc(list.title) +
-                '</p><div class="research-graph__neighbors">';
-            for (let j = 0; j < list.items.length; j++) {
-                html += inspectorNeighborHtml(list.items[j]);
-            }
-            html += '</div>';
-        }
-        html += '</div>';
-        paintInspector(html);
-        return model;
+        return 'Could not load Research Graph.';
     }
 
-    function renderFindResults() {
-        if (!liveDom) return;
-        const box = liveDom.querySelector('#prks-graph-find-results');
-        if (!box) return;
-        if (!findQuery || !findHits.length) {
-            box.innerHTML = findQuery
-                ? '<p class="meta-row">No matching nodes.</p>'
-                : '';
-            box.hidden = !findQuery;
-            return;
+    function queryGraphRole(scope, role) {
+        if (!scope || typeof scope.querySelector !== 'function') return null;
+        try {
+            return scope.querySelector('[data-prks-role="' + role + '"]');
+        } catch (_e) {
+            return null;
         }
-        box.hidden = false;
-        box.innerHTML = findHits
-            .map(function (n, i) {
-                return (
-                    '<button type="button" class="prks-list-row research-graph__find-hit' + (i === findIndex ? ' is-active' : '') + '" role="option" aria-selected="' +
-                    (i === findIndex ? 'true' : 'false') +
-                    '" data-graph-node="' +
-                    esc(n.id) +
-                    '">' +
-                    esc(n.label) +
-                    ' <span class="meta-row">' +
-                    esc(typeLabel(n)) +
-                    '</span></button>'
-                );
-            })
-            .join('');
     }
 
-    function runFind(query) {
-        findQuery = String(query || '');
-        findHits = findNodesByLabel(snapshot, findQuery);
-        findIndex = findHits.length ? 0 : -1;
-        renderFindResults();
-        return findHits;
+    function inspectorEl(liveDom) {
+        if (typeof document !== 'undefined' && document.getElementById) {
+            const panel = document.getElementById('panel-content');
+            if (panel && typeof panel.querySelector === 'function') {
+                const fromPanel = panel.querySelector('#prks-graph-inspector');
+                if (fromPanel) return fromPanel;
+            }
+        }
+        if (liveDom && liveDom.querySelector) return liveDom.querySelector('#prks-graph-inspector');
+        return null;
     }
 
-    function chooseFindHit(id) {
-        const vis = visibleGraph(snapshot, filters);
-        const allowed = vis.nodes.some(function (n) {
-            return n.id === id;
-        });
-        if (!allowed) {
-            statusMessage = 'That node is hidden by the current filters.';
+    function resolveGraphCtx(opts) {
+        if (opts && opts.ctx) return opts.ctx;
+        if (typeof root.prksGetFocusedTabContext === 'function') {
+            return root.prksGetFocusedTabContext() || null;
+        }
+        return null;
+    }
+
+    function resolveActiveRuntime() {
+        const ctx = typeof root.prksGetFocusedTabContext === 'function' ? root.prksGetFocusedTabContext() : null;
+        const fromCtx = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('researchGraph') : null;
+        if (fromCtx) return fromCtx;
+        return activeRuntime;
+    }
+
+    function createResearchGraphRuntime(ctx, container, options) {
+        options = options || {};
+        let liveCy = null;
+        let liveDom = null;
+        let snapshot = null;
+        let filters = Object.assign({}, DEFAULT_FILTERS);
+        let includePeople = false;
+        let selectedId = '';
+        let selectedEdgeId = '';
+        let hoverEdgeId = '';
+        let findQuery = '';
+        let findHits = [];
+        let findIndex = -1;
+        let statusMessage = '';
+        let pendingFocus = '';
+        let boundKeyHandler = null;
+        let reloadGeneration = 0;
+        let graphRouteSignal = options.signal || null;
+        let destroyed = false;
+        const unbinders = [];
+
+        function chromeId(local) {
+            if (ctx && typeof ctx.domId === 'function') return ctx.domId(local);
+            return '';
+        }
+
+        function queryRole(role) {
+            const fromLive = queryGraphRole(liveDom, role);
+            if (fromLive) return fromLive;
+            const fromContainer = queryGraphRole(container, role);
+            if (fromContainer) return fromContainer;
+            if (ctx && typeof ctx.query === 'function') {
+                const fromCtx = ctx.query('[data-prks-role="' + role + '"]');
+                if (fromCtx) return fromCtx;
+            }
+            if (ctx && ctx.root) return queryGraphRole(ctx.root, role);
+            return null;
+        }
+
+        function listen(el, type, fn) {
+            if (!el || typeof el.addEventListener !== 'function') return;
+            el.addEventListener(type, fn);
+            unbinders.push(function () {
+                if (typeof el.removeEventListener === 'function') el.removeEventListener(type, fn);
+            });
+        }
+
+        function unbindAll() {
+            while (unbinders.length) {
+                try {
+                    unbinders.pop()();
+                } catch (_e) {}
+            }
+            boundKeyHandler = null;
+        }
+
+        function graphReloadIsStale(gen, originDom) {
+            return destroyed || gen !== reloadGeneration || liveDom !== originDom;
+        }
+
+        function teardownCy() {
+            if (liveCy) {
+                try {
+                    liveCy.destroy();
+                } catch (_e) {}
+                liveCy = null;
+            }
+            root.__prksResearchGraphLiveCount = 0;
+        }
+
+        function destroy() {
+            if (destroyed) return;
+            destroyed = true;
+            reloadGeneration += 1;
+            unbindAll();
+            teardownCy();
+            liveDom = null;
+            if (container && container.__prksGraphRuntime === runtime) {
+                container.__prksGraphRuntime = null;
+            }
+            if (activeRuntime === runtime) activeRuntime = null;
+            if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('researchGraph') === runtime) {
+                if (typeof ctx.clearResource === 'function') ctx.clearResource('researchGraph');
+            }
+        }
+
+        function debug() {
+            return { cy: liveCy, liveCount: liveCy ? 1 : 0 };
+        }
+
+        function updateEdgeLabels(cy) {
+            if (!cy) return;
+            const labelCtx = {
+                hoverEdgeId: hoverEdgeId,
+                selectedEdgeId: selectedEdgeId,
+            };
+            cy.edges().forEach(function (e) {
+                if (edgeShouldShowCanvasLabel(e.id(), labelCtx)) e.addClass('graph-edge--label-on');
+                else e.removeClass('graph-edge--label-on');
+            });
+        }
+
+        function applySelectionContext(cy) {
+            if (!cy) return;
+            const hasFocus = !!(selectedId || selectedEdgeId);
+            const selCtx = selectionContextIds(snapshot, selectedId, selectedEdgeId);
+            cy.batch(function () {
+                cy.nodes().forEach(function (n) {
+                    const keep = !hasFocus || selCtx.nodeIds[n.id()];
+                    if (keep) n.removeClass('graph-dim');
+                    else n.addClass('graph-dim');
+                    if (selectedId && n.id() === selectedId) n.addClass('graph-node--selected');
+                    else n.removeClass('graph-node--selected');
+                });
+                cy.edges().forEach(function (e) {
+                    const keep = !hasFocus || selCtx.edgeIds[e.id()];
+                    if (keep) {
+                        e.removeClass('graph-dim');
+                        if (hasFocus) e.addClass('graph-focus');
+                        else e.removeClass('graph-focus');
+                    } else {
+                        e.addClass('graph-dim');
+                        e.removeClass('graph-focus');
+                    }
+                });
+            });
+            updateEdgeLabels(cy);
+        }
+
+        function centerNode(cy, id) {
+            if (!cy || !id) return false;
+            const el = cy.getElementById(id);
+            if (!el || !el.length || el.empty()) return false;
+            try {
+                cy.animate({
+                    fit: { eles: el, padding: 80 },
+                    duration: 180,
+                });
+            } catch (_e) {
+                try {
+                    cy.fit(el, 80);
+                } catch (_e2) {}
+            }
+            return true;
+        }
+
+        function selectNode(id, opts) {
+            selectedId = id || '';
+            selectedEdgeId = '';
+            hoverEdgeId = '';
+            const cy = liveCy;
+            if (cy) {
+                cy.elements().unselect();
+                if (id) {
+                    const el = cy.getElementById(id);
+                    if (el && el.length && !el.empty()) {
+                        el.select();
+                        if (!opts || opts.center !== false) centerNode(cy, id);
+                    }
+                }
+                applySelectionContext(cy);
+            }
             renderInspector();
-            return;
+            return selectedId;
         }
-        statusMessage = '';
-        selectNode(id);
-    }
 
-    function bindShell(container) {
-        liveDom = container.querySelector('.research-graph');
-        if (!liveDom) return;
-        liveDom.addEventListener('click', function (ev) {
+        function selectEdge(id) {
+            selectedEdgeId = id || '';
+            selectedId = '';
+            const cy = liveCy;
+            if (cy) {
+                cy.elements().unselect();
+                if (id) {
+                    const el = cy.getElementById(id);
+                    if (el && el.length && !el.empty()) el.select();
+                }
+                applySelectionContext(cy);
+            }
+            renderInspector();
+            return selectedEdgeId;
+        }
+
+        function clearGraphSelection() {
+            selectedId = '';
+            selectedEdgeId = '';
+            hoverEdgeId = '';
+            const cy = liveCy;
+            if (cy) {
+                cy.elements().unselect();
+                applySelectionContext(cy);
+            }
+            renderInspector();
+        }
+
+        function inspectorClick(ev) {
             const t = ev.target;
             if (!t || !t.closest) return;
             const hit = t.closest('[data-graph-node]');
@@ -956,7 +893,7 @@
                 chooseFindHit(hit.getAttribute('data-graph-node'));
                 return;
             }
-            if (t.id === 'prks-graph-open' || (t.closest && t.closest('#prks-graph-open'))) {
+            if (t.id === 'prks-graph-open' || t.closest('#prks-graph-open')) {
                 ev.preventDefault();
                 openSelectedRecord(selectedId);
                 return;
@@ -965,380 +902,662 @@
             if (openBtn) {
                 ev.preventDefault();
                 openSelectedRecord(openBtn.getAttribute('data-graph-open'));
-                return;
             }
-            if (t.id === 'prks-graph-fit') {
-                if (liveCy) liveCy.fit(undefined, 40);
-                return;
-            }
-            if (t.id === 'prks-graph-reset') {
-                rerunLayout();
-                return;
-            }
-        });
-        const findInput = liveDom.querySelector('#prks-graph-find');
-        if (findInput) {
-            findInput.addEventListener('input', function () {
-                runFind(findInput.value);
-            });
-            findInput.addEventListener('keydown', function (ev) {
-                if (ev.key === 'ArrowDown') {
-                    ev.preventDefault();
-                    if (findHits.length) {
-                        findIndex = Math.min(findHits.length - 1, findIndex + 1);
-                        renderFindResults();
-                    }
-                } else if (ev.key === 'ArrowUp') {
-                    ev.preventDefault();
-                    if (findHits.length) {
-                        findIndex = Math.max(0, findIndex - 1);
-                        renderFindResults();
-                    }
-                } else if (ev.key === 'Enter') {
-                    ev.preventDefault();
-                    if (findIndex >= 0 && findHits[findIndex]) chooseFindHit(findHits[findIndex].id);
-                } else if (ev.key === 'Escape') {
-                    findInput.value = '';
-                    runFind('');
-                }
+        }
+
+        function ensureInspectorBound(el) {
+            if (!el || typeof el.addEventListener !== 'function') return;
+            if (el.getAttribute && el.getAttribute('data-graph-inspector-bound') === '1') return;
+            if (el.setAttribute) el.setAttribute('data-graph-inspector-bound', '1');
+            listen(el, 'click', inspectorClick);
+            unbinders.push(function () {
+                if (el.removeAttribute) el.removeAttribute('data-graph-inspector-bound');
             });
         }
-        liveDom.querySelectorAll('[data-graph-filter]').forEach(function (el) {
-            el.addEventListener('change', function () {
-                const key = el.getAttribute('data-graph-filter');
-                if (!key) return;
-                if (key === 'people') {
-                    void reloadGraph(!!el.checked);
+
+        function paintInspector(html) {
+            const el = inspectorEl(liveDom);
+            if (!el) return;
+            el.innerHTML = html;
+            ensureInspectorBound(el);
+        }
+
+        function renderInspector() {
+            const edgeModel = selectedEdgeId ? inspectorEdgeModel(snapshot, selectedEdgeId) : null;
+            const model = !edgeModel ? inspectorModel(snapshot, selectedId) : null;
+            let html = '';
+            if (statusMessage) {
+                html += '<p class="prks-inline-message" role="status">' + esc(statusMessage) + '</p>';
+            }
+            if (edgeModel) {
+                html +=
+                    '<div class="doc-meta-card">' +
+                    '<p class="saved-view-detail__kicker">' +
+                    esc(edgeModel.kicker) +
+                    '</p><p class="card-title" id="prks-graph-inspector-title">' +
+                    esc(edgeModel.relation) +
+                    '</p>' +
+                    '<p class="meta-row meta-row--compact research-graph__edge-ends">' +
+                    '<span class="research-graph__edge-end">' +
+                    esc(edgeModel.source ? edgeModel.source.label : '') +
+                    '</span>' +
+                    '<span class="research-graph__edge-arrow" aria-hidden="true"> → </span>' +
+                    '<span class="research-graph__edge-end">' +
+                    esc(edgeModel.target ? edgeModel.target.label : '') +
+                    '</span></p>' +
+                    inspectorStatsHtml(edgeModel.stats) +
+                    '<div class="research-graph__inspector-actions">';
+                if (edgeModel.source) {
+                    html +=
+                        '<button type="button" class="prks-btn prks-btn--secondary" data-graph-open="' +
+                        esc(edgeModel.source.id) +
+                        '">' +
+                        esc(edgeModel.openSourceLabel) +
+                        '</button>';
+                }
+                if (edgeModel.target) {
+                    html +=
+                        '<button type="button" class="prks-btn prks-btn--secondary" data-graph-open="' +
+                        esc(edgeModel.target.id) +
+                        '">' +
+                        esc(edgeModel.openTargetLabel) +
+                        '</button>';
+                }
+                html += '</div></div>';
+                paintInspector(html);
+                return edgeModel;
+            }
+            if (!model) {
+                html +=
+                    '<div class="doc-meta-card">' +
+                    '<p class="saved-view-detail__kicker">Selection</p>' +
+                    '<p class="meta-row">Select a node or edge. Relationships stay on the canvas as highlights, not mass labels.</p>' +
+                    '</div>';
+                paintInspector(html);
+                return model;
+            }
+            html +=
+                '<div class="doc-meta-card">' +
+                '<p class="saved-view-detail__kicker">' +
+                esc(model.typeLabel) +
+                '</p><p class="card-title" id="prks-graph-inspector-title">' +
+                esc(model.label) +
+                '</p>' +
+                inspectorStatsHtml(model.stats) +
+                '<div class="research-graph__inspector-actions">' +
+                '<button type="button" class="prks-btn prks-btn--primary" id="prks-graph-open">' +
+                esc(model.openLabel) +
+                '</button></div>';
+            for (let g = 0; g < model.lists.length; g++) {
+                const list = model.lists[g];
+                html +=
+                    '<p class="person-sidebar__section-label">' +
+                    esc(list.title) +
+                    '</p><div class="research-graph__neighbors">';
+                for (let j = 0; j < list.items.length; j++) {
+                    html += inspectorNeighborHtml(list.items[j]);
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+            paintInspector(html);
+            return model;
+        }
+
+        function renderFindResults() {
+            if (!liveDom) return;
+            const box = queryRole('graph-find-results');
+            if (!box) return;
+            if (!findQuery || !findHits.length) {
+                box.innerHTML = findQuery ? '<p class="meta-row">No matching nodes.</p>' : '';
+                box.hidden = !findQuery;
+                return;
+            }
+            box.hidden = false;
+            box.innerHTML = findHits
+                .map(function (n, i) {
+                    return (
+                        '<button type="button" class="prks-list-row research-graph__find-hit' +
+                        (i === findIndex ? ' is-active' : '') +
+                        '" role="option" aria-selected="' +
+                        (i === findIndex ? 'true' : 'false') +
+                        '" data-graph-node="' +
+                        esc(n.id) +
+                        '">' +
+                        esc(n.label) +
+                        ' <span class="meta-row">' +
+                        esc(typeLabel(n)) +
+                        '</span></button>'
+                    );
+                })
+                .join('');
+        }
+
+        function runFind(query) {
+            findQuery = String(query || '');
+            findHits = findNodesByLabel(snapshot, findQuery);
+            findIndex = findHits.length ? 0 : -1;
+            renderFindResults();
+            return findHits;
+        }
+
+        function chooseFindHit(id) {
+            const vis = visibleGraph(snapshot, filters);
+            const allowed = vis.nodes.some(function (n) {
+                return n.id === id;
+            });
+            if (!allowed) {
+                statusMessage = 'That node is hidden by the current filters.';
+                renderInspector();
+                return;
+            }
+            statusMessage = '';
+            selectNode(id);
+        }
+
+        function openSelectedRecord(nodeOrId) {
+            const node = typeof nodeOrId === 'string' ? nodeById(snapshot, nodeOrId) : nodeOrId;
+            return navigateToNode(node);
+        }
+
+        function fit() {
+            if (liveCy) liveCy.fit(undefined, 40);
+        }
+
+        function rerunLayout() {
+            if (!liveCy) return;
+            const layout = liveCy.layout(coseLayoutOptions(true));
+            layout.run();
+        }
+
+        function bindShell(host) {
+            liveDom = host && host.querySelector ? host.querySelector('.research-graph') : null;
+            if (!liveDom) return;
+            listen(liveDom, 'click', function (ev) {
+                const t = ev.target;
+                if (!t || !t.closest) return;
+                const hit = t.closest('[data-graph-node]');
+                if (hit) {
+                    ev.preventDefault();
+                    chooseFindHit(hit.getAttribute('data-graph-node'));
                     return;
                 }
-                filters[key] = !!el.checked;
-                applyGraphFilters(liveCy, snapshot, filters);
-                if (selectedId) {
-                    const vis = visibleGraph(snapshot, filters);
-                    const still = vis.nodes.some(function (n) {
-                        return n.id === selectedId;
-                    });
-                    if (!still) {
-                        selectedId = '';
-                        selectedEdgeId = '';
-                        if (liveCy) liveCy.elements().unselect();
-                        applySelectionContext(liveCy);
-                        renderInspector();
-                    } else {
-                        applySelectionContext(liveCy);
-                    }
-                } else if (selectedEdgeId) {
-                    applySelectionContext(liveCy);
+                if (t.id === 'prks-graph-open' || (t.closest && t.closest('#prks-graph-open'))) {
+                    ev.preventDefault();
+                    openSelectedRecord(selectedId);
+                    return;
+                }
+                const openBtn = t.closest('[data-graph-open]');
+                if (openBtn) {
+                    ev.preventDefault();
+                    openSelectedRecord(openBtn.getAttribute('data-graph-open'));
+                    return;
+                }
+                if (t.closest('[data-prks-role="graph-fit"]')) {
+                    fit();
+                    return;
+                }
+                if (t.closest('[data-prks-role="graph-reset"]')) {
+                    rerunLayout();
                 }
             });
-        });
-    }
-
-    function shellHtml(opts) {
-        const derivedOff = opts && opts.derivedOff;
-        const tooLarge = opts && opts.tooLarge;
-        const loadError = opts && opts.loadError;
-        function chk(key, label, on) {
-            return (
-                '<label class="prks-filter-toggle"><input type="checkbox" data-graph-filter="' +
-                key +
-                '"' +
-                (on ? ' checked' : '') +
-                '> <span>' +
-                esc(label) +
-                '</span></label>'
-            );
-        }
-        let body = '';
-        if (tooLarge) {
-            body =
-                '<p class="prks-inline-message" role="status">This graph is too large to render as a single snapshot.</p>';
-        } else if (loadError) {
-            body = '<p class="prks-inline-message" role="status">Could not load Research Graph.</p>';
-        } else {
-            body =
-                '<div class="research-graph__stage">' +
-                '<div class="prks-panel research-graph__canvas-wrap"><div class="research-graph__canvas" id="prks-graph-canvas" role="img" aria-label="Research relationship graph"></div></div>' +
-                '</div>' +
-                (derivedOff
-                    ? '<p class="meta-row" role="status">Note-mention edges unavailable. Canonical relationships still shown.</p>'
-                    : '');
-        }
-        function legendIcon(name, kind) {
-            const icon = typeof root.prksIcon === 'function' ? root.prksIcon(name, { size: 'sm' }) : '';
-            return (
-                '<span class="research-graph__legend-icon research-graph__legend-icon--' +
-                kind +
-                '" aria-hidden="true">' +
-                icon +
-                '</span>'
-            );
-        }
-        return (
-            '<div class="research-graph">' +
-            '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2 class="prks-page-title">' +
-            (typeof root.prksPageHeaderIconHtml === 'function'
-                ? root.prksPageHeaderIconHtml('share-2')
-                : '') +
-            ' Research Graph</h2></div></div>' +
-            '<div class="prks-toolbar research-graph__toolbar">' +
-            '<label class="research-graph__find-label" for="prks-graph-find">Find node</label>' +
-            '<input id="prks-graph-find" class="prks-input" type="search" autocomplete="off" placeholder="Find node…">' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-graph-fit">Fit</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-graph-reset">Reset layout</button>' +
-            '</div>' +
-            '<div id="prks-graph-find-results" class="research-graph__find-results" role="listbox" hidden></div>' +
-            '<div class="research-graph__filters">' +
-            '<span class="research-graph__filter-group">Nodes</span>' +
-            chk('concepts', 'Concepts', filters.concepts) +
-            chk('positions', 'Positions', filters.positions) +
-            chk('arguments', 'Arguments', filters.arguments) +
-            chk('works', 'Works', filters.works) +
-            chk('people', 'People', includePeople) +
-            '</div>' +
-            '<div class="research-graph__filters">' +
-            '<span class="research-graph__filter-group">Relations</span>' +
-            chk('hierarchy', 'Hierarchy', filters.hierarchy) +
-            chk('responds', 'Responses', filters.responds) +
-            chk('sources', 'Sources', filters.sources) +
-            chk('mentions', 'Note mentions', filters.mentions) +
-            '</div>' +
-            '<div class="research-graph__legend" aria-label="Graph legend">' +
-            '<div class="research-graph__legend-group"><span class="research-graph__filter-group">Nodes</span>' +
-            '<ul>' +
-            '<li>' +
-            legendIcon('network', 'concept') +
-            ' Concept</li>' +
-            '<li>' +
-            legendIcon('flag', 'position') +
-            ' Position</li>' +
-            '<li>' +
-            legendIcon('messages-square', 'argument') +
-            ' Argument</li>' +
-            '<li>' +
-            legendIcon('messages-square', 'stance') +
-            ' Stance</li>' +
-            '<li>' +
-            legendIcon('file-text', 'work') +
-            ' Work</li>' +
-            '<li>' +
-            legendIcon('user', 'person') +
-            ' Person</li>' +
-            '</ul></div>' +
-            '<div class="research-graph__legend-group"><span class="research-graph__filter-group">Relations</span>' +
-            '<ul>' +
-            '<li><span class="research-graph__line research-graph__line--hierarchy"></span> Hierarchy</li>' +
-            '<li><span class="research-graph__line research-graph__line--responds"></span> Response</li>' +
-            '<li><span class="research-graph__line research-graph__line--source"></span> Source</li>' +
-            '<li><span class="research-graph__line research-graph__line--mentions"></span> Note mention</li>' +
-            '<li><span class="research-graph__line research-graph__line--author"></span> Author</li>' +
-            '</ul></div>' +
-            '</div>' +
-            body +
-            '</div>'
-        );
-    }
-
-    function coseLayoutOptions(randomize) {
-        return {
-            name: 'cose',
-            animate: false,
-            randomize: !!randomize,
-            fit: true,
-            padding: 48,
-            nodeDimensionsIncludeLabels: true,
-            componentSpacing: 100,
-            nodeOverlap: 10,
-            gravity: 0.35,
-            numIter: 1400,
-            nodeRepulsion: function () {
-                return 18000;
-            },
-            idealEdgeLength: function () {
-                return 150;
-            },
-        };
-    }
-
-    function rerunLayout() {
-        if (!liveCy) return;
-        const layout = liveCy.layout(coseLayoutOptions(true));
-        layout.run();
-    }
-
-    function applyFocusAfterLayout() {
-        const focus = pendingFocus;
-        pendingFocus = '';
-        if (!focus) {
-            renderInspector();
-            return;
-        }
-        const node = nodeById(snapshot, focus);
-        if (!node) {
-            statusMessage = 'Requested node is not present in this graph.';
-            renderInspector();
-            return;
-        }
-        statusMessage = '';
-        selectNode(focus);
-    }
-
-    function mountCytoscape(container) {
-        const canvas = container.querySelector('#prks-graph-canvas');
-        if (!canvas || typeof root.cytoscape !== 'function') return;
-        destroyResearchGraph();
-        liveDom = container.querySelector('.research-graph');
-        liveCy = root.cytoscape({
-            container: canvas,
-            elements: toCytoscapeElements(snapshot),
-            style: cytoscapeStyle(),
-            layout: { name: 'preset' },
-            wheelSensitivity: 0.35,
-            minZoom: 0.15,
-            maxZoom: 3,
-            boxSelectionEnabled: false,
-            autoungrabify: false,
-            autounselectify: false,
-        });
-        root.__prksResearchGraphLiveCount = 1;
-        root.__prksResearchGraphCy = liveCy;
-        liveCy.on('tap', 'node', function (evt) {
-            const id = evt.target.id();
-            selectNode(id, { center: false });
-        });
-        liveCy.on('tap', 'edge', function (evt) {
-            selectEdge(evt.target.id());
-        });
-        liveCy.on('tap', function (evt) {
-            if (evt.target === liveCy) {
-                clearGraphSelection();
+            const findInput = queryRole('graph-find');
+            if (findInput) {
+                listen(findInput, 'input', function () {
+                    runFind(findInput.value);
+                });
+                listen(findInput, 'keydown', function (ev) {
+                    if (ev.key === 'ArrowDown') {
+                        ev.preventDefault();
+                        if (findHits.length) {
+                            findIndex = Math.min(findHits.length - 1, findIndex + 1);
+                            renderFindResults();
+                        }
+                    } else if (ev.key === 'ArrowUp') {
+                        ev.preventDefault();
+                        if (findHits.length) {
+                            findIndex = Math.max(0, findIndex - 1);
+                            renderFindResults();
+                        }
+                    } else if (ev.key === 'Enter') {
+                        ev.preventDefault();
+                        if (findIndex >= 0 && findHits[findIndex]) chooseFindHit(findHits[findIndex].id);
+                    } else if (ev.key === 'Escape') {
+                        findInput.value = '';
+                        runFind('');
+                    }
+                });
             }
-        });
-        liveCy.on('mouseover', 'edge', function (evt) {
-            hoverEdgeId = evt.target.id();
-            updateEdgeLabels(liveCy);
-        });
-        liveCy.on('mouseout', 'edge', function () {
-            hoverEdgeId = '';
-            updateEdgeLabels(liveCy);
-        });
-        liveCy.on('dbltap', 'node', function (evt) {
-            openSelectedRecord(evt.target.id());
-        });
-        applyGraphFilters(liveCy, snapshot, filters);
-        pendingFocus = pendingFocus || '';
-        const layout = liveCy.layout(coseLayoutOptions(true));
-        layout.one('layoutstop', function () {
-            applyFocusAfterLayout();
-        });
-        layout.run();
-        if (!liveCy.nodes().length) applyFocusAfterLayout();
-    }
-
-    function syncPeopleCheckbox() {
-        if (!liveDom || !liveDom.querySelector) return;
-        const el = liveDom.querySelector('[data-graph-filter="people"]');
-        if (el) el.checked = !!includePeople;
-    }
-
-    function reloadGraphFailureMessage(err) {
-        if (err && err.code === 'graph_too_large') {
-            return 'Graph is too large to render as a single snapshot.';
-        }
-        return 'Could not load Research Graph.';
-    }
-
-    async function reloadGraph(nextPeople) {
-        if (!liveDom) return false;
-        const wantPeople = nextPeople === undefined ? includePeople : !!nextPeople;
-        const prevPeople = includePeople;
-        const keep = selectedId;
-        const originDom = liveDom;
-        const host = originDom.parentNode;
-        const gen = (reloadGeneration += 1);
-        try {
-            const data = await root.fetchResearchGraph({ people: wantPeople, signal: graphRouteSignal });
-            if (graphReloadIsStale(gen, originDom)) return false;
-            includePeople = wantPeople;
-            filters.people = wantPeople;
-            snapshot = data;
-            statusMessage = '';
-            if (keep && nodeById(snapshot, keep)) pendingFocus = keep;
-            else pendingFocus = '';
-            destroyResearchGraph();
-            if (!host) return false;
-            host.innerHTML = shellHtml({
-                derivedOff: data.meta && data.meta.derived_note_edges_available === false,
+            const filterRoot = liveDom.querySelectorAll ? liveDom : host;
+            const filterEls =
+                filterRoot && filterRoot.querySelectorAll
+                    ? filterRoot.querySelectorAll('[data-graph-filter]')
+                    : [];
+            Array.prototype.forEach.call(filterEls, function (el) {
+                listen(el, 'change', function () {
+                    const key = el.getAttribute('data-graph-filter');
+                    if (!key) return;
+                    if (key === 'people') {
+                        void reloadGraph(!!el.checked);
+                        return;
+                    }
+                    filters[key] = !!el.checked;
+                    applyGraphFilters(liveCy, snapshot, filters);
+                    if (selectedId) {
+                        const vis = visibleGraph(snapshot, filters);
+                        const still = vis.nodes.some(function (n) {
+                            return n.id === selectedId;
+                        });
+                        if (!still) {
+                            selectedId = '';
+                            selectedEdgeId = '';
+                            if (liveCy) liveCy.elements().unselect();
+                            applySelectionContext(liveCy);
+                            renderInspector();
+                        } else {
+                            applySelectionContext(liveCy);
+                        }
+                    } else if (selectedEdgeId) {
+                        applySelectionContext(liveCy);
+                    }
+                });
             });
+        }
+
+        function shellHtml(opts) {
+            const derivedOff = opts && opts.derivedOff;
+            const tooLarge = opts && opts.tooLarge;
+            const loadError = opts && opts.loadError;
+            function chk(key, label, on) {
+                return (
+                    '<label class="prks-filter-toggle"><input type="checkbox" data-graph-filter="' +
+                    key +
+                    '"' +
+                    (on ? ' checked' : '') +
+                    '> <span>' +
+                    esc(label) +
+                    '</span></label>'
+                );
+            }
+            let body = '';
+            if (tooLarge) {
+                body =
+                    '<p class="prks-inline-message" role="status">This graph is too large to render as a single snapshot.</p>';
+            } else if (loadError) {
+                body = '<p class="prks-inline-message" role="status">Could not load Research Graph.</p>';
+            } else {
+                body =
+                    '<div class="research-graph__stage">' +
+                    '<div class="prks-panel research-graph__canvas-wrap"><div class="research-graph__canvas" data-prks-role="graph-canvas" role="img" aria-label="Research relationship graph"></div></div>' +
+                    '</div>' +
+                    (derivedOff
+                        ? '<p class="meta-row" role="status">Note-mention edges unavailable. Canonical relationships still shown.</p>'
+                        : '');
+            }
+            function legendIcon(name, kind) {
+                const icon = typeof root.prksIcon === 'function' ? root.prksIcon(name, { size: 'sm' }) : '';
+                return (
+                    '<span class="research-graph__legend-icon research-graph__legend-icon--' +
+                    kind +
+                    '" aria-hidden="true">' +
+                    icon +
+                    '</span>'
+                );
+            }
+            const findId = chromeId('graph-find');
+            const resultsId = chromeId('graph-find-results');
+            return (
+                '<div class="research-graph">' +
+                '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2 class="prks-page-title">' +
+                (typeof root.prksPageHeaderIconHtml === 'function'
+                    ? root.prksPageHeaderIconHtml('share-2')
+                    : '') +
+                ' Research Graph</h2></div></div>' +
+                '<div class="prks-toolbar research-graph__toolbar">' +
+                '<label class="research-graph__find-label"' +
+                (findId ? ' for="' + esc(findId) + '"' : '') +
+                '>Find node</label>' +
+                '<input' +
+                (findId ? ' id="' + esc(findId) + '"' : '') +
+                ' class="prks-input" type="search" autocomplete="off" placeholder="Find node…" data-prks-role="graph-find"' +
+                (resultsId ? ' aria-controls="' + esc(resultsId) + '"' : '') +
+                '>' +
+                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-fit">Fit</button>' +
+                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-reset">Reset layout</button>' +
+                '</div>' +
+                '<div' +
+                (resultsId ? ' id="' + esc(resultsId) + '"' : '') +
+                ' class="research-graph__find-results" role="listbox" hidden data-prks-role="graph-find-results"></div>' +
+                '<div class="research-graph__filters">' +
+                '<span class="research-graph__filter-group">Nodes</span>' +
+                chk('concepts', 'Concepts', filters.concepts) +
+                chk('positions', 'Positions', filters.positions) +
+                chk('arguments', 'Arguments', filters.arguments) +
+                chk('works', 'Works', filters.works) +
+                chk('people', 'People', includePeople) +
+                '</div>' +
+                '<div class="research-graph__filters">' +
+                '<span class="research-graph__filter-group">Relations</span>' +
+                chk('hierarchy', 'Hierarchy', filters.hierarchy) +
+                chk('responds', 'Responses', filters.responds) +
+                chk('sources', 'Sources', filters.sources) +
+                chk('mentions', 'Note mentions', filters.mentions) +
+                '</div>' +
+                '<div class="research-graph__legend" aria-label="Graph legend">' +
+                '<div class="research-graph__legend-group"><span class="research-graph__filter-group">Nodes</span>' +
+                '<ul>' +
+                '<li>' +
+                legendIcon('network', 'concept') +
+                ' Concept</li>' +
+                '<li>' +
+                legendIcon('flag', 'position') +
+                ' Position</li>' +
+                '<li>' +
+                legendIcon('messages-square', 'argument') +
+                ' Argument</li>' +
+                '<li>' +
+                legendIcon('messages-square', 'stance') +
+                ' Stance</li>' +
+                '<li>' +
+                legendIcon('file-text', 'work') +
+                ' Work</li>' +
+                '<li>' +
+                legendIcon('user', 'person') +
+                ' Person</li>' +
+                '</ul></div>' +
+                '<div class="research-graph__legend-group"><span class="research-graph__filter-group">Relations</span>' +
+                '<ul>' +
+                '<li><span class="research-graph__line research-graph__line--hierarchy"></span> Hierarchy</li>' +
+                '<li><span class="research-graph__line research-graph__line--responds"></span> Response</li>' +
+                '<li><span class="research-graph__line research-graph__line--source"></span> Source</li>' +
+                '<li><span class="research-graph__line research-graph__line--mentions"></span> Note mention</li>' +
+                '<li><span class="research-graph__line research-graph__line--author"></span> Author</li>' +
+                '</ul></div>' +
+                '</div>' +
+                body +
+                '</div>'
+            );
+        }
+
+        function applyFocusAfterLayout() {
+            const focus = pendingFocus;
+            pendingFocus = '';
+            if (!focus) {
+                renderInspector();
+                return;
+            }
+            const node = nodeById(snapshot, focus);
+            if (!node) {
+                statusMessage = 'Requested node is not present in this graph.';
+                renderInspector();
+                return;
+            }
+            statusMessage = '';
+            selectNode(focus);
+        }
+
+        function mountCytoscape(host) {
+            const canvas = queryGraphRole(host, 'graph-canvas') || queryRole('graph-canvas');
+            if (!canvas || typeof root.cytoscape !== 'function') return;
+            teardownCy();
+            liveDom = host && host.querySelector ? host.querySelector('.research-graph') : liveDom;
+            liveCy = root.cytoscape({
+                container: canvas,
+                elements: toCytoscapeElements(snapshot),
+                style: cytoscapeStyle(),
+                layout: { name: 'preset' },
+                wheelSensitivity: 0.35,
+                minZoom: 0.15,
+                maxZoom: 3,
+                boxSelectionEnabled: false,
+                autoungrabify: false,
+                autounselectify: false,
+            });
+            root.__prksResearchGraphLiveCount = 1;
+            liveCy.on('tap', 'node', function (evt) {
+                const id = evt.target.id();
+                selectNode(id, { center: false });
+            });
+            liveCy.on('tap', 'edge', function (evt) {
+                selectEdge(evt.target.id());
+            });
+            liveCy.on('tap', function (evt) {
+                if (evt.target === liveCy) {
+                    clearGraphSelection();
+                }
+            });
+            liveCy.on('mouseover', 'edge', function (evt) {
+                hoverEdgeId = evt.target.id();
+                updateEdgeLabels(liveCy);
+            });
+            liveCy.on('mouseout', 'edge', function () {
+                hoverEdgeId = '';
+                updateEdgeLabels(liveCy);
+            });
+            liveCy.on('dbltap', 'node', function (evt) {
+                openSelectedRecord(evt.target.id());
+            });
+            applyGraphFilters(liveCy, snapshot, filters);
+            pendingFocus = pendingFocus || '';
+            const layout = liveCy.layout(coseLayoutOptions(true));
+            layout.one('layoutstop', function () {
+                applyFocusAfterLayout();
+            });
+            layout.run();
+            if (!liveCy.nodes().length) applyFocusAfterLayout();
+        }
+
+        function syncPeopleCheckbox() {
+            const el = queryRole('graph-filter-people') || (liveDom && liveDom.querySelector
+                ? liveDom.querySelector('[data-graph-filter="people"]')
+                : null);
+            if (el) el.checked = !!includePeople;
+        }
+
+        function refreshHost(host, htmlOpts) {
+            if (!host) return;
+            unbindAll();
+            host.innerHTML = shellHtml(htmlOpts || {});
             bindShell(host);
             syncPeopleCheckbox();
-            mountCytoscape(host);
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
-            return true;
-        } catch (e) {
-            if (graphReloadIsStale(gen, originDom)) return false;
-            if (typeof root.prksIsAbortError === 'function' && root.prksIsAbortError(e)) return false;
-            includePeople = prevPeople;
-            filters.people = prevPeople;
-            syncPeopleCheckbox();
-            statusMessage = reloadGraphFailureMessage(e);
-            renderInspector();
-            return false;
+        }
+
+        async function reloadGraph(nextPeople) {
+            if (destroyed || !liveDom) return false;
+            const wantPeople = nextPeople === undefined ? includePeople : !!nextPeople;
+            const prevPeople = includePeople;
+            const keep = selectedId;
+            const originDom = liveDom;
+            const host = originDom.parentNode;
+            const gen = (reloadGeneration += 1);
+            try {
+                const data = await root.fetchResearchGraph({ people: wantPeople, signal: graphRouteSignal });
+                if (graphReloadIsStale(gen, originDom)) return false;
+                includePeople = wantPeople;
+                filters.people = wantPeople;
+                snapshot = data;
+                statusMessage = '';
+                if (keep && nodeById(snapshot, keep)) pendingFocus = keep;
+                else pendingFocus = '';
+                teardownCy();
+                unbindAll();
+                liveDom = null;
+                if (!host) return false;
+                host.innerHTML = shellHtml({
+                    derivedOff: data.meta && data.meta.derived_note_edges_available === false,
+                });
+                bindShell(host);
+                syncPeopleCheckbox();
+                mountCytoscape(host);
+                if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
+                return true;
+            } catch (e) {
+                if (graphReloadIsStale(gen, originDom)) return false;
+                if (typeof root.prksIsAbortError === 'function' && root.prksIsAbortError(e)) return false;
+                includePeople = prevPeople;
+                filters.people = prevPeople;
+                syncPeopleCheckbox();
+                statusMessage = reloadGraphFailureMessage(e);
+                renderInspector();
+                return false;
+            }
+        }
+
+        async function start() {
+            if (destroyed) return;
+            const focus = String(options.focus || '');
+            includePeople = peopleRequiredForFocus(focus);
+            filters = Object.assign({}, DEFAULT_FILTERS);
+            filters.people = includePeople;
+            pendingFocus = focus;
+            statusMessage = '';
+            selectedId = '';
+            selectedEdgeId = '';
+            hoverEdgeId = '';
+            findQuery = '';
+            findHits = [];
+            findIndex = -1;
+            graphRouteSignal = options.signal || graphRouteSignal;
+            if (!container) return;
+            const gen = (reloadGeneration += 1);
+            const originHost = container;
+            container.innerHTML = shellHtml({});
+            bindShell(container);
+            try {
+                const data = await (typeof root.fetchResearchGraph === 'function'
+                    ? root.fetchResearchGraph({ people: includePeople, signal: options.signal })
+                    : Promise.resolve({ nodes: [], edges: [], meta: {} }));
+                if (destroyed || gen !== reloadGeneration) return;
+                if (options.stale && options.stale()) return;
+                snapshot = data;
+                refreshHost(originHost, {
+                    derivedOff: data.meta && data.meta.derived_note_edges_available === false,
+                });
+                mountCytoscape(originHost);
+            } catch (e) {
+                if (destroyed || gen !== reloadGeneration) return;
+                if (options.stale && options.stale()) return;
+                if (typeof root.prksIsAbortError === 'function' && root.prksIsAbortError(e)) return;
+                const tooLarge = e && e.code === 'graph_too_large';
+                refreshHost(originHost, { tooLarge: tooLarge, loadError: !tooLarge });
+            }
+        }
+
+        const runtime = {
+            start: start,
+            reload: reloadGraph,
+            fit: fit,
+            resetLayout: rerunLayout,
+            destroy: destroy,
+            debug: debug,
+            selectNode: selectNode,
+            selectEdge: selectEdge,
+            clearSelection: clearGraphSelection,
+            renderInspector: renderInspector,
+            openSelectedRecord: openSelectedRecord,
+            getSelectedId: function () {
+                return selectedId;
+            },
+            getSelectedEdgeId: function () {
+                return selectedEdgeId;
+            },
+        };
+        return runtime;
+    }
+
+    function renderResearchGraph(container, opts) {
+        const options = opts || {};
+        const ctx = resolveGraphCtx(options);
+        if (container && container.__prksGraphRuntime && typeof container.__prksGraphRuntime.destroy === 'function') {
+            container.__prksGraphRuntime.destroy();
+        }
+        const runtime = createResearchGraphRuntime(ctx, container, options);
+        if (ctx && typeof ctx.setResource === 'function') {
+            ctx.setResource('researchGraph', runtime, function () {
+                runtime.destroy();
+            });
+        }
+        if (container) container.__prksGraphRuntime = runtime;
+        activeRuntime = runtime;
+        return runtime.start();
+    }
+
+    function destroyResearchGraph(container) {
+        if (container && container.__prksGraphRuntime && typeof container.__prksGraphRuntime.destroy === 'function') {
+            container.__prksGraphRuntime.destroy();
+            return;
+        }
+        const ctx = typeof root.prksGetFocusedTabContext === 'function' ? root.prksGetFocusedTabContext() : null;
+        if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('researchGraph')) {
+            if (typeof ctx.clearResource === 'function') ctx.clearResource('researchGraph');
+            else ctx.getResource('researchGraph').destroy();
+            return;
+        }
+        if (activeRuntime && typeof activeRuntime.destroy === 'function') {
+            activeRuntime.destroy();
         }
     }
 
-    async function renderResearchGraph(container, opts) {
-        destroyResearchGraph();
-        const options = opts || {};
-        graphRouteSignal = options.signal || null;
-        const focus = String(options.focus || '');
-        includePeople = peopleRequiredForFocus(focus);
-        filters = Object.assign({}, DEFAULT_FILTERS);
-        filters.people = includePeople;
-        pendingFocus = focus;
-        statusMessage = '';
-        selectedId = '';
-        selectedEdgeId = '';
-        hoverEdgeId = '';
-        findQuery = '';
-        findHits = [];
-        findIndex = -1;
-        if (!container) return;
-        container.innerHTML = shellHtml({});
-        try {
-            const data = await (typeof root.fetchResearchGraph === 'function'
-                ? root.fetchResearchGraph({ people: includePeople, signal: options.signal })
-                : Promise.resolve({ nodes: [], edges: [], meta: {} }));
-            if (options.stale && options.stale()) return;
-            snapshot = data;
-            container.innerHTML = shellHtml({
-                derivedOff: data.meta && data.meta.derived_note_edges_available === false,
-            });
-            bindShell(container);
-            syncPeopleCheckbox();
-            mountCytoscape(container);
-            if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
-        } catch (e) {
-            if (options.stale && options.stale()) return;
-            if (typeof root.prksIsAbortError === 'function' && root.prksIsAbortError(e)) return;
-            const tooLarge = e && e.code === 'graph_too_large';
-            container.innerHTML = shellHtml({ tooLarge: tooLarge, loadError: !tooLarge });
-            bindShell(container);
-            syncPeopleCheckbox();
-            if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
-        }
+    function prksGetResearchGraphDebug(tabId) {
+        const ctx = tabId && root.prksGetTabContext
+            ? root.prksGetTabContext(tabId)
+            : root.prksGetFocusedTabContext && root.prksGetFocusedTabContext();
+        const rt = ctx && ctx.getResource && ctx.getResource('researchGraph');
+        if (rt && rt.debug) return rt.debug();
+        return null;
+    }
+
+    function openSelectedRecord(nodeOrId) {
+        if (typeof nodeOrId !== 'string') return navigateToNode(nodeOrId);
+        const rt = resolveActiveRuntime();
+        if (rt && typeof rt.openSelectedRecord === 'function') return rt.openSelectedRecord(nodeOrId);
+        return false;
+    }
+
+    function reloadGraph(nextPeople) {
+        const rt = resolveActiveRuntime();
+        if (rt && typeof rt.reload === 'function') return rt.reload(nextPeople);
+        return Promise.resolve(false);
+    }
+
+    function selectGraphNode(id, opts) {
+        const rt = resolveActiveRuntime();
+        if (rt && typeof rt.selectNode === 'function') return rt.selectNode(id, opts);
+        return '';
+    }
+
+    function selectGraphEdge(id) {
+        const rt = resolveActiveRuntime();
+        if (rt && typeof rt.selectEdge === 'function') return rt.selectEdge(id);
+        return '';
+    }
+
+    function clearGraphSelection() {
+        const rt = resolveActiveRuntime();
+        if (rt && typeof rt.clearSelection === 'function') return rt.clearSelection();
+    }
+
+    function renderGraphInspector() {
+        const rt = resolveActiveRuntime();
+        if (rt && typeof rt.renderInspector === 'function') return rt.renderInspector();
+        return null;
     }
 
     const api = {
         renderResearchGraph: renderResearchGraph,
         destroyResearchGraph: destroyResearchGraph,
+        createResearchGraphRuntime: createResearchGraphRuntime,
+        prksGetResearchGraphDebug: prksGetResearchGraphDebug,
         reloadGraph: reloadGraph,
         peopleRequiredForFocus: peopleRequiredForFocus,
         getSelectedGraphNodeId: function () {
-            return selectedId;
+            const rt = resolveActiveRuntime();
+            return rt && typeof rt.getSelectedId === 'function' ? rt.getSelectedId() : '';
         },
         getSelectedGraphEdgeId: function () {
-            return selectedEdgeId;
+            const rt = resolveActiveRuntime();
+            return rt && typeof rt.getSelectedEdgeId === 'function' ? rt.getSelectedEdgeId() : '';
         },
         toCytoscapeElements: toCytoscapeElements,
         displayLabelForEdge: displayLabelForEdge,
@@ -1356,10 +1575,10 @@
         inspectorModel: inspectorModel,
         neighborGroups: neighborGroups,
         openSelectedRecord: openSelectedRecord,
-        selectGraphNode: selectNode,
-        selectGraphEdge: selectEdge,
+        selectGraphNode: selectGraphNode,
+        selectGraphEdge: selectGraphEdge,
         clearGraphSelection: clearGraphSelection,
-        renderGraphInspector: renderInspector,
+        renderGraphInspector: renderGraphInspector,
         defaultGraphFilters: function () {
             return Object.assign({}, DEFAULT_FILTERS);
         },

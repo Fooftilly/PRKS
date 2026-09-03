@@ -1765,7 +1765,21 @@ async function handleRoute(options) {
             }
             case 'research-graph': {
                 if (typeof renderResearchGraph === 'function') {
+                    let graphCtx =
+                        typeof window.prksGetFocusedTabContext === 'function'
+                            ? window.prksGetFocusedTabContext()
+                            : null;
+                    if (
+                        !graphCtx &&
+                        typeof window.prksWorkspaceSnapshot === 'function' &&
+                        typeof window.prksEnsureTabContext === 'function'
+                    ) {
+                        const snap = window.prksWorkspaceSnapshot();
+                        const tabId = snap && (snap.focusedTabId || snap.mainTabId);
+                        if (tabId) graphCtx = window.prksEnsureTabContext(tabId);
+                    }
                     await renderResearchGraph(contentDiv, {
+                        ctx: graphCtx,
                         focus: route.params.focus || '',
                         routeGen: routeGen,
                         stale: stale,
