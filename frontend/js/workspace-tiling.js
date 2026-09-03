@@ -283,10 +283,13 @@
         if (!canvas) return;
         const narrow = canvas.clientWidth > 0 && canvas.clientWidth < NARROW_PX;
         if (lastNarrow === narrow) return;
-        lastNarrow = narrow;
-        if (typeof root.prksWorkspaceSetNarrowFallback === 'function') {
-            root.prksWorkspaceSetNarrowFallback(narrow);
+        if (typeof root.prksWorkspaceSetNarrowFallback !== 'function') {
+            lastNarrow = narrow;
+            return;
         }
+        Promise.resolve(root.prksWorkspaceSetNarrowFallback(narrow)).then(function (ok) {
+            if (ok !== false) lastNarrow = narrow;
+        });
     }
 
     function watchCanvas(canvas) {

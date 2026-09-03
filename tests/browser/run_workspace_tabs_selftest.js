@@ -77,17 +77,46 @@ function makeHistory(initialHash) {
         stats: function () {
             return { pushes: pushes, replaces: replaces, index: index, length: entries.length };
         },
+        back: function () {
+            if (index <= 0) return false;
+            index -= 1;
+            hash = entries[index].hash;
+            href = entries[index].href;
+            state = entries[index].state == null ? null : jsonClone(entries[index].state);
+            return true;
+        },
+        forward: function () {
+            if (index >= entries.length - 1) return false;
+            index += 1;
+            hash = entries[index].hash;
+            href = entries[index].href;
+            state = entries[index].state == null ? null : jsonClone(entries[index].state);
+            return true;
+        },
         entries: entries,
     };
+}
+
+function fingerprint(h) {
+    return JSON.stringify({
+        snap: h.ws.snapshot(),
+        hash: h.hist.getHash(),
+        stats: h.hist.stats(),
+        renders: h.renders.length,
+    });
 }
 
 function makeHarness(opts) {
     opts = opts || {};
     const hist = makeHistory(opts.hash || '#/folders');
     const renders = [];
+    const published = [];
+    const life = { mount: [], park: [], destroy: [] };
+    const mounted = Object.create(null);
     let canLeave = true;
     let canLeaveCalls = 0;
     let lastLeaveTabId = null;
+    let lastLeaveHash = null;
     let titleGenOk = null;
     const ws = createPrksWorkspaceTabs({
         parseRoute: nav.prksParseRoute,
@@ -96,9 +125,10 @@ function makeHarness(opts) {
         homeHash: '#/folders',
         historyAdapter: hist,
         supportsTile: nav.prksRouteSupportsTile,
-        canLeave: function (tabId) {
+        canLeave: function (tabId, nextHash) {
             canLeaveCalls += 1;
             lastLeaveTabId = tabId || null;
+            lastLeaveHash = nextHash || null;
             return canLeave;
         },
         isRouteGenCurrent: function (g) {
@@ -109,12 +139,35 @@ function makeHarness(opts) {
             renders.push(options || {});
         },
         announce: function () {},
+        publishMainShell: function (tabId, title) {
+            published.push({ tabId: tabId, title: title || '' });
+        },
+        onMountContext: function (tabId) {
+            life.mount.push(tabId);
+            mounted[tabId] = true;
+        },
+        onParkContext: function (tabId) {
+            life.park.push(tabId);
+            delete mounted[tabId];
+        },
+        onDestroyContext: function (tabId) {
+            life.destroy.push(tabId);
+            delete mounted[tabId];
+        },
     });
     ws.bootstrap(opts.hash || '#/folders');
     return {
         ws: ws,
         hist: hist,
         renders: renders,
+        published: published,
+        life: life,
+        mountedCount: function () {
+            return Object.keys(mounted).length;
+        },
+        isMounted: function (tabId) {
+            return !!mounted[tabId];
+        },
         setCanLeave: function (v) {
             canLeave = v;
         },
@@ -126,6 +179,9 @@ function makeHarness(opts) {
         },
         lastLeaveTabId: function () {
             return lastLeaveTabId;
+        },
+        lastLeaveHash: function () {
+            return lastLeaveHash;
         },
     };
 }
@@ -567,12 +623,177 @@ async function run() {
     const unsupB = unsup.ws.snapshot().secondaryTree.tabId;
     const unsupA = unsup.ws.snapshot().mainTabId;
     const unsupPushes = unsup.hist.stats().pushes;
+    const unsupLeave0 = unsup.canLeaveCalls();
     await unsup.ws.navigate('#/folders', { target: 'current', tabId: unsupB });
     const snapUnsup = unsup.ws.snapshot();
     assertEq('unsupported B is main', snapUnsup.mainTabId, unsupB);
     assertEq('unsupported A is secondary', snapUnsup.secondaryTree && snapUnsup.secondaryTree.tabId, unsupA);
     assertEq('unsupported url folders', unsup.hist.getHash(), '#/folders');
     assert('unsupported pushed', unsup.hist.stats().pushes > unsupPushes);
+    assertEq('unsupported one leave', unsup.canLeaveCalls(), unsupLeave0 + 1);
+    assertEq('unsupported leave tab B', unsup.lastLeaveTabId(), unsupB);
+
+    const unsupDeny = makeHarness({ hash: '#/works/WA' });
+    await unsupDeny.ws.navigate('#/people/P1', { target: 'tile' });
+    const denyBefore = fingerprint(unsupDeny);
+    const denyLeave0 = unsupDeny.canLeaveCalls();
+    const denyB = unsupDeny.ws.snapshot().secondaryTree.tabId;
+    unsupDeny.setCanLeave(false);
+    const denyResult = await unsupDeny.ws.navigate('#/folders', {
+        target: 'current',
+        tabId: denyB,
+    });
+    assertEq('unsupported deny result', denyResult, false);
+    assertEq('unsupported deny fingerprint', fingerprint(unsupDeny), denyBefore);
+    assertEq('unsupported deny one leave', unsupDeny.canLeaveCalls(), denyLeave0 + 1);
+    assertEq('unsupported deny leave B', unsupDeny.lastLeaveTabId(), denyB);
+
+    const titleSwap = makeHarness({ hash: '#/works/WA' });
+    await titleSwap.ws.navigate('#/works/WB', { target: 'tile' });
+    const titleB = titleSwap.ws.snapshot().secondaryTree.tabId;
+    const titleA = titleSwap.ws.snapshot().mainTabId;
+    titleSwap.ws.setResolvedTitleForTab(titleB, '#/works/WB', 'Work B Title');
+    titleSwap.ws.setResolvedTitleForTab(titleA, '#/works/WA', 'Work A Title');
+    const pub0 = titleSwap.published.length;
+    const titleRenders = titleSwap.renders.length;
+    titleSwap.ws.makeMain(titleB);
+    assert('makeMain published title', titleSwap.published.length > pub0);
+    assertEq(
+        'makeMain shell title',
+        titleSwap.published[titleSwap.published.length - 1].title,
+        'Work B Title'
+    );
+    assertEq('makeMain shell tab', titleSwap.published[titleSwap.published.length - 1].tabId, titleB);
+    assertEq('makeMain still no render', titleSwap.renders.length, titleRenders);
+
+    const titleClose = makeHarness({ hash: '#/works/WA' });
+    await titleClose.ws.navigate('#/works/WB', { target: 'tile' });
+    const closeTitleB = titleClose.ws.snapshot().secondaryTree.tabId;
+    const closeTitleA = titleClose.ws.snapshot().mainTabId;
+    titleClose.ws.setResolvedTitleForTab(closeTitleB, '#/works/WB', 'Promoted Work B');
+    await titleClose.ws.closeTab(closeTitleA);
+    assertEq('close main shell title', titleClose.published[titleClose.published.length - 1].title, 'Promoted Work B');
+    assertEq('close main shell tab', titleClose.published[titleClose.published.length - 1].tabId, closeTitleB);
+
+    const popTile = makeHarness({ hash: '#/works/WA' });
+    await popTile.ws.navigate('#/works/WB', { target: 'tile' });
+    const popA = popTile.ws.snapshot().mainTabId;
+    const popB = popTile.ws.snapshot().secondaryTree.tabId;
+    popTile.hist.pushState(popTile.hist.getState(), popTile.hist.getHref());
+    popTile.ws.makeMain(popB);
+    assertEq('pop prep B main', popTile.ws.snapshot().mainTabId, popB);
+    const parkBeforeBack = popTile.life.park.length;
+    const destroyBeforeBack = popTile.life.destroy.length;
+    const mountBeforeBack = popTile.life.mount.length;
+    const leaveBeforeBack = popTile.canLeaveCalls();
+    const rendersBeforeBack = popTile.renders.length;
+    assert('hist back exists', popTile.hist.back() === true);
+    const backOk = await popTile.ws.handlePopState(popTile.hist.getState());
+    assert('tiled back ok', backOk === true);
+    const snapBack = popTile.ws.snapshot();
+    assertEq('back A main', snapBack.mainTabId, popA);
+    assertEq('back B secondary', snapBack.secondaryTree && snapBack.secondaryTree.tabId, popB);
+    assertEq('back url A', popTile.hist.getHash(), '#/works/WA');
+    assertEq('back mounted 2', popTile.mountedCount(), 2);
+    assert('back A mounted', popTile.isMounted(popA));
+    assert('back B mounted', popTile.isMounted(popB));
+    assertEq('back no park', popTile.life.park.length, parkBeforeBack);
+    assertEq('back no destroy', popTile.life.destroy.length, destroyBeforeBack);
+    assertEq('back no remount', popTile.life.mount.length, mountBeforeBack);
+    assertEq('back no leave', popTile.canLeaveCalls(), leaveBeforeBack);
+    assertEq('back no render', popTile.renders.length, rendersBeforeBack);
+    assert('hist forward exists', popTile.hist.forward() === true);
+    const fwdOk = await popTile.ws.handlePopState(popTile.hist.getState());
+    assert('tiled forward ok', fwdOk === true);
+    const snapFwd = popTile.ws.snapshot();
+    assertEq('fwd B main', snapFwd.mainTabId, popB);
+    assertEq('fwd A secondary', snapFwd.secondaryTree && snapFwd.secondaryTree.tabId, popA);
+    assertEq('fwd url B', popTile.hist.getHash(), '#/works/WB');
+    assertEq('fwd mounted 2', popTile.mountedCount(), 2);
+    assertEq('fwd no park', popTile.life.park.length, parkBeforeBack);
+    assertEq('fwd no destroy', popTile.life.destroy.length, destroyBeforeBack);
+    assertEq('fwd no remount', popTile.life.mount.length, mountBeforeBack);
+
+    const popDenyA = makeHarness({ hash: '#/works/WA' });
+    await popDenyA.ws.navigate('#/people/PA');
+    await popDenyA.ws.navigate('#/works/WB', { target: 'tile' });
+    const denyPopB = popDenyA.ws.snapshot().secondaryTree.tabId;
+    const denyPopA = popDenyA.ws.snapshot().mainTabId;
+    popDenyA.ws.makeMain(denyPopB);
+    popDenyA.setCanLeave(false);
+    const denyFp = fingerprint(popDenyA);
+    assert('deny hist back', popDenyA.hist.back() === true);
+    const denyPop = await popDenyA.ws.handlePopState(popDenyA.hist.getState());
+    assertEq('pop route-change deny', denyPop, false);
+    const denySnap = popDenyA.ws.snapshot();
+    assertEq('pop deny still B main', denySnap.mainTabId, denyPopB);
+    assertEq('pop deny A still secondary', denySnap.secondaryTree && denySnap.secondaryTree.tabId, denyPopA);
+    assertEq('pop deny url restored', popDenyA.hist.getHash(), '#/works/WB');
+    void denyFp;
+    assertEq('pop deny leave A', popDenyA.lastLeaveTabId(), denyPopA);
+
+    const n0 = makeHarness({ hash: '#/works/WA' });
+    await n0.ws.setNarrowFallback(true);
+    n0.ws.bootstrap('#/works/WA');
+    assertEq('initial narrow mode', n0.ws.snapshot().mode, 'stacked');
+    assertEq('initial narrow visual', n0.ws.visualTiled(), false);
+    assertEq('initial narrow mounted', n0.mountedCount(), 1);
+
+    const nTile = makeHarness({ hash: '#/works/WA' });
+    await nTile.ws.setNarrowFallback(true);
+    const nMain = nTile.ws.snapshot().mainTabId;
+    const nRenders0 = nTile.renders.length;
+    await nTile.ws.navigate('#/works/WB', { target: 'tile' });
+    const nSnap = nTile.ws.snapshot();
+    assertEq('narrow tile logical mode', nSnap.mode, 'tiled');
+    assert('narrow tile leaf B', !!(nSnap.secondaryTree && nSnap.secondaryTree.type === 'leaf'));
+    assertEq('narrow tile visual', nTile.ws.visualTiled(), false);
+    assertEq('narrow tile focus main', nSnap.focusedTabId, nMain);
+    assertEq('narrow tile mounted 1', nTile.mountedCount(), 1);
+    assertEq('narrow tile no render B', nTile.renders.length, nRenders0);
+    assert('narrow B not mounted', !nTile.isMounted(nSnap.secondaryTree.tabId));
+    const nB = nSnap.secondaryTree.tabId;
+    await nTile.ws.setNarrowFallback(false);
+    assertEq('widen mode tiled', nTile.ws.snapshot().mode, 'tiled');
+    assertEq('widen visual', nTile.ws.visualTiled(), true);
+    assertEq('widen mounted 2', nTile.mountedCount(), 2);
+    assert('widen B mounted', nTile.isMounted(nB));
+    assertEq('widen focus main', nTile.ws.snapshot().focusedTabId, nMain);
+    assert('widen rendered B', nTile.renders.length > nRenders0);
+
+    const nParked = makeHarness({ hash: '#/works/WA' });
+    await nParked.ws.navigate('#/works/WZ', { target: 'new-tab', activate: false });
+    const nZ = nParked.ws.snapshot().tabs[1].id;
+    await nParked.ws.setNarrowFallback(true);
+    await nParked.ws.tileTab(nZ);
+    assertEq('narrow tileTab mode', nParked.ws.snapshot().mode, 'tiled');
+    assertEq('narrow tileTab secondary', nParked.ws.snapshot().secondaryTree.tabId, nZ);
+    assertEq('narrow tileTab visual', nParked.ws.visualTiled(), false);
+    assertEq('narrow tileTab mounted', nParked.mountedCount(), 1);
+    assertEq('narrow tileTab focus main', nParked.ws.snapshot().focusedTabId, nParked.ws.snapshot().mainTabId);
+
+    const nLeave = makeHarness({ hash: '#/works/WA' });
+    await nLeave.ws.navigate('#/works/WB', { target: 'tile' });
+    const nLeaveB = nLeave.ws.snapshot().secondaryTree.tabId;
+    const nLeaveA = nLeave.ws.snapshot().mainTabId;
+    const nLeaveFp = fingerprint(nLeave);
+    const nLeaveMount = nLeave.mountedCount();
+    nLeave.setCanLeave(false);
+    const nDenied = await nLeave.ws.setNarrowFallback(true);
+    assertEq('narrow leave denied', nDenied, false);
+    assertEq('narrow deny fingerprint', fingerprint(nLeave), nLeaveFp);
+    assertEq('narrow deny visual tiled', nLeave.ws.visualTiled(), true);
+    assertEq('narrow deny mounted', nLeave.mountedCount(), nLeaveMount);
+    assert('narrow deny B mounted', nLeave.isMounted(nLeaveB));
+    nLeave.setCanLeave(true);
+    const nAccepted = await nLeave.ws.setNarrowFallback(true);
+    assert('narrow leave accepted', nAccepted === true);
+    assertEq('narrow accept mode still tiled', nLeave.ws.snapshot().mode, 'tiled');
+    assert('narrow accept leaf kept', nLeave.ws.snapshot().secondaryTree && nLeave.ws.snapshot().secondaryTree.tabId === nLeaveB);
+    assertEq('narrow accept visual', nLeave.ws.visualTiled(), false);
+    assertEq('narrow accept mounted 1', nLeave.mountedCount(), 1);
+    assert('narrow accept A mounted', nLeave.isMounted(nLeaveA));
+    assert('narrow accept B parked', !nLeave.isMounted(nLeaveB));
 
     const tileTabH = makeHarness({ hash: '#/works/WA' });
     await tileTabH.ws.navigate('#/works/WZ', { target: 'new-tab', activate: false });

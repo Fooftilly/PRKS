@@ -1182,11 +1182,23 @@
         return !!PRKS_TILE_ROUTE_NAMES[route.name];
     }
 
-    function prksPublishMainShell(ctx) {
+    function prksPublishMainShell(ctx, options) {
         if (!ctx) return;
         const route = ctx.lastResolvedRoute || ctx.route;
         if (!route) return;
-        prksSetResolvedDocumentTitle(ctx, route, {});
+        const opts = options && typeof options === 'object' ? Object.assign({}, options) : {};
+        if (!opts.entityTitle && ctx.tabId && typeof root.prksWorkspaceSnapshot === 'function') {
+            const snap = root.prksWorkspaceSnapshot();
+            if (snap && Array.isArray(snap.tabs)) {
+                for (let i = 0; i < snap.tabs.length; i++) {
+                    if (snap.tabs[i].id === ctx.tabId && snap.tabs[i].title) {
+                        opts.entityTitle = snap.tabs[i].title;
+                        break;
+                    }
+                }
+            }
+        }
+        prksSetResolvedDocumentTitle(ctx, route, opts);
         if (typeof prksSyncSidebarActive === 'function') prksSyncSidebarActive(route);
         if (typeof prksSyncNavDisclosures === 'function') prksSyncNavDisclosures(route);
     }

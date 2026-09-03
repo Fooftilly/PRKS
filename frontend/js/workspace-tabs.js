@@ -131,11 +131,15 @@
             typeof deps.refreshFocusedPanel === 'function' ? deps.refreshFocusedPanel : function () {};
         const supportsTileFn =
             typeof deps.supportsTile === 'function' ? deps.supportsTile : null;
+        const onMountContext = typeof deps.onMountContext === 'function' ? deps.onMountContext : null;
+        const onParkContext = typeof deps.onParkContext === 'function' ? deps.onParkContext : null;
+        const onDestroyContext = typeof deps.onDestroyContext === 'function' ? deps.onDestroyContext : null;
 
         let seq = 0;
         let lastHandledHref = '';
         let lastRenderGen = 0;
         let narrowFallback = false;
+        const mountedSet = Object.create(null);
         const state = {
             version: WORKSPACE_VERSION,
             mode: MODE_STACKED,
@@ -282,9 +286,12 @@
         }
 
         function parkContext(tabId) {
-            if (tabId && typeof root.prksUnmountTabContext === 'function') {
+            if (!tabId || !contextMounted(tabId)) return;
+            if (typeof root.prksUnmountTabContext === 'function') {
                 root.prksUnmountTabContext(tabId, 'park');
             }
+            delete mountedSet[tabId];
+            if (onParkContext) onParkContext(tabId);
         }
 
         function hostForTab(tabId) {
@@ -298,27 +305,46 @@
         }
 
         function mountContext(tabId) {
-            if (!tabId || typeof root.prksMountTabContext !== 'function') return;
-            const host = hostForTab(tabId);
-            if (host) root.prksMountTabContext(tabId, host);
+            if (!tabId || contextMounted(tabId)) return;
+            if (typeof root.prksMountTabContext === 'function') {
+                const host = hostForTab(tabId);
+                if (host) root.prksMountTabContext(tabId, host);
+            }
+            mountedSet[tabId] = true;
+            if (onMountContext) onMountContext(tabId);
         }
 
         function destroyContext(tabId) {
-            if (tabId && typeof root.prksDestroyTabContext === 'function') {
+            if (!tabId) return;
+            if (typeof root.prksDestroyTabContext === 'function') {
                 root.prksDestroyTabContext(tabId);
             }
+            delete mountedSet[tabId];
+            if (onDestroyContext) onDestroyContext(tabId);
         }
 
         function resetAllContexts() {
+            const ids = Object.keys(mountedSet);
+            for (let i = 0; i < ids.length; i++) {
+                delete mountedSet[ids[i]];
+                if (onDestroyContext) onDestroyContext(ids[i]);
+            }
             if (typeof root.prksDestroyAllTabContexts === 'function') {
                 root.prksDestroyAllTabContexts();
             }
         }
 
         function contextMounted(tabId) {
-            if (!tabId || typeof root.prksGetTabContext !== 'function') return false;
+            if (!tabId) return false;
+            if (mountedSet[tabId]) return true;
+            if (typeof root.prksGetTabContext !== 'function') return false;
             const ctx = root.prksGetTabContext(tabId);
             return !!(ctx && ctx.mounted);
+        }
+
+        function publishShell(tabId) {
+            const tab = getTab(tabId);
+            publishMainShell(tabId, tab ? tab.title : '');
         }
 
         function invokeRender(options) {
@@ -415,7 +441,6 @@
             seq = 0;
             lastHandledHref = '';
             lastRenderGen = 0;
-            narrowFallback = false;
             resetAllContexts();
             const tab = makeTab(hash);
             state.tabs = [tab];
@@ -472,6 +497,22 @@
             });
         }
 
+        function swapVisibleRoles(newMainId) {
+            const tab = getTab(newMainId);
+            if (!tab) return false;
+            if (tab.id === state.mainTabId) {
+                state.focusedTabId = tab.id;
+                return true;
+            }
+            if (tab.id !== secondaryTabId()) return false;
+            const oldMain = state.mainTabId;
+            state.mainTabId = tab.id;
+            state.secondaryTree = { type: 'leaf', tabId: oldMain };
+            state.mode = MODE_TILED;
+            state.focusedTabId = tab.id;
+            return true;
+        }
+
         function makeMain(tabId) {
             const tab = getTab(tabId);
             if (!tab) return false;
@@ -481,15 +522,10 @@
                 refreshFocusedPanel();
                 return true;
             }
-            if (tab.id !== secondaryTabId()) return false;
-            const oldMain = state.mainTabId;
-            state.mainTabId = tab.id;
-            state.secondaryTree = { type: 'leaf', tabId: oldMain };
-            state.mode = MODE_TILED;
-            state.focusedTabId = tab.id;
+            if (!swapVisibleRoles(tab.id)) return false;
             commitUrl(tab, 'replace');
             paint();
-            publishMainShell(tab.id);
+            publishShell(tab.id);
             refreshFocusedPanel();
             return true;
         }
@@ -505,8 +541,13 @@
             return true;
         }
 
-            function mountAndRenderSecondary(tab) {
+        function mountAndRenderSecondary(tab) {
             state.mode = MODE_TILED;
+            if (narrowFallback) {
+                state.focusedTabId = state.mainTabId;
+                paint();
+                return Promise.resolve(copyTab(tab));
+            }
             state.focusedTabId = tab.id;
             paint();
             mountContext(tab.id);
@@ -530,6 +571,11 @@
             const curSec = secondaryTabId();
             if (curSec === tab.id) {
                 state.mode = MODE_TILED;
+                if (narrowFallback) {
+                    state.focusedTabId = state.mainTabId;
+                    paint();
+                    return Promise.resolve(copyTab(tab));
+                }
                 state.focusedTabId = tab.id;
                 paint();
                 if (!contextMounted(tab.id)) {
@@ -591,6 +637,14 @@
             });
         }
 
+        function applyCurrentNavigation(tab, route, replace) {
+            const same = tab.route === route;
+            navigateTabHistory(tab, route, replace || same);
+            if (tab.id === state.mainTabId) commitUrl(tab, replace || same ? 'replace' : 'push');
+            paint();
+            return Promise.resolve(invokeRender({ workspaceSwitch: false, tabId: tab.id, hash: tab.route }));
+        }
+
         function navigate(hash, options) {
             const opts = options || {};
             const target = opts.target || 'current';
@@ -611,24 +665,23 @@
                 bootstrap(route);
                 return Promise.resolve(invokeRender({ workspaceSwitch: false }));
             }
-            const promoteUnsupported = tab.id !== state.mainTabId && !routeSupportsTile(route);
-            if (promoteUnsupported) {
-                makeMain(tab.id);
-                announce('', 'promote');
-                tab = getMainTab();
-            }
             const replace = !!opts.replace;
-            const unchanged = tab.route === route && !replace;
-            const isMainNav = tab.id === state.mainTabId;
+            if (tab.id !== state.mainTabId && !routeSupportsTile(route)) {
+                const leavingId = tab.id;
+                return awaitLeave(leavingId, route).then(function (ok) {
+                    if (!ok) return false;
+                    if (!getTab(leavingId) || secondaryTabId() !== leavingId) return false;
+                    if (!makeMain(leavingId)) return false;
+                    announce('', 'promote');
+                    const promoted = getMainTab();
+                    if (!promoted || promoted.id !== leavingId) return false;
+                    return applyCurrentNavigation(promoted, route, replace);
+                });
+            }
             return awaitLeave(tab.id, route).then(function (ok) {
                 if (!ok) return false;
                 if (!getTab(tab.id)) return false;
-                const same = tab.route === route;
-                navigateTabHistory(tab, route, replace || same);
-                if (isMainNav) commitUrl(tab, replace || same ? 'replace' : 'push');
-                paint();
-                void unchanged;
-                return Promise.resolve(invokeRender({ workspaceSwitch: false, tabId: tab.id, hash: tab.route }));
+                return applyCurrentNavigation(tab, route, replace);
             });
         }
 
@@ -728,7 +781,7 @@
                 commitUrl(successor, 'replace');
                 paint();
                 if (wasMountedSuccessor) {
-                    publishMainShell(successor.id);
+                    publishShell(successor.id);
                     refreshFocusedPanel();
                     return true;
                 }
@@ -784,7 +837,19 @@
             if (next === narrowFallback) return Promise.resolve(true);
             const sec = secondaryTabId();
             if (next) {
-                if (sec && contextMounted(sec)) parkContext(sec);
+                if (sec && contextMounted(sec)) {
+                    const leavingId = sec;
+                    return awaitLeave(leavingId, homeHash).then(function (ok) {
+                        if (!ok) return false;
+                        if (secondaryTabId() !== leavingId) return false;
+                        if (contextMounted(leavingId)) parkContext(leavingId);
+                        narrowFallback = true;
+                        state.focusedTabId = state.mainTabId;
+                        paint();
+                        refreshFocusedPanel();
+                        return true;
+                    });
+                }
                 narrowFallback = true;
                 state.focusedTabId = state.mainTabId;
                 paint();
@@ -793,6 +858,7 @@
             }
             narrowFallback = false;
             if (state.mode === MODE_TILED && sec && !contextMounted(sec)) {
+                state.focusedTabId = state.mainTabId;
                 paint();
                 mountContext(sec);
                 const tab = getTab(sec);
@@ -837,64 +903,143 @@
             return setResolvedTitleForTab(tab.id, hash, title, routeGen);
         }
 
-        function applyPopState(raw, locHash) {
-            if (raw && raw.tabId) {
-                const tab = getTab(raw.tabId);
-                if (tab) {
-                    const idx = Number(raw.historyIndex);
-                    if (Number.isFinite(idx) && idx >= 0 && idx < tab.history.length) {
-                        tab.historyIndex = idx;
-                        applyTabRoute(tab, tab.history[idx]);
-                    } else {
-                        applyTabRoute(tab, locHash || canonical(raw.route));
-                    }
-                    const prevId = state.mainTabId;
-                    if (tab.id === secondaryTabId()) {
-                        state.secondaryTree = prevId && prevId !== tab.id ? { type: 'leaf', tabId: prevId } : null;
-                    }
-                    if (prevId && prevId !== tab.id) parkContext(prevId);
-                    setMain(tab.id);
-                    mountContext(tab.id);
-                    markHandled();
-                    paint();
-                    return invokeRender({
-                        workspaceSwitch: false,
-                        fromPopstate: true,
-                        tabId: tab.id,
-                        hash: tab.route,
-                    });
-                }
+        function historyWant(tab, raw, locHash) {
+            const idx = Number(raw && raw.historyIndex);
+            if (tab && raw && Number.isFinite(idx) && idx >= 0 && idx < tab.history.length) {
+                return {
+                    route: canonical(tab.history[idx]),
+                    historyIndex: idx,
+                    fromHistory: true,
+                };
             }
+            return {
+                route: canonical(locHash || (raw && raw.route) || (tab && tab.route) || homeHash),
+                historyIndex: tab ? tab.historyIndex : 0,
+                fromHistory: false,
+            };
+        }
+
+        function applyWantToTab(tab, want) {
+            if (want.fromHistory) tab.historyIndex = want.historyIndex;
+            if (tab.route !== want.route) applyTabRoute(tab, want.route);
+            if (!want.fromHistory && tab.history[tab.historyIndex] !== want.route) {
+                tab.history[tab.historyIndex] = want.route;
+            }
+        }
+
+        function restoreMainUrl() {
             const main = getMainTab();
-            if (!main) {
-                bootstrap(locHash);
-                return invokeRender({ fromPopstate: true });
-            }
-            applyTabRoute(main, locHash);
-            if (main.history[main.historyIndex] !== locHash) {
-                main.history[main.historyIndex] = locHash;
-            }
-            mountContext(main.id);
-            patchHistoryState();
-            paint();
-            return invokeRender({
-                workspaceSwitch: false,
-                fromPopstate: true,
-                tabId: main.id,
-                hash: main.route,
-            });
+            if (main) commitUrl(main, 'replace');
         }
 
         function handlePopState(eventState) {
             const raw = eventState && eventState.prksWorkspace ? eventState.prksWorkspace : null;
             const locHash = canonical(getHash());
-            return awaitLeave(state.mainTabId, locHash).then(function (ok) {
+            const targetId = raw && raw.tabId ? raw.tabId : null;
+            const target = targetId ? getTab(targetId) : null;
+            const main = getMainTab();
+            const secId = visualTiled() ? secondaryTabId() : null;
+
+            if (!main) {
+                bootstrap(locHash);
+                return Promise.resolve(invokeRender({ fromPopstate: true })).then(function () {
+                    return true;
+                });
+            }
+
+            if (target && secId && target.id === secId) {
+                const want = historyWant(target, raw, locHash);
+                const routeChanging = target.route !== want.route;
+                const preflight = routeChanging ? awaitLeave(target.id, want.route) : Promise.resolve(true);
+                return preflight.then(function (ok) {
+                    if (!ok) {
+                        restoreMainUrl();
+                        return false;
+                    }
+                    if (!getTab(target.id) || secondaryTabId() !== target.id) {
+                        restoreMainUrl();
+                        return false;
+                    }
+                    applyWantToTab(target, want);
+                    if (!swapVisibleRoles(target.id)) {
+                        restoreMainUrl();
+                        return false;
+                    }
+                    markHandled();
+                    paint();
+                    if (routeChanging) {
+                        return Promise.resolve(
+                            invokeRender({
+                                workspaceSwitch: false,
+                                fromPopstate: true,
+                                tabId: target.id,
+                                hash: target.route,
+                            })
+                        ).then(function () {
+                            return true;
+                        });
+                    }
+                    publishShell(target.id);
+                    refreshFocusedPanel();
+                    return true;
+                });
+            }
+
+            if (!target || target.id === main.id) {
+                const tab = main;
+                const want = target ? historyWant(tab, raw, locHash) : historyWant(tab, null, locHash);
+                const routeChanging = tab.route !== want.route;
+                const preflight = routeChanging ? awaitLeave(tab.id, want.route) : Promise.resolve(true);
+                return preflight.then(function (ok) {
+                    if (!ok) {
+                        restoreMainUrl();
+                        return false;
+                    }
+                    if (target) applyWantToTab(tab, want);
+                    else {
+                        applyWantToTab(tab, want);
+                        patchHistoryState();
+                    }
+                    markHandled();
+                    paint();
+                    if (routeChanging) {
+                        return Promise.resolve(
+                            invokeRender({
+                                workspaceSwitch: false,
+                                fromPopstate: true,
+                                tabId: tab.id,
+                                hash: tab.route,
+                            })
+                        ).then(function () {
+                            return true;
+                        });
+                    }
+                    return true;
+                });
+            }
+
+            const parkedWant = historyWant(target, raw, locHash);
+            return awaitLeave(state.mainTabId, parkedWant.route).then(function (ok) {
                 if (!ok) {
-                    const main = getMainTab();
-                    if (main) commitUrl(main, 'replace');
+                    restoreMainUrl();
                     return false;
                 }
-                return Promise.resolve(applyPopState(raw, locHash)).then(function () {
+                if (!getTab(target.id)) return false;
+                const prevId = state.mainTabId;
+                if (prevId && prevId !== target.id) parkContext(prevId);
+                applyWantToTab(target, parkedWant);
+                setMain(target.id);
+                mountContext(target.id);
+                markHandled();
+                paint();
+                return Promise.resolve(
+                    invokeRender({
+                        workspaceSwitch: false,
+                        fromPopstate: true,
+                        tabId: target.id,
+                        hash: target.route,
+                    })
+                ).then(function () {
                     return true;
                 });
             });
@@ -1324,11 +1469,13 @@
             },
             onChange: paintProduction,
             announce: announce,
-            publishMainShell: function (tabId) {
+            publishMainShell: function (tabId, title) {
                 if (typeof root.prksPublishMainShell === 'function') {
                     const ctx =
                         typeof root.prksGetTabContext === 'function' ? root.prksGetTabContext(tabId) : null;
-                    root.prksPublishMainShell(ctx);
+                    const opts = {};
+                    if (title) opts.entityTitle = title;
+                    root.prksPublishMainShell(ctx, opts);
                 }
             },
             refreshFocusedPanel: function () {
@@ -1343,9 +1490,9 @@
     function prksWorkspaceInit() {
         const ws = ensureProduction();
         if (!productionReady) {
-            if (typeof root.prksWorkspaceInitTiles === 'function') root.prksWorkspaceInitTiles();
             ws.bootstrap();
             productionReady = true;
+            if (typeof root.prksWorkspaceInitTiles === 'function') root.prksWorkspaceInitTiles();
         }
         bindLinkLayer();
         bindHistory();

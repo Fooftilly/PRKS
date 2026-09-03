@@ -1735,6 +1735,8 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertTrue(same["bNotes"])
         self.assertEqual(same["mounted"], 2)
         self.assertIn(work_b, page.evaluate("() => location.hash"))
+        self.assertIn(WORK_B_TITLE, page.evaluate("() => document.title"))
+        self.assertNotEqual(page.evaluate("() => document.title"), "Work — PRKS")
         self.assertEqual(len(page.context.pages), 1)
 
     def test_alt_click_opens_tile_and_ctrl_still_parks(self):
@@ -1894,5 +1896,173 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
         self.assertIsNone(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"))
         self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+
+    def test_unsupported_secondary_nav_respects_leave(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        ids = _workspace_ids(page)
+        _wait_pdf_tab(page, ids["secondaryTabId"])
+        dialogs = []
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(snap.secondaryTree.tabId);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && ctx && c.tabId === ctx.tabId);
+                };
+            }"""
+        )
+        before = _workspace_ids(page)
+        denied = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return window.prksNavigate('#/folders', { target: 'current', tabId: snap.secondaryTree.tabId });
+            }"""
+        )
+        self.assertFalse(denied)
+        after = _workspace_ids(page)
+        self.assertEqual(after["mainTabId"], before["mainTabId"])
+        self.assertEqual(after["secondaryTabId"], before["secondaryTabId"])
+        self.assertEqual(after["focusedTabId"], before["focusedTabId"])
+        self.assertEqual(after["mode"], "tiled")
+        self.assertEqual(after["hash"], before["hash"])
+        self.assertEqual(after["mountedCount"], 2)
+        self.assertEqual(len(dialogs), 1)
+
+    def test_browser_back_forward_after_make_main(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_a = server.ids["work_a"]
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.work-detail').length === 2")
+        ids = _workspace_ids(page)
+        _wait_pdf_tab(page, ids["mainTabId"])
+        _wait_pdf_tab(page, ids["secondaryTabId"])
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const a = window.prksGetTabContext(snap.mainTabId);
+                const b = window.prksGetTabContext(snap.secondaryTree.tabId);
+                window.__prksHistRt = {
+                    aId: snap.mainTabId,
+                    bId: snap.secondaryTree.tabId,
+                    aPdf: a.getResource('pdf'),
+                    bPdf: b.getResource('pdf'),
+                };
+                history.pushState(history.state, '', location.href);
+                window.prksWorkspaceMakeMain(snap.secondaryTree.tabId);
+            }"""
+        )
+        page.wait_for_function(
+            """(b) => location.hash.indexOf(b) !== -1 && window.prksWorkspaceSnapshot().mainTabId === window.__prksHistRt.bId""",
+            arg=work_b,
+        )
+        page.go_back()
+        page.wait_for_function(
+            """(a) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.mainTabId === window.__prksHistRt.aId && location.hash.indexOf(a) !== -1;
+            }""",
+            arg=work_a,
+        )
+        back = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const rt = window.__prksHistRt;
+                const a = window.prksGetTabContext(rt.aId);
+                const b = window.prksGetTabContext(rt.bId);
+                return {
+                    main: snap.mainTabId,
+                    secondary: snap.secondaryTree && snap.secondaryTree.tabId,
+                    mounted: window.prksTabContextDebugSnapshot().mountedCount,
+                    aPdf: a.getResource('pdf') === rt.aPdf,
+                    bPdf: b.getResource('pdf') === rt.bPdf,
+                    hash: location.hash,
+                };
+            }"""
+        )
+        self.assertEqual(back["main"], page.evaluate("() => window.__prksHistRt.aId"))
+        self.assertEqual(back["secondary"], page.evaluate("() => window.__prksHistRt.bId"))
+        self.assertEqual(back["mounted"], 2)
+        self.assertTrue(back["aPdf"])
+        self.assertTrue(back["bPdf"])
+        self.assertIn(work_a, back["hash"])
+        page.go_forward()
+        page.wait_for_function(
+            """(b) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.mainTabId === window.__prksHistRt.bId && location.hash.indexOf(b) !== -1;
+            }""",
+            arg=work_b,
+        )
+        fwd = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const rt = window.__prksHistRt;
+                const a = window.prksGetTabContext(rt.aId);
+                const b = window.prksGetTabContext(rt.bId);
+                return {
+                    main: snap.mainTabId,
+                    secondary: snap.secondaryTree && snap.secondaryTree.tabId,
+                    mounted: window.prksTabContextDebugSnapshot().mountedCount,
+                    aPdf: a.getResource('pdf') === rt.aPdf,
+                    bPdf: b.getResource('pdf') === rt.bPdf,
+                };
+            }"""
+        )
+        self.assertEqual(fwd["main"], page.evaluate("() => window.__prksHistRt.bId"))
+        self.assertEqual(fwd["secondary"], page.evaluate("() => window.__prksHistRt.aId"))
+        self.assertEqual(fwd["mounted"], 2)
+        self.assertTrue(fwd["aPdf"])
+        self.assertTrue(fwd["bPdf"])
+
+    def test_close_main_promotes_secondary_title(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.wait_for_function(
+            """(title) => {
+                const snap = window.prksWorkspaceSnapshot();
+                const tab = snap.tabs.find(function (t) { return t.id === snap.secondaryTree.tabId; });
+                return !!(tab && tab.title === title);
+            }""",
+            arg=WORK_B_TITLE,
+        )
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return window.prksWorkspaceCloseTab(snap.mainTabId);
+            }"""
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        self.assertIn(WORK_B_TITLE, page.evaluate("() => document.title"))
+        self.assertNotEqual(page.evaluate("() => document.title"), "Work — PRKS")
+        self.assertIn(work_b, page.evaluate("() => location.hash"))
         self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
 
