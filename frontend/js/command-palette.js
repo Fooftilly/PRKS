@@ -1067,14 +1067,26 @@
             if (!hash || hash.charAt(0) !== '#') return;
             const background = !!(execOpts && execOpts.backgroundTab);
             const newTabMode = state.navigationTarget === 'new-tab';
-            const target = background || newTabMode ? 'new-tab' : 'current';
-            const activate = newTabMode && !background;
+            const tileMode = state.navigationTarget === 'tile' || !!(execOpts && execOpts.tile);
+            let target = 'current';
+            if (background) target = 'new-tab';
+            else if (tileMode) target = 'tile';
+            else if (newTabMode) target = 'new-tab';
+            const activate = newTabMode && !background && target === 'new-tab';
             closePalette({ restoreFocus: false });
             if (typeof root.prksNavigate === 'function') {
                 if (target === 'new-tab') {
                     root.prksNavigate(hash, { target: 'new-tab', activate: activate });
+                } else if (target === 'tile') {
+                    root.prksNavigate(hash, { target: 'tile' });
                 } else {
-                    root.prksNavigate(hash);
+                    const focused =
+                        typeof root.prksGetFocusedTabContext === 'function' ? root.prksGetFocusedTabContext() : null;
+                    if (focused && focused.tabId) {
+                        root.prksNavigate(hash, { target: 'current', tabId: focused.tabId });
+                    } else {
+                        root.prksNavigate(hash);
+                    }
                 }
             }
             return;
@@ -1352,7 +1364,8 @@
                 if (Number.isFinite(idx)) {
                     state.activeIndex = idx;
                     executeActive({
-                        backgroundTab: !!(e.ctrlKey || e.metaKey) && state.navigationTarget !== 'new-tab',
+                        backgroundTab: !!(e.ctrlKey || e.metaKey) && !e.altKey && state.navigationTarget !== 'new-tab' && state.navigationTarget !== 'tile',
+                        tile: !!e.altKey && state.navigationTarget !== 'new-tab',
                     });
                 }
             }
@@ -1390,7 +1403,8 @@
         if (key === 'Enter') {
             e.preventDefault();
             executeActive({
-                backgroundTab: (e.ctrlKey || e.metaKey) && state.navigationTarget !== 'new-tab',
+                backgroundTab: (e.ctrlKey || e.metaKey) && !e.altKey && state.navigationTarget !== 'new-tab',
+                tile: (!e.ctrlKey && !e.metaKey && !!e.altKey) || (state.navigationTarget === 'tile' && !(e.ctrlKey || e.metaKey)),
             });
             return;
         }
@@ -1436,7 +1450,9 @@
         state.sessionGen += 1;
         state.scope = options && options.scope === 'create' ? 'create' : 'all';
         state.navigationTarget =
-            options && options.navigationTarget === 'new-tab' && state.scope !== 'create' ? 'new-tab' : 'current';
+            options && (options.navigationTarget === 'new-tab' || options.navigationTarget === 'tile') && state.scope !== 'create'
+                ? options.navigationTarget
+                : 'current';
         state.query = '';
         state.activeIndex = 0;
         state.queryGen += 1;
@@ -1446,6 +1462,7 @@
         if (parts.title) {
             if (state.scope === 'create') parts.title.textContent = 'Create…';
             else if (state.navigationTarget === 'new-tab') parts.title.textContent = 'Open in new tab';
+            else if (state.navigationTarget === 'tile') parts.title.textContent = 'Open as tile';
             else parts.title.textContent = 'Search or jump';
         }
         parts.input.setAttribute(
@@ -1454,7 +1471,9 @@
                 ? 'Create…'
                 : state.navigationTarget === 'new-tab'
                   ? 'Open in new tab…'
-                  : 'Search or jump…'
+                  : state.navigationTarget === 'tile'
+                    ? 'Open as tile…'
+                    : 'Search or jump…'
         );
         setHidden(parts.root, false);
         parts.root.classList.toggle('prks-command-palette--create', state.scope === 'create');

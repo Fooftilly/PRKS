@@ -1209,13 +1209,13 @@ class WorkspaceTabsTests(_BrowserE2E):
         self.assertEqual(person_gets, [])
 
 
-_ONE_STACKED_ROOT = """() => document.querySelectorAll('#page-content > .prks-tab-root').length === 1"""
+_ONE_STACKED_ROOT = """() => document.querySelectorAll('.prks-tab-root').length === 1"""
 
 
 def _tab_root_id(page):
     return page.evaluate(
         """() => {
-            const el = document.querySelector('#page-content > .prks-tab-root');
+            const el = document.querySelector('.prks-tab-root');
             return el ? el.getAttribute('data-prks-tab-id') : null;
         }"""
     )
@@ -1233,10 +1233,10 @@ def _host_child_classes(page):
 class TabContextHostRootTests(_BrowserE2E):
     def _assert_single_mounted_root(self, page, expected_id=None):
         page.wait_for_function(_ONE_STACKED_ROOT)
-        self.assertEqual(page.locator("#page-content > .prks-tab-root").count(), 1)
+        self.assertEqual(page.locator(".prks-tab-root").count(), 1)
         classes = _host_child_classes(page)
         self.assertEqual(len(classes), 1)
-        self.assertIn("prks-tab-root", classes[0])
+        self.assertIn("prks-workspace-canvas", classes[0])
         rid = _tab_root_id(page)
         if expected_id is not None:
             self.assertEqual(rid, expected_id)
@@ -1251,14 +1251,14 @@ class TabContextHostRootTests(_BrowserE2E):
         page.locator(".person-profile__summary").wait_for()
         root_id = self._assert_single_mounted_root(page)
         self.assertGreaterEqual(
-            page.locator("#page-content > .prks-tab-root .person-profile").count(),
+            page.locator(".prks-tab-root .person-profile").count(),
             1,
         )
         page.locator(".person-sidebar-summary .prks-btn--secondary", has_text="Edit works").click()
         page.wait_for_selector(".person-profile__work-card-wrap, .person-profile__role-block")
         self._assert_single_mounted_root(page, root_id)
         self.assertGreaterEqual(
-            page.locator("#page-content > .prks-tab-root .person-profile").count(),
+            page.locator(".prks-tab-root .person-profile").count(),
             1,
         )
         page.locator(".person-sidebar-summary .prks-btn--secondary", has_text="Done").click()
@@ -1271,7 +1271,7 @@ class TabContextHostRootTests(_BrowserE2E):
         page.locator(".person-profile__about", has_text="Host-root profile save").wait_for()
         self._assert_single_mounted_root(page, root_id)
         self.assertGreaterEqual(
-            page.locator("#page-content > .prks-tab-root .person-profile").count(),
+            page.locator(".prks-tab-root .person-profile").count(),
             1,
         )
 
@@ -1292,13 +1292,13 @@ class TabContextHostRootTests(_BrowserE2E):
         page.locator("#prks-playlist-edit-save").click()
         page.wait_for_function(
             """() => {
-                const el = document.querySelector('#page-content > .prks-tab-root');
+                const el = document.querySelector('.prks-tab-root');
                 return !!(el && el.innerText && el.innerText.indexOf('Refreshed in owner root') !== -1);
             }"""
         )
         self._assert_single_mounted_root(page, root_id)
         self.assertGreaterEqual(
-            page.locator("#page-content > .prks-tab-root .prks-playlist-detail").count(),
+            page.locator(".prks-tab-root .prks-playlist-detail").count(),
             1,
         )
 
@@ -1316,7 +1316,7 @@ class TabContextHostRootTests(_BrowserE2E):
         page.get_by_text("E2E Host Folder").wait_for()
         self._assert_single_mounted_root(page, root_id)
         self.assertGreaterEqual(
-            page.locator("#page-content > .prks-tab-root .prks-folder-library").count(),
+            page.locator(".prks-tab-root .prks-folder-library").count(),
             1,
         )
         self.assertEqual(page.evaluate("() => location.hash"), "#/folders")
@@ -1337,7 +1337,7 @@ class TabContextHostRootTests(_BrowserE2E):
         )
         self._assert_single_mounted_root(page, root_id)
         self.assertGreaterEqual(
-            page.locator("#page-content > .prks-tab-root #prks-processing-refresh").count(),
+            page.locator(".prks-tab-root #prks-processing-refresh").count(),
             1,
         )
 
@@ -1564,3 +1564,335 @@ class TabContextHostRootTests(_BrowserE2E):
                 page.unroute("**/api/person-groups/*", hold_group_patch)
             except Exception:
                 pass
+
+
+def _wait_pdf_tab(page, tab_id):
+    page.wait_for_function(
+        """(tabId) => {
+            const ctx = window.prksGetTabContext && window.prksGetTabContext(tabId);
+            const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+            const v = pdf && pdf.viewer;
+            return !!(v && v.getPageCount && v.getPageCount() >= 1 && pdf.syncState);
+        }""",
+        arg=tab_id,
+        timeout=30000,
+    )
+
+
+def _workspace_ids(page):
+    return page.evaluate(
+        """() => {
+            const snap = window.prksWorkspaceSnapshot && window.prksWorkspaceSnapshot();
+            const debug = window.prksTabContextDebugSnapshot && window.prksTabContextDebugSnapshot();
+            return {
+                mode: snap && snap.mode,
+                mainTabId: snap && snap.mainTabId,
+                focusedTabId: snap && snap.focusedTabId,
+                secondaryTabId: snap && snap.secondaryTree && snap.secondaryTree.tabId,
+                hash: location.hash,
+                title: document.title,
+                mountedCount: debug && debug.mountedCount,
+            };
+        }"""
+    )
+
+
+class WorkspaceTilingTests(_BrowserE2E):
+    def test_work_work_runtimes_focus_notes_make_main(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_a = server.ids["work_a"]
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        extra_pages = []
+        page.context.on("page", lambda p: extra_pages.append(p))
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.work-detail').length === 2")
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap && snap.mode === 'tiled' && snap.secondaryTree && snap.secondaryTree.type === 'leaf';
+            }"""
+        )
+        ids = _workspace_ids(page)
+        self.assertEqual(ids["mode"], "tiled")
+        self.assertEqual(ids["mountedCount"], 2)
+        self.assertNotEqual(ids["mainTabId"], ids["secondaryTabId"])
+        self.assertEqual(ids["focusedTabId"], ids["secondaryTabId"])
+        self.assertIn(work_a, ids["hash"])
+        self.assertIn(WORK_A_TITLE, ids["title"])
+        _wait_pdf_tab(page, ids["mainTabId"])
+        _wait_pdf_tab(page, ids["secondaryTabId"])
+        self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 2)
+        self.assertEqual(len(page.context.pages), 1)
+        self.assertEqual(extra_pages, [])
+
+        isolated = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const a = window.prksGetTabContext(snap.mainTabId);
+                const b = window.prksGetTabContext(snap.secondaryTree.tabId);
+                const aPdf = a.getResource('pdf');
+                const bPdf = b.getResource('pdf');
+                const aNotes = a.getResource('workNotes');
+                const bNotes = b.getResource('workNotes');
+                window.__prksTileRt = { aPdf: aPdf, bPdf: bPdf, aNotes: aNotes, bNotes: bNotes };
+                return {
+                    ctx: a !== b,
+                    pdf: aPdf !== bPdf,
+                    notes: aNotes !== bNotes,
+                    timers: a.timers !== b.timers,
+                    mounted: window.prksTabContextDebugSnapshot().mountedCount,
+                };
+            }"""
+        )
+        self.assertTrue(isolated["ctx"])
+        self.assertTrue(isolated["pdf"])
+        self.assertTrue(isolated["notes"])
+        self.assertEqual(isolated["mounted"], 2)
+
+        page.locator(".prks-tile--main").click(position={"x": 24, "y": 80})
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().focusedTabId === window.prksWorkspaceSnapshot().mainTabId")
+        page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
+        page.wait_for_selector("#annotation-fallback-list")
+        self.assertIn(work_a, page.evaluate("() => location.hash"))
+        page.locator(".prks-tile--secondary").click(position={"x": 24, "y": 80})
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().focusedTabId === window.prksWorkspaceSnapshot().secondaryTree.tabId"
+        )
+        self.assertIn(work_a, page.evaluate("() => location.hash"))
+        self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 2)
+
+        unique_a = "TILE-NOTE-A-%s" % int(time.time() * 1000)
+        unique_b = "TILE-NOTE-B-%s" % int(time.time() * 1000)
+        page.locator(".prks-tile--main .CodeMirror").click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text(unique_a)
+        page.locator(".prks-tile--secondary .CodeMirror").click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text(unique_b)
+        page.wait_for_function(
+            """(pair) => {
+                function val(tabId) {
+                    const ctx = window.prksGetTabContext(tabId);
+                    const wn = ctx && ctx.getResource('workNotes');
+                    const ed = wn && wn.editor ? wn.editor : wn;
+                    return ed && ed.value ? ed.value() : '';
+                }
+                const snap = window.prksWorkspaceSnapshot();
+                return val(snap.mainTabId).indexOf(pair.a) !== -1 && val(snap.secondaryTree.tabId).indexOf(pair.b) !== -1;
+            }""",
+            arg={"a": unique_a, "b": unique_b},
+        )
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                if (window.prksFlushPendingWorkResearchNotes) {
+                    window.prksFlushPendingWorkResearchNotes(window.prksGetTabContext(snap.mainTabId));
+                    window.prksFlushPendingWorkResearchNotes(window.prksGetTabContext(snap.secondaryTree.tabId));
+                }
+                const a = window.prksGetTabContext(snap.mainTabId);
+                const b = window.prksGetTabContext(snap.secondaryTree.tabId);
+                window.__prksTileRt = {
+                    aPdf: a.getResource('pdf'),
+                    bPdf: b.getResource('pdf'),
+                    aNotes: a.getResource('workNotes'),
+                    bNotes: b.getResource('workNotes'),
+                };
+            }"""
+        )
+
+        page.locator(".prks-tile--secondary .prks-tile-header__make-main").click()
+        page.wait_for_function(
+            """(b) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.mainTabId && location.hash.indexOf(b) !== -1 && snap.secondaryTree && snap.mainTabId !== snap.secondaryTree.tabId;
+            }""",
+            arg=work_b,
+        )
+        same = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const a = window.prksGetTabContext(snap.secondaryTree.tabId);
+                const b = window.prksGetTabContext(snap.mainTabId);
+                const rt = window.__prksTileRt;
+                return {
+                    aPdf: a.getResource('pdf') === rt.aPdf,
+                    bPdf: b.getResource('pdf') === rt.bPdf,
+                    aNotes: a.getResource('workNotes') === rt.aNotes,
+                    bNotes: b.getResource('workNotes') === rt.bNotes,
+                    mounted: window.prksTabContextDebugSnapshot().mountedCount,
+                };
+            }"""
+        )
+        self.assertTrue(same["aPdf"])
+        self.assertTrue(same["bPdf"])
+        self.assertTrue(same["aNotes"])
+        self.assertTrue(same["bNotes"])
+        self.assertEqual(same["mounted"], 2)
+        self.assertIn(work_b, page.evaluate("() => location.hash"))
+        self.assertEqual(len(page.context.pages), 1)
+
+    def test_alt_click_opens_tile_and_ctrl_still_parks(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        extra_pages = []
+        page.context.on("page", lambda p: extra_pages.append(p))
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector("a.work-linked-persons__chip-link")
+        work_hash = page.evaluate("() => location.hash")
+        page.locator("a.work-linked-persons__chip-link", has_text=PERSON_DISPLAY).click(modifiers=["Alt"])
+        page.wait_for_selector(".prks-tile--secondary .person-profile")
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap && snap.mode === 'tiled' && document.querySelectorAll('.prks-tab-root').length === 2;
+            }"""
+        )
+        ids = _workspace_ids(page)
+        self.assertEqual(ids["hash"], work_hash)
+        self.assertEqual(ids["mountedCount"], 2)
+        self.assertEqual(ids["focusedTabId"], ids["secondaryTabId"])
+        self.assertGreaterEqual(page.locator(".person-profile").count(), 1)
+        self.assertGreaterEqual(page.locator(".work-detail").count(), 1)
+        self.assertEqual(len(page.context.pages), 1)
+        self.assertEqual(extra_pages, [])
+
+        before = _workspace_tab_count(page)
+        page.locator(".prks-tile--main a[href^='#/']").first.click(modifiers=["Control"])
+        page.wait_for_function(
+            "n => document.querySelectorAll('.prks-workspace-tab').length === n",
+            arg=before + 1,
+        )
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(_workspace_ids(page)["mountedCount"], 2)
+        self.assertEqual(len(page.context.pages), 1)
+
+    def test_secondary_navigation_does_not_change_url(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        work_hash = page.evaluate("() => location.hash")
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.evaluate(
+            """(pid) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return window.prksNavigate('#/people/' + pid, { target: 'current', tabId: snap.secondaryTree.tabId });
+            }""",
+            arg=person_id,
+        )
+        page.wait_for_selector(".prks-tile--secondary .person-profile")
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                window.prksWorkspaceMakeMain(snap.secondaryTree.tabId);
+            }"""
+        )
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        self.assertIn("/people/", page.evaluate("() => location.hash"))
+
+    def test_tile_replace_and_stack_leave_guards(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        dialogs = []
+        accept_next = {"v": False}
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            if accept_next["v"]:
+                dialog.accept()
+            else:
+                dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(snap.secondaryTree.tabId);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && ctx && c.tabId === ctx.tabId);
+                };
+            }"""
+        )
+        before = _workspace_ids(page)
+        denied = page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'tile' })""",
+            arg=person_id,
+        )
+        self.assertFalse(denied)
+        after = _workspace_ids(page)
+        self.assertEqual(after["secondaryTabId"], before["secondaryTabId"])
+        self.assertEqual(after["mainTabId"], before["mainTabId"])
+        self.assertEqual(after["focusedTabId"], before["focusedTabId"])
+        self.assertEqual(after["hash"], before["hash"])
+        self.assertEqual(len(dialogs), 1)
+
+        stack_denied = page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
+        self.assertFalse(stack_denied)
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mode"), "tiled")
+        self.assertEqual(len(dialogs), 2)
+
+        accept_next["v"] = True
+        stacked = page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
+        self.assertTrue(stacked)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(snap["mode"], "stacked")
+        self.assertTrue(snap["secondaryTree"] and snap["secondaryTree"]["tabId"] == before["secondaryTabId"])
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+        restored = page.evaluate("() => window.prksWorkspaceSetMode('tiled')")
+        self.assertTrue(restored)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 2")
+        page.evaluate("() => { window.prksHasPendingWorkAnnotationSync = function () { return false; }; }")
+        page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'tile' })""",
+            arg=person_id,
+        )
+        page.wait_for_selector(".prks-tile--secondary .person-profile")
+        self.assertEqual(page.evaluate("() => location.hash"), before["hash"])
+
+    def test_close_secondary_and_hide_keep_main_url(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        work_hash = page.evaluate("() => location.hash")
+        page.locator(".prks-tile--secondary .prks-tile-header__hide").click()
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertTrue(snap["secondaryTree"])
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        page.evaluate("() => window.prksWorkspaceSetMode('tiled')")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        sec = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.evaluate("(id) => window.prksWorkspaceCloseTab(id)", arg=sec)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        self.assertIsNone(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"))
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+

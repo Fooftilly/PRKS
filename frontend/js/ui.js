@@ -1557,6 +1557,20 @@ function prksSyncRightPanelTabStrip(tabId) {
     });
 }
 
+function prksRefreshFocusedRightPanel() {
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (!ctx) return;
+    let tab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+    const route = ctx.lastResolvedRoute || ctx.route;
+    const onWorkDetailPage = !!(route && route.name === 'work' && ctx.getEntity && ctx.getEntity('work'));
+    if (!onWorkDetailPage && tab === 'annotations') {
+        tab = 'details';
+        if (ctx.ui) ctx.ui.rightPanelTab = 'details';
+    }
+    prksSyncRightPanelTabStrip(tab);
+    updatePanelContent(tab);
+}
+
 /**
  * Right column layout: full tabs (work), two tabs (folder, no annotations), or single contextual pane (everything else).
  */

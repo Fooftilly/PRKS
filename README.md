@@ -176,18 +176,24 @@ People, Progress, and Research sidebar shortcuts are collapsible. Active child r
 
 ## Workspace tabs
 
-PRKS keeps a strip of in-app tabs under the top ribbon. Only one page is visible at a time (stacked/browser mode). Tiled layouts come later. Tabs do not yet survive a full app reload.
+PRKS keeps a strip of in-app tabs under the top ribbon. Stacked mode shows one page at a time. Tiled v1 can show Main on the left and one Secondary on the right. Tabs do not yet survive a full app reload. Recursive splits and splitter resizing are not included yet.
 
-- Normal click: open in the current PRKS tab
+- Normal click: open in the originating PRKS tab
 - Ctrl/Cmd-click or middle-click: open a background PRKS tab (no extra browser page)
+- **Open as tile** (Alt-click, Alt+Enter, or the workspace split control): open a Secondary tile
+- Click inside a tile: focus it (the details panel follows focus; the browser URL does not)
+- **Make main**: Secondary tile header, or click that tab in the workspace strip (swaps roles; URL becomes that page)
+- **Stack view**: workspace layout control hides the Secondary tile but keeps the tab
 - **+**: choose a page or item in the command palette (“Open in new tab”) and open it as a new main tab
-- Close: close that PRKS tab; closing the last tab leaves Folders
+- Close: the tab-strip close button closes that PRKS tab; Hide on a tile only stacks the view. Closing the last tab leaves Folders
+
+Only Main controls the browser URL. The details panel follows whichever tile is focused.
 
 Parked tabs do no rendering or network work until you activate them.
 
-Each tab has a TabContext. Route state, page DOM (`ctx.root` / `ctx.query`),
+Each visible tab has a TabContext. Route state, page DOM (`ctx.root` / `ctx.query`),
 async generation, and live resources (PDF viewer, notes editor, graph) live
-there. Stacked mode mounts one context. Tiling is not implemented.
+there. Stacked mode mounts one context. Tiled v1 mounts Main and one Secondary.
 
 ## Research network
 

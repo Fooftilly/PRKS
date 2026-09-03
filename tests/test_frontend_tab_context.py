@@ -172,12 +172,14 @@ class TestScriptOrderAndRenderer(unittest.TestCase):
         nav = html.find('src="/js/navigation.js"')
         ws = html.find('src="/js/workspace-tabs.js"')
         tc = html.find('src="/js/tab-context.js"')
+        tiling = html.find('src="/js/workspace-tiling.js"')
         pdf_rt = html.find('src="/js/pdf-work-runtime.js"')
         app = html.find('src="/js/app.js"')
         self.assertNotEqual(nav, -1)
         self.assertLess(nav, ws)
         self.assertLess(ws, tc)
-        self.assertLess(tc, pdf_rt)
+        self.assertLess(tc, tiling)
+        self.assertLess(tiling, pdf_rt)
         self.assertLess(pdf_rt, app)
 
     def test_render_tab_route_signature(self):
@@ -223,6 +225,7 @@ class TestEntityMigrationIntegration(unittest.TestCase):
 _PAGE_CONTENT_HOST_FILES = {
     "frontend/js/tab-context.js",
     "frontend/js/workspace-tabs.js",
+    "frontend/js/workspace-tiling.js",
     "frontend/js/app.js",
     "frontend/js/work-selection.js",
     "frontend/js/components/folders.js",

@@ -31,6 +31,8 @@ def seed_library(storage_root: str) -> dict:
     os.makedirs(cfg.thumbs_dir, exist_ok=True)
     dest_pdf = os.path.join(cfg.pdfs_dir, PDF_NAME)
     shutil.copy2(str(MINIMAL_PDF), dest_pdf)
+    dest_pdf_b = os.path.join(cfg.pdfs_dir, "e2e-related.pdf")
+    shutil.copy2(str(MINIMAL_PDF), dest_pdf_b)
     db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
     work_a = db.add_work(
         title=WORK_A_TITLE,
@@ -42,6 +44,7 @@ def seed_library(storage_root: str) -> dict:
     work_b = db.add_work(
         title=WORK_B_TITLE,
         text_content="Related notes.",
+        file_path="/api/pdfs/e2e-related.pdf",
         doc_type="article",
         status="Not Started",
     )

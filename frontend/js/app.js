@@ -1338,9 +1338,11 @@ function prksEnsureMountedTabContext(tabId) {
         return null;
     }
     const host =
-        typeof prksTabContextHost === 'function'
-            ? prksTabContextHost()
-            : document.getElementById('page-content');
+        typeof prksWorkspaceHostForTab === 'function'
+            ? prksWorkspaceHostForTab(tabId)
+            : typeof prksTabContextHost === 'function'
+              ? prksTabContextHost()
+              : document.getElementById('page-content');
     if (!host) return null;
     prksEnsureTabContext(tabId);
     return prksMountTabContext(tabId, host);

@@ -398,9 +398,14 @@
     function prksContextFromElement(element) {
         if (!element || typeof element.closest !== 'function') return null;
         const rootEl = element.closest('.prks-tab-root[data-prks-tab-id]');
-        if (!rootEl) return null;
-        const tabId = rootEl.getAttribute('data-prks-tab-id');
-        return prksGetTabContext(tabId);
+        if (rootEl) {
+            const tabId = rootEl.getAttribute('data-prks-tab-id');
+            const fromRoot = prksGetTabContext(tabId);
+            if (fromRoot) return fromRoot;
+        }
+        const tile = element.closest('.prks-tile[data-prks-tab-id]');
+        if (!tile) return null;
+        return prksGetTabContext(tile.getAttribute('data-prks-tab-id'));
     }
 
     function prksMountTabContext(tabId, host) {

@@ -165,13 +165,21 @@ Do not write window.location.hash directly from feature code.
 
 Do not use window.open for ordinary internal PRKS routes.
 
-Normal navigation targets the current (main) tab.
+Normal navigation targets the originating workspace context (the TabContext that owns the link, or the focused context for palette/global commands). Sidebar chrome navigates Main.
 
 Ctrl/Cmd-click and middle-click target a background PRKS tab.
 
+Alt-click and `prksNavigate(..., { target: "tile" })` open a Secondary tile when the route is tile-capable.
+
 Parked tabs must perform no API requests and own no live DOM/resources.
 
-Only the main tab is mounted. Tiling is not implemented.
+Stacked mode mounts one TabContext (Main). Tiled v1 mounts at most two: Main and one Secondary. Do not introduce a third mounted context until recursive tiling is implemented.
+
+URL always represents Main. Secondary routes never mutate browser History. Make Main uses replaceState.
+
+The right panel always follows the focused TabContext. Feature navigation uses the originating TabContext when it is known; do not use focused context as a substitute for an originating element/context.
+
+Do not add route-level global runtime state.
 
 Tab switching must not create contextual Back origins.
 
@@ -186,8 +194,7 @@ TabContext owns route runtime:
 - live resources → `ctx.resources` / `ctx.setTimer`
 - shell → main/focused context (`prksGetMainTabContext`, `prksGetFocusedTabContext`)
 
-Stacked mode: one mounted context. Future tiling: several visible mounted
-contexts. Do not store route-scoped state on `window`. The Research Graph
+Stacked mode: one mounted context. Tiled v1: Main + one Secondary, each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
 is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
 
 ## Saved Views

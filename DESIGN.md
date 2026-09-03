@@ -509,26 +509,30 @@ These are different concepts. Mixing them will break the later workspace project
 .prks-tab.is-active
 ```
 
-**Workspace tabs (stacked, v1)** represent independently navigable PRKS pages. Only the main tab is mounted. Parked tabs are state only. Reserved names:
+**Workspace tabs (stacked + tiled v1)** represent independently navigable PRKS pages. Parked tabs are state only. Reserved names:
 
 ```text
 .prks-workspace-tabs
 .prks-workspace-tab
+.prks-workspace-canvas
 .prks-tile
 .prks-tile--main
 .prks-tile--secondary
 .prks-tile--focused
 .prks-tile-header
+.prks-tile__body
 .prks-splitter
 ```
 
-The component gallery shows the accessible tab-strip structure (activation control + close control). Tiling is not implemented yet.
+The component gallery shows the accessible tab-strip structure (activation control + close control). Tiled v1 ships one Secondary on the right. Recursive splits and draggable splitters are not implemented.
 
-### Future workspace / tab visual contract
+### Workspace / tab visual contract
 
 Workspace tabs should feel like application/document tabs, not browser chrome pasted into the page.
 
-Stacked v1: one main/visible tab (`mainTabId == focusedTabId`). Parked tabs are unmounted. Tiled mode is not shipped yet: main occupies the full left master column and a focused secondary may differ.
+Stacked: one main/visible tab (`mainTabId == focusedTabId`). Parked tabs are unmounted. Main tile chrome is visually transparent.
+
+Tiled v1: Main occupies the left master column; one Secondary occupies the right. `focusedTabId` may differ from `mainTabId`. The right details panel follows the focused tile. Browser URL, document title, sidebar, and History stay with Main.
 
 | State | Visual |
 | --- | --- |
@@ -538,22 +542,25 @@ Stacked v1: one main/visible tab (`mainTabId == focusedTabId`). Parked tabs are 
 | Parked / open tab | Normal tab-strip state |
 | Dirty / queued / syncing / error | Small semantic state marker (icon + not color alone) |
 
-Tiling:
+Tiling v1:
 
-- main/master tile owns the full left column
-- secondary tiles live on the right
-- splitters use border/surface language
+- main/master tile owns the left column (~58/42 split, fixed)
+- one secondary tile lives on the right
+- a simple border separates tiles
 - no heavy card shadow around every tile
+- stacked mode has no visible tile chrome
 
-Future vertical/horizontal splitter:
+Future recursive Secondary splits / vertical-horizontal splitter:
 
+- `secondaryTree` may grow `type: "split"` nodes (`axis`, `ratio`, `first`, `second`)
 - 1px normal separator
 - larger invisible pointer hit target
 - accent focus/drag indication
 - do not make the divider visually thick just to make it draggable
 - `role="separator"`, `aria-orientation`, `aria-valuenow` where applicable, keyboard arrows
+- splitter resizing is not shipped yet
 
-This specification will later govern the actual workspace project. Do not invent another design language then.
+This specification governs later recursive tiling. Do not invent another design language then.
 
 ### Chips, tags, and badges
 

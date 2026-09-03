@@ -1166,6 +1166,31 @@
         return prksMeta(route).tabIcon || 'file-text';
     }
 
+    const PRKS_TILE_ROUTE_NAMES = {
+        work: true,
+        person: true,
+        'concept-detail': true,
+        'position-detail': true,
+        'argument-detail': true,
+        'playlist-detail': true,
+    };
+
+    function prksRouteSupportsTile(hashOrRoute) {
+        let route = hashOrRoute;
+        if (route == null || typeof route === 'string') route = prksParseRoute(route);
+        if (!route || !route.name) return false;
+        return !!PRKS_TILE_ROUTE_NAMES[route.name];
+    }
+
+    function prksPublishMainShell(ctx) {
+        if (!ctx) return;
+        const route = ctx.lastResolvedRoute || ctx.route;
+        if (!route) return;
+        prksSetResolvedDocumentTitle(ctx, route, {});
+        if (typeof prksSyncSidebarActive === 'function') prksSyncSidebarActive(route);
+        if (typeof prksSyncNavDisclosures === 'function') prksSyncNavDisclosures(route);
+    }
+
     function prksPublishRouteSidebar(ctx, data, generation) {
         if (!ctx || typeof ctx.isCurrent !== 'function') return false;
         if (!ctx.isCurrent(generation)) return false;
@@ -1293,6 +1318,8 @@
         prksDocumentTitleText: prksDocumentTitleText,
         prksRouteLoadingTitle: prksRouteLoadingTitle,
         prksRouteTabIcon: prksRouteTabIcon,
+        prksRouteSupportsTile: prksRouteSupportsTile,
+        prksPublishMainShell: prksPublishMainShell,
         prksPublishRouteSidebar: prksPublishRouteSidebar,
         prksAssignRouteEntity: prksAssignRouteEntity,
         prksIsRouteGenCurrent: prksIsRouteGenCurrent,

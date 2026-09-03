@@ -22,7 +22,7 @@ _REQUIRED_DESIGN_HEADINGS = (
     "Semantic token system",
     "Canonical component vocabulary",
     "Local / content tabs versus workspace tabs",
-    "Future workspace / tab visual contract",
+    "Workspace / tab visual contract",
     "Inline-style policy",
     "Research entities",
     "Research visualization",

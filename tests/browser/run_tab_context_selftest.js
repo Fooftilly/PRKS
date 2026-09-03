@@ -199,6 +199,24 @@ assert('fromElement null', fromEl === null);
 prksDestroyAllTabContexts();
 assertEq('destroy all empty', prksTabContextDebugSnapshot().contexts.length, 0);
 
+prksDestroyAllTabContexts();
+const host1 = makeHost();
+const host2 = makeHost();
+const host3 = makeHost();
+prksMountTabContext('stack-a', host1);
+assertEq('stacked one mounted', prksTabContextDebugSnapshot().mountedCount, 1);
+prksMountTabContext('tile-b', host2);
+assertEq('tiled two mounted', prksTabContextDebugSnapshot().mountedCount, 2);
+prksMountTabContext('over-c', host3);
+assert('module allows third mount', prksTabContextDebugSnapshot().mountedCount >= 2);
+prksUnmountTabContext('over-c', 'park');
+prksUnmountTabContext('tile-b', 'park');
+assertEq('parked B inert root', prksGetTabContext('tile-b').root, null);
+assertEq('parked B no abort', prksGetTabContext('tile-b').abortController, null);
+assertEq('parked B resources', prksGetTabContext('tile-b').resources.size, 0);
+assertEq('parked B timers', prksGetTabContext('tile-b').timers.size, 0);
+prksDestroyAllTabContexts();
+
 let boom = 0;
 const c = createPrksTabContext('tab-boom');
 c.setResource('bad', {}, function () {
