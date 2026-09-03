@@ -20,6 +20,7 @@
             personWorksEditing: false,
             personGroupEditing: false,
             playlistEditing: false,
+            playlistRename: {},
             argumentEditing: false,
             currentSavedView: null,
             researchNotesHints: null,
@@ -31,6 +32,7 @@
         ui.personWorksEditing = false;
         ui.personGroupEditing = false;
         ui.playlistEditing = false;
+        ui.playlistRename = {};
         ui.argumentEditing = false;
         ui.currentSavedView = null;
         ui.researchNotesHints = null;
@@ -452,6 +454,12 @@
         return { mountedCount: mountedCount, contexts: list };
     }
 
+    function prksFocusedRouteRecord() {
+        const ctx = prksGetFocusedTabContext();
+        if (!ctx) return null;
+        return ctx.lastResolvedRoute || ctx.route || null;
+    }
+
     function prksFocusedEntity(type) {
         const ctx = prksGetFocusedTabContext();
         return ctx ? ctx.getEntity(type) : null;
@@ -530,6 +538,7 @@
         prksTabContextHost: prksTabContextHost,
         prksTabContextDebugSnapshot: prksTabContextDebugSnapshot,
         prksFocusedEntity: prksFocusedEntity,
+        prksFocusedRouteRecord: prksFocusedRouteRecord,
         prksOwnerTabContext: prksOwnerTabContext,
         prksSetFocusedEntity: prksSetFocusedEntity,
         prksFocusedRouteGeneration: prksFocusedRouteGeneration,

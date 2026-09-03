@@ -54,8 +54,10 @@ def run_unit_tests(project_dir: str) -> int:
 
 
 def run_e2e_tests(project_dir: str) -> int:
+    from tests.e2e.harness import python_for_subprocess
+
     script = os.path.join(project_dir, "tests", "e2e", "run.py")
-    return subprocess.call([sys.executable, script], cwd=project_dir)
+    return subprocess.call([python_for_subprocess(), script], cwd=project_dir)
 
 
 def main(argv=None) -> int:

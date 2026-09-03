@@ -117,11 +117,12 @@ class TestLatePdfInitProtection(unittest.TestCase):
         )
         with open(pdf_path, encoding="utf-8") as fh:
             src = fh.read()
-        # The .then() handler must check staleness and destroy viewer.
         self.assertIn("_pdfStale()", src, "late-init stale guard missing")
-        # There should be a viewer.destroy() call inside the stale branch.
+        self.assertIn("ctx.getResource('pdf') !== runtime", src)
         stale_block = re.search(
-            r"if\s*\(_pdfStale\(\)\)\s*\{(.*?)\}", src, re.S
+            r"if\s*\(_pdfStale\(\)\s*\|\|\s*ctx\.getResource\('pdf'\)\s*!==\s*runtime\)\s*\{(.*?)return;",
+            src,
+            re.S,
         )
         self.assertIsNotNone(stale_block, "stale guard block not found")
         self.assertIn(
@@ -169,11 +170,13 @@ class TestScriptOrderAndRenderer(unittest.TestCase):
         nav = html.find('src="/js/navigation.js"')
         ws = html.find('src="/js/workspace-tabs.js"')
         tc = html.find('src="/js/tab-context.js"')
+        pdf_rt = html.find('src="/js/pdf-work-runtime.js"')
         app = html.find('src="/js/app.js"')
         self.assertNotEqual(nav, -1)
         self.assertLess(nav, ws)
         self.assertLess(ws, tc)
-        self.assertLess(tc, app)
+        self.assertLess(tc, pdf_rt)
+        self.assertLess(pdf_rt, app)
 
     def test_render_tab_route_signature(self):
         app = os.path.join(FRONTEND_JS, "app.js")
@@ -196,23 +199,113 @@ class TestEntityMigrationIntegration(unittest.TestCase):
             "works.js must use ctx.setEntity for work ownership"
         )
 
-    def test_folders_uses_set_focused_entity(self):
+    def test_folders_uses_ctx_set_entity(self):
         f_path = os.path.join(FRONTEND_JS, "components", "folders.js")
         with open(f_path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn(
-            "prksSetFocusedEntity('folder'", src,
-            "folders.js must use prksSetFocusedEntity for folder"
+            "ctx.setEntity('folder'", src,
+            "folders.js must use ctx.setEntity for folder"
         )
 
-    def test_people_uses_set_focused_entity(self):
+    def test_people_uses_ctx_set_entity(self):
         p_path = os.path.join(FRONTEND_JS, "components", "people.js")
         with open(p_path, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn(
-            "prksSetFocusedEntity('person'", src,
-            "people.js must use prksSetFocusedEntity for person"
+            "ctx.setEntity('person'", src,
+            "people.js must use ctx.setEntity for person"
         )
+
+
+_PAGE_CONTENT_HOST_FILES = {
+    "frontend/js/tab-context.js",
+    "frontend/js/workspace-tabs.js",
+    "frontend/js/app.js",
+    "frontend/js/work-selection.js",
+    "frontend/js/components/folders.js",
+}
+
+_ROUTE_RUNTIME_GLOBALS_RE = re.compile(
+    r"window\.(__prksPdfPageSession|__prksPdfLastPageDetach|"
+    r"__prksPdfLastPageDebounceClear|__prksAnnotationListCache|"
+    r"__prksFlushWorkAnnotationPersistence|__prksPersonDetailEditing|"
+    r"__prksPersonWorksEditing|__prksPlaylistDetailEditing|"
+    r"__prksArgumentDetailEditing)"
+)
+
+_PAGE_CONTENT_GET_RE = re.compile(r"getElementById\(\s*['\"]page-content['\"]\s*\)")
+
+
+class TestPageContentHostOnly(unittest.TestCase):
+    """Feature renderers must not treat #page-content as a route content target."""
+
+    def test_feature_files_do_not_lookup_page_content(self):
+        hits = _scan_frontend_js(_PAGE_CONTENT_GET_RE)
+        bad = [(r, n, l) for r, n, l in hits if r not in _PAGE_CONTENT_HOST_FILES]
+        if bad:
+            lines = "\n".join(f"  {r}:{n}: {l}" for r, n, l in bad[:20])
+            self.fail(f"{len(bad)} feature #page-content lookup(s):\n{lines}")
+
+    def test_host_files_classified(self):
+        hits = _scan_frontend_js(_PAGE_CONTENT_GET_RE)
+        found = {r for r, _n, _l in hits}
+        for required in (
+            "frontend/js/tab-context.js",
+            "frontend/js/workspace-tabs.js",
+            "frontend/js/app.js",
+        ):
+            self.assertIn(required, found, required + " should still resolve the host")
+
+
+class TestRouteRuntimeGlobalsAbsent(unittest.TestCase):
+    """Multi-instance blockers: PDF/detail edit flags must not be window globals."""
+
+    def test_no_route_runtime_globals(self):
+        hits = _scan_frontend_js(_ROUTE_RUNTIME_GLOBALS_RE)
+        if hits:
+            lines = "\n".join(f"  {r}:{n}: {l}" for r, n, l in hits[:20])
+            self.fail(f"{len(hits)} route-runtime global(s):\n{lines}")
+
+
+class TestPdfRuntimeShape(unittest.TestCase):
+    def test_resource_is_runtime_not_viewer(self):
+        pdf_path = os.path.join(FRONTEND_JS, "components", "works-pdf.js")
+        with open(pdf_path, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("createWorkPdfRuntime", src)
+        self.assertIn("ctx.setResource('pdf', runtime", src)
+        self.assertIn("runtime.viewer = viewer", src)
+        self.assertIn("openPdfAnnotationEditorById(ctx, info.annotationId)", src)
+        self.assertNotIn("window.prksHasPendingWorkAnnotationSync = function", src)
+
+    def test_pdf_runtime_module_exports(self):
+        rt_path = os.path.join(FRONTEND_JS, "pdf-work-runtime.js")
+        with open(rt_path, encoding="utf-8") as fh:
+            src = fh.read()
+        for name in (
+            "createWorkPdfRuntime",
+            "prksHasPendingWorkAnnotationSync",
+            "hasPendingSync",
+            "flushAnnotations",
+            "flushLastPage",
+            "getAnnotationHints",
+        ):
+            self.assertIn(name, src, name + " missing from pdf-work-runtime.js")
+
+
+class TestPdfAndNotesIsolationSelftests(unittest.TestCase):
+    def test_pdf_runtime_selftest(self):
+        script = os.path.join(ROOT, "tests", "browser", "run_pdf_runtime_selftest.js")
+        result = subprocess.run(["node", script], capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            self.fail(result.stdout + "\n" + result.stderr)
+
+    def test_work_notes_layout_selftest(self):
+        script = os.path.join(ROOT, "tests", "browser", "run_work_notes_layout_selftest.js")
+        result = subprocess.run(["node", script], capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            self.fail(result.stdout + "\n" + result.stderr)
 
 
 if __name__ == "__main__":

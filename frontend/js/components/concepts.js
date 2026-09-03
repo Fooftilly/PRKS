@@ -151,7 +151,8 @@
             '<p class="meta-row"><a class="prks-btn prks-btn--secondary" href="#/concepts">Back to Concepts</a></p>';
     }
 
-    function renderConceptDetail(concept, container) {
+    function renderConceptDetail(ctx, concept, container) {
+        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('concept', concept);
         const c = concept || {};
         const aliases = (c.aliases || []).map(function (a) {
             return '<li>' + esc(a) + '</li>';

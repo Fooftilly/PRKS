@@ -1206,6 +1206,7 @@ async function prksPatchRoleCreditName(workId, personId, roleType, orderIndex, c
 }
 
 async function prksEditRoleCreditOnWork(btn) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
     const personId = (btn.getAttribute('data-person-id') || '').trim();
@@ -1243,7 +1244,7 @@ async function prksEditRoleCreditOnWork(btn) {
         await prksAlertMessage(data.error || 'Could not update name on file.', 'Could not save');
         return;
     }
-    await prksRefreshUiAfterWorkRoleRemoved(workId);
+    await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx);
 }
 
 window.prksRoleDisplayName = prksRoleDisplayName;
@@ -2146,7 +2147,13 @@ function updatePanelContent(tabId) {
     const panel = document.getElementById('panel-content');
     if (!panel) return;
 
-    setRightPanelRouteContext(window.location.hash || '');
+    const focusedCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const focusedRoute = focusedCtx && (focusedCtx.lastResolvedRoute || focusedCtx.route);
+    const focusedHash =
+        (focusedRoute && (focusedRoute.hash || focusedRoute.canonicalHash)) || (window.location.hash || '');
+    const routeName = focusedRoute && focusedRoute.name;
+
+    setRightPanelRouteContext(focusedHash);
 
     const _fe = typeof prksFocusedEntity === 'function' ? prksFocusedEntity : function () { return null; };
     const _cw = _fe('work');
@@ -2177,19 +2184,20 @@ function updatePanelContent(tabId) {
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Use Details or Annotations.</p>';
         }
-    } else if (_cpl && (window.location.hash || '').startsWith('#/playlists/')) {
-        const editing = window.__prksPlaylistDetailEditing === true;
+    } else if (_cpl && routeName === 'playlist-detail') {
+        const editing = !!(focusedCtx && focusedCtx.ui && focusedCtx.ui.playlistEditing);
         panel.innerHTML = editing ? renderPlaylistEditSidebarHtml(_cpl) : renderPlaylistSummarySidebarHtml(_cpl);
         if (editing) {
-            void mountPlaylistEditSidebar(_cpl);
+            void mountPlaylistEditSidebar(_cpl, focusedCtx);
         } else {
             const btn = document.getElementById('prks-playlist-edit-btn');
             if (btn && btn.dataset.bound !== '1') {
                 btn.dataset.bound = '1';
                 btn.onclick = () => {
-                    window.__prksPlaylistDetailEditing = true;
+                    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                    if (ctx && ctx.ui) ctx.ui.playlistEditing = true;
                     updatePanelContent('details');
-                    if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain();
+                    if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
                 };
             }
         }
@@ -2207,10 +2215,10 @@ function updatePanelContent(tabId) {
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Folder details and tags are above.</p>';
         }
-    } else if (_cp && isPersonDetailHash(window.location.hash || '')) {
+    } else if (_cp && (routeName === 'person' || isPersonDetailHash(focusedHash))) {
         if (tabId === 'details') {
             let topHtml;
-            if (window.__prksPersonDetailEditing && typeof renderPersonProfileEditFormHtml === 'function') {
+            if (focusedCtx && focusedCtx.ui && focusedCtx.ui.personDetailEditing && typeof renderPersonProfileEditFormHtml === 'function') {
                 topHtml = renderPersonProfileEditFormHtml(_cp);
             } else if (typeof renderPersonProfileDetailsSidebarHtml === 'function') {
                 topHtml = renderPersonProfileDetailsSidebarHtml(_cp);
@@ -2223,7 +2231,7 @@ function updatePanelContent(tabId) {
         }
     } else if (
         _cpg &&
-        isPersonGroupDetailHash(window.location.hash || '')
+        (routeName === 'person-group-detail' || isPersonGroupDetailHash(focusedHash))
     ) {
         if (tabId === 'details') {
             const g = _cpg;
@@ -2256,19 +2264,19 @@ function updatePanelContent(tabId) {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';
         }
     } else {
-        if (_cpl && (window.location.hash || '').startsWith('#/playlists/')) {
+        if (_cpl && routeName === 'playlist-detail') {
             const pl = _cpl;
-            const editing = window.__prksPlaylistDetailEditing === true;
+            const editing = !!(focusedCtx && focusedCtx.ui && focusedCtx.ui.playlistEditing);
             const panel = document.getElementById('panel-content');
             if (!panel) return;
             panel.innerHTML = editing ? renderPlaylistEditSidebarHtml(pl) : renderPlaylistSummarySidebarHtml(pl);
             prksBindAutosizeTextareas(panel);
             if (editing) {
-                void mountPlaylistEditSidebar(pl);
+                void mountPlaylistEditSidebar(pl, focusedCtx);
             }
             return;
         }
-        const mode = inferRightPanelListMode(window.location.hash || '');
+        const mode = inferRightPanelListMode(focusedHash);
         panel.innerHTML = renderRouteContextSidebar(mode);
         if (mode === 'graph' && typeof window.renderGraphInspector === 'function') {
             window.renderGraphInspector();
@@ -2349,23 +2357,25 @@ function renderPlaylistEditSidebarHtml(pl) {
     `;
 }
 
-async function mountPlaylistEditSidebar(pl) {
+async function mountPlaylistEditSidebar(pl, ownerCtx) {
     if (!pl || !pl.id) return;
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     prksBindAutosizeTextareas(document.getElementById('panel-content'));
     const editBtn = document.getElementById('prks-playlist-edit-btn');
     if (editBtn && editBtn.dataset.bound !== '1') {
         editBtn.dataset.bound = '1';
         editBtn.onclick = () => {
-            window.__prksPlaylistDetailEditing = true;
+            const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : ctx;
+            if (focused && focused.ui) focused.ui.playlistEditing = true;
             updatePanelContent('details');
-            if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain();
+            if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(focused);
         };
     }
     const close = () => {
-        window.__prksPlaylistDetailEditing = false;
-        if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState();
+        if (ctx && ctx.ui) ctx.ui.playlistEditing = false;
+        if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState(ctx);
         updatePanelContent('details');
-        if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain();
+        if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
     };
 
     document.getElementById('prks-playlist-edit-close')?.addEventListener('click', close);
@@ -2392,14 +2402,13 @@ async function mountPlaylistEditSidebar(pl) {
                 if (!res.ok) throw new Error('save failed');
                 const fresh = typeof fetchPlaylistDetails === 'function' ? await fetchPlaylistDetails(pl.id) : null;
                 if (fresh) {
-                    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
-                    const _ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-                    if (_ctx) _ctx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
+                    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
+                    if (ctx) ctx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
                 }
-                window.__prksPlaylistDetailEditing = false;
-                if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState();
+                if (ctx && ctx.ui) ctx.ui.playlistEditing = false;
+                if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState(ctx);
                 updatePanelContent('details');
-                if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain();
+                if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
             } catch (_e) {
                 if (statusEl) statusEl.textContent = 'Could not save.';
             }
@@ -2458,18 +2467,15 @@ async function mountPlaylistEditSidebar(pl) {
                         const fresh =
                             typeof fetchPlaylistDetails === 'function' ? await fetchPlaylistDetails(pl.id) : null;
                         if (fresh) {
-                            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
-                            const _pctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-                            if (_pctx) _pctx.routeSidebar = {
+                            if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
+                            if (ctx) ctx.routeSidebar = {
                                 playlistTitle: fresh.title || 'Playlist',
                                 itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0,
                             };
-                            const page = document.getElementById('page-content');
-                            if (page && typeof renderPlaylistDetail === 'function') {
-                                renderPlaylistDetail(fresh, page);
+                            if (ctx && ctx.root && typeof renderPlaylistDetail === 'function') {
+                                renderPlaylistDetail(ctx, fresh, ctx.root);
                             }
-                            // Stay in edit mode and keep the editor open.
-                            window.__prksPlaylistDetailEditing = true;
+                            if (ctx && ctx.ui) ctx.ui.playlistEditing = true;
                             updatePanelContent('details');
                         }
                     } catch (_e) {
@@ -2683,6 +2689,7 @@ function buildWorkLinkedPersonsHtml(work) {
 }
 
 async function prksRemoveWorkRoleLink(btn) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
     const personId = (btn.getAttribute('data-person-id') || '').trim();
@@ -2716,23 +2723,25 @@ async function prksRemoveWorkRoleLink(btn) {
         await prksAlertMessage(data.error || 'Could not remove link.', 'Could not save');
         return;
     }
-    await prksRefreshUiAfterWorkRoleRemoved(workId);
+    await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx);
 }
 
-async function prksRefreshUiAfterWorkRoleRemoved(workId) {
-    const hash = window.location.hash || '';
+async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx) {
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const route = ctx && (ctx.lastResolvedRoute || ctx.route);
     const wIdStr = String(workId);
-    const _cwBefore = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
+    const _cwBefore = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
     if (
-        (typeof prksParseRoute === 'function'
-            ? prksParseRoute(hash).name === 'work' && prksParseRoute(hash).params.workId === wIdStr
-            : hash.startsWith('#/works/')) &&
+        route &&
+        route.name === 'work' &&
+        route.params &&
+        String(route.params.workId) === wIdStr &&
         _cwBefore &&
         String(_cwBefore.id) === wIdStr
     ) {
         if (typeof fetchWorkDetails === 'function') {
             const _refreshedW = await fetchWorkDetails(wIdStr);
-            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _refreshedW);
+            if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('work', _refreshedW);
             const panel = document.getElementById('panel-content');
             const tab =
                 typeof getActiveRightPanelTab === 'function' ? getActiveRightPanelTab() : 'details';
@@ -2758,15 +2767,13 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId) {
         }
         return;
     }
-    if (hash.startsWith('#/people/') && !hash.includes('/groups')) {
-        const parts = hash.split('/');
-        const personId = parts[2] ? decodeURIComponent(parts[2]) : '';
+    if (route && route.name === 'person') {
+        const personId = route.params && route.params.personId ? route.params.personId : '';
         if (personId && typeof fetchPersonDetails === 'function') {
-            const container = document.getElementById('page-content');
             try {
                 const person = await fetchPersonDetails(personId);
-                if (person && container && typeof renderPersonDetails === 'function') {
-                    renderPersonDetails(person, container);
+                if (person && ctx && ctx.root && ctx.mounted && typeof renderPersonDetails === 'function') {
+                    renderPersonDetails(ctx, person, ctx.root);
                 }
             } catch (e) {
                 console.error(e);
@@ -3148,10 +3155,11 @@ function renderWorkTagsChips(work) {
         .join('');
 }
 
-async function prksReloadEntityTagsUI(entityType, entityId) {
+async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx) {
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     if (entityType === 'work') {
         const _tw = await fetchWorkDetails(entityId);
-        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _tw);
+        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('work', _tw);
         const panel = document.getElementById('panel-content');
         if (panel && getActiveRightPanelTab() === 'details' && _tw && _tw.id === entityId) {
             panel.innerHTML = prksWorkRightPanelStackHtml(_tw, false);
@@ -3169,10 +3177,10 @@ async function prksReloadEntityTagsUI(entityType, entityId) {
         }
     } else {
         const _tf = await fetchFolderDetails(entityId);
-        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('folder', _tf);
-        const contentDiv = document.getElementById('page-content');
-        if (contentDiv && window.location.hash === '#/folders/' + entityId) {
-            renderFolderDetails(_tf, contentDiv);
+        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('folder', _tf);
+        const route = ctx && (ctx.lastResolvedRoute || ctx.route);
+        if (ctx && ctx.root && ctx.mounted && route && route.name === 'folder-detail' && route.params && String(route.params.folderId) === String(entityId)) {
+            renderFolderDetails(ctx, _tf, ctx.root);
         }
         const panel = document.getElementById('panel-content');
         if (panel && getActiveRightPanelTab() === 'details' && _tf && _tf.id === entityId) {
@@ -3187,6 +3195,7 @@ async function prksReloadEntityTagsUI(entityType, entityId) {
 }
 
 async function prksAttachExistingTag(entityType, entityId, tagId) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
         const url =
             entityType === 'work' ? `/api/works/${entityId}/tags` : `/api/folders/${entityId}/tags`;
@@ -3199,7 +3208,7 @@ async function prksAttachExistingTag(entityType, entityId, tagId) {
         window.__prksAllTagsCache = null;
         const input = document.getElementById(entityType === 'work' ? 'work-tag-search' : 'folder-tag-search');
         if (input) input.value = '';
-        await prksReloadEntityTagsUI(entityType, entityId);
+        await prksReloadEntityTagsUI(entityType, entityId, ownerCtx);
     } catch (e) {
         console.error(e);
         await prksAlertMessage('Could not add tag.', 'Error');
@@ -3456,6 +3465,7 @@ async function mountFolderHierarchyControls(folder) {
 }
 
 async function mountFolderLibraryAttachControls(folder) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const fid = folder && folder.id ? String(folder.id) : '';
     if (!fid) return;
     const editBtn = document.getElementById('prks-folder-library-edit-btn');
@@ -3516,7 +3526,7 @@ async function mountFolderLibraryAttachControls(folder) {
                             if (typeof addWorkToFolder !== 'function') return;
                             await addWorkToFolder(fid, wid);
                             if (status) status.textContent = 'Added.';
-                            await prksReloadEntityTagsUI('folder', fid);
+                            await prksReloadEntityTagsUI('folder', fid, ownerCtx);
                         } catch (e) {
                             if (status) status.textContent = String((e && e.message) || 'Could not add.');
                         }
@@ -3538,7 +3548,7 @@ async function mountFolderLibraryAttachControls(folder) {
                             if (typeof patchWorkFolder !== 'function') return;
                             await patchWorkFolder(wid, fid);
                             if (status) status.textContent = 'Moved.';
-                            await prksReloadEntityTagsUI('folder', fid);
+                            await prksReloadEntityTagsUI('folder', fid, ownerCtx);
                         } catch (e) {
                             if (status) status.textContent = String((e && e.message) || 'Could not move.');
                         }
@@ -3562,13 +3572,14 @@ async function mountFolderLibraryAttachControls(folder) {
 }
 
 async function prksRemoveWorkTag(workId, tagId) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
         await prksRequest(
             `/api/works/${encodeURIComponent(workId)}/tags/${encodeURIComponent(tagId)}`,
             { method: 'DELETE' }
         );
         window.__prksAllTagsCache = null;
-        await prksReloadEntityTagsUI('work', workId);
+        await prksReloadEntityTagsUI('work', workId, ownerCtx);
     } catch (e) {
         console.error(e);
         await prksAlertMessage('Could not remove tag.', 'Error');

@@ -262,7 +262,9 @@ class PageCollector:
     def wait_pdf_handshake(self, page, timeout_ms: int = 25000, since_ms: int = 0) -> None:
         page.wait_for_function(
             """(since) => {
-                const st = window.__prksWorkAnnotationSyncState;
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+                const st = pdf && pdf.syncState;
                 return !!(
                     st
                     && st.lastSuccessAt > since

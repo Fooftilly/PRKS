@@ -204,22 +204,13 @@ function prksExtractWorkIdFromHash(h) {
 }
 
 function prksFlushPdfLastPageToStorage(workId) {
-    if (!workId || !prksGetPdfRememberLastPageEnabled()) return;
-    const sess = window.__prksPdfPageSession;
-    if (!sess || sess.workId !== workId) return;
-    const p = sess.pageNumber;
-    const n = sess.totalPages;
-    if (!Number.isFinite(p) || p < 1) return;
-    try {
-        const payload = JSON.stringify({
-            p: Math.floor(p),
-            n: Number.isFinite(n) ? Math.floor(n) : undefined,
-        });
-        localStorage.setItem(prksPdfLastPageStorageKey(workId), payload);
-    } catch (_e) {}
-    if (typeof window.__prksPdfLastPageDebounceClear === 'function') {
-        window.__prksPdfLastPageDebounceClear(workId);
-    }
+    if (typeof prksForEachMountedTabContext !== 'function') return;
+    prksForEachMountedTabContext(function (ctx) {
+        const pdf = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('pdf') : null;
+        if (!pdf) return;
+        if (workId && pdf.workId && String(pdf.workId) !== String(workId)) return;
+        if (typeof pdf.flushLastPage === 'function') pdf.flushLastPage();
+    });
 }
 
 function prksMaybeFlushPdfLastPageOnRouteChange(prevHash, newHash) {
@@ -242,10 +233,11 @@ function initPrksPdfLastPageVisibilityFlush() {
     if (window.__prksPdfVisibilityFlushBound) return;
     window.__prksPdfVisibilityFlushBound = true;
     const flush = () => {
-        const sess = window.__prksPdfPageSession;
-        if (sess && sess.workId) {
-            prksFlushPdfLastPageToStorage(sess.workId);
-        }
+        if (typeof prksForEachMountedTabContext !== 'function') return;
+        prksForEachMountedTabContext(function (ctx) {
+            const pdf = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('pdf') : null;
+            if (pdf && typeof pdf.flushLastPage === 'function') pdf.flushLastPage();
+        });
     };
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState !== 'hidden') return;
@@ -356,15 +348,16 @@ function prksSyncWorkNotesMobileSideClass() {
         prksIsSmallScreen();
     const want = mobileWorkNotesRightEnabled && isSmall;
     document.documentElement.classList.toggle('prks-work-notes-mobile-side', want);
-    if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
+    if (typeof prksForEachMountedTabContext === 'function') {
+        prksForEachMountedTabContext(function (c) {
+            if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
+                window.prksReapplyWorkNotesSplitLayout(c);
+            }
+            const sync = c && typeof c.getResource === 'function' ? c.getResource('workNotesCollapseSync') : null;
+            if (typeof sync === 'function') sync();
+        });
+    } else if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
         window.prksReapplyWorkNotesSplitLayout();
-    }
-    const splitHandle = document.querySelector('.document-view--work .work-split-handle');
-    if (splitHandle) {
-        splitHandle.setAttribute('aria-orientation', want ? 'vertical' : 'horizontal');
-    }
-    if (typeof window.__prksWorkNotesCollapseSyncUi === 'function') {
-        window.__prksWorkNotesCollapseSyncUi();
     }
 }
 
@@ -1447,6 +1440,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
     }
 
     const prevHash = prevRoute ? prevRoute.hash || prevRoute.canonicalHash : '';
+    const prevPdf = ctx.getResource && ctx.getResource('pdf');
+    if (prevPdf && typeof prevPdf.flushLastPage === 'function') {
+        try {
+            prevPdf.flushLastPage();
+        } catch (_e) {}
+    }
     prksMaybeFlushPdfLastPageOnRouteChange(prevHash, route.hash);
     if (prevRoute && prevRoute.canonicalHash && prevRoute.canonicalHash !== route.canonicalHash) {
         if (typeof prksCaptureCurrentRouteState === 'function') prksCaptureCurrentRouteState(prevRoute, ctx);
@@ -1519,7 +1518,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                               }
                             : { playlistTitle: 'Playlist', itemCount: 0 }
                     );
-                    renderPlaylistDetail(pl, contentDiv);
+                    renderPlaylistDetail(ctx, pl, contentDiv);
                     titleOpts = pl
                         ? { entityTitle: pl.title || 'Playlist' }
                         : { notFound: true, notFoundTitle: 'Playlist not found' };
@@ -1532,7 +1531,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
             case 'folder-detail': {
                 const folder = await fetchFolderDetails(route.params.folderId, { signal: routeSignal });
                 if (stale()) return;
-                renderFolderDetails(folder, contentDiv);
+                ctx.setEntity('folder', folder);
+                renderFolderDetails(ctx, folder, contentDiv);
                 titleOpts = folder
                     ? { entityTitle: folder.title || 'Folder' }
                     : { notFound: true, notFoundTitle: 'Folder not found' };
@@ -1722,7 +1722,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concept not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Concept not found' };
                 } else {
-                    if (typeof renderConceptDetail === 'function') renderConceptDetail(item, contentDiv);
+                    ctx.setEntity('concept', item);
+                    if (typeof renderConceptDetail === 'function') renderConceptDetail(ctx, item, contentDiv);
                     titleOpts = { entityTitle: item.name || 'Concept' };
                 }
                 break;
@@ -1742,7 +1743,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Position not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Position not found' };
                 } else {
-                    if (typeof renderPositionDetail === 'function') renderPositionDetail(item, contentDiv);
+                    ctx.setEntity('position', item);
+                    if (typeof renderPositionDetail === 'function') renderPositionDetail(ctx, item, contentDiv);
                     titleOpts = { entityTitle: item.name || 'Position' };
                 }
                 break;
@@ -1763,7 +1765,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Argument not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Argument not found' };
                 } else {
-                    if (typeof renderArgumentDetail === 'function') renderArgumentDetail(item, contentDiv);
+                    ctx.setEntity('argument', item);
+                    ctx.ui.argumentEditing = false;
+                    if (typeof renderArgumentDetail === 'function') renderArgumentDetail(ctx, item, contentDiv);
                     titleOpts = { entityTitle: item.name || 'Argument' };
                 }
                 break;
@@ -1802,7 +1806,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                           }
                         : { personDisplayName: 'Person not found', linkedWorks: 0 }
                 );
-                renderPersonDetails(person, contentDiv);
+                ctx.setEntity('person', person);
+                ctx.ui.personDetailEditing = false;
+                ctx.ui.personWorksEditing = false;
+                renderPersonDetails(ctx, person, contentDiv);
                 if (person) {
                     const nm =
                         typeof personDisplayName === 'function'
@@ -2204,6 +2211,8 @@ function initForms() {
 
     if (folderBtn) {
         folderBtn.onclick = async () => {
+            const ownerCtx =
+                typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
             if (folderBtn.disabled) return;
             const payload = {
                 title: document.getElementById('folder-title').value,
@@ -2248,16 +2257,16 @@ function initForms() {
                 return;
             }
             closeModals();
-            const hash = window.location.hash || '';
+            const ownerRoute = ownerCtx && (ownerCtx.lastResolvedRoute || ownerCtx.route);
             if (
-                hash === '#/folders' &&
+                ownerRoute &&
+                ownerRoute.name === 'folders' &&
                 typeof fetchFolders === 'function' &&
                 typeof renderDashboard === 'function'
             ) {
-                const contentDiv = document.getElementById('page-content');
                 const folders = await fetchFolders();
-                if (contentDiv) {
-                    renderDashboard(folders, contentDiv);
+                if (ownerCtx && ownerCtx.root && ownerCtx.mounted) {
+                    renderDashboard(folders, ownerCtx.root);
                 }
                 return;
             }

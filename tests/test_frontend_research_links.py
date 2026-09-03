@@ -126,7 +126,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn('class="prks-btn prks-btn--primary"', args)
         self.assertIn("research-entity", args)
         self.assertIn("prks-arg-edit", args)
-        self.assertIn("__prksArgumentDetailEditing", args)
+        self.assertIn("ctx.ui.argumentEditing", args)
         self.assertIn("prksOpenResearchPicker", args)
         self.assertNotIn('placeholder="Work id"', args)
         self.assertNotIn("P-… or A-…", args)

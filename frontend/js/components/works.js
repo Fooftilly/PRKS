@@ -281,7 +281,7 @@ function prksPdfAnnLinkCompletionPick(cm, data, completion) {
 function prksPdfAnnLinkHint(cm) {
     const ctx = prksGetPdfAnnLinkAutocompleteContext(cm);
     if (!ctx) return null;
-    const rows = typeof window.prksGetPdfAnnotationHintList === 'function' ? window.prksGetPdfAnnotationHintList() : [];
+    const rows = typeof window.prksGetPdfAnnotationHintList === 'function' ? window.prksGetPdfAnnotationHintList(prksHintOwnerCtx(cm)) : [];
     const matches = prksFilterPdfAnnForHint(rows, ctx.query);
     if (matches.length === 0) return null;
     return {
@@ -388,9 +388,11 @@ function prksInsertNotesMarkup(cm, markup) {
     cm.focus();
 }
 
-function prksCurrentPdfPagesForWork(workId) {
-    const sess = window.__prksPdfPageSession;
-    if (!sess || sess.workId !== workId) return '';
+function prksCurrentPdfPagesForWork(workId, ctx) {
+    const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const pdf = owner && owner.getResource ? owner.getResource('pdf') : null;
+    const sess = pdf && pdf.pageSession;
+    if (!sess || (workId && sess.workId !== workId)) return '';
     const n = sess.pageNumber;
     if (!Number.isFinite(n) || n < 1) return '';
     return String(Math.floor(n));
@@ -584,7 +586,7 @@ function prksOpenArgumentPicker(cm, work) {
                 kind: kind,
                 name: name || '',
                 workId: work && work.id,
-                pages: prksCurrentPdfPagesForWork(work && work.id),
+                pages: prksCurrentPdfPagesForWork(work && work.id, prksHintOwnerCtx(cm)),
             });
             if (created && created.id) {
                 prksInsertNotesMarkup(
@@ -832,7 +834,7 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         }
         if (!isCurrent()) return;
         initEasyMDE(ctx, work);
-        setupWorkNotesSplitResize(work.id);
+        setupWorkNotesSplitResize(ctx, work.id);
         setupWorkNotesCollapseToggle(ctx, work.id);
     }, 200);
 
@@ -844,7 +846,7 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         .then((r) => (r.ok ? r.json() : []))
         .then((related) => {
             if (!isCurrent()) return;
-            const target = document.getElementById('related-folders-container');
+            const target = ctx.query ? ctx.query('[data-prks-role="related-folders"]') : null;
             if (!target || !Array.isArray(related) || related.length === 0) return;
             target.replaceChildren();
             for (const f of related) {
@@ -978,7 +980,7 @@ function initEasyMDE(ctx, work) {
                 className: "fa fa-lightbulb-o prks-notes-concept",
                 title: "Concept",
                 action: () => {
-                    const _mde = ctx && ctx.getResource ? ctx.getResource('workNotes') : (typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null);
+                    const _mde = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
                     const editor = _mde && _mde.editor ? _mde.editor : _mde;
                     const cm = editor && editor.codemirror;
                     if (cm) prksOpenConceptPicker(cm);
@@ -989,7 +991,7 @@ function initEasyMDE(ctx, work) {
                 className: "fa fa-comment prks-notes-argument",
                 title: "Argument",
                 action: () => {
-                    const _mde = ctx && ctx.getResource ? ctx.getResource('workNotes') : (typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null);
+                    const _mde = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
                     const editor = _mde && _mde.editor ? _mde.editor : _mde;
                     const cm = editor && editor.codemirror;
                     if (cm) prksOpenArgumentPicker(cm, work);
@@ -1071,7 +1073,7 @@ function initEasyMDE(ctx, work) {
                     e.preventDefault();
                     const annId = pdfA.getAttribute('data-pdf-ann-id');
                     if (annId && typeof window.prksJumpToPdfAnnotationFromNotes === 'function') {
-                        void window.prksJumpToPdfAnnotationFromNotes(annId);
+                        void window.prksJumpToPdfAnnotationFromNotes(annId, ctx);
                     }
                     return;
                 }
@@ -1159,8 +1161,13 @@ function prksWorkNotesMobileSideActive() {
     return document.documentElement.classList.contains('prks-work-notes-mobile-side');
 }
 
-function prksReapplyWorkNotesSplitLayout() {
-    const ws = document.querySelector('.work-workspace[data-work-id]');
+function prksWorkNotesEditor(ctx) {
+    return ctx && typeof ctx.getResource === 'function' ? ctx.getResource('workNotes') : null;
+}
+
+function prksReapplyWorkNotesSplitLayout(ctx) {
+    if (!ctx || typeof ctx.query !== 'function') return;
+    const ws = ctx.query('.work-workspace[data-work-id]');
     if (!ws) return;
     const workId = ws.getAttribute('data-work-id');
     if (!workId) return;
@@ -1198,7 +1205,7 @@ function prksReapplyWorkNotesSplitLayout() {
     );
 
     requestAnimationFrame(() => {
-        const _mde = typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null;
+        const _mde = prksWorkNotesEditor(ctx);
         if (_mde && _mde.codemirror) {
             _mde.codemirror.refresh();
         }
@@ -1225,8 +1232,8 @@ function prksClampWorkNotesSideWidth(ws, handle, px) {
     return Math.max(minNotes, Math.min(maxW, px));
 }
 
-function setupWorkNotesSplitResize(workId) {
-    const ws = document.querySelector('.work-workspace[data-work-id="' + workId + '"]');
+function setupWorkNotesSplitResize(ctx, workId) {
+    const ws = ctx && ctx.query ? ctx.query('.work-workspace[data-work-id="' + workId + '"]') : null;
     const handle = ws && ws.querySelector('.work-split-handle');
     const notesPane = ws && ws.querySelector('.work-notes-pane');
     if (!ws || !handle || !notesPane) return;
@@ -1261,7 +1268,7 @@ function setupWorkNotesSplitResize(workId) {
     );
 
     function refreshNotesEditor() {
-        const _mde = typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null;
+        const _mde = prksWorkNotesEditor(ctx);
         if (_mde && _mde.codemirror) {
             _mde.codemirror.refresh();
         }
@@ -1384,32 +1391,29 @@ function setupWorkNotesSplitResize(workId) {
         }
     });
 
-    if (!window.__prksWorkNotesWinResizeBound) {
-        window.__prksWorkNotesWinResizeBound = true;
-        window.addEventListener('resize', () => {
-            const active = document.querySelector('.work-workspace[data-work-id]');
-            if (!active) return;
-            const hEl = active.querySelector('.work-split-handle');
-            const nEl = active.querySelector('.work-notes-pane');
-            if (!hEl || !nEl) return;
+    if (typeof ResizeObserver === 'function') {
+        const ro = new ResizeObserver(function () {
+            prksReapplyWorkNotesSplitLayout(ctx);
+        });
+        try {
+            ro.observe(ws);
+        } catch (_e) {}
+        if (ctx && typeof ctx.registerCleanup === 'function') {
+            ctx.registerCleanup(function () {
+                try {
+                    ro.disconnect();
+                } catch (_e2) {}
+            });
+        }
+    }
 
-            if (document.documentElement.classList.contains('prks-work-notes-mobile-side')) {
-                const raw = active.style.getPropertyValue('--work-notes-width').trim();
-                const cur = parseInt(raw, 10);
-                if (Number.isNaN(cur)) return;
-                const clamped = prksClampWorkNotesSideWidth(active, hEl, cur);
-                active.style.setProperty('--work-notes-width', clamped + 'px');
-            } else {
-                const raw = active.style.getPropertyValue('--work-notes-height').trim();
-                const cur = parseInt(raw, 10);
-                if (Number.isNaN(cur)) return;
-                const clamped = prksClampWorkNotesHeight(active, hEl, cur);
-                active.style.setProperty('--work-notes-height', clamped + 'px');
-            }
-            const _mdeR1 = typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null;
-            if (_mdeR1 && _mdeR1.codemirror) {
-                _mdeR1.codemirror.refresh();
-            }
+    if (!window.__prksWorkNotesViewportBound) {
+        window.__prksWorkNotesViewportBound = true;
+        window.addEventListener('resize', function () {
+            if (typeof prksForEachMountedTabContext !== 'function') return;
+            prksForEachMountedTabContext(function (c) {
+                if (typeof prksReapplyWorkNotesSplitLayout === 'function') prksReapplyWorkNotesSplitLayout(c);
+            });
         });
     }
 
@@ -1434,10 +1438,7 @@ function setupWorkNotesSplitResize(workId) {
 }
 
 function setupWorkNotesCollapseToggle(ctx, workId) {
-    const ws =
-        (ctx && ctx.query
-            ? ctx.query('.work-workspace[data-work-id="' + workId + '"]')
-            : null) || document.querySelector('.work-workspace[data-work-id="' + workId + '"]');
+    const ws = ctx && ctx.query ? ctx.query('.work-workspace[data-work-id="' + workId + '"]') : null;
     const btn = ctx && ctx.query ? ctx.query('[data-prks-role="work-notes-collapse-btn"]') : null;
     if (!ws || !btn) return;
 
@@ -1467,7 +1468,7 @@ function setupWorkNotesCollapseToggle(ctx, workId) {
         localStorage.setItem(storageKey, collapsed ? '1' : '0');
         syncToggleUi();
         requestAnimationFrame(() => {
-            const _mdeC = typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null;
+            const _mdeC = prksWorkNotesEditor(ctx);
             if (_mdeC && _mdeC.codemirror) {
                 _mdeC.codemirror.refresh();
             }
@@ -1475,7 +1476,7 @@ function setupWorkNotesCollapseToggle(ctx, workId) {
     }
 
     syncToggleUi();
-    window.__prksWorkNotesCollapseSyncUi = syncToggleUi;
+    if (ctx && typeof ctx.setResource === 'function') ctx.setResource('workNotesCollapseSync', syncToggleUi);
     btn.addEventListener('click', () => setCollapsed(!ws.classList.contains('work-workspace--notes-collapsed')));
 }
 

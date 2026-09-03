@@ -148,16 +148,19 @@ function renderPlaylistsIndex(playlists, container) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
-function prksClearPlaylistRenameState() {
-    window.__prksPlaylistRename = {};
+function prksClearPlaylistRenameState(ctx) {
+    const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (owner && owner.ui) owner.ui.playlistRename = {};
 }
 
-function prksRefreshPlaylistDetailMain() {
-    const page = document.getElementById('page-content');
-    const pl = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('playlist') : null;
-    const hash = window.location.hash || '';
-    if (!page || !pl || !hash.startsWith('#/playlists/')) return;
-    renderPlaylistDetail(pl, page);
+function prksRefreshPlaylistDetailMain(ctx) {
+    const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const page = owner && owner.root;
+    const pl = owner && owner.getEntity ? owner.getEntity('playlist') : null;
+    const route = owner && (owner.lastResolvedRoute || owner.route);
+    if (!page || !pl) return;
+    if (route && route.name && route.name !== 'playlist-detail') return;
+    renderPlaylistDetail(owner, pl, page);
 }
 
 function prksPlPlaylistItemActionsHtml(w, idx, ren) {
@@ -204,16 +207,18 @@ function prksPlPlaylistItemBodyHtml(w, ren, editing) {
         </div>`;
 }
 
-function renderPlaylistDetail(pl, container) {
+function renderPlaylistDetail(ctx, pl, container) {
+    if (!container) return;
     if (!pl) {
         container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Playlist not found</h2></div>';
         return;
     }
+    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', pl);
     const items = Array.isArray(pl.items) ? pl.items : [];
-    const editing = window.__prksPlaylistDetailEditing === true;
+    const editing = !!(ctx && ctx.ui && ctx.ui.playlistEditing);
     const ren =
-        window.__prksPlaylistRename && typeof window.__prksPlaylistRename === 'object'
-            ? window.__prksPlaylistRename
+        ctx && ctx.ui && ctx.ui.playlistRename && typeof ctx.ui.playlistRename === 'object'
+            ? ctx.ui.playlistRename
             : {};
     const editingClass = editing ? ' prks-playlist-detail--editing' : '';
     container.innerHTML = `
@@ -248,6 +253,35 @@ function renderPlaylistDetail(pl, container) {
         </div>
     `;
 
+    function playlistRenameMap() {
+        if (!ctx || !ctx.ui) return {};
+        if (!ctx.ui.playlistRename || typeof ctx.ui.playlistRename !== 'object') ctx.ui.playlistRename = {};
+        return ctx.ui.playlistRename;
+    }
+
+    function applyFreshPlaylist(fresh) {
+        if (!fresh) return;
+        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
+        if (ctx) {
+            ctx.routeSidebar = {
+                playlistTitle: fresh.title || 'Playlist',
+                itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0,
+            };
+        }
+        renderPlaylistDetail(ctx, fresh, container);
+        const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+        if (
+            ctx &&
+            ctx.ui &&
+            ctx.ui.playlistEditing &&
+            focused &&
+            focused.tabId === ctx.tabId &&
+            typeof updatePanelContent === 'function'
+        ) {
+            updatePanelContent('details');
+        }
+    }
+
     container.onclick = async (ev) => {
         const nav = ev.target.closest && ev.target.closest('[data-pl-nav]');
         if (nav && !editing) {
@@ -269,11 +303,8 @@ function renderPlaylistDetail(pl, container) {
         if (renBtn) {
             const wid = String(renBtn.getAttribute('data-pl-rename') || '').trim();
             if (!wid) return;
-            if (!window.__prksPlaylistRename || typeof window.__prksPlaylistRename !== 'object') {
-                window.__prksPlaylistRename = {};
-            }
-            window.__prksPlaylistRename[wid] = true;
-            renderPlaylistDetail(pl, container);
+            playlistRenameMap()[wid] = true;
+            renderPlaylistDetail(ctx, pl, container);
             const inp = document.getElementById('prks-pl-rename-input-' + wid);
             if (inp) {
                 inp.focus();
@@ -286,10 +317,8 @@ function renderPlaylistDetail(pl, container) {
         }
         if (renCancel) {
             const wid = String(renCancel.getAttribute('data-pl-rename-cancel') || '').trim();
-            if (window.__prksPlaylistRename && typeof window.__prksPlaylistRename === 'object') {
-                delete window.__prksPlaylistRename[wid];
-            }
-            renderPlaylistDetail(pl, container);
+            delete playlistRenameMap()[wid];
+            renderPlaylistDetail(ctx, pl, container);
             return;
         }
         if (renSave) {
@@ -304,19 +333,9 @@ function renderPlaylistDetail(pl, container) {
                     body: JSON.stringify({ title: nextTitle }),
                 });
                 if (!res.ok) throw new Error('save failed');
-                if (window.__prksPlaylistRename && typeof window.__prksPlaylistRename === 'object') {
-                    delete window.__prksPlaylistRename[wid];
-                }
+                delete playlistRenameMap()[wid];
                 const fresh = await fetchPlaylistDetails(pl.id);
-                renderPlaylistDetail(fresh, container);
-                if (fresh) {
-                    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
-                    const _pctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-                    if (_pctx) _pctx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
-                    if (window.__prksPlaylistDetailEditing === true && typeof updatePanelContent === 'function') {
-                        updatePanelContent('details');
-                    }
-                }
+                applyFreshPlaylist(fresh);
             } catch (_e) {
                 await prksAlertMessage('Could not rename video.', 'Error');
             }
@@ -341,15 +360,7 @@ function renderPlaylistDetail(pl, container) {
             try {
                 await removeWorkFromPlaylist(pl.id, wid);
                 const fresh = await fetchPlaylistDetails(pl.id);
-                renderPlaylistDetail(fresh, container);
-                if (fresh) {
-                    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
-                    const _rmCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-                    if (_rmCtx) _rmCtx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
-                    if (window.__prksPlaylistDetailEditing === true && typeof updatePanelContent === 'function') {
-                        updatePanelContent('details');
-                    }
-                }
+                applyFreshPlaylist(fresh);
             } catch (_e) {
                 await prksAlertMessage('Could not remove item.', 'Error');
             }
@@ -358,15 +369,7 @@ function renderPlaylistDetail(pl, container) {
         try {
             await reorderPlaylist(pl.id, ids);
             const fresh = await fetchPlaylistDetails(pl.id);
-            renderPlaylistDetail(fresh, container);
-            if (fresh) {
-                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
-                const _roCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-                if (_roCtx) _roCtx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
-                if (window.__prksPlaylistDetailEditing === true && typeof updatePanelContent === 'function') {
-                    updatePanelContent('details');
-                }
-            }
+            applyFreshPlaylist(fresh);
         } catch (_e) {
             await prksAlertMessage('Could not reorder playlist.', 'Error');
         }

@@ -81,7 +81,8 @@
             '<p class="meta-row"><a class="prks-btn prks-btn--secondary" href="#/positions">Back to Positions</a></p>';
     }
 
-    function renderPositionDetail(position, container) {
+    function renderPositionDetail(ctx, position, container) {
+        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('position', position);
         const p = position || {};
         const args = (p.arguments || [])
             .map(function (a) {

@@ -659,7 +659,7 @@
             .replace(/'/g, '&#39;');
     }
 
-    function prksBackLabelForRoute(route) {
+    function prksBackLabelForRoute(route, ctx) {
         if (!route) return 'Folders';
         if (route.name === 'progress' && route.params && route.params.status) {
             return String(route.params.status);
@@ -667,32 +667,46 @@
         if (route.name === 'people-role' && route.params && route.params.role) {
             return String(route.params.role);
         }
-        if (route.name === 'folder-detail' && root.currentFolder && route.params && root.currentFolder.id === route.params.folderId) {
-            const t = String(root.currentFolder.title || '').trim();
-            if (t) return t;
+        const owner =
+            ctx ||
+            (typeof root.prksGetFocusedTabContext === 'function' ? root.prksGetFocusedTabContext() : null);
+        function ent(type) {
+            return owner && typeof owner.getEntity === 'function' ? owner.getEntity(type) : null;
         }
-        if (route.name === 'person' && root.currentPerson && route.params && root.currentPerson.id === route.params.personId) {
-            if (typeof root.personDisplayName === 'function') {
-                const n = String(root.personDisplayName(root.currentPerson) || '').trim();
+        if (route.name === 'folder-detail' && route.params) {
+            const folder = ent('folder');
+            if (folder && folder.id === route.params.folderId) {
+                const t = String(folder.title || '').trim();
+                if (t) return t;
+            }
+        }
+        if (route.name === 'person' && route.params) {
+            const person = ent('person');
+            if (person && person.id === route.params.personId && typeof root.personDisplayName === 'function') {
+                const n = String(root.personDisplayName(person) || '').trim();
                 if (n) return n;
             }
         }
-        if (route.name === 'playlist-detail' && root.currentPlaylist && route.params && root.currentPlaylist.id === route.params.playlistId) {
-            const t = String(root.currentPlaylist.title || '').trim();
-            if (t) return t;
+        if (route.name === 'playlist-detail' && route.params) {
+            const pl = ent('playlist');
+            if (pl && pl.id === route.params.playlistId) {
+                const t = String(pl.title || '').trim();
+                if (t) return t;
+            }
         }
-        if (
-            route.name === 'person-group-detail' &&
-            root.currentPersonGroup &&
-            route.params &&
-            root.currentPersonGroup.id === route.params.groupId
-        ) {
-            const t = String(root.currentPersonGroup.name || '').trim();
-            if (t) return t;
+        if (route.name === 'person-group-detail' && route.params) {
+            const group = ent('personGroup');
+            if (group && group.id === route.params.groupId) {
+                const t = String(group.name || '').trim();
+                if (t) return t;
+            }
         }
-        if (route.name === 'work' && root.currentWork && route.params && root.currentWork.id === route.params.workId) {
-            const t = String(root.currentWork.title || '').trim();
-            if (t) return t;
+        if (route.name === 'work' && route.params) {
+            const work = ent('work');
+            if (work && work.id === route.params.workId) {
+                const t = String(work.title || '').trim();
+                if (t) return t;
+            }
         }
         return prksMeta(route).backLabel || 'Folders';
     }
@@ -1012,7 +1026,7 @@
         const rec = prksValidateOriginRecord({
             hash: fromRoute.canonicalHash,
             name: fromRoute.name,
-            label: prksBackLabelForRoute(fromRoute),
+            label: prksBackLabelForRoute(fromRoute, ctx),
         });
         if (!rec) return;
         const key = destRoute.canonicalHash;

@@ -733,12 +733,13 @@ function renderDashboard(folders, container) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
-function renderFolderDetails(folder, container) {
+function renderFolderDetails(ctx, folder, container) {
+    if (!container) return;
     if (!folder) {
         container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">Folder not found.</p>';
         return;
     }
-    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('folder', folder);
+    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('folder', folder);
     const hasChildren = Array.isArray(folder.children) && folder.children.length > 0;
     const canDelete = (!folder.works || folder.works.length === 0) && !hasChildren;
 
@@ -792,6 +793,7 @@ function renderFolderDetails(folder, container) {
 }
 
 async function prksRemoveFolderTag(folderId, tagId) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
         const res = await prksRequest(
             `/api/folders/${encodeURIComponent(folderId)}/tags/${encodeURIComponent(tagId)}`,
@@ -799,7 +801,7 @@ async function prksRemoveFolderTag(folderId, tagId) {
         );
         if (!res.ok) throw new Error(`Server error ${res.status}`);
         window.__prksAllTagsCache = null;
-        await prksReloadEntityTagsUI('folder', folderId);
+        await prksReloadEntityTagsUI('folder', folderId, ownerCtx);
     } catch (e) {
         console.error(e);
         await prksAlertMessage('Could not remove tag.', 'Error');

@@ -148,10 +148,11 @@
             .join(', ');
     }
 
-    function renderArgumentDetail(argument, container) {
+    function renderArgumentDetail(ctx, argument, container) {
         const a = argument || {};
+        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('argument', a);
         const kindLabel = a.kind === 'stance' ? 'Stance' : 'Argument';
-        const editing = window.__prksArgumentDetailEditing === true;
+        const editing = !!(ctx && ctx.ui && ctx.ui.argumentEditing);
         const verdicts = a.verdicts || [];
 
         function graphHash() {
@@ -259,7 +260,7 @@
                 '<div class="list-view prks-research-index">' +
                 mentions +
                 '</div></section></div>';
-            bindArgumentRead(a, container, graphHash);
+            bindArgumentRead(ctx, a, container, graphHash);
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
             return;
         }
@@ -306,7 +307,7 @@
             '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="prks-arg-add-source">Add source</button>' +
             '<p class="prks-arg-form__actions"><button type="submit" class="prks-btn prks-btn--primary">Save</button></p>' +
             '</form>';
-        bindArgumentEdit(a, container, verdictOpts, graphHash);
+        bindArgumentEdit(ctx, a, container, verdictOpts);
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
     }
 
@@ -360,7 +361,7 @@
         );
     }
 
-    function bindArgumentRead(a, container, graphHash) {
+    function bindArgumentRead(ctx, a, container, graphHash) {
         const viewGraph = container.querySelector('#prks-arg-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
@@ -370,8 +371,8 @@
         const edit = container.querySelector('#prks-arg-edit');
         if (edit) {
             edit.addEventListener('click', function () {
-                window.__prksArgumentDetailEditing = true;
-                renderArgumentDetail(a, container);
+                if (ctx && ctx.ui) ctx.ui.argumentEditing = true;
+                renderArgumentDetail(ctx, a, container);
             });
         }
         const resp = container.querySelector('#prks-arg-response');
@@ -399,7 +400,7 @@
         }
     }
 
-    function bindArgumentEdit(a, container, verdictOpts) {
+    function bindArgumentEdit(ctx, a, container, verdictOpts) {
         const kindSel = container.querySelector('#prks-arg-kind');
         function defaultVerdict() {
             const kind = kindSel && kindSel.value === 'stance' ? 'stance' : 'argument';
@@ -522,8 +523,8 @@
         const cancel = container.querySelector('#prks-arg-cancel');
         if (cancel) {
             cancel.addEventListener('click', function () {
-                window.__prksArgumentDetailEditing = false;
-                renderArgumentDetail(a, container);
+                if (ctx && ctx.ui) ctx.ui.argumentEditing = false;
+                renderArgumentDetail(ctx, a, container);
             });
         }
         const addT = container.querySelector('#prks-arg-add-target');
@@ -562,12 +563,12 @@
             });
             form.addEventListener('submit', function (e) {
                 e.preventDefault();
-                void saveArgumentForm(a.id, container);
+                void saveArgumentForm(ctx, a.id, container);
             });
         }
     }
 
-    async function saveArgumentForm(id, container) {
+    async function saveArgumentForm(ctx, id, container) {
         const nameEl = container.querySelector('#prks-arg-name');
         const kindEl = container.querySelector('#prks-arg-kind');
         const textEl = container.querySelector('#prks-arg-text');
@@ -592,7 +593,7 @@
             });
             await root.putArgumentTargets(id, targets);
             await root.putArgumentSources(id, sources);
-            window.__prksArgumentDetailEditing = false;
+            if (ctx && ctx.ui) ctx.ui.argumentEditing = false;
             if (typeof root.prksNavigate === 'function') {
                 root.prksNavigate(root.location.hash, { replace: true });
             }

@@ -34,6 +34,23 @@ This note links [[concept:Culture Industry]] to the work.
 <img src=x onerror=alert(1)>
 """
 
+_FOCUSED_PDF = """(() => {
+    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+    return (ctx && ctx.getResource) ? ctx.getResource('pdf') : null;
+})()"""
+
+_FOCUSED_VIEWER = """(() => {
+    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+    const pdf = (ctx && ctx.getResource) ? ctx.getResource('pdf') : null;
+    return pdf && pdf.viewer ? pdf.viewer : null;
+})()"""
+
+_FOCUSED_WORK_NOTES = """(() => {
+    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+    const wn = (ctx && ctx.getResource) ? ctx.getResource('workNotes') : null;
+    return wn && wn.editor ? wn.editor : wn;
+})()"""
+
 
 def load_tests(loader, standard_tests, pattern):
     if os.environ.get("PRKS_E2E") != "1":
@@ -152,10 +169,12 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
         page.locator(".CodeMirror").click()
         page.keyboard.press("Control+A")
         page.keyboard.insert_text(NOTES)
-        page.locator("#editor-status", has_text="All changes saved").wait_for()
+        page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for()
         page.wait_for_function(
             """() => {
-                const refs = window.currentWork && window.currentWork.research_refs;
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+                const refs = work && work.research_refs;
                 const cs = refs && refs.concepts;
                 return Array.isArray(cs) && cs.some(function (c) {
                     return String(c && c.name || '').indexOf('Culture Industry') !== -1;
@@ -210,7 +229,7 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
         self.assertEqual(len(mention), 1, topo["edges"])
         _open_work_from_home(page, WORK_A_TITLE)
         page.wait_for_selector(".CodeMirror")
-        saved = page.evaluate("() => window.workNotesEasyMDE && window.workNotesEasyMDE.value()")
+        saved = page.evaluate("() => { const ed = %s; return ed && ed.value && ed.value(); }" % _FOCUSED_WORK_NOTES)
         self.assertIn("[[concept:Culture Industry]]", saved)
 
 
@@ -420,7 +439,7 @@ class ResearchPickerTests(_BrowserE2E):
         q.fill("E2E")
         q.press("Enter")
         page.wait_for_function("() => !document.getElementById('prks-research-picker')")
-        saved = page.evaluate("() => window.workNotesEasyMDE && window.workNotesEasyMDE.value()")
+        saved = page.evaluate("() => { const ed = %s; return ed && ed.value && ed.value(); }" % _FOCUSED_WORK_NOTES)
         self.assertIn("[[concept:", saved)
         page.locator(".editor-toolbar button.prks-insert-argument").click()
         page.wait_for_selector("#prks-research-picker .prks-dialog")
@@ -429,7 +448,9 @@ class ResearchPickerTests(_BrowserE2E):
         page.wait_for_function("() => !document.getElementById('prks-research-picker')")
         page.wait_for_function(
             """() => {
-                const v = window.workNotesEasyMDE && window.workNotesEasyMDE.value();
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const wn = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                const v = wn && wn.editor && wn.editor.value ? wn.editor.value() : '';
                 return v && v.indexOf('[[argument:') !== -1 && v.indexOf('E2E Picker Argument') !== -1;
             }"""
         )
@@ -442,7 +463,9 @@ class ResearchPickerTests(_BrowserE2E):
         page.wait_for_function("() => !document.getElementById('prks-research-picker')")
         page.wait_for_function(
             """() => {
-                const v = window.workNotesEasyMDE && window.workNotesEasyMDE.value();
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const wn = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                const v = wn && wn.editor && wn.editor.value ? wn.editor.value() : '';
                 return v && v.indexOf('E2E Search Created Stance') !== -1;
             }"""
         )
@@ -452,12 +475,23 @@ class ResearchPickerTests(_BrowserE2E):
 def _wait_pdf_viewer(page):
     page.wait_for_selector('[data-prks-role="pdf-viewer"] .prks-pdf-page', timeout=30000)
     page.wait_for_selector('[data-prks-role="pdf-viewer"] .prks-pdf-render-image', timeout=30000)
-    page.wait_for_function("() => window.currentPdfViewer != null", timeout=30000)
     page.wait_for_function(
-        "() => window.currentPdfViewer && window.currentPdfViewer.getPageCount && window.currentPdfViewer.getPageCount() >= 1",
+        """() => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+            const v = pdf && pdf.viewer;
+            return !!(v && v.getPageCount && v.getPageCount() >= 1);
+        }""",
         timeout=30000,
     )
-    page.wait_for_function("() => window.__prksWorkAnnotationSyncState != null", timeout=30000)
+    page.wait_for_function(
+        """() => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+            return !!(pdf && pdf.syncState);
+        }""",
+        timeout=30000,
+    )
 
 
 def _open_annotations_tab(page):
@@ -468,7 +502,8 @@ def _open_annotations_tab(page):
 def _sync_success_at(page):
     return int(
         page.evaluate(
-            "() => (window.__prksWorkAnnotationSyncState && window.__prksWorkAnnotationSyncState.lastSuccessAt) || 0"
+            "() => { const pdf = %s; return (pdf && pdf.syncState && pdf.syncState.lastSuccessAt) || 0; }"
+            % _FOCUSED_PDF
         )
         or 0
     )
@@ -478,10 +513,11 @@ def _viewer_annotation_count(page):
     return int(
         page.evaluate(
             """() => {
-                const v = window.currentPdfViewer;
+                const v = %s;
                 if (!v || typeof v.getAnnotations !== 'function') return 0;
                 return (v.getAnnotations() || []).length;
             }"""
+            % _FOCUSED_VIEWER
         )
         or 0
     )
@@ -607,7 +643,9 @@ def _commit_pdf_highlight(page):
     highlight.click()
     page.wait_for_function(
         """(n) => {
-            const v = window.currentPdfViewer;
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+            const v = pdf && pdf.viewer;
             return !!(v && v.getAnnotations && v.getAnnotations().length > n);
         }""",
         arg=before,
@@ -636,7 +674,9 @@ class PdfPersistenceTests(_BrowserE2E):
         page.locator(".annotation-row__jump").first.click()
         page.wait_for_function(
             """() => {
-                const v = window.currentPdfViewer;
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+                const v = pdf && pdf.viewer;
                 if (!v || typeof v.getSelectedAnnotation !== 'function') return true;
                 return !!v.getSelectedAnnotation();
             }"""
@@ -1016,7 +1056,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.locator(".CodeMirror").click()
         page.keyboard.press("Control+A")
         page.keyboard.insert_text(unique)
-        page.locator("#editor-status", has_text="Drafting").wait_for()
+        page.locator('[data-prks-role="editor-status"]', has_text="Drafting").wait_for()
         with page.expect_response(
             lambda r: r.request.method == "PATCH" and "/api/works/" in r.url and r.ok
         ):
@@ -1026,7 +1066,9 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.wait_for_selector(".CodeMirror")
         page.wait_for_function(
             """(text) => {
-                const ed = window.workNotesEasyMDE;
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const wn = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                const ed = wn && wn.editor ? wn.editor : wn;
                 return !!(ed && ed.value && ed.value().indexOf(text) !== -1);
             }""",
             arg=unique,
@@ -1153,3 +1195,116 @@ class WorkspaceTabsTests(_BrowserE2E):
         self.assertGreaterEqual(page.locator(".work-detail").count(), 1)
         self.assertEqual(page.locator(".person-profile").count(), 0)
         self.assertEqual(person_gets, [])
+
+
+_ONE_STACKED_ROOT = """() => document.querySelectorAll('#page-content > .prks-tab-root').length === 1"""
+
+
+def _tab_root_id(page):
+    return page.evaluate(
+        """() => {
+            const el = document.querySelector('#page-content > .prks-tab-root');
+            return el ? el.getAttribute('data-prks-tab-id') : null;
+        }"""
+    )
+
+
+def _host_child_classes(page):
+    return page.evaluate(
+        """() => {
+            const host = document.getElementById('page-content');
+            return Array.from(host.children).map((el) => el.className || '');
+        }"""
+    )
+
+
+class TabContextHostRootTests(_BrowserE2E):
+    def _assert_single_mounted_root(self, page, expected_id=None):
+        page.wait_for_function(_ONE_STACKED_ROOT)
+        self.assertEqual(page.locator("#page-content > .prks-tab-root").count(), 1)
+        classes = _host_child_classes(page)
+        self.assertEqual(len(classes), 1)
+        self.assertIn("prks-tab-root", classes[0])
+        rid = _tab_root_id(page)
+        if expected_id is not None:
+            self.assertEqual(rid, expected_id)
+        return rid
+
+    def test_person_edit_keeps_same_tab_root(self):
+        _server, page, _collector = self._start_app()
+        page.locator('#sidebar a.nav-link[href="#/people"]').click()
+        page.wait_for_function("() => location.hash === '#/people'")
+        page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.locator(".person-profile__summary").wait_for()
+        root_id = self._assert_single_mounted_root(page)
+        self.assertGreaterEqual(
+            page.locator("#page-content > .prks-tab-root .person-profile").count(),
+            1,
+        )
+        page.locator(".person-sidebar-summary .prks-btn--secondary", has_text="Edit works").click()
+        page.wait_for_selector(".person-profile__work-card-wrap, .person-profile__role-block")
+        self._assert_single_mounted_root(page, root_id)
+        self.assertGreaterEqual(
+            page.locator("#page-content > .prks-tab-root .person-profile").count(),
+            1,
+        )
+        page.locator(".person-sidebar-summary .prks-btn--secondary", has_text="Done").click()
+        self._assert_single_mounted_root(page, root_id)
+        page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
+        page.wait_for_selector("#pd-about")
+        page.fill("#pd-about", "Host-root profile save")
+        page.locator("#pd-save-btn").click()
+        page.wait_for_selector(".person-profile__summary")
+        page.locator(".person-profile__about", has_text="Host-root profile save").wait_for()
+        self._assert_single_mounted_root(page, root_id)
+        self.assertGreaterEqual(
+            page.locator("#page-content > .prks-tab-root .person-profile").count(),
+            1,
+        )
+
+    def test_playlist_refresh_keeps_same_tab_root(self):
+        _server, page, _collector = self._start_app()
+        page.locator('#sidebar a.nav-link[href="#/playlists"]').click()
+        page.wait_for_function("() => location.hash === '#/playlists'")
+        page.evaluate("() => openModal('playlist-modal')")
+        page.wait_for_selector("#playlist-title")
+        page.fill("#playlist-title", "E2E Host Playlist")
+        page.locator("#save-playlist-btn").click()
+        page.wait_for_function("() => location.hash.indexOf('#/playlists/') === 0")
+        page.locator(".prks-playlist-detail").wait_for()
+        root_id = self._assert_single_mounted_root(page)
+        page.locator("#prks-playlist-edit-btn").click()
+        page.wait_for_selector("#prks-playlist-edit-desc")
+        page.fill("#prks-playlist-edit-desc", "Refreshed in owner root")
+        page.locator("#prks-playlist-edit-save").click()
+        page.wait_for_function(
+            """() => {
+                const el = document.querySelector('#page-content > .prks-tab-root');
+                return !!(el && el.innerText && el.innerText.indexOf('Refreshed in owner root') !== -1);
+            }"""
+        )
+        self._assert_single_mounted_root(page, root_id)
+        self.assertGreaterEqual(
+            page.locator("#page-content > .prks-tab-root .prks-playlist-detail").count(),
+            1,
+        )
+
+    def test_folder_create_refresh_stays_in_tab_root(self):
+        _server, page, _collector = self._start_app()
+        page.locator('#sidebar a.nav-link[href="#/folders"]').click()
+        page.wait_for_function("() => location.hash === '#/folders'")
+        page.wait_for_selector(".prks-folder-library")
+        root_id = self._assert_single_mounted_root(page)
+        page.evaluate("() => openModal('folder-modal')")
+        page.wait_for_selector("#folder-title")
+        page.fill("#folder-title", "E2E Host Folder")
+        page.locator("#save-folder-btn").click()
+        page.wait_for_selector(".prks-folder-library")
+        page.get_by_text("E2E Host Folder").wait_for()
+        self._assert_single_mounted_root(page, root_id)
+        self.assertGreaterEqual(
+            page.locator("#page-content > .prks-tab-root .prks-folder-library").count(),
+            1,
+        )
+        self.assertEqual(page.evaluate("() => location.hash"), "#/folders")

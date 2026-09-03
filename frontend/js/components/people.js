@@ -698,23 +698,28 @@ function renderPeopleList(persons, container, options = {}) {
 }
 
 async function openPersonProfileEdit() {
-    window.__prksPersonWorksEditing = false;
-    window.__prksPersonDetailEditing = true;
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (ctx && ctx.ui) {
+        ctx.ui.personWorksEditing = false;
+        ctx.ui.personDetailEditing = true;
+    }
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
-    const _cpEdit = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
+    const _cpEdit = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
     if (typeof prksMountPersonProfileGroupPicker === 'function' && _cpEdit) {
         await prksMountPersonProfileGroupPicker(_cpEdit);
     }
 }
 
 function closePersonProfileEdit() {
-    window.__prksPersonDetailEditing = false;
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (ctx && ctx.ui) ctx.ui.personDetailEditing = false;
     window.__prksPersonEditSelectedGroups = null;
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
 
 async function deletePerson() {
-    const p = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const p = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
     const personId = p && p.id ? String(p.id) : '';
     if (!personId) return;
     const linkedWorks = p ? prksUniquePersonWorks(p).length : 0;
@@ -735,9 +740,11 @@ async function deletePerson() {
             await prksAlertMessage(body.error || 'Could not delete person.', 'Could not delete');
             return;
         }
-        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('person', null);
-        window.__prksPersonDetailEditing = false;
-        window.__prksPersonWorksEditing = false;
+        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', null);
+        if (ctx && ctx.ui) {
+            ctx.ui.personDetailEditing = false;
+            ctx.ui.personWorksEditing = false;
+        }
         if (typeof prksNavigate === 'function') prksNavigate('#/people');
     } catch (_e) {
         await prksAlertMessage('Could not delete person.', 'Error');
@@ -745,18 +752,19 @@ async function deletePerson() {
 }
 
 function prksTogglePersonWorksEdit() {
-    const p = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
-    if (!p) return;
-    const nowEditing = window.__prksPersonWorksEditing === true;
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const p = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
+    if (!p || !ctx) return;
+    const nowEditing = !!(ctx.ui && ctx.ui.personWorksEditing);
     if (nowEditing) {
-        window.__prksPersonWorksEditing = false;
+        ctx.ui.personWorksEditing = false;
     } else {
         if (!p.works || p.works.length === 0) return;
-        window.__prksPersonWorksEditing = true;
+        ctx.ui.personWorksEditing = true;
     }
-    const contentDiv = document.getElementById('page-content');
-    if (contentDiv && typeof renderPersonDetails === 'function') {
-        renderPersonDetails(p, contentDiv);
+    const root = ctx.root;
+    if (root && typeof renderPersonDetails === 'function') {
+        renderPersonDetails(ctx, p, root);
     }
     if (typeof updatePanelContent === 'function') {
         updatePanelContent('details');
@@ -795,7 +803,8 @@ function renderPersonProfileDetailsSidebarHtml(person) {
     const nWorks = prksUniquePersonWorks(person).length;
     const nGroups = Array.isArray(person.groups) ? person.groups.length : 0;
     const nRefs = personReferenceCount(person);
-    const editingWorks = window.__prksPersonWorksEditing === true;
+    const _fctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const editingWorks = !!( _fctx && _fctx.ui && _fctx.ui.personWorksEditing);
     const worksEditBtn =
         nWorks > 0 || editingWorks
             ? `<button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" onclick="prksTogglePersonWorksEdit()">${
@@ -887,6 +896,8 @@ function renderPersonProfileEditFormHtml(person) {
 }
 
 async function savePersonProfile(personId) {
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const root = ctx && ctx.root;
     const birthIso = parsePersonBirthDeathField(document.getElementById('pd-birth-date').value);
     if (birthIso === null) {
         await prksAlertMessage(`Birth:\n${PERSON_DATE_HELP}`, 'Validation');
@@ -900,7 +911,7 @@ async function savePersonProfile(personId) {
     let group_ids =
         typeof prksGetPersonEditGroupIdsFromDom === 'function' ? prksGetPersonEditGroupIdsFromDom() : undefined;
     if (group_ids === undefined) {
-        const _cpSave = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
+        const _cpSave = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
         group_ids = (_cpSave && _cpSave.groups
             ? _cpSave.groups
             : []
@@ -941,19 +952,17 @@ async function savePersonProfile(personId) {
             return;
         }
         const person = await fetchPersonDetails(personId);
-        window.__prksPersonDetailEditing = false;
+        if (ctx && ctx.ui) ctx.ui.personDetailEditing = false;
         if (person) {
-            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('person', person);
-            const _pctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-            if (_pctx) _pctx.routeSidebar = {
+            if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
+            if (ctx) ctx.routeSidebar = {
                 personDisplayName:
                     typeof personDisplayName === 'function' ? personDisplayName(person) || 'Person' : 'Person',
                 linkedWorks: prksUniquePersonWorks(person).length
             };
         }
-        const contentDiv = document.getElementById('page-content');
-        if (person && contentDiv) {
-            renderPersonDetails(person, contentDiv);
+        if (person && root && ctx && ctx.mounted) {
+            renderPersonDetails(ctx, person, root);
         }
         if (typeof updatePanelContent === 'function') {
             updatePanelContent('details');
@@ -978,16 +987,17 @@ function personRoleBlockHtml(heading, count, cardsHtml) {
     );
 }
 
-function renderPersonDetails(person, container) {
+function renderPersonDetails(ctx, person, container) {
+    if (!container) return;
     if (!person) {
-        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('person', null);
-        window.__prksPersonWorksEditing = false;
+        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', null);
+        if (ctx && ctx.ui) ctx.ui.personWorksEditing = false;
         container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Person not found</h2></div>';
         return;
     }
-    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('person', person);
+    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
 
-    const worksEditing = window.__prksPersonWorksEditing === true;
+    const worksEditing = !!(ctx && ctx.ui && ctx.ui.personWorksEditing);
     const rolesByWork = prksPersonWorkRolesById(person);
     let worksHtml = '';
     if (person.works && person.works.length > 0) {
