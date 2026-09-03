@@ -90,10 +90,20 @@ function prksWikiLinkCompletionPick(cm, data, completion) {
     cm.replaceRange(title + ']]', from, to, 'complete');
 }
 
+function prksHintOwnerCtx(cm) {
+    if (cm && cm.__prksOwnerCtx) return cm.__prksOwnerCtx;
+    return typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+}
+
+function prksHintResource(cm, name) {
+    const owner = prksHintOwnerCtx(cm);
+    return owner && typeof owner.getResource === 'function' ? owner.getResource(name) : undefined;
+}
+
 function prksWikiLinkHint(cm) {
     const ctx = prksGetWikiLinkAutocompleteContext(cm);
     if (!ctx) return null;
-    const rows = window.__prksWikiWorkList || [];
+    const rows = prksHintResource(cm, 'wikiWorkList') || [];
     const matches = prksFilterWorksForWikiHint(rows, ctx.query);
     if (matches.length === 0) return null;
     return {
@@ -107,7 +117,8 @@ function prksWikiLinkHint(cm) {
     };
 }
 
-function prksAttachWikiLinkAutocomplete(cm) {
+function prksAttachWikiLinkAutocomplete(cm, ownerCtx) {
+    if (cm && ownerCtx) cm.__prksOwnerCtx = ownerCtx;
     const hintPatched = cm ? prksEnsureEasyMDECodeMirrorHints(cm) : false;
     const CM = cm && cm.constructor;
     if (!cm || !hintPatched || typeof CM.showHint !== 'function') {
@@ -296,8 +307,8 @@ function prksGetConceptLinkAutocompleteContext(cm) {
     return { from: CM.Pos(cur.line, startCh), to: cur, query: m[1] || '' };
 }
 
-function prksConceptHintRows() {
-    const rows = window.__prksConceptHintList || [];
+function prksConceptHintRows(cm) {
+    const rows = prksHintResource(cm, 'conceptHintList') || [];
     const out = [];
     for (let i = 0; i < rows.length; i++) {
         const c = rows[i];
@@ -312,9 +323,9 @@ function prksConceptHintRows() {
     return out;
 }
 
-function prksFilterConceptsForHint(query) {
+function prksFilterConceptsForHint(query, cm) {
     const ql = query.trim().toLowerCase();
-    const rows = prksConceptHintRows();
+    const rows = prksConceptHintRows(cm);
     if (!ql) {
         const seen = {};
         const uniq = [];
@@ -357,7 +368,7 @@ function prksConceptLinkCompletionPick(cm, data, completion) {
 function prksConceptLinkHint(cm) {
     const ctx = prksGetConceptLinkAutocompleteContext(cm);
     if (!ctx) return null;
-    const matches = prksFilterConceptsForHint(ctx.query);
+    const matches = prksFilterConceptsForHint(ctx.query, cm);
     if (matches.length === 0) return null;
     return {
         from: ctx.from,
@@ -523,7 +534,7 @@ function prksOpenResearchPicker(opts) {
 
 function prksOpenConceptPicker(cm) {
     const items = function () {
-        return (window.__prksConceptHintList || []).map(function (c) {
+        return (prksHintResource(cm, 'conceptHintList') || []).map(function (c) {
             const aliases = (c.aliases || []).join(' ');
             return {
                 id: c.id,
@@ -539,7 +550,7 @@ function prksOpenConceptPicker(cm) {
             return 'Create “' + name + '”';
         },
         onPick: function (id) {
-            const rows = window.__prksConceptHintList || [];
+            const rows = prksHintResource(cm, 'conceptHintList') || [];
             let name = '';
             for (let i = 0; i < rows.length; i++) {
                 if (rows[i].id === id) {
@@ -557,7 +568,7 @@ function prksOpenConceptPicker(cm) {
 
 function prksOpenArgumentPicker(cm, work) {
     const items = function () {
-        return (window.__prksArgumentHintList || []).map(function (a) {
+        return (prksHintResource(cm, 'argumentHintList') || []).map(function (a) {
             return {
                 id: a.id,
                 label: a.name || a.id,
@@ -582,7 +593,8 @@ function prksOpenArgumentPicker(cm, work) {
                 );
                 if (typeof fetchArguments === 'function') {
                     const list = await fetchArguments();
-                    window.__prksArgumentHintList = list;
+                    const owner = prksHintOwnerCtx(cm);
+                    if (owner && typeof owner.setResource === 'function') owner.setResource('argumentHintList', list);
                 }
             }
         })();
@@ -597,7 +609,7 @@ function prksOpenArgumentPicker(cm, work) {
             ];
         },
         onPick: function (id) {
-            const rows = window.__prksArgumentHintList || [];
+            const rows = prksHintResource(cm, 'argumentHintList') || [];
             let name = id;
             for (let i = 0; i < rows.length; i++) {
                 if (rows[i].id === id) {
@@ -633,12 +645,17 @@ async function deleteWork(w_id) {
     }
 }
 
-function prksRouteStale(routeGen) {
-    return typeof routeGen === 'number' && routeGen !== window.__prksRouteGen;
-}
-
-async function renderWorkDetails(work, container, routeGen, requestCtx) {
+async function renderWorkDetails(ctx, work, requestCtx) {
+    const generation = requestCtx && requestCtx.generation;
     const routeSignal = requestCtx && requestCtx.signal;
+    const container = ctx && ctx.root ? ctx.root : null;
+    if (!container) return;
+    if (!ctx || typeof ctx.isCurrent !== 'function') return;
+
+    const isCurrent = function () {
+        return ctx.isCurrent(generation);
+    };
+
     if (!work) {
         container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">File not found.</p>';
         return;
@@ -650,12 +667,12 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
     if (inferredKind === 'pdf' && work.file_path) {
         pdfModule = await import('/js/components/works-pdf.js');
     }
-    if (prksRouteStale(routeGen)) return;
+    if (!isCurrent()) return;
     let videoModule = null;
     if (inferredKind === 'video') {
         videoModule = await import('/js/components/works-video.js');
     }
-    if (prksRouteStale(routeGen)) return;
+    if (!isCurrent()) return;
 
     let authorsStr = '';
     if (work.roles) {
@@ -688,7 +705,7 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
     let leftPane = '';
     if (inferredKind === 'pdf') {
         leftPane = work.file_path
-            ? `<div class="work-pdf-pane"><div id="pdf-viewer"></div></div>`
+            ? `<div class="work-pdf-pane"><div data-prks-role="pdf-viewer"></div></div>`
             : `<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No PDF file attached.</p></div>`;
     } else if (inferredKind === 'video') {
         leftPane =
@@ -710,20 +727,20 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
                     <div class="work-notes-pane-header">
                         <h3 class="work-notes-title">Research Notes</h3>
                         <div class="work-notes-pane-header-actions">
-                            <button type="button" class="work-notes-toggle-btn" id="work-notes-collapse-btn" aria-expanded="true" aria-controls="work-notes-editor-region" aria-label="Collapse research notes editor" title="Collapse notes"><span class="work-notes-toggle-btn__icon" aria-hidden="true"><svg class="work-notes-toggle-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.65" stroke-linecap="round" stroke-linejoin="round"><polyline points="6.5 13 12 19 17.5 13"/><polyline points="6.5 6 12 12 17.5 6"/></svg></span></button>
-                            <div id="annotation-sync-status" class="work-annotation-sync-status work-annotation-sync-status--hidden" aria-live="polite"></div>
-                            <div id="editor-status" class="work-editor-status"></div>
+                            <button type="button" class="work-notes-toggle-btn" data-prks-role="work-notes-collapse-btn" aria-expanded="true" aria-controls="${ctx.domId('work-notes-editor-region')}" aria-label="Collapse research notes editor" title="Collapse notes"><span class="work-notes-toggle-btn__icon" aria-hidden="true"><svg class="work-notes-toggle-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.65" stroke-linecap="round" stroke-linejoin="round"><polyline points="6.5 13 12 19 17.5 13"/><polyline points="6.5 6 12 12 17.5 6"/></svg></span></button>
+                            <div data-prks-role="annotation-sync-status" class="work-annotation-sync-status work-annotation-sync-status--hidden" aria-live="polite"></div>
+                            <div data-prks-role="editor-status" class="work-editor-status"></div>
                         </div>
                     </div>
-                    <div class="work-notes-editor-wrap" id="work-notes-editor-region">
-                        <textarea id="research-notes-editor"></textarea>
+                    <div class="work-notes-editor-wrap" data-prks-role="work-notes-editor-region" id="${ctx.domId('work-notes-editor-region')}">
+                        <textarea data-prks-role="research-notes-editor"></textarea>
                     </div>
                 </div>
             </div>
         </div>
     `;
 
-    window.currentWork = work;
+    if (typeof ctx.setEntity === 'function') ctx.setEntity('work', work);
     const workTitle = String((work && work.title) || '').trim();
     const headerTitle = workTitle ? prksEscapeHtmlLite(workTitle) : 'Document';
     const pdfViewerActive = inferredKind === 'pdf' && !!work.file_path;
@@ -733,7 +750,7 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
             <div class="prks-page-header page-header page-header--work">
                 <div class="card-heading-row card-heading-row--wrap">
                     <h2 class="page-header--work-title">${headerTitle}</h2>
-                    <span id="work-header-doc-type-slot">${typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : ''}</span>
+                    <span data-prks-role="work-header-doc-type-slot">${typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : ''}</span>
                 </div>
             </div>
         `;
@@ -747,7 +764,7 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
         </div>
     `;
 
-    const notesTa = document.getElementById('research-notes-editor');
+    const notesTa = ctx.query('[data-prks-role="research-notes-editor"]');
     if (notesTa) notesTa.value = work.text_content || '';
     container.querySelectorAll('.prks-person-chip').forEach((el) => {
         el.style.cursor = 'pointer';
@@ -762,12 +779,12 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
         editBtn.onclick = () => toggleWorkMetaEdit(true);
     }
 
-    if (work.file_path && pdfModule && !prksRouteStale(routeGen)) {
-        pdfModule.initPdfViewerForWork(work);
+    if (work.file_path && pdfModule && isCurrent()) {
+        pdfModule.initPdfViewerForWork(ctx, work);
     }
 
     setTimeout(async () => {
-        if (prksRouteStale(routeGen)) return;
+        if (!isCurrent()) return;
         const wsEarly = container.querySelector('.work-workspace');
         if (wsEarly) {
             const key = 'prks.workNotesCollapsed.' + work.id;
@@ -781,38 +798,42 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
         }
         try {
             const works = await fetchWorks({ signal: routeSignal });
-            if (prksRouteStale(routeGen)) return;
-            window.__prksWikiTitleMap = prksBuildWorkTitleLowerToIdMap(works);
-            window.__prksWikiWorkList = prksBuildWikiAutocompleteWorkList(works);
+            if (!isCurrent()) return;
+            if (typeof ctx.setResource === 'function') {
+                ctx.setResource('wikiTitleMap', prksBuildWorkTitleLowerToIdMap(works));
+                ctx.setResource('wikiWorkList', prksBuildWikiAutocompleteWorkList(works));
+            }
         } catch (_e) {
-            if (prksRouteStale(routeGen)) return;
-            window.__prksWikiTitleMap = {};
-            window.__prksWikiWorkList = [];
+            if (!isCurrent()) return;
+            if (typeof ctx.setResource === 'function') {
+                ctx.setResource('wikiTitleMap', {});
+                ctx.setResource('wikiWorkList', []);
+            }
         }
         try {
             if (typeof fetchConcepts === 'function') {
                 const concepts = await fetchConcepts({ signal: routeSignal });
-                if (prksRouteStale(routeGen)) return;
-                window.__prksConceptHintList = concepts;
+                if (!isCurrent()) return;
+                if (typeof ctx.setResource === 'function') ctx.setResource('conceptHintList', concepts);
             }
         } catch (_e) {
-            if (prksRouteStale(routeGen)) return;
-            window.__prksConceptHintList = [];
+            if (!isCurrent()) return;
+            if (typeof ctx.setResource === 'function') ctx.setResource('conceptHintList', []);
         }
         try {
             if (typeof fetchArguments === 'function') {
                 const argumentsList = await fetchArguments(undefined, { signal: routeSignal });
-                if (prksRouteStale(routeGen)) return;
-                window.__prksArgumentHintList = argumentsList;
+                if (!isCurrent()) return;
+                if (typeof ctx.setResource === 'function') ctx.setResource('argumentHintList', argumentsList);
             }
         } catch (_e) {
-            if (prksRouteStale(routeGen)) return;
-            window.__prksArgumentHintList = [];
+            if (!isCurrent()) return;
+            if (typeof ctx.setResource === 'function') ctx.setResource('argumentHintList', []);
         }
-        if (prksRouteStale(routeGen)) return;
-        initEasyMDE(work);
+        if (!isCurrent()) return;
+        initEasyMDE(ctx, work);
         setupWorkNotesSplitResize(work.id);
-        setupWorkNotesCollapseToggle(work.id);
+        setupWorkNotesCollapseToggle(ctx, work.id);
     }, 200);
 
     prksRequest(
@@ -822,7 +843,7 @@ async function renderWorkDetails(work, container, routeGen, requestCtx) {
     )
         .then((r) => (r.ok ? r.json() : []))
         .then((related) => {
-            if (prksRouteStale(routeGen)) return;
+            if (!isCurrent()) return;
             const target = document.getElementById('related-folders-container');
             if (!target || !Array.isArray(related) || related.length === 0) return;
             target.replaceChildren();
@@ -880,8 +901,8 @@ function prksPaintEasyMDEToolbarIcons(toolbar) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(toolbar);
 }
 
-function initEasyMDE(work) {
-    const titleLowerToId = window.__prksWikiTitleMap || {};
+function initEasyMDE(ctx, work) {
+    const titleLowerToId = (ctx && ctx.getResource ? ctx.getResource('wikiTitleMap') : null) || {};
     const prksNotesHelpHtml = `
 <div class="prks-help-section">
   <div class="prks-help-title">Work links</div>
@@ -932,8 +953,10 @@ function initEasyMDE(work) {
     } catch (_e) {
         /* ignore */
     }
+    const notesEl = ctx && ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
+    if (!notesEl) return;
     const easyMDE = new EasyMDE({
-        element: document.getElementById('research-notes-editor'),
+        element: notesEl,
         spellChecker: false,
         autoDownloadFontAwesome: false,
         /* Server PATCH below is the source of truth; EasyMDE localStorage autosave would restore stale drafts after reload (autosave delay > PATCH delay). */
@@ -955,7 +978,9 @@ function initEasyMDE(work) {
                 className: "fa fa-lightbulb-o prks-notes-concept",
                 title: "Concept",
                 action: () => {
-                    const cm = window.workNotesEasyMDE && window.workNotesEasyMDE.codemirror;
+                    const _mde = ctx && ctx.getResource ? ctx.getResource('workNotes') : (typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null);
+                    const editor = _mde && _mde.editor ? _mde.editor : _mde;
+                    const cm = editor && editor.codemirror;
                     if (cm) prksOpenConceptPicker(cm);
                 },
             },
@@ -964,7 +989,9 @@ function initEasyMDE(work) {
                 className: "fa fa-comment prks-notes-argument",
                 title: "Argument",
                 action: () => {
-                    const cm = window.workNotesEasyMDE && window.workNotesEasyMDE.codemirror;
+                    const _mde = ctx && ctx.getResource ? ctx.getResource('workNotes') : (typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null);
+                    const editor = _mde && _mde.editor ? _mde.editor : _mde;
+                    const cm = editor && editor.codemirror;
                     if (cm) prksOpenArgumentPicker(cm, work);
                 },
             },
@@ -993,8 +1020,9 @@ function initEasyMDE(work) {
         status: ["lines", "words", "cursor"],
         minHeight: "120px",
         previewRender: (plainText) => {
+            const _cwPrev = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
             const refs =
-                (window.currentWork && window.currentWork.id === work.id && window.currentWork.research_refs) ||
+                (_cwPrev && _cwPrev.id === work.id && _cwPrev.research_refs) ||
                 work.research_refs ||
                 {};
             let t = plainText;
@@ -1007,13 +1035,33 @@ function initEasyMDE(work) {
         },
     });
 
-    window.workNotesEasyMDE = easyMDE;
-    prksAttachWikiLinkAutocomplete(easyMDE.codemirror);
-    prksPaintEasyMDEToolbarIcons(
-        document.querySelector('.work-notes-editor-wrap .editor-toolbar')
-    );
+    const workNotes = {
+        editor: easyMDE,
+        hints: {
+            wikiTitleMap: titleLowerToId,
+        },
+        pendingSave: null,
+        destroy: function () {
+            try {
+                const cm = easyMDE.codemirror;
+                const handler = easyMDE.__notesChangeHandler;
+                if (cm && handler) cm.off('change', handler);
+            } catch (_e) {}
+            try {
+                if (typeof easyMDE.toTextArea === 'function') easyMDE.toTextArea();
+            } catch (_e) {}
+        },
+    };
+    if (ctx && typeof ctx.setResource === 'function') {
+        ctx.setResource('workNotes', workNotes, function () {
+            workNotes.destroy();
+        });
+    }
+    prksAttachWikiLinkAutocomplete(easyMDE.codemirror, ctx);
+    const toolbarHost = ctx && ctx.query ? ctx.query('.work-notes-editor-wrap .editor-toolbar') : null;
+    prksPaintEasyMDEToolbarIcons(toolbarHost);
 
-    const wrap = document.querySelector('.work-notes-editor-wrap');
+    const wrap = ctx && ctx.query ? ctx.query('.work-notes-editor-wrap') : null;
     if (wrap) {
         wrap.addEventListener(
             'click',
@@ -1034,26 +1082,31 @@ function initEasyMDE(work) {
     }
 
     const notesChangeHandler = () => {
-        const statusEl = document.getElementById('editor-status');
+        const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
-        clearTimeout(window.saveNotesTimeout);
+        if (ctx && typeof ctx.clearTimer === 'function') ctx.clearTimer('saveNotesTimeout');
         const workId = work.id;
-        window.saveNotesTimeout = setTimeout(function () {
-            prksEnqueueWorkResearchNotesSave(workId);
+        const _tid = setTimeout(function () {
+            prksEnqueueWorkResearchNotesSave(ctx, workId);
         }, 2000);
+        if (ctx && typeof ctx.setTimer === 'function') ctx.setTimer('saveNotesTimeout', _tid);
     };
     easyMDE.codemirror.on("change", notesChangeHandler);
     easyMDE.__notesChangeHandler = notesChangeHandler;
 }
 
-function prksEnqueueWorkResearchNotesSave(workId) {
-    const id = workId || (window.currentWork && window.currentWork.id);
+function prksEnqueueWorkResearchNotesSave(ctx, workId) {
+    const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const _cwSave = owner && owner.getEntity ? owner.getEntity('work') : null;
+    const id = workId || (_cwSave && _cwSave.id);
     if (!id) return;
+    const notes = owner && owner.getResource ? owner.getResource('workNotes') : null;
+    const editor = notes && notes.editor ? notes.editor : notes;
     let content = '';
-    if (window.workNotesEasyMDE && typeof window.workNotesEasyMDE.value === 'function') {
-        content = window.workNotesEasyMDE.value();
+    if (editor && typeof editor.value === 'function') {
+        content = editor.value();
     }
-    const statusEl = document.getElementById('editor-status');
+    const statusEl = owner && owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
     void prksRequest(
         '/api/works/' + encodeURIComponent(id),
         {
@@ -1069,13 +1122,9 @@ function prksEnqueueWorkResearchNotesSave(workId) {
             if (statusEl) statusEl.innerText = res.ok ? 'All changes saved' : 'Error saving changes';
             if (res.ok && typeof fetchWorkDetails === 'function') {
                 return fetchWorkDetails(id).then(function (latest) {
-                    if (
-                        latest &&
-                        latest.research_refs &&
-                        window.currentWork &&
-                        window.currentWork.id === id
-                    ) {
-                        window.currentWork.research_refs = latest.research_refs;
+                    if (latest && latest.research_refs && owner && owner.getEntity) {
+                        const live = owner.getEntity('work');
+                        if (live && live.id === id) live.research_refs = latest.research_refs;
                     }
                 });
             }
@@ -1086,32 +1135,22 @@ function prksEnqueueWorkResearchNotesSave(workId) {
         });
 }
 
-function prksFlushPendingWorkResearchNotes() {
-    if (!window.saveNotesTimeout) return;
-    clearTimeout(window.saveNotesTimeout);
-    window.saveNotesTimeout = null;
-    const id = window.currentWork && window.currentWork.id;
+function prksFlushPendingWorkResearchNotes(ctx) {
+    const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const _hasSaveTimer = owner && owner.timers && owner.timers.has('saveNotesTimeout');
+    if (!_hasSaveTimer) return;
+    if (owner && typeof owner.clearTimer === 'function') owner.clearTimer('saveNotesTimeout');
+    const _cw = owner && owner.getEntity ? owner.getEntity('work') : null;
+    const id = _cw && _cw.id;
     if (!id) return;
-    prksEnqueueWorkResearchNotesSave(id);
+    prksEnqueueWorkResearchNotesSave(owner, id);
 }
 
 window.prksFlushPendingWorkResearchNotes = prksFlushPendingWorkResearchNotes;
 
-function prksDestroyWorkNotesEditor() {
-    if (!window.workNotesEasyMDE) return;
-    try {
-        const cm = window.workNotesEasyMDE.codemirror;
-        const handler = window.workNotesEasyMDE.__notesChangeHandler;
-        if (cm && handler) {
-            cm.off("change", handler);
-        }
-    } catch (_e) {}
-    try {
-        if (typeof window.workNotesEasyMDE.toTextArea === 'function') {
-            window.workNotesEasyMDE.toTextArea();
-        }
-    } catch (_e) {}
-    window.workNotesEasyMDE = null;
+function prksDestroyWorkNotesEditor(ctx) {
+    const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (owner && typeof owner.clearResource === 'function') owner.clearResource('workNotes');
 }
 
 window.prksDestroyWorkNotesEditor = prksDestroyWorkNotesEditor;
@@ -1159,8 +1198,9 @@ function prksReapplyWorkNotesSplitLayout() {
     );
 
     requestAnimationFrame(() => {
-        if (window.workNotesEasyMDE && window.workNotesEasyMDE.codemirror) {
-            window.workNotesEasyMDE.codemirror.refresh();
+        const _mde = typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null;
+        if (_mde && _mde.codemirror) {
+            _mde.codemirror.refresh();
         }
     });
 }
@@ -1221,8 +1261,9 @@ function setupWorkNotesSplitResize(workId) {
     );
 
     function refreshNotesEditor() {
-        if (window.workNotesEasyMDE && window.workNotesEasyMDE.codemirror) {
-            window.workNotesEasyMDE.codemirror.refresh();
+        const _mde = typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null;
+        if (_mde && _mde.codemirror) {
+            _mde.codemirror.refresh();
         }
     }
 
@@ -1365,8 +1406,9 @@ function setupWorkNotesSplitResize(workId) {
                 const clamped = prksClampWorkNotesHeight(active, hEl, cur);
                 active.style.setProperty('--work-notes-height', clamped + 'px');
             }
-            if (window.workNotesEasyMDE && window.workNotesEasyMDE.codemirror) {
-                window.workNotesEasyMDE.codemirror.refresh();
+            const _mdeR1 = typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null;
+            if (_mdeR1 && _mdeR1.codemirror) {
+                _mdeR1.codemirror.refresh();
             }
         });
     }
@@ -1391,9 +1433,12 @@ function setupWorkNotesSplitResize(workId) {
     });
 }
 
-function setupWorkNotesCollapseToggle(workId) {
-    const ws = document.querySelector('.work-workspace[data-work-id="' + workId + '"]');
-    const btn = document.getElementById('work-notes-collapse-btn');
+function setupWorkNotesCollapseToggle(ctx, workId) {
+    const ws =
+        (ctx && ctx.query
+            ? ctx.query('.work-workspace[data-work-id="' + workId + '"]')
+            : null) || document.querySelector('.work-workspace[data-work-id="' + workId + '"]');
+    const btn = ctx && ctx.query ? ctx.query('[data-prks-role="work-notes-collapse-btn"]') : null;
     if (!ws || !btn) return;
 
     const storageKey = 'prks.workNotesCollapsed.' + workId;
@@ -1422,8 +1467,9 @@ function setupWorkNotesCollapseToggle(workId) {
         localStorage.setItem(storageKey, collapsed ? '1' : '0');
         syncToggleUi();
         requestAnimationFrame(() => {
-            if (window.workNotesEasyMDE && window.workNotesEasyMDE.codemirror) {
-                window.workNotesEasyMDE.codemirror.refresh();
+            const _mdeC = typeof prksFocusedResource === 'function' ? prksFocusedResource('workNotesEasyMDE') : null;
+            if (_mdeC && _mdeC.codemirror) {
+                _mdeC.codemirror.refresh();
             }
         });
     }

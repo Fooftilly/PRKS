@@ -690,10 +690,11 @@ async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
         allFolders = window.__prksProcessingFolders;
         window.allFolders = allFolders;
     } catch (_e) {}
-    if (!window.__prksRouteSidebar || typeof window.__prksRouteSidebar !== 'object') {
-        window.__prksRouteSidebar = {};
+    const _pfCtx = (opts && opts.ctx) || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (_pfCtx) {
+        if (!_pfCtx.routeSidebar || typeof _pfCtx.routeSidebar !== 'object') _pfCtx.routeSidebar = {};
+        _pfCtx.routeSidebar.pendingCount = Array.isArray(items) ? items.length : 0;
     }
-    window.__prksRouteSidebar.pendingCount = Array.isArray(items) ? items.length : 0;
     renderProcessingFilesPage(items, container);
 }
 

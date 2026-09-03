@@ -185,6 +185,10 @@ PRKS keeps a strip of in-app tabs under the top ribbon. Only one page is visible
 
 Parked tabs do no rendering or network work until you activate them.
 
+Each tab has a TabContext. Route state, page DOM (`ctx.root` / `ctx.query`),
+async generation, and live resources (PDF viewer, notes editor, graph) live
+there. Stacked mode mounts one context. Tiling is not implemented.
+
 ## Research network
 
 Concepts, Positions, and Arguments/Stances are persistent research records. They are not Work metadata.

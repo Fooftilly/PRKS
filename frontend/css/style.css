@@ -6584,7 +6584,7 @@ textarea[data-prks-autosize="1"] {
     }
 }
 
-.document-view--work #pdf-viewer {
+.document-view--work [data-prks-role="pdf-viewer"] {
     flex: 1;
     width: 100%;
     min-width: 0;
@@ -6597,7 +6597,7 @@ textarea[data-prks-autosize="1"] {
 }
 
 /* Flat shell for the viewer: border only (max-width mockup cap only on very wide panes below) */
-:root[data-theme="light"] .document-view--work #pdf-viewer {
+:root[data-theme="light"] .document-view--work [data-prks-role="pdf-viewer"] {
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     box-shadow: none;
@@ -6605,7 +6605,7 @@ textarea[data-prks-autosize="1"] {
 }
 
 @media (prefers-color-scheme: light) {
-    :root:not([data-theme]) .document-view--work #pdf-viewer {
+    :root:not([data-theme]) .document-view--work [data-prks-role="pdf-viewer"] {
         border-radius: var(--radius-sm);
         border: 1px solid var(--border);
         box-shadow: none;
@@ -6613,7 +6613,7 @@ textarea[data-prks-autosize="1"] {
     }
 }
 
-:root[data-theme="dark"] .document-view--work #pdf-viewer {
+:root[data-theme="dark"] .document-view--work [data-prks-role="pdf-viewer"] {
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     box-shadow: none;
@@ -6621,7 +6621,7 @@ textarea[data-prks-autosize="1"] {
 }
 
 @media (prefers-color-scheme: dark) {
-    :root:not([data-theme]) .document-view--work #pdf-viewer {
+    :root:not([data-theme]) .document-view--work [data-prks-role="pdf-viewer"] {
         border-radius: var(--radius-sm);
         border: 1px solid var(--border);
         box-shadow: none;
@@ -6635,7 +6635,7 @@ textarea[data-prks-autosize="1"] {
         align-items: center;
     }
 
-    .document-view--work #pdf-viewer {
+    .document-view--work [data-prks-role="pdf-viewer"] {
         width: 75%;
         max-width: min(920px, 100%);
     }
@@ -6861,7 +6861,7 @@ html.prks-work-notes-mobile-side .document-view--work .work-pdf-pane--empty {
     height: auto;
 }
 
-html.prks-work-notes-mobile-side .document-view--work #pdf-viewer {
+html.prks-work-notes-mobile-side .document-view--work [data-prks-role="pdf-viewer"] {
     width: 100%;
     max-width: 100%;
 }
@@ -6999,7 +6999,7 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     font-weight: 600;
 }
 
-#work-header-doc-type-slot {
+[data-prks-role="work-header-doc-type-slot"] {
     display: inline-flex;
     align-items: center;
     min-height: 0;
@@ -8785,7 +8785,7 @@ html.prks-force-mobile .project-card--work .project-card__rail {
         align-items: stretch;
     }
 
-    .document-view--work #pdf-viewer {
+    .document-view--work [data-prks-role="pdf-viewer"] {
         width: 100%;
         max-width: none;
     }
@@ -8872,12 +8872,12 @@ html.prks-force-mobile .project-card--work .project-card__rail {
 }
 
 @media (max-width: 900px) {
-    #work-header-doc-type-slot {
+    [data-prks-role="work-header-doc-type-slot"] {
         display: none;
     }
 }
 
-html.prks-force-mobile #work-header-doc-type-slot {
+html.prks-force-mobile [data-prks-role="work-header-doc-type-slot"] {
     display: none;
 }
 

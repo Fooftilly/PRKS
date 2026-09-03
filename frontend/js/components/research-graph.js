@@ -19,7 +19,7 @@
         mentions: true,
     };
 
-    let activeRuntime = null;
+    // activeRuntime singleton removed; use ctx.getResource('researchGraph') exclusively.
 
     function esc(s) {
         if (typeof root.prksEscapeHtml === 'function') return root.prksEscapeHtml(s);
@@ -685,9 +685,7 @@
 
     function resolveActiveRuntime() {
         const ctx = typeof root.prksGetFocusedTabContext === 'function' ? root.prksGetFocusedTabContext() : null;
-        const fromCtx = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('researchGraph') : null;
-        if (fromCtx) return fromCtx;
-        return activeRuntime;
+        return ctx && typeof ctx.getResource === 'function' ? ctx.getResource('researchGraph') : null;
     }
 
     function createResearchGraphRuntime(ctx, container, options) {
@@ -770,7 +768,6 @@
             if (container && container.__prksGraphRuntime === runtime) {
                 container.__prksGraphRuntime = null;
             }
-            if (activeRuntime === runtime) activeRuntime = null;
             if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('researchGraph') === runtime) {
                 if (typeof ctx.clearResource === 'function') ctx.clearResource('researchGraph');
             }
@@ -1479,7 +1476,6 @@
             });
         }
         if (container) container.__prksGraphRuntime = runtime;
-        activeRuntime = runtime;
         return runtime.start();
     }
 
@@ -1492,10 +1488,6 @@
         if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('researchGraph')) {
             if (typeof ctx.clearResource === 'function') ctx.clearResource('researchGraph');
             else ctx.getResource('researchGraph').destroy();
-            return;
-        }
-        if (activeRuntime && typeof activeRuntime.destroy === 'function') {
-            activeRuntime.destroy();
         }
     }
 

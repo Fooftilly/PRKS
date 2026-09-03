@@ -471,6 +471,38 @@
         return value;
     }
 
+    function prksFocusedResource(name) {
+        const ctx = prksGetFocusedTabContext();
+        return ctx ? ctx.getResource(String(name)) : undefined;
+    }
+
+    function prksSetFocusedResource(name, value, disposer) {
+        const ctx = prksGetFocusedTabContext();
+        if (ctx) return ctx.setResource(String(name), value, disposer);
+        return value;
+    }
+
+    function prksClearFocusedResource(name) {
+        const ctx = prksGetFocusedTabContext();
+        if (ctx) ctx.clearResource(String(name));
+    }
+
+    function prksFocusedTimer(name, timerId) {
+        const ctx = prksGetFocusedTabContext();
+        if (ctx) return ctx.setTimer(String(name), timerId);
+        return timerId;
+    }
+
+    function prksClearFocusedTimer(name) {
+        const ctx = prksGetFocusedTabContext();
+        if (ctx) ctx.clearTimer(String(name));
+    }
+
+    function prksFocusedRouteSidebar() {
+        const ctx = prksGetFocusedTabContext();
+        return ctx ? ctx.routeSidebar : {};
+    }
+
     function prksFocusedRouteGeneration() {
         const ctx = prksGetFocusedTabContext();
         return ctx ? ctx.generation : 0;
@@ -502,6 +534,12 @@
         prksSetFocusedEntity: prksSetFocusedEntity,
         prksFocusedRouteGeneration: prksFocusedRouteGeneration,
         prksFocusedRouteIsCurrent: prksFocusedRouteIsCurrent,
+        prksFocusedResource: prksFocusedResource,
+        prksSetFocusedResource: prksSetFocusedResource,
+        prksClearFocusedResource: prksClearFocusedResource,
+        prksFocusedTimer: prksFocusedTimer,
+        prksClearFocusedTimer: prksClearFocusedTimer,
+        prksFocusedRouteSidebar: prksFocusedRouteSidebar,
     };
 
     Object.keys(api).forEach(function (k) {

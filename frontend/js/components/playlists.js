@@ -154,7 +154,7 @@ function prksClearPlaylistRenameState() {
 
 function prksRefreshPlaylistDetailMain() {
     const page = document.getElementById('page-content');
-    const pl = window.currentPlaylist;
+    const pl = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('playlist') : null;
     const hash = window.location.hash || '';
     if (!page || !pl || !hash.startsWith('#/playlists/')) return;
     renderPlaylistDetail(pl, page);
@@ -310,11 +310,9 @@ function renderPlaylistDetail(pl, container) {
                 const fresh = await fetchPlaylistDetails(pl.id);
                 renderPlaylistDetail(fresh, container);
                 if (fresh) {
-                    window.currentPlaylist = fresh;
-                    window.__prksRouteSidebar = {
-                        playlistTitle: fresh.title || 'Playlist',
-                        itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0,
-                    };
+                    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
+                    const _pctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                    if (_pctx) _pctx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
                     if (window.__prksPlaylistDetailEditing === true && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');
                     }
@@ -345,12 +343,9 @@ function renderPlaylistDetail(pl, container) {
                 const fresh = await fetchPlaylistDetails(pl.id);
                 renderPlaylistDetail(fresh, container);
                 if (fresh) {
-                    window.currentPlaylist = fresh;
-                    window.__prksRouteSidebar = {
-                        playlistTitle: fresh.title || 'Playlist',
-                        itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0,
-                    };
-                    // If user is editing in the right panel, refresh it so the removed item becomes selectable again.
+                    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
+                    const _rmCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                    if (_rmCtx) _rmCtx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
                     if (window.__prksPlaylistDetailEditing === true && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');
                     }
@@ -365,11 +360,9 @@ function renderPlaylistDetail(pl, container) {
             const fresh = await fetchPlaylistDetails(pl.id);
             renderPlaylistDetail(fresh, container);
             if (fresh) {
-                window.currentPlaylist = fresh;
-                window.__prksRouteSidebar = {
-                    playlistTitle: fresh.title || 'Playlist',
-                    itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0,
-                };
+                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
+                const _roCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                if (_roCtx) _roCtx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
                 if (window.__prksPlaylistDetailEditing === true && typeof updatePanelContent === 'function') {
                     updatePanelContent('details');
                 }
@@ -568,7 +561,8 @@ async function mountPlaylistAttachControls(work) {
             if (status) status.textContent = 'Playlist set.';
             // Refresh current work so the UI shows the selected playlist title consistently.
             if (typeof fetchWorkDetails === 'function') {
-                window.currentWork = await fetchWorkDetails(wid);
+                const _pw = await fetchWorkDetails(wid);
+                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _pw);
                 if (typeof updatePanelContent === 'function') updatePanelContent('details');
             }
         } catch (_e) {
@@ -590,7 +584,8 @@ async function mountPlaylistAttachControls(work) {
             hidden.value = '';
             if (status) status.textContent = 'Removed from playlist.';
             if (typeof fetchWorkDetails === 'function') {
-                window.currentWork = await fetchWorkDetails(wid);
+                const _rmw = await fetchWorkDetails(wid);
+                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _rmw);
                 if (typeof updatePanelContent === 'function') updatePanelContent('details');
             }
         } catch (_e) {

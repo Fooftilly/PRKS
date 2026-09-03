@@ -81,6 +81,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
     def test_route_is_real(self):
         nav = _read(_NAV)
         app = _read(_APP)
+        graph = _read(_GRAPH)
         self.assertIn("research-graph", nav)
         self.assertIn("navHref: '#/graph'", nav)
         self.assertIn("prksParseGraphFocus", nav)
@@ -88,7 +89,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("person):[A-Za-z0-9]", nav)
         self.assertIn("case 'research-graph':", app)
         self.assertNotIn("route.name === 'graph' || route.canonicalize", app)
-        self.assertIn("destroyResearchGraph", app)
+        self.assertIn("destroyResearchGraph", graph)
         self.assertIn("prksResearchRouteForcesOpen", nav)
         self.assertIn("route.name === 'research-graph'", nav)
 

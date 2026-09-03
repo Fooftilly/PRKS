@@ -413,7 +413,7 @@ function requestModalClose(reason) {
 
 function prksAutosizeTextarea(el) {
     if (!el || el.tagName !== 'TEXTAREA') return;
-    if (el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
+    if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
     const cs = window.getComputedStyle(el);
     const minH = parseFloat(cs.minHeight || '0');
     el.style.height = 'auto';
@@ -429,7 +429,7 @@ function prksBindAutosizeTextareas(root = document) {
     const textareas = scope.querySelectorAll(PRKS_AUTOSIZE_TEXTAREA_SELECTOR);
     textareas.forEach((el) => {
         if (!el || el.tagName !== 'TEXTAREA') return;
-        if (el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
+        if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
         if (el.dataset.prksAutosizeBound !== '1') {
             el.dataset.prksAutosizeBound = '1';
             el.addEventListener('input', () => prksAutosizeTextarea(el));
@@ -1368,9 +1368,10 @@ async function addRoleToWorkFromMetaEditor(workId) {
         await prksAlertMessage('Select a person and role first.', 'Validation');
         return;
     }
+    const _cw = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
     const existingRoles =
-        window.currentWork && String(window.currentWork.id) === resolvedWorkId
-            ? window.currentWork.roles
+        _cw && String(_cw.id) === resolvedWorkId
+            ? _cw.roles
             : [];
     if (prksWorkHasRoleLink(existingRoles, personId, roleType)) {
         await prksShowDuplicateRoleLinkAlert(roleType);
@@ -1403,9 +1404,10 @@ async function addRoleToWorkFromMetaEditor(workId) {
             return;
         }
         if (typeof fetchWorkDetails === 'function') {
-            window.currentWork = await fetchWorkDetails(resolvedWorkId);
-            if (list && window.currentWork) {
-                list.innerHTML = buildWorkLinkedPersonsHtml(window.currentWork);
+            const _refreshed = await fetchWorkDetails(resolvedWorkId);
+            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _refreshed);
+            if (list && _refreshed) {
+                list.innerHTML = buildWorkLinkedPersonsHtml(_refreshed);
             }
         }
         if (personHidden) personHidden.value = '';
@@ -1478,8 +1480,9 @@ async function prepareRoleModal() {
     } else if (hash.startsWith('#/works/')) {
         workId = hash.split('/')[2];
     }
-    if (!workId && window.currentWork && window.currentWork.id) {
-        workId = window.currentWork.id;
+    const _cwModal = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
+    if (!workId && _cwModal && _cwModal.id) {
+        workId = _cwModal.id;
     }
     if (workId) {
         const w = allWorks.find(x => String(x.id) === String(workId));
@@ -1571,7 +1574,8 @@ function setRightPanelRouteContext(hash) {
         }
     }
 
-    if (window.currentWork) {
+    const _fe = typeof prksFocusedEntity === 'function' ? prksFocusedEntity : function () { return null; };
+    if (_fe('work')) {
         rp.classList.add('right-panel--mode-work');
         rp.setAttribute('data-right-panel-mode', 'work');
         tabs.hidden = false;
@@ -1580,7 +1584,7 @@ function setRightPanelRouteContext(hash) {
         return;
     }
 
-    if (window.currentFolder) {
+    if (_fe('folder')) {
         rp.classList.add('right-panel--mode-folder');
         rp.setAttribute('data-right-panel-mode', 'folder');
         tabs.hidden = false;
@@ -1593,7 +1597,7 @@ function setRightPanelRouteContext(hash) {
         return;
     }
 
-    if (window.currentPerson && isPersonDetailHash(h)) {
+    if (_fe('person') && isPersonDetailHash(h)) {
         rp.classList.add('right-panel--mode-person');
         rp.setAttribute('data-right-panel-mode', 'person');
         tabs.hidden = false;
@@ -1606,7 +1610,7 @@ function setRightPanelRouteContext(hash) {
         return;
     }
 
-    if (window.currentPersonGroup && isPersonGroupDetailHash(h)) {
+    if (_fe('personGroup') && isPersonGroupDetailHash(h)) {
         rp.classList.add('right-panel--mode-person-group');
         rp.setAttribute('data-right-panel-mode', 'person-group');
         tabs.hidden = false;
@@ -1619,7 +1623,7 @@ function setRightPanelRouteContext(hash) {
         return;
     }
 
-    if (window.currentPlaylist && (h.startsWith('#/playlists/') || h === '#/playlists')) {
+    if (_fe('playlist') && (h.startsWith('#/playlists/') || h === '#/playlists')) {
         rp.classList.add('right-panel--single-pane');
         rp.setAttribute('data-right-panel-mode', h.startsWith('#/playlists/') ? 'playlist' : 'playlists');
         tabs.hidden = true;
@@ -1737,11 +1741,12 @@ function isResearchGraphHash(h) {
 
 function prksRightPanelHasActionableContent(hash) {
     const h = hash || '';
-    if (window.currentWork) return true;
-    if (window.currentFolder) return true;
-    if (window.currentPerson && isPersonDetailHash(h)) return true;
-    if (window.currentPersonGroup && isPersonGroupDetailHash(h)) return true;
-    if (window.currentPlaylist && (h.startsWith('#/playlists/') || h === '#/playlists')) return true;
+    const _fe = typeof prksFocusedEntity === 'function' ? prksFocusedEntity : function () { return null; };
+    if (_fe('work')) return true;
+    if (_fe('folder')) return true;
+    if (_fe('person') && isPersonDetailHash(h)) return true;
+    if (_fe('personGroup') && isPersonGroupDetailHash(h)) return true;
+    if (_fe('playlist') && (h.startsWith('#/playlists/') || h === '#/playlists')) return true;
     if (isResearchGraphHash(h)) return true;
     return false;
 }
@@ -1766,7 +1771,7 @@ function prksApplyRightPanelVisibility(hash) {
 }
 
 function renderRouteContextSidebar(mode) {
-    const ctx = window.__prksRouteSidebar || {};
+    const ctx = (typeof prksFocusedRouteSidebar === 'function' ? prksFocusedRouteSidebar() : null) || {};
     const link = (href, label) =>
         `<p class="route-sidebar__action"><a href="${href}" class="route-sidebar__link">${label}</a></p>`;
 
@@ -2068,11 +2073,13 @@ function initPrksPrivateNotesEditor(entityType, entityId) {
                     if (statusEl.textContent === 'Saved') statusEl.textContent = '';
                 }, 1800);
             }
-            if (entityType === 'work' && window.currentWork && window.currentWork.id === entityId) {
-                window.currentWork.private_notes = ta.value;
+            const _feW = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
+            if (entityType === 'work' && _feW && _feW.id === entityId) {
+                _feW.private_notes = ta.value;
             }
-            if (entityType === 'folder' && window.currentFolder && window.currentFolder.id === entityId) {
-                window.currentFolder.private_notes = ta.value;
+            const _feF = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('folder') : null;
+            if (entityType === 'folder' && _feF && _feF.id === entityId) {
+                _feF.private_notes = ta.value;
             }
         } catch (e) {
             console.error(e);
@@ -2141,36 +2148,41 @@ function updatePanelContent(tabId) {
 
     setRightPanelRouteContext(window.location.hash || '');
 
-    if (window.currentWork) {
+    const _fe = typeof prksFocusedEntity === 'function' ? prksFocusedEntity : function () { return null; };
+    const _cw = _fe('work');
+    const _cf = _fe('folder');
+    const _cp = _fe('person');
+    const _cpg = _fe('personGroup');
+    const _cpl = _fe('playlist');
+
+    if (_cw) {
         if (tabId === 'details') {
-            panel.innerHTML = prksWorkRightPanelStackHtml(window.currentWork, false);
-            initPrksPrivateNotesEditor('work', window.currentWork.id);
+            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, false);
+            initPrksPrivateNotesEditor('work', _cw.id);
             if (typeof mountPlaylistAttachControls === 'function') {
-                void mountPlaylistAttachControls(window.currentWork);
+                void mountPlaylistAttachControls(_cw);
             }
             if (typeof mountFolderAttachControlsForWork === 'function') {
-                void mountFolderAttachControlsForWork(window.currentWork);
+                void mountFolderAttachControlsForWork(_cw);
             }
-            initWorkTagCombobox(window.currentWork.id);
+            initWorkTagCombobox(_cw.id);
             if (typeof initWorkDetailRightPanelActions === 'function') {
-                initWorkDetailRightPanelActions(window.currentWork);
+                initWorkDetailRightPanelActions(_cw);
             }
         } else if (tabId === 'annotations') {
-            panel.innerHTML = renderWorkAnnotationsTab(window.currentWork);
+            panel.innerHTML = renderWorkAnnotationsTab(_cw);
             if (typeof window.applyCachedAnnotationListToPanel === 'function') {
                 window.applyCachedAnnotationListToPanel();
             }
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Use Details or Annotations.</p>';
         }
-    } else if (window.currentPlaylist && (window.location.hash || '').startsWith('#/playlists/')) {
-        // Playlist detail route uses single-pane right panel; show summary or editor.
+    } else if (_cpl && (window.location.hash || '').startsWith('#/playlists/')) {
         const editing = window.__prksPlaylistDetailEditing === true;
-        panel.innerHTML = editing ? renderPlaylistEditSidebarHtml(window.currentPlaylist) : renderPlaylistSummarySidebarHtml(window.currentPlaylist);
+        panel.innerHTML = editing ? renderPlaylistEditSidebarHtml(_cpl) : renderPlaylistSummarySidebarHtml(_cpl);
         if (editing) {
-            void mountPlaylistEditSidebar(window.currentPlaylist);
+            void mountPlaylistEditSidebar(_cpl);
         } else {
-            // bind edit button
             const btn = document.getElementById('prks-playlist-edit-btn');
             if (btn && btn.dataset.bound !== '1') {
                 btn.dataset.bound = '1';
@@ -2181,27 +2193,27 @@ function updatePanelContent(tabId) {
                 };
             }
         }
-    } else if (window.currentFolder) {
+    } else if (_cf) {
         if (tabId === 'details') {
-            panel.innerHTML = prksFolderRightPanelStackHtml(window.currentFolder);
-            initPrksPrivateNotesEditor('folder', window.currentFolder.id);
-            initFolderTagCombobox(window.currentFolder.id);
+            panel.innerHTML = prksFolderRightPanelStackHtml(_cf);
+            initPrksPrivateNotesEditor('folder', _cf.id);
+            initFolderTagCombobox(_cf.id);
             if (typeof mountFolderHierarchyControls === 'function') {
-                void mountFolderHierarchyControls(window.currentFolder);
+                void mountFolderHierarchyControls(_cf);
             }
             if (typeof mountFolderLibraryAttachControls === 'function') {
-                void mountFolderLibraryAttachControls(window.currentFolder);
+                void mountFolderLibraryAttachControls(_cf);
             }
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Folder details and tags are above.</p>';
         }
-    } else if (window.currentPerson && isPersonDetailHash(window.location.hash || '')) {
+    } else if (_cp && isPersonDetailHash(window.location.hash || '')) {
         if (tabId === 'details') {
             let topHtml;
             if (window.__prksPersonDetailEditing && typeof renderPersonProfileEditFormHtml === 'function') {
-                topHtml = renderPersonProfileEditFormHtml(window.currentPerson);
+                topHtml = renderPersonProfileEditFormHtml(_cp);
             } else if (typeof renderPersonProfileDetailsSidebarHtml === 'function') {
-                topHtml = renderPersonProfileDetailsSidebarHtml(window.currentPerson);
+                topHtml = renderPersonProfileDetailsSidebarHtml(_cp);
             } else {
                 topHtml = '<p class="meta-row">Person panel unavailable.</p>';
             }
@@ -2210,11 +2222,11 @@ function updatePanelContent(tabId) {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';
         }
     } else if (
-        window.currentPersonGroup &&
+        _cpg &&
         isPersonGroupDetailHash(window.location.hash || '')
     ) {
         if (tabId === 'details') {
-            const g = window.currentPersonGroup;
+            const g = _cpg;
             let topHtml;
             if (
                 window.__prksPersonGroupDetailEditing &&
@@ -2244,8 +2256,8 @@ function updatePanelContent(tabId) {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';
         }
     } else {
-        if (window.currentPlaylist && (window.location.hash || '').startsWith('#/playlists/')) {
-            const pl = window.currentPlaylist;
+        if (_cpl && (window.location.hash || '').startsWith('#/playlists/')) {
+            const pl = _cpl;
             const editing = window.__prksPlaylistDetailEditing === true;
             const panel = document.getElementById('panel-content');
             if (!panel) return;
@@ -2380,8 +2392,9 @@ async function mountPlaylistEditSidebar(pl) {
                 if (!res.ok) throw new Error('save failed');
                 const fresh = typeof fetchPlaylistDetails === 'function' ? await fetchPlaylistDetails(pl.id) : null;
                 if (fresh) {
-                    window.currentPlaylist = fresh;
-                    window.__prksRouteSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
+                    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
+                    const _ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                    if (_ctx) _ctx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
                 }
                 window.__prksPlaylistDetailEditing = false;
                 if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState();
@@ -2445,8 +2458,9 @@ async function mountPlaylistEditSidebar(pl) {
                         const fresh =
                             typeof fetchPlaylistDetails === 'function' ? await fetchPlaylistDetails(pl.id) : null;
                         if (fresh) {
-                            window.currentPlaylist = fresh;
-                            window.__prksRouteSidebar = {
+                            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('playlist', fresh);
+                            const _pctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                            if (_pctx) _pctx.routeSidebar = {
                                 playlistTitle: fresh.title || 'Playlist',
                                 itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0,
                             };
@@ -2475,28 +2489,29 @@ async function mountPlaylistEditSidebar(pl) {
 }
 
 function toggleWorkMetaEdit(isEditing) {
-    if (window.currentWork) {
+    const _cw = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
+    if (_cw) {
         const panel = document.getElementById('panel-content');
         if (panel) {
-            panel.innerHTML = prksWorkRightPanelStackHtml(window.currentWork, isEditing);
-            initPrksPrivateNotesEditor('work', window.currentWork.id);
-            if (!isEditing) initWorkTagCombobox(window.currentWork.id);
+            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, isEditing);
+            initPrksPrivateNotesEditor('work', _cw.id);
+            if (!isEditing) initWorkTagCombobox(_cw.id);
             if (typeof mountPlaylistAttachControls === 'function') {
-                void mountPlaylistAttachControls(window.currentWork);
+                void mountPlaylistAttachControls(_cw);
             }
             if (typeof mountFolderAttachControlsForWork === 'function') {
-                void mountFolderAttachControlsForWork(window.currentWork);
+                void mountFolderAttachControlsForWork(_cw);
             }
             if (typeof initWorkDetailRightPanelActions === 'function') {
-                initWorkDetailRightPanelActions(window.currentWork);
+                initWorkDetailRightPanelActions(_cw);
             }
             if (isEditing) {
                 prksBindSegmentedHidden('meta-status');
-                void initWorkMetaRoleLinker(window.currentWork.id);
+                void initWorkMetaRoleLinker(_cw.id);
                 if (typeof initPrksDocTypeMenu === 'function') {
                     const inf =
                         typeof prksInferWorkSourceKind === 'function'
-                            ? prksInferWorkSourceKind(window.currentWork)
+                            ? prksInferWorkSourceKind(_cw)
                             : '';
                     initPrksDocTypeMenu('meta-doc-type', { disabled: inf === 'video' });
                 }
@@ -2578,25 +2593,27 @@ async function submitWorkMetaEdit(workId) {
             const errData = await saveRes.json().catch(() => ({}));
             throw new Error(errData.error || `Server error ${saveRes.status}`);
         }
-        // Refresh work in memory
-        window.currentWork = await fetchWorkDetails(workId);
+        const _saved = await fetchWorkDetails(workId);
+        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _saved);
         toggleWorkMetaEdit(false);
-        // Refresh the main page header, or the PDF toolbar identity, to reflect new title / document type
         const headerTitle = document.querySelector('.page-header--work-title');
-        if (headerTitle) headerTitle.innerText = window.currentWork.title;
-        const typeSlot = document.getElementById('work-header-doc-type-slot');
-        if (typeSlot && typeof prksDocTypeBadgeHtml === 'function') {
-            typeSlot.innerHTML = prksDocTypeBadgeHtml(window.currentWork.doc_type);
+        if (headerTitle && _saved) headerTitle.innerText = _saved.title;
+        const _slotCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+        const typeSlot = _slotCtx && _slotCtx.query
+            ? _slotCtx.query('[data-prks-role="work-header-doc-type-slot"]')
+            : document.querySelector('[data-prks-role="work-header-doc-type-slot"]');
+        if (typeSlot && typeof prksDocTypeBadgeHtml === 'function' && _saved) {
+            typeSlot.innerHTML = prksDocTypeBadgeHtml(_saved.doc_type);
         }
         const toolbarTitle = document.querySelector('.prks-pdf-toolbar__title');
-        if (toolbarTitle) {
-            const nextTitle = String((window.currentWork && window.currentWork.title) || '').trim() || 'Document';
+        if (toolbarTitle && _saved) {
+            const nextTitle = String(_saved.title || '').trim() || 'Document';
             toolbarTitle.textContent = nextTitle;
             toolbarTitle.setAttribute('title', nextTitle);
         }
         const toolbarType = document.querySelector('.prks-pdf-toolbar__type');
-        if (toolbarType && typeof prksDocTypeMeta === 'function') {
-            const meta = prksDocTypeMeta(window.currentWork.doc_type);
+        if (toolbarType && typeof prksDocTypeMeta === 'function' && _saved) {
+            const meta = prksDocTypeMeta(_saved.doc_type);
             toolbarType.textContent = meta.label || '';
             toolbarType.setAttribute('title', meta.label || '');
             if (meta.color) toolbarType.style.background = meta.color;
@@ -2705,35 +2722,37 @@ async function prksRemoveWorkRoleLink(btn) {
 async function prksRefreshUiAfterWorkRoleRemoved(workId) {
     const hash = window.location.hash || '';
     const wIdStr = String(workId);
+    const _cwBefore = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
     if (
         (typeof prksParseRoute === 'function'
             ? prksParseRoute(hash).name === 'work' && prksParseRoute(hash).params.workId === wIdStr
             : hash.startsWith('#/works/')) &&
-        window.currentWork &&
-        String(window.currentWork.id) === wIdStr
+        _cwBefore &&
+        String(_cwBefore.id) === wIdStr
     ) {
         if (typeof fetchWorkDetails === 'function') {
-            window.currentWork = await fetchWorkDetails(wIdStr);
+            const _refreshedW = await fetchWorkDetails(wIdStr);
+            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _refreshedW);
             const panel = document.getElementById('panel-content');
             const tab =
                 typeof getActiveRightPanelTab === 'function' ? getActiveRightPanelTab() : 'details';
             if (panel && tab === 'details' && typeof prksWorkRightPanelStackHtml === 'function') {
-                panel.innerHTML = prksWorkRightPanelStackHtml(window.currentWork, false);
+                panel.innerHTML = prksWorkRightPanelStackHtml(_refreshedW, false);
                 if (typeof prksRefreshIcons === 'function') {
                     prksRefreshIcons(panel);
                 }
                 if (typeof initPrksPrivateNotesEditor === 'function') {
-                    initPrksPrivateNotesEditor('work', window.currentWork.id);
+                    initPrksPrivateNotesEditor('work', _refreshedW.id);
                 }
-                if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(window.currentWork.id);
+                if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(_refreshedW.id);
                 if (typeof mountPlaylistAttachControls === 'function') {
-                    void mountPlaylistAttachControls(window.currentWork);
+                    void mountPlaylistAttachControls(_refreshedW);
                 }
                 if (typeof mountFolderAttachControlsForWork === 'function') {
-                    void mountFolderAttachControlsForWork(window.currentWork);
+                    void mountFolderAttachControlsForWork(_refreshedW);
                 }
                 if (typeof initWorkDetailRightPanelActions === 'function') {
-                    initWorkDetailRightPanelActions(window.currentWork);
+                    initWorkDetailRightPanelActions(_refreshedW);
                 }
             }
         }
@@ -3131,35 +3150,37 @@ function renderWorkTagsChips(work) {
 
 async function prksReloadEntityTagsUI(entityType, entityId) {
     if (entityType === 'work') {
-        window.currentWork = await fetchWorkDetails(entityId);
+        const _tw = await fetchWorkDetails(entityId);
+        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _tw);
         const panel = document.getElementById('panel-content');
-        if (panel && getActiveRightPanelTab() === 'details' && window.currentWork && window.currentWork.id === entityId) {
-            panel.innerHTML = prksWorkRightPanelStackHtml(window.currentWork, false);
+        if (panel && getActiveRightPanelTab() === 'details' && _tw && _tw.id === entityId) {
+            panel.innerHTML = prksWorkRightPanelStackHtml(_tw, false);
             initPrksPrivateNotesEditor('work', entityId);
             initWorkTagCombobox(entityId);
             if (typeof mountPlaylistAttachControls === 'function') {
-                void mountPlaylistAttachControls(window.currentWork);
+                void mountPlaylistAttachControls(_tw);
             }
             if (typeof mountFolderAttachControlsForWork === 'function') {
-                void mountFolderAttachControlsForWork(window.currentWork);
+                void mountFolderAttachControlsForWork(_tw);
             }
             if (typeof initWorkDetailRightPanelActions === 'function') {
-                initWorkDetailRightPanelActions(window.currentWork);
+                initWorkDetailRightPanelActions(_tw);
             }
         }
     } else {
-        window.currentFolder = await fetchFolderDetails(entityId);
+        const _tf = await fetchFolderDetails(entityId);
+        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('folder', _tf);
         const contentDiv = document.getElementById('page-content');
         if (contentDiv && window.location.hash === '#/folders/' + entityId) {
-            renderFolderDetails(window.currentFolder, contentDiv);
+            renderFolderDetails(_tf, contentDiv);
         }
         const panel = document.getElementById('panel-content');
-        if (panel && getActiveRightPanelTab() === 'details' && window.currentFolder && window.currentFolder.id === entityId) {
-            panel.innerHTML = prksFolderRightPanelStackHtml(window.currentFolder);
+        if (panel && getActiveRightPanelTab() === 'details' && _tf && _tf.id === entityId) {
+            panel.innerHTML = prksFolderRightPanelStackHtml(_tf);
             initPrksPrivateNotesEditor('folder', entityId);
             initFolderTagCombobox(entityId);
             if (typeof mountFolderLibraryAttachControls === 'function') {
-                void mountFolderLibraryAttachControls(window.currentFolder);
+                void mountFolderLibraryAttachControls(_tf);
             }
         }
     }
@@ -3236,7 +3257,9 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId) {
     if (!input || !results) return;
 
     function getAttachedIds() {
-        const ent = entityType === 'work' ? window.currentWork : window.currentFolder;
+        const ent = typeof prksFocusedEntity === 'function'
+            ? prksFocusedEntity(entityType === 'work' ? 'work' : 'folder')
+            : null;
         if (!ent || ent.id !== entityId) return new Set();
         return new Set((ent.tags || []).map((t) => t.id));
     }
@@ -3295,12 +3318,14 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId) {
 }
 
 function initWorkTagCombobox(workId) {
-    if (!window.currentWork || window.currentWork.id !== workId) return;
+    const _cw = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
+    if (!_cw || _cw.id !== workId) return;
     initTagComboboxForEntity('work', workId, 'work-tag-search', 'work-tag-search-results');
 }
 
 function initFolderTagCombobox(folderId) {
-    if (!window.currentFolder || window.currentFolder.id !== folderId) return;
+    const _cf = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('folder') : null;
+    if (!_cf || _cf.id !== folderId) return;
     initTagComboboxForEntity('folder', folderId, 'folder-tag-search', 'folder-tag-search-results');
 }
 

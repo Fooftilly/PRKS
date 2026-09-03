@@ -171,17 +171,17 @@
             root.prksRememberOrigin(work, search);
             const origin = root.prksReadOriginForRoute(work);
             assert('origin from search', origin && origin.hash === '#/search?q=test', origin && origin.hash);
-            const back = root.prksResolveBackTarget(work);
+            const back = root.prksResolveBackTarget(null, work);
             assertEq('back hash from search', back.hash, '#/search?q=test');
             try {
                 root.sessionStorage.removeItem(root.PRKS_ROUTE_STATES_KEY);
             } catch (_e) {}
-            const direct = root.prksResolveBackTarget(parse('#/works/W-1'));
+            const direct = root.prksResolveBackTarget(null, parse('#/works/W-1'));
             assertEq('direct work fallback hash', direct.hash, '#/folders');
-            assertEq('direct person fallback hash', root.prksResolveBackTarget(parse('#/people/P-1')).hash, '#/people');
-            assertEq('direct group fallback hash', root.prksResolveBackTarget(parse('#/people/groups/PG-1')).hash, '#/people/groups');
-            assertEq('direct playlist fallback hash', root.prksResolveBackTarget(parse('#/playlists/PL-1')).hash, '#/playlists');
-            assertEq('direct saved view fallback hash', root.prksResolveBackTarget(parse('#/views/SV-1')).hash, '#/views');
+            assertEq('direct person fallback hash', root.prksResolveBackTarget(null, parse('#/people/P-1')).hash, '#/people');
+            assertEq('direct group fallback hash', root.prksResolveBackTarget(null, parse('#/people/groups/PG-1')).hash, '#/people/groups');
+            assertEq('direct playlist fallback hash', root.prksResolveBackTarget(null, parse('#/playlists/PL-1')).hash, '#/playlists');
+            assertEq('direct saved view fallback hash', root.prksResolveBackTarget(null, parse('#/views/SV-1')).hash, '#/views');
 
             try {
                 root.sessionStorage.removeItem(root.PRKS_ROUTE_STATES_KEY);
@@ -189,7 +189,7 @@
             const sv = parse('#/views/SV-1');
             const workFromSv = parse('#/works/W-1');
             root.prksRememberOrigin(workFromSv, sv);
-            const backSv = root.prksResolveBackTarget(workFromSv);
+            const backSv = root.prksResolveBackTarget(null, workFromSv);
             assertEq('back hash from saved view', backSv.hash, '#/views/SV-1');
             if (typeof document !== 'undefined' && document.getElementById) {
                 const main = document.getElementById('main-content');
@@ -197,8 +197,14 @@
                     main.scrollTop = 420;
                     root.prksCaptureCurrentRouteState(sv);
                     main.scrollTop = 0;
-                    root.__prksRouteGen = 7;
-                    root.prksRestoreRouteState(sv, 7);
+                    const ctx = {
+                        tabId: 'selftest',
+                        navigation: { routeStates: new Map(), origins: new Map() },
+                        isCurrent: function (g) {
+                            return g === 7;
+                        },
+                    };
+                    root.prksRestoreRouteState(ctx, sv, 7);
                     assertEq('saved view scroll restored', main.scrollTop, 420);
                 }
             }
@@ -218,14 +224,21 @@
                         root.prksCaptureCurrentRouteState(a);
                         main.scrollTop = 800;
                         root.prksCaptureCurrentRouteState(b);
-                        root.__prksRouteGen = 1;
-                        root.prksRestoreRouteState(a, 1);
+                        const ctx = {
+                            tabId: 'selftest',
+                            navigation: { routeStates: new Map(), origins: new Map() },
+                            generation: 1,
+                            isCurrent: function (g) {
+                                return g === ctx.generation;
+                            },
+                        };
+                        root.prksRestoreRouteState(ctx, a, 1);
                         assertEq('search A scroll restored', main.scrollTop, 300);
-                        root.prksRestoreRouteState(b, 1);
+                        root.prksRestoreRouteState(ctx, b, 1);
                         assertEq('search B scroll restored', main.scrollTop, 800);
                         main.scrollTop = 0;
-                        root.__prksRouteGen = 2;
-                        root.prksRestoreRouteState(a, 1);
+                        ctx.generation = 2;
+                        root.prksRestoreRouteState(ctx, a, 1);
                         assertEq('stale scroll ignored', main.scrollTop, 0);
                     }
                 }
@@ -304,39 +317,43 @@
         }
 
         if (typeof root.prksSetResolvedDocumentTitle === 'function' && typeof document !== 'undefined') {
+            const ctxMain = {
+                tabId: 'selftest',
+                navigation: { routeStates: new Map(), origins: new Map() },
+            };
             document.title = 'Keep Me — PRKS';
-            root.__prksRouteGen = 5;
-            root.prksSetResolvedDocumentTitle(parse('#/folders'), {}, 4);
+            root.prksSetResolvedDocumentTitle(null, parse('#/folders'), {});
             assertEq('stale title ignored', document.title, 'Keep Me — PRKS');
-            root.prksSetResolvedDocumentTitle(parse('#/recent'), {}, 5);
+            root.prksSetResolvedDocumentTitle(ctxMain, parse('#/recent'), {});
             assertEq('current title applied', document.title, 'Recent — PRKS');
-            root.prksSetResolvedDocumentTitle(parse('#/views'), {}, 5);
+            root.prksSetResolvedDocumentTitle(ctxMain, parse('#/views'), {});
             assertEq('saved views title', document.title, 'Saved Views — PRKS');
-            root.prksSetResolvedDocumentTitle(
-                parse('#/views/SV-1'),
-                { entityTitle: 'Critical Theory' },
-                5
-            );
+            root.prksSetResolvedDocumentTitle(ctxMain, parse('#/views/SV-1'), { entityTitle: 'Critical Theory' });
             assertEq('saved view entity title', document.title, 'Critical Theory — PRKS');
-            root.prksSetResolvedDocumentTitle(
-                parse('#/views/SV-missing'),
-                { notFound: true, notFoundTitle: 'Saved View not found' },
-                5
-            );
+            root.prksSetResolvedDocumentTitle(ctxMain, parse('#/views/SV-missing'), {
+                notFound: true,
+                notFoundTitle: 'Saved View not found',
+            });
             assertEq('saved view missing title', document.title, 'Saved View not found — PRKS');
         }
 
         if (typeof root.prksPublishRouteSidebar === 'function') {
-            root.__prksRouteGen = 9;
-            root.__prksRouteSidebar = { keep: true };
-            root.prksPublishRouteSidebar({ stale: true }, 3);
-            assert('stale sidebar ignored', root.__prksRouteSidebar && root.__prksRouteSidebar.keep === true);
-            root.prksPublishRouteSidebar({ ok: 1 }, 9);
-            assert('current sidebar applied', root.__prksRouteSidebar && root.__prksRouteSidebar.ok === 1);
+            const ctx = {
+                tabId: 'selftest',
+                navigation: { routeStates: new Map(), origins: new Map() },
+                routeSidebar: { keep: true },
+                isCurrent: function (g) {
+                    return g === 9;
+                },
+            };
+            root.prksPublishRouteSidebar(ctx, { stale: true }, 3);
+            assert('stale sidebar ignored', ctx.routeSidebar && ctx.routeSidebar.keep === true);
+            root.prksPublishRouteSidebar(ctx, { ok: 1 }, 9);
+            assert('current sidebar applied', ctx.routeSidebar && ctx.routeSidebar.ok === 1);
         }
 
         if (typeof root.prksContextualBackHtml === 'function') {
-            const html = root.prksContextualBackHtml(parse('#/works/W-1'));
+            const html = root.prksContextualBackHtml(null, parse('#/works/W-1'));
             assert('back is anchor', html.indexOf('<a class="prks-nav-back"') === 0);
             assert('back has aria-label', html.indexOf('aria-label="Back to ') !== -1);
             assert('back stays in hash', html.indexOf('href="#/') !== -1);

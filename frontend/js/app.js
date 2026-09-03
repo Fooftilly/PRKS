@@ -1391,10 +1391,6 @@ window.prksCanLeaveTabContext = prksCanLeaveTabContext;
 async function handleRoute(options) {
     const opts = options || {};
     if (typeof prksCloseOverlays === 'function') prksCloseOverlays();
-    if (window.__prksRouteRevertDueToPendingSync === true) {
-        window.__prksRouteRevertDueToPendingSync = false;
-        return;
-    }
     if (!opts.fromWorkspace && typeof prksWorkspaceAdoptLocation === 'function') {
         prksWorkspaceAdoptLocation();
     }
@@ -1436,10 +1432,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 'PDF annotation sync still running. Leave page before all changes save to server?'
             );
             if (!ok) {
-                window.__prksRouteRevertDueToPendingSync = true;
-                const revertHash = prevRoute.hash || prevRoute.canonicalHash || '';
-                if (revertHash) window.location.hash = revertHash;
-                return;
+                return { cancelled: true, reason: 'pending-sync' };
             }
         }
     }
@@ -2244,7 +2237,8 @@ function initForms() {
                     );
                 }
                 if (typeof fetchWorkDetails === 'function' && typeof updatePanelContent === 'function') {
-                    window.currentWork = await fetchWorkDetails(attachWid);
+                    const _aw = await fetchWorkDetails(attachWid);
+                    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _aw);
                     if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
                         window.__prksWorkFolderEdit = {};
                     }
@@ -2464,11 +2458,12 @@ function initForms() {
             role_type,
             credit_name,
         };
+        const _cwDupCheck = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
         if (
             typeof prksWorkHasRoleLink === 'function' &&
-            window.currentWork &&
-            String(window.currentWork.id) === String(work_id) &&
-            prksWorkHasRoleLink(window.currentWork.roles, person_id, role_type)
+            _cwDupCheck &&
+            String(_cwDupCheck.id) === String(work_id) &&
+            prksWorkHasRoleLink(_cwDupCheck.roles, person_id, role_type)
         ) {
             if (typeof prksShowDuplicateRoleLinkAlert === 'function') {
                 await prksShowDuplicateRoleLinkAlert(role_type);
@@ -2508,23 +2503,25 @@ function initForms() {
                 : hash.startsWith('#/works/')
                   ? hash.split('/')[2]
                   : '';
+        const _cwApp = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
         const onThisWork =
             workIdFromHash &&
             String(workIdFromHash) === String(work_id) &&
-            window.currentWork &&
-            String(window.currentWork.id) === String(work_id);
+            _cwApp &&
+            String(_cwApp.id) === String(work_id);
         if (onThisWork && typeof fetchWorkDetails === 'function') {
-            window.currentWork = await fetchWorkDetails(work_id);
+            const _rw = await fetchWorkDetails(work_id);
+            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _rw);
             const panel = document.getElementById('panel-content');
             const tab = typeof getActiveRightPanelTab === 'function' ? getActiveRightPanelTab() : 'details';
             if (panel && tab === 'details' && typeof prksWorkRightPanelStackHtml === 'function') {
-                panel.innerHTML = prksWorkRightPanelStackHtml(window.currentWork, false);
+                panel.innerHTML = prksWorkRightPanelStackHtml(_rw, false);
                 if (typeof initPrksPrivateNotesEditor === 'function') {
-                    initPrksPrivateNotesEditor('work', window.currentWork.id);
+                    initPrksPrivateNotesEditor('work', _rw.id);
                 }
-                if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(window.currentWork.id);
+                if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(_rw.id);
                 if (typeof initWorkDetailRightPanelActions === 'function') {
-                    initWorkDetailRightPanelActions(window.currentWork);
+                    initWorkDetailRightPanelActions(_rw);
                 }
             }
         } else {

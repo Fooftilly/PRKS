@@ -450,8 +450,8 @@ class ResearchPickerTests(_BrowserE2E):
 
 
 def _wait_pdf_viewer(page):
-    page.wait_for_selector("#pdf-viewer .prks-pdf-page", timeout=30000)
-    page.wait_for_selector("#pdf-viewer .prks-pdf-render-image", timeout=30000)
+    page.wait_for_selector('[data-prks-role="pdf-viewer"] .prks-pdf-page', timeout=30000)
+    page.wait_for_selector('[data-prks-role="pdf-viewer"] .prks-pdf-render-image', timeout=30000)
     page.wait_for_function("() => window.currentPdfViewer != null", timeout=30000)
     page.wait_for_function(
         "() => window.currentPdfViewer && window.currentPdfViewer.getPageCount && window.currentPdfViewer.getPageCount() >= 1",
@@ -517,7 +517,7 @@ def _pdf_selection_geometry(page):
     band = _pdf_text_band_fractions()
     page.evaluate(
         """(band) => {
-            const viewer = document.querySelector('#pdf-viewer');
+            const viewer = document.querySelector('[data-prks-role="pdf-viewer"]');
             const pageEl = viewer && viewer.querySelector('.prks-pdf-page');
             const vp = viewer && viewer.querySelector('.prks-pdf-viewport');
             if (!pageEl || !vp) return;
@@ -529,7 +529,7 @@ def _pdf_selection_geometry(page):
     )
     page.wait_for_function(
         """(band) => {
-            const viewer = document.querySelector('#pdf-viewer');
+            const viewer = document.querySelector('[data-prks-role="pdf-viewer"]');
             const pageEl = viewer && viewer.querySelector('.prks-pdf-page');
             const vp = viewer && viewer.querySelector('.prks-pdf-viewport');
             if (!pageEl || !vp) return false;
@@ -544,7 +544,7 @@ def _pdf_selection_geometry(page):
     )
     geo = page.evaluate(
         """(band) => {
-            const viewer = document.querySelector('#pdf-viewer');
+            const viewer = document.querySelector('[data-prks-role="pdf-viewer"]');
             const pageEl = viewer && viewer.querySelector('.prks-pdf-page');
             if (!viewer || !pageEl) return { error: 'missing page' };
             const host = pageEl.firstElementChild instanceof Element ? pageEl.firstElementChild : pageEl;
@@ -579,12 +579,12 @@ def _pdf_selection_geometry(page):
 def _commit_pdf_highlight(page):
     """Pointer mode → real mouse text selection → selection popup Highlight."""
     _wait_pdf_viewer(page)
-    pointer = page.locator('#pdf-viewer .prks-pdf-toolbar [aria-label="Pointer"]')
+    pointer = page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Pointer"]')
     pointer.wait_for(state="visible")
     pointer.click()
     page.wait_for_function(
         """() => {
-            const b = document.querySelector('#pdf-viewer .prks-pdf-toolbar [aria-label="Pointer"]');
+            const b = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Pointer"]');
             return b && b.getAttribute('aria-pressed') === 'true';
         }"""
     )
@@ -924,7 +924,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash === '#/folders'")
         self.assertEqual(page.locator(".work-detail").count(), 0)
-        self.assertEqual(page.locator("#pdf-viewer").count(), 0)
+        self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 0)
 
     def test_middle_click_opens_background_person(self):
         server, page, _collector = self._start_app()
@@ -1042,7 +1042,7 @@ class WorkspaceTabsTests(_BrowserE2E):
             arg=person_id,
         )
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
-        self.assertEqual(page.locator("#pdf-viewer").count(), 0)
+        self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 0)
         page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
         _wait_pdf_viewer(page)

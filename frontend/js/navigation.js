@@ -621,10 +621,17 @@
         return !!(route && route.name && route.name !== 'unknown');
     }
 
-    function prksIsRouteGenCurrent(routeGen) {
-        if (typeof routeGen !== 'number') return true;
-        if (typeof root.__prksRouteGen !== 'number') return true;
-        return routeGen === root.__prksRouteGen;
+    function prksIsRouteGenCurrent(a, b) {
+        // Transition helper: accept either (ctx, generation) or (generation, ctx).
+        let ctx = a;
+        let generation = b;
+        if (typeof a === 'number') {
+            generation = a;
+            ctx = b;
+        }
+        if (typeof generation !== 'number') return true;
+        if (!ctx || typeof ctx.isCurrent !== 'function') return true;
+        return ctx.isCurrent(generation);
     }
 
     function prksCurrentLocationHash() {
@@ -941,23 +948,35 @@
         return document.getElementById('main-content');
     }
 
-    function prksCaptureCurrentRouteState(prevRoute) {
+    function prksCaptureCurrentRouteState(prevRoute, ctx) {
         if (!prevRoute || !prksIsRecognizedRoute(prevRoute)) return;
         const el = prksRouteScrollElement();
         const scrollTop = el && Number.isFinite(el.scrollTop) ? el.scrollTop : 0;
-        const store = prksReadStore();
         const key = prevRoute.canonicalHash;
+        if (ctx && ctx.navigation && ctx.navigation.routeStates && typeof ctx.navigation.routeStates.set === 'function') {
+            ctx.navigation.routeStates.set(key, { scrollTop: scrollTop });
+            return;
+        }
+        const store = prksReadStore();
         store.states[key] = { scrollTop: scrollTop };
         prksTouchOrder(store, key);
         prksPruneOrphans(store);
         prksWriteStore(store);
     }
 
-    function prksRestoreRouteState(route, routeGen) {
-        if (!prksIsRouteGenCurrent(routeGen)) return null;
+    function prksRestoreRouteState(ctx, route, generation) {
+        if (ctx && typeof ctx.isCurrent === 'function' && typeof generation === 'number' && !ctx.isCurrent(generation)) return null;
         if (!route || !prksIsRecognizedRoute(route)) return null;
-        const store = prksReadStore();
-        const saved = store.states[route.canonicalHash];
+
+        const key = route.canonicalHash;
+        let saved = null;
+        if (ctx && ctx.navigation && ctx.navigation.routeStates && typeof ctx.navigation.routeStates.get === 'function') {
+            saved = ctx.navigation.routeStates.get(key);
+        }
+        if (!saved) {
+            const store = prksReadStore();
+            saved = store.states[key];
+        }
         if (!saved || typeof saved !== 'object') return null;
         const top = Number(saved.scrollTop);
         if (!Number.isFinite(top) || top < 0) return null;
@@ -966,9 +985,8 @@
         el.scrollTop = top;
         if (typeof root.requestAnimationFrame === 'function') {
             root.requestAnimationFrame(function () {
-                if (!prksIsRouteGenCurrent(routeGen)) return;
-                const now = prksParseRoute(prksCurrentLocationHash());
-                if (now.canonicalHash !== route.canonicalHash) return;
+                if (ctx && typeof ctx.isCurrent === 'function' && typeof generation === 'number' && !ctx.isCurrent(generation)) return;
+                if (ctx && ctx.lastResolvedRoute && ctx.lastResolvedRoute.canonicalHash !== route.canonicalHash) return;
                 const again = prksRouteScrollElement();
                 if (again) again.scrollTop = top;
             });
@@ -987,7 +1005,7 @@
         return { hash: parsed.canonicalHash, name: parsed.name, label: label };
     }
 
-    function prksRememberOrigin(destRoute, fromRoute) {
+    function prksRememberOrigin(destRoute, fromRoute, ctx) {
         if (!destRoute || !destRoute.detail || !fromRoute) return;
         if (!prksIsRecognizedRoute(fromRoute)) return;
         if (fromRoute.canonicalHash === destRoute.canonicalHash) return;
@@ -997,23 +1015,39 @@
             label: prksBackLabelForRoute(fromRoute),
         });
         if (!rec) return;
+        const key = destRoute.canonicalHash;
+        if (ctx && ctx.navigation && ctx.navigation.origins && typeof ctx.navigation.origins.set === 'function') {
+            ctx.navigation.origins.set(key, rec);
+            // Preserve roughly-bounded memory like session fallback.
+            if (typeof PRKS_ROUTE_STATE_LIMIT === 'number' && ctx.navigation.origins.size > PRKS_ROUTE_STATE_LIMIT) {
+                const over = ctx.navigation.origins.size - PRKS_ROUTE_STATE_LIMIT;
+                const keys = Array.from(ctx.navigation.origins.keys());
+                for (let i = 0; i < over; i++) ctx.navigation.origins.delete(keys[i]);
+            }
+            return;
+        }
         const store = prksReadStore();
-        store.origins[destRoute.canonicalHash] = rec;
-        prksTouchOrder(store, destRoute.canonicalHash);
+        store.origins[key] = rec;
+        prksTouchOrder(store, key);
         prksPruneOrphans(store);
         prksWriteStore(store);
     }
 
-    function prksReadOriginForRoute(route) {
+    function prksReadOriginForRoute(route, ctx) {
         if (!route || !route.detail) return null;
+        const key = route.canonicalHash;
+        if (ctx && ctx.navigation && ctx.navigation.origins && typeof ctx.navigation.origins.get === 'function') {
+            const rec = ctx.navigation.origins.get(key);
+            if (rec && typeof rec === 'object') return prksValidateOriginRecord(rec);
+        }
         const store = prksReadStore();
-        return prksValidateOriginRecord(store.origins[route.canonicalHash]);
+        return prksValidateOriginRecord(store.origins[key]);
     }
 
-    function prksResolveBackTarget(route) {
+    function prksResolveBackTarget(ctx, route) {
         const fallbackHash = prksMeta(route).fallbackBack || PRKS_HOME_HASH;
         const fallbackRoute = prksParseRoute(fallbackHash);
-        const origin = prksReadOriginForRoute(route);
+        const origin = prksReadOriginForRoute(route, ctx);
         if (origin) {
             const parsed = prksParseRoute(origin.hash);
             if (prksIsRecognizedRoute(parsed) && parsed.canonicalHash !== (route && route.canonicalHash)) {
@@ -1029,9 +1063,9 @@
         };
     }
 
-    function prksContextualBackHtml(route) {
+    function prksContextualBackHtml(ctx, route) {
         if (!route || !route.detail) return '';
-        const dest = prksResolveBackTarget(route);
+        const dest = prksResolveBackTarget(ctx, route);
         if (!dest || !dest.hash) return '';
         const label = String(dest.label || 'Back').replace(/\s+/g, ' ').trim() || 'Back';
         const href = dest.hash;
@@ -1054,26 +1088,27 @@
         return !!(container.querySelector('.work-detail') && !container.querySelector('.page-header--work'));
     }
 
-    function prksMountContextualBack(container, route, routeGen) {
-        if (!prksIsRouteGenCurrent(routeGen)) return;
-        if (!container || !container.querySelector) return;
+    function prksMountContextualBack(ctx, route, generation, container) {
+        if (ctx && typeof ctx.isCurrent === 'function' && typeof generation === 'number' && !ctx.isCurrent(generation)) return;
+        const el = container || (ctx && ctx.root ? ctx.root : null);
+        if (!el || !el.querySelector) return;
         if (!route || !route.detail) return;
-        if (container.querySelector('.prks-nav-back')) return;
-        const html = prksContextualBackHtml(route);
+        if (el.querySelector('.prks-nav-back')) return;
+        const html = prksContextualBackHtml(ctx, route);
         if (!html) return;
-        if (prksIsPdfWorkWithoutHeader(container)) {
-            const detail = container.querySelector('.work-detail');
+        if (prksIsPdfWorkWithoutHeader(el)) {
+            const detail = el.querySelector('.work-detail');
             if (detail) {
                 detail.insertAdjacentHTML('afterbegin', '<div class="prks-nav-back-row prks-nav-back-row--work">' + html + '</div>');
             }
             return;
         }
-        const header = container.querySelector('.page-header');
+        const header = el.querySelector('.page-header');
         if (header) {
             header.insertAdjacentHTML('afterbegin', html);
             return;
         }
-        container.insertAdjacentHTML('afterbegin', '<div class="prks-nav-back-row">' + html + '</div>');
+        el.insertAdjacentHTML('afterbegin', '<div class="prks-nav-back-row">' + html + '</div>');
     }
 
     function prksResolvedRouteTitle(route, options) {
@@ -1099,8 +1134,10 @@
         return base + PRKS_TITLE_SUFFIX;
     }
 
-    function prksSetResolvedDocumentTitle(route, options, routeGen) {
-        if (!prksIsRouteGenCurrent(routeGen)) return;
+    function prksSetResolvedDocumentTitle(ctx, route, options) {
+        const isMain =
+            typeof root.prksIsMainTabContext === 'function' ? root.prksIsMainTabContext(ctx) : !!ctx;
+        if (!isMain) return;
         if (typeof document === 'undefined') return;
         document.title = prksDocumentTitleText(route, options);
     }
@@ -1115,9 +1152,10 @@
         return prksMeta(route).tabIcon || 'file-text';
     }
 
-    function prksPublishRouteSidebar(data, routeGen) {
-        if (!prksIsRouteGenCurrent(routeGen)) return false;
-        root.__prksRouteSidebar = data && typeof data === 'object' ? data : {};
+    function prksPublishRouteSidebar(ctx, data, generation) {
+        if (!ctx || typeof ctx.isCurrent !== 'function') return false;
+        if (!ctx.isCurrent(generation)) return false;
+        ctx.routeSidebar = data && typeof data === 'object' ? data : {};
         return true;
     }
 
@@ -1180,31 +1218,37 @@
         }
     }
 
-    function prksFinishRouteRender(route, routeGen, contentDiv, options) {
-        if (!prksIsRouteGenCurrent(routeGen)) return false;
+    function prksFinishRouteRender(ctx, route, generation, contentDiv, options) {
+        if (!ctx || typeof ctx.isCurrent !== 'function') return false;
+        if (!ctx.isCurrent(generation)) return false;
+
         const opts = options || {};
-        prksSetResolvedDocumentTitle(route, opts, routeGen);
-        if (typeof root.prksWorkspaceSetResolvedTitle === 'function') {
-            root.prksWorkspaceSetResolvedTitle(
-                route.canonicalHash || route.hash,
-                prksResolvedRouteTitle(route, opts),
-                routeGen
-            );
+        ctx.lastResolvedRoute = route || null;
+
+        const restored = prksRestoreRouteState(ctx, route, generation);
+        prksMountContextualBack(ctx, route, generation, contentDiv);
+
+        const cd = contentDiv || (ctx && ctx.root ? ctx.root : null);
+        if (cd && cd.removeAttribute) cd.removeAttribute('aria-busy');
+        if (ctx.root && ctx.root.removeAttribute) ctx.root.removeAttribute('aria-busy');
+
+        const resolvedTitle = prksResolvedRouteTitle(route, opts);
+        const routeHash = route ? route.canonicalHash || route.hash : '';
+        if (typeof root.prksWorkspaceSetResolvedTitleForTab === 'function') {
+            root.prksWorkspaceSetResolvedTitleForTab(ctx.tabId, routeHash, resolvedTitle, generation);
+        } else if (typeof root.prksWorkspaceSetResolvedTitle === 'function') {
+            root.prksWorkspaceSetResolvedTitle(routeHash, resolvedTitle, generation);
         }
-        if (!prksIsRouteGenCurrent(routeGen)) return false;
-        prksMountContextualBack(contentDiv, route, routeGen);
-        const restored = prksRestoreRouteState(route, routeGen);
-        if (contentDiv && contentDiv.removeAttribute) contentDiv.removeAttribute('aria-busy');
-        root.__prksLastResolvedHash = route ? route.hash : prksCurrentLocationHash();
-        root.__prksLastResolvedRouteName = route ? route.name : '';
-        root.__prksRouteRenderDone = {
-            gen: routeGen,
-            hash: route ? route.canonicalHash : '',
-            name: route ? route.name : '',
-        };
+
+        if (typeof root.prksIsMainTabContext === 'function' && root.prksIsMainTabContext(ctx)) {
+            prksSetResolvedDocumentTitle(ctx, route, opts);
+            if (typeof prksSyncSidebarActive === 'function') prksSyncSidebarActive(route);
+            if (typeof prksSyncNavDisclosures === 'function') prksSyncNavDisclosures(route);
+        }
+
         const skipAnim = restored && Number(restored.scrollTop) > 8;
-        if (!skipAnim && typeof root.prksPlayPageEnterAnimation === 'function') {
-            root.prksPlayPageEnterAnimation(contentDiv);
+        if (!skipAnim && typeof root.prksPlayPageEnterAnimation === 'function' && cd) {
+            root.prksPlayPageEnterAnimation(cd);
         }
         return true;
     }

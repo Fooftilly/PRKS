@@ -738,7 +738,7 @@ function renderFolderDetails(folder, container) {
         container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">Folder not found.</p>';
         return;
     }
-    window.currentFolder = folder;
+    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('folder', folder);
     const hasChildren = Array.isArray(folder.children) && folder.children.length > 0;
     const canDelete = (!folder.works || folder.works.length === 0) && !hasChildren;
 
@@ -946,7 +946,8 @@ async function mountFolderAttachControlsForWork(work) {
         if (!Array.isArray(folderRows)) folderRows = [];
         if (status) status.textContent = message || 'Folder set.';
         if (typeof fetchWorkDetails === 'function') {
-            window.currentWork = await fetchWorkDetails(wid);
+            const _fw = await fetchWorkDetails(wid);
+            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _fw);
             if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
                 window.__prksWorkFolderEdit = {};
             }
@@ -1049,7 +1050,8 @@ async function mountFolderAttachControlsForWork(work) {
             await patchWorkFolder(wid, pid);
             if (status) status.textContent = 'Folder updated.';
             if (typeof fetchWorkDetails === 'function') {
-                window.currentWork = await fetchWorkDetails(wid);
+                const _uw = await fetchWorkDetails(wid);
+                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _uw);
                 if (!window.__prksWorkFolderEdit || typeof window.__prksWorkFolderEdit !== 'object') {
                     window.__prksWorkFolderEdit = {};
                 }
@@ -1069,7 +1071,8 @@ async function mountFolderAttachControlsForWork(work) {
             hidden.value = '';
             if (status) status.textContent = 'Removed from folder.';
             if (typeof fetchWorkDetails === 'function') {
-                window.currentWork = await fetchWorkDetails(wid);
+                const _rw = await fetchWorkDetails(wid);
+                if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('work', _rw);
                 if (typeof updatePanelContent === 'function') updatePanelContent('details');
             }
         } catch (e) {

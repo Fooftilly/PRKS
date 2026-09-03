@@ -140,6 +140,34 @@ function fakeCytoscape(opts) {
     return cy;
 }
 
+const _mockResources = new Map();
+const _mockCtx = {
+    tabId: 'mock-tab',
+    mounted: true,
+    destroyed: false,
+    resources: _mockResources,
+    setResource: function (name, value, disposer) {
+        const key = String(name);
+        const prev = _mockResources.get(key);
+        if (prev && typeof prev.disposer === 'function') try { prev.disposer(); } catch (_e) {}
+        _mockResources.set(key, { value: value, disposer: disposer });
+        return value;
+    },
+    getResource: function (name) {
+        const rec = _mockResources.get(String(name));
+        return rec ? rec.value : undefined;
+    },
+    clearResource: function (name) {
+        const key = String(name);
+        const rec = _mockResources.get(key);
+        if (!rec) return;
+        _mockResources.delete(key);
+        if (typeof rec.disposer === 'function') try { rec.disposer(); } catch (_e) {}
+    },
+    domId: function (local) { return 'prks-tab-mock-tab-' + local; },
+    query: function () { return null; },
+};
+
 const sandbox = {
     window: {},
     global: {},
@@ -150,6 +178,9 @@ const sandbox = {
     },
     prksEscapeHtml: function (s) {
         return String(s == null ? '' : s);
+    },
+    prksGetFocusedTabContext: function () {
+        return _mockCtx;
     },
     fetchResearchGraph: async function () {
         return fixture;
@@ -489,7 +520,7 @@ function makeGraphHost() {
         });
     };
     const leavePending = g.reloadGraph(true);
-    g.destroyResearchGraph();
+    g.destroyResearchGraph(leaveHost);
     leaveHost.innerHTML = 'WORKS PAGE';
     resolveLeave(fixture);
     const leaveResult = await leavePending;

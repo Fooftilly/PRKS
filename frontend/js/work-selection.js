@@ -22,6 +22,7 @@
         inited: false,
         inFlightGen: null,
         inFlightHash: '',
+        lastResolvedHash: '',
     };
 
     function esc(s) {
@@ -781,7 +782,7 @@
 
     function stillOnCaptured(captured) {
         if (!captured) return false;
-        if (captured.gen != null && captured.gen !== root.__prksRouteGen) return false;
+        if (captured.gen != null && typeof root.prksFocusedRouteGeneration === 'function' && captured.gen !== root.prksFocusedRouteGeneration()) return false;
         const now = currentRoute();
         if (captured.hash && now.canonicalHash !== captured.hash) return false;
         return true;
@@ -790,7 +791,7 @@
     async function runBulkPayload(payload) {
         if (!payload || state.submitting) return;
         const captured = {
-            gen: root.__prksRouteGen,
+            gen: typeof root.prksFocusedRouteGeneration === 'function' ? root.prksFocusedRouteGeneration() : 0,
             hash: currentRoute().canonicalHash,
             route: currentRoute(),
         };
@@ -847,13 +848,14 @@
         } else if (!isSupportedRoute(route) && state.active) {
             exitSelection();
         }
+        state.lastResolvedHash = route && (route.canonicalHash || route.hash) ? route.canonicalHash || route.hash : '';
     }
 
     function wrapFinish() {
         const orig = root.prksFinishRouteRender;
         if (typeof orig === 'function' && orig._prksBulkWrapped) return;
-        function wrapped(route, routeGen, contentDiv, options) {
-            const ok = typeof orig === 'function' ? orig(route, routeGen, contentDiv, options) : true;
+        function wrapped(ctx, route, generation, contentDiv, options) {
+            const ok = typeof orig === 'function' ? orig(ctx, route, generation, contentDiv, options) : true;
             if (ok !== false) onRouteFinished(route, contentDiv);
             return ok;
         }
@@ -865,7 +867,7 @@
         const orig = root.handleRoute;
         if (typeof orig !== 'function' || orig._prksBulkWrapped) return typeof orig === 'function';
         function wrapped() {
-            const prev = root.__prksLastResolvedHash || '';
+            const prev = state.lastResolvedHash || '';
             const next = root.location ? root.location.hash : '';
             onRouteWillChange(prev, next);
             return orig.apply(this, arguments);
@@ -893,6 +895,7 @@
         state.ids = new Set();
         state.submitting = false;
         state.sheetKind = null;
+        state.lastResolvedHash = '';
         closeSheet();
         setToolbarVisible(false);
         decorateAll();

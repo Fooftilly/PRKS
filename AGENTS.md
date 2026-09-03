@@ -33,7 +33,7 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/research_index.py` disposable derived note-reference index
 - `backend/research_graph.py` read-only Research Graph projection
 - `backend/performance.py` in-memory performance diagnostics
-- `frontend/` UI (`frontend/js/workspace-tabs.js` stacked workspace tabs)
+- `frontend/` UI (`frontend/js/tab-context.js` per-tab runtime, `frontend/js/workspace-tabs.js` stacked workspace tabs)
 - `tests/` unittest
 
 New substantial behavior, in order:
@@ -171,11 +171,24 @@ Ctrl/Cmd-click and middle-click target a background PRKS tab.
 
 Parked tabs must perform no API requests and own no live DOM/resources.
 
-Only the main tab is mounted until TabContext/tiling is implemented.
+Only the main tab is mounted. Tiling is not implemented.
 
 Tab switching must not create contextual Back origins.
 
 Workspace state is intentionally memory-only in v1.
+
+TabContext owns route runtime:
+
+- route state → TabContext (`ctx.navigation`, `ctx.lastResolvedRoute`, `ctx.entity`)
+- route DOM → `ctx.root`
+- page-local lookup → `ctx.query` / `data-prks-role` (`ctx.domId` only for ARIA)
+- async lifetime → `ctx.beginRoute()` / `ctx.isCurrent(generation)`
+- live resources → `ctx.resources` / `ctx.setTimer`
+- shell → main/focused context (`prksGetMainTabContext`, `prksGetFocusedTabContext`)
+
+Stacked mode: one mounted context. Future tiling: several visible mounted
+contexts. Do not store route-scoped state on `window`. The Research Graph
+is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
 
 ## Saved Views
 

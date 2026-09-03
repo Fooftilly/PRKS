@@ -181,7 +181,7 @@ function setPersonTemplateFeedback(message, isError, targetId = 'person-template
 
 function buildPersonStandardTemplateFromProfile() {
     const out = {};
-    const p = window.currentPerson || {};
+    const p = (typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null) || {};
     out.first_name = String(p.first_name || '');
     out.last_name = String(p.last_name || '');
     out.aliases = String(p.aliases || '');
@@ -525,7 +525,7 @@ window.buildPersonListCardContentHtml = buildPersonListCardContentHtml;
 window.buildPersonListDetailsHtml = buildPersonListDetailsHtml;
 
 function prksPersonViewInGraph() {
-    const p = window.currentPerson;
+    const p = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
     if (!p || !p.id) return;
     const hash =
         typeof window.prksGraphFocusHash === 'function'
@@ -701,8 +701,9 @@ async function openPersonProfileEdit() {
     window.__prksPersonWorksEditing = false;
     window.__prksPersonDetailEditing = true;
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
-    if (typeof prksMountPersonProfileGroupPicker === 'function' && window.currentPerson) {
-        await prksMountPersonProfileGroupPicker(window.currentPerson);
+    const _cpEdit = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
+    if (typeof prksMountPersonProfileGroupPicker === 'function' && _cpEdit) {
+        await prksMountPersonProfileGroupPicker(_cpEdit);
     }
 }
 
@@ -713,7 +714,7 @@ function closePersonProfileEdit() {
 }
 
 async function deletePerson() {
-    const p = window.currentPerson;
+    const p = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
     const personId = p && p.id ? String(p.id) : '';
     if (!personId) return;
     const linkedWorks = p ? prksUniquePersonWorks(p).length : 0;
@@ -734,7 +735,7 @@ async function deletePerson() {
             await prksAlertMessage(body.error || 'Could not delete person.', 'Could not delete');
             return;
         }
-        window.currentPerson = null;
+        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('person', null);
         window.__prksPersonDetailEditing = false;
         window.__prksPersonWorksEditing = false;
         if (typeof prksNavigate === 'function') prksNavigate('#/people');
@@ -744,7 +745,7 @@ async function deletePerson() {
 }
 
 function prksTogglePersonWorksEdit() {
-    const p = window.currentPerson;
+    const p = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
     if (!p) return;
     const nowEditing = window.__prksPersonWorksEditing === true;
     if (nowEditing) {
@@ -899,8 +900,9 @@ async function savePersonProfile(personId) {
     let group_ids =
         typeof prksGetPersonEditGroupIdsFromDom === 'function' ? prksGetPersonEditGroupIdsFromDom() : undefined;
     if (group_ids === undefined) {
-        group_ids = (window.currentPerson && window.currentPerson.groups
-            ? window.currentPerson.groups
+        const _cpSave = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('person') : null;
+        group_ids = (_cpSave && _cpSave.groups
+            ? _cpSave.groups
             : []
         ).map((g) => g.id);
     }
@@ -941,8 +943,9 @@ async function savePersonProfile(personId) {
         const person = await fetchPersonDetails(personId);
         window.__prksPersonDetailEditing = false;
         if (person) {
-            window.currentPerson = person;
-            window.__prksRouteSidebar = {
+            if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('person', person);
+            const _pctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+            if (_pctx) _pctx.routeSidebar = {
                 personDisplayName:
                     typeof personDisplayName === 'function' ? personDisplayName(person) || 'Person' : 'Person',
                 linkedWorks: prksUniquePersonWorks(person).length
@@ -977,12 +980,12 @@ function personRoleBlockHtml(heading, count, cardsHtml) {
 
 function renderPersonDetails(person, container) {
     if (!person) {
-        window.currentPerson = null;
+        if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('person', null);
         window.__prksPersonWorksEditing = false;
         container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Person not found</h2></div>';
         return;
     }
-    window.currentPerson = person;
+    if (typeof prksSetFocusedEntity === 'function') prksSetFocusedEntity('person', person);
 
     const worksEditing = window.__prksPersonWorksEditing === true;
     const rolesByWork = prksPersonWorkRolesById(person);

@@ -442,13 +442,13 @@
     }
 
     function editFetchStillCurrent(routeGen, canonicalHash) {
-        if (routeGen !== root.__prksRouteGen) return false;
+        if (typeof root.prksFocusedRouteGeneration === 'function' && routeGen !== root.prksFocusedRouteGeneration()) return false;
         return canonicalHash === currentCanonicalHash();
     }
 
     async function openEditById(id) {
         if (typeof root.fetchSavedView !== 'function') return;
-        const routeGen = root.__prksRouteGen;
+        const routeGen = typeof root.prksFocusedRouteGeneration === 'function' ? root.prksFocusedRouteGeneration() : 0;
         const canonicalHash = currentCanonicalHash();
         let view;
         try {

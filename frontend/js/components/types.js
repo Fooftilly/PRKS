@@ -38,7 +38,8 @@ function renderTypesIndex(works, container) {
     const totals = rows.map((r) => Number(r.count) || 0);
     const totalFiles = totals.reduce((acc, n) => acc + n, 0);
 
-    window.__prksRouteSidebar = { typeCount: rows.length, totalFiles };
+    const _tctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (_tctx) _tctx.routeSidebar = { typeCount: rows.length, totalFiles };
 
     const rowsHtml = rows.length
         ? rows
@@ -84,7 +85,8 @@ function renderWorksByDocType(works, docType, container) {
         .filter((w) => (typeof prksNormalizeDocType === 'function' ? prksNormalizeDocType(w?.doc_type) : w?.doc_type) === dt)
         .sort((a, b) => String(a?.title || '').localeCompare(String(b?.title || ''), undefined, { sensitivity: 'base' }));
 
-    window.__prksRouteSidebar = { docType: dt, docTypeLabel: label, workCount: filtered.length };
+    const _tdctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (_tdctx) _tdctx.routeSidebar = { docType: dt, docTypeLabel: label, workCount: filtered.length };
     const typeBadge =
         typeof prksDocTypeBadgeHtml === 'function'
             ? prksDocTypeBadgeHtml(dt)
