@@ -371,7 +371,7 @@ function makeGraphHost() {
     const graphRoot = {
         addEventListener: noop,
         removeEventListener: noop,
-            querySelector: function (sel) {
+        querySelector: function (sel) {
             if (sel === '#prks-graph-find' || sel === '[data-prks-role="graph-find"]') {
                 return { value: '', addEventListener: noop };
             }

@@ -1,6 +1,6 @@
 /**
  * Stacked workspace tabs. Parked tabs are state only: no DOM, fetch, or render.
- * Tiling / TabContext / persistence are out of scope.
+ * Each logical tab may own a TabContext; stacked mode mounts at most one.
  */
 (function (root) {
     'use strict';
@@ -233,9 +233,47 @@
             markHandled();
         }
 
+        function parkContext(tabId) {
+            if (tabId && typeof root.prksUnmountTabContext === 'function') {
+                root.prksUnmountTabContext(tabId, 'park');
+            }
+        }
+
+        function mountContext(tabId) {
+            if (!tabId || typeof root.prksMountTabContext !== 'function') return;
+            const host =
+                typeof root.prksTabContextHost === 'function'
+                    ? root.prksTabContextHost()
+                    : typeof document !== 'undefined'
+                      ? document.getElementById('page-content')
+                      : null;
+            if (host) root.prksMountTabContext(tabId, host);
+        }
+
+        function destroyContext(tabId) {
+            if (tabId && typeof root.prksDestroyTabContext === 'function') {
+                root.prksDestroyTabContext(tabId);
+            }
+        }
+
+        function resetAllContexts() {
+            if (typeof root.prksDestroyAllTabContexts === 'function') {
+                root.prksDestroyAllTabContexts();
+            }
+        }
+
         function invokeRender(options) {
             lastRenderGen += 1;
-            const opts = Object.assign({ leaveApproved: true, fromWorkspace: true }, options || {});
+            const tab = getMainTab();
+            const opts = Object.assign(
+                {
+                    leaveApproved: true,
+                    fromWorkspace: true,
+                    tabId: tab ? tab.id : null,
+                    hash: tab ? tab.route : null,
+                },
+                options || {}
+            );
             return renderRoute(opts);
         }
 
@@ -278,9 +316,11 @@
             seq = 0;
             lastHandledHref = '';
             lastRenderGen = 0;
+            resetAllContexts();
             const tab = makeTab(hash);
             state.tabs = [tab];
             setMain(tab.id);
+            mountContext(tab.id);
             commitUrl(tab, 'replace');
             onChange();
             return snapshot();
@@ -313,12 +353,17 @@
             }
             return awaitLeave(route).then(function (ok) {
                 if (!ok) return false;
+                const prevId = state.mainTabId;
                 const tab = makeTab(route);
                 state.tabs.push(tab);
+                if (prevId && prevId !== tab.id) parkContext(prevId);
                 setMain(tab.id);
+                mountContext(tab.id);
                 commitUrl(tab, 'replace');
                 onChange();
-                return Promise.resolve(invokeRender({ workspaceSwitch: true })).then(function () {
+                return Promise.resolve(
+                    invokeRender({ workspaceSwitch: true, tabId: tab.id, hash: tab.route })
+                ).then(function () {
                     return copyTab(tab);
                 });
             });
@@ -364,13 +409,18 @@
             return awaitLeave(tab.route).then(function (ok) {
                 if (!ok) return false;
                 if (!getTab(tabId)) return false;
+                const prevId = state.mainTabId;
+                if (prevId && prevId !== tabId) parkContext(prevId);
                 setMain(tabId);
+                mountContext(tabId);
                 commitUrl(tab, 'replace');
                 onChange();
                 return Promise.resolve(
                     invokeRender({
                         workspaceSwitch: !opts.fromPopstate,
                         fromPopstate: !!opts.fromPopstate,
+                        tabId: tab.id,
+                        hash: tab.route,
                     })
                 ).then(function () {
                     return true;
@@ -384,6 +434,7 @@
             const closing = state.tabs[idx];
             const closingMain = closing.id === state.mainTabId;
             if (!closingMain) {
+                destroyContext(closing.id);
                 state.tabs.splice(idx, 1);
                 onChange();
                 return Promise.resolve(true);
@@ -395,29 +446,37 @@
                 const i = tabIndex(tabId);
                 if (i < 0) return false;
                 if (!successor) {
+                    destroyContext(tabId);
                     state.tabs.splice(i, 1);
                     const home = makeTab(homeHash);
                     state.tabs.push(home);
                     setMain(home.id);
+                    mountContext(home.id);
                     commitUrl(home, 'replace');
                     onChange();
-                    return Promise.resolve(invokeRender({ workspaceSwitch: true })).then(function () {
+                    return Promise.resolve(
+                        invokeRender({ workspaceSwitch: true, tabId: home.id, hash: home.route })
+                    ).then(function () {
                         return true;
                     });
                 }
                 const next = state.tabs[i + 1] || state.tabs[i - 1];
+                destroyContext(tabId);
                 state.tabs.splice(i, 1);
                 setMain(next.id);
+                mountContext(next.id);
                 commitUrl(next, 'replace');
                 onChange();
-                return Promise.resolve(invokeRender({ workspaceSwitch: true })).then(function () {
+                return Promise.resolve(
+                    invokeRender({ workspaceSwitch: true, tabId: next.id, hash: next.route })
+                ).then(function () {
                     return true;
                 });
             });
         }
 
-        function setResolvedTitle(hash, title, routeGen) {
-            const tab = getMainTab();
+        function setResolvedTitleForTab(tabId, hash, title, routeGen) {
+            const tab = getTab(tabId);
             if (!tab) return false;
             const want = canonical(hash);
             if (tab.route !== want) return false;
@@ -436,6 +495,12 @@
             return true;
         }
 
+        function setResolvedTitle(hash, title, routeGen) {
+            const tab = getMainTab();
+            if (!tab) return false;
+            return setResolvedTitleForTab(tab.id, hash, title, routeGen);
+        }
+
         function applyPopState(raw, locHash) {
             if (raw && raw.tabId) {
                 const tab = getTab(raw.tabId);
@@ -447,10 +512,18 @@
                     } else {
                         applyTabRoute(tab, locHash || canonical(raw.route));
                     }
+                    const prevId = state.mainTabId;
+                    if (prevId && prevId !== tab.id) parkContext(prevId);
                     setMain(tab.id);
+                    mountContext(tab.id);
                     markHandled();
                     onChange();
-                    return invokeRender({ workspaceSwitch: false, fromPopstate: true });
+                    return invokeRender({
+                        workspaceSwitch: false,
+                        fromPopstate: true,
+                        tabId: tab.id,
+                        hash: tab.route,
+                    });
                 }
             }
             const main = getMainTab();
@@ -462,9 +535,15 @@
             if (main.history[main.historyIndex] !== locHash) {
                 main.history[main.historyIndex] = locHash;
             }
+            mountContext(main.id);
             patchHistoryState();
             onChange();
-            return invokeRender({ workspaceSwitch: false, fromPopstate: true });
+            return invokeRender({
+                workspaceSwitch: false,
+                fromPopstate: true,
+                tabId: main.id,
+                hash: main.route,
+            });
         }
 
         function handlePopState(eventState) {
@@ -498,6 +577,7 @@
             activateTab: activateTab,
             closeTab: closeTab,
             setResolvedTitle: setResolvedTitle,
+            setResolvedTitleForTab: setResolvedTitleForTab,
             snapshot: snapshot,
             adoptLocation: adoptLocation,
             handlePopState: handlePopState,
@@ -800,10 +880,19 @@
             homeHash: defaultHome(),
             historyAdapter: defaultHistoryAdapter(),
             isRouteGenCurrent: function (routeGen) {
-                if (typeof root.prksIsRouteGenCurrent === 'function') return root.prksIsRouteGenCurrent(routeGen);
+                if (typeof root.prksIsRouteGenCurrent === 'function') {
+                    const ctx =
+                        typeof root.prksGetMainTabContext === 'function' ? root.prksGetMainTabContext() : null;
+                    return root.prksIsRouteGenCurrent(routeGen, ctx);
+                }
                 return true;
             },
             canLeave: function (nextHash) {
+                if (typeof root.prksCanLeaveTabContext === 'function') {
+                    const ctx =
+                        typeof root.prksGetMainTabContext === 'function' ? root.prksGetMainTabContext() : null;
+                    return root.prksCanLeaveTabContext(ctx, nextHash);
+                }
                 if (typeof root.prksCanLeaveCurrentRoute === 'function') {
                     return root.prksCanLeaveCurrentRoute(nextHash);
                 }
@@ -871,6 +960,11 @@
         return production.setResolvedTitle(hash, title, routeGen);
     }
 
+    function prksWorkspaceSetResolvedTitleForTab(tabId, hash, title, routeGen) {
+        if (!production || typeof production.setResolvedTitleForTab !== 'function') return false;
+        return production.setResolvedTitleForTab(tabId, hash, title, routeGen);
+    }
+
     function prksWorkspaceSnapshot() {
         if (!production) {
             return {
@@ -904,6 +998,7 @@
         prksWorkspaceActivateTab: prksWorkspaceActivateTab,
         prksWorkspaceCloseTab: prksWorkspaceCloseTab,
         prksWorkspaceSetResolvedTitle: prksWorkspaceSetResolvedTitle,
+        prksWorkspaceSetResolvedTitleForTab: prksWorkspaceSetResolvedTitleForTab,
         prksWorkspaceAdoptLocation: prksWorkspaceAdoptLocation,
         prksWorkspaceSnapshot: prksWorkspaceSnapshot,
         prksNavigate: prksNavigate,

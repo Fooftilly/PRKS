@@ -452,6 +452,36 @@
         return { mountedCount: mountedCount, contexts: list };
     }
 
+    function prksFocusedEntity(type) {
+        const ctx = prksGetFocusedTabContext();
+        return ctx ? ctx.getEntity(type) : null;
+    }
+
+    function prksOwnerTabContext(element) {
+        if (element && typeof element.closest === 'function') {
+            const fromEl = prksContextFromElement(element);
+            if (fromEl) return fromEl;
+        }
+        return prksGetFocusedTabContext();
+    }
+
+    function prksSetFocusedEntity(type, value) {
+        const ctx = prksGetFocusedTabContext();
+        if (ctx) ctx.setEntity(type, value);
+        return value;
+    }
+
+    function prksFocusedRouteGeneration() {
+        const ctx = prksGetFocusedTabContext();
+        return ctx ? ctx.generation : 0;
+    }
+
+    function prksFocusedRouteIsCurrent(routeGen) {
+        const ctx = prksGetFocusedTabContext();
+        if (ctx && typeof ctx.isCurrent === 'function') return ctx.isCurrent(routeGen);
+        return typeof routeGen !== 'number';
+    }
+
     const api = {
         createPrksTabContext: createPrksTabContext,
         prksEnsureTabContext: prksEnsureTabContext,
@@ -467,6 +497,11 @@
         prksForEachMountedTabContext: prksForEachMountedTabContext,
         prksTabContextHost: prksTabContextHost,
         prksTabContextDebugSnapshot: prksTabContextDebugSnapshot,
+        prksFocusedEntity: prksFocusedEntity,
+        prksOwnerTabContext: prksOwnerTabContext,
+        prksSetFocusedEntity: prksSetFocusedEntity,
+        prksFocusedRouteGeneration: prksFocusedRouteGeneration,
+        prksFocusedRouteIsCurrent: prksFocusedRouteIsCurrent,
     };
 
     Object.keys(api).forEach(function (k) {

@@ -1330,16 +1330,37 @@ function prksPlayPageEnterAnimation(contentDiv) {
     contentDiv.addEventListener('animationend', onEnd);
 }
 
-function prksCanLeaveCurrentRoute(nextHash) {
-    if (typeof prksFlushPendingWorkResearchNotes === 'function') {
-        prksFlushPendingWorkResearchNotes();
+function prksResolveWorkspaceMainTab() {
+    if (typeof prksWorkspaceSnapshot !== 'function') return null;
+    const snap = prksWorkspaceSnapshot();
+    if (!snap || !Array.isArray(snap.tabs)) return null;
+    for (let i = 0; i < snap.tabs.length; i++) {
+        if (snap.tabs[i] && snap.tabs[i].id === snap.mainTabId) return snap.tabs[i];
     }
-    const prevResolvedHash = window.__prksLastResolvedHash || '';
-    const prevRoute =
-        prevResolvedHash && typeof prksParseRoute === 'function' ? prksParseRoute(prevResolvedHash) : null;
+    return snap.tabs[0] || null;
+}
+
+function prksEnsureMountedTabContext(tabId) {
+    if (!tabId || typeof prksEnsureTabContext !== 'function' || typeof prksMountTabContext !== 'function') {
+        return null;
+    }
+    const host =
+        typeof prksTabContextHost === 'function'
+            ? prksTabContextHost()
+            : document.getElementById('page-content');
+    if (!host) return null;
+    prksEnsureTabContext(tabId);
+    return prksMountTabContext(tabId, host);
+}
+
+function prksCanLeaveTabContext(ctx, nextHash) {
+    if (typeof prksFlushPendingWorkResearchNotes === 'function') {
+        prksFlushPendingWorkResearchNotes(ctx);
+    }
+    const prevRoute = ctx && ctx.lastResolvedRoute;
     const route =
         typeof prksParseRoute === 'function'
-            ? prksParseRoute(nextHash || window.location.hash || '#/folders')
+            ? prksParseRoute(nextHash || '#/folders')
             : null;
     const leavingWorkPage = !!(
         prevRoute &&
@@ -1350,7 +1371,7 @@ function prksCanLeaveCurrentRoute(nextHash) {
     if (
         leavingWorkPage &&
         typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
-        window.prksHasPendingWorkAnnotationSync()
+        window.prksHasPendingWorkAnnotationSync(ctx)
     ) {
         return window.confirm(
             'PDF annotation sync still running. Leave page before all changes save to server?'
@@ -1359,124 +1380,115 @@ function prksCanLeaveCurrentRoute(nextHash) {
     return true;
 }
 
+function prksCanLeaveCurrentRoute(nextHash) {
+    const ctx = typeof prksGetMainTabContext === 'function' ? prksGetMainTabContext() : null;
+    return prksCanLeaveTabContext(ctx, nextHash);
+}
+
 window.prksCanLeaveCurrentRoute = prksCanLeaveCurrentRoute;
+window.prksCanLeaveTabContext = prksCanLeaveTabContext;
 
 async function handleRoute(options) {
     const opts = options || {};
-    const workspaceSwitch = !!opts.workspaceSwitch;
-    const fromPopstate = !!opts.fromPopstate;
-    const leaveApproved = !!opts.leaveApproved;
-    const fromWorkspace = !!opts.fromWorkspace;
     if (typeof prksCloseOverlays === 'function') prksCloseOverlays();
     if (window.__prksRouteRevertDueToPendingSync === true) {
         window.__prksRouteRevertDueToPendingSync = false;
         return;
     }
-    const prevResolvedHash = window.__prksLastResolvedHash || '';
-    const prevRoute =
-        prevResolvedHash && typeof prksParseRoute === 'function' ? prksParseRoute(prevResolvedHash) : null;
-    let route = typeof prksParseRoute === 'function' ? prksParseRoute(window.location.hash || '#/folders') : null;
+    if (!opts.fromWorkspace && typeof prksWorkspaceAdoptLocation === 'function') {
+        prksWorkspaceAdoptLocation();
+    }
+    const tab = prksResolveWorkspaceMainTab();
+    const tabId = opts.tabId || (tab && tab.id);
+    const hash =
+        opts.hash != null
+            ? opts.hash
+            : (tab && tab.route) || window.location.hash || '#/folders';
+    if (!tabId) return;
+    const ctx = prksEnsureMountedTabContext(tabId);
+    if (!ctx || !ctx.root) return;
+    return prksRenderTabRoute(ctx, hash, opts);
+}
+
+async function prksRenderTabRoute(ctx, hash, options) {
+    if (!ctx || ctx.destroyed) return;
+    const opts = options || {};
+    const workspaceSwitch = !!opts.workspaceSwitch;
+    const fromPopstate = !!opts.fromPopstate;
+    const leaveApproved = !!opts.leaveApproved;
+    const suppliedHash = hash == null ? '#/folders' : String(hash);
+    let route = typeof prksParseRoute === 'function' ? prksParseRoute(suppliedHash) : null;
     if (!route) return;
-    const leavingWorkPage = !!(prevRoute && prevRoute.name === 'work' && route.canonicalHash !== prevRoute.canonicalHash);
+
+    const prevRoute = ctx.lastResolvedRoute || null;
+    const leavingWorkPage = !!(
+        prevRoute &&
+        prevRoute.name === 'work' &&
+        route.canonicalHash !== prevRoute.canonicalHash
+    );
     if (!leaveApproved) {
         if (
             leavingWorkPage &&
             typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
-            window.prksHasPendingWorkAnnotationSync()
+            window.prksHasPendingWorkAnnotationSync(ctx)
         ) {
             const ok = window.confirm(
                 'PDF annotation sync still running. Leave page before all changes save to server?'
             );
             if (!ok) {
                 window.__prksRouteRevertDueToPendingSync = true;
-                window.location.hash = prevResolvedHash;
+                const revertHash = prevRoute.hash || prevRoute.canonicalHash || '';
+                if (revertHash) window.location.hash = revertHash;
                 return;
             }
         }
     }
-    if (!fromWorkspace && typeof prksWorkspaceAdoptLocation === 'function') {
-        prksWorkspaceAdoptLocation();
-    }
-    prksMaybeFlushPdfLastPageOnRouteChange(prevResolvedHash, route.hash);
-    if (route.canonicalize) {
-        const target = route.canonicalHash;
-        const here = window.location.hash || '';
-        if (target && target !== here) {
-            if (typeof prksNavigate === 'function') {
-                prksNavigate(target, { replace: true });
-            } else {
-                window.location.hash = target;
-            }
+
+    if (route.canonicalize && route.canonicalHash && route.canonicalHash !== suppliedHash) {
+        const isMain = typeof prksIsMainTabContext === 'function' ? prksIsMainTabContext(ctx) : true;
+        if (isMain && typeof prksNavigate === 'function') {
+            prksNavigate(route.canonicalHash, { replace: true });
             return;
         }
+        route = prksParseRoute(route.canonicalHash);
     }
 
+    const prevHash = prevRoute ? prevRoute.hash || prevRoute.canonicalHash : '';
+    prksMaybeFlushPdfLastPageOnRouteChange(prevHash, route.hash);
     if (prevRoute && prevRoute.canonicalHash && prevRoute.canonicalHash !== route.canonicalHash) {
-        if (typeof prksCaptureCurrentRouteState === 'function') prksCaptureCurrentRouteState(prevRoute);
-        if (
-            !workspaceSwitch &&
-            !fromPopstate &&
-            route.detail &&
-            typeof prksRememberOrigin === 'function'
-        ) {
-            prksRememberOrigin(route, prevRoute);
+        if (typeof prksCaptureCurrentRouteState === 'function') prksCaptureCurrentRouteState(prevRoute, ctx);
+        if (!workspaceSwitch && !fromPopstate && route.detail && typeof prksRememberOrigin === 'function') {
+            prksRememberOrigin(route, prevRoute, ctx);
         }
     }
 
-    const contentDiv = document.getElementById('page-content');
+    if (typeof prksFlushPendingWorkResearchNotes === 'function') {
+        prksFlushPendingWorkResearchNotes(ctx);
+    }
+
+    const contentDiv = ctx.root;
     if (!contentDiv) return;
 
-    const previousRouteAbort = window.__prksRouteAbortController;
-    if (previousRouteAbort) previousRouteAbort.abort();
-    const routeAbortController = new AbortController();
-    window.__prksRouteAbortController = routeAbortController;
-    const routeSignal = routeAbortController.signal;
+    const generation = ctx.beginRoute(route);
+    const routeAbort = ctx.abortController;
+    const routeSignal = routeAbort && routeAbort.signal;
+    const stale = function () {
+        return !ctx.isCurrent(generation);
+    };
+    const publishSidebar = function (data) {
+        if (typeof prksPublishRouteSidebar === 'function') return prksPublishRouteSidebar(ctx, data, generation);
+        if (stale()) return false;
+        ctx.routeSidebar = data || {};
+        return true;
+    };
 
-    window.__prksRouteGen = (window.__prksRouteGen || 0) + 1;
-    const routeGen = window.__prksRouteGen;
-    if (window.annotationSyncInterval) {
-        clearInterval(window.annotationSyncInterval);
-        window.annotationSyncInterval = null;
-    }
-    if (typeof prksFlushPendingWorkResearchNotes === 'function') {
-        prksFlushPendingWorkResearchNotes();
-    }
-    if (window.saveNotesTimeout) {
-        clearTimeout(window.saveNotesTimeout);
-        window.saveNotesTimeout = null;
-    }
-    if (typeof window.prksDestroyWorkNotesEditor === 'function') {
-        window.prksDestroyWorkNotesEditor();
-    }
-    if (typeof window.destroyResearchGraph === 'function' && route.name !== 'research-graph') {
-        window.destroyResearchGraph();
-    }
-    window.currentWork = null;
-    window.currentFolder = null;
-    window.currentPerson = null;
-    window.currentPersonGroup = null;
-    window.currentPlaylist = null;
-    window.__prksPersonDetailEditing = false;
-    window.__prksPersonWorksEditing = false;
-    window.__prksPersonGroupDetailEditing = false;
-    window.__prksArgumentDetailEditing = false;
-    window.__prksCurrentSavedView = null;
-    window.__prksRouteSidebar = {};
-
-    if (typeof prksSyncSidebarActive === 'function') {
-        prksSyncSidebarActive(route);
+    if (typeof prksIsMainTabContext === 'function' ? prksIsMainTabContext(ctx) : true) {
+        if (typeof prksSyncSidebarActive === 'function') prksSyncSidebarActive(route);
     }
 
     prksRenderRouteLoading(contentDiv, route.hash);
 
     let titleOpts = {};
-    const stale = () => routeGen !== window.__prksRouteGen;
-    const publishSidebar = (data) => {
-        if (typeof prksPublishRouteSidebar === 'function') return prksPublishRouteSidebar(data, routeGen);
-        if (stale()) return false;
-        window.__prksRouteSidebar = data || {};
-        return true;
-    };
 
     try {
         switch (route.name) {
@@ -1503,9 +1515,9 @@ async function handleRoute(options) {
                 if (typeof fetchPlaylistDetails === 'function' && typeof renderPlaylistDetail === 'function') {
                     const pl = await fetchPlaylistDetails(plId, { signal: routeSignal });
                     if (stale()) return;
-                    window.currentPlaylist = pl;
-                    window.__prksPlaylistDetailEditing = false;
-                    window.__prksPlaylistRename = {};
+                    ctx.setEntity('playlist', pl);
+                    ctx.ui.playlistEditing = false;
+                    ctx.ui.playlistRename = {};
                     publishSidebar(
                         pl
                             ? {
@@ -1567,7 +1579,7 @@ async function handleRoute(options) {
                         '<div class="prks-page-header page-header"><h2 class="prks-page-title">Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
                     titleOpts = { notFound: true, notFoundTitle: 'Group not found' };
                 } else {
-                    window.currentPersonGroup = group;
+                    ctx.setEntity('personGroup', group);
                     publishSidebar({
                         groupName: group.name,
                         memberCount: Array.isArray(group.members) ? group.members.length : 0,
@@ -1600,7 +1612,7 @@ async function handleRoute(options) {
                 const viewId = route.params.viewId;
                 const view = typeof fetchSavedView === 'function' ? await fetchSavedView(viewId, { signal: routeSignal }) : null;
                 if (stale()) return;
-                window.__prksCurrentSavedView = view || null;
+                ctx.ui.currentSavedView = view || null;
                 if (!view) {
                     if (typeof renderSavedViewNotFound === 'function') {
                         renderSavedViewNotFound(contentDiv);
@@ -1633,7 +1645,7 @@ async function handleRoute(options) {
             }
             case 'processing-files': {
                 if (typeof prksRenderProcessingFilesPageWithFetch === 'function') {
-                    await prksRenderProcessingFilesPageWithFetch(contentDiv, { rescan: true, routeGen, signal: routeSignal });
+                    await prksRenderProcessingFilesPageWithFetch(contentDiv, { rescan: true, routeGen: generation, signal: routeSignal, ctx: ctx });
                     if (stale()) return;
                 } else {
                     const rows = await fetchProcessingFiles({ rescan: true, signal: routeSignal });
@@ -1668,14 +1680,14 @@ async function handleRoute(options) {
             }
             case 'tags': {
                 if (typeof renderTagsPage === 'function') {
-                    await renderTagsPage(contentDiv, routeGen, { signal: routeSignal });
+                    await renderTagsPage(contentDiv, generation, { signal: routeSignal, ctx: ctx });
                     if (stale()) return;
                 }
                 break;
             }
             case 'publishers': {
                 if (typeof renderPublishersPage === 'function') {
-                    await renderPublishersPage(contentDiv, routeGen, { signal: routeSignal });
+                    await renderPublishersPage(contentDiv, generation, { signal: routeSignal, ctx: ctx });
                     if (stale()) return;
                 }
                 break;
@@ -1695,7 +1707,7 @@ async function handleRoute(options) {
             case 'work': {
                 const work = await fetchWorkDetails(route.params.workId, { signal: routeSignal });
                 if (stale()) return;
-                await renderWorkDetails(work, contentDiv, routeGen, { signal: routeSignal });
+                await renderWorkDetails(ctx, work, { generation: generation, signal: routeSignal });
                 if (stale()) return;
                 titleOpts = work
                     ? { entityTitle: String(work.title || '').trim() || 'File' }
@@ -1765,23 +1777,10 @@ async function handleRoute(options) {
             }
             case 'research-graph': {
                 if (typeof renderResearchGraph === 'function') {
-                    let graphCtx =
-                        typeof window.prksGetFocusedTabContext === 'function'
-                            ? window.prksGetFocusedTabContext()
-                            : null;
-                    if (
-                        !graphCtx &&
-                        typeof window.prksWorkspaceSnapshot === 'function' &&
-                        typeof window.prksEnsureTabContext === 'function'
-                    ) {
-                        const snap = window.prksWorkspaceSnapshot();
-                        const tabId = snap && (snap.focusedTabId || snap.mainTabId);
-                        if (tabId) graphCtx = window.prksEnsureTabContext(tabId);
-                    }
                     await renderResearchGraph(contentDiv, {
-                        ctx: graphCtx,
+                        ctx: ctx,
                         focus: route.params.focus || '',
-                        routeGen: routeGen,
+                        routeGen: generation,
                         stale: stale,
                         signal: routeSignal,
                     });
@@ -1823,7 +1822,7 @@ async function handleRoute(options) {
                 break;
             }
             default: {
-                window.currentWork = null;
+                ctx.setEntity('work', null);
                 updatePanelContent('details');
                 contentDiv.innerHTML =
                     '<div class="prks-page-header page-header"><h2 class="prks-page-title">Section In Development</h2></div><p class="prks-dev-path-msg prks-inline-message"></p>';
@@ -1838,7 +1837,7 @@ async function handleRoute(options) {
         if (typeof prksRenderRouteError === 'function') prksRenderRouteError(contentDiv);
         else contentDiv.innerHTML = '<p class="prks-inline-message">Could not load this view.</p>';
         if (typeof prksFinishRouteRender === 'function') {
-            prksFinishRouteRender(route, routeGen, contentDiv, titleOpts);
+            prksFinishRouteRender(ctx, route, generation, contentDiv, titleOpts);
         } else {
             contentDiv.removeAttribute('aria-busy');
         }
@@ -1860,21 +1859,25 @@ async function handleRoute(options) {
         contentDiv.prepend(bar);
     }
 
-    const onWorkDetailPage = route.name === 'work' && window.currentWork;
-    if (!onWorkDetailPage) {
+    const isShell =
+        typeof prksIsMainTabContext === 'function' ? prksIsMainTabContext(ctx) : true;
+    const onWorkDetailPage = route.name === 'work' && ctx.getEntity('work');
+    if (isShell && !onWorkDetailPage) {
         updatePanelContent(getActiveRightPanelTab());
     }
     if (stale()) return;
     if (typeof prksFinishRouteRender === 'function') {
-        prksFinishRouteRender(route, routeGen, contentDiv, titleOpts);
+        prksFinishRouteRender(ctx, route, generation, contentDiv, titleOpts);
     } else {
-        window.__prksLastResolvedHash = route.hash;
+        ctx.lastResolvedRoute = route;
         contentDiv.removeAttribute('aria-busy');
         prksPlayPageEnterAnimation(contentDiv);
     }
 }
 
+window.prksRenderTabRoute = prksRenderTabRoute;
 window.handleRoute = handleRoute;
+
 
 function initForms() {
     if (typeof initPrksDocTypeMenu === 'function') {
