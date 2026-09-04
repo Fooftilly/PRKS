@@ -1761,6 +1761,105 @@ def _drag_divider(page, dx):
     page.mouse.up()
 
 
+# ---- workspace-drag.js E2E helpers: real Playwright pointer gestures, never a direct call into
+# prksWorkspaceReorderTab/prksWorkspaceMovePane/etc. -- those are exercised by the drag controller
+# itself, exactly the way a user would trigger them. ----
+
+
+def _tab_box(page, tab_id):
+    return page.locator('.prks-workspace-tab[data-tab-id="%s"]' % tab_id).bounding_box()
+
+
+def _tile_box(page, tab_id):
+    return page.locator('.prks-tile[data-prks-tab-id="%s"]' % tab_id).bounding_box()
+
+
+def _grip_box(page, tab_id):
+    return page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__grip' % tab_id).bounding_box()
+
+
+def _center(box):
+    return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+
+def _tab_grab_point(box):
+    """A point safely inside a workspace tab wrap, biased toward its icon/title on the leading
+    edge -- away from the fixed-position Split-view toggle at the tab strip's trailing edge,
+    which can visually overlap the last tab's own bounding box when the strip is full-width."""
+    return box["x"] + min(24, box["width"] / 3), box["y"] + box["height"] / 2
+
+
+def _edge_point(box, zone):
+    """A point well inside the 0.28 default edge band for `zone`, and centered on the cross
+    axis so that edge is unambiguously nearest."""
+    cx = box["x"] + box["width"] / 2
+    cy = box["y"] + box["height"] / 2
+    if zone == "left":
+        return box["x"] + box["width"] * 0.08, cy
+    if zone == "right":
+        return box["x"] + box["width"] * 0.92, cy
+    if zone == "above":
+        return cx, box["y"] + box["height"] * 0.08
+    if zone == "below":
+        return cx, box["y"] + box["height"] * 0.92
+    raise ValueError(zone)
+
+
+def _begin_pointer_drag(page, start_xy):
+    """pointerdown + enough movement to cross workspace-drag.js's 6px threshold and arm an
+    active drag. Caller continues with further page.mouse.move()/page.mouse.up() calls."""
+    sx, sy = start_xy
+    page.mouse.move(sx, sy)
+    page.mouse.down()
+    page.mouse.move(sx + 12, sy + 12, steps=3)
+
+
+def _pointer_drag(page, start_xy, hover_xy, release_xy=None, pre_release=None):
+    """A full drag gesture: down at `start_xy`, cross the movement threshold, move to
+    `hover_xy` (where a caller-supplied `pre_release` callback can inspect live drag state),
+    then move to `release_xy` (defaults to `hover_xy`) and release there."""
+    _begin_pointer_drag(page, start_xy)
+    hx, hy = hover_xy
+    page.mouse.move(hx, hy, steps=10)
+    if pre_release is not None:
+        pre_release()
+    rx, ry = release_xy if release_xy is not None else (hx, hy)
+    if (rx, ry) != (hx, hy):
+        page.mouse.move(rx, ry, steps=6)
+    page.mouse.up()
+
+
+def _drag_dom_residue(page):
+    return page.evaluate(
+        """() => ({
+            preview: document.querySelectorAll('.prks-drag-preview').length,
+            marker: document.querySelectorAll('#prks-drag-insertion-marker').length,
+            edge: document.querySelectorAll('#prks-drag-edge-overlay').length,
+            empty: document.querySelectorAll('#prks-drag-empty-overlay').length,
+            dragSource: document.querySelectorAll('.is-drag-source').length,
+            bodyDragging: document.body.classList.contains('prks-workspace-dragging'),
+            parkTarget: document.querySelectorAll('#prks-workspace-tabs.is-drop-target-park').length,
+        })"""
+    )
+
+
+def _assert_no_drag_residue(test, page, msg=""):
+    residue = _drag_dom_residue(page)
+    test.assertEqual(
+        residue,
+        {
+            "preview": 0,
+            "marker": 0,
+            "edge": 0,
+            "empty": 0,
+            "dragSource": 0,
+            "bodyDragging": False,
+            "parkTarget": 0,
+        },
+        msg,
+    )
+
+
 class WorkspaceTilingTests(_BrowserE2E):
     def test_work_work_runtimes_focus_notes_make_main(self):
         server, page, _collector = self._start_app()
@@ -3929,5 +4028,751 @@ class MainSecondaryDividerTests(_BrowserE2E):
 
         self.assertEqual(len(requests), before, "divider drags must not fetch a Work route or reload a PDF")
         self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+
+
+class WorkspaceDragDropTests(_BrowserE2E):
+    """Real-pointer coverage for workspace-drag.js. Every test drives an actual
+    page.mouse down/move/up sequence through the DOM -- never a direct call into
+    prksWorkspaceReorderTab/prksWorkspaceMovePane/prksWorkspaceHideLeaf/prksWorkspaceSplitLeaf,
+    which would only prove those canonical APIs work (already covered by the state/tree
+    selftests), not that the drag controller's geometry/targeting correctly drives them."""
+
+    def test_tab_reorder_with_real_pointer_and_close_to_the_right(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        position_id = server.ids["position"]
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        work_hash = page.evaluate("() => location.hash")
+        for hash_ in ("#/people/" + person_id, "#/positions/" + position_id, "#/works/" + work_b):
+            page.evaluate(
+                """(h) => window.prksNavigate(h, { target: 'new-tab', activate: false })""",
+                arg=hash_,
+            )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 4")
+        before = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        a_id, b_id, c_id, d_id = [t["id"] for t in before["tabs"]]
+        self.assertIsNone(before["secondaryTree"])
+
+        seen_gets = []
+        page.on("request", lambda req: seen_gets.append(req.url) if req.method == "GET" else None)
+
+        # Real pointer drag: D onto the strip, dropped just inside B's leading edge -> A, D, B, C.
+        d_box = _tab_box(page, d_id)
+        b_box = _tab_box(page, b_id)
+        _pointer_drag(page, _tab_grab_point(d_box), (b_box["x"] + 4, b_box["y"] + b_box["height"] / 2))
+        page.wait_for_function(
+            "(ids) => window.prksWorkspaceSnapshot().tabs.map(t => t.id).join(',') === ids",
+            arg=",".join([a_id, d_id, b_id, c_id]),
+        )
+        _assert_no_drag_residue(self, page, "after a completed tab reorder")
+
+        after = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(after["mainTabId"], before["mainTabId"])
+        self.assertEqual(after["focusedTabId"], before["focusedTabId"])
+        self.assertIsNone(after["secondaryTree"])
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+        for path in ("/api/works/", "/api/persons/", "/api/positions/"):
+            self.assertFalse(any(path in u for u in seen_gets), "tab reorder must not fetch any route: " + path)
+
+        # Close tabs to the right of D (its NEW position) must use the new order, closing B/C.
+        closed = page.evaluate("(id) => window.prksWorkspaceCloseTabsToTheRight(id)", arg=d_id)
+        self.assertTrue(closed)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        remaining = [t["id"] for t in page.evaluate("() => window.prksWorkspaceSnapshot().tabs")]
+        self.assertEqual(remaining, [a_id, d_id])
+
+    def test_drag_parked_tab_creates_first_secondary(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        work_hash = page.evaluate("() => location.hash")
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[1].id")
+        self.assertIsNone(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"))
+
+        b_box = _tab_box(page, b_id)
+        canvas = page.locator(".prks-workspace-canvas").bounding_box()
+        drop_x = canvas["x"] + canvas["width"] * 0.85
+        drop_y = canvas["y"] + canvas["height"] / 2
+        _pointer_drag(page, _tab_grab_point(b_box), (drop_x, drop_y))
+
+        page.wait_for_function(
+            """(id) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return !!(snap.secondaryTree && snap.secondaryTree.type === 'leaf' && snap.secondaryTree.tabId === id);
+            }""",
+            arg=b_id,
+        )
+        _assert_no_drag_residue(self, page, "after creating the first Secondary via drag")
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(len(snap["tabs"]), 2, "no duplicate logical tab was created")
+        self.assertEqual(snap["focusedTabId"], b_id)
+        self.assertNotEqual(snap["mainTabId"], b_id)
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
+
+    def test_drag_parked_tab_splits_below_existing_leaf(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        position_id = server.ids["position"]
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'tile' })""",
+            arg=server.ids["person"],
+        )
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().secondaryTree && window.prksWorkspaceSnapshot().secondaryTree.type === 'leaf'"
+        )
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        c_tab = page.evaluate(
+            """(a) => window.prksWorkspaceSplitLeaf(a.target, 'left-right', { hash: '#/positions/' + a.position })""",
+            arg={"target": b_id, "position": position_id},
+        )
+        c_id = c_tab["id"]
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 4")
+        d_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[3].id")
+
+        page.evaluate(
+            """(ids) => {
+                window.__prksSplitRt = {
+                    bCtx: window.prksGetTabContext(ids.b),
+                    cCtx: window.prksGetTabContext(ids.c),
+                };
+            }""",
+            arg={"b": b_id, "c": c_id},
+        )
+
+        d_box = _tab_box(page, d_id)
+        c_box = _tile_box(page, c_id)
+        _pointer_drag(page, _tab_grab_point(d_box), _edge_point(c_box, "below"))
+
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 4")
+        _assert_no_drag_residue(self, page, "after a parked-tab nested split via drag")
+
+        shape = page.evaluate(
+            """(ids) => {
+                const t = window.prksWorkspaceSnapshot().secondaryTree;
+                if (!t || t.type !== 'split' || t.axis !== 'left-right') return { ok: false };
+                if (!t.first || t.first.tabId !== ids.b) return { ok: false, step: 'first' };
+                const inner = t.second;
+                if (!inner || inner.type !== 'split' || inner.axis !== 'top-bottom') return { ok: false, step: 'inner-axis' };
+                return {
+                    ok: inner.first && inner.first.tabId === ids.c && inner.second && inner.second.tabId === ids.d,
+                    innerFirst: inner.first && inner.first.tabId,
+                    innerSecond: inner.second && inner.second.tabId,
+                };
+            }""",
+            arg={"b": b_id, "c": c_id, "d": d_id},
+        )
+        self.assertTrue(shape["ok"], "expected B | (C over D): " + repr(shape))
+
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(snap["focusedTabId"], d_id)
+        self.assertEqual(len(snap["tabs"]), 4, "no duplicate logical tab was created")
+
+        identity = page.evaluate(
+            """(ids) => ({
+                bSame: window.prksGetTabContext(ids.b) === window.__prksSplitRt.bCtx,
+                cSame: window.prksGetTabContext(ids.c) === window.__prksSplitRt.cCtx,
+            })""",
+            arg={"b": b_id, "c": c_id},
+        )
+        self.assertTrue(identity["bSame"])
+        self.assertTrue(identity["cSame"])
+
+    def test_drag_visible_pane_move_preserves_runtimes(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)  # Main A; Secondary B / (C | D)
+
+        page.evaluate(
+            """(ids) => {
+                window.__prksMoveRt = {
+                    aCtx: window.prksGetTabContext(ids.main),
+                    bCtx: window.prksGetTabContext(ids.b),
+                    cCtx: window.prksGetTabContext(ids.c),
+                    dPdf: window.prksGetTabContext(ids.d).getResource('pdf'),
+                    dNotes: window.prksGetTabContext(ids.d).getResource('workNotes'),
+                };
+            }""",
+            arg={"main": tree["main_id"], "b": tree["b_id"], "c": tree["c_id"], "d": tree["d_id"]},
+        )
+        tree_before = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+
+        dialogs = []
+        page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+        seen_gets = []
+        page.on("request", lambda req: seen_gets.append(req.url) if req.method == "GET" else None)
+
+        d_grip = _grip_box(page, tree["d_id"])
+        b_box = _tile_box(page, tree["b_id"])
+        _pointer_drag(page, _center(d_grip), _edge_point(b_box, "above"))
+
+        page.wait_for_function(
+            """(ids) => {
+                const leaves = window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree);
+                return leaves.length === 3 && leaves[0] === ids.d;
+            }""",
+            arg={"d": tree["d_id"]},
+        )
+        _assert_no_drag_residue(self, page, "after a visible pane move via drag")
+        self.assertEqual(dialogs, [], "a spatial pane move must not trigger a leave prompt")
+
+        expected = page.evaluate(
+            """(a) => {
+                const moved = window.moveLeafRelativeToTarget(a.before, a.d, a.b, { axis: 'top-bottom', placement: 'first' });
+                const strip = function (n) {
+                    if (!n) return null;
+                    if (n.type === 'leaf') return { type: 'leaf', tabId: n.tabId };
+                    return { type: 'split', axis: n.axis, first: strip(n.first), second: strip(n.second) };
+                };
+                return strip(moved);
+            }""",
+            arg={"before": tree_before, "d": tree["d_id"], "b": tree["b_id"]},
+        )
+        actual = page.evaluate(
+            """() => {
+                const strip = function (n) {
+                    if (!n) return null;
+                    if (n.type === 'leaf') return { type: 'leaf', tabId: n.tabId };
+                    return { type: 'split', axis: n.axis, first: strip(n.first), second: strip(n.second) };
+                };
+                return strip(window.prksWorkspaceSnapshot().secondaryTree);
+            }"""
+        )
+        self.assertEqual(actual, expected, "drag-driven move must match moveLeafRelativeToTarget(D, B, above)")
+
+        identity = page.evaluate(
+            """(ids) => ({
+                aSame: window.prksGetTabContext(ids.main) === window.__prksMoveRt.aCtx,
+                bSame: window.prksGetTabContext(ids.b) === window.__prksMoveRt.bCtx,
+                cSame: window.prksGetTabContext(ids.c) === window.__prksMoveRt.cCtx,
+                dPdfSame: window.prksGetTabContext(ids.d).getResource('pdf') === window.__prksMoveRt.dPdf,
+                dNotesSame: window.prksGetTabContext(ids.d).getResource('workNotes') === window.__prksMoveRt.dNotes,
+                mounted: window.prksTabContextDebugSnapshot().mountedCount,
+            })""",
+            arg={"main": tree["main_id"], "b": tree["b_id"], "c": tree["c_id"], "d": tree["d_id"]},
+        )
+        self.assertTrue(identity["aSame"])
+        self.assertTrue(identity["bSame"])
+        self.assertTrue(identity["cSame"])
+        self.assertTrue(identity["dPdfSame"], "moving a pane must not reload its PDF")
+        self.assertTrue(identity["dNotesSame"], "moving a pane must not remount its notes editor")
+        self.assertEqual(identity["mounted"], 4, "moving a visible pane must not mount/unmount anything")
+        for path in ("/api/works/", "/api/persons/", "/api/positions/", "/api/pdfs/"):
+            self.assertFalse(any(path in u for u in seen_gets), "pane move must not fetch: " + path)
+
+    def test_drag_global_tab_of_visible_secondary_also_moves_it(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'tile' })""",
+            arg=person_id,
+        )
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().secondaryTree && window.prksWorkspaceSnapshot().secondaryTree.type === 'leaf'"
+        )
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        c_tab = page.evaluate(
+            """(a) => window.prksWorkspaceSplitLeaf(a.target, 'left-right', { hash: '#/positions/' + a.position })""",
+            arg={"target": b_id, "position": server.ids["position"]},
+        )
+        c_id = c_tab["id"]
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+        b_ctx_before = page.evaluate("(id) => !!window.prksGetTabContext(id)", arg=b_id)
+        self.assertTrue(b_ctx_before)
+
+        # Drag C's GLOBAL workspace tab (not its pane grip) onto B's left edge.
+        c_tab_box = _tab_box(page, c_id)
+        b_tile_box = _tile_box(page, b_id)
+        _pointer_drag(page, _tab_grab_point(c_tab_box), _edge_point(b_tile_box, "left"))
+
+        page.wait_for_function(
+            """(ids) => {
+                const t = window.prksWorkspaceSnapshot().secondaryTree;
+                return !!(t && t.type === 'split' && t.first && t.first.tabId === ids.c && t.second && t.second.tabId === ids.b);
+            }""",
+            arg={"c": c_id, "b": b_id},
+        )
+        _assert_no_drag_residue(self, page, "after a global-tab-driven pane move")
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(len(page.evaluate("() => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)")), 2)
+        self.assertEqual(len(snap["tabs"]), 3, "no duplicate leaf/tab was created")
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 3)
+
+    def test_drag_pane_to_tab_strip_parks_it(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)  # Main A; Secondary B / (C | D)
+
+        page.evaluate(
+            """(ids) => {
+                window.__prksParkRt = {
+                    bCtx: window.prksGetTabContext(ids.b),
+                    cCtx: window.prksGetTabContext(ids.c),
+                };
+            }""",
+            arg={"b": tree["b_id"], "c": tree["c_id"]},
+        )
+
+        d_grip = _grip_box(page, tree["d_id"])
+        strip = page.locator("#prks-workspace-tabs").bounding_box()
+        _pointer_drag(page, _center(d_grip), _center(strip))
+
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+        _assert_no_drag_residue(self, page, "after parking a pane via drag")
+
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        leaves = page.evaluate("() => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)")
+        self.assertEqual(sorted(leaves), sorted([tree["b_id"], tree["c_id"]]))
+        self.assertTrue(any(t["id"] == tree["d_id"] for t in snap["tabs"]), "D's logical tab remains open")
+        self.assertTrue(
+            page.locator('.prks-workspace-tab[data-tab-id="%s"].is-parked' % tree["d_id"]).count() == 1
+        )
+        identity = page.evaluate(
+            """(ids) => {
+                const dCtx = window.prksGetTabContext(ids.d);
+                return {
+                    bSame: window.prksGetTabContext(ids.b) === window.__prksParkRt.bCtx,
+                    cSame: window.prksGetTabContext(ids.c) === window.__prksParkRt.cCtx,
+                    dUnmounted: !dCtx || dCtx.mounted === false,
+                };
+            }""",
+            arg={"b": tree["b_id"], "c": tree["c_id"], "d": tree["d_id"]},
+        )
+        self.assertTrue(identity["bSame"])
+        self.assertTrue(identity["cSame"])
+        self.assertTrue(
+            identity["dUnmounted"], "D's TabContext must actually unmount (park), not just detach visually"
+        )
+
+    def test_drag_park_rejected_by_leave_guard_is_atomic(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)  # Main A; Secondary B / (C | D)
+        tree_before = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+        before = page.evaluate("() => window.prksWorkspaceSnapshot()")
+
+        dialogs = []
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+        page.evaluate(
+            """(dId) => {
+                const ctx = window.prksGetTabContext(dId);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && ctx && c.tabId === ctx.tabId);
+                };
+            }""",
+            arg=tree["d_id"],
+        )
+
+        d_grip = _grip_box(page, tree["d_id"])
+        strip = page.locator("#prks-workspace-tabs").bounding_box()
+        _pointer_drag(page, _center(d_grip), _center(strip))
+
+        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        self.assertEqual(len(dialogs), 1)
+        _assert_no_drag_residue(self, page, "after a rejected park")
+
+        after = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(after["secondaryTree"], tree_before, "tree must be exactly unchanged on a rejected park")
+        self.assertEqual(after["focusedTabId"], before["focusedTabId"])
+        self.assertEqual([t["id"] for t in after["tabs"]], [t["id"] for t in before["tabs"]])
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
+        self.assertIsNotNone(page.evaluate("(id) => window.prksGetTabContext(id)", arg=tree["d_id"]))
+
+    def test_drag_pane_cap_blocks_addition_but_allows_move(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        # Wide enough that all 5 workspace tabs (Main + 3 Secondary + the parked cap-test tab)
+        # stay unclipped in the strip -- this test drags the tab itself, not just its pane.
+        page.set_viewport_size({"width": 2400, "height": 900})
+        tree = _build_three_leaf_tree(page, server)  # 1 Main + 3 Secondary already mounted
+        self.assertFalse(page.evaluate("() => window.prksWorkspaceCanAddSecondaryLeaf()"))
+        # Use a tile-capable route (an Argument) so only the CAP -- not route eligibility -- is
+        # under test.
+        page.evaluate(
+            """(id) => window.prksNavigate('#/arguments/' + id, { target: 'new-tab', activate: false })""",
+            arg=server.ids["argument"],
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 5")
+        e_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[4].id")
+
+        e_box = _tab_box(page, e_id)
+        b_box = _tile_box(page, tree["b_id"])
+        overlay_class_at_hover = {}
+
+        def check_overlay():
+            overlay_class_at_hover["cls"] = page.evaluate(
+                """() => {
+                    const el = document.getElementById('prks-drag-edge-overlay');
+                    return el ? el.className : null;
+                }"""
+            )
+
+        _pointer_drag(page, _tab_grab_point(e_box), _edge_point(b_box, "right"), pre_release=check_overlay)
+        self.assertIsNotNone(overlay_class_at_hover.get("cls"))
+        self.assertIn("is-invalid", overlay_class_at_hover["cls"], "cap must be visibly invalid while hovering")
+
+        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _assert_no_drag_residue(self, page, "after a capped drop attempt")
+        leaves_after = page.evaluate("() => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)")
+        self.assertEqual(sorted(leaves_after), sorted([tree["b_id"], tree["c_id"], tree["d_id"]]))
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
+        self.assertTrue(
+            page.locator('.prks-workspace-tab[data-tab-id="%s"].is-parked' % e_id).count() == 1,
+            "E must remain parked, the cap must block the addition",
+        )
+
+        # Rearranging an ALREADY-VISIBLE pane remains allowed at the cap.
+        d_grip = _grip_box(page, tree["d_id"])
+        _pointer_drag(page, _center(d_grip), _edge_point(b_box, "above"))
+        page.wait_for_function(
+            """(ids) => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)[0] === ids.d""",
+            arg={"d": tree["d_id"]},
+        )
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
+
+    def test_drag_invalid_targets(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+
+        # A. Dragging a parked tab over Main has no valid Secondary drop.
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[1].id")
+        before_hash = page.evaluate("() => location.hash")
+        b_box = _tab_box(page, b_id)
+        main_tile = _tile_box(page, main_id)
+        _pointer_drag(page, _tab_grab_point(b_box), _center(main_tile))
+        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _assert_no_drag_residue(self, page, "after dragging over Main")
+        self.assertIsNone(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"))
+        self.assertEqual(page.evaluate("() => location.hash"), before_hash)
+        self.assertTrue(page.locator('.prks-workspace-tab[data-tab-id="%s"].is-parked' % b_id).count() == 1)
+
+        # Build a Secondary leaf reusing B's exact tab id (not a duplicate) so a self-drop can
+        # be attempted next.
+        page.evaluate("(id) => window.prksWorkspaceTileTab(id)", arg=b_id)
+        page.wait_for_function(
+            """(id) => {
+                const t = window.prksWorkspaceSnapshot().secondaryTree;
+                return !!(t && t.type === 'leaf' && t.tabId === id);
+            }""",
+            arg=b_id,
+        )
+        tree_snap = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+
+        # B. Self-drop: dragging B's own pane grip over B's own tile must never mutate.
+        b_grip = _grip_box(page, tree_snap["tabId"])
+        b_tile = _tile_box(page, tree_snap["tabId"])
+        _pointer_drag(page, _center(b_grip), _center(b_tile))
+        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _assert_no_drag_residue(self, page, "after a self-drop attempt")
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"), tree_snap)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+
+        # C. Unsupported (non-tile-capable) parked route cannot enter Secondary.
+        page.evaluate("() => window.prksNavigate('#/folders', { target: 'new-tab', activate: false })")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 3")
+        folders_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[2].id")
+        folders_box = _tab_box(page, folders_id)
+        sec_tile = _tile_box(page, tree_snap["tabId"])
+        _pointer_drag(page, _center(folders_box), _edge_point(sec_tile, "right"))
+        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _assert_no_drag_residue(self, page, "after dragging an unsupported route toward Secondary")
+        leaves = page.evaluate("() => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)")
+        self.assertNotIn(folders_id, leaves)
+        self.assertTrue(page.locator('.prks-workspace-tab[data-tab-id="%s"].is-parked' % folders_id).count() == 1)
+
+    def test_drag_escape_cancellation_preserves_state_and_click_still_works(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        before = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        b_id = before["tabs"][1]["id"]
+
+        canvas = page.locator(".prks-workspace-canvas").bounding_box()
+        b_box = _tab_box(page, b_id)
+        _begin_pointer_drag(page, _center(b_box))
+        page.mouse.move(canvas["x"] + canvas["width"] * 0.85, canvas["y"] + canvas["height"] / 2, steps=10)
+        page.wait_for_selector("#prks-drag-empty-overlay")
+        page.keyboard.press("Escape")
+        page.mouse.up()  # the drag already ended; this mouseup must be inert
+
+        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _assert_no_drag_residue(self, page, "after Escape cancellation")
+        after = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual([t["id"] for t in after["tabs"]], [t["id"] for t in before["tabs"]])
+        self.assertEqual(after["mainTabId"], before["mainTabId"])
+        self.assertEqual(after["focusedTabId"], before["focusedTabId"])
+        self.assertIsNone(after["secondaryTree"])
+
+        # A normal click on the cancelled drag's source must not be swallowed by leftover
+        # click-suppression state (spec item 4).
+        page.locator('.prks-workspace-tab[data-tab-id="%s"]' % b_id).click()
+        page.wait_for_function(
+            "(id) => window.prksWorkspaceSnapshot().mainTabId === id",
+            arg=b_id,
+        )
+
+    def test_drag_click_after_real_drop_is_suppressed_once(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        main_id_before = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[1].id")
+
+        # A real drag that crosses the movement threshold but releases back over its own tab
+        # wrap -- mousedown and mouseup target the same element, exactly the case click
+        # suppression exists for: a drag happened, so the browser's own synthesized click on
+        # that same element (which would otherwise activate a parked tab as Main) must not fire.
+        start = _center(_tab_box(page, b_id))
+        page.mouse.move(*start)
+        page.mouse.down()
+        page.mouse.move(start[0] + 10, start[1] - 10, steps=4)
+        page.mouse.move(start[0], start[1], steps=4)
+        page.mouse.up()
+
+        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        page.wait_for_timeout(50)
+        self.assertEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"),
+            main_id_before,
+            "the pointerup-synthesized click on the drag source must not also activate it",
+        )
+
+    def test_drag_responsive_cancellation_before_narrow_fallback(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        position_id = server.ids["position"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate("(id) => window.prksNavigate('#/people/' + id, { target: 'tile' })", arg=person_id)
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().secondaryTree && window.prksWorkspaceSnapshot().secondaryTree.type === 'leaf'"
+        )
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        c_tab = page.evaluate(
+            """(a) => window.prksWorkspaceSplitLeaf(a.target, 'left-right', { hash: '#/positions/' + a.position })""",
+            arg={"target": b_id, "position": position_id},
+        )
+        c_id = c_tab["id"]
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+
+        c_grip = _grip_box(page, c_id)
+        b_tile = _tile_box(page, b_id)
+        _begin_pointer_drag(page, _center(c_grip))
+        left = _edge_point(b_tile, "left")
+        page.mouse.move(left[0], left[1], steps=10)
+        page.wait_for_selector("#prks-drag-edge-overlay")
+
+        # Cross into narrow fallback WHILE the drag is still held.
+        page.set_viewport_size({"width": 500, "height": 900})
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode !== 'tiled' || window.prksWorkspaceVisualTiled() === false")
+
+        _assert_no_drag_residue(self, page, "drag must be cancelled before the narrow transition completes")
+        page.mouse.up()  # the drag already ended; this mouseup must be inert
+        _assert_no_drag_residue(self, page, "still clean after the now-inert mouseup")
+
+        leaves = page.evaluate("() => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)")
+        self.assertEqual(sorted(leaves), sorted([b_id, c_id]), "responsive cancellation must not mutate the tree")
+
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 3)
+
+    def test_drag_cancel_active_drag_cleans_up_without_mutation(self):
+        """Covers the pointercancel/lostpointercapture paths: both handlers simply call the
+        same cancel() this test invokes directly (workspace-drag.js exports it specifically so
+        other lifecycle code can call it defensively -- see prksWorkspaceCancelActiveDrag's own
+        callers in workspace-tiling.js). A literal browser pointercancel/lostpointercapture
+        event is not reliably synthesizable through Playwright's mouse API, which always
+        completes a normal gesture."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        before = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        b_id = before["tabs"][1]["id"]
+
+        b_box = _tab_box(page, b_id)
+        _begin_pointer_drag(page, _center(b_box))
+        page.mouse.move(b_box["x"] + 200, b_box["y"], steps=10)
+        page.wait_for_selector(".prks-drag-preview")
+
+        page.evaluate("() => window.prksWorkspaceCancelActiveDrag()")
+        _assert_no_drag_residue(self, page, "after a defensive cancel mid-drag")
+        page.mouse.up()  # inert: pending is already null
+        _assert_no_drag_residue(self, page, "still clean after the now-inert mouseup")
+
+        after = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual([t["id"] for t in after["tabs"]], [t["id"] for t in before["tabs"]])
+        self.assertEqual(after["mainTabId"], before["mainTabId"])
+
+    def test_drag_tab_strip_autoscroll(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1100, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate(
+            """(id) => {
+                const jobs = [];
+                for (let i = 0; i < 14; i++) {
+                    jobs.push(window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false }));
+                }
+                return Promise.all(jobs);
+            }""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length >= 15")
+        overflow = page.evaluate(
+            """() => {
+                const list = document.getElementById('prks-workspace-tabs');
+                return !!(list && list.scrollWidth > list.clientWidth + 2);
+            }"""
+        )
+        self.assertTrue(overflow)
+
+        first_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[0].id")
+        last_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.slice(-1)[0].id")
+        strip = page.locator("#prks-workspace-tabs").bounding_box()
+        scroll_before = page.evaluate("() => document.getElementById('prks-workspace-tabs').scrollLeft")
+
+        first_box = _tab_box(page, first_id)
+        _begin_pointer_drag(page, _center(first_box))
+        # Hold near the right edge of the strip long enough for several autoscroll frames.
+        edge_x = strip["x"] + strip["width"] - 10
+        edge_y = strip["y"] + strip["height"] / 2
+        page.mouse.move(edge_x, edge_y, steps=5)
+        page.wait_for_function(
+            "(before) => document.getElementById('prks-workspace-tabs').scrollLeft > before",
+            arg=scroll_before,
+        )
+        scroll_mid = page.evaluate("() => document.getElementById('prks-workspace-tabs').scrollLeft")
+        self.assertGreater(scroll_mid, scroll_before)
+
+        # Keep holding at the edge until autoscroll has actually brought the last tab into
+        # view (a handful of RAF frames is not enough by itself for a strip this long).
+        page.wait_for_function(
+            """() => {
+                const l = document.getElementById('prks-workspace-tabs');
+                return l.scrollLeft >= l.scrollWidth - l.clientWidth - 5;
+            }""",
+            timeout=15000,
+        )
+
+        # Drop onto the last tab, now scrolled into view under the still-stationary pointer.
+        last_box_now = _tab_box(page, last_id)
+        page.mouse.move(last_box_now["x"] + last_box_now["width"] - 4, last_box_now["y"] + last_box_now["height"] / 2, steps=6)
+        page.mouse.up()
+
+        page.wait_for_function(
+            """(id) => window.prksWorkspaceSnapshot().tabs.slice(-1)[0].id === id""",
+            arg=first_id,
+        )
+        _assert_no_drag_residue(self, page, "after an autoscrolled reorder")
+
+        # Autoscroll must actually stop once the drag ends (no further scrollLeft growth).
+        scroll_after_drop = page.evaluate("() => document.getElementById('prks-workspace-tabs').scrollLeft")
+        page.wait_for_timeout(200)
+        self.assertEqual(
+            page.evaluate("() => document.getElementById('prks-workspace-tabs').scrollLeft"),
+            scroll_after_drop,
+            "autoscroll RAF must stop after drop",
+        )
+
+    def test_move_tab_context_menu_left_right(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        a_id, b_id = [t["id"] for t in page.evaluate("() => window.prksWorkspaceSnapshot().tabs")]
+
+        # Main (A, idx 0): "Move tab left" must be disabled at the start.
+        page.locator('.prks-workspace-tab[data-tab-id="%s"]' % a_id).click(button="right")
+        page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+        left_item = page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text="Move tab left")
+        self.assertEqual(left_item.count(), 1)
+        self.assertTrue(left_item.get_attribute("aria-disabled") == "true" or left_item.is_disabled())
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#prks-workspace-menu[hidden]", state="attached")
+
+        # Parked (B, idx 1): "Move tab right" must be disabled at the end; "Move tab left" works.
+        page.locator('.prks-workspace-tab[data-tab-id="%s"]' % b_id).click(button="right")
+        page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+        right_item = page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text="Move tab right")
+        self.assertTrue(right_item.get_attribute("aria-disabled") == "true" or right_item.is_disabled())
+        page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text="Move tab left").click()
+        page.wait_for_function(
+            "(ids) => window.prksWorkspaceSnapshot().tabs.map(t => t.id).join(',') === ids",
+            arg=",".join([b_id, a_id]),
+        )
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"), a_id)
+
+        # Existing non-drag Split/Hide/Make main workflows remain available alongside drag.
+        page.locator('.prks-workspace-tab[data-tab-id="%s"]' % a_id).click(button="right")
+        page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+        labels = page.locator("#prks-workspace-menu .prks-workspace-menu__item").all_text_contents()
+        self.assertTrue(any("split view" in t for t in labels), labels)
+        page.keyboard.press("Escape")
 
 

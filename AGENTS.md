@@ -257,6 +257,41 @@ TabContext owns route runtime:
 Stacked mode: one mounted context. Tiled mode: Main + every visible Secondary leaf (up to the visible-pane cap), each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
 is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
 
+### Workspace drag and drop
+
+`workspace-drag.js` is an alternate input path for existing canonical workflows, never a
+parallel layout model. Drag state (`active`, `source`, `origin`, `pointerId`, `target`) is
+transient and lives only in that module's own closure; it is never canonical/persisted and
+never written to `localStorage`, `sessionStorage`, or IndexedDB.
+
+`workspace-tree.js` owns recursive tree transformations (including drag-driven pane moves, via
+`moveLeafRelativeToTarget`); `workspace-tabs.js` owns global tab ordering (via
+`prksWorkspaceReorderTab`). `workspace-drag.js` only computes/previews user intent and invokes
+those same canonical APIs on drop — it must never mutate `secondaryTree` or `state.tabs`
+directly, and must never mutate either while the pointer is merely moving/hovering (preview
+only; the DOM insertion marker/edge overlay are pure visual feedback with no state effect).
+
+A pane move is one atomic tree transaction. Moving a visible pane is spatial repositioning, not
+a leave operation — it must not run PDF leave confirmation, must not flush-for-unmount Research
+Notes, and must not remount the moved pane or any unrelated pane. Parking a pane (grip → tab
+strip) is equivalent to "Hide from split" and does require leave preflight; a rejected leave
+must leave the tree, tab order, and focus completely unchanged.
+
+Parked-tab insertion into the Secondary tree always reuses that tab's existing logical tab ID —
+never a duplicate tab, never a second mount. Main can never be inserted into `secondaryTree` by
+drag; only the existing "Make main" action changes Main ownership. The pane cap
+(`PRKS_MAX_VISIBLE_TABS`) blocks new visible leaves being added by drag, not existing panes
+being moved.
+
+Drag cancellation (Escape, `pointercancel`, `lostpointercapture`, window blur, responsive
+transition, external tile removal) must run through one idempotent cleanup that removes every
+transient listener, the preview element, every overlay/marker, the autoscroll animation frame,
+source styling, and the body drag class, and must leave canonical workspace state completely
+untouched. `prksWorkspaceCancelActiveDrag` exists specifically so `workspace-tiling.js` can
+defensively end an active drag before a real narrow/wide transition and before pruning any
+stale tile that could contain the live drag source — it is always safe to call when nothing is
+active. `workspace-drag.js` must never itself mutate responsive/narrow-fallback state.
+
 ## Saved Views
 
 Saved Views store search definitions, never cached work membership.

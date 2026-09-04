@@ -496,6 +496,15 @@
      * Runs after rendering, once every surviving node has already been reparented into its new
      * position, so anything still found here is genuinely orphaned garbage. */
     function pruneStale(canvas, keepTabIds, keepSplitIds) {
+        /* Defensive lifecycle integration (drag-and-drop workspace management #3): a workspace
+         * mutation (close, park, make-main, ...) can remove a Secondary tile that happens to be
+         * the live drag source before another pointer event ever fires. Cancel unconditionally,
+         * before any DOM removal below -- idempotent/no-op when no drag is active, and already a
+         * no-op on a normal successful drop commit (that path already ran cleanup() itself
+         * before calling into the canonical mutation that lands here). */
+        if (typeof root.prksWorkspaceCancelActiveDrag === 'function') {
+            root.prksWorkspaceCancelActiveDrag();
+        }
         const staleTiles = collectAll(canvas, function (n) {
             return isAnyTile(n) && !keepTabIds[n.getAttribute('data-prks-tab-id')];
         });
@@ -638,6 +647,16 @@
             lastNarrow = narrow;
             pendingNarrow = null;
             return;
+        }
+        /* Drag-and-drop workspace management #2/#18/#19: this is the actual physical
+         * wide<->narrow transition (guarded by the early returns above, not every
+         * ResizeObserver callback) -- an active spatial pane drag's overlays/preview reference
+         * geometry that is about to change or disappear, so cancel it first, before the
+         * existing narrow leave-preflight logic below even starts. The drag controller never
+         * touches narrow-fallback state itself; this is the one integration point going the
+         * other direction. */
+        if (typeof root.prksWorkspaceCancelActiveDrag === 'function') {
+            root.prksWorkspaceCancelActiveDrag();
         }
         pendingNarrow = narrow;
         Promise.resolve(root.prksWorkspaceSetNarrowFallback(narrow)).then(function () {

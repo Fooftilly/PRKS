@@ -620,6 +620,35 @@ Every internal Secondary split node (`type: "split"`, `axis: "left-right" | "top
 
 A recursive DOM renderer mounts exactly one stable host per visible leaf (keyed by `tabId`) and one split container + separator per split node (keyed by `split.id`), reconciling rather than rebuilding: an unrelated leaf's host and TabContext survive any sibling being split, closed, hidden, resized, or promoted to Main elsewhere in the tree. Removing a leaf normalizes the tree — a split node left with only one child is replaced by that child, repeated upward as needed — so the tree never carries a redundant single-child split node.
 
+### Workspace drag and drop
+
+Drag is an alternate input path for the same canonical workflows above (reorder, split placement, pane move, hide/park) — never a parallel layout model, never persisted, never canonical state. `workspace-drag.js` owns one transient session (source, origin, pointer ID, live target) and computes/previews the user's spatial intent; on a successful drop it calls exactly the same state APIs the menus already use. Pointer Events (`pointerdown`/`pointermove`/`pointerup`/`pointercancel`/`lostpointercapture`) are used throughout — no native HTML5 DnD.
+
+Interaction contract:
+
+- **Global tab drag = reorder.** Any tab (Main, visible Secondary, or parked) dragged along the workspace tab bar only reorders `state.tabs`; it never changes `mainTabId`, `focusedTabId`, `secondaryTree`, mounted contexts, or the URL. Dragging a visible Secondary's *global tab* onto another pane's edge, however, repositions its existing leaf (see below) — a global tab still carries pane identity, it does not fork into a duplicate.
+- **Parked tab → Secondary edge = split left/right/above/below.** Dropping a parked, tile-eligible tab on one of a Secondary leaf's four edge bands inserts it as a new sibling on that side, reusing its existing logical tab ID (never a duplicate tab, never a second mount).
+- **Parked tab → empty Secondary region = create the first Secondary.** Offered only while `secondaryTree` is `null`; equivalent to "Open in split view", not a pointless nested split.
+- **Secondary grip → Secondary edge = move pane.** Dragging a visible pane's header grip onto another leaf's edge repositions its existing leaf via one atomic tree transaction (`moveLeafRelativeToTarget`). This is spatial repositioning only — it is explicitly *not* a leave operation, so it never runs PDF leave confirmation or a Notes flush-for-unmount, and it never remounts the moved pane or any unrelated pane.
+- **Secondary grip → tab bar = park.** Dragging a pane's grip onto the tab strip removes that leaf from `secondaryTree`, normalizes the tree, and unmounts its TabContext — exactly "Hide from split", so it does require leave preflight; a rejected leave leaves the tree, tab order, and focus completely unchanged.
+- **Main is never spatially draggable.** Main's global tab can still be reordered in the tab bar, but it can never be dropped into the Secondary tree; **Make main** remains the only way to change Main ownership.
+- **Self-drop is invalid.** A pane dragged over its own edge offers no target and mutates nothing.
+- **The pane cap blocks additions, not moves.** At 4 visible panes, dropping a *new* parked tab into the Secondary tree is unavailable (no highlight, capped-explanation announcement); repositioning an already-visible pane remains allowed at the cap.
+- **Route eligibility is checked live and re-checked at commit.** Only tile-capable routes may become new Secondary leaves; the state API is the final authority regardless of what the drag preview offered.
+- **No spatial pane drag while stacked/narrow-fallback** — only tab-bar reordering remains available at that width. An active spatial drag is cancelled *before* a live wide→narrow transition mutates layout, not after.
+
+Visual states (all restrained, flat/square — no heavy shadows or cards beyond what non-drag menus already use):
+
+- **Drag source**: stays visible, dimmed (`.is-drag-source`, `opacity: 0.5`) — layout changes only on a committed drop, never mid-drag.
+- **Drag preview**: a small floating chip (icon + truncated title) that follows the pointer (`.prks-drag-preview`); it never clones an entire pane and never intercepts pointer events.
+- **Insertion marker**: a narrow accent bar between two tabs in the strip, positioned by tab-midpoint geometry, recomputed live during tab-strip autoscroll so it never goes stale while the strip scrolls under a stationary pointer.
+- **Secondary edge overlay**: a translucent, accent-bordered rectangle sized to the resulting pane region (`.prks-drag-edge-overlay`) for a valid target; a dimmed neutral variant (`.is-invalid`) for a capped/ineligible target — never a highlight across the whole pane.
+- **Empty-Secondary overlay**: a dashed accent rectangle labeled "Open in split view", shown only while `secondaryTree` is `null`.
+- **Park target**: the tab bar gets an inset accent outline (`.is-drop-target-park`) only while dragging a pane by its grip.
+- No drop-zone chrome of any kind exists outside an active, eligible drag.
+
+Lifecycle: one idempotent `cleanup()` tears down pointer capture, every document/window listener, the preview element, every overlay/marker, the autoscroll animation frame, source styling, and the body drag class — safe to call more than once. `cancel()` (exported as `prksWorkspaceCancelActiveDrag`) runs that same cleanup and leaves canonical state completely untouched; it fires on Escape, `pointercancel`, `lostpointercapture`, window blur, and is also called defensively (and harmlessly, when nothing is active) by `workspace-tiling.js` right before a real narrow/wide transition and right before pruning any stale tile that could contain the live drag source. A drag only ever begins after the pointer clears a small movement threshold (distinguishing it from a plain click), and click suppression is armed only for the click a completed `pointerup` gesture synthesizes — a cancelled drag never swallows the user's next intentional click.
+
 ### Chips, tags, and badges
 
 Three different concepts. Do not use them interchangeably because everything is small. All remain predominantly square.

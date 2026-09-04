@@ -284,14 +284,20 @@ function run() {
     assertEq('second-branch child moved before first', tree.collectLeafTabIds(secondToFirst), ['Z', 'X', 'Y']);
 
     /* Move causing the source's own parent split to collapse (2-leaf subtree loses one leaf,
-     * parent becomes a bare leaf, then gets re-split at the target). */
+     * parent becomes a bare leaf) -- here P|(Q over R); move Q relative to P (axis left-right,
+     * placement 'second'): remove Q -> P|R; locate P in that normalized tree; split P with Q as
+     * second -> (P|Q)|R. So the requested spatial operation lands Q beside P in a brand-new
+     * nested split, while R -- never on the source/target path -- survives untouched as the
+     * outer split's other child. */
     let collapseBase = tree.makeSplit('left-right', tree.makeLeaf('P'), tree.makeSplit('top-bottom', tree.makeLeaf('Q'), tree.makeLeaf('R')));
     let collapseMoved = tree.moveLeafRelativeToTarget(collapseBase, 'Q', 'P', { axis: 'left-right', placement: 'second' });
-    assertEq('move causing parent collapse order', tree.collectLeafTabIds(collapseMoved), ['R', 'P', 'Q']);
+    assertEq('move causing parent collapse order', tree.collectLeafTabIds(collapseMoved), ['P', 'Q', 'R']);
     assert('move causing parent collapse valid', tree.validateTree(collapseMoved).ok);
-    /* R (Q's old sibling, never touched by the move) keeps its exact leaf identity/position --
-     * only Q's old split parent, now redundant, actually collapses away. */
-    assertEq('move causing parent collapse keeps R as new root leaf-first', collapseMoved.first.tabId, 'R');
+    assertEq('move causing parent collapse: first split holds P', collapseMoved.first.first.tabId, 'P');
+    assertEq('move causing parent collapse: first split holds Q second', collapseMoved.first.second.tabId, 'Q');
+    /* R (Q's old sibling, never on the source/target path) remains the unaffected outer sibling
+     * -- only Q's old split parent, now redundant, actually collapses away. */
+    assertEq('move causing parent collapse: R remains unaffected outer sibling', collapseMoved.second.tabId, 'R');
 
     /* Target path changes after source removal: removing the source collapses a split that
      * used to sit BETWEEN the tree root and the target, so the target must be re-located in the

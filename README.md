@@ -200,7 +200,7 @@ Then the shortcuts:
 - Alt-click a link, or Alt+Enter in the command palette: open in split view
 - Click inside a split pane: focus it (the details panel follows focus; the browser URL does not)
 - Click a Secondary tab that's already visible, in the workspace strip: focus it in place (it does not become Main)
-- **Make main**: Secondary header, or click that tab in the workspace strip (swaps roles; URL becomes that page)
+- **Make main**: Secondary pane header, or a Secondary tab/pane's context-menu action (swaps roles; URL becomes that page)
 - **Hide split view**: Split control beside the workspace tabs. Parks every visible Secondary pane at once; the layout comes back with **Show split**.
 - **Hide from split**: per-pane action on a Secondary tab's context menu. Keeps that pane's tab open (parked) but removes just that one pane.
 - **+**: choose a page in the command palette (“Open in new tab”) and open it as a new main tab
@@ -217,6 +217,18 @@ Any Secondary pane can be split again: use its header's **Split ▾** control, o
 Drag the thin divider between any two adjacent panes to resize them — this includes the root Main/Secondary divider and every divider between nested panes. Keyboard: focus a divider, then the appropriate arrow keys to resize (Shift + arrow for a larger step), Home / End for the smallest / largest allowed size for that divider. Double-click a divider to reset just that one split to its default size. Every pane keeps a comfortable minimum size. Resizing one divider never changes any other divider's size. Split sizes are remembered for the rest of your session but reset to their defaults on a full reload.
 
 Parked tabs do no rendering or network work until you activate them.
+
+**Drag and drop**
+
+Dragging is an optional shortcut for the same actions above — every menu command still works without it.
+
+- Reorder tabs: drag a tab along the workspace tab bar. Dragging near either edge of an overflowing strip scrolls it.
+- Create the first split: drag a parked tab into the drop region on the right side of the workspace canvas.
+- Add a parked tab to split view: drag it onto an edge of an existing Secondary pane (left/right/above/below) to split that pane in that direction.
+- Move a pane: drag its header's grip handle onto another pane's edge to reposition it in the split layout.
+- Park a pane: drag its grip handle back onto the tab bar. Equivalent to **Hide from split**, and asks first if the pane has unsaved work.
+
+Main can be reordered in the tab bar but is never dropped into the split layout itself — use **Make main** for that. Press Escape at any point during a drag to cancel it without changing anything.
 
 Each visible tab has a TabContext. Route state, page DOM (`ctx.root` / `ctx.query`),
 async generation, and live resources (PDF viewer, notes editor, graph) live

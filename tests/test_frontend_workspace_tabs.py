@@ -20,6 +20,10 @@ _README = os.path.join(_PROJECT_DIR, "README.md")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tabs_selftest.js")
 _TREE = os.path.join(_FRONTEND, "js", "workspace-tree.js")
 _TREE_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tree_selftest.js")
+_DRAG = os.path.join(_FRONTEND, "js", "workspace-drag.js")
+_DRAG_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_drag_selftest.js")
+_SPLIT = os.path.join(_FRONTEND, "js", "workspace-split.js")
+_MENU = os.path.join(_FRONTEND, "js", "workspace-tab-menu.js")
 
 _HASH_ASSIGN_RE = re.compile(r"(?:window\.)?location\.hash\s*=(?!=)")
 _OPEN_BLANK_RE = re.compile(r"""window\.open\s*\([^)]*['_"]_blank['_"]""")
@@ -61,29 +65,45 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         nav_at = html.find('src="/js/navigation.js"')
         ws_at = html.find('src="/js/workspace-tabs.js"')
         tc_at = html.find('src="/js/tab-context.js"')
+        tree_at = html.find('src="/js/workspace-tree.js"')
         tiling_at = html.find('src="/js/workspace-tiling.js"')
+        split_at = html.find('src="/js/workspace-split.js"')
         menu_at = html.find('src="/js/workspace-tab-menu.js"')
+        drag_at = html.find('src="/js/workspace-drag.js"')
         coord_at = html.find('src="/js/request-coordinator.js"')
         api_at = html.find('src="/js/api.js"')
         app_at = html.find('src="/js/app.js"')
         self.assertNotEqual(nav_at, -1)
         self.assertNotEqual(ws_at, -1)
+        self.assertNotEqual(tree_at, -1)
         self.assertNotEqual(tiling_at, -1)
+        self.assertNotEqual(split_at, -1)
         self.assertNotEqual(menu_at, -1)
+        self.assertNotEqual(drag_at, -1)
         self.assertNotEqual(coord_at, -1)
         self.assertNotEqual(api_at, -1)
         self.assertNotEqual(app_at, -1)
+        # Module load-order contract: workspace-tabs, workspace-tree/tiling, workspace-split,
+        # workspace-tab-menu, workspace-drag, ..., app. Drag orchestrates the other workspace
+        # modules' canonical/DOM APIs, so it must load after all of them and before app.js wires
+        # up initialization.
         self.assertLess(nav_at, ws_at)
         self.assertLess(ws_at, tc_at)
+        self.assertLess(tree_at, ws_at)
         self.assertLess(tc_at, tiling_at)
-        self.assertLess(tiling_at, menu_at)
-        self.assertLess(menu_at, app_at)
+        self.assertLess(tiling_at, split_at)
+        self.assertLess(split_at, menu_at)
+        self.assertLess(menu_at, drag_at)
+        self.assertLess(drag_at, app_at)
         self.assertLess(tiling_at, app_at)
         self.assertLess(ws_at, app_at)
         self.assertLess(coord_at, api_at)
         self.assertLess(api_at, app_at)
         self.assertTrue(os.path.isfile(_WS))
         self.assertTrue(os.path.isfile(_TILING))
+        self.assertTrue(os.path.isfile(_SPLIT))
+        self.assertTrue(os.path.isfile(_MENU))
+        self.assertTrue(os.path.isfile(_DRAG))
         self.assertTrue(os.path.isfile(_RUNNER))
         self.assertTrue(os.path.isfile(_COORD))
 
@@ -290,6 +310,75 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
+    def test_drag_module_structural_contract(self):
+        self.assertTrue(os.path.isfile(_DRAG))
+        self.assertTrue(os.path.isfile(_DRAG_RUNNER))
+        html = _read(_INDEX)
+        self.assertIn('src="/js/workspace-drag.js"', html)
+        src = _read(_DRAG)
+        # Production wiring: workspace-tabs.js must actually call the init function, not just
+        # define it in isolation.
+        ws = _read(_WS)
+        self.assertIn("prksWorkspaceInitDrag()", ws)
+        # Exported canonical APIs this module drives on drop must exist on workspace-tabs.js.
+        self.assertIn("prksWorkspaceMovePane", ws)
+        self.assertIn("prksWorkspaceReorderTab", ws)
+        self.assertIn("prksWorkspaceMoveTabStep", ws)
+        self.assertIn("prksWorkspaceIsNarrowFallback", ws)
+        # workspace-drag.js itself only ever calls those canonical APIs to mutate state; it does
+        # not reimplement tree/tab mutation.
+        self.assertIn("root.prksWorkspaceMovePane", src)
+        self.assertIn("root.prksWorkspaceReorderTab", src)
+        self.assertIn("root.prksWorkspaceHideLeaf", src)
+        self.assertIn("root.prksWorkspaceSplitLeaf", src)
+        self.assertIn("root.prksWorkspaceTileTab", src)
+        self.assertIn("root.prksWorkspaceIsNarrowFallback", src)
+        # Pointer Events, not native HTML5 drag/drop.
+        self.assertIn("pointerdown", src)
+        self.assertIn("pointermove", src)
+        self.assertIn("pointerup", src)
+        self.assertIn("pointercancel", src)
+        self.assertIn("lostpointercapture", src)
+        self.assertNotIn("dragstart", src)
+        self.assertNotIn('"dragover"', src)
+        self.assertNotIn("ondrop", src)
+        # Drag state is transient only -- never persisted.
+        self.assertNotIn("localStorage", src)
+        self.assertNotIn("sessionStorage", src)
+        self.assertNotIn("indexedDB", src)
+        # Two defensive lifecycle integration points call back into this module, and this module
+        # never mutates responsive/canonical state from either of them.
+        tiling = _read(_TILING)
+        self.assertIn("prksWorkspaceCancelActiveDrag", tiling)
+        applied_narrow = tiling[tiling.find("function applyNarrow") : tiling.find("function applyNarrow") + 1600]
+        self.assertIn("prksWorkspaceCancelActiveDrag", applied_narrow)
+        prune_stale = tiling[tiling.find("function pruneStale") : tiling.find("function pruneStale") + 900]
+        self.assertIn("prksWorkspaceCancelActiveDrag", prune_stale)
+        # Move tab left/right context-menu commands reuse the same canonical ordering API as
+        # drag/drop, and existing non-drag workflows remain intact alongside it.
+        menu = _read(_MENU)
+        self.assertIn("prksWorkspaceMoveTabStep", menu)
+        self.assertIn("Move tab left", menu)
+        self.assertIn("Move tab right", menu)
+        self.assertIn("Open in split view", menu)
+        self.assertIn("Make main", menu)
+
+    def test_drag_node_selftest(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for workspace drag tests")
+        proc = subprocess.run(
+            [node, _DRAG_RUNNER],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("passed", proc.stdout)
+        self.assertIn(", 0 failed", proc.stdout)
         self.assertNotIn("FAIL  ", proc.stdout)
 
     def test_tiling_recursive_selftest(self):

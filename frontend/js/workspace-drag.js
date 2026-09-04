@@ -11,6 +11,17 @@
  * `secondaryTree`/`state.tabs` are never mutated while the pointer is merely crossing zones --
  * only on a successful drop. This module owns no canonical state and stores nothing outside its
  * own closure; `pending` below disappears completely once a drag ends or cancels.
+ *
+ * `prksWorkspaceCancelActiveDrag` (== `cancel()`) is exported specifically so two OTHER modules
+ * can defensively end an active drag before a lifecycle event that would otherwise leave stale
+ * geometry/overlays behind -- it is always idempotent/a no-op when nothing is active:
+ *   - workspace-tiling.js's `applyNarrow()` calls it right before an actual physical wide<->
+ *     narrow transition (the real source of truth for PRKS responsive fallback, not a raw
+ *     window resize event).
+ *   - workspace-tiling.js's `pruneStale()` calls it right before removing any stale tile/split
+ *     DOM, in case the node being pruned is the live drag source.
+ * This module never calls back into responsive-fallback or canonical mutation APIs from either
+ * integration point -- it only tears down its own transient state.
  */
 (function (root) {
     'use strict';
@@ -214,12 +225,15 @@
         const d = doc();
         d.addEventListener('keydown', onKeyDown, true);
         root.addEventListener('blur', onWindowBlur);
-        root.addEventListener('resize', onWindowResize);
         d.body.classList.add('prks-workspace-dragging');
         applySourceStyle(true);
         createPreview();
+        pending.lastX = e.clientX;
+        pending.lastY = e.clientY;
         updatePreviewPosition(e.clientX, e.clientY);
-        suppressClickTarget = pending.sourceEl;
+        /* Click suppression is armed later, only for a completed pointerup gesture (see
+         * onPointerUp) -- not here, so a drag cancelled by Escape/pointercancel/lost-capture/
+         * blur/responsive-transition never swallows the user's next intentional click. */
         announce('Dragging ' + titleFor(pending.source.tabId) + '.');
     }
 
@@ -262,9 +276,21 @@
     /* ---- Live target computation (preview only -- never mutates canonical state) ---- */
 
     function updateDrag(e) {
+        pending.lastX = e.clientX;
+        pending.lastY = e.clientY;
         updatePreviewPosition(e.clientX, e.clientY);
         runAutoscroll(e.clientX, e.clientY);
-        const nextTarget = computeTarget(e.clientX, e.clientY);
+        refreshTargetFromLastPointer();
+    }
+
+    /** Recomputes the semantic drop target from the most recently known pointer position and
+     * updates preview visuals/announcements if it changed. Called both from ordinary pointer
+     * movement and from each autoscroll animation frame (spec #5): while the strip scrolls
+     * underneath a stationary pointer, the tab positions -- and therefore the insertion index --
+     * change even though no pointermove fires. Never mutates canonical state; only preview. */
+    function refreshTargetFromLastPointer() {
+        if (!pending) return;
+        const nextTarget = computeTarget(pending.lastX, pending.lastY);
         if (!sameTarget(nextTarget, pending.target)) {
             pending.target = nextTarget;
             renderTargetVisuals(nextTarget);
@@ -521,6 +547,10 @@
                 return;
             }
             pending.autoscroll.list.scrollLeft += pending.autoscroll.speed;
+            /* Spec #5: the tabs move underneath a pointer that hasn't itself moved, so the
+             * semantic target (insertion index) must be recomputed here, not only on the next
+             * pointermove. Tab order itself is still untouched -- preview only. */
+            refreshTargetFromLastPointer();
             pending.rafId = root.requestAnimationFrame(step);
         }
         pending.rafId = root.requestAnimationFrame(step);
@@ -541,6 +571,12 @@
         }
         const finalTarget = computeTarget(e.clientX, e.clientY);
         const source = pending.source;
+        /* Click suppression is armed here and only here (spec #4): this is the one path where
+         * the browser is about to synthesize a click for the same gesture that just committed a
+         * real drag. Every other exit (Escape/pointercancel/lost-capture/blur/responsive
+         * cancellation) goes through cancel() below, which explicitly leaves this cleared, so a
+         * cancelled drag never swallows the user's next intentional click on the source. */
+        suppressClickTarget = pending.sourceEl;
         cleanup();
         commit(source, finalTarget);
     }
@@ -565,21 +601,23 @@
         if (pending && pending.active) cancel();
     }
 
-    function onWindowResize() {
-        /* Spec #38: a responsive-width transition during an active spatial drag must cancel the
-         * drag first, then proceed normally -- never drop against geometry that no longer
-         * exists. Cancelling on every resize while dragging is simple and always safe. */
-        if (pending && pending.active) cancel();
-    }
-
-    /** Cancels an in-progress drag (Escape/pointercancel/lost-capture/blur/resize/destroy):
-     * workspace state is left completely untouched, and every transient visual/listener this
-     * module created is removed. Safe to call when nothing is active. */
+    /** Cancels an in-progress drag (Escape/pointercancel/lost-capture/blur/responsive
+     * transition/external tile removal/destroy): workspace state is left completely untouched,
+     * and every transient visual/listener this module created is removed. Safe to call when
+     * nothing is active -- callers (workspace-tiling.js's narrow-fallback transition and stale-
+     * tile pruning) invoke this defensively and unconditionally. Responsive-width cancellation
+     * is triggered by workspace-tiling.js's own ResizeObserver-driven narrow-fallback transition
+     * (the actual source of truth for PRKS's responsive layout), not by a raw window resize
+     * event here -- this module never mutates that responsive state itself. */
     function cancel() {
         if (!pending) return;
         const wasActive = pending.active;
         const srcEl = pending.sourceEl;
         cleanup();
+        /* Cancellation never completes a gesture, so it never suppresses a future click either
+         * (spec #4) -- clear defensively even though the active-drag paths above no longer set
+         * this in the first place. */
+        suppressClickTarget = null;
         if (wasActive) {
             announce('Move cancelled.');
             if (srcEl && typeof srcEl.focus === 'function' && doc().contains(srcEl)) {
@@ -613,7 +651,6 @@
         d.removeEventListener('lostpointercapture', onLostCapture);
         d.removeEventListener('keydown', onKeyDown, true);
         root.removeEventListener('blur', onWindowBlur);
-        root.removeEventListener('resize', onWindowResize);
         d.body.classList.remove('prks-workspace-dragging');
         applySourceStyle(false);
         if (pending.previewEl && pending.previewEl.parentNode) pending.previewEl.parentNode.removeChild(pending.previewEl);
