@@ -1043,7 +1043,24 @@
         state.emptyCreate = state.scope === 'create' && combined.length === 0 && !!q;
         if (state.navigationTarget === 'tile') {
             const openTabs = openTabRows(qRaw);
-            const filtered = combined.filter(rowCanBeSecondary);
+            const openHashes = Object.create(null);
+            for (let i = 0; i < openTabs.length; i++) {
+                if (openTabs[i].hash) openHashes[openTabs[i].hash] = true;
+            }
+            if (typeof root.prksWorkspaceSnapshot === 'function') {
+                const snap = root.prksWorkspaceSnapshot();
+                if (snap && Array.isArray(snap.tabs)) {
+                    for (let t = 0; t < snap.tabs.length; t++) {
+                        if (snap.tabs[t] && snap.tabs[t].route) openHashes[snap.tabs[t].route] = true;
+                    }
+                }
+            }
+            const filtered = combined.filter(function (row) {
+                if (!rowCanBeSecondary(row)) return false;
+                if (row.workspaceTabId) return true;
+                if (row.hash && openHashes[row.hash]) return false;
+                return true;
+            });
             return openTabs.concat(filtered);
         }
         return combined;

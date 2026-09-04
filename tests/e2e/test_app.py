@@ -2249,6 +2249,385 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.wait_for_function(
             """() => (document.getElementById('prks-workspace-live') || {}).textContent.indexOf('wider window') !== -1"""
         )
-        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mode"), "tiled")
         self.assertFalse(page.evaluate("() => window.prksWorkspaceVisualTiled()"))
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mode"), "tiled")
+
+    def test_many_tabs_overflow_reveals_main(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1100, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => {
+                const jobs = [];
+                for (let i = 0; i < 12; i++) {
+                    jobs.push(window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false }));
+                }
+                return Promise.all(jobs);
+            }""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length >= 12")
+        overflow = page.evaluate(
+            """() => {
+                const list = document.getElementById('prks-workspace-tabs');
+                return !!(list && list.scrollWidth > list.clientWidth + 2);
+            }"""
+        )
+        self.assertTrue(overflow)
+        last_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.slice(-1)[0].id")
+        page.evaluate("(id) => window.prksWorkspaceActivateTab(id)", arg=last_id)
+        page.wait_for_function(
+            "(id) => window.prksWorkspaceSnapshot().mainTabId === id",
+            arg=last_id,
+        )
+        visible = page.evaluate(
+            """(id) => {
+                const list = document.getElementById('prks-workspace-tabs');
+                const wrap = list && list.querySelector('.prks-workspace-tab[data-tab-id="' + id + '"]');
+                if (!list || !wrap) return false;
+                const lr = list.getBoundingClientRect();
+                const wr = wrap.getBoundingClientRect();
+                return wr.left >= lr.left - 2 && wr.right <= lr.right + 2;
+            }""",
+            arg=last_id,
+        )
+        self.assertTrue(visible)
+        overflow_btn = page.locator("#prks-workspace-tab-overflow")
+        self.assertEqual(overflow_btn.count(), 1)
+
+    def test_close_secondary_restores_focus_to_main(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.locator(".prks-tile--secondary").click(position={"x": 24, "y": 80})
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().focusedTabId === window.prksWorkspaceSnapshot().secondaryTree.tabId"
+        )
+        page.evaluate(
+            """() => window.prksWorkspaceCloseTab(window.prksWorkspaceSnapshot().secondaryTree.tabId)"""
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        page.wait_for_function(
+            """() => {
+                const ae = document.activeElement;
+                if (!ae) return false;
+                return !!(
+                    (ae.closest && ae.closest('.prks-tile--main')) ||
+                    (ae.closest && ae.closest('.prks-workspace-tab.is-main'))
+                );
+            }"""
+        )
+
+    def test_close_main_promotes_secondary_without_home_flash(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        hashes = page.evaluate(
+            """() => {
+                window.__prksHashLog = [];
+                const orig = history.replaceState.bind(history);
+                history.replaceState = function () {
+                    orig.apply(this, arguments);
+                    window.__prksHashLog.push(location.hash);
+                };
+                const snap = window.prksWorkspaceSnapshot();
+                return window.prksWorkspaceCloseTab(snap.mainTabId).then(function () {
+                    return window.__prksHashLog.slice();
+                });
+            }"""
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        self.assertTrue(all("/folders" not in h for h in hashes))
+        self.assertIn(work_b, page.evaluate("() => location.hash"))
+
+    def test_secondary_replace_rejected_leave_keeps_layout(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        ids = _workspace_ids(page)
+        _wait_pdf_tab(page, ids["secondaryTabId"])
+        page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length >= 3")
+        parked = page.evaluate(
+            """() => window.prksWorkspaceSnapshot().tabs.find(function (t) {
+                return t.id !== window.prksWorkspaceSnapshot().mainTabId
+                    && t.id !== window.prksWorkspaceSnapshot().secondaryTree.tabId;
+            }).id"""
+        )
+        dialogs = []
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(snap.secondaryTree.tabId);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && ctx && c.tabId === ctx.tabId);
+                };
+            }"""
+        )
+        before = _workspace_ids(page)
+        page.evaluate("(id) => window.prksWorkspaceTileTab(id)", arg=parked)
+        self.assertEqual(len(dialogs), 1)
+        after = _workspace_ids(page)
+        self.assertEqual(after["secondaryTabId"], before["secondaryTabId"])
+        self.assertEqual(after["mainTabId"], before["mainTabId"])
+        self.assertEqual(after["hash"], before["hash"])
+        self.assertEqual(after["mountedCount"], 2)
+
+    def test_secondary_replace_does_not_remount_main(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.work-detail').length === 2")
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length >= 3")
+        roots = page.evaluate(
+            """() => {
+                const main = document.querySelector('.prks-tile--main .prks-tab-root');
+                window.__prksMainRoot = main;
+                return {
+                    mainRoot: !!main,
+                    mainWork: !!document.querySelector('.prks-tile--main .work-detail'),
+                };
+            }"""
+        )
+        self.assertTrue(roots["mainRoot"])
+        parked = page.evaluate(
+            """() => window.prksWorkspaceSnapshot().tabs.find(function (t) {
+                return t.id !== window.prksWorkspaceSnapshot().mainTabId
+                    && t.id !== window.prksWorkspaceSnapshot().secondaryTree.tabId;
+            }).id"""
+        )
+        page.evaluate("(id) => window.prksWorkspaceTileTab(id)", arg=parked)
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const tab = snap.tabs.find(function (t) { return t.id === snap.secondaryTree.tabId; });
+                return !!(tab && tab.route.indexOf('/people/') !== -1);
+            }"""
+        )
+        same = page.evaluate(
+            """() => {
+                const main = document.querySelector('.prks-tile--main .prks-tab-root');
+                return {
+                    sameRoot: main === window.__prksMainRoot,
+                    work: !!document.querySelector('.prks-tile--main .work-detail'),
+                    person: !!document.querySelector('.prks-tile--secondary .prks-people-profile, .prks-tile--secondary [data-prks-role], .prks-tile--secondary h2'),
+                    tiles: document.querySelectorAll('.prks-tile').length,
+                };
+            }"""
+        )
+        self.assertTrue(same["sameRoot"])
+        self.assertTrue(same["work"])
+        self.assertEqual(same["tiles"], 2)
+
+    def test_work_status_isolated_per_tab(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.CodeMirror').length === 2")
+        page.locator(".prks-tile--main .CodeMirror").click()
+        page.keyboard.insert_text("STATUS-A")
+        page.wait_for_function(
+            """() => !!document.querySelector('.prks-workspace-tab.is-main .prks-workspace-tab__status--drafting')"""
+        )
+        isolated = page.evaluate(
+            """() => {
+                const main = document.querySelector('.prks-workspace-tab.is-main .prks-workspace-tab__status--drafting');
+                const sec = document.querySelector('.prks-workspace-tab.is-tiled .prks-workspace-tab__status--drafting');
+                const snap = window.prksWorkspaceSnapshot();
+                const a = window.prksGetTabContext(snap.mainTabId).getResource('workNotes');
+                const b = window.prksGetTabContext(snap.secondaryTree.tabId).getResource('workNotes');
+                return {
+                    mainDot: !!main,
+                    secDot: !!sec,
+                    aDraft: !!(a && a.drafting),
+                    bDraft: !!(b && b.drafting),
+                };
+            }"""
+        )
+        self.assertTrue(isolated["mainDot"])
+        self.assertFalse(isolated["secDot"])
+        self.assertTrue(isolated["aDraft"])
+        self.assertFalse(isolated["bDraft"])
+
+    def test_narrow_wide_restores_secondary(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        sec_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.evaluate("() => window.prksWorkspaceSetNarrowFallback(true)")
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === false")
+        btn = page.locator("#prks-workspace-tile-layout")
+        self.assertNotIn("Hide", btn.get_attribute("aria-label") or "")
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId"), main_id)
+        self.assertEqual(page.locator(".prks-tile").count(), 1)
+        page.evaluate("() => window.prksWorkspaceSetNarrowFallback(false)")
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        after = _workspace_ids(page)
+        self.assertEqual(after["mainTabId"], main_id)
+        self.assertEqual(after["secondaryTabId"], sec_id)
+        self.assertEqual(after["focusedTabId"], main_id)
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
+        self.assertEqual(page.locator(".prks-tile--main.prks-tile--focused").count(), 1)
+
+    def test_tab_context_menu_commands(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        page.locator(".prks-workspace-tab.is-parked").click(button="right")
+        page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+        labels = page.locator("#prks-workspace-menu .prks-workspace-menu__item").all_text_contents()
+        self.assertTrue(any("Make main" in t for t in labels))
+        self.assertTrue(any("Open in split view" in t for t in labels))
+        self.assertTrue(any(t.strip() == "Close" for t in labels))
+        page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text="Open in split view").click()
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
+        page.locator(".prks-workspace-tab.is-tiled").click(button="right")
+        page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+        tiled_labels = page.locator("#prks-workspace-menu .prks-workspace-menu__item").all_text_contents()
+        self.assertTrue(any("Hide split" in t for t in tiled_labels))
+        self.assertFalse(any("tileTab" in t or "secondaryTree" in t for t in tiled_labels))
+
+    def test_loading_secondary_leaves_main_intact(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.work-detail').length === 2")
+        page.evaluate(
+            """() => {
+                window.__prksMainRoot = document.querySelector('.prks-tile--main .prks-tab-root');
+                window.__prksMainHeader = document.querySelector('.prks-tile--main .prks-tile-header');
+            }"""
+        )
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'current', tabId: window.prksWorkspaceSnapshot().secondaryTree.tabId })""",
+            arg=person_id,
+        )
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const tab = snap.tabs.find(function (t) { return t.id === snap.secondaryTree.tabId; });
+                return !!(tab && tab.route.indexOf('/people/') !== -1);
+            }"""
+        )
+        intact = page.evaluate(
+            """() => {
+                return {
+                    sameRoot: document.querySelector('.prks-tile--main .prks-tab-root') === window.__prksMainRoot,
+                    sameHeader: document.querySelector('.prks-tile--main .prks-tile-header') === window.__prksMainHeader,
+                    work: !!document.querySelector('.prks-tile--main .work-detail'),
+                    tiles: document.querySelectorAll('.prks-tile').length,
+                    hash: location.hash,
+                };
+            }"""
+        )
+        self.assertTrue(intact["sameRoot"])
+        self.assertTrue(intact["sameHeader"])
+        self.assertTrue(intact["work"])
+        self.assertEqual(intact["tiles"], 2)
+        self.assertIn(server.ids["work_a"], intact["hash"])
+
+    def test_main_and_focused_secondary_are_distinct(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.locator(".prks-tile--secondary").click(position={"x": 24, "y": 80})
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().focusedTabId === window.prksWorkspaceSnapshot().secondaryTree.tabId"
+        )
+        dist = page.evaluate(
+            """() => {
+                const mainTab = document.querySelector('.prks-workspace-tab.is-main');
+                const secTab = document.querySelector('.prks-workspace-tab.is-tiled');
+                const mainTile = document.querySelector('.prks-tile--main');
+                const secTile = document.querySelector('.prks-tile--secondary');
+                return {
+                    mainIsMain: mainTab && mainTab.classList.contains('is-main'),
+                    secIsMain: secTab && secTab.classList.contains('is-main'),
+                    secFocused: secTab && secTab.classList.contains('is-focused'),
+                    mainFocusedTab: mainTab && mainTab.classList.contains('is-focused'),
+                    mainTileFocused: mainTile && mainTile.classList.contains('prks-tile--focused'),
+                    secTileFocused: secTile && secTile.classList.contains('prks-tile--focused'),
+                    mainHasRole: !!(mainTile && mainTile.querySelector('.prks-tile-header__role')),
+                    secHasMakeMain: !!(secTile && secTile.querySelector('.prks-tile-header__make-main')),
+                };
+            }"""
+        )
+        self.assertTrue(dist["mainIsMain"])
+        self.assertFalse(dist["secIsMain"])
+        self.assertTrue(dist["secFocused"])
+        self.assertTrue(dist["secTileFocused"])
+        self.assertFalse(dist["mainTileFocused"])
+        self.assertTrue(dist["mainHasRole"])
+        self.assertTrue(dist["secHasMakeMain"])
+
 

@@ -73,69 +73,87 @@
     }
 
     function fillHeader(header, snap, tabId, role, visualTiled) {
-        header.replaceChildren();
-        if (!visualTiled) {
-            header.hidden = true;
+        const token = (visualTiled ? role : 'stacked') + ':' + String(tabId);
+        if (header.getAttribute('data-prks-header') !== token) {
+            header.setAttribute('data-prks-header', token);
+            header.replaceChildren();
+            if (!visualTiled) {
+                header.hidden = true;
+                return;
+            }
+            header.hidden = false;
+
+            const icon = doc().createElement('span');
+            icon.className = 'prks-tile-header__icon';
+            icon.setAttribute('aria-hidden', 'true');
+            icon.setAttribute('data-icon', headerIcon(snap, tabId));
+            icon.innerHTML = iconHtml(headerIcon(snap, tabId));
+
+            const title = doc().createElement('span');
+            title.className = 'prks-tile-header__title';
+            title.textContent = headerTitle(snap, tabId);
+
+            header.appendChild(icon);
+            header.appendChild(title);
+
+            const actions = doc().createElement('span');
+            actions.className = 'prks-tile-header__actions';
+
+            if (role === 'main') {
+                const badge = doc().createElement('span');
+                badge.className = 'prks-tile-header__role';
+                badge.textContent = 'Main';
+                actions.appendChild(badge);
+            } else {
+                const makeMain = doc().createElement('button');
+                makeMain.type = 'button';
+                makeMain.className = 'prks-btn prks-btn--secondary prks-tile-header__make-main';
+                makeMain.textContent = 'Make main';
+                makeMain.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (typeof root.prksWorkspaceMakeMain === 'function') {
+                        void root.prksWorkspaceMakeMain(tabId);
+                    }
+                });
+                const hide = doc().createElement('button');
+                hide.type = 'button';
+                hide.className = 'prks-icon-btn prks-icon-btn--ghost prks-tile-header__hide';
+                hide.setAttribute('aria-label', 'Hide split view');
+                hide.title = 'Hide split view';
+                hide.innerHTML = iconHtml('x');
+                hide.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (typeof root.prksWorkspaceSetMode === 'function') {
+                        void root.prksWorkspaceSetMode('stacked');
+                    }
+                });
+                actions.appendChild(makeMain);
+                actions.appendChild(hide);
+            }
+            header.appendChild(actions);
+            if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(header);
             return;
         }
-        header.hidden = false;
-
-        const icon = doc().createElement('span');
-        icon.className = 'prks-tile-header__icon';
-        icon.setAttribute('aria-hidden', 'true');
-        icon.innerHTML = iconHtml(headerIcon(snap, tabId));
-
-        const title = doc().createElement('span');
-        title.className = 'prks-tile-header__title';
-        title.textContent = headerTitle(snap, tabId);
-
-        header.appendChild(icon);
-        header.appendChild(title);
-
-        const actions = doc().createElement('span');
-        actions.className = 'prks-tile-header__actions';
-
-        if (role === 'main') {
-            const badge = doc().createElement('span');
-            badge.className = 'prks-tile-header__role';
-            badge.textContent = 'Main';
-            actions.appendChild(badge);
-        } else {
-            const makeMain = doc().createElement('button');
-            makeMain.type = 'button';
-            makeMain.className = 'prks-btn prks-btn--secondary prks-tile-header__make-main';
-            makeMain.textContent = 'Make main';
-            makeMain.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                if (typeof root.prksWorkspaceMakeMain === 'function') {
-                    void root.prksWorkspaceMakeMain(tabId);
-                }
-            });
-            const hide = doc().createElement('button');
-            hide.type = 'button';
-            hide.className = 'prks-icon-btn prks-icon-btn--ghost prks-tile-header__hide';
-            hide.setAttribute('aria-label', 'Hide split view');
-            hide.title = 'Hide split view';
-            hide.innerHTML = iconHtml('x');
-            hide.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                if (typeof root.prksWorkspaceSetMode === 'function') {
-                    void root.prksWorkspaceSetMode('stacked');
-                }
-            });
-            actions.appendChild(makeMain);
-            actions.appendChild(hide);
+        header.hidden = !visualTiled;
+        if (!visualTiled) return;
+        const titleEl = header.querySelector('.prks-tile-header__title');
+        if (titleEl) titleEl.textContent = headerTitle(snap, tabId);
+        const iconEl = header.querySelector('.prks-tile-header__icon');
+        const wantIcon = headerIcon(snap, tabId);
+        if (iconEl && iconEl.getAttribute('data-icon') !== wantIcon) {
+            iconEl.setAttribute('data-icon', wantIcon);
+            iconEl.innerHTML = iconHtml(wantIcon);
+            if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(iconEl);
         }
-        header.appendChild(actions);
-        if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(header);
     }
 
     function createTile(tabId) {
         const section = doc().createElement('section');
         section.className = 'prks-tile';
         section.setAttribute('data-prks-tab-id', tabId);
+        section.setAttribute('tabindex', '-1');
 
         const header = doc().createElement('header');
         header.className = 'prks-tile-header';
@@ -266,6 +284,9 @@
     function onPointerDownCapture(ev) {
         const tabId = tabIdFromEvent(ev);
         if (!tabId) return;
+        if (ev.target && ev.target.closest && ev.target.closest('.prks-tile-header__make-main, .prks-tile-header__hide')) {
+            return;
+        }
         if (typeof root.prksWorkspaceFocusTab === 'function') {
             root.prksWorkspaceFocusTab(tabId);
         }

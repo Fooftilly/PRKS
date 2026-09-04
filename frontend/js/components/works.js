@@ -1046,6 +1046,8 @@ function initEasyMDE(ctx, work) {
             wikiTitleMap: titleLowerToId,
         },
         pendingSave: null,
+        drafting: false,
+        saveError: false,
         destroy: function () {
             try {
                 const cm = easyMDE.codemirror;
@@ -1089,6 +1091,13 @@ function initEasyMDE(ctx, work) {
     const notesChangeHandler = () => {
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
+        if (workNotes) {
+            workNotes.drafting = true;
+            workNotes.saveError = false;
+        }
+        if (ctx && ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+            window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+        }
         if (ctx && typeof ctx.clearTimer === 'function') ctx.clearTimer('saveNotesTimeout');
         const workId = work.id;
         const _tid = setTimeout(function () {
@@ -1112,6 +1121,14 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         content = editor.value();
     }
     const statusEl = owner && owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
+    if (notes) {
+        notes.drafting = false;
+        notes.pendingSave = true;
+        notes.saveError = false;
+    }
+    if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+        window.prksWorkspaceRefreshTabStatus(owner.tabId);
+    }
     void prksRequest(
         '/api/works/' + encodeURIComponent(id),
         {
@@ -1124,6 +1141,13 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         }
     )
         .then(function (res) {
+            if (notes) {
+                notes.pendingSave = false;
+                notes.saveError = !res.ok;
+            }
+            if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+                window.prksWorkspaceRefreshTabStatus(owner.tabId);
+            }
             if (statusEl) statusEl.innerText = res.ok ? 'All changes saved' : 'Error saving changes';
             if (res.ok && typeof fetchWorkDetails === 'function') {
                 return fetchWorkDetails(id).then(function (latest) {
@@ -1136,6 +1160,13 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
             return undefined;
         })
         .catch(function () {
+            if (notes) {
+                notes.pendingSave = false;
+                notes.saveError = true;
+            }
+            if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+                window.prksWorkspaceRefreshTabStatus(owner.tabId);
+            }
             if (statusEl) statusEl.innerText = 'Error saving changes';
         });
 }
@@ -1160,8 +1191,12 @@ function prksDestroyWorkNotesEditor(ctx) {
 
 window.prksDestroyWorkNotesEditor = prksDestroyWorkNotesEditor;
 
-function prksWorkNotesMobileSideActive() {
-    return document.documentElement.classList.contains('prks-work-notes-mobile-side');
+function prksWorkNotesMobileSideActive(ctx) {
+    const ws =
+        ctx && typeof ctx.query === 'function'
+            ? ctx.query('.work-workspace[data-work-id]')
+            : document.querySelector('.prks-tab-root .work-workspace[data-work-id], .work-workspace[data-work-id]');
+    return !!(ws && ws.classList.contains('work-workspace--side'));
 }
 
 function prksWorkNotesEditor(ctx) {
@@ -1176,8 +1211,12 @@ function prksReapplyWorkNotesSplitLayout(ctx) {
     if (!workId) return;
     const handle = ws.querySelector('.work-split-handle');
     if (!handle) return;
+    const enabled =
+        typeof prksGetMobileWorkNotesRightEnabled === 'function' && prksGetMobileWorkNotesRightEnabled();
+    const wantSide = !!(enabled && ws.clientWidth > 0 && ws.clientWidth < 720);
+    ws.classList.toggle('work-workspace--side', wantSide);
 
-    if (prksWorkNotesMobileSideActive()) {
+    if (prksWorkNotesMobileSideActive(ctx)) {
         const storageKeyW = 'prks.workNotesSideWidth.' + workId;
         const savedW = localStorage.getItem(storageKeyW);
         let initialW = 280;
@@ -1199,10 +1238,10 @@ function prksReapplyWorkNotesSplitLayout(ctx) {
         ws.style.setProperty('--work-notes-height', clampH + 'px');
     }
 
-    handle.setAttribute('aria-orientation', prksWorkNotesMobileSideActive() ? 'vertical' : 'horizontal');
+    handle.setAttribute('aria-orientation', prksWorkNotesMobileSideActive(ctx) ? 'vertical' : 'horizontal');
     handle.setAttribute(
         'aria-label',
-        prksWorkNotesMobileSideActive()
+        prksWorkNotesMobileSideActive(ctx)
             ? 'Drag to resize research notes panel width'
             : 'Drag to resize research notes panel height'
     );
@@ -1257,15 +1296,15 @@ function setupWorkNotesSplitResize(ctx, workId) {
         if (!Number.isNaN(n) && n >= 160 && n <= 600) initialW = n;
     }
 
-    if (prksWorkNotesMobileSideActive()) {
+    if (prksWorkNotesMobileSideActive(ctx)) {
         ws.style.setProperty('--work-notes-width', prksClampWorkNotesSideWidth(ws, handle, initialW) + 'px');
     } else {
         ws.style.setProperty('--work-notes-height', prksClampWorkNotesHeight(ws, handle, initialH) + 'px');
     }
-    handle.setAttribute('aria-orientation', prksWorkNotesMobileSideActive() ? 'vertical' : 'horizontal');
+    handle.setAttribute('aria-orientation', prksWorkNotesMobileSideActive(ctx) ? 'vertical' : 'horizontal');
     handle.setAttribute(
         'aria-label',
-        prksWorkNotesMobileSideActive()
+        prksWorkNotesMobileSideActive(ctx)
             ? 'Drag to resize research notes panel width'
             : 'Drag to resize research notes panel height'
     );
@@ -1281,7 +1320,7 @@ function setupWorkNotesSplitResize(ctx, workId) {
         if (e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
-        const side = document.documentElement.classList.contains('prks-work-notes-mobile-side');
+        const side = ws.classList.contains('work-workspace--side');
         if (side) {
             let dragging = true;
             const startX = e.clientX;
@@ -1368,7 +1407,7 @@ function setupWorkNotesSplitResize(ctx, workId) {
 
     handle.addEventListener('keydown', (e) => {
         const step = e.shiftKey ? 24 : 10;
-        const side = document.documentElement.classList.contains('prks-work-notes-mobile-side');
+        const side = ws.classList.contains('work-workspace--side');
         if (side) {
             const raw = ws.style.getPropertyValue('--work-notes-width').trim();
             const cur = parseInt(raw, 10) || initialW;
@@ -1425,11 +1464,11 @@ function setupWorkNotesSplitResize(ctx, workId) {
         const activeNotesPane = ws.querySelector('.work-notes-pane');
         if (!activeNotesPane) return;
         const nRect = activeNotesPane.getBoundingClientRect();
-        const isOutOfViewport = nRect.bottom > window.innerHeight || nRect.top < 0;
+        const host = ws.closest('.prks-tile__body') || ws;
+        const hostRect = host.getBoundingClientRect();
+        const isOutOfViewport = nRect.bottom > hostRect.bottom + 1 || nRect.top < hostRect.top - 1;
         const collapsed = ws.classList.contains('work-workspace--notes-collapsed');
-        const isSmall =
-            typeof prksIsSmallScreen === 'function' &&
-            prksIsSmallScreen();
+        const isSmall = ws.clientWidth > 0 && ws.clientWidth < 720;
         if (collapsed && isOutOfViewport && isSmall) {
             ws.classList.remove('work-workspace--notes-collapsed');
             try {
@@ -1438,6 +1477,28 @@ function setupWorkNotesSplitResize(ctx, workId) {
             requestAnimationFrame(() => refreshNotesEditor());
         }
     });
+
+    if (ctx && typeof ctx.setResource === 'function' && typeof ResizeObserver !== 'undefined') {
+        if (!ctx.getResource('workNotesSideRo')) {
+            let ticking = false;
+            const ro = new ResizeObserver(function () {
+                if (ticking) return;
+                ticking = true;
+                requestAnimationFrame(function () {
+                    ticking = false;
+                    if (typeof prksReapplyWorkNotesSplitLayout === 'function') {
+                        prksReapplyWorkNotesSplitLayout(ctx);
+                    }
+                });
+            });
+            ro.observe(ws);
+            ctx.setResource('workNotesSideRo', ro, function () {
+                try {
+                    ro.disconnect();
+                } catch (_e) {}
+            });
+        }
+    }
 }
 
 function setupWorkNotesCollapseToggle(ctx, workId) {
@@ -1450,7 +1511,7 @@ function setupWorkNotesCollapseToggle(ctx, workId) {
     function syncToggleUi() {
         const collapsed = ws.classList.contains('work-workspace--notes-collapsed');
         btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        const side = typeof prksWorkNotesMobileSideActive === 'function' && prksWorkNotesMobileSideActive();
+        const side = typeof prksWorkNotesMobileSideActive === 'function' && prksWorkNotesMobileSideActive(ctx);
         if (side) {
             btn.setAttribute(
                 'aria-label',

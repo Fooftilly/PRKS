@@ -175,6 +175,12 @@ User-facing copy says "Split view" / "Open in split view". Internal APIs stay `t
 
 Existing parked tabs should be tiled through `prksWorkspaceTileTab(tabId)`, not duplicated through `navigate(... { target: "tile" })`.
 
+Close: parked closes only that tab. Secondary close stacks and leaves Main. Main close with a visible Secondary promotes that Secondary. Otherwise pick the right neighbor, then left, then Home. Do not flash Home. Keep leave guards. Batch close (other tabs / tabs to the right) preflights every mounted tab being closed and aborts entirely on reject.
+
+Focusing a tile must not promote Main, change the URL, remount, or reset PDF/editor. After close, hide split, replace Secondary, Make main, or narrow fallback, restore focus to the resulting focused tile or its workspace tab control.
+
+User-facing menu copy is Split view / Make main / Hide split. Do not expose `tileTab`, `secondaryTree`, or `mainTabId`.
+
 Parked tabs must perform no API requests and own no live DOM/resources.
 
 Stacked mode mounts one TabContext (Main). Tiled v1 mounts at most two: Main and one Secondary. Do not introduce a third mounted context until recursive tiling is implemented.

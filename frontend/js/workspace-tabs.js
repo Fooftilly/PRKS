@@ -534,13 +534,13 @@
             if (!tab) return false;
             if (tab.id === state.mainTabId) {
                 state.focusedTabId = tab.id;
-                paint();
+                paintAndRestore(tab.id);
                 refreshFocusedPanel();
                 return true;
             }
             if (!swapVisibleRoles(tab.id)) return false;
             commitUrl(tab, 'replace');
-            paint();
+            paintAndRestore(tab.id);
             publishShell(tab.id);
             refreshFocusedPanel();
             return true;
@@ -561,12 +561,12 @@
             state.mode = MODE_TILED;
             if (narrowFallback) {
                 state.focusedTabId = state.mainTabId;
-                paint();
+                paintAndRestore(state.mainTabId);
                 announce('', 'narrow');
                 return Promise.resolve(copyTab(tab));
             }
             state.focusedTabId = tab.id;
-            paint();
+            paintAndRestore(tab.id);
             mountContext(tab.id);
             announce(tab.title, 'split');
             return Promise.resolve(
@@ -590,12 +590,12 @@
                 state.mode = MODE_TILED;
                 if (narrowFallback) {
                     state.focusedTabId = state.mainTabId;
-                    paint();
+                    paintAndRestore(state.mainTabId);
                     announce('', 'narrow');
                     return Promise.resolve(copyTab(tab));
                 }
                 state.focusedTabId = tab.id;
-                paint();
+                paintAndRestore(tab.id);
                 if (!contextMounted(tab.id)) {
                     mountContext(tab.id);
                     return Promise.resolve(
@@ -761,7 +761,7 @@
                         state.mode = MODE_STACKED;
                         state.focusedTabId = state.mainTabId;
                     }
-                    paint();
+                    paintAndRestore(state.focusedTabId);
                     return true;
                 });
             }
@@ -787,7 +787,7 @@
                     paint();
                     mountContext(home.id);
                     commitUrl(home, 'replace');
-                    paint();
+                    paintAndRestore(home.id);
                     return Promise.resolve(
                         invokeRender({ workspaceSwitch: true, tabId: home.id, hash: home.route })
                     ).then(function () {
@@ -797,7 +797,7 @@
                 setMain(successor.id);
                 if (!wasMountedSuccessor) mountContext(successor.id);
                 commitUrl(successor, 'replace');
-                paint();
+                paintAndRestore(successor.id);
                 if (wasMountedSuccessor) {
                     publishShell(successor.id);
                     refreshFocusedPanel();
@@ -809,6 +809,95 @@
                     return true;
                 });
             });
+        }
+
+        function paintAndRestore(tabId) {
+            paint();
+            if (typeof root.prksWorkspaceRestoreFocus === 'function') {
+                root.prksWorkspaceRestoreFocus(tabId || state.focusedTabId);
+            }
+        }
+
+        function closeTabIds(ids, keepId) {
+            const keep = getTab(keepId);
+            if (!keep) return Promise.resolve(false);
+            const unique = [];
+            const seen = Object.create(null);
+            for (let i = 0; i < ids.length; i++) {
+                const id = ids[i];
+                if (!id || id === keepId || seen[id] || !getTab(id)) continue;
+                seen[id] = true;
+                unique.push(id);
+            }
+            if (!unique.length) return Promise.resolve(true);
+
+            function preflight(i) {
+                if (i >= unique.length) return Promise.resolve(true);
+                const id = unique[i];
+                const p = contextMounted(id) ? awaitLeave(id, keep.route) : Promise.resolve(true);
+                return p.then(function (ok) {
+                    if (!ok) return false;
+                    return preflight(i + 1);
+                });
+            }
+
+            return preflight(0).then(function (ok) {
+                if (!ok) return false;
+                if (!getTab(keepId)) return false;
+                const closingMain = unique.indexOf(state.mainTabId) >= 0;
+                const secNow = secondaryTabId() || (state.secondaryTree && state.secondaryTree.tabId);
+                const closingSec = !!(secNow && unique.indexOf(secNow) >= 0);
+                const keepWasMounted = contextMounted(keepId);
+                const keepWasSec = secNow === keepId;
+                for (let i = 0; i < unique.length; i++) {
+                    destroyContext(unique[i]);
+                    const idx = tabIndex(unique[i]);
+                    if (idx >= 0) state.tabs.splice(idx, 1);
+                }
+                if (closingSec) {
+                    state.secondaryTree = null;
+                    state.mode = MODE_STACKED;
+                }
+                if (closingMain) {
+                    setMain(keepId);
+                    if (!keepWasMounted) mountContext(keepId);
+                    commitUrl(keep, 'replace');
+                    paintAndRestore(keepId);
+                    if (keepWasMounted && (keepWasSec || keepId === state.mainTabId)) {
+                        publishShell(keepId);
+                        refreshFocusedPanel();
+                        return true;
+                    }
+                    return Promise.resolve(
+                        invokeRender({ workspaceSwitch: true, tabId: keep.id, hash: keep.route })
+                    ).then(function () {
+                        return true;
+                    });
+                }
+                if (!visualTiled() || !isVisibleTab(state.focusedTabId)) {
+                    state.focusedTabId = state.mainTabId;
+                }
+                paintAndRestore(state.focusedTabId);
+                refreshFocusedPanel();
+                return true;
+            });
+        }
+
+        function closeOtherTabs(tabId) {
+            if (!getTab(tabId)) return Promise.resolve(false);
+            const ids = [];
+            for (let i = 0; i < state.tabs.length; i++) {
+                if (state.tabs[i].id !== tabId) ids.push(state.tabs[i].id);
+            }
+            return closeTabIds(ids, tabId);
+        }
+
+        function closeTabsToTheRight(tabId) {
+            const idx = tabIndex(tabId);
+            if (idx < 0) return Promise.resolve(false);
+            const ids = [];
+            for (let i = idx + 1; i < state.tabs.length; i++) ids.push(state.tabs[i].id);
+            return closeTabIds(ids, tabId);
         }
 
         function setMode(mode) {
@@ -844,7 +933,7 @@
                 if (sec) parkContext(sec);
                 state.mode = MODE_STACKED;
                 state.focusedTabId = state.mainTabId;
-                paint();
+                paintAndRestore(state.mainTabId);
                 refreshFocusedPanel();
                 return true;
             });
@@ -863,14 +952,14 @@
                         if (contextMounted(leavingId)) parkContext(leavingId);
                         narrowFallback = true;
                         state.focusedTabId = state.mainTabId;
-                        paint();
+                        paintAndRestore(state.mainTabId);
                         refreshFocusedPanel();
                         return true;
                     });
                 }
                 narrowFallback = true;
                 state.focusedTabId = state.mainTabId;
-                paint();
+                paintAndRestore(state.mainTabId);
                 refreshFocusedPanel();
                 return Promise.resolve(true);
             }
@@ -1078,6 +1167,8 @@
             openTab: openTab,
             activateTab: activateTab,
             closeTab: closeTab,
+            closeOtherTabs: closeOtherTabs,
+            closeTabsToTheRight: closeTabsToTheRight,
             focusTab: focusTab,
             makeMain: makeMain,
             tileTab: tileTab,
@@ -1206,102 +1297,288 @@
         el.textContent = 'Opened ' + label + ' in a new PRKS tab';
     }
 
-    function paintProduction() {
-        if (typeof document === 'undefined' || !production) return;
+    function tabStatusKind(tabId) {
+        if (!tabId || typeof root.prksGetTabContext !== 'function') return '';
+        const ctx = root.prksGetTabContext(tabId);
+        if (!ctx || !ctx.mounted) return '';
+        const notes = ctx.getResource ? ctx.getResource('workNotes') : null;
+        if (notes && notes.saveError) return 'error';
+        if (notes && notes.pendingSave) return 'saving';
+        if (notes && notes.drafting) return 'drafting';
+        if (typeof root.prksHasPendingWorkAnnotationSync === 'function' && root.prksHasPendingWorkAnnotationSync(ctx)) {
+            return 'saving';
+        }
+        const pdf = ctx.getResource ? ctx.getResource('pdf') : null;
+        if (pdf && pdf.syncState && pdf.syncState.lastError) return 'error';
+        return '';
+    }
+
+    function statusLabel(kind) {
+        if (kind === 'error') return 'Save error';
+        if (kind === 'saving') return 'Saving';
+        if (kind === 'drafting') return 'Drafting';
+        return '';
+    }
+
+    function applyTabStatus(wrap, tabId) {
+        if (!wrap) return;
+        let el = wrap.querySelector(':scope > .prks-workspace-tab__status');
+        const kind = tabStatusKind(tabId);
+        const activate = wrap.querySelector('.prks-workspace-tab__activate');
+        if (!kind) {
+            if (el) el.hidden = true;
+            if (activate) activate.removeAttribute('aria-busy');
+            return;
+        }
+        if (!el) {
+            el = document.createElement('span');
+            el.className = 'prks-workspace-tab__status';
+            const close = wrap.querySelector('.prks-workspace-tab__close');
+            wrap.insertBefore(el, close || null);
+        }
+        el.hidden = false;
+        el.className = 'prks-workspace-tab__status prks-workspace-tab__status--' + kind;
+        const label = statusLabel(kind);
+        el.title = label;
+        el.setAttribute('aria-label', label);
+        if (activate) {
+            if (kind === 'saving') activate.setAttribute('aria-busy', 'true');
+            else activate.removeAttribute('aria-busy');
+        }
+    }
+
+    function prksWorkspaceRefreshTabStatus(tabId) {
+        if (typeof document === 'undefined' || !tabId) return;
         const list = document.getElementById('prks-workspace-tabs');
         if (!list) return;
-        const snap = production.snapshot();
-        const secId =
-            snap.secondaryTree && snap.secondaryTree.type === 'leaf' ? snap.secondaryTree.tabId : null;
-        const visualTiled = typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
-        list.replaceChildren();
-        snap.tabs.forEach(function (tab, i) {
-            const isMain = tab.id === snap.mainTabId;
-            const isTiled = visualTiled && tab.id === secId && !isMain;
-            const isFocused = tab.id === snap.focusedTabId;
-            const isParked = !isMain && !isTiled;
-            const wrap = document.createElement('div');
-            wrap.className =
-                'prks-workspace-tab' +
-                (isMain ? ' is-main' : '') +
-                (isTiled ? ' is-tiled' : '') +
-                (isFocused ? ' is-focused' : '') +
-                (isParked ? ' is-parked' : '');
-            wrap.setAttribute('data-tab-id', tab.id);
+        const wrap = list.querySelector('.prks-workspace-tab[data-tab-id="' + String(tabId).replace(/"/g, '') + '"]');
+        if (wrap) applyTabStatus(wrap, tabId);
+    }
 
-            const activate = document.createElement('button');
-            activate.type = 'button';
-            activate.className = 'prks-workspace-tab__activate';
-            activate.setAttribute('role', 'tab');
-            activate.setAttribute('aria-selected', isMain ? 'true' : 'false');
-            activate.tabIndex = isMain ? 0 : -1;
-            activate.title = tab.title;
+    function revealWorkspaceTab(tabId) {
+        if (typeof document === 'undefined' || !tabId) return;
+        const list = document.getElementById('prks-workspace-tabs');
+        if (!list) return;
+        const wrap = list.querySelector('.prks-workspace-tab[data-tab-id="' + String(tabId).replace(/"/g, '') + '"]');
+        if (!wrap) return;
+        const lr = list.getBoundingClientRect();
+        const wr = wrap.getBoundingClientRect();
+        if (wr.left < lr.left) list.scrollLeft += wr.left - lr.left - 8;
+        else if (wr.right > lr.right) list.scrollLeft += wr.right - lr.right + 8;
+    }
 
-            const icon = document.createElement('span');
-            icon.className = 'prks-workspace-tab__icon';
-            icon.setAttribute('aria-hidden', 'true');
-            icon.innerHTML = iconHtml(tab.icon);
+    function updateTabOverflow() {
+        if (typeof document === 'undefined') return;
+        const list = document.getElementById('prks-workspace-tabs');
+        const btn = document.getElementById('prks-workspace-tab-overflow');
+        if (!list || !btn) return;
+        const overflow = list.scrollWidth > list.clientWidth + 2;
+        btn.hidden = !overflow;
+        if (!overflow) btn.setAttribute('aria-expanded', 'false');
+    }
 
-            const title = document.createElement('span');
-            title.className = 'prks-workspace-tab__title';
-            title.textContent = tab.title;
-
-            activate.appendChild(icon);
-            activate.appendChild(title);
-            activate.addEventListener('click', function () {
-                void production.activateTab(tab.id);
+    function bindTabStripChrome() {
+        if (typeof document === 'undefined') return;
+        const list = document.getElementById('prks-workspace-tabs');
+        if (!list || list.getAttribute('data-workspace-overflow-bound') === '1') return;
+        list.setAttribute('data-workspace-overflow-bound', '1');
+        list.addEventListener(
+            'wheel',
+            function (e) {
+                if (list.scrollWidth <= list.clientWidth) return;
+                if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+                list.scrollLeft += e.deltaY;
+                e.preventDefault();
+            },
+            { passive: false }
+        );
+        list.addEventListener('scroll', updateTabOverflow);
+        if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(function () {
+                updateTabOverflow();
             });
-            activate.addEventListener('keydown', onTabKeydown);
+            ro.observe(list);
+        }
+    }
 
-            wrap.appendChild(activate);
+    function tabRoleFlags(tab, snap, visualTiled, secId) {
+        const isMain = tab.id === snap.mainTabId;
+        const isTiled = visualTiled && tab.id === secId && !isMain;
+        const isFocused = tab.id === snap.focusedTabId;
+        return {
+            isMain: isMain,
+            isTiled: isTiled,
+            isFocused: isFocused,
+            isParked: !isMain && !isTiled,
+        };
+    }
 
-            if (isTiled) {
+    function syncTabTrailing(wrap, tab, flags) {
+        const existingSplit = wrap.querySelector(':scope > .prks-workspace-tab__split');
+        const existingMark = wrap.querySelector(':scope > .prks-workspace-tab__split-mark');
+        const close = wrap.querySelector(':scope > .prks-workspace-tab__close');
+        const wantMark = flags.isTiled;
+        const wantSplit =
+            flags.isParked &&
+            typeof root.prksRouteSupportsTile === 'function' &&
+            root.prksRouteSupportsTile(tab.route);
+        if (wantMark) {
+            if (existingSplit) existingSplit.remove();
+            if (!existingMark) {
                 const mark = document.createElement('span');
                 mark.className = 'prks-workspace-tab__split-mark';
                 mark.setAttribute('aria-hidden', 'true');
                 mark.innerHTML = iconHtml('columns-2');
-                wrap.appendChild(mark);
-            } else if (
-                isParked &&
-                typeof root.prksRouteSupportsTile === 'function' &&
-                root.prksRouteSupportsTile(tab.route)
-            ) {
-                const split = document.createElement('button');
+                wrap.insertBefore(mark, close || null);
+            }
+        } else if (existingMark) {
+            existingMark.remove();
+        }
+        if (wantSplit) {
+            let split = existingSplit;
+            if (!split) {
+                split = document.createElement('button');
                 split.type = 'button';
                 split.className = 'prks-workspace-tab__split';
-                split.setAttribute('aria-label', 'Open ' + tab.title + ' in split view');
-                split.title = 'Open in split view';
+                split.tabIndex = -1;
                 split.innerHTML = iconHtml('columns-2');
                 split.addEventListener('click', function (e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    void production.tileTab(tab.id);
+                    const id = wrap.getAttribute('data-tab-id');
+                    if (id && production) void production.tileTab(id);
                 });
-                wrap.appendChild(split);
+                wrap.insertBefore(split, close || null);
             }
-
-            const close = document.createElement('button');
-            close.type = 'button';
-            close.className = 'prks-workspace-tab__close';
+            split.setAttribute('aria-label', 'Open ' + tab.title + ' in split view');
+            split.title = 'Open in split view';
+        } else if (existingSplit) {
+            existingSplit.remove();
+        }
+        if (close) {
             close.setAttribute('aria-label', 'Close ' + tab.title);
-            close.title = 'Close';
-            close.innerHTML = iconHtml('x');
-            close.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                void production.closeTab(tab.id);
-            });
+        }
+    }
 
-            wrap.appendChild(close);
-            list.appendChild(wrap);
-            if (isMain) tabFocusIndex = i;
+    function createTabWrap(tab, flags, index) {
+        const wrap = document.createElement('div');
+        wrap.setAttribute('data-tab-id', tab.id);
+
+        const activate = document.createElement('button');
+        activate.type = 'button';
+        activate.className = 'prks-workspace-tab__activate';
+        activate.setAttribute('role', 'tab');
+        activate.addEventListener('click', function () {
+            const id = wrap.getAttribute('data-tab-id');
+            if (id && production) void production.activateTab(id);
+        });
+        activate.addEventListener('keydown', onTabKeydown);
+        activate.addEventListener('contextmenu', function (e) {
+            if (typeof root.prksWorkspaceOpenTabMenu === 'function') {
+                e.preventDefault();
+                root.prksWorkspaceOpenTabMenu(wrap.getAttribute('data-tab-id'), e);
+            }
+        });
+
+        const icon = document.createElement('span');
+        icon.className = 'prks-workspace-tab__icon';
+        icon.setAttribute('aria-hidden', 'true');
+
+        const title = document.createElement('span');
+        title.className = 'prks-workspace-tab__title';
+
+        activate.appendChild(icon);
+        activate.appendChild(title);
+        wrap.appendChild(activate);
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'prks-workspace-tab__close';
+        close.tabIndex = -1;
+        close.title = 'Close';
+        close.innerHTML = iconHtml('x');
+        close.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = wrap.getAttribute('data-tab-id');
+            if (id && production) void production.closeTab(id);
+        });
+        wrap.appendChild(close);
+        wrap.addEventListener('contextmenu', function (e) {
+            if (e.target && e.target.closest && e.target.closest('.prks-workspace-tab__close, .prks-workspace-tab__split')) {
+                return;
+            }
+            if (typeof root.prksWorkspaceOpenTabMenu === 'function') {
+                e.preventDefault();
+                root.prksWorkspaceOpenTabMenu(wrap.getAttribute('data-tab-id'), e);
+            }
+        });
+        applyTabWrap(wrap, tab, flags, index);
+        return wrap;
+    }
+
+    function applyTabWrap(wrap, tab, flags, index) {
+        wrap.className =
+            'prks-workspace-tab' +
+            (flags.isMain ? ' is-main' : '') +
+            (flags.isTiled ? ' is-tiled' : '') +
+            (flags.isFocused ? ' is-focused' : '') +
+            (flags.isParked ? ' is-parked' : '');
+        const activate = wrap.querySelector('.prks-workspace-tab__activate');
+        if (activate) {
+            activate.setAttribute('aria-selected', flags.isMain ? 'true' : 'false');
+            activate.tabIndex = flags.isMain ? 0 : -1;
+            activate.title = tab.title;
+            const title = activate.querySelector('.prks-workspace-tab__title');
+            if (title) title.textContent = tab.title;
+            const icon = activate.querySelector('.prks-workspace-tab__icon');
+            if (icon && icon.getAttribute('data-icon') !== tab.icon) {
+                icon.setAttribute('data-icon', tab.icon || '');
+                icon.innerHTML = iconHtml(tab.icon);
+            }
+        }
+        syncTabTrailing(wrap, tab, flags);
+        applyTabStatus(wrap, tab.id);
+        if (flags.isMain) tabFocusIndex = index;
+    }
+
+    function paintProduction() {
+        if (typeof document === 'undefined' || !production) return;
+        const list = document.getElementById('prks-workspace-tabs');
+        if (!list) return;
+        bindTabStripChrome();
+        const snap = production.snapshot();
+        const secId =
+            snap.secondaryTree && snap.secondaryTree.type === 'leaf' ? snap.secondaryTree.tabId : null;
+        const visualTiled = typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
+        const byId = Object.create(null);
+        const kids = Array.prototype.slice.call(list.children);
+        for (let i = 0; i < kids.length; i++) {
+            const id = kids[i].getAttribute('data-tab-id');
+            if (id) byId[id] = kids[i];
+        }
+        const nextIds = {};
+        snap.tabs.forEach(function (tab, i) {
+            nextIds[tab.id] = true;
+            const flags = tabRoleFlags(tab, snap, visualTiled, secId);
+            let wrap = byId[tab.id];
+            if (!wrap) wrap = createTabWrap(tab, flags, i);
+            else applyTabWrap(wrap, tab, flags, i);
+            if (list.children[i] !== wrap) {
+                list.insertBefore(wrap, list.children[i] || null);
+            }
+        });
+        kids.forEach(function (el) {
+            const id = el.getAttribute('data-tab-id');
+            if (!id || !nextIds[id]) el.remove();
         });
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(list);
         paintSplitControl();
-        const mainBtn = list.querySelector('.prks-workspace-tab.is-main .prks-workspace-tab__activate');
-        if (mainBtn && typeof mainBtn.scrollIntoView === 'function') {
-            mainBtn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        revealWorkspaceTab(snap.mainTabId);
+        if (visualTiled && snap.focusedTabId && snap.focusedTabId !== snap.mainTabId) {
+            revealWorkspaceTab(snap.focusedTabId);
         }
+        updateTabOverflow();
         if (typeof root.prksWorkspaceSyncTiles === 'function') {
             root.prksWorkspaceSyncTiles(snap, { visualMode: visualTiled ? MODE_TILED : MODE_STACKED });
         }
@@ -1325,8 +1602,9 @@
             btn.tabIndex = n === i ? 0 : -1;
         });
         buttons[i].focus();
-        if (scroll && typeof buttons[i].scrollIntoView === 'function') {
-            buttons[i].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        if (scroll) {
+            const wrap = buttons[i].closest('[data-tab-id]');
+            if (wrap) revealWorkspaceTab(wrap.getAttribute('data-tab-id'));
         }
     }
 
@@ -1352,7 +1630,51 @@
             const wrap = e.currentTarget.closest('[data-tab-id]');
             const id = wrap && wrap.getAttribute('data-tab-id');
             if (id && production) void production.activateTab(id);
+            return;
         }
+        if (key === 'ContextMenu' || (key === 'F10' && e.shiftKey)) {
+            e.preventDefault();
+            const wrap = e.currentTarget.closest('[data-tab-id]');
+            const id = wrap && wrap.getAttribute('data-tab-id');
+            if (id && typeof root.prksWorkspaceOpenTabMenu === 'function') {
+                root.prksWorkspaceOpenTabMenu(id, e);
+            }
+        }
+    }
+
+    function prksWorkspaceRestoreFocus(tabId) {
+        if (typeof document === 'undefined' || !tabId) return;
+        const d = document;
+        const active = d.activeElement;
+        if (active && active !== d.body && d.contains(active)) {
+            if (active.closest && active.closest('.prks-tile[data-prks-tab-id]')) return;
+            if (active.closest && active.closest('#prks-command-palette')) return;
+            if (active.closest && active.closest('.prks-workspace-menu')) return;
+            const tabWrap = active.closest && active.closest('.prks-workspace-tab[data-tab-id]');
+            if (tabWrap && tabWrap.getAttribute('data-tab-id') === tabId) return;
+        }
+        const run = function () {
+            const tile = d.querySelector(
+                '.prks-tile[data-prks-tab-id="' + String(tabId).replace(/"/g, '') + '"]'
+            );
+            if (tile && typeof tile.focus === 'function') {
+                tile.setAttribute('tabindex', '-1');
+                tile.focus({ preventScroll: true });
+                revealWorkspaceTab(tabId);
+                return;
+            }
+            const btn = d.querySelector(
+                '.prks-workspace-tab[data-tab-id="' +
+                    String(tabId).replace(/"/g, '') +
+                    '"] .prks-workspace-tab__activate'
+            );
+            if (btn && typeof btn.focus === 'function') {
+                btn.focus({ preventScroll: true });
+                revealWorkspaceTab(tabId);
+            }
+        };
+        if (typeof root.requestAnimationFrame === 'function') root.requestAnimationFrame(run);
+        else run();
     }
 
     function internalHashFromAnchor(a) {
@@ -1590,6 +1912,7 @@
         bindNewTabButton();
         bindTileLayoutButton();
         paintProduction();
+        if (typeof root.prksWorkspaceInitTabMenus === 'function') root.prksWorkspaceInitTabMenus();
         root.__prksWorkspaceReady = true;
         return ws.snapshot();
     }
@@ -1620,6 +1943,16 @@
     function prksWorkspaceCloseTab(tabId) {
         if (!production) return Promise.resolve(false);
         return production.closeTab(tabId);
+    }
+
+    function prksWorkspaceCloseOtherTabs(tabId) {
+        if (!production || typeof production.closeOtherTabs !== 'function') return Promise.resolve(false);
+        return production.closeOtherTabs(tabId);
+    }
+
+    function prksWorkspaceCloseTabsToTheRight(tabId) {
+        if (!production || typeof production.closeTabsToTheRight !== 'function') return Promise.resolve(false);
+        return production.closeTabsToTheRight(tabId);
     }
 
     function prksWorkspaceFocusTab(tabId) {
@@ -1707,6 +2040,10 @@
         prksWorkspaceOpenTab: prksWorkspaceOpenTab,
         prksWorkspaceActivateTab: prksWorkspaceActivateTab,
         prksWorkspaceCloseTab: prksWorkspaceCloseTab,
+        prksWorkspaceCloseOtherTabs: prksWorkspaceCloseOtherTabs,
+        prksWorkspaceCloseTabsToTheRight: prksWorkspaceCloseTabsToTheRight,
+        prksWorkspaceRestoreFocus: prksWorkspaceRestoreFocus,
+        prksWorkspaceRefreshTabStatus: prksWorkspaceRefreshTabStatus,
         prksWorkspaceFocusTab: prksWorkspaceFocusTab,
         prksWorkspaceMakeMain: prksWorkspaceMakeMain,
         prksWorkspaceTileTab: prksWorkspaceTileTab,

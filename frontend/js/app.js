@@ -343,13 +343,16 @@ function prksSyncWorkNotesMobileSideClass() {
         window.prksSyncViewportHeightVar();
     }
     const mobileWorkNotesRightEnabled = prksGetMobileWorkNotesRightEnabled();
-    const isSmall =
-        typeof prksIsSmallScreen === 'function' &&
-        prksIsSmallScreen();
-    const want = mobileWorkNotesRightEnabled && isSmall;
-    document.documentElement.classList.toggle('prks-work-notes-mobile-side', want);
+    function applyToWorkspace(ws) {
+        if (!ws) return;
+        const narrow = ws.clientWidth > 0 && ws.clientWidth < 720;
+        const want = mobileWorkNotesRightEnabled && narrow;
+        ws.classList.toggle('work-workspace--side', want);
+    }
     if (typeof prksForEachMountedTabContext === 'function') {
         prksForEachMountedTabContext(function (c) {
+            const ws = c && typeof c.query === 'function' ? c.query('.work-workspace[data-work-id]') : null;
+            applyToWorkspace(ws);
             if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
                 window.prksReapplyWorkNotesSplitLayout(c);
             }
@@ -1305,6 +1308,7 @@ function prksRenderRouteLoading(contentDiv, hash) {
 
 function prksPlayPageEnterAnimation(contentDiv) {
     if (!contentDiv) return;
+    if (contentDiv.closest && contentDiv.closest('.prks-workspace-canvas--tiled')) return;
     if (
         typeof window.matchMedia === 'function' &&
         window.matchMedia('(prefers-reduced-motion: reduce)').matches

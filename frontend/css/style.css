@@ -644,7 +644,9 @@ body {
 .prks-workspace-tabs-shell {
     display: flex;
     align-items: stretch;
+    height: var(--control-height-lg);
     min-height: var(--control-height-lg);
+    max-height: var(--control-height-lg);
     margin: 0 calc(-1 * var(--space-md)) var(--space-md);
     border-bottom: 1px solid var(--border);
     background: var(--surface);
@@ -660,12 +662,17 @@ body {
     overflow-x: auto;
     overflow-y: hidden;
     flex-wrap: nowrap;
+    height: var(--control-height-lg);
     min-height: var(--control-height-lg);
+    max-height: var(--control-height-lg);
     background: var(--surface);
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
 }
 
 .prks-workspace-tabs-shell #prks-workspace-new-tab,
-.prks-workspace-tabs-shell #prks-workspace-tile-layout {
+.prks-workspace-tabs-shell #prks-workspace-tile-layout,
+.prks-workspace-tabs-shell #prks-workspace-tab-overflow {
     flex: 0 0 auto;
     align-self: center;
     margin: 0 var(--space-xs);
@@ -677,6 +684,14 @@ body {
     min-width: var(--control-height-md);
     gap: var(--space-xs);
     padding: 0 var(--space-sm);
+}
+
+.prks-workspace-tabs-shell #prks-workspace-tab-overflow {
+    margin-left: 0;
+}
+
+.prks-workspace-tabs-shell #prks-workspace-tab-overflow[hidden] {
+    display: none !important;
 }
 
 .prks-workspace-split-btn.is-active,
@@ -695,9 +710,12 @@ body {
     display: inline-flex;
     align-items: stretch;
     flex: 0 0 auto;
+    width: auto;
     max-width: 14rem;
-    min-width: 0;
+    min-width: 7.5rem;
+    height: var(--control-height-lg);
     min-height: var(--control-height-lg);
+    max-height: var(--control-height-lg);
     border: none;
     border-right: 1px solid var(--border);
     background: var(--surface);
@@ -707,12 +725,18 @@ body {
     font-weight: var(--weight-medium);
 }
 
+.prks-workspace-tab:hover {
+    background: var(--hover-overlay);
+    color: var(--text-primary);
+}
+
 .prks-workspace-tab__activate {
     display: inline-flex;
     align-items: center;
     gap: var(--space-sm);
     min-width: 0;
     flex: 1 1 auto;
+    height: 100%;
     margin: 0;
     padding: 0 var(--space-sm) 0 var(--space-md);
     border: none;
@@ -723,39 +747,69 @@ body {
     text-align: left;
 }
 
+.prks-workspace-tab__activate:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+}
+
 .prks-workspace-tab__icon {
     display: inline-flex;
     flex: 0 0 auto;
     align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
 }
 
 .prks-workspace-tab__title {
     min-width: 0;
+    flex: 1 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 1.2;
 }
 
-.prks-workspace-tab__close {
+.prks-workspace-tab__status {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
     flex: 0 0 auto;
-    width: var(--control-height-sm);
-    margin: 0;
-    padding: 0;
-    border: none;
+    width: 0.5rem;
+    height: 0.5rem;
+    margin-right: var(--space-xs);
+    border: 1px solid currentColor;
+    border-radius: 50%;
     background: transparent;
-    color: var(--text-tertiary);
-    cursor: pointer;
 }
 
+.prks-workspace-tab__status[hidden] {
+    display: none;
+}
+
+.prks-workspace-tab__status--drafting {
+    border-color: var(--text-tertiary);
+    background: transparent;
+}
+
+.prks-workspace-tab__status--saving {
+    border-color: var(--accent);
+    background: var(--accent);
+    opacity: 0.85;
+}
+
+.prks-workspace-tab__status--error {
+    border-radius: 1px;
+    border-color: var(--danger, #b42318);
+    background: var(--danger, #b42318);
+}
+
+.prks-workspace-tab__close,
 .prks-workspace-tab__split {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    width: var(--control-height-sm);
+    width: var(--control-height-md);
+    height: 100%;
     margin: 0;
     padding: 0;
     border: none;
@@ -769,7 +823,8 @@ body {
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    width: var(--control-height-sm);
+    width: var(--control-height-md);
+    height: 100%;
     color: var(--text-tertiary);
     pointer-events: none;
 }
@@ -815,12 +870,125 @@ body {
 }
 
 .prks-workspace-tab.is-tiled.is-focused {
-    box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+    background: var(--surface);
+    box-shadow: inset 0 -2px 0 var(--focus-ring);
+}
+
+.prks-workspace-menu {
+    position: fixed;
+    z-index: var(--z-dropdown);
+    min-width: 12.5rem;
+    max-width: 18rem;
+    max-height: min(24rem, calc(100vh - 24px));
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: var(--space-xs) 0;
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-sm);
+}
+
+.prks-workspace-menu[hidden] {
+    display: none;
+}
+
+.prks-workspace-menu__item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    width: 100%;
+    min-height: var(--control-height-md);
+    padding: 0 var(--space-md);
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: var(--text-sm);
+    text-align: left;
+    cursor: pointer;
+}
+
+.prks-workspace-menu__item:hover,
+.prks-workspace-menu__item:focus-visible,
+.prks-workspace-menu__item.is-active {
+    background: var(--hover-overlay);
+    outline: none;
+}
+
+.prks-workspace-menu__item:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+}
+
+.prks-workspace-menu__icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: 1rem;
+    height: 1rem;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+}
+
+.prks-workspace-menu__label {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prks-workspace-menu__mark {
+    flex: 0 0 auto;
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.prks-workspace-menu__sep {
+    height: 1px;
+    margin: var(--space-xs) 0;
+    background: var(--border);
+}
+
+.prks-workspace-menu__overflow-row {
+    display: flex;
+    align-items: stretch;
+    width: 100%;
+}
+
+.prks-workspace-menu__overflow-row .prks-workspace-menu__item {
+    flex: 1 1 auto;
+}
+
+.prks-workspace-menu__overflow-close {
+    flex: 0 0 auto;
+    width: var(--control-height-md);
+    min-height: var(--control-height-md);
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.prks-workspace-menu__overflow-close:hover,
+.prks-workspace-menu__overflow-close:focus-visible {
+    color: var(--text-primary);
+    background: var(--hover-overlay);
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
 }
 
 @container prks-main (max-width: 720px) {
     .prks-workspace-tab {
         max-width: 8.5rem;
+        min-width: 6.5rem;
     }
 
     .prks-workspace-split-btn__label {
@@ -860,10 +1028,12 @@ body {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
+    height: var(--control-height-md);
     min-height: var(--control-height-md);
+    max-height: var(--control-height-md);
     padding: 0 var(--space-sm);
     border-bottom: 1px solid var(--border);
-    background: var(--surface-muted);
+    background: var(--surface);
     font-size: var(--text-xs);
     font-weight: var(--weight-semibold);
     color: var(--text-secondary);
@@ -948,13 +1118,38 @@ body {
     outline: none;
 }
 
+.prks-workspace-canvas--tiled .prks-tile--main.prks-tile--focused .prks-tile-header {
+    background: var(--surface-selected);
+    box-shadow: inset 0 -2px 0 var(--accent);
+}
+
 .prks-workspace-canvas--tiled .prks-tile--secondary.prks-tile--focused {
     box-shadow: inset 0 0 0 2px var(--focus-ring);
 }
 
+.prks-workspace-canvas--tiled .prks-tile--secondary.prks-tile--focused .prks-tile-header {
+    box-shadow: inset 0 -2px 0 var(--focus-ring);
+}
+
 .prks-workspace-canvas--tiled .prks-tile-header {
     flex-shrink: 0;
+    height: var(--control-height-md);
+    min-height: var(--control-height-md);
+    max-height: var(--control-height-md);
     background: var(--surface);
+}
+
+.prks-tile:focus {
+    outline: none;
+}
+
+.prks-tile:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+}
+
+.prks-workspace-canvas--tiled .prks-tile:focus-visible {
+    outline: none;
 }
 
 .prks-tile-header__icon {
@@ -7021,11 +7216,11 @@ textarea[data-prks-autosize="1"] {
 }
 
 /* Side-by-side mobile: horizontal collapse affordance (chevrons point sideways). */
-html.prks-work-notes-mobile-side .document-view--work .work-notes-toggle-btn .work-notes-toggle-icon {
+.document-view--work:has(.work-workspace--side) .work-notes-toggle-btn .work-notes-toggle-icon {
     transform: rotate(-90deg);
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-notes-toggle-btn[aria-expanded="false"] .work-notes-toggle-icon {
+.document-view--work:has(.work-workspace--side) .work-notes-toggle-btn[aria-expanded="false"] .work-notes-toggle-icon {
     transform: rotate(90deg);
 }
 
@@ -7105,27 +7300,27 @@ html.prks-work-notes-mobile-side .document-view--work .work-notes-toggle-btn[ari
 }
 
 /* Mobile shell + setting: PDF left, research notes right (optional). */
-html.prks-work-notes-mobile-side .document-view--work .work-workspace {
-    --work-notes-width: min(38vw, 320px);
+.document-view--work:has(.work-workspace--side) .work-workspace {
+    --work-notes-width: min(38%, 320px);
     flex-direction: row;
     align-items: stretch;
     min-width: 0;
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-pdf-pane,
-html.prks-work-notes-mobile-side .document-view--work .work-pdf-pane--empty {
+.document-view--work:has(.work-workspace--side) .work-pdf-pane,
+.document-view--work:has(.work-workspace--side) .work-pdf-pane--empty {
     flex: 1 1 auto;
     min-width: 0;
     min-height: 0;
     height: auto;
 }
 
-html.prks-work-notes-mobile-side .document-view--work [data-prks-role="pdf-viewer"] {
+.document-view--work:has(.work-workspace--side) [data-prks-role="pdf-viewer"] {
     width: 100%;
     max-width: 100%;
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-split-handle {
+.document-view--work:has(.work-workspace--side) .work-split-handle {
     flex: 0 0 16px;
     width: 16px;
     min-width: 16px;
@@ -7141,14 +7336,14 @@ html.prks-work-notes-mobile-side .document-view--work .work-split-handle {
     border-right: 1px solid var(--border);
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-split-handle:hover,
-html.prks-work-notes-mobile-side .document-view--work .work-split-handle:focus-visible,
-html.prks-work-notes-mobile-side .document-view--work .work-split-handle.dragging {
+.document-view--work:has(.work-workspace--side) .work-split-handle:hover,
+.document-view--work:has(.work-workspace--side) .work-split-handle:focus-visible,
+.document-view--work:has(.work-workspace--side) .work-split-handle.dragging {
     background: var(--surface);
 }
 
 /* Wider invisible hit strip for touch / precise dragging next to the PDF viewer. */
-html.prks-work-notes-mobile-side .document-view--work .work-split-handle::after {
+.document-view--work:has(.work-workspace--side) .work-split-handle::after {
     content: '';
     position: absolute;
     top: 0;
@@ -7158,7 +7353,7 @@ html.prks-work-notes-mobile-side .document-view--work .work-split-handle::after 
     z-index: 1;
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-split-handle-grip {
+.document-view--work:has(.work-workspace--side) .work-split-handle-grip {
     position: relative;
     z-index: 2;
     width: 5px;
@@ -7170,17 +7365,17 @@ html.prks-work-notes-mobile-side .document-view--work .work-split-handle-grip {
         0 10px 0 0 var(--border);
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-split-handle:hover .work-split-handle-grip,
-html.prks-work-notes-mobile-side .document-view--work .work-split-handle:focus-visible .work-split-handle-grip,
-html.prks-work-notes-mobile-side .document-view--work .work-split-handle.dragging .work-split-handle-grip {
+.document-view--work:has(.work-workspace--side) .work-split-handle:hover .work-split-handle-grip,
+.document-view--work:has(.work-workspace--side) .work-split-handle:focus-visible .work-split-handle-grip,
+.document-view--work:has(.work-workspace--side) .work-split-handle.dragging .work-split-handle-grip {
     background: var(--accent);
     box-shadow:
         0 -10px 0 0 var(--accent),
         0 10px 0 0 var(--accent);
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-notes-pane {
-    flex: 0 0 var(--work-notes-width, min(38vw, 320px));
+.document-view--work:has(.work-workspace--side) .work-notes-pane {
+    flex: 0 0 var(--work-notes-width, min(38%, 320px));
     min-width: 0;
     max-height: none;
     height: auto;
@@ -7190,12 +7385,12 @@ html.prks-work-notes-mobile-side .document-view--work .work-notes-pane {
 }
 
 /* Collapsed: keep splitter visible and draggable; notes column stays same width, header-only height. */
-html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-collapsed .work-split-handle {
+.document-view--work:has(.work-workspace--side) .work-workspace--notes-collapsed .work-split-handle {
     display: flex !important;
 }
 
 /* Collapsed side strip: narrow column; expand control on top, vertical label below. */
-html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-collapsed .work-notes-pane {
+.document-view--work:has(.work-workspace--side) .work-workspace--notes-collapsed .work-notes-pane {
     flex: 0 0 52px;
     width: 52px;
     min-width: 52px;
@@ -7209,7 +7404,7 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     box-sizing: border-box;
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-collapsed .work-notes-pane-header {
+.document-view--work:has(.work-workspace--side) .work-workspace--notes-collapsed .work-notes-pane-header {
     flex: 1 1 auto;
     flex-direction: column-reverse;
     align-items: center;
@@ -7221,17 +7416,17 @@ html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-col
     background: transparent;
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-collapsed .work-notes-pane-header-actions {
+.document-view--work:has(.work-workspace--side) .work-workspace--notes-collapsed .work-notes-pane-header-actions {
     flex-direction: column;
     align-items: center;
     gap: 0;
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-collapsed .work-editor-status {
+.document-view--work:has(.work-workspace--side) .work-workspace--notes-collapsed .work-editor-status {
     display: none;
 }
 
-html.prks-work-notes-mobile-side .document-view--work .work-workspace--notes-collapsed .work-notes-title {
+.document-view--work:has(.work-workspace--side) .work-workspace--notes-collapsed .work-notes-title {
     writing-mode: vertical-lr;
     text-orientation: mixed;
     font-size: 0.7rem;

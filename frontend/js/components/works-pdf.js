@@ -947,28 +947,34 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
     prksEnsureAnnotationBeforeUnloadGuard();
 
     function renderSyncIndicator() {
-        if (!stillLive()) return;
-        const el = ctx && ctx.query ? ctx.query('[data-prks-role="annotation-sync-status"]') : null;
-        if (!el) return;
-        el.classList.remove(
-            'work-annotation-sync-status--hidden',
-            'work-annotation-sync-status--saving',
-            'work-annotation-sync-status--saved',
-            'work-annotation-sync-status--error'
-        );
-        if (syncState.inFlight || syncState.pendingChanges) {
-            el.classList.add('work-annotation-sync-status--saving');
-            el.textContent = syncState.lastError ? 'Sync retry pending...' : 'PDF annotations syncing...';
-            return;
+        try {
+            if (!stillLive()) return;
+            const el = ctx && ctx.query ? ctx.query('[data-prks-role="annotation-sync-status"]') : null;
+            if (!el) return;
+            el.classList.remove(
+                'work-annotation-sync-status--hidden',
+                'work-annotation-sync-status--saving',
+                'work-annotation-sync-status--saved',
+                'work-annotation-sync-status--error'
+            );
+            if (syncState.inFlight || syncState.pendingChanges) {
+                el.classList.add('work-annotation-sync-status--saving');
+                el.textContent = syncState.lastError ? 'Sync retry pending...' : 'PDF annotations syncing...';
+                return;
+            }
+            if (syncState.lastError) {
+                el.classList.add('work-annotation-sync-status--error');
+                el.textContent = 'PDF annotations sync failed';
+                return;
+            }
+            el.classList.add('work-annotation-sync-status--saved');
+            const t = prksFormatSyncClock(syncState.lastSuccessAt);
+            el.textContent = t ? `PDF annotations saved at ${t}` : 'PDF annotations saved';
+        } finally {
+            if (ctx && ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+                window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+            }
         }
-        if (syncState.lastError) {
-            el.classList.add('work-annotation-sync-status--error');
-            el.textContent = 'PDF annotations sync failed';
-            return;
-        }
-        el.classList.add('work-annotation-sync-status--saved');
-        const t = prksFormatSyncClock(syncState.lastSuccessAt);
-        el.textContent = t ? `PDF annotations saved at ${t}` : 'PDF annotations saved';
     }
 
     try {

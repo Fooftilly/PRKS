@@ -546,6 +546,30 @@ Tiled v1: Main occupies the left master column; one Secondary occupies the right
 | Parked / open tab | Normal tab-strip state; tile-capable parked tabs show a quiet Split action |
 | Dirty / queued / syncing / error | Small semantic state marker (icon + not color alone) |
 
+Main is not the same state as focus. Main owns the browser route. Focus marks the tile that receives pointer/keyboard and the right panel. A focused Secondary keeps its split marker and must not reuse Main’s selected background/accent bar.
+
+### Workspace interaction invariants
+
+Tab strip: one row, fixed height, titles ellipsize. Tabs do not shrink below a usable width. Overflow scrolls horizontally; Main (and focused Secondary) are revealed when they change. A compact overflow menu lists open tabs with Main/Split markers when the strip overflows.
+
+Tab context menu (user copy only: Split view):
+
+- Parked: Make main, Open in split view (if tile-capable), Close, Close other tabs, Close tabs to the right
+- Secondary: Focus, Make main, Hide split, Close
+- Main: Open another tab in split view, Close, Close other tabs, Close tabs to the right
+
+Close: parked closes that tab; Secondary close collapses to stacked and leaves Main; Main close with a Secondary promotes that Secondary; otherwise the right neighbor, then left, then Home. Never flash Home while a successor exists. Leave guards apply before any close or Secondary replacement. Rejected leave changes nothing.
+
+Replacement (A Main | B Secondary, choose C): preflight B, keep A mounted, do not remove B until accepted; C becomes focused Secondary and B is parked. No intermediate stacked frame.
+
+Focus restoration after close / hide / replace / Make main / narrow fallback prefers the resulting focused tile, else that tab’s activation control. Do not leave DOM focus on a destroyed node. Pointer or keyboard entering a tile focuses it without promoting Main or changing the URL.
+
+Split control: **Split** (no leaf), **Show split** (leaf, stacked), **Hide split** (visually tiled). Narrow fallback must not show Hide split; it explains that split needs a wider window.
+
+Tile chrome exists only in tiled mode. Headers keep a stable height. Loading and errors stay inside the route root; the tile shell/header is not torn down.
+
+Work notes side-by-side layout follows that Work’s tile/container width, not a global viewport class that would restyle the other tile.
+
 Tiling v1:
 
 - main/master tile owns the left column (~58/42 split, fixed)

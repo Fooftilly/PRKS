@@ -154,6 +154,9 @@ function makeHarness(opts) {
             life.destroy.push(tabId);
             delete mounted[tabId];
         },
+        onChange: function () {
+            if (typeof opts.onChange === 'function') opts.onChange();
+        },
     });
     ws.bootstrap(opts.hash || '#/folders');
     return {
@@ -811,6 +814,78 @@ async function run() {
     const foundParked = tileTabH.ws.findTabByRoute('#/works/WZ', { excludeMain: true, excludeVisibleSecondary: true });
     assert('findTabByRoute parked', !!(foundParked && foundParked.id === parkedZ));
     assertEq('findTabByRoute skips main', tileTabH.ws.findTabByRoute('#/works/WA', { excludeMain: true }) === null, true);
+
+    const closeBatch = makeHarness({ hash: '#/works/WA' });
+    await closeBatch.ws.navigate('#/works/WB', { target: 'new-tab', activate: false });
+    await closeBatch.ws.navigate('#/works/WC', { target: 'new-tab', activate: false });
+    await closeBatch.ws.navigate('#/works/WD', { target: 'new-tab', activate: false });
+    const batchIds = closeBatch.ws.snapshot().tabs.map(function (t) { return t.id; });
+    await closeBatch.ws.closeTabsToTheRight(batchIds[1]);
+    const afterRight = closeBatch.ws.snapshot();
+    assertEq('close to right count', afterRight.tabs.length, 2);
+    assertEq('close to right keep 0', afterRight.tabs[0].id, batchIds[0]);
+    assertEq('close to right keep 1', afterRight.tabs[1].id, batchIds[1]);
+    assertEq('close to right main', afterRight.mainTabId, batchIds[0]);
+
+    const othersH = makeHarness({ hash: '#/works/WA' });
+    await othersH.ws.navigate('#/works/WB', { target: 'new-tab', activate: false });
+    await othersH.ws.navigate('#/works/WC', { target: 'new-tab', activate: true });
+    const othersIds = othersH.ws.snapshot().tabs.map(function (t) { return t.id; });
+    const othersRenders = othersH.renders.length;
+    await othersH.ws.closeOtherTabs(othersIds[2]);
+    const afterOthers = othersH.ws.snapshot();
+    assertEq('close others count', afterOthers.tabs.length, 1);
+    assertEq('close others keep', afterOthers.mainTabId, othersIds[2]);
+    assertEq('close others no extra render', othersH.renders.length, othersRenders);
+
+    const othersParked = makeHarness({ hash: '#/works/WA' });
+    await othersParked.ws.navigate('#/works/WB', { target: 'new-tab', activate: false });
+    const parkedKeep = othersParked.ws.snapshot().tabs[1].id;
+    const parkedRenders = othersParked.renders.length;
+    await othersParked.ws.closeOtherTabs(parkedKeep);
+    const afterParkedKeep = othersParked.ws.snapshot();
+    assertEq('close others parked keep count', afterParkedKeep.tabs.length, 1);
+    assertEq('close others parked is main', afterParkedKeep.mainTabId, parkedKeep);
+    assert('close others parked rendered', othersParked.renders.length > parkedRenders);
+
+    const othersLeave = makeHarness({ hash: '#/works/WA' });
+    await othersLeave.ws.navigate('#/works/WB', { target: 'new-tab', activate: false });
+    await othersLeave.ws.tileTab(othersLeave.ws.snapshot().tabs[1].id);
+    othersLeave.setCanLeave(false);
+    const othersLeaveFp = fingerprint(othersLeave);
+    const othersDenied = await othersLeave.ws.closeOtherTabs(othersLeave.ws.snapshot().mainTabId);
+    assertEq('close others leave denied', othersDenied, false);
+    assertEq('close others leave fingerprint', fingerprint(othersLeave), othersLeaveFp);
+
+    const box = { ws: null, modes: [] };
+    const replaceH = makeHarness({
+        hash: '#/works/WA',
+        onChange: function () {
+            if (box.ws) box.modes.push(box.ws.snapshot().mode);
+        },
+    });
+    box.ws = replaceH.ws;
+    await replaceH.ws.navigate('#/works/WB', { target: 'new-tab', activate: false });
+    await replaceH.ws.tileTab(replaceH.ws.snapshot().tabs[1].id);
+    await replaceH.ws.navigate('#/works/WC', { target: 'new-tab', activate: false });
+    const replaceC = replaceH.ws.snapshot().tabs[2].id;
+    const replaceA = replaceH.ws.snapshot().mainTabId;
+    const replaceMountA = replaceH.isMounted(replaceA);
+    box.modes.length = 0;
+    await replaceH.ws.tileTab(replaceC);
+    assertEq('replace secondary', replaceH.ws.snapshot().secondaryTree.tabId, replaceC);
+    assertEq('replace main stable', replaceH.ws.snapshot().mainTabId, replaceA);
+    assert('replace no stacked paint', box.modes.every(function (m) { return m === 'tiled'; }));
+    assert('replace A still mounted', replaceH.isMounted(replaceA) === replaceMountA);
+    replaceH.setCanLeave(false);
+    await replaceH.ws.navigate('#/works/WD', { target: 'new-tab', activate: false });
+    const replaceD = replaceH.ws.snapshot().tabs[replaceH.ws.snapshot().tabs.length - 1].id;
+    const deniedFp = fingerprint(replaceH);
+    box.modes.length = 0;
+    const deniedReplace = await replaceH.ws.tileTab(replaceD);
+    assertEq('replace leave denied', deniedReplace, false);
+    assertEq('replace deny fingerprint', fingerprint(replaceH), deniedFp);
+    assertEq('replace deny no paint', box.modes.length, 0);
     }
 
     console.log('\n' + passed + ' passed, ' + failed + ' failed');
