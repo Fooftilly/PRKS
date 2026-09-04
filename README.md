@@ -178,6 +178,14 @@ People, Progress, and Research sidebar shortcuts are collapsible. Active child r
 
 PRKS keeps a strip of in-app tabs under the top ribbon. Stacked mode shows one page at a time. Split view can show Main on the left and one Secondary on the right. Tabs do not yet survive a full app reload. Recursive splits and splitter resizing are not included yet.
 
+**Tab actions**
+
+Right-click a tab, or press Shift+F10 while it is focused, for tab actions. From that menu you can close the tab, **Close other tabs**, or **Close tabs to the right**. Parked tabs can also be opened in split view there.
+
+If the strip is too narrow for every tab, an overflow button at the end lists the open tabs. Choose a tab to switch to it. Parked rows also offer split view and close.
+
+A small marker on a tab means research notes or PDF annotations are drafting, saving, or that a save failed. Failures stay visible even if you keep editing.
+
 **Split view**
 
 1. Click **Split** beside the workspace tabs, then pick a page in **Open in split view**.

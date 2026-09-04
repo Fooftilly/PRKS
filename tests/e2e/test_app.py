@@ -2296,6 +2296,203 @@ class WorkspaceTilingTests(_BrowserE2E):
         overflow_btn = page.locator("#prks-workspace-tab-overflow")
         self.assertEqual(overflow_btn.count(), 1)
 
+    def test_overflow_menu_keyboard_split_and_escape(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => {
+                const jobs = [];
+                for (let i = 0; i < 12; i++) {
+                    jobs.push(window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false }));
+                }
+                return Promise.all(jobs);
+            }""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length >= 12")
+        page.evaluate(
+            """() => {
+                const list = document.getElementById('prks-workspace-tabs');
+                if (list) list.style.maxWidth = '12rem';
+                const snap = window.prksWorkspaceSnapshot();
+                if (snap && snap.mainTabId && window.prksWorkspaceActivateTab) {
+                    return window.prksWorkspaceActivateTab(snap.mainTabId);
+                }
+            }"""
+        )
+        page.wait_for_function(
+            """() => {
+                const btn = document.getElementById('prks-workspace-tab-overflow');
+                const list = document.getElementById('prks-workspace-tabs');
+                return !!(btn && !btn.hidden && list && list.scrollWidth > list.clientWidth + 2);
+            }"""
+        )
+        page.locator("#prks-workspace-tab-overflow").focus()
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+        page.keyboard.press("Escape")
+        page.wait_for_function(
+            """() => {
+                const menu = document.getElementById('prks-workspace-menu');
+                return !!(menu && menu.hidden && document.activeElement && document.activeElement.id === 'prks-workspace-tab-overflow');
+            }"""
+        )
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+        steps = page.evaluate(
+            """() => {
+                const items = Array.prototype.slice.call(
+                    document.querySelectorAll('#prks-workspace-menu [role="menuitem"]')
+                );
+                return items.findIndex(function (el) {
+                    const label = (el.getAttribute('aria-label') || '') + ' ' + (el.textContent || '');
+                    return /split view/i.test(label);
+                });
+            }"""
+        )
+        self.assertGreaterEqual(steps, 0)
+        for _ in range(steps):
+            page.keyboard.press("ArrowDown")
+        page.wait_for_function(
+            """() => {
+                const ae = document.activeElement;
+                if (!ae) return false;
+                const label = (ae.getAttribute('aria-label') || '') + ' ' + (ae.textContent || '');
+                return ae.getAttribute('role') === 'menuitem' && /split view/i.test(label);
+            }"""
+        )
+        page.keyboard.press("Enter")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mode"), "tiled")
+
+    def test_tab_trailing_actions_keyboard_only(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        page.locator(".prks-workspace-tab.is-main .prks-workspace-tab__activate").focus()
+        page.keyboard.press("Enter")
+        page.keyboard.press("ArrowRight")
+        page.wait_for_function(
+            """() => {
+                const ae = document.activeElement;
+                return !!(ae && ae.classList && ae.classList.contains('prks-workspace-tab__activate')
+                    && ae.closest('.prks-workspace-tab.is-parked'));
+            }"""
+        )
+        page.keyboard.press("Tab")
+        page.wait_for_function(
+            """() => {
+                const ae = document.activeElement;
+                return !!(ae && ae.classList && ae.classList.contains('prks-workspace-tab__split'));
+            }"""
+        )
+        page.keyboard.press("Enter")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
+        page.locator(".prks-workspace-tab.is-tiled .prks-workspace-tab__activate").focus()
+        page.keyboard.press("Tab")
+        page.wait_for_function(
+            """() => {
+                const ae = document.activeElement;
+                return !!(ae && ae.classList && ae.classList.contains('prks-workspace-tab__close')
+                    && ae.closest('.prks-workspace-tab.is-tiled'));
+            }"""
+        )
+        page.keyboard.press("Enter")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length"), 1)
+
+    def test_narrow_rejected_leave_does_not_reprompt_on_paint(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        dialogs = []
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(snap.secondaryTree.tabId);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && ctx && c.tabId === ctx.tabId);
+                };
+                window.__prksNarrowCalls = 0;
+                const orig = window.prksWorkspaceSetNarrowFallback;
+                window.prksWorkspaceSetNarrowFallback = function (n) {
+                    window.__prksNarrowCalls += 1;
+                    return orig(n);
+                };
+            }"""
+        )
+        before = _workspace_ids(page)
+        page.set_viewport_size({"width": 500, "height": 900})
+        page.wait_for_function("() => window.__prksNarrowCalls >= 1")
+        self.assertEqual(len(dialogs), 1)
+        after = _workspace_ids(page)
+        self.assertEqual(after["mode"], "tiled")
+        self.assertEqual(after["secondaryTabId"], before["secondaryTabId"])
+        self.assertEqual(after["mountedCount"], 2)
+        self.assertTrue(page.evaluate("() => window.prksWorkspaceVisualTiled()"))
+        calls_after_reject = page.evaluate("() => window.__prksNarrowCalls")
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                for (let i = 0; i < 5; i++) {
+                    window.prksWorkspaceSyncTiles(snap, { visualMode: 'tiled' });
+                    window.prksWorkspaceApplyFocus(snap, { visualMode: 'tiled' });
+                    window.prksWorkspaceFocusTab(snap.focusedTabId);
+                    const tab = snap.tabs.find(function (t) { return t.id === snap.mainTabId; });
+                    if (tab && window.prksWorkspaceSetResolvedTitleForTab) {
+                        window.prksWorkspaceSetResolvedTitleForTab(snap.mainTabId, tab.route, tab.title);
+                    }
+                }
+            }"""
+        )
+        self.assertEqual(len(dialogs), 1)
+        self.assertEqual(page.evaluate("() => window.__prksNarrowCalls"), calls_after_reject)
+        self.assertEqual(_workspace_ids(page)["mountedCount"], 2)
+        self.assertTrue(page.evaluate("() => window.prksWorkspaceVisualTiled()"))
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.wait_for_function(
+            """(n) => {
+                const c = document.querySelector('.prks-workspace-canvas');
+                return !!(c && c.clientWidth >= 720 && window.__prksNarrowCalls > n);
+            }""",
+            arg=calls_after_reject,
+        )
+        calls_wide = page.evaluate("() => window.__prksNarrowCalls")
+        page.set_viewport_size({"width": 500, "height": 900})
+        page.wait_for_function(
+            """(n) => {
+                const c = document.querySelector('.prks-workspace-canvas');
+                return !!(c && c.clientWidth > 0 && c.clientWidth < 720 && window.__prksNarrowCalls > n);
+            }""",
+            arg=calls_wide,
+        )
+        self.assertGreaterEqual(len(dialogs), 2)
+        still = _workspace_ids(page)
+        self.assertEqual(still["secondaryTabId"], before["secondaryTabId"])
+        self.assertEqual(still["mountedCount"], 2)
+
     def test_close_secondary_restores_focus_to_main(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})

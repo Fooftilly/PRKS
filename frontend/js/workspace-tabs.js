@@ -1302,14 +1302,19 @@
         const ctx = root.prksGetTabContext(tabId);
         if (!ctx || !ctx.mounted) return '';
         const notes = ctx.getResource ? ctx.getResource('workNotes') : null;
-        if (notes && notes.saveError) return 'error';
-        if (notes && notes.pendingSave) return 'saving';
-        if (notes && notes.drafting) return 'drafting';
-        if (typeof root.prksHasPendingWorkAnnotationSync === 'function' && root.prksHasPendingWorkAnnotationSync(ctx)) {
-            return 'saving';
-        }
         const pdf = ctx.getResource ? ctx.getResource('pdf') : null;
-        if (pdf && pdf.syncState && pdf.syncState.lastError) return 'error';
+        const pdfErr = !!(pdf && pdf.syncState && pdf.syncState.lastError);
+        const notesErr = !!(notes && notes.saveError);
+        if (pdfErr || notesErr) return 'error';
+        const saveToken = notes ? Number(notes.saveToken) || 0 : 0;
+        const settledToken = notes ? Number(notes.settledToken) || 0 : 0;
+        const notesSaving = !!(notes && saveToken > settledToken);
+        const pdfSaving =
+            typeof root.prksHasPendingWorkAnnotationSync === 'function' &&
+            root.prksHasPendingWorkAnnotationSync(ctx);
+        if (notesSaving || pdfSaving) return 'saving';
+        const editGen = notes ? Number(notes.editGeneration) || 0 : 0;
+        if (notes && (notes.drafting || editGen > saveToken)) return 'drafting';
         return '';
     }
 
@@ -1353,6 +1358,7 @@
         if (!list) return;
         const wrap = list.querySelector('.prks-workspace-tab[data-tab-id="' + String(tabId).replace(/"/g, '') + '"]');
         if (wrap) applyTabStatus(wrap, tabId);
+        updateTabOverflow();
     }
 
     function revealWorkspaceTab(tabId) {
@@ -1372,9 +1378,35 @@
         const list = document.getElementById('prks-workspace-tabs');
         const btn = document.getElementById('prks-workspace-tab-overflow');
         if (!list || !btn) return;
-        const overflow = list.scrollWidth > list.clientWidth + 2;
+        const overflow = list.clientWidth > 0 && list.scrollWidth > list.clientWidth + 2;
         btn.hidden = !overflow;
         if (!overflow) btn.setAttribute('aria-expanded', 'false');
+    }
+
+    function syncTrailingTabStops() {
+        if (typeof document === 'undefined') return;
+        const list = document.getElementById('prks-workspace-tabs');
+        if (!list) return;
+        const wraps = list.querySelectorAll('.prks-workspace-tab');
+        let activeWrap = null;
+        const ae = document.activeElement;
+        if (ae && ae.closest) activeWrap = ae.closest('.prks-workspace-tab');
+        if (!activeWrap) {
+            const buttons = list.querySelectorAll('.prks-workspace-tab__activate');
+            for (let i = 0; i < buttons.length; i++) {
+                if (buttons[i].tabIndex === 0) {
+                    activeWrap = buttons[i].closest('.prks-workspace-tab');
+                    break;
+                }
+            }
+        }
+        for (let i = 0; i < wraps.length; i++) {
+            const enable = wraps[i] === activeWrap;
+            const split = wraps[i].querySelector(':scope > .prks-workspace-tab__split');
+            const close = wraps[i].querySelector(':scope > .prks-workspace-tab__close');
+            if (split) split.tabIndex = enable ? 0 : -1;
+            if (close) close.tabIndex = enable ? 0 : -1;
+        }
     }
 
     function bindTabStripChrome() {
@@ -1393,6 +1425,7 @@
             { passive: false }
         );
         list.addEventListener('scroll', updateTabOverflow);
+        list.addEventListener('focusin', syncTrailingTabStops);
         if (typeof ResizeObserver !== 'undefined') {
             const ro = new ResizeObserver(function () {
                 updateTabOverflow();
@@ -1440,7 +1473,6 @@
                 split = document.createElement('button');
                 split.type = 'button';
                 split.className = 'prks-workspace-tab__split';
-                split.tabIndex = -1;
                 split.innerHTML = iconHtml('columns-2');
                 split.addEventListener('click', function (e) {
                     e.preventDefault();
@@ -1494,7 +1526,6 @@
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'prks-workspace-tab__close';
-        close.tabIndex = -1;
         close.title = 'Close';
         close.innerHTML = iconHtml('x');
         close.addEventListener('click', function (e) {
@@ -1579,6 +1610,7 @@
             revealWorkspaceTab(snap.focusedTabId);
         }
         updateTabOverflow();
+        syncTrailingTabStops();
         if (typeof root.prksWorkspaceSyncTiles === 'function') {
             root.prksWorkspaceSyncTiles(snap, { visualMode: visualTiled ? MODE_TILED : MODE_STACKED });
         }
@@ -1602,6 +1634,7 @@
             btn.tabIndex = n === i ? 0 : -1;
         });
         buttons[i].focus();
+        syncTrailingTabStops();
         if (scroll) {
             const wrap = buttons[i].closest('[data-tab-id]');
             if (wrap) revealWorkspaceTab(wrap.getAttribute('data-tab-id'));

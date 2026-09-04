@@ -7,7 +7,9 @@
     const NARROW_PX = 720;
     let bound = false;
     let resizeObserver = null;
+    let observedCanvas = null;
     let lastNarrow = null;
+    let pendingNarrow = null;
 
     function doc() {
         return typeof document !== 'undefined' ? document : null;
@@ -302,24 +304,33 @@
 
     function applyNarrow(canvas) {
         if (!canvas) return;
-        const narrow = canvas.clientWidth > 0 && canvas.clientWidth < NARROW_PX;
-        if (lastNarrow === narrow) return;
+        if (canvas.clientWidth <= 0) return;
+        const narrow = canvas.clientWidth < NARROW_PX;
+        if (narrow === lastNarrow && pendingNarrow === null) return;
+        if (pendingNarrow === narrow) return;
         if (typeof root.prksWorkspaceSetNarrowFallback !== 'function') {
             lastNarrow = narrow;
+            pendingNarrow = null;
             return;
         }
-        Promise.resolve(root.prksWorkspaceSetNarrowFallback(narrow)).then(function (ok) {
-            if (ok !== false) lastNarrow = narrow;
+        pendingNarrow = narrow;
+        Promise.resolve(root.prksWorkspaceSetNarrowFallback(narrow)).then(function () {
+            if (pendingNarrow !== narrow) return;
+            pendingNarrow = null;
+            lastNarrow = narrow;
         });
     }
 
     function watchCanvas(canvas) {
         if (!canvas || typeof ResizeObserver === 'undefined') return;
+        if (observedCanvas === canvas && resizeObserver) return;
         if (resizeObserver) {
             try {
                 resizeObserver.disconnect();
             } catch (_e) {}
+            resizeObserver = null;
         }
+        observedCanvas = canvas;
         resizeObserver = new ResizeObserver(function () {
             applyNarrow(canvas);
         });

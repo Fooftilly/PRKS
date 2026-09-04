@@ -1045,9 +1045,12 @@ function initEasyMDE(ctx, work) {
         hints: {
             wikiTitleMap: titleLowerToId,
         },
-        pendingSave: null,
+        pendingSave: false,
         drafting: false,
         saveError: false,
+        editGeneration: 0,
+        saveToken: 0,
+        settledToken: 0,
         destroy: function () {
             try {
                 const cm = easyMDE.codemirror;
@@ -1091,10 +1094,7 @@ function initEasyMDE(ctx, work) {
     const notesChangeHandler = () => {
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
-        if (workNotes) {
-            workNotes.drafting = true;
-            workNotes.saveError = false;
-        }
+        prksWorkNotesMarkEdit(workNotes);
         if (ctx && ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
             window.prksWorkspaceRefreshTabStatus(ctx.tabId);
         }
@@ -1109,6 +1109,36 @@ function initEasyMDE(ctx, work) {
     easyMDE.__notesChangeHandler = notesChangeHandler;
 }
 
+function prksWorkNotesMarkEdit(notes) {
+    if (!notes) return 0;
+    notes.editGeneration = (Number(notes.editGeneration) || 0) + 1;
+    notes.drafting = true;
+    return notes.editGeneration;
+}
+
+function prksWorkNotesBeginSave(notes) {
+    if (!notes) return 0;
+    const token = Number(notes.editGeneration) || 0;
+    notes.saveToken = token;
+    notes.drafting = notes.editGeneration > token;
+    notes.pendingSave = notes.saveToken > (Number(notes.settledToken) || 0);
+    return token;
+}
+
+function prksWorkNotesSettleSave(notes, token, ok) {
+    if (!notes) return false;
+    if (token !== notes.saveToken) return false;
+    notes.settledToken = token;
+    notes.pendingSave = notes.saveToken > notes.settledToken;
+    notes.saveError = !ok;
+    notes.drafting = (Number(notes.editGeneration) || 0) > notes.saveToken;
+    return true;
+}
+
+window.prksWorkNotesMarkEdit = prksWorkNotesMarkEdit;
+window.prksWorkNotesBeginSave = prksWorkNotesBeginSave;
+window.prksWorkNotesSettleSave = prksWorkNotesSettleSave;
+
 function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const _cwSave = owner && owner.getEntity ? owner.getEntity('work') : null;
@@ -1121,11 +1151,8 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         content = editor.value();
     }
     const statusEl = owner && owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
-    if (notes) {
-        notes.drafting = false;
-        notes.pendingSave = true;
-        notes.saveError = false;
-    }
+    const token = prksWorkNotesBeginSave(notes);
+    if (statusEl) statusEl.innerText = 'Saving...';
     if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
         window.prksWorkspaceRefreshTabStatus(owner.tabId);
     }
@@ -1141,10 +1168,8 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         }
     )
         .then(function (res) {
-            if (notes) {
-                notes.pendingSave = false;
-                notes.saveError = !res.ok;
-            }
+            const applied = prksWorkNotesSettleSave(notes, token, !!(res && res.ok));
+            if (!applied) return undefined;
             if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
                 window.prksWorkspaceRefreshTabStatus(owner.tabId);
             }
@@ -1160,10 +1185,8 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
             return undefined;
         })
         .catch(function () {
-            if (notes) {
-                notes.pendingSave = false;
-                notes.saveError = true;
-            }
+            const applied = prksWorkNotesSettleSave(notes, token, false);
+            if (!applied) return;
             if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
                 window.prksWorkspaceRefreshTabStatus(owner.tabId);
             }
@@ -1182,6 +1205,7 @@ function prksFlushPendingWorkResearchNotes(ctx) {
     prksEnqueueWorkResearchNotesSave(owner, id);
 }
 
+window.prksEnqueueWorkResearchNotesSave = prksEnqueueWorkResearchNotesSave;
 window.prksFlushPendingWorkResearchNotes = prksFlushPendingWorkResearchNotes;
 
 function prksDestroyWorkNotesEditor(ctx) {

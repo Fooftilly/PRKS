@@ -102,6 +102,7 @@
         menuIndex = i;
         menuItems.forEach(function (btn, n) {
             btn.classList.toggle('is-active', n === i);
+            btn.tabIndex = n === i ? 0 : -1;
             if (n === i) btn.focus();
         });
     }
@@ -358,6 +359,7 @@
                 const split = d.createElement('button');
                 split.type = 'button';
                 split.className = 'prks-workspace-menu__overflow-close';
+                split.setAttribute('role', 'menuitem');
                 split.setAttribute('aria-label', 'Open ' + (row.tab.title || 'page') + ' in split view');
                 split.title = 'Open in split view';
                 split.innerHTML = iconHtml('columns-2');
@@ -367,10 +369,12 @@
                     runAction({ kind: 'tile', tabId: row.tab.id });
                 });
                 host.appendChild(split);
+                menuItems.push(split);
             }
             const close = d.createElement('button');
             close.type = 'button';
             close.className = 'prks-workspace-menu__overflow-close';
+            close.setAttribute('role', 'menuitem');
             close.setAttribute('aria-label', 'Close ' + (row.tab.title || 'tab'));
             close.title = 'Close';
             close.innerHTML = iconHtml('x');
@@ -380,6 +384,7 @@
                 runAction({ kind: 'close', tabId: row.tab.id });
             });
             host.appendChild(close);
+            menuItems.push(close);
             menu.appendChild(host);
         });
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(menu);
@@ -427,7 +432,8 @@
         }
         if (ev.key === 'Enter' || ev.key === ' ') {
             ev.preventDefault();
-            if (menuItems[menuIndex]) menuItems[menuIndex].click();
+            const focused = ev.target && menuItems.indexOf(ev.target) >= 0 ? ev.target : menuItems[menuIndex];
+            if (focused) focused.click();
         }
     }
 

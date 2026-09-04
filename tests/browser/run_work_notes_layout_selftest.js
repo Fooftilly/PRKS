@@ -174,10 +174,100 @@ sandbox.prksReapplyWorkNotesSplitLayout(ctxB);
 assert('B workspace height set', !!wsB._vars['--work-notes-height']);
 assertEq('still no document.querySelector', bannedQuery, 0);
 
-prksDestroyAllTabContexts();
-
-if (failed) {
-    console.log(failed + ' failed, ' + passed + ' passed');
-    process.exit(1);
+function tick() {
+    return new Promise(function (resolve) {
+        setTimeout(resolve, 0);
+    });
 }
-console.log('All ' + passed + ' Work notes layout isolation checks passed');
+
+async function runSaveGenerationRace() {
+    const pending = [];
+    sandbox.prksRequest = function () {
+        return new Promise(function (resolve) {
+            pending.push(resolve);
+        });
+    };
+    sandbox.fetchWorkDetails = function () {
+        return Promise.resolve(null);
+    };
+    sandbox.prksWorkspaceRefreshTabStatus = function () {};
+    sandbox.window.prksWorkspaceRefreshTabStatus = sandbox.prksWorkspaceRefreshTabStatus;
+
+    const ctxS = prksEnsureTabContext('notes-save');
+    ctxS.mounted = true;
+    ctxS.tabId = 'notes-save';
+    const statusEl = { innerText: '' };
+    ctxS.query = function () {
+        return statusEl;
+    };
+    const notes = {
+        editor: {
+            value: function () {
+                return 'note';
+            },
+        },
+        editGeneration: 0,
+        saveToken: 0,
+        settledToken: 0,
+        drafting: false,
+        saveError: false,
+        pendingSave: false,
+    };
+    ctxS.setResource('workNotes', notes);
+
+    sandbox.prksWorkNotesMarkEdit(notes);
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
+    assertEq('A save token', notes.saveToken, 1);
+    assertEq('A pending after enqueue', notes.saveToken > notes.settledToken, true);
+    assertEq('one delayed mutation', pending.length, 1);
+
+    sandbox.prksWorkNotesMarkEdit(notes);
+    assertEq('edit while A in flight drafts', notes.drafting, true);
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
+    assertEq('B save token newest', notes.saveToken, 2);
+    assertEq('two delayed mutations', pending.length, 2);
+
+    pending[0]({ ok: true });
+    await tick();
+    assertEq('stale A does not settle newest', notes.settledToken, 0);
+    assertEq('stale A leaves pending', notes.saveToken > notes.settledToken, true);
+    assert('status after stale A still busy', !!(notes.drafting || notes.saveToken > notes.settledToken));
+    assertEq('stale A does not mark saved', statusEl.innerText === 'All changes saved', false);
+
+    pending[1]({ ok: true });
+    await tick();
+    assertEq('B settles newest', notes.settledToken, 2);
+    assertEq('B clears pending', notes.saveToken > notes.settledToken, false);
+    assertEq('B clears drafting', notes.drafting, false);
+    assertEq('B clears error', notes.saveError, false);
+    assertEq('newest success status', statusEl.innerText, 'All changes saved');
+
+    sandbox.prksWorkNotesMarkEdit(notes);
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
+    sandbox.prksWorkNotesMarkEdit(notes);
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
+    assertEq('retry queued two more', pending.length, 4);
+    pending[2]({ ok: false });
+    await tick();
+    assertEq('stale failure ignored', notes.saveError, false);
+    assertEq('stale failure does not settle B', notes.settledToken, 2);
+    pending[3]({ ok: true });
+    await tick();
+    assertEq('newest retry settled', notes.settledToken, 4);
+    assertEq('newest retry not error', notes.saveError, false);
+}
+
+(async function () {
+    try {
+        await runSaveGenerationRace();
+    } catch (err) {
+        console.error(err);
+        process.exit(1);
+    }
+    prksDestroyAllTabContexts();
+    if (failed) {
+        console.log(failed + ' failed, ' + passed + ' passed');
+        process.exit(1);
+    }
+    console.log('All ' + passed + ' Work notes layout isolation checks passed');
+})();

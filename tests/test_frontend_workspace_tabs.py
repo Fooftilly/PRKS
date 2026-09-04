@@ -124,8 +124,15 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("prksWorkspaceCloseOtherTabs", src)
         self.assertIn("prksWorkspaceCloseTabsToTheRight", src)
         self.assertIn("prks-workspace-tab__split", src)
+        self.assertIn("syncTrailingTabStops", src)
         self.assertIn("Open split view", _read(_INDEX))
+        refresh = src[src.find("function prksWorkspaceRefreshTabStatus") : src.find("function revealWorkspaceTab")]
+        self.assertIn("updateTabOverflow()", refresh)
+        kind = src[src.find("function tabStatusKind") : src.find("function statusLabel")]
+        self.assertLess(kind.find("return 'error'"), kind.find("return 'saving'"))
+        self.assertLess(kind.find("return 'saving'"), kind.find("return 'drafting'"))
         self.assertIn("prks-workspace-canvas", tiling)
+        self.assertIn("observedCanvas", tiling)
         self.assertIn("prks-tile--main", tiling)
         self.assertIn("prks-tile--secondary", tiling)
         self.assertIn("prks-tile--focused", tiling)
@@ -138,6 +145,9 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertNotIn("type: 'split'", menu)
         self.assertIn("Open in split view", menu)
         self.assertIn("Make main", menu)
+        self.assertIn("menuItems.push(split)", menu)
+        self.assertIn("menuItems.push(close)", menu)
+        self.assertIn("role', 'menuitem'", menu)
         nav = _read(_NAV)
         self.assertIn("function prksRouteSupportsTile", nav)
         self.assertIn("function prksPublishMainShell", nav)
@@ -214,6 +224,11 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("stacked", readme.lower())
         self.assertIn("Open in split view", readme)
         self.assertIn("Split view", readme)
+        self.assertIn("Close other tabs", readme)
+        self.assertIn("Close tabs to the right", readme)
+        self.assertIn("overflow", readme.lower())
+        self.assertIn("Shift+F10", readme)
+        self.assertIn("drafting", readme.lower())
 
     def test_node_selftest(self):
         node = shutil.which("node")
@@ -229,6 +244,21 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
         self.assertIn("passed", proc.stdout)
         self.assertIn(", 0 failed", proc.stdout)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
+    def test_tiling_observer_selftest(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for workspace tiling tests")
+        runner = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tiling_selftest.js")
+        proc = subprocess.run(
+            [node, runner],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
         self.assertNotIn("FAIL  ", proc.stdout)
 
 

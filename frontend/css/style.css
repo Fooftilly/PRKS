@@ -978,9 +978,13 @@ body {
 }
 
 .prks-workspace-menu__overflow-close:hover,
-.prks-workspace-menu__overflow-close:focus-visible {
+.prks-workspace-menu__overflow-close:focus-visible,
+.prks-workspace-menu__overflow-close.is-active {
     color: var(--text-primary);
     background: var(--hover-overlay);
+}
+
+.prks-workspace-menu__overflow-close:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: -2px;
 }
