@@ -91,9 +91,11 @@
      * no knowledge this module exists. */
     let pending = null;
     let bound = false;
-    /* Outlives `pending` by design: set the instant a real drag begins, consumed by the very
-     * next capture-phase click (the one pointerup synthesizes), so a completed/cancelled drag
-     * never also fires the click a plain tap would have. */
+    /* Outlives `pending` by design: armed only in onPointerUp() for a gesture that actually
+     * completed a drag (see onPointerUp below), consumed by the very next capture-phase click
+     * (the one that same pointerup synthesizes). A cancelled drag (Escape/pointercancel/
+     * lostpointercapture/blur/responsive transition) never arms this, so it never swallows the
+     * user's next intentional click. */
     let suppressClickTarget = null;
 
     function cssEscape(id) {
@@ -516,6 +518,15 @@
     /* ---- Tab-strip edge autoscroll ---- */
 
     function runAutoscroll(x, y) {
+        /* A pane's grip only ever targets the tab strip as a Park drop (spec #4): its insertion
+         * position within the strip is irrelevant, so scrolling the strip while hovering near an
+         * edge would be a surprising side effect with no purpose. Tab-source dragging (ordinary
+         * reorder) still autoscrolls; pane-to-pane spatial movement never touches the strip at
+         * all and is unaffected either way. */
+        if (pending.source.kind === 'pane') {
+            stopAutoscroll();
+            return;
+        }
         const list = doc().getElementById('prks-workspace-tabs');
         if (!list || list.scrollWidth <= list.clientWidth) {
             stopAutoscroll();

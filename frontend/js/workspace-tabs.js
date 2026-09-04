@@ -1863,12 +1863,16 @@
     }
 
     function applyTabWrap(wrap, tab, flags, index) {
-        wrap.className =
-            'prks-workspace-tab' +
-            (flags.isMain ? ' is-main' : '') +
-            (flags.isTiled ? ' is-tiled' : '') +
-            (flags.isFocused ? ' is-focused' : '') +
-            (flags.isParked ? ' is-parked' : '');
+        /* Toggle only the flag classes this function owns -- an ordinary reconciling paint
+         * (e.g. a resolved-title update) must never clobber an unrelated transient class an
+         * external module applied directly to this same, reused DOM node (e.g. workspace-drag.js's
+         * `is-drag-source` while this tab is the live drag source). Do not replace `className`
+         * wholesale. */
+        wrap.classList.add('prks-workspace-tab');
+        wrap.classList.toggle('is-main', !!flags.isMain);
+        wrap.classList.toggle('is-tiled', !!flags.isTiled);
+        wrap.classList.toggle('is-focused', !!flags.isFocused);
+        wrap.classList.toggle('is-parked', !!flags.isParked);
         const activate = wrap.querySelector('.prks-workspace-tab__activate');
         if (activate) {
             activate.setAttribute('aria-selected', flags.isMain ? 'true' : 'false');

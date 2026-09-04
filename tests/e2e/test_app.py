@@ -4122,6 +4122,150 @@ class WorkspaceDragDropTests(_BrowserE2E):
         self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
         self.assertEqual(page.locator(".prks-tile").count(), 2)
 
+    def test_drag_ordinary_paint_survives_active_drag(self):
+        """A benign workspace repaint (a resolved-title update -- the normal production paint
+        path any route triggers on load) must never cancel an in-progress drag. Only
+        workspace-tiling.js's pruneStale() actually finding stale tile/split DOM to remove may
+        cancel a drag (see test_drag_actual_stale_removal_cancels_active_drag below); an
+        ordinary paint with nothing stale must leave it completely alone."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        work_hash = page.evaluate("() => location.hash")
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        before = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        a_id, b_id = [t["id"] for t in before["tabs"]]
+
+        b_box = _tab_box(page, b_id)
+        canvas = page.locator(".prks-workspace-canvas").bounding_box()
+        drop_x = canvas["x"] + canvas["width"] * 0.85
+        drop_y = canvas["y"] + canvas["height"] / 2
+        _begin_pointer_drag(page, _tab_grab_point(b_box))
+        page.mouse.move(drop_x, drop_y, steps=10)
+        page.wait_for_selector("#prks-drag-empty-overlay")
+
+        # Trigger a normal production paint on an UNRELATED existing tab (Main/A), using its own
+        # current route -- this exercises prksWorkspaceSetResolvedTitleForTab -> paint() ->
+        # prksWorkspaceSyncTiles() -> pruneStale(), with nothing stale to remove.
+        set_ok = page.evaluate(
+            """(a) => {
+                const tab = window.prksWorkspaceSnapshot().tabs.find((t) => t.id === a.id);
+                return window.prksWorkspaceSetResolvedTitleForTab(a.id, tab.route, 'Benign Paint Title', null);
+            }""",
+            arg={"id": a_id},
+        )
+        self.assertTrue(set_ok, "the benign title update must actually go through the normal paint path")
+        page.wait_for_function(
+            "(id) => document.querySelector('.prks-workspace-tab[data-tab-id=\"' + id + '\"] .prks-workspace-tab__title')?.textContent === 'Benign Paint Title'",
+            arg=a_id,
+        )
+
+        # The drag must have survived that paint completely intact.
+        residue = _drag_dom_residue(page)
+        self.assertEqual(residue["preview"], 1, "drag preview must survive a benign paint")
+        self.assertTrue(residue["bodyDragging"], "body drag class must survive a benign paint")
+        self.assertEqual(residue["dragSource"], 1, "source dim style must survive a benign paint")
+        self.assertEqual(
+            page.evaluate("() => document.querySelectorAll('#prks-drag-empty-overlay').length"),
+            1,
+            "the valid drop overlay must still be shown after a benign paint",
+        )
+        mid = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertIsNone(mid["secondaryTree"], "canonical state must be unchanged by a benign paint mid-drag")
+        self.assertEqual([t["id"] for t in mid["tabs"]], [a_id, b_id])
+
+        # Release: normal drop semantics still occur afterward.
+        page.mouse.move(drop_x, drop_y, steps=3)
+        page.mouse.up()
+        page.wait_for_function(
+            """(id) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return !!(snap.secondaryTree && snap.secondaryTree.type === 'leaf' && snap.secondaryTree.tabId === id);
+            }""",
+            arg=b_id,
+        )
+        _assert_no_drag_residue(self, page, "after completing the drop following a benign mid-drag paint")
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+
+    def test_drag_actual_stale_removal_cancels_active_drag(self):
+        """Distinct from the responsive-transition cancellation test: this specifically protects
+        pruneStale()'s own lifecycle role by forcing a paint that actually has stale tile DOM to
+        remove (via a normal, unrelated 'Hide from split' on a leaf that is NOT the live drag
+        source), and asserts the cancellation observably happens before that stale node is
+        actually removed from the DOM."""
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)  # Main A; Secondary B / (C | D)
+
+        # Instrument call order: prksWorkspaceCancelActiveDrag() must run strictly before the
+        # stale C tile is actually removed from the DOM.
+        page.evaluate(
+            """(cId) => {
+                window.__prksOrder = [];
+                const origCancel = window.prksWorkspaceCancelActiveDrag;
+                window.prksWorkspaceCancelActiveDrag = function () {
+                    window.__prksOrder.push('cancel');
+                    return origCancel.apply(this, arguments);
+                };
+                const origRemoveChild = Node.prototype.removeChild;
+                Node.prototype.removeChild = function (child) {
+                    if (
+                        child &&
+                        child.getAttribute &&
+                        child.getAttribute('data-prks-tab-id') === cId &&
+                        child.classList &&
+                        child.classList.contains('prks-tile')
+                    ) {
+                        window.__prksOrder.push('remove-c-tile');
+                    }
+                    return origRemoveChild.call(this, child);
+                };
+            }""",
+            arg=tree["c_id"],
+        )
+
+        # Begin dragging D (unrelated to the leaf about to be removed) into a valid position.
+        d_grip = _grip_box(page, tree["d_id"])
+        b_tile = _tile_box(page, tree["b_id"])
+        _begin_pointer_drag(page, _center(d_grip))
+        page.mouse.move(*_edge_point(b_tile, "above"), steps=8)
+        page.wait_for_selector("#prks-drag-edge-overlay")
+
+        # An unrelated, ordinary canonical mutation removes C's tile -- this is what actually
+        # gives pruneStale() stale DOM to clean up in the same repaint.
+        hidden = page.evaluate("(cId) => window.prksWorkspaceHideLeaf(cId)", arg=tree["c_id"])
+        self.assertTrue(hidden)
+
+        page.wait_for_function(
+            "(cId) => !document.querySelector('.prks-tile[data-prks-tab-id=\"' + cId + '\"]')",
+            arg=tree["c_id"],
+        )
+        _assert_no_drag_residue(self, page, "the D drag must be fully cancelled once C's tile actually goes stale")
+
+        order = page.evaluate("() => window.__prksOrder")
+        self.assertIn("cancel", order)
+        self.assertIn("remove-c-tile", order)
+        self.assertLess(
+            order.index("cancel"),
+            order.index("remove-c-tile"),
+            "cancellation must happen strictly before the stale tile is removed from the DOM",
+        )
+
+        # The mouseup for the now-cancelled D drag is inert.
+        page.mouse.up()
+        _assert_no_drag_residue(self, page, "still clean after the now-inert mouseup")
+
+        # C is genuinely gone (hidden/parked), B and D remain, and D was never moved (the drag
+        # that was in flight got cancelled rather than committed).
+        leaves = page.evaluate("() => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)")
+        self.assertEqual(sorted(leaves), sorted([tree["b_id"], tree["d_id"]]))
+
     def test_drag_parked_tab_splits_below_existing_leaf(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         page.set_viewport_size({"width": 1600, "height": 900})
@@ -4734,6 +4878,66 @@ class WorkspaceDragDropTests(_BrowserE2E):
             scroll_after_drop,
             "autoscroll RAF must stop after drop",
         )
+
+    def test_drag_pane_parking_does_not_autoscroll_tab_strip(self):
+        """Distinct from test_drag_tab_strip_autoscroll (tab-source dragging DOES autoscroll):
+        a pane's grip only ever targets the tab strip as a Park drop, so its insertion position
+        within the strip is irrelevant and edge autoscroll must not fire for that drag."""
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate("(id) => window.prksNavigate('#/people/' + id, { target: 'tile' })", arg=person_id)
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().secondaryTree && window.prksWorkspaceSnapshot().secondaryTree.type === 'leaf'"
+        )
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.evaluate(
+            """(id) => {
+                const jobs = [];
+                for (let i = 0; i < 24; i++) {
+                    jobs.push(window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false }));
+                }
+                return Promise.all(jobs);
+            }""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length >= 26")
+        overflow = page.evaluate(
+            """() => {
+                const list = document.getElementById('prks-workspace-tabs');
+                return !!(list && list.scrollWidth > list.clientWidth + 2);
+            }"""
+        )
+        self.assertTrue(overflow)
+
+        strip = page.locator("#prks-workspace-tabs").bounding_box()
+        scroll_before = page.evaluate("() => document.getElementById('prks-workspace-tabs').scrollLeft")
+
+        b_grip = _grip_box(page, b_id)
+        _begin_pointer_drag(page, _center(b_grip))
+        edge_x = strip["x"] + strip["width"] - 10
+        edge_y = strip["y"] + strip["height"] / 2
+        page.mouse.move(edge_x, edge_y, steps=5)
+        page.wait_for_selector("#prks-workspace-tabs.is-drop-target-park")
+        # Hold at the edge briefly -- long enough for several autoscroll animation frames to
+        # have fired if they were (incorrectly) still running for a pane-source drag.
+        page.wait_for_timeout(250)
+        self.assertEqual(
+            page.evaluate("() => document.getElementById('prks-workspace-tabs').scrollLeft"),
+            scroll_before,
+            "a pane-source drag must never autoscroll the tab strip",
+        )
+
+        page.mouse.up()
+        page.wait_for_function(
+            "(id) => window.prksWorkspaceSnapshot().secondaryTree === null",
+            arg=b_id,
+        )
+        _assert_no_drag_residue(self, page, "after parking near the overflowing strip's edge")
+        self.assertTrue(page.locator('.prks-workspace-tab[data-tab-id="%s"].is-parked' % b_id).count() == 1)
 
     def test_move_tab_context_menu_left_right(self):
         server, page, _collector = self._start_app()

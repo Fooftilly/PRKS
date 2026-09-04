@@ -449,10 +449,14 @@
         if (!tile || !snap) return;
         const isMain = tabId === snap.mainTabId;
         const isFocused = tabId === snap.focusedTabId;
-        tile.className =
-            'prks-tile' +
-            (isMain ? ' prks-tile--main' : ' prks-tile--secondary') +
-            (isFocused ? ' prks-tile--focused' : '');
+        /* Toggle only the flag classes this function owns -- an ordinary reconciling paint must
+         * never clobber an unrelated transient class an external module applied directly to
+         * this same, reused tile node (e.g. workspace-drag.js's `is-drag-source` while this pane
+         * is the live drag source). Do not replace `className` wholesale. */
+        tile.classList.add('prks-tile');
+        tile.classList.toggle('prks-tile--main', isMain);
+        tile.classList.toggle('prks-tile--secondary', !isMain);
+        tile.classList.toggle('prks-tile--focused', isFocused);
         tile.setAttribute('data-prks-tab-id', tabId);
         const header = tile.querySelector(':scope > .prks-tile-header') || tile.querySelector('.prks-tile-header');
         if (header) fillHeader(header, snap, tabId, isMain ? 'main' : 'secondary', visualTiled);
@@ -496,26 +500,29 @@
      * Runs after rendering, once every surviving node has already been reparented into its new
      * position, so anything still found here is genuinely orphaned garbage. */
     function pruneStale(canvas, keepTabIds, keepSplitIds) {
-        /* Defensive lifecycle integration (drag-and-drop workspace management #3): a workspace
-         * mutation (close, park, make-main, ...) can remove a Secondary tile that happens to be
-         * the live drag source before another pointer event ever fires. Cancel unconditionally,
-         * before any DOM removal below -- idempotent/no-op when no drag is active, and already a
-         * no-op on a normal successful drop commit (that path already ran cleanup() itself
-         * before calling into the canonical mutation that lands here). */
-        if (typeof root.prksWorkspaceCancelActiveDrag === 'function') {
-            root.prksWorkspaceCancelActiveDrag();
-        }
         const staleTiles = collectAll(canvas, function (n) {
             return isAnyTile(n) && !keepTabIds[n.getAttribute('data-prks-tab-id')];
         });
+        const staleContainers = collectAll(canvas, function (n) {
+            return isAnySplitContainer(n) && !keepSplitIds[n.getAttribute('data-prks-split-id')];
+        });
+        /* Defensive lifecycle integration (drag-and-drop workspace management #3): a workspace
+         * mutation (close, park, make-main, ...) can remove a Secondary tile that happens to be
+         * the live drag source before another pointer event ever fires. Cancel before any actual
+         * DOM removal below -- but only when there is genuinely stale DOM to remove. pruneStale()
+         * also runs on every ordinary prksWorkspaceSyncTiles() paint (e.g. a resolved-title
+         * update) where nothing is stale; an active drag must survive those unconditionally.
+         * Idempotent/no-op when no drag is active, and already a no-op on a normal successful
+         * drop commit (that path already ran cleanup() itself before calling into the canonical
+         * mutation that lands here). */
+        if ((staleTiles.length || staleContainers.length) && typeof root.prksWorkspaceCancelActiveDrag === 'function') {
+            root.prksWorkspaceCancelActiveDrag();
+        }
         for (let i = 0; i < staleTiles.length; i++) {
             const el = staleTiles[i];
             if (openSplitMenu && el.contains && el.contains(openSplitMenu.wrap)) openSplitMenu = null;
             if (el.parentNode) el.parentNode.removeChild(el);
         }
-        const staleContainers = collectAll(canvas, function (n) {
-            return isAnySplitContainer(n) && !keepSplitIds[n.getAttribute('data-prks-split-id')];
-        });
         for (let i = 0; i < staleContainers.length; i++) {
             const el = staleContainers[i];
             if (typeof root.prksWorkspaceReleaseNestedSeparator === 'function') {

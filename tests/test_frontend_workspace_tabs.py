@@ -354,8 +354,11 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("prksWorkspaceCancelActiveDrag", tiling)
         applied_narrow = tiling[tiling.find("function applyNarrow") : tiling.find("function applyNarrow") + 1600]
         self.assertIn("prksWorkspaceCancelActiveDrag", applied_narrow)
-        prune_stale = tiling[tiling.find("function pruneStale") : tiling.find("function pruneStale") + 900]
+        prune_stale = tiling[tiling.find("function pruneStale") : tiling.find("function pruneStale") + 1500]
         self.assertIn("prksWorkspaceCancelActiveDrag", prune_stale)
+        # pruneStale() must only cancel when it actually found stale DOM to remove -- not
+        # unconditionally on every ordinary paint.
+        self.assertIn("staleTiles.length || staleContainers.length", prune_stale)
         # Move tab left/right context-menu commands reuse the same canonical ordering API as
         # drag/drop, and existing non-drag workflows remain intact alongside it.
         menu = _read(_MENU)
