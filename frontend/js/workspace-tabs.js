@@ -797,12 +797,14 @@
             }
             /* Adding a new tab to split view never evicts an existing pane (spec): split the
              * default target leaf (the single existing leaf, or the focused Secondary leaf)
-             * left-right -- existing leaf stays first, new leaf becomes second/focused. */
+             * left-right -- existing leaf stays first, new leaf becomes second/focused.
+             * Fail-closed, matching tileTab(): when placement is ambiguous (a recursive tree
+             * with no focused Secondary leaf) or the pane cap is already reached, this must not
+             * create a tab, mutate secondaryTree, mount anything, or paint -- only announce the
+             * guidance and return false. The caller can focus a Secondary leaf or use an
+             * explicit Split right/down instead. */
             const targetLeaf = defaultSplitTargetLeafId();
             if (!targetLeaf || paneCapReached()) {
-                const tab = makeTab(route);
-                state.tabs.push(tab);
-                paint();
                 announce('', paneCapReached() ? 'cap' : 'ambiguous');
                 return Promise.resolve(false);
             }

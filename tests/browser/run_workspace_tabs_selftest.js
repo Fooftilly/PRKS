@@ -569,6 +569,73 @@ async function run() {
     assert('split tile B still mounted', splitTile.isMounted(bId));
     assert('split tile C mounted', splitTile.isMounted(cId));
 
+    /* Ambiguous {target:'tile'} navigation (recursive tree, no focused Secondary leaf) must
+     * fail exactly as atomically as tileTab(): no new logical tab, no tree mutation, no mount,
+     * no paint, no leave check -- just the existing ambiguity announcement and `false`. */
+    const ambigNav = makeHarness({ hash: '#/works/WA' });
+    await ambigNav.ws.navigate('#/works/WB', { target: 'tile' }); // A Main | B Secondary
+    const ambigB = ambigNav.ws.snapshot().secondaryTree.tabId;
+    await ambigNav.ws.splitLeaf(ambigB, 'left-right', { hash: '#/works/WC' }); // B | C
+    const ambigC = ambigNav.ws.snapshot().secondaryTree.second.tabId;
+    const ambigA = ambigNav.ws.snapshot().mainTabId;
+    await ambigNav.ws.focusTab(ambigA); // no Secondary leaf focused -> ambiguous
+    ambigNav.setCanLeave(false);
+    const ambigLeaveBefore = ambigNav.canLeaveCalls();
+    const ambigMountBefore = ambigNav.mountedCount();
+    const ambigRendersBefore = ambigNav.renders.length;
+    const ambigFpBefore = fingerprint(ambigNav);
+    const ambigResult = await ambigNav.ws.navigate('#/works/WD', { target: 'tile' });
+    assertEq('ambiguous navigateTile declines', ambigResult, false);
+    assertEq('ambiguous navigateTile fingerprint unchanged', fingerprint(ambigNav), ambigFpBefore);
+    assertEq('ambiguous navigateTile no new tab', ambigNav.ws.snapshot().tabs.length, 3);
+    assertEq('ambiguous navigateTile no mount', ambigNav.mountedCount(), ambigMountBefore);
+    assertEq('ambiguous navigateTile no paint/render', ambigNav.renders.length, ambigRendersBefore);
+    assertEq('ambiguous navigateTile no leave check', ambigNav.canLeaveCalls(), ambigLeaveBefore);
+
+    /* Focusing a Secondary leaf resolves the ambiguity: the same call now unambiguously splits
+     * that focused leaf (B) with the new tab (D); only D is newly mounted. */
+    await ambigNav.ws.focusTab(ambigB);
+    const resolvedResult = await ambigNav.ws.navigate('#/works/WD', { target: 'tile' });
+    assert('resolved navigateTile succeeds once a Secondary leaf is focused', !!resolvedResult);
+    const snapResolved = ambigNav.ws.snapshot();
+    /* B was the target leaf being split, so it's replaced in-place by a new nested split(B, D);
+     * the sibling C (never involved) stays exactly where it was, as the outer split's `second`. */
+    const innerResolved = snapResolved.secondaryTree.first;
+    assertEq('resolved navigateTile nests B under a new split', innerResolved.type, 'split');
+    assertEq('resolved navigateTile keeps B first in the nest', innerResolved.first.tabId, ambigB);
+    const ambigD = innerResolved.second.tabId;
+    assert('resolved navigateTile new leaf is D', ambigD !== ambigB && ambigD !== ambigC && ambigD !== ambigA);
+    assertEq('resolved navigateTile C untouched in outer tree', snapResolved.secondaryTree.second.tabId, ambigC);
+    assertEq('resolved navigateTile focuses D', snapResolved.focusedTabId, ambigD);
+    assertEq('resolved navigateTile only D newly mounted', ambigNav.mountedCount(), ambigMountBefore + 1);
+    assert('resolved navigateTile D mounted', ambigNav.isMounted(ambigD));
+    assert('resolved navigateTile C untouched', ambigNav.isMounted(ambigC));
+
+    /* Pane-cap {target:'tile'} must be equally atomic: at 1 Main + 3 Secondary, an explicit
+     * split-view navigation must not silently fall back to creating a parked tab. Ordinary
+     * {target:'new-tab'} is a genuinely different operation and must keep working. */
+    const capNav = makeHarness({ hash: '#/works/WA' });
+    await capNav.ws.navigate('#/works/WB', { target: 'tile' });
+    const capB = capNav.ws.snapshot().secondaryTree.tabId;
+    await capNav.ws.splitLeaf(capB, 'top-bottom', { hash: '#/works/WC' });
+    const capC = capNav.ws.snapshot().secondaryTree.second.tabId;
+    await capNav.ws.splitLeaf(capC, 'left-right', { hash: '#/works/WD' });
+    assertEq('cap setup mounted 4', capNav.mountedCount(), 4);
+    const capFpBefore = fingerprint(capNav);
+    const capMountBefore = capNav.mountedCount();
+    const capRendersBefore = capNav.renders.length;
+    const capResult = await capNav.ws.navigate('#/works/WE', { target: 'tile' });
+    assertEq('pane-cap navigateTile declines', capResult, false);
+    assertEq('pane-cap navigateTile fingerprint unchanged', fingerprint(capNav), capFpBefore);
+    assertEq('pane-cap navigateTile tab count unchanged', capNav.ws.snapshot().tabs.length, 4);
+    assertEq('pane-cap navigateTile mounted unchanged', capNav.mountedCount(), capMountBefore);
+    assertEq('pane-cap navigateTile no paint/render', capNav.renders.length, capRendersBefore);
+
+    const capNewTabResult = await capNav.ws.navigate('#/works/WE', { target: 'new-tab', activate: false });
+    assert('new-tab at cap still succeeds', !!capNewTabResult);
+    assertEq('new-tab at cap creates one parked tab', capNav.ws.snapshot().tabs.length, 5);
+    assertEq('new-tab at cap does not mount it', capNav.mountedCount(), 4);
+
     const stack = makeHarness({ hash: '#/works/WA' });
     await stack.ws.navigate('#/works/WB', { target: 'tile' });
     const stackSec = stack.ws.snapshot().secondaryTree.tabId;

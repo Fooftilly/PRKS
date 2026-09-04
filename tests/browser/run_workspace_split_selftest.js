@@ -401,7 +401,7 @@ async function run() {
         .then(function (t) {
             return t.id;
         }));
-    assertEq('replace Secondary preserves ratio', h.ws.snapshot().mainSplitRatio, 0.65);
+    assertEq('split Secondary preserves root ratio', h.ws.snapshot().mainSplitRatio, 0.65);
 
     await h.ws.closeTab(h.ws.snapshot().secondaryTree.tabId);
     assertEq('close Secondary preserves ratio (session)', h.ws.snapshot().mainSplitRatio, 0.65);
