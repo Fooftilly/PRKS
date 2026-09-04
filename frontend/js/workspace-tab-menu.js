@@ -133,6 +133,14 @@
             void root.prksWorkspaceHideLeaf(action.tabId);
             return;
         }
+        if (action.kind === 'move-left' && typeof root.prksWorkspaceMoveTabStep === 'function') {
+            root.prksWorkspaceMoveTabStep(action.tabId, 'left');
+            return;
+        }
+        if (action.kind === 'move-right' && typeof root.prksWorkspaceMoveTabStep === 'function') {
+            root.prksWorkspaceMoveTabStep(action.tabId, 'right');
+            return;
+        }
         if (
             (action.kind === 'split-right' || action.kind === 'split-down') &&
             typeof root.prksOpenCommandPalette === 'function'
@@ -203,6 +211,25 @@
         host.appendChild(sep);
     }
 
+    /** Keyboard/non-drag alternative to tab-strip drag reordering (spec #43): same canonical
+     * `prksWorkspaceMoveTabStep` ordering API drag-drop uses. Any tab -- Main, Secondary, or
+     * parked -- can be reordered; role/mounted state never changes. Disabled at either end of
+     * the strip, where the move is meaningless. */
+    function moveSpecs(snap, tabId, idx) {
+        return [
+            {
+                label: 'Move tab left',
+                action: { kind: 'move-left', tabId: tabId },
+                disabled: idx <= 0,
+            },
+            {
+                label: 'Move tab right',
+                action: { kind: 'move-right', tabId: tabId },
+                disabled: idx < 0 || idx >= snap.tabs.length - 1,
+            },
+        ];
+    }
+
     function contextSpecs(tabId) {
         const snap = snapshot();
         const tab = findTab(snap, tabId);
@@ -232,6 +259,7 @@
                     action: { kind: 'close-right', tabId: tabId },
                 });
             }
+            specs.push.apply(specs, moveSpecs(snap, tabId, idx));
             return specs;
         }
         if (role === 'secondary') {
@@ -257,6 +285,7 @@
             });
             specs.push({ label: 'Hide from split', icon: 'eye-off', action: { kind: 'hide-leaf', tabId: tabId } });
             specs.push({ label: 'Close', action: { kind: 'close', tabId: tabId } });
+            specs.push.apply(specs, moveSpecs(snap, tabId, idx));
             return specs;
         }
         specs.push({
@@ -277,6 +306,7 @@
                 action: { kind: 'close-right', tabId: tabId },
             });
         }
+        specs.push.apply(specs, moveSpecs(snap, tabId, idx));
         return specs;
     }
 

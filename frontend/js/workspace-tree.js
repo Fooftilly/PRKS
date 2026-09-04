@@ -197,6 +197,36 @@
         return replaceLeaf(tree, tabId, splitNode);
     }
 
+    /**
+     * Atomically repositions an existing leaf (`sourceTabId`) relative to another existing
+     * leaf (`targetTabId`) in one pure transaction: remove `sourceTabId` from a temporary tree,
+     * normalize it, re-locate `targetTabId` in that normalized tree (its path may have changed
+     * -- a collapse can promote a different node to root, or shift which split now holds it),
+     * then insert `sourceTabId` next to it via the same `splitLeaf` primitive used for ordinary
+     * insertion. Returns one final valid tree; never a sequence of intermediate published trees.
+     * `options.axis`: 'left-right' | 'top-bottom'. `options.placement`: 'first' | 'second'
+     * (default 'second' -- target stays first, moved leaf becomes second).
+     * Nodes outside the affected path are returned by reference (via `removeLeaf`/`splitLeaf`'s
+     * own path-rewriting), so unrelated split IDs are preserved automatically.
+     * No-op (returns the original tree unchanged) when: source/target are the same, either is
+     * missing from `tree`, or (defensively) target can no longer be found after removing source.
+     */
+    function moveLeafRelativeToTarget(tree, sourceTabId, targetTabId, options) {
+        if (!sourceTabId || !targetTabId || sourceTabId === targetTabId) return tree;
+        if (!containsTab(tree, sourceTabId) || !containsTab(tree, targetTabId)) return tree;
+        const opts = options || {};
+        const axis = opts.axis === 'top-bottom' ? 'top-bottom' : 'left-right';
+        const placement = opts.placement === 'first' ? 'first' : 'second';
+        const withoutSource = normalizeTree(removeLeaf(tree, sourceTabId));
+        if (!containsTab(withoutSource, targetTabId)) return tree;
+        return splitLeaf(withoutSource, targetTabId, {
+            axis: axis,
+            newTabId: sourceTabId,
+            placement: placement,
+            ratio: opts.ratio,
+        });
+    }
+
     /** Removes the leaf with `tabId`, collapsing any split left with a single child
      * (repeated upward). Returns the new tree root, or `null` if the whole tree collapsed
      * (i.e. the removed leaf was the entire tree). */
@@ -336,6 +366,7 @@
         replaceTabId: replaceTabId,
         splitLeaf: splitLeaf,
         removeLeaf: removeLeaf,
+        moveLeafRelativeToTarget: moveLeafRelativeToTarget,
         findSiblingLeafTabId: findSiblingLeafTabId,
         setSplitRatio: setSplitRatio,
         normalizeTree: normalizeTree,

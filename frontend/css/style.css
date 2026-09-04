@@ -1328,6 +1328,129 @@ body.prks-resizing-split--horizontal * {
     color: var(--text-secondary);
 }
 
+/* Restrained pane-drag grip (spec: dragging starts only from this handle -- never from the
+ * tile body/PDF/Research Notes/links/buttons/text/scrollbars, and never from Main's header,
+ * since Main is not spatially draggable). Not keyboard-operable (aria-hidden, tabindex -1):
+ * the equivalent non-drag commands ("Hide from split", "Move tab left/right") stay in the
+ * pane/tab menus. */
+.prks-tile-header__grip {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text-tertiary);
+    cursor: grab;
+    touch-action: none;
+}
+
+.prks-tile-header__grip:hover {
+    color: var(--text-secondary);
+}
+
+/* Source pane/tab stays visible during a drag (spec: layout only changes on a successful
+ * drop) -- a restrained dim, not a removal. */
+.prks-workspace-tab.is-drag-source,
+.prks-tile.is-drag-source {
+    opacity: 0.5;
+}
+
+body.prks-workspace-dragging {
+    cursor: grabbing;
+    user-select: none;
+}
+
+body.prks-workspace-dragging * {
+    user-select: none;
+}
+
+/* Floating drag preview: follows the pointer, never captures it, truncates long titles. */
+.prks-drag-preview {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 9000;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    max-width: 240px;
+    padding: var(--space-xs) var(--space-sm);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: var(--shadow-md);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+    pointer-events: none;
+    will-change: transform;
+}
+
+.prks-drag-preview__icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+
+.prks-drag-preview__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Tab-strip insertion marker: a narrow bar between the two tabs the drop would land between. */
+.prks-drag-insertion-marker {
+    flex: 0 0 auto;
+    align-self: stretch;
+    width: 2px;
+    margin: var(--space-xs) 2px;
+    border-radius: 1px;
+    background: var(--accent);
+}
+
+/* Tab strip as the "park pane" target while dragging a Secondary pane by its handle. */
+#prks-workspace-tabs.is-drop-target-park {
+    box-shadow: inset 0 0 0 2px var(--accent);
+    border-radius: var(--radius-sm);
+}
+
+/* Secondary edge-zone drop preview: a translucent overlay sized to the resulting pane area
+ * (spec: preview the result, not a giant highlight across the whole pane). Appears only during
+ * an active, eligible drag. */
+.prks-drag-edge-overlay {
+    position: fixed;
+    z-index: 8990;
+    background: var(--surface-selected);
+    opacity: 0.55;
+    border: 2px solid var(--accent);
+    border-radius: var(--radius-sm);
+    pointer-events: none;
+}
+
+.prks-drag-edge-overlay.is-invalid {
+    background: var(--text-tertiary);
+    border-color: var(--text-tertiary);
+    opacity: 0.25;
+}
+
+/* First-Secondary drop zone: shown only while there is no Secondary tree yet, during an
+ * eligible parked-tab drag. */
+.prks-drag-empty-overlay {
+    position: fixed;
+    z-index: 8990;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-selected);
+    opacity: 0.55;
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+    pointer-events: none;
+}
+
 .prks-tile__body {
     container-type: inline-size;
     min-width: 0;

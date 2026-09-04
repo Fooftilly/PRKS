@@ -301,6 +301,24 @@
             }
             header.hidden = false;
 
+            if (role !== 'main') {
+                /* Restrained drag grip (spec: pane drag starts only from this handle, never from
+                 * the tile body/PDF/Research Notes/links/buttons/text/scrollbars). Not a
+                 * keyboard-operable control -- it has no click behavior of its own -- so it's
+                 * hidden from the accessibility tree; the equivalent non-drag operations
+                 * ("Hide from split", "Move tab left/right") stay reachable via the tab/pane
+                 * menus for keyboard and screen-reader users. workspace-drag.js binds pointerdown
+                 * on this element by class, not by wiring a listener per-header here. */
+                const grip = doc().createElement('button');
+                grip.type = 'button';
+                grip.className = 'prks-tile-header__grip';
+                grip.tabIndex = -1;
+                grip.setAttribute('aria-hidden', 'true');
+                grip.title = 'Drag to move or park this pane';
+                grip.innerHTML = iconHtml('grip-vertical');
+                header.appendChild(grip);
+            }
+
             const icon = doc().createElement('span');
             icon.className = 'prks-tile-header__icon';
             icon.setAttribute('aria-hidden', 'true');

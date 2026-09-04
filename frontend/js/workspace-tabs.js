@@ -655,22 +655,25 @@
             });
         }
 
-        /** Splits `targetTabId`'s leaf into a new split node holding `tab` as the second child
-         * (spec: existing leaf stays first, new leaf placed second). Mounts only `tab` -- the
-         * target leaf and every other leaf keep their existing TabContext untouched. */
-        function performSplit(targetTabId, axis, tab) {
+        /** Splits `targetTabId`'s leaf into a new split node holding `tab` (spec default:
+         * existing leaf stays first, new leaf placed second -- `placement: 'first'` reverses
+         * that, used by drag-drop's left/above edge zones). Mounts only `tab` -- the target
+         * leaf and every other leaf keep their existing TabContext untouched. */
+        function performSplit(targetTabId, axis, tab, placement) {
             state.secondaryTree = root.splitLeaf(state.secondaryTree, targetTabId, {
                 axis: axis,
                 newTabId: tab.id,
-                placement: 'second',
+                placement: placement === 'first' ? 'first' : 'second',
             });
             return mountAndRenderSecondary(tab);
         }
 
         /** Explicit Split right ('left-right') / Split down ('top-bottom') action for a specific
          * focused Secondary leaf. `options.tabId` reuses an existing (often parked) tab;
-         * `options.hash` creates one. Refuses (without side effects on an existing tab) when the
-         * target isn't a visible leaf or the visible-pane cap is already reached. */
+         * `options.hash` creates one. `options.placement` ('first' | 'second', default 'second')
+         * lets a caller (drag-drop's edge-zone geometry) put the new leaf before the target
+         * instead of after. Refuses (without side effects on an existing tab) when the target
+         * isn't a visible leaf, the tab is ineligible, or the visible-pane cap is reached. */
         function splitLeafAction(targetTabId, axis, options) {
             if (!root.containsTab(state.secondaryTree, targetTabId)) return Promise.resolve(false);
             if (paneCapReached()) {
@@ -689,13 +692,75 @@
                 ) {
                     return Promise.resolve(false);
                 }
-                return Promise.resolve(performSplit(targetTabId, useAxis, existing));
+                return Promise.resolve(performSplit(targetTabId, useAxis, existing, opts.placement));
             }
             const route = canonical(opts.hash);
             if (!routeSupportsTile(route)) return Promise.resolve(false);
             const tab = makeTab(route);
             state.tabs.push(tab);
-            return Promise.resolve(performSplit(targetTabId, useAxis, tab));
+            return Promise.resolve(performSplit(targetTabId, useAxis, tab, opts.placement));
+        }
+
+        /** Atomic spatial reposition of an already-visible Secondary leaf (`sourceTabId`)
+         * relative to another visible Secondary leaf (`targetTabId`) -- one tree transaction via
+         * `root.moveLeafRelativeToTarget`, published once (spec #17-21). This is NOT a leave
+         * operation: the moved leaf stays mounted and visible before and after, so no leave
+         * preflight and no context destroy/remount happen here. `focusedTabId` is left exactly
+         * as-is -- moving a pane never changes focus ownership by itself. Declines (no mutation)
+         * when source/target aren't distinct visible Secondary leaves, Main is involved (Main
+         * never enters secondaryTree by drag), or the layout isn't spatially visible (stacked /
+         * narrow fallback -- no Secondary geometry exists to move within). */
+        function movePane(sourceTabId, targetTabId, axis, placement) {
+            if (!sourceTabId || !targetTabId || sourceTabId === targetTabId) return false;
+            if (sourceTabId === state.mainTabId || targetTabId === state.mainTabId) return false;
+            if (!visualTiled()) return false;
+            if (!root.containsTab(state.secondaryTree, sourceTabId)) return false;
+            if (!root.containsTab(state.secondaryTree, targetTabId)) return false;
+            const useAxis = axis === 'top-bottom' ? 'top-bottom' : 'left-right';
+            const usePlacement = placement === 'first' ? 'first' : 'second';
+            const nextTree = root.moveLeafRelativeToTarget(state.secondaryTree, sourceTabId, targetTabId, {
+                axis: useAxis,
+                placement: usePlacement,
+            });
+            if (nextTree === state.secondaryTree) return false;
+            state.secondaryTree = nextTree;
+            paint();
+            return true;
+        }
+
+        /** Canonical global tab-strip reorder (spec #9/#48): moves `tabId` to sit immediately
+         * before `beforeTabId` in `state.tabs` order (or to the end when `beforeTabId` is
+         * falsy/not found). Touches array order only -- never `mainTabId`, `focusedTabId`,
+         * `secondaryTree`, mounted contexts, or the URL. Both drag-drop and the tab context
+         * menu's Move left/right commands call this one function. */
+        function reorderTab(tabId, beforeTabId) {
+            const idx = tabIndex(tabId);
+            if (idx < 0 || tabId === beforeTabId) return false;
+            const tab = state.tabs[idx];
+            state.tabs.splice(idx, 1);
+            let insertAt = state.tabs.length;
+            if (beforeTabId) {
+                const beforeIdx = tabIndex(beforeTabId);
+                if (beforeIdx !== -1) insertAt = beforeIdx;
+            }
+            state.tabs.splice(insertAt, 0, tab);
+            paint();
+            return true;
+        }
+
+        /** Keyboard/menu alternative to drag reordering (spec #43): swaps `tabId` with its
+         * immediate left/right neighbor in the tab strip via the same `reorderTab` primitive.
+         * No-op at either end of the strip. */
+        function moveTabStep(tabId, direction) {
+            const idx = tabIndex(tabId);
+            if (idx < 0) return false;
+            if (direction === 'left') {
+                if (idx <= 0) return false;
+                return reorderTab(tabId, state.tabs[idx - 1].id);
+            }
+            if (idx >= state.tabs.length - 1) return false;
+            const afterNeighbor = state.tabs[idx + 2];
+            return reorderTab(tabId, afterNeighbor ? afterNeighbor.id : null);
         }
 
         /** Removes `tabId`'s leaf from secondaryTree while keeping its logical tab open and
@@ -1382,6 +1447,10 @@
             return !paneCapReached();
         }
 
+        function isNarrowFallback() {
+            return narrowFallback;
+        }
+
         return {
             bootstrap: bootstrap,
             navigate: navigate,
@@ -1395,10 +1464,14 @@
             tileTab: tileTab,
             splitLeaf: splitLeafAction,
             hideLeaf: hideLeaf,
+            movePane: movePane,
+            reorderTab: reorderTab,
+            moveTabStep: moveTabStep,
             canAddSecondaryLeaf: canAddSecondaryLeaf,
             setNestedSplitRatio: setNestedSplitRatio,
             findTabByRoute: findTabByRoute,
             setMode: setMode,
+            isNarrowFallback: isNarrowFallback,
             setNarrowFallback: setNarrowFallback,
             setResolvedTitle: setResolvedTitle,
             setResolvedTitleForTab: setResolvedTitleForTab,
@@ -2186,6 +2259,7 @@
         bindTileLayoutButton();
         paintProduction();
         if (typeof root.prksWorkspaceInitTabMenus === 'function') root.prksWorkspaceInitTabMenus();
+        if (typeof root.prksWorkspaceInitDrag === 'function') root.prksWorkspaceInitDrag();
         root.__prksWorkspaceReady = true;
         return ws.snapshot();
     }
@@ -2255,6 +2329,34 @@
     function prksWorkspaceHideLeaf(tabId) {
         if (!production || typeof production.hideLeaf !== 'function') return Promise.resolve(false);
         return production.hideLeaf(tabId);
+    }
+
+    /** Atomic spatial move of an already-visible Secondary leaf (`sourceTabId`) relative to
+     * another visible Secondary leaf (`targetTabId`); see `movePane` above. Used by pane-handle
+     * drag and by dragging a visible Secondary's global tab onto another pane's edge zone. */
+    function prksWorkspaceMovePane(sourceTabId, targetTabId, axis, placement) {
+        if (!production || typeof production.movePane !== 'function') return false;
+        return production.movePane(sourceTabId, targetTabId, axis, placement);
+    }
+
+    /** Canonical tab-strip reorder; see `reorderTab` above. Used by drag-drop tab reordering. */
+    function prksWorkspaceReorderTab(tabId, beforeTabId) {
+        if (!production || typeof production.reorderTab !== 'function') return false;
+        return production.reorderTab(tabId, beforeTabId);
+    }
+
+    /** Move-left/right tab-strip step; see `moveTabStep` above. Used by the tab context menu's
+     * "Move tab left" / "Move tab right" keyboard-friendly commands. */
+    function prksWorkspaceMoveTabStep(tabId, direction) {
+        if (!production || typeof production.moveTabStep !== 'function') return false;
+        return production.moveTabStep(tabId, direction);
+    }
+
+    /** True while the physical viewport is too narrow to show Secondary geometry (spatial
+     * drag/drop must not offer pane targets in that state; tab-strip reordering still may). */
+    function prksWorkspaceIsNarrowFallback() {
+        if (!production || typeof production.isNarrowFallback !== 'function') return false;
+        return production.isNarrowFallback();
     }
 
     function prksWorkspaceCanAddSecondaryLeaf() {
@@ -2374,6 +2476,10 @@
         prksWorkspaceTileTab: prksWorkspaceTileTab,
         prksWorkspaceSplitLeaf: prksWorkspaceSplitLeaf,
         prksWorkspaceHideLeaf: prksWorkspaceHideLeaf,
+        prksWorkspaceMovePane: prksWorkspaceMovePane,
+        prksWorkspaceReorderTab: prksWorkspaceReorderTab,
+        prksWorkspaceMoveTabStep: prksWorkspaceMoveTabStep,
+        prksWorkspaceIsNarrowFallback: prksWorkspaceIsNarrowFallback,
         prksWorkspaceCanAddSecondaryLeaf: prksWorkspaceCanAddSecondaryLeaf,
         prksWorkspaceSetNestedSplitRatio: prksWorkspaceSetNestedSplitRatio,
         prksWorkspaceFindTabByRoute: prksWorkspaceFindTabByRoute,

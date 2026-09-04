@@ -1331,6 +1331,106 @@ async function run() {
         assert('close to right D destroyed', !h2.isMounted(D2));
     }
 
+    {
+        /* ---- Canonical tab-strip reorder (drag-and-drop workspace management #5/#9/#48) ---- */
+        const r = makeHarness({ hash: '#/works/WA' });
+        await r.ws.navigate('#/works/WB', { target: 'tile' }); // A main, B Secondary leaf
+        const rA = r.ws.snapshot().mainTabId;
+        const rB = r.ws.snapshot().secondaryTree.tabId;
+        await r.ws.navigate('#/works/WC', { target: 'new-tab', activate: false }); // C parked
+        const rC = r.ws.snapshot().tabs[2].id;
+        await r.ws.navigate('#/works/WD', { target: 'new-tab', activate: false }); // D parked
+        const rD = r.ws.snapshot().tabs[3].id;
+        assertEq('reorder setup order', r.ws.snapshot().tabs.map((t) => t.id).join(','), [rA, rB, rC, rD].join(','));
+
+        const rMountBefore = r.mountedCount();
+        const rRendersBefore = r.renders.length;
+        const rTreeBefore = JSON.stringify(r.ws.snapshot().secondaryTree);
+        assert('reorder C before B', r.ws.reorderTab(rC, rB));
+        const afterReorder = r.ws.snapshot();
+        assertEq('reorder C before B order', afterReorder.tabs.map((t) => t.id).join(','), [rA, rC, rB, rD].join(','));
+        assertEq('reorder does not change mainTabId', afterReorder.mainTabId, rA);
+        assertEq('reorder does not change focusedTabId', afterReorder.focusedTabId, rB);
+        assertEq('reorder does not change secondaryTree', JSON.stringify(afterReorder.secondaryTree), rTreeBefore);
+        assertEq('reorder does not mount/unmount', r.mountedCount(), rMountBefore);
+        assertEq('reorder causes no render/route change', r.renders.length, rRendersBefore);
+
+        assert('reorder to end (beforeTabId null)', r.ws.reorderTab(rC, null));
+        assertEq('reorder to end order', r.ws.snapshot().tabs.map((t) => t.id).join(','), [rA, rB, rD, rC].join(','));
+
+        assert('reorder self is a no-op-false', !r.ws.reorderTab(rC, rC));
+        assert('reorder missing tab declines', !r.ws.reorderTab('nope', rA));
+        assertEq('reorder declines leave order unchanged', r.ws.snapshot().tabs.map((t) => t.id).join(','), [rA, rB, rD, rC].join(','));
+
+        /* ---- moveTabStep: swap-with-neighbor, the keyboard/menu Move left/right primitive,
+         * built on the very same reorderTab (#43/#48) ---- */
+        const step = makeHarness({ hash: '#/works/WA' });
+        await step.ws.navigate('#/works/WB', { target: 'new-tab', activate: false });
+        await step.ws.navigate('#/works/WC', { target: 'new-tab', activate: false });
+        await step.ws.navigate('#/works/WD', { target: 'new-tab', activate: false });
+        const [sA, sB, sC, sD] = step.ws.snapshot().tabs.map((t) => t.id);
+        assert('moveTabStep left at start declines', !step.ws.moveTabStep(sA, 'left'));
+        assert('moveTabStep right at end declines', !step.ws.moveTabStep(sD, 'right'));
+        assert('moveTabStep left swaps with left neighbor', step.ws.moveTabStep(sC, 'left'));
+        assertEq('moveTabStep left result', step.ws.snapshot().tabs.map((t) => t.id).join(','), [sA, sC, sB, sD].join(','));
+        assert('moveTabStep right swaps with right neighbor', step.ws.moveTabStep(sB, 'right'));
+        assertEq('moveTabStep right result', step.ws.snapshot().tabs.map((t) => t.id).join(','), [sA, sC, sD, sB].join(','));
+
+        /* ---- movePane: atomic spatial reposition of a visible Secondary leaf (#17-21/#25/#41) ---- */
+        const mp = makeHarness({ hash: '#/works/WA' });
+        await mp.ws.navigate('#/works/WB', { target: 'tile' }); // Main A | Secondary B
+        const mpA = mp.ws.snapshot().mainTabId;
+        const mpB = mp.ws.snapshot().secondaryTree.tabId;
+        await mp.ws.splitLeaf(mpB, 'left-right', { hash: '#/works/WC' }); // B | C
+        const mpC = mp.ws.snapshot().secondaryTree.second.tabId;
+        await mp.ws.splitLeaf(mpC, 'top-bottom', { hash: '#/works/WD' }); // B | (C over D)
+        const mpD = mp.ws.snapshot().secondaryTree.second.second.tabId;
+        await mp.ws.focusTab(mpD);
+        assertEq('movePane setup mounted 4', mp.mountedCount(), 4);
+
+        const mpMountBefore = mp.life.mount.length;
+        const mpParkBefore = mp.life.park.length;
+        const mpDestroyBefore = mp.life.destroy.length;
+        const mpRendersBefore = mp.renders.length;
+        const mpLeaveBefore = mp.canLeaveCalls();
+        const mpRootId = mp.ws.snapshot().secondaryTree.id;
+        assert('movePane D above B', mp.ws.movePane(mpD, mpB, 'top-bottom', 'first'));
+        const mpSnap = mp.ws.snapshot();
+        assertEq('movePane result order', tree.collectLeafTabIds(mpSnap.secondaryTree).join(','), [mpD, mpB, mpC].join(','));
+        /* B's leaf position is replaced in-place by a new nested split(D, B); C -- never
+         * involved in the move -- keeps its exact prior position as the outer split's second
+         * child, and the outer (unaffected) split node keeps its original id (spec #18). */
+        assertEq('movePane D moved above B (nested)', mpSnap.secondaryTree.first.first.tabId, mpD);
+        assertEq('movePane B nested below D', mpSnap.secondaryTree.first.second.tabId, mpB);
+        assertEq('movePane C untouched as outer second', mpSnap.secondaryTree.second.tabId, mpC);
+        assertEq('movePane preserves unaffected outer split id', mpSnap.secondaryTree.id, mpRootId);
+        /* Moving a pane is not a leave operation (#21): no context mounts, parks, destroys,
+         * leave-preflight calls, or route renders -- only the tree structure changed. */
+        assertEq('movePane mounts nothing new', mp.life.mount.length, mpMountBefore);
+        assertEq('movePane parks nothing', mp.life.park.length, mpParkBefore);
+        assertEq('movePane destroys nothing', mp.life.destroy.length, mpDestroyBefore);
+        assertEq('movePane triggers no render/route change', mp.renders.length, mpRendersBefore);
+        assertEq('movePane runs no leave preflight', mp.canLeaveCalls(), mpLeaveBefore);
+        assertEq('movePane still mounted 4', mp.mountedCount(), 4);
+        /* Focus ownership is untouched by a spatial move alone (#41): D was focused before the
+         * move and remains focused purely because geometry changed, not because of a new
+         * activation semantic. */
+        assertEq('movePane preserves prior focus', mpSnap.focusedTabId, mpD);
+
+        assert('movePane self is invalid', !mp.ws.movePane(mpB, mpB, 'left-right', 'second'));
+        assert('movePane Main as source is invalid', !mp.ws.movePane(mpA, mpB, 'left-right', 'second'));
+        assert('movePane Main as target is invalid', !mp.ws.movePane(mpB, mpA, 'left-right', 'second'));
+        assert('movePane missing leaf is invalid', !mp.ws.movePane(mpB, 'nope', 'left-right', 'second'));
+        assertEq('movePane rejects leave tree unchanged', JSON.stringify(mp.ws.snapshot().secondaryTree), JSON.stringify(mpSnap.secondaryTree));
+
+        /* Spatial pane drag/move is unavailable while the physical layout is narrow (#37): no
+         * Secondary geometry is visible to move within, so movePane must decline without
+         * mutating anything, even though the tree still structurally contains both leaves. */
+        await mp.ws.setNarrowFallback(true);
+        assert('movePane declines under narrow fallback', !mp.ws.movePane(mpD, mpC, 'left-right', 'second'));
+        await mp.ws.setNarrowFallback(false);
+    }
+
     console.log('\n' + passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);
 }

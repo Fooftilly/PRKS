@@ -243,6 +243,80 @@ function run() {
     assert('make main preserves axis of inner split', afterMakeMain.second.axis === 'left-right');
     assert('make main did not touch B subtree identity', afterMakeMain.first === makeMainTree.first);
 
+    /* ---- moveLeafRelativeToTarget: atomic reposition of an existing leaf (drag-and-drop
+     * workspace management #17-21/#51) -- remove, normalize, re-locate target, insert, in one
+     * pure transaction. Covers the difficult shapes called out in the spec. ---- */
+
+    /* Sibling swap/reposition: split(B, C) -> move B relative to C, placement 'second' (the
+     * default -- target C stays first, moved B becomes second) -> split(C, B). */
+    let swapBase = tree.makeLeaf('B');
+    swapBase = tree.splitLeaf(swapBase, 'B', { axis: 'left-right', newTabId: 'C' });
+    let swapped = tree.moveLeafRelativeToTarget(swapBase, 'B', 'C', { axis: 'left-right', placement: 'second' });
+    assertEq('move sibling B right of C', tree.collectLeafTabIds(swapped), ['C', 'B']);
+    assert('move sibling result valid', tree.validateTree(swapped).ok);
+
+    /* Deep leaf -> ancestor sibling: split1(A, split2(B, split3(C, D))); move D beside A. */
+    let moveDeep = tree.makeLeaf('A');
+    moveDeep = tree.splitLeaf(moveDeep, 'A', { axis: 'left-right', newTabId: 'B' });
+    moveDeep = tree.splitLeaf(moveDeep, 'B', { axis: 'top-bottom', newTabId: 'C' });
+    moveDeep = tree.splitLeaf(moveDeep, 'C', { axis: 'left-right', newTabId: 'D' });
+    assertEq('move-deep setup order', tree.collectLeafTabIds(moveDeep), ['A', 'B', 'C', 'D']);
+    let deepToAncestor = tree.moveLeafRelativeToTarget(moveDeep, 'D', 'A', { axis: 'top-bottom', placement: 'second' });
+    assertEq('deep leaf beside ancestor order', tree.collectLeafTabIds(deepToAncestor), ['A', 'D', 'B', 'C']);
+    assert('deep leaf beside ancestor valid', tree.validateTree(deepToAncestor).ok);
+    assertEq('deep leaf beside ancestor nests under A', deepToAncestor.first.first.tabId, 'A');
+    assertEq('deep leaf beside ancestor D nested second', deepToAncestor.first.second.tabId, 'D');
+    assertEq('deep leaf beside ancestor B,C unaffected branch', tree.collectLeafTabIds(deepToAncestor.second), ['B', 'C']);
+
+    /* Ancestor-side leaf -> deep target: same tree, move A beside D (the deepest leaf). */
+    let ancestorToDeep = tree.moveLeafRelativeToTarget(moveDeep, 'A', 'D', { axis: 'left-right', placement: 'second' });
+    assertEq('ancestor leaf beside deep target order', tree.collectLeafTabIds(ancestorToDeep), ['B', 'C', 'D', 'A']);
+    assert('ancestor leaf beside deep target valid', tree.validateTree(ancestorToDeep).ok);
+
+    /* First child -> second branch, and second child -> first branch (placement flips). */
+    let placementBase = tree.makeLeaf('X');
+    placementBase = tree.splitLeaf(placementBase, 'X', { axis: 'left-right', newTabId: 'Y' });
+    placementBase = tree.splitLeaf(placementBase, 'Y', { axis: 'top-bottom', newTabId: 'Z' });
+    assertEq('placement-base order', tree.collectLeafTabIds(placementBase), ['X', 'Y', 'Z']);
+    let firstToSecond = tree.moveLeafRelativeToTarget(placementBase, 'X', 'Z', { axis: 'top-bottom', placement: 'second' });
+    assertEq('first child moved into second branch', tree.collectLeafTabIds(firstToSecond), ['Y', 'Z', 'X']);
+    let secondToFirst = tree.moveLeafRelativeToTarget(placementBase, 'Z', 'X', { axis: 'left-right', placement: 'first' });
+    assertEq('second-branch child moved before first', tree.collectLeafTabIds(secondToFirst), ['Z', 'X', 'Y']);
+
+    /* Move causing the source's own parent split to collapse (2-leaf subtree loses one leaf,
+     * parent becomes a bare leaf, then gets re-split at the target). */
+    let collapseBase = tree.makeSplit('left-right', tree.makeLeaf('P'), tree.makeSplit('top-bottom', tree.makeLeaf('Q'), tree.makeLeaf('R')));
+    let collapseMoved = tree.moveLeafRelativeToTarget(collapseBase, 'Q', 'P', { axis: 'left-right', placement: 'second' });
+    assertEq('move causing parent collapse order', tree.collectLeafTabIds(collapseMoved), ['R', 'P', 'Q']);
+    assert('move causing parent collapse valid', tree.validateTree(collapseMoved).ok);
+    /* R (Q's old sibling, never touched by the move) keeps its exact leaf identity/position --
+     * only Q's old split parent, now redundant, actually collapses away. */
+    assertEq('move causing parent collapse keeps R as new root leaf-first', collapseMoved.first.tabId, 'R');
+
+    /* Target path changes after source removal: removing the source collapses a split that
+     * used to sit BETWEEN the tree root and the target, so the target must be re-located in the
+     * post-removal tree, not looked up by a stale pre-removal path. */
+    let pathChange = tree.makeSplit('left-right', tree.makeSplit('top-bottom', tree.makeLeaf('M'), tree.makeLeaf('N')), tree.makeLeaf('T'));
+    let pathChanged = tree.moveLeafRelativeToTarget(pathChange, 'N', 'T', { axis: 'left-right', placement: 'first' });
+    assertEq('target path change order', tree.collectLeafTabIds(pathChanged), ['M', 'N', 'T']);
+    assert('target path change valid', tree.validateTree(pathChanged).ok);
+
+    /* Preserve unaffected split IDs: a move inside one branch must not touch a sibling split's
+     * id, even though the whole tree is re-published as one new root. */
+    let idBase = tree.makeSplit('left-right', tree.makeSplit('top-bottom', tree.makeLeaf('E'), tree.makeLeaf('F')), tree.makeSplit('top-bottom', tree.makeLeaf('G'), tree.makeLeaf('H')));
+    const untouchedBranchId = idBase.second.id;
+    let idMoved = tree.moveLeafRelativeToTarget(idBase, 'E', 'F', { axis: 'left-right', placement: 'first' });
+    assertEq('preserve-id order', tree.collectLeafTabIds(idMoved), ['E', 'F', 'G', 'H']);
+    assert('preserve unaffected sibling branch id', idMoved.second.id === untouchedBranchId);
+    assert('preserve unaffected sibling branch identity by reference', idMoved.second === idBase.second);
+
+    /* No duplicate tab IDs: source == target, missing source, missing target all reject with
+     * the tree entirely unchanged (same reference back, not just structurally equal). */
+    assert('moveLeafRelativeToTarget rejects self move', tree.moveLeafRelativeToTarget(swapBase, 'B', 'B', { axis: 'left-right' }) === swapBase);
+    assert('moveLeafRelativeToTarget rejects missing source', tree.moveLeafRelativeToTarget(swapBase, 'ZZZ', 'C', { axis: 'left-right' }) === swapBase);
+    assert('moveLeafRelativeToTarget rejects missing target', tree.moveLeafRelativeToTarget(swapBase, 'B', 'ZZZ', { axis: 'left-right' }) === swapBase);
+    assert('moveLeafRelativeToTarget no duplicate ids after a real move', tree.validateTree(swapped).ok);
+
     /* ---- No persistence ---- */
     const src = require('fs').readFileSync(path.join(rootDir, 'frontend/js/workspace-tree.js'), 'utf8');
     assert('workspace-tree.js has no localStorage', src.indexOf('localStorage') === -1);
