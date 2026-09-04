@@ -7,6 +7,8 @@
  */
 
 const path = require('path');
+const fs = require('fs');
+const vm = require('vm');
 
 const rootDir = path.resolve(__dirname, '../..');
 const nav = require(path.join(rootDir, 'frontend/js/navigation.js'));
@@ -91,6 +93,216 @@ function makeHarness(opts) {
     return { ws: ws, hist: hist };
 }
 
+/* ---- Minimal fake DOM for the commit-option + active-drag-cleanup regressions below.
+ * workspace-split.js is loaded via vm into this fake DOM (mirrors run_workspace_tiling_selftest.js)
+ * so pointerdown/pointermove/removal can be driven deterministically without a browser. ---- */
+
+function makeEventTarget() {
+    const listeners = Object.create(null);
+    return {
+        addEventListener: function (type, fn, capture) {
+            listeners[type] = listeners[type] || [];
+            listeners[type].push({ fn: fn, capture: !!capture });
+        },
+        removeEventListener: function (type, fn, capture) {
+            const arr = listeners[type];
+            if (!arr) return;
+            for (let i = arr.length - 1; i >= 0; i--) {
+                if (arr[i].fn === fn && arr[i].capture === !!capture) arr.splice(i, 1);
+            }
+        },
+        dispatch: function (type, evt) {
+            const arr = (listeners[type] || []).slice();
+            for (let i = 0; i < arr.length; i++) arr[i].fn(evt);
+        },
+    };
+}
+
+function fakeEl(tag) {
+    const attrs = Object.create(null);
+    const kids = [];
+    let classes = [];
+    const node = Object.assign({}, makeEventTarget(), {
+        tagName: String(tag || 'div').toUpperCase(),
+        clientWidth: 0,
+        style: {
+            setProperty: function () {},
+        },
+        classList: {
+            add: function (c) {
+                if (classes.indexOf(c) === -1) classes.push(c);
+            },
+            remove: function (c) {
+                const i = classes.indexOf(c);
+                if (i >= 0) classes.splice(i, 1);
+            },
+            contains: function (c) {
+                return classes.indexOf(c) !== -1;
+            },
+        },
+        parentNode: null,
+        children: kids,
+        setAttribute: function (k, v) {
+            attrs[k] = String(v);
+        },
+        getAttribute: function (k) {
+            return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null;
+        },
+        appendChild: function (child) {
+            const i = kids.indexOf(child);
+            if (i >= 0) kids.splice(i, 1);
+            kids.push(child);
+            child.parentNode = node;
+            return child;
+        },
+        insertBefore: function (child, ref) {
+            const existingIdx = kids.indexOf(child);
+            if (existingIdx >= 0) kids.splice(existingIdx, 1);
+            const idx = kids.indexOf(ref);
+            kids.splice(idx >= 0 ? idx : kids.length, 0, child);
+            child.parentNode = node;
+            return child;
+        },
+        removeChild: function (child) {
+            const i = kids.indexOf(child);
+            if (i >= 0) kids.splice(i, 1);
+            child.parentNode = null;
+            return child;
+        },
+        querySelector: function (sel) {
+            const cls = String(sel || '').replace(/^\./, '');
+            for (let i = 0; i < kids.length; i++) {
+                if (kids[i].className && kids[i].className.indexOf(cls) !== -1) return kids[i];
+                const nested = kids[i].querySelector && kids[i].querySelector(sel);
+                if (nested) return nested;
+            }
+            return null;
+        },
+        closest: function (sel) {
+            const cls = String(sel || '').replace(/^\./, '');
+            let cur = node;
+            while (cur) {
+                if (cur.className && cur.className.indexOf(cls) !== -1) return cur;
+                cur = cur.parentNode;
+            }
+            return null;
+        },
+        getBoundingClientRect: function () {
+            return { width: node.clientWidth || 0, left: 0 };
+        },
+        setPointerCapture: function () {},
+        releasePointerCapture: function () {},
+        focus: function () {},
+    });
+    Object.defineProperty(node, 'nextSibling', {
+        get: function () {
+            if (!node.parentNode) return null;
+            const arr = node.parentNode.children;
+            const idx = arr.indexOf(node);
+            if (idx === -1 || idx === arr.length - 1) return null;
+            return arr[idx + 1];
+        },
+    });
+    /* className is backed by the same `classes` array `classList` mutates, mirroring real DOM
+     * behavior: a direct `el.className = '...'` assignment (as createSeparator does) and later
+     * `el.classList.add(...)` calls (as drag/keyboard handlers do) must not clobber each other. */
+    Object.defineProperty(node, 'className', {
+        get: function () {
+            return classes.join(' ');
+        },
+        set: function (v) {
+            classes = String(v || '')
+                .split(/\s+/)
+                .filter(Boolean);
+        },
+    });
+    return node;
+}
+
+function runDomRegressions() {
+    const splitSrcCode = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-split.js'), 'utf8');
+
+    const canvas = fakeEl('div');
+    canvas.className = 'prks-workspace-canvas prks-workspace-canvas--tiled';
+    canvas.clientWidth = 1600;
+
+    const body = fakeEl('body');
+    const documentMock = Object.assign({}, makeEventTarget(), {
+        createElement: function (tag) {
+            return fakeEl(tag);
+        },
+        getElementById: function () {
+            return null;
+        },
+        body: body,
+    });
+
+    let ratioState = 0.58;
+    const sandbox = {
+        window: {},
+        document: documentMock,
+        prksWorkspaceGetSplitRatio: function () {
+            return ratioState;
+        },
+        prksWorkspaceSetMainSplitRatio: function (r) {
+            ratioState = r;
+        },
+        prksWorkspaceDefaultSplitRatio: function () {
+            return 0.58;
+        },
+    };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(splitSrcCode, sandbox);
+
+    ratioState = 0.68;
+    sandbox.prksWorkspaceSyncSplitSeparator(canvas, true, { mainSplitRatio: 0.68 });
+    const sep = canvas.querySelector('.prks-splitter');
+    assert('dom: separator created', !!sep);
+
+    /* --- 2/3: commit:false must clamp the DOM/ARIA safely but never mutate the canonical ratio. --- */
+    canvas.clientWidth = 480; /* 360 + 320 > 479px: impossible split at this width, collapses to a safe midpoint */
+    sandbox.prksWorkspaceReapplySplitRatio(canvas, { commit: false });
+    assertEq('commit:false preserves canonical ratio during narrow/in-transition width', ratioState, 0.68);
+    const nowAfterNoCommit = Number(sep.getAttribute('aria-valuenow'));
+    assert(
+        'commit:false still clamps the rendered ARIA for the narrow width',
+        Math.abs(nowAfterNoCommit - 68) > 1,
+        'now=' + nowAfterNoCommit
+    );
+
+    /* --- Ordinary wide-layout resizing may commit a reclamp (default commit:true). --- */
+    sandbox.prksWorkspaceReapplySplitRatio(canvas, { commit: true });
+    assert(
+        'commit:true reclamps and commits the canonical ratio',
+        Math.abs(ratioState - 0.68) > 0.01,
+        'ratio=' + ratioState
+    );
+
+    /* --- 7/8: active-drag cleanup must be externally terminable when the separator is removed mid-drag. --- */
+    canvas.clientWidth = 1600;
+    ratioState = 0.58;
+    sandbox.prksWorkspaceSyncSplitSeparator(canvas, true, { mainSplitRatio: 0.58 });
+
+    sep.dispatch('pointerdown', { pointerType: 'mouse', button: 0, pointerId: 7, preventDefault: function () {} });
+    assert('drag: is-dragging set on pointerdown', sep.classList.contains('is-dragging'));
+    assert('drag: body resizing state set on pointerdown', body.classList.contains('prks-resizing-split'));
+
+    documentMock.dispatch('pointermove', { clientX: 1000, preventDefault: function () {} });
+    assert('drag: pointermove committed a ratio change', Math.abs(ratioState - 0.58) > 0.01, 'ratio=' + ratioState);
+
+    /* Controlled test seam: the split disappears mid-drag (narrow fallback / hide split / Secondary closes). */
+    sandbox.prksWorkspaceSyncSplitSeparator(canvas, false, {});
+
+    assert('drag: separator removed from the canvas', canvas.querySelector('.prks-splitter') === null);
+    assert('drag: is-dragging cleared by removal cleanup', !sep.classList.contains('is-dragging'));
+    assert('drag: body resizing state cleared by removal cleanup', !body.classList.contains('prks-resizing-split'));
+
+    const ratioAfterRemoval = ratioState;
+    documentMock.dispatch('pointermove', { clientX: 1400, preventDefault: function () {} });
+    assertEq('drag: stray pointermove after removal does not mutate ratio', ratioState, ratioAfterRemoval);
+}
+
 async function run() {
     /* ---- Pure bounds math ---- */
     const wide = prksSplitComputeBounds(2000);
@@ -148,6 +360,13 @@ async function run() {
     const homeEndBounds = prksSplitComputeBounds(1200);
     assertEq('Home reaches minRatio', prksSplitClampRatio(0, homeEndBounds), homeEndBounds.minRatio);
     assertEq('End reaches maxRatio', prksSplitClampRatio(1, homeEndBounds), homeEndBounds.maxRatio);
+
+    /* ---- Fake-DOM regressions: commit option + active-drag cleanup ownership ---- */
+    try {
+        runDomRegressions();
+    } catch (err) {
+        record('dom regressions ran without throwing', false, String((err && err.stack) || err));
+    }
 
     /* ---- Canonical ratio-state contract (workspace-tabs.js) ---- */
     const h = makeHarness({ hash: '#/folders' });

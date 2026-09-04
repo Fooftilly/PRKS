@@ -22,6 +22,17 @@
 
     let canvasRef = null;
     let separatorRef = null;
+    /* Single active-drag cleanup handle. Every termination path (pointerup, pointercancel,
+     * lostpointercapture, or the separator being removed from the DOM) funnels through this
+     * same idempotent function so no path can leave a stuck cursor/class/capture behind. */
+    let activeDragCleanup = null;
+
+    function terminateActiveDrag() {
+        if (typeof activeDragCleanup !== 'function') return;
+        const fn = activeDragCleanup;
+        activeDragCleanup = null;
+        fn();
+    }
 
     function doc() {
         return typeof document !== 'undefined' ? document : null;
@@ -159,13 +170,16 @@
         const canvas = el.closest ? el.closest('.prks-workspace-canvas') : null;
         if (!canvas) return;
         e.preventDefault();
+        /* Defensively terminate any stale drag (e.g. a lost pointerup) before starting a new one. */
+        terminateActiveDrag();
         canvasRef = canvas;
         separatorRef = el;
         let dragging = true;
+        const pointerId = e.pointerId;
         if (el.classList) el.classList.add('is-dragging');
         beginDragCursor();
         try {
-            if (typeof el.setPointerCapture === 'function') el.setPointerCapture(e.pointerId);
+            if (typeof el.setPointerCapture === 'function') el.setPointerCapture(pointerId);
         } catch (_err) {}
 
         function ratioFromClientX(clientX) {
@@ -182,7 +196,9 @@
             commitRatio(ratioFromClientX(ev.clientX));
         }
 
-        function endDrag(ev) {
+        /* Idempotent: safe to invoke more than once (pointerup+lostpointercapture can both fire,
+         * and a separator removal mid-drag calls this too). */
+        function cleanup() {
             if (!dragging) return;
             dragging = false;
             if (el.classList) el.classList.remove('is-dragging');
@@ -190,27 +206,32 @@
             const d = doc();
             if (d) {
                 d.removeEventListener('pointermove', onMove, true);
-                d.removeEventListener('pointerup', endDrag, true);
-                d.removeEventListener('pointercancel', endDrag, true);
+                d.removeEventListener('pointerup', onPointerUp, true);
+                d.removeEventListener('pointercancel', onPointerUp, true);
             }
             if (el.removeEventListener) el.removeEventListener('lostpointercapture', onLost);
-            if (ev && typeof ev.pointerId === 'number') {
-                try {
-                    if (typeof el.releasePointerCapture === 'function') el.releasePointerCapture(ev.pointerId);
-                } catch (_err2) {}
-            }
+            try {
+                if (typeof el.releasePointerCapture === 'function') el.releasePointerCapture(pointerId);
+            } catch (_err2) {}
+            if (activeDragCleanup === cleanup) activeDragCleanup = null;
+        }
+
+        function onPointerUp() {
+            cleanup();
         }
 
         function onLost() {
-            endDrag({});
+            cleanup();
         }
+
+        activeDragCleanup = cleanup;
 
         if (el.addEventListener) el.addEventListener('lostpointercapture', onLost);
         const d = doc();
         if (d) {
             d.addEventListener('pointermove', onMove, true);
-            d.addEventListener('pointerup', endDrag, true);
-            d.addEventListener('pointercancel', endDrag, true);
+            d.addEventListener('pointerup', onPointerUp, true);
+            d.addEventListener('pointercancel', onPointerUp, true);
         }
     }
 
@@ -252,7 +273,11 @@
         }
     }
 
+    /** Called whenever the separator is about to be removed (hide split, narrow fallback,
+     * Secondary closes). Must run before the DOM removal so a mid-drag pointer never keeps
+     * a stale capture, cursor, or listener alive. */
     function releaseDragState(el) {
+        terminateActiveDrag();
         if (el && el.classList) el.classList.remove('is-dragging');
         endDragCursor();
     }
@@ -280,14 +305,29 @@
         applyRatioToDom(canvas, el, ratio);
     }
 
-    /** Called by workspace-tiling.js's canvas ResizeObserver. Recomputes bounds and reclamps; no remount. */
-    function prksWorkspaceReapplySplitRatio(canvas) {
+    /**
+     * Called by workspace-tiling.js's canvas ResizeObserver. Recomputes bounds and reclamps
+     * for rendering; no remount.
+     *
+     * `options.commit` (default true) controls whether the clamped value is written back to
+     * the canonical `mainSplitRatio`. Callers must pass `{ commit: false }` while a physical
+     * narrow-fallback transition is in flight or already narrow: the DOM/ARIA still reflect a
+     * geometrically safe value, but the user's preferred ratio is not overwritten just because
+     * the Secondary happens to be temporarily hidden or a leave guard is being evaluated.
+     */
+    function prksWorkspaceReapplySplitRatio(canvas, options) {
         if (!canvas) return;
         const el = findSeparator(canvas);
         if (!el) return;
         canvasRef = canvas;
         separatorRef = el;
-        commitRatio(getCurrentRatio());
+        const opts = options || {};
+        const commit = opts.commit !== false;
+        if (commit) {
+            commitRatio(getCurrentRatio());
+        } else {
+            applyRatioToDom(canvas, el, getCurrentRatio());
+        }
     }
 
     const api = {

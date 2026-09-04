@@ -3220,4 +3220,131 @@ class MainSecondaryDividerTests(_BrowserE2E):
         self.assertLessEqual(result["ratio"], 1)
         self.assertEqual(page.locator(".prks-tile").count(), 2)
 
+    def test_divider_narrow_viewport_transition_preserves_preferred_ratio(self):
+        """A real width transition (not a direct prksWorkspaceSetNarrowFallback call) must
+        preserve the user's preferred ratio through an accepted narrow fallback and restore it
+        (clamped only if genuinely necessary) once the canvas widens again."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+
+        _drag_divider(page, 130)
+        page.wait_for_function(
+            "() => Math.abs(window.prksWorkspaceSnapshot().mainSplitRatio - 0.58) > 0.03"
+        )
+        custom_ratio = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+
+        page.set_viewport_size({"width": 500, "height": 900})
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === false")
+        self.assertEqual(page.locator(".prks-splitter").count(), 0)
+        self.assertIsNotNone(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"))
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+        self.assertAlmostEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), custom_ratio, delta=1e-6
+        )
+
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        page.wait_for_selector(".prks-splitter")
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 2")
+        self.assertAlmostEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), custom_ratio, delta=0.02
+        )
+
+    def test_divider_narrow_viewport_rejected_transition_preserves_preferred_ratio(self):
+        """A rejected leave during a real narrow width transition must keep the Secondary
+        mounted, keep the visual split alive, and never mutate the preferred ratio -- including
+        across the ordinary workspace paints that follow the rejection."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+
+        _drag_divider(page, 130)
+        page.wait_for_function(
+            "() => Math.abs(window.prksWorkspaceSnapshot().mainSplitRatio - 0.58) > 0.03"
+        )
+        custom_ratio = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+
+        dialogs = []
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(snap.secondaryTree.tabId);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && ctx && c.tabId === ctx.tabId);
+                };
+                window.__prksNarrowCalls = 0;
+                const orig = window.prksWorkspaceSetNarrowFallback;
+                window.prksWorkspaceSetNarrowFallback = function (n) {
+                    window.__prksNarrowCalls += 1;
+                    return orig(n);
+                };
+            }"""
+        )
+
+        page.set_viewport_size({"width": 500, "height": 900})
+        page.wait_for_function("() => window.__prksNarrowCalls >= 1")
+        self.assertEqual(len(dialogs), 1)
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mode"), "tiled")
+        self.assertTrue(page.evaluate("() => window.prksWorkspaceVisualTiled()"))
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+        self.assertEqual(page.locator(".prks-splitter").count(), 1)
+        self.assertAlmostEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), custom_ratio, delta=1e-6
+        )
+
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                for (let i = 0; i < 5; i++) {
+                    window.prksWorkspaceSyncTiles(snap, { visualMode: 'tiled' });
+                    window.prksWorkspaceApplyFocus(snap, { visualMode: 'tiled' });
+                    window.prksWorkspaceFocusTab(snap.focusedTabId);
+                }
+            }"""
+        )
+        self.assertEqual(len(dialogs), 1, "ordinary paints must not reprompt")
+        self.assertAlmostEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), custom_ratio, delta=1e-6
+        )
+
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.wait_for_function(
+            "(r) => Math.abs(window.prksWorkspaceSnapshot().mainSplitRatio - r) < 0.02",
+            arg=custom_ratio,
+        )
+        self.assertEqual(page.locator(".prks-splitter").count(), 1)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+
+    def test_divider_drag_causes_no_additional_route_or_pdf_requests(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+
+        requests = []
+
+        def on_request(req):
+            path = urlparse(req.url).path
+            if req.method == "GET" and (path.startswith("/api/works/") or path.startswith("/api/pdfs/")):
+                requests.append(path)
+
+        page.on("request", on_request)
+        before = len(requests)
+
+        _drag_divider(page, 150)
+        page.wait_for_timeout(150)
+        _drag_divider(page, -220)
+        page.wait_for_timeout(150)
+        _drag_divider(page, 90)
+        page.wait_for_timeout(150)
+
+        self.assertEqual(len(requests), before, "divider drags must not fetch a Work route or reload a PDF")
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+
 

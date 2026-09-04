@@ -340,7 +340,15 @@
         resizeObserver = new ResizeObserver(function () {
             applyNarrow(canvas);
             if (typeof root.prksWorkspaceReapplySplitRatio === 'function') {
-                root.prksWorkspaceReapplySplitRatio(canvas);
+                /* `applyNarrow` may have just kicked off an async narrow-fallback transition
+                 * (leave guard pending) or the canvas may currently be narrow outright. Either
+                 * way the split's real width is not a stable wide layout yet, so only apply the
+                 * ratio to the DOM/ARIA for safety and do not commit it as the user's new
+                 * preferred ratio. Only a genuinely wide, settled canvas may commit a reclamp. */
+                const w = canvas.clientWidth || 0;
+                const isNarrowNow = w > 0 && w < NARROW_PX;
+                const transitionPending = pendingNarrow !== null;
+                root.prksWorkspaceReapplySplitRatio(canvas, { commit: !isNarrowNow && !transitionPending });
             }
         });
         resizeObserver.observe(canvas);
