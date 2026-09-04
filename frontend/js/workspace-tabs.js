@@ -1,5 +1,6 @@
 /**
- * Workspace tabs. Stacked mounts one TabContext; tiled mounts Main + one Secondary.
+ * Workspace tabs. Stacked mounts one TabContext; tiled mounts Main plus a recursive
+ * Secondary split tree of up to 3 more Secondary leaves (4 mounted TabContexts at most).
  * Parked tabs are state only: no DOM, fetch, or render.
  */
 (function (root) {
@@ -680,7 +681,12 @@
             const useAxis = axis === 'top-bottom' ? 'top-bottom' : 'left-right';
             if (opts.tabId) {
                 const existing = getTab(opts.tabId);
-                if (!existing || existing.id === state.mainTabId || root.containsTab(state.secondaryTree, existing.id)) {
+                if (
+                    !existing ||
+                    existing.id === state.mainTabId ||
+                    root.containsTab(state.secondaryTree, existing.id) ||
+                    !routeSupportsTile(existing.route)
+                ) {
                     return Promise.resolve(false);
                 }
                 return Promise.resolve(performSplit(targetTabId, useAxis, existing));
@@ -749,32 +755,21 @@
                 refreshFocusedPanel();
                 return Promise.resolve(copyTab(tab));
             }
+            /* Route capability is a workspace state invariant, not just a UI affordance: reject
+             * inserting a tab whose route cannot be tiled -- without any tree mutation, mounting,
+             * or duplication -- even if a caller bypasses UI filtering. */
+            if (!routeSupportsTile(tab.route)) return Promise.resolve(false);
             if (!tree) {
                 state.secondaryTree = root.makeLeaf(tab.id);
                 return Promise.resolve(mountAndRenderSecondary(tab));
             }
-            if (root.isLeaf(tree)) {
-                /* Secondary replacement (spec): a single existing Secondary leaf is replaced
-                 * wholesale, preserving the root ratio and Main. This is intentionally distinct
-                 * from splitting -- there's nothing to split when there's only ever been one
-                 * Secondary leaf. */
-                const replaceId = tree.tabId;
-                const proceed = function () {
-                    if (!getTab(tabId)) return false;
-                    parkContext(replaceId);
-                    state.secondaryTree = root.makeLeaf(tab.id);
-                    return mountAndRenderSecondary(tab);
-                };
-                if (!visualTiled()) return Promise.resolve(proceed());
-                return awaitLeave(replaceId, tab.route).then(function (ok) {
-                    if (!ok) return false;
-                    return proceed();
-                });
-            }
-            /* A recursive tree already exists: splitting is unambiguous only when a Secondary
-             * leaf is focused (split it) or -- degenerate, shouldn't normally reach here -- there
-             * is exactly one leaf. Otherwise this generic entry point declines; callers needing a
-             * specific placement must use the explicit Split right/down action. */
+            /* Adding a tab to split view never evicts an existing pane (spec): there is no
+             * user-facing "Replace split pane" command, so generic placement always splits
+             * instead of replacing. Splitting is unambiguous when there is exactly one existing
+             * Secondary leaf (split it) or a Secondary leaf is focused (split that one).
+             * Otherwise this generic entry point declines; callers needing a specific
+             * placement/axis use the explicit Split right/down action. Never duplicates a tab --
+             * `tab` here is already an existing logical tab. */
             const targetLeaf = defaultSplitTargetLeafId();
             if (!targetLeaf || paneCapReached()) {
                 announce('', paneCapReached() ? 'cap' : 'ambiguous');
@@ -800,21 +795,9 @@
                 state.secondaryTree = root.makeLeaf(tab.id);
                 return Promise.resolve(mountAndRenderSecondary(tab));
             }
-            if (root.isLeaf(tree)) {
-                const curSec = tree.tabId;
-                const proceedCreate = function () {
-                    parkContext(curSec);
-                    const tab = makeTab(route);
-                    state.tabs.push(tab);
-                    state.secondaryTree = root.makeLeaf(tab.id);
-                    return mountAndRenderSecondary(tab);
-                };
-                if (!visualTiled()) return Promise.resolve(proceedCreate());
-                return awaitLeave(curSec, route).then(function (ok) {
-                    if (!ok) return false;
-                    return proceedCreate();
-                });
-            }
+            /* Adding a new tab to split view never evicts an existing pane (spec): split the
+             * default target leaf (the single existing leaf, or the focused Secondary leaf)
+             * left-right -- existing leaf stays first, new leaf becomes second/focused. */
             const targetLeaf = defaultSplitTargetLeafId();
             if (!targetLeaf || paneCapReached()) {
                 const tab = makeTab(route);
@@ -950,7 +933,8 @@
             }
             const treeLeavesForMainClose = root.collectLeafTabIds(state.secondaryTree);
             const secId = treeLeavesForMainClose.length ? treeLeavesForMainClose[0] : null;
-            let successor = secId && secId !== closing.id ? getTab(secId) : null;
+            const promotingLeaf = !!secId;
+            let successor = secId ? getTab(secId) : null;
             if (!successor) successor = state.tabs[idx + 1] || state.tabs[idx - 1] || null;
             if (successor && successor.id === closing.id) successor = null;
             const nextHash = successor ? successor.route : homeHash;
@@ -959,18 +943,24 @@
                 const i = tabIndex(tabId);
                 if (i < 0) return false;
                 const wasMountedSuccessor = successor && contextMounted(successor.id);
-                /* Closing Main always collapses back to a single stacked tab: every other
-                 * Secondary leaf besides the promoted successor loses its tiled visibility. */
-                for (let k = 0; k < treeLeavesForMainClose.length; k++) {
-                    const leafId = treeLeavesForMainClose[k];
-                    if (successor && leafId === successor.id) continue;
-                    if (contextMounted(leafId)) parkContext(leafId);
-                }
                 destroyContext(tabId);
                 const j = tabIndex(tabId);
                 if (j >= 0) state.tabs.splice(j, 1);
-                state.secondaryTree = null;
-                state.mode = MODE_STACKED;
+                if (promotingLeaf && successor) {
+                    /* Promote the deterministic first surviving Secondary leaf (depth-first tree
+                     * order) into Main's exact former position; remove that one leaf and
+                     * normalize. Every OTHER Secondary leaf's tree position, mounted state, and
+                     * TabContext are left completely untouched -- closing Main must not hide or
+                     * remount unrelated surviving panes. Only collapse to stacked if no
+                     * Secondary leaves remain afterward. */
+                    state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, successor.id));
+                    if (!state.secondaryTree) state.mode = MODE_STACKED;
+                } else {
+                    /* No Secondary leaf existed to promote -- ordinary tab-strip neighbor
+                     * fallback (or none at all), same as a bare stacked Main close. */
+                    state.secondaryTree = null;
+                    state.mode = MODE_STACKED;
+                }
                 if (!successor) {
                     const home = makeTab(homeHash);
                     state.tabs.push(home);
@@ -1048,13 +1038,18 @@
                     if (idx >= 0) state.tabs.splice(idx, 1);
                 }
                 if (closingMain) {
-                    /* Closing Main always collapses to stacked, same as single closeTab. */
-                    for (let k = 0; k < treeLeavesBefore.length; k++) {
-                        if (unique.indexOf(treeLeavesBefore[k]) >= 0) continue;
-                        if (contextMounted(treeLeavesBefore[k])) parkContext(treeLeavesBefore[k]);
-                    }
-                    state.secondaryTree = null;
-                    state.mode = MODE_STACKED;
+                    /* Promote `keepId` into Main's position. If `keepId` is itself a surviving
+                     * Secondary leaf, vacate just that one leaf (same in-place swap as the
+                     * deterministic single-close successor); either way only the leaves actually
+                     * requested to close are removed from the tree. Unrelated surviving Secondary
+                     * leaves are never parked or remounted just because Main and some other tabs
+                     * closed together in the same batch. Only collapse to stacked if no Secondary
+                     * leaves remain afterward. */
+                    let nextTree = state.secondaryTree;
+                    for (let k = 0; k < closingLeafIds.length; k++) nextTree = root.removeLeaf(nextTree, closingLeafIds[k]);
+                    if (keepWasLeaf) nextTree = root.removeLeaf(nextTree, keepId);
+                    state.secondaryTree = root.normalizeTree(nextTree);
+                    if (!state.secondaryTree) state.mode = MODE_STACKED;
                 } else if (closingLeafIds.length) {
                     let nextTree = state.secondaryTree;
                     for (let k = 0; k < closingLeafIds.length; k++) nextTree = root.removeLeaf(nextTree, closingLeafIds[k]);

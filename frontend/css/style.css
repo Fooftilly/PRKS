@@ -1114,8 +1114,11 @@ body.prks-resizing-split--horizontal * {
 }
 
 /* Recursive Secondary split containers: one per internal split node, keyed by data-prks-split-id.
- * --prks-split-first-size is an exact px value written by workspace-split.js from that node's
- * local ratio; the 50% fallback only covers the instant before JS applies it. */
+ * --prks-split-first-size is a percentage (not px) written by workspace-split.js from that node's
+ * local effective ratio -- deliberately a percentage so ancestor resizes (e.g. dragging the root
+ * Main/Secondary divider) reflow nested panes via CSS alone; a per-split-container ResizeObserver
+ * separately re-clamps the effective ratio/ARIA when the container's own size changes, without
+ * touching the canonical ratio. The 50% fallback only covers the instant before JS applies it. */
 .prks-workspace-split {
     display: grid;
     min-width: 0;

@@ -547,28 +547,27 @@ async function run() {
     assertEq('secondary history length', secTab.history.length, 2);
     assertEq('secondary history index', secTab.historyIndex, 1);
 
-    const leaveTile = makeHarness({ hash: '#/works/WA' });
-    await leaveTile.ws.navigate('#/works/WB', { target: 'tile' });
-    const bId = leaveTile.ws.snapshot().secondaryTree.tabId;
-    const aId = leaveTile.ws.snapshot().mainTabId;
-    const hrefLeaveTile = leaveTile.hist.getHash();
-    const rendersLeaveTile = leaveTile.renders.length;
-    leaveTile.setCanLeave(false);
-    const deniedTile = await leaveTile.ws.navigate('#/works/WC', { target: 'tile' });
-    assertEq('replace tile denied', deniedTile, false);
-    assertEq('replace tile still B', leaveTile.ws.snapshot().secondaryTree.tabId, bId);
-    assertEq('replace tile main A', leaveTile.ws.snapshot().mainTabId, aId);
-    assertEq('replace tile url', leaveTile.hist.getHash(), hrefLeaveTile);
-    assertEq('replace tile no render', leaveTile.renders.length, rendersLeaveTile);
-    assertEq('replace tile leave tab', leaveTile.lastLeaveTabId(), bId);
-    leaveTile.setCanLeave(true);
-    const allowedTile = await leaveTile.ws.navigate('#/works/WC', { target: 'tile' });
-    assert('replace tile allowed', !!allowedTile);
-    assert('C is secondary', leaveTile.ws.snapshot().secondaryTree.tabId !== bId);
-    assertEq('A still main after replace', leaveTile.ws.snapshot().mainTabId, aId);
-    assert('B still present parked', leaveTile.ws.snapshot().tabs.some(function (t) {
-        return t.id === bId;
-    }));
+    /* Generic {target:'tile'} navigation never evicts an existing single Secondary leaf (spec):
+     * it splits that leaf with the new tab instead. Since B is never unmounted, a denied leave
+     * guard on B must not matter at all -- the split succeeds regardless. */
+    const splitTile = makeHarness({ hash: '#/works/WA' });
+    await splitTile.ws.navigate('#/works/WB', { target: 'tile' });
+    const bId = splitTile.ws.snapshot().secondaryTree.tabId;
+    const aId = splitTile.ws.snapshot().mainTabId;
+    const hrefSplitTile = splitTile.hist.getHash();
+    splitTile.setCanLeave(false);
+    const splitTileResult = await splitTile.ws.navigate('#/works/WC', { target: 'tile' });
+    assert('split tile succeeds despite denied leave (B never evicted)', !!splitTileResult);
+    const snapSplitTile = splitTile.ws.snapshot();
+    assertEq('split tile becomes a split node', snapSplitTile.secondaryTree.type, 'split');
+    assertEq('split tile keeps B first', snapSplitTile.secondaryTree.first.tabId, bId);
+    const cId = snapSplitTile.secondaryTree.second.tabId;
+    assert('split tile new leaf is C, not B', cId !== bId);
+    assertEq('split tile main unchanged', snapSplitTile.mainTabId, aId);
+    assertEq('split tile focuses new leaf', snapSplitTile.focusedTabId, cId);
+    assertEq('split tile url unchanged', splitTile.hist.getHash(), hrefSplitTile);
+    assert('split tile B still mounted', splitTile.isMounted(bId));
+    assert('split tile C mounted', splitTile.isMounted(cId));
 
     const stack = makeHarness({ hash: '#/works/WA' });
     await stack.ws.navigate('#/works/WB', { target: 'tile' });
@@ -877,24 +876,39 @@ async function run() {
     await replaceH.ws.navigate('#/works/WB', { target: 'new-tab', activate: false });
     await replaceH.ws.tileTab(replaceH.ws.snapshot().tabs[1].id);
     await replaceH.ws.navigate('#/works/WC', { target: 'new-tab', activate: false });
+    const replaceB = replaceH.ws.snapshot().secondaryTree.tabId;
     const replaceC = replaceH.ws.snapshot().tabs[2].id;
     const replaceA = replaceH.ws.snapshot().mainTabId;
     const replaceMountA = replaceH.isMounted(replaceA);
     box.modes.length = 0;
+    /* tileTab() on a parked tab, with exactly one existing Secondary leaf, splits that leaf
+     * instead of replacing it (spec: no "Replace split pane" command exists). */
     await replaceH.ws.tileTab(replaceC);
-    assertEq('replace secondary', replaceH.ws.snapshot().secondaryTree.tabId, replaceC);
-    assertEq('replace main stable', replaceH.ws.snapshot().mainTabId, replaceA);
-    assert('replace no stacked paint', box.modes.every(function (m) { return m === 'tiled'; }));
-    assert('replace A still mounted', replaceH.isMounted(replaceA) === replaceMountA);
+    const snapAfterSplit = replaceH.ws.snapshot();
+    assertEq('tileTab splits instead of replacing', snapAfterSplit.secondaryTree.type, 'split');
+    assertEq('tileTab split keeps B first', snapAfterSplit.secondaryTree.first.tabId, replaceB);
+    assertEq('tileTab split adds C second', snapAfterSplit.secondaryTree.second.tabId, replaceC);
+    assertEq('tileTab split main stable', snapAfterSplit.mainTabId, replaceA);
+    assertEq('tileTab split focuses C', snapAfterSplit.focusedTabId, replaceC);
+    assert('tileTab split no stacked paint', box.modes.every(function (m) { return m === 'tiled'; }));
+    assert('tileTab split A still mounted', replaceH.isMounted(replaceA) === replaceMountA);
+    assert('tileTab split B still mounted (never evicted)', replaceH.isMounted(replaceB));
+
+    /* With a recursive tree and no focused Secondary leaf, generic tileTab declines rather than
+     * guessing a placement -- and never even consults the leave guard, since nothing would be
+     * evicted either way. */
     replaceH.setCanLeave(false);
     await replaceH.ws.navigate('#/works/WD', { target: 'new-tab', activate: false });
     const replaceD = replaceH.ws.snapshot().tabs[replaceH.ws.snapshot().tabs.length - 1].id;
-    const deniedFp = fingerprint(replaceH);
+    await replaceH.ws.focusTab(replaceA);
+    const ambiguousLeaveCalls = replaceH.canLeaveCalls();
+    const ambiguousFp = fingerprint(replaceH);
     box.modes.length = 0;
-    const deniedReplace = await replaceH.ws.tileTab(replaceD);
-    assertEq('replace leave denied', deniedReplace, false);
-    assertEq('replace deny fingerprint', fingerprint(replaceH), deniedFp);
-    assertEq('replace deny no paint', box.modes.length, 0);
+    const ambiguousResult = await replaceH.ws.tileTab(replaceD);
+    assertEq('tileTab declines when ambiguous (no focused Secondary leaf)', ambiguousResult, false);
+    assertEq('tileTab ambiguous fingerprint unchanged', fingerprint(replaceH), ambiguousFp);
+    assertEq('tileTab ambiguous no paint', box.modes.length, 0);
+    assertEq('tileTab ambiguous did not consult leave guard', replaceH.canLeaveCalls(), ambiguousLeaveCalls);
     }
 
     /* =================== Recursive Secondary splits =================== */
@@ -1117,6 +1131,137 @@ async function run() {
         const secId = h.ws.snapshot().secondaryTree.tabId;
         const refuseMain = await h.ws.splitLeaf(secId, 'left-right', { tabId: mainId });
         assertEq('split refuses reusing main tab', refuseMain, false);
+
+        /* Route-capability is a state-API invariant, not just a UI affordance: tileTab() and
+         * splitLeaf({tabId}) must reject inserting a parked tab whose route cannot be tiled,
+         * without any tree mutation, mounting, or duplication. */
+        await h.ws.navigate('#/folders', { target: 'new-tab', activate: false });
+        const folderTab = h.ws.snapshot().tabs[h.ws.snapshot().tabs.length - 1].id;
+        const guardFpBefore = fingerprint(h);
+        const guardMountBefore = h.mountedCount();
+        const rejectedTileTab = await h.ws.tileTab(folderTab);
+        assertEq('tileTab rejects unsupported route', rejectedTileTab, false);
+        assertEq('tileTab rejection unchanged state', fingerprint(h), guardFpBefore);
+        const rejectedSplitLeaf = await h.ws.splitLeaf(secId, 'left-right', { tabId: folderTab });
+        assertEq('splitLeaf rejects unsupported route', rejectedSplitLeaf, false);
+        assertEq('splitLeaf rejection unchanged state', fingerprint(h), guardFpBefore);
+        assertEq('route guard mounted unchanged', h.mountedCount(), guardMountBefore);
+        assert('route guard folder tab not mounted', !h.isMounted(folderTab));
+    }
+
+    {
+        /* Main-close on a recursive tree (spec): Main A, Secondary B / (C | D). Closing A
+         * promotes the deterministic first Secondary leaf (B) into Main's exact position and
+         * removes only that one leaf from the tree -- every OTHER Secondary leaf (C, D) stays
+         * exactly where it was: same tree position, still mounted, TabContext untouched. */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const A = h.ws.snapshot().mainTabId;
+        const B = h.ws.snapshot().secondaryTree.tabId;
+        await h.ws.splitLeaf(B, 'top-bottom', { hash: '#/works/WC' });
+        const C = h.ws.snapshot().secondaryTree.second.tabId;
+        await h.ws.splitLeaf(C, 'left-right', { hash: '#/works/WD' });
+        const D = h.ws.snapshot().secondaryTree.second.second.tabId;
+        assertEq('main-close setup mounted 4', h.mountedCount(), 4);
+
+        const mountBefore = h.life.mount.length;
+        const parkBefore = h.life.park.length;
+        const destroyBefore = h.life.destroy.length;
+
+        const closed = await h.ws.closeTab(A);
+        assert('close main ok', closed === true);
+        const snap = h.ws.snapshot();
+        assertEq('close main promotes B', snap.mainTabId, B);
+        assertEq('close main focuses B', snap.focusedTabId, B);
+        assertEq('close main stays tiled', snap.mode, 'tiled');
+        assertEq('close main url is B', h.hist.getHash(), '#/works/WB');
+        assertEq('close main leaves C,D', snap.secondaryTree.first.tabId, C);
+        assertEq('close main second leaf D', snap.secondaryTree.second.tabId, D);
+        assertEq('close main tree still split', snap.secondaryTree.type, 'split');
+        assertEq('close main mounted 3', h.mountedCount(), 3);
+        assert('close main A destroyed', !h.isMounted(A));
+        assert('close main B mounted (now Main)', h.isMounted(B));
+        assert('close main C untouched (mounted)', h.isMounted(C));
+        assert('close main D untouched (mounted)', h.isMounted(D));
+        /* C and D must never be mounted/parked/destroyed just because Main closed. */
+        assertEq('close main C,D not re-mounted', h.life.mount.length, mountBefore);
+        assertEq('close main C,D not parked', h.life.park.length, parkBefore);
+        assertEq('close main only A destroyed', h.life.destroy.length, destroyBefore + 1);
+        assertEq('close main last destroy is A', h.life.destroy[h.life.destroy.length - 1], A);
+    }
+
+    {
+        /* The plain one-Secondary case is unaffected by the recursive-close fix (spec #6):
+         * Main A | Secondary B, close A -> B becomes Main, secondaryTree becomes null, stacked. */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const B = h.ws.snapshot().secondaryTree.tabId;
+        await h.ws.closeTab(h.ws.snapshot().mainTabId);
+        const snap = h.ws.snapshot();
+        assertEq('single-secondary close main promotes B', snap.mainTabId, B);
+        assertEq('single-secondary close main tree null', snap.secondaryTree, null);
+        assertEq('single-secondary close main stacked', snap.mode, 'stacked');
+    }
+
+    {
+        /* Batch close (closeTabsToTheRight/closeOtherTabs) must apply the same principle:
+         * only the leaves actually requested to close are removed; an unrelated surviving
+         * Secondary leaf is never parked/remounted, and the tree normalizes correctly whether
+         * or not the kept anchor is itself a promoted Secondary leaf. */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const A = h.ws.snapshot().mainTabId;
+        const B = h.ws.snapshot().secondaryTree.tabId;
+        await h.ws.splitLeaf(B, 'top-bottom', { hash: '#/works/WC' });
+        const C = h.ws.snapshot().secondaryTree.second.tabId;
+        await h.ws.navigate('#/folders', { target: 'new-tab', activate: false }); // K: parked anchor
+        const K = h.ws.snapshot().tabs[h.ws.snapshot().tabs.length - 1].id;
+        assertEq('batch setup mounted 3', h.mountedCount(), 3);
+
+        /* closeOtherTabs(K): closes everything except K, including Main (A) and every
+         * Secondary leaf (B, C) -- none of them are "unrelated survivors" here, so this just
+         * exercises the ordinary closingMain + keepId-not-a-leaf path. */
+        const closedOthers = await h.ws.closeOtherTabs(K);
+        assert('close others (K kept) ok', closedOthers === true);
+        const snapOthers = h.ws.snapshot();
+        assertEq('close others promotes K to main', snapOthers.mainTabId, K);
+        assertEq('close others collapses (no leaves left)', snapOthers.secondaryTree, null);
+        assertEq('close others stacked', snapOthers.mode, 'stacked');
+        assertEq('close others tab count', snapOthers.tabs.length, 1);
+
+        /* Construct a tab order where Main is among "tabs to the right" of the anchor, and two
+         * unrelated Secondary leaves that are NOT being closed survive before the anchor. */
+        const h2 = makeHarness({ hash: '#/works/WA' });
+        await h2.ws.navigate('#/works/WB', { target: 'tile' }); // A idx0 (main), B idx1 (leaf)
+        const A2 = h2.ws.snapshot().mainTabId;
+        const B2 = h2.ws.snapshot().secondaryTree.tabId;
+        await h2.ws.navigate('#/works/WK', { target: 'new-tab', activate: false }); // K idx2 (anchor, parked)
+        const K2 = h2.ws.snapshot().tabs[2].id;
+        await h2.ws.splitLeaf(B2, 'top-bottom', { hash: '#/works/WD' }); // D idx3 (leaf)
+        const D2 = h2.ws.snapshot().secondaryTree.second.tabId;
+        await h2.ws.makeMain(D2); // Main becomes D (idx3); A takes D's old leaf position (idx0)
+        assertEq('batch setup main is D', h2.ws.snapshot().mainTabId, D2);
+        assertEq('batch setup tree is B,A', [h2.ws.snapshot().secondaryTree.first.tabId, h2.ws.snapshot().secondaryTree.second.tabId].join(','), [B2, A2].join(','));
+        await h2.ws.navigate('#/works/WE', { target: 'new-tab', activate: false }); // E idx4 (also closes)
+        assertEq('batch setup mounted 3', h2.mountedCount(), 3);
+
+        const mount2Before = h2.life.mount.length;
+        const park2Before = h2.life.park.length;
+        const closedRight = await h2.ws.closeTabsToTheRight(K2);
+        assert('close to right (K2 kept, Main among closed) ok', closedRight === true);
+        const snap2 = h2.ws.snapshot();
+        assertEq('close to right promotes K2 to main', snap2.mainTabId, K2);
+        assertEq('close to right tab count', snap2.tabs.length, 3);
+        assertEq('close to right tree untouched (B first)', snap2.secondaryTree.first.tabId, B2);
+        assertEq('close to right tree untouched (A second)', snap2.secondaryTree.second.tabId, A2);
+        /* K2 itself newly mounts (it was parked, now promoted to Main) -- but B2/A2, the
+         * unrelated surviving Secondary leaves, must not be touched by that promotion. */
+        assertEq('close to right only K2 newly mounted', h2.life.mount.length, mount2Before + 1);
+        assertEq('close to right last mount is K2', h2.life.mount[h2.life.mount.length - 1], K2);
+        assertEq('close to right unrelated leaves not parked', h2.life.park.length, park2Before);
+        assert('close to right B2 still mounted', h2.isMounted(B2));
+        assert('close to right A2 (now a leaf) still mounted', h2.isMounted(A2));
+        assert('close to right D destroyed', !h2.isMounted(D2));
     }
 
     console.log('\n' + passed + ' passed, ' + failed + ' failed');

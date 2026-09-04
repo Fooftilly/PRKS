@@ -583,11 +583,30 @@
         releaseDragState(el, el.getAttribute('aria-orientation') === 'horizontal' ? 'top-bottom' : 'left-right');
     }
 
+    /**
+     * Called by workspace-tiling.js's per-split-container ResizeObserver whenever that split
+     * node's OWN container geometry changes (ancestor resize -- e.g. dragging the root
+     * Main/Secondary divider, resizing the window, or a sibling pane changing size). Re-reads
+     * the canonical `node.ratio`, recomputes bounds from the container's current size, and
+     * reclamps the EFFECTIVE DOM ratio/ARIA. This never writes back to canonical `node.ratio` --
+     * only a direct drag/keyboard/dblclick on this divider (`commitNestedRatio`) does that, so a
+     * temporarily-small ancestor never permanently narrows the user's preferred nested split. */
+    function prksWorkspaceReclampNestedSplit(container) {
+        if (!container || !container.getAttribute) return;
+        const splitId = container.getAttribute('data-prks-split-id');
+        if (!splitId) return;
+        const el = findSeparator(container);
+        if (!el) return;
+        const axis = container.getAttribute('data-prks-axis') === 'top-bottom' ? 'top-bottom' : 'left-right';
+        applyNestedRatioToDom(container, el, axis, getNestedRatio(splitId));
+    }
+
     const api = {
         prksWorkspaceSyncSplitSeparator: prksWorkspaceSyncSplitSeparator,
         prksWorkspaceReapplySplitRatio: prksWorkspaceReapplySplitRatio,
         prksWorkspaceSyncNestedSeparator: prksWorkspaceSyncNestedSeparator,
         prksWorkspaceReleaseNestedSeparator: prksWorkspaceReleaseNestedSeparator,
+        prksWorkspaceReclampNestedSplit: prksWorkspaceReclampNestedSplit,
         prksSplitComputeBounds: prksSplitComputeBounds,
         prksSplitClampRatio: prksSplitClampRatio,
     };

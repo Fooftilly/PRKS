@@ -29,12 +29,27 @@ function assert(name, ok, detail) {
     record(name, !!ok, ok ? '' : detail || '');
 }
 
+function safeDescribe(v) {
+    if (v && typeof v === 'object' && v.tagName) {
+        return '<' + v.tagName + (v.getAttribute ? ' data-prks-tab-id=' + v.getAttribute('data-prks-tab-id') + ' data-prks-split-id=' + v.getAttribute('data-prks-split-id') : '') + '>';
+    }
+    try {
+        return JSON.stringify(v);
+    } catch (_e) {
+        return String(v);
+    }
+}
+
 function assertEq(name, got, want) {
     const ok = got === want;
-    record(name, ok, ok ? '' : 'got=' + JSON.stringify(got) + ' want=' + JSON.stringify(want));
+    record(name, ok, ok ? '' : 'got=' + safeDescribe(got) + ' want=' + safeDescribe(want));
 }
 
 /* ---------------- Minimal but structurally-real fake DOM ---------------- */
+
+/* Tracks the most recently `.focus()`-ed fake node so `document.activeElement` behaves
+ * realistically enough for keyboard-navigation assertions (Split-menu Escape/ArrowUp/Down). */
+let __lastFocusedNode = null;
 
 function makeClassList(node) {
     return {
@@ -83,6 +98,7 @@ function matchesSimpleSelector(node, sel) {
 function createNode(tag) {
     const attrs = Object.create(null);
     const listeners = Object.create(null);
+    const styleProps = Object.create(null);
     const node = {
         tagName: String(tag || 'div').toUpperCase(),
         __classes: [],
@@ -93,7 +109,14 @@ function createNode(tag) {
         title: '',
         textContent: '',
         innerHTML: '',
-        style: { setProperty: function () {} },
+        style: {
+            setProperty: function (name, value) {
+                styleProps[name] = value;
+            },
+            getProperty: function (name) {
+                return styleProps[name] !== undefined ? styleProps[name] : '';
+            },
+        },
         clientWidth: 0,
         clientHeight: 0,
     };
@@ -205,7 +228,10 @@ function createNode(tag) {
     };
     node.setPointerCapture = function () {};
     node.releasePointerCapture = function () {};
-    node.focus = function () {};
+    node.focus = function () {
+        node.__focusCount = (node.__focusCount || 0) + 1;
+        __lastFocusedNode = node;
+    };
     node.addEventListener = function (type, fn, capture) {
         const key = type + (capture ? '|capture' : '');
         if (!listeners[key]) listeners[key] = [];
@@ -272,6 +298,11 @@ function makeDocumentSandbox() {
         },
         body: body,
     });
+    Object.defineProperty(documentMock, 'activeElement', {
+        get: function () {
+            return __lastFocusedNode;
+        },
+    });
     return { pageContent: pageContent, body: body, documentMock: documentMock };
 }
 
@@ -302,8 +333,13 @@ function makeSandbox() {
         prksWorkspaceDefaultSplitRatio: function () {
             return 0.58;
         },
+        /* Mirrors the real cap semantics (workspace-tabs.js PRKS_MAX_VISIBLE_TABS = 4: Main +
+         * up to 3 Secondary leaves) against whatever tree is currently set via setSnap(). */
         prksWorkspaceCanAddSecondaryLeaf: function () {
-            return true;
+            const snap = sandbox.prksWorkspaceSnapshot && sandbox.prksWorkspaceSnapshot();
+            const tree = snap && snap.secondaryTree;
+            const count = tree ? sandbox.leafCount(tree) : 0;
+            return count < 3;
         },
     };
     sandbox.window = sandbox;
@@ -521,6 +557,209 @@ function run() {
     const rootRatioBefore = h.sandbox.prksWorkspaceGetSplitRatio();
     dragSep.dispatch('keydown', { key: 'ArrowRight', preventDefault: function () {}, stopPropagation: function () {} });
     assertEq('nested keyboard resize does not change root mainSplitRatio', h.sandbox.prksWorkspaceGetSplitRatio(), rootRatioBefore);
+
+    /* ---- Ancestor-resize re-clamp: canonical nested ratio survives a container geometry
+     * change; only the EFFECTIVE DOM ratio/ARIA clamp to the container's own current minimums,
+     * and they spring back once the container is large again. No canonical mutation, no
+     * TabContext remount, no observer leak. (left-right axis) ---- */
+    tree.resetSplitIds();
+    let resizeTree = tree.makeLeaf('C');
+    resizeTree = tree.splitLeaf(resizeTree, 'C', { axis: 'left-right', newTabId: 'D' });
+    const resizeSplitId = resizeTree.id;
+    resizeTree = tree.setSplitRatio(resizeTree, resizeSplitId, 0.75);
+    h.setSnap(baseSnap({ secondaryTree: resizeTree, focusedTabId: 'C', tabs: [
+        { id: 'A', title: 'Work A', icon: 'file-text' },
+        { id: 'C', title: 'Work C', icon: 'file-text' },
+        { id: 'D', title: 'Work D', icon: 'file-text' },
+    ] }));
+    h.sandbox.prksWorkspaceSyncTiles(h.getSnap(), { visualMode: 'tiled' });
+    const resizeContainer = canvas.querySelector('[data-prks-split-id="' + resizeSplitId + '"]');
+    const resizeSep = resizeContainer.__children[1];
+    const resizeTileC = canvas.querySelector('[data-prks-tab-id="C"]');
+    const resizeTileD = canvas.querySelector('[data-prks-tab-id="D"]');
+
+    /* Wide: canonical 0.75 fits comfortably (both sides well over the 280px minimum). */
+    resizeContainer.clientWidth = 2000;
+    h.sandbox.prksWorkspaceReclampNestedSplit(resizeContainer);
+    assertEq('wide: canonical ratio untouched', h.getSnap().secondaryTree.ratio, 0.75);
+    assertEq('wide: effective ARIA now matches canonical', resizeSep.getAttribute('aria-valuenow'), '75');
+    assertEq('wide: effective CSS var matches canonical', resizeContainer.style.getProperty('--prks-split-first-size'), '75%');
+
+    /* Narrow: canonical 0.75 would violate the 280px minimum on the second pane; the effective
+     * DOM ratio clamps to the container's own current max, canonical stays 0.75. */
+    resizeContainer.clientWidth = 700;
+    h.sandbox.prksWorkspaceReclampNestedSplit(resizeContainer);
+    assertEq('narrow: canonical ratio still 0.75 (never overwritten)', h.getSnap().secondaryTree.ratio, 0.75);
+    const narrowNow = Number(resizeSep.getAttribute('aria-valuenow'));
+    assert('narrow: effective ratio clamped below canonical', narrowNow < 75, 'now=' + narrowNow);
+    const narrowMax = Number(resizeSep.getAttribute('aria-valuemax'));
+    assertEq('narrow: effective clamps exactly to local max bound', narrowNow, narrowMax);
+    const narrowCssVar = parseFloat(resizeContainer.style.getProperty('--prks-split-first-size'));
+    assert('narrow: effective CSS var reflects clamp, not canonical', Math.abs(narrowCssVar - narrowMax) < 1, 'css=' + narrowCssVar + ' max=' + narrowMax);
+    assert('narrow: min bound also present in ARIA', Number(resizeSep.getAttribute('aria-valuemin')) > 0);
+    assert('narrow: tile C same DOM node (no remount)', canvas.querySelector('[data-prks-tab-id="C"]') === resizeTileC);
+    assert('narrow: tile D same DOM node (no remount)', canvas.querySelector('[data-prks-tab-id="D"]') === resizeTileD);
+
+    /* Expand again: effective geometry returns to ~0.75 with no canonical change either time. */
+    resizeContainer.clientWidth = 2000;
+    h.sandbox.prksWorkspaceReclampNestedSplit(resizeContainer);
+    assertEq('re-expand: canonical ratio still 0.75', h.getSnap().secondaryTree.ratio, 0.75);
+    assertEq('re-expand: effective ARIA returns to 75', resizeSep.getAttribute('aria-valuenow'), '75');
+    assertEq('re-expand: effective CSS var returns to 75%', resizeContainer.style.getProperty('--prks-split-first-size'), '75%');
+
+    /* ---- Same geometry re-clamp for a top-bottom nested split (local min-height bounds). ---- */
+    tree.resetSplitIds();
+    let vResizeTree = tree.makeLeaf('E');
+    vResizeTree = tree.splitLeaf(vResizeTree, 'E', { axis: 'top-bottom', newTabId: 'F' });
+    const vResizeSplitId = vResizeTree.id;
+    vResizeTree = tree.setSplitRatio(vResizeTree, vResizeSplitId, 0.75);
+    h.setSnap(baseSnap({ secondaryTree: vResizeTree, focusedTabId: 'E', tabs: [
+        { id: 'A', title: 'Work A', icon: 'file-text' },
+        { id: 'E', title: 'Work E', icon: 'file-text' },
+        { id: 'F', title: 'Work F', icon: 'file-text' },
+    ] }));
+    h.sandbox.prksWorkspaceSyncTiles(h.getSnap(), { visualMode: 'tiled' });
+    const vResizeContainer = canvas.querySelector('[data-prks-split-id="' + vResizeSplitId + '"]');
+    const vResizeSep = vResizeContainer.__children[1];
+
+    vResizeContainer.clientHeight = 1200;
+    h.sandbox.prksWorkspaceReclampNestedSplit(vResizeContainer);
+    assertEq('top-bottom wide: canonical ratio untouched', h.getSnap().secondaryTree.ratio, 0.75);
+    assertEq('top-bottom wide: effective matches canonical', vResizeSep.getAttribute('aria-valuenow'), '75');
+
+    vResizeContainer.clientHeight = 500;
+    h.sandbox.prksWorkspaceReclampNestedSplit(vResizeContainer);
+    assertEq('top-bottom narrow: canonical ratio still 0.75', h.getSnap().secondaryTree.ratio, 0.75);
+    const vNarrowNow = Number(vResizeSep.getAttribute('aria-valuenow'));
+    assert('top-bottom narrow: effective clamped below canonical', vNarrowNow < 75, 'now=' + vNarrowNow);
+    assertEq('top-bottom narrow: horizontal aria-orientation preserved', vResizeSep.getAttribute('aria-orientation'), 'horizontal');
+
+    vResizeContainer.clientHeight = 1200;
+    h.sandbox.prksWorkspaceReclampNestedSplit(vResizeContainer);
+    assertEq('top-bottom re-expand: effective returns to 75', vResizeSep.getAttribute('aria-valuenow'), '75');
+
+    /* ---- Observer lifecycle: one ResizeObserver per live split container, disconnected when
+     * that split node collapses/is removed -- never leaked across split/close cycles. ---- */
+    const roCountBeforeCollapse = h.roCount();
+    const collapsedAfterC = tree.normalizeTree(tree.removeLeaf(resizeTree, 'D'));
+    h.setSnap(baseSnap({ secondaryTree: collapsedAfterC, focusedTabId: 'C', tabs: [
+        { id: 'A', title: 'Work A', icon: 'file-text' },
+        { id: 'C', title: 'Work C', icon: 'file-text' },
+    ] }));
+    h.sandbox.prksWorkspaceSyncTiles(h.getSnap(), { visualMode: 'tiled' });
+    assert('collapse removed the split container from the DOM', canvas.querySelector('[data-prks-split-id="' + resizeSplitId + '"]') === null);
+    assertEq('collapse did not create a fresh observer', h.roCount(), roCountBeforeCollapse);
+
+    /* ---- Pane-cap header sync: 1 Main + 3 Secondary is the cap. Every Secondary tile's
+     * Split button must be disabled immediately (not just after the next unrelated repaint),
+     * and re-enabled as soon as a pane closes/hides and the cap is no longer reached. ---- */
+    tree.resetSplitIds();
+    let capTree = tree.makeLeaf('G');
+    capTree = tree.splitLeaf(capTree, 'G', { axis: 'top-bottom', newTabId: 'H' });
+    capTree = tree.splitLeaf(capTree, 'H', { axis: 'left-right', newTabId: 'I' });
+    h.setSnap(baseSnap({ secondaryTree: capTree, focusedTabId: 'I', tabs: [
+        { id: 'A', title: 'Work A', icon: 'file-text' },
+        { id: 'G', title: 'Work G', icon: 'file-text' },
+        { id: 'H', title: 'Work H', icon: 'file-text' },
+        { id: 'I', title: 'Work I', icon: 'file-text' },
+    ] }));
+    h.sandbox.prksWorkspaceSyncTiles(h.getSnap(), { visualMode: 'tiled' });
+    assertEq('cap setup mounted 4 (1 main + 3 secondary)', canvas.querySelectorAll('.prks-tile').length, 4);
+    const capTileG = canvas.querySelector('[data-prks-tab-id="G"]');
+    const capTileH = canvas.querySelector('[data-prks-tab-id="H"]');
+    const capTileI = canvas.querySelector('[data-prks-tab-id="I"]');
+    const capSplitG = capTileG.querySelector('.prks-tile-header__split');
+    const capSplitH = capTileH.querySelector('.prks-tile-header__split');
+    const capSplitI = capTileI.querySelector('.prks-tile-header__split');
+    assert('cap: G split button disabled at 4-pane cap', !!(capSplitG && capSplitG.disabled));
+    assert('cap: H split button disabled at 4-pane cap', !!(capSplitH && capSplitH.disabled));
+    assert('cap: I split button disabled at 4-pane cap', !!(capSplitI && capSplitI.disabled));
+    assert('cap: disabled button carries an explanatory title', !!(capSplitG && capSplitG.title));
+
+    /* Close I -> only 2 Secondary leaves remain (G, H); cap no longer reached, buttons re-enable. */
+    const capTreeAfterClose = tree.normalizeTree(tree.removeLeaf(capTree, 'I'));
+    h.setSnap(baseSnap({ secondaryTree: capTreeAfterClose, focusedTabId: 'G', tabs: [
+        { id: 'A', title: 'Work A', icon: 'file-text' },
+        { id: 'G', title: 'Work G', icon: 'file-text' },
+        { id: 'H', title: 'Work H', icon: 'file-text' },
+    ] }));
+    h.sandbox.prksWorkspaceSyncTiles(h.getSnap(), { visualMode: 'tiled' });
+    assert('cap released: I removed from DOM', canvas.querySelector('[data-prks-tab-id="I"]') === null);
+    assert('cap released: G split button re-enabled', !(capSplitG.disabled));
+    assert('cap released: H split button re-enabled', !(capSplitH.disabled));
+    assertEq('cap released: title cleared', capSplitG.title, '');
+
+    /* ---- Split-menu usability/accessibility pass: singleton open menu, Escape closes +
+     * restores focus, item choice closes, outside pointer/focus closes, coherent Arrow
+     * keyboard route between the two menu items. ---- */
+    tree.resetSplitIds();
+    let menuTree = tree.makeLeaf('J');
+    menuTree = tree.splitLeaf(menuTree, 'J', { axis: 'left-right', newTabId: 'K' });
+    h.setSnap(baseSnap({ secondaryTree: menuTree, focusedTabId: 'J', tabs: [
+        { id: 'A', title: 'Work A', icon: 'file-text' },
+        { id: 'J', title: 'Work J', icon: 'file-text' },
+        { id: 'K', title: 'Work K', icon: 'file-text' },
+    ] }));
+    /* The document-level Escape/outside-pointer/outside-focus listeners are bound by
+     * prksWorkspaceInitTiles() (once, idempotently) rather than every syncTiles repaint --
+     * exercise the real init path so this test matches production wiring. */
+    h.sandbox.prksWorkspaceInitTiles();
+    const tileJ = canvas.querySelector('[data-prks-tab-id="J"]');
+    const tileK = canvas.querySelector('[data-prks-tab-id="K"]');
+    const wrapJ = tileJ.querySelector('.prks-tile-header__split-wrap');
+    const btnJ = wrapJ.querySelector('.prks-tile-header__split');
+    const menuJ = wrapJ.querySelector('.prks-tile-header__split-menu');
+    const itemsJ = menuJ.querySelectorAll('.prks-tile-header__split-menu-item');
+    const wrapK = tileK.querySelector('.prks-tile-header__split-wrap');
+    const btnK = wrapK.querySelector('.prks-tile-header__split');
+    const menuK = wrapK.querySelector('.prks-tile-header__split-menu');
+
+    /* Open: menu becomes visible, button reflects aria-expanded, first item gets focus. */
+    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('split menu opens (hidden=false)', menuJ.hidden, false);
+    assertEq('split menu button aria-expanded true', btnJ.getAttribute('aria-expanded'), 'true');
+    assertEq('split menu focuses first item on open', __lastFocusedNode, itemsJ[0]);
+
+    /* Escape: closes and restores focus to the Split button. */
+    h.sandbox.document.dispatch('keydown', { key: 'Escape' }, true);
+    assertEq('escape closes split menu', menuJ.hidden, true);
+    assertEq('escape clears aria-expanded', btnJ.getAttribute('aria-expanded'), 'false');
+    assertEq('escape restores focus to split button', __lastFocusedNode, btnJ);
+
+    /* Singleton: opening J's menu again, then opening K's menu, closes J's. */
+    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('split menu J reopened', menuJ.hidden, false);
+    btnK.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('opening K closes J (only one open at once)', menuJ.hidden, true);
+    assertEq('K menu now open', menuK.hidden, false);
+    btnK.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('K menu closed via toggle', menuK.hidden, true);
+
+    /* ArrowDown/ArrowUp routes focus between the two menu items; Home/End style wraparound. */
+    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('split menu J open for arrow nav', __lastFocusedNode, itemsJ[0]);
+    h.sandbox.document.dispatch('keydown', { key: 'ArrowDown' }, true);
+    assertEq('ArrowDown moves focus to second item', __lastFocusedNode, itemsJ[1]);
+    h.sandbox.document.dispatch('keydown', { key: 'ArrowDown' }, true);
+    assertEq('ArrowDown wraps back to first item', __lastFocusedNode, itemsJ[0]);
+    h.sandbox.document.dispatch('keydown', { key: 'ArrowUp' }, true);
+    assertEq('ArrowUp wraps to last item', __lastFocusedNode, itemsJ[1]);
+
+    /* Choosing an item closes the menu (item click handler calls closeSplitMenu itself). */
+    itemsJ[0].dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('choosing an item closes the menu', menuJ.hidden, true);
+    assertEq('choosing an item clears aria-expanded', btnJ.getAttribute('aria-expanded'), 'false');
+
+    /* Outside pointer/focus closes the open menu. */
+    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('split menu J reopened for outside-pointer test', menuJ.hidden, false);
+    h.sandbox.document.dispatch('pointerdown', { target: tileK }, true);
+    assertEq('outside pointerdown closes open menu', menuJ.hidden, true);
+
+    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('split menu J reopened for outside-focus test', menuJ.hidden, false);
+    h.sandbox.document.dispatch('focusin', { target: tileK }, true);
+    assertEq('outside focusin closes open menu', menuJ.hidden, true);
 
     if (failed) {
         console.log(failed + ' failed, ' + passed + ' passed');

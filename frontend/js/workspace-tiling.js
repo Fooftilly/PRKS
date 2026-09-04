@@ -16,6 +16,35 @@
     let observedCanvas = null;
     let lastNarrow = null;
     let pendingNarrow = null;
+    /* One ResizeObserver per live nested split container, keyed by split.id, so a container's
+     * own geometry change (ancestor resize, window resize, a sibling pane changing size) can
+     * reclamp that divider's effective ratio/ARIA without a paint. Created once when the
+     * container is first rendered; disconnected the moment its split node is pruned so repeated
+     * split/close cycles never leak observers. */
+    const nestedObservers = Object.create(null);
+
+    function disconnectNestedObserver(splitId) {
+        const entry = splitId && nestedObservers[splitId];
+        if (!entry) return;
+        try {
+            entry.observer.disconnect();
+        } catch (_e) {}
+        delete nestedObservers[splitId];
+    }
+
+    function watchNestedSplit(splitId, container) {
+        if (!splitId || !container || typeof ResizeObserver === 'undefined') return;
+        const entry = nestedObservers[splitId];
+        if (entry && entry.container === container) return;
+        if (entry) disconnectNestedObserver(splitId);
+        const observer = new ResizeObserver(function () {
+            if (typeof root.prksWorkspaceReclampNestedSplit === 'function') {
+                root.prksWorkspaceReclampNestedSplit(container);
+            }
+        });
+        observer.observe(container);
+        nestedObservers[splitId] = { observer: observer, container: container };
+    }
 
     function doc() {
         return typeof document !== 'undefined' ? document : null;
@@ -126,11 +155,59 @@
         return 'file-text';
     }
 
-    function closeSplitMenu(wrap) {
+    /* At most one per-pane Split menu can be open at a time; module-level so opening a new one
+     * closes any other, and a single set of document-level listeners (registered once) can close
+     * whichever one is currently open on Escape or a pointer/focus move outside it. */
+    let openSplitMenu = null; // { wrap, btn, menu }
+
+    function closeSplitMenu(wrap, options) {
         const menu = wrap.querySelector && wrap.querySelector('.prks-tile-header__split-menu');
         if (menu) menu.hidden = true;
         const btn = wrap.querySelector && wrap.querySelector('.prks-tile-header__split');
         if (btn) btn.setAttribute('aria-expanded', 'false');
+        if (openSplitMenu && openSplitMenu.wrap === wrap) openSplitMenu = null;
+        if (options && options.restoreFocus && btn && typeof btn.focus === 'function') btn.focus();
+    }
+
+    function onSplitMenuDocPointer(ev) {
+        if (!openSplitMenu) return;
+        if (openSplitMenu.wrap.contains && openSplitMenu.wrap.contains(ev.target)) return;
+        closeSplitMenu(openSplitMenu.wrap);
+    }
+
+    function onSplitMenuDocFocusIn(ev) {
+        if (!openSplitMenu) return;
+        if (openSplitMenu.wrap.contains && openSplitMenu.wrap.contains(ev.target)) return;
+        closeSplitMenu(openSplitMenu.wrap);
+    }
+
+    function onSplitMenuDocKey(ev) {
+        if (!openSplitMenu) return;
+        if (ev.key === 'Escape') {
+            ev.preventDefault();
+            closeSplitMenu(openSplitMenu.wrap, { restoreFocus: true });
+            return;
+        }
+        if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+        const items = openSplitMenu.menu.querySelectorAll('.prks-tile-header__split-menu-item');
+        if (!items.length) return;
+        const active = doc().activeElement;
+        let idx = Array.prototype.indexOf.call(items, active);
+        ev.preventDefault();
+        if (ev.key === 'ArrowDown') idx = idx < 0 ? 0 : (idx + 1) % items.length;
+        else idx = idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length;
+        items[idx].focus();
+    }
+
+    let splitMenuLayerBound = false;
+
+    function bindSplitMenuLayer() {
+        const d = doc();
+        if (!d || splitMenuLayerBound) return;
+        splitMenuLayerBound = true;
+        d.addEventListener('pointerdown', onSplitMenuDocPointer, true);
+        d.addEventListener('focusin', onSplitMenuDocFocusIn, true);
+        d.addEventListener('keydown', onSplitMenuDocKey, true);
     }
 
     function buildSplitDropdown(tabId) {
@@ -159,8 +236,7 @@
             item.addEventListener('click', function (e) {
                 e.preventDefault();
                 e.stopPropagation();
-                menu.hidden = true;
-                btn.setAttribute('aria-expanded', 'false');
+                closeSplitMenu(wrap);
                 if (typeof root.prksOpenCommandPalette === 'function') {
                     /* Opens the existing split picker (OPEN TABS/library/quick-open) scoped to
                      * this specific focused Secondary leaf; reuses a parked tab if selected,
@@ -181,13 +257,37 @@
             e.preventDefault();
             e.stopPropagation();
             const willOpen = menu.hidden;
-            menu.hidden = !willOpen;
-            btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+            if (!willOpen) {
+                closeSplitMenu(wrap);
+                return;
+            }
+            if (openSplitMenu && openSplitMenu.wrap !== wrap) closeSplitMenu(openSplitMenu.wrap);
+            menu.hidden = false;
+            btn.setAttribute('aria-expanded', 'true');
+            openSplitMenu = { wrap: wrap, btn: btn, menu: menu };
+            const items = menu.querySelectorAll('.prks-tile-header__split-menu-item');
+            if (items[0] && typeof items[0].focus === 'function') items[0].focus();
         });
 
         wrap.appendChild(btn);
         wrap.appendChild(menu);
         return wrap;
+    }
+
+    /** Single owner of per-pane Split-button availability (disabled/title, and closing an
+     * already-open Split menu once the cap is reached). Called both when a Secondary header is
+     * freshly built and whenever an existing header is refreshed, so a newly-created fourth
+     * visible pane's own Split button -- and every sibling's -- reflects the cap immediately,
+     * with no window where a capped pane's Split button is still enabled. No-op for headers with
+     * no Split button (Main, or not yet built). */
+    function syncSecondarySplitAvailability(header) {
+        if (!header) return;
+        const splitBtn = header.querySelector('.prks-tile-header__split');
+        if (!splitBtn) return;
+        const canSplit = typeof root.prksWorkspaceCanAddSecondaryLeaf !== 'function' || root.prksWorkspaceCanAddSecondaryLeaf();
+        splitBtn.disabled = !canSplit;
+        splitBtn.title = canSplit ? '' : 'Maximum of 4 visible panes. Close or hide a pane to split again.';
+        if (!canSplit) closeSplitMenu(header);
     }
 
     function fillHeader(header, snap, tabId, role, visualTiled) {
@@ -254,6 +354,7 @@
             }
             header.appendChild(actions);
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(header);
+            syncSecondarySplitAvailability(header);
             return;
         }
         header.hidden = !visualTiled;
@@ -267,13 +368,7 @@
             iconEl.innerHTML = iconHtml(wantIcon);
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(iconEl);
         }
-        const splitBtn = header.querySelector('.prks-tile-header__split');
-        if (splitBtn) {
-            const canSplit = typeof root.prksWorkspaceCanAddSecondaryLeaf !== 'function' || root.prksWorkspaceCanAddSecondaryLeaf();
-            splitBtn.disabled = !canSplit;
-            splitBtn.title = canSplit ? '' : 'Maximum of 4 visible panes. Close or hide a pane to split again.';
-            if (!canSplit) closeSplitMenu(header);
-        }
+        syncSecondarySplitAvailability(header);
     }
 
     function createTile(tabId) {
@@ -359,6 +454,7 @@
         if (node.type !== 'split') return null;
         const container = ensureSplitContainer(canvas, node.id);
         container.setAttribute('data-prks-axis', node.axis);
+        watchNestedSplit(node.id, container);
         const firstEl = renderTreeNode(canvas, node.first, snap, visualTiled);
         const secondEl = renderTreeNode(canvas, node.second, snap, visualTiled);
         if (firstEl && secondEl && typeof root.prksWorkspaceSyncNestedSeparator === 'function') {
@@ -387,6 +483,7 @@
         });
         for (let i = 0; i < staleTiles.length; i++) {
             const el = staleTiles[i];
+            if (openSplitMenu && el.contains && el.contains(openSplitMenu.wrap)) openSplitMenu = null;
             if (el.parentNode) el.parentNode.removeChild(el);
         }
         const staleContainers = collectAll(canvas, function (n) {
@@ -397,6 +494,7 @@
             if (typeof root.prksWorkspaceReleaseNestedSeparator === 'function') {
                 root.prksWorkspaceReleaseNestedSeparator(el);
             }
+            disconnectNestedObserver(el.getAttribute('data-prks-split-id'));
             if (el.parentNode) el.parentNode.removeChild(el);
         }
     }
@@ -565,6 +663,7 @@
         bound = true;
         d.addEventListener('pointerdown', onPointerDownCapture, true);
         d.addEventListener('focusin', onFocusIn);
+        bindSplitMenuLayer();
     }
 
     function prksWorkspaceInitTiles() {

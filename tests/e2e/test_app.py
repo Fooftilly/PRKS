@@ -1968,11 +1968,14 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
         self.assertIn("/people/", page.evaluate("() => location.hash"))
 
-    def test_tile_replace_and_stack_leave_guards(self):
+    def test_stack_hide_split_leave_guard_blocks_and_confirms(self):
+        # Global "Hide split" (stacked mode) unmounts every visible Secondary leaf, so it is
+        # still leave-guarded. Generic split placement is not: it never evicts an existing
+        # leaf (see test_open_in_split_view_adds_beside_existing_leaf), so there is nothing to
+        # guard there any more.
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
         work_b = server.ids["work_b"]
-        person_id = server.ids["person"]
         _open_work_from_home(page, WORK_A_TITLE)
         page.evaluate(
             """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
@@ -2000,22 +2003,11 @@ class WorkspaceTilingTests(_BrowserE2E):
             }"""
         )
         before = _workspace_ids(page)
-        denied = page.evaluate(
-            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'tile' })""",
-            arg=person_id,
-        )
-        self.assertFalse(denied)
-        after = _workspace_ids(page)
-        self.assertEqual(after["secondaryTabId"], before["secondaryTabId"])
-        self.assertEqual(after["mainTabId"], before["mainTabId"])
-        self.assertEqual(after["focusedTabId"], before["focusedTabId"])
-        self.assertEqual(after["hash"], before["hash"])
-        self.assertEqual(len(dialogs), 1)
 
         stack_denied = page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
         self.assertFalse(stack_denied)
         self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mode"), "tiled")
-        self.assertEqual(len(dialogs), 2)
+        self.assertEqual(len(dialogs), 1)
 
         accept_next["v"] = True
         stacked = page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
@@ -2029,13 +2021,120 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertTrue(restored)
         page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
         page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 2")
-        page.evaluate("() => { window.prksHasPendingWorkAnnotationSync = function () { return false; }; }")
+
+    def test_open_in_split_view_adds_beside_existing_leaf(self):
+        """Spec workflow regression: A Main, B Secondary, C parked. Invoking C's tab-strip
+        "Open in split view" action must split B with C -- B stays first/mounted, C becomes
+        the second leaf/focused -- never evict B. Since B is never unmounted, no leave guard
+        fires even though B has a pending (simulated) unsaved change."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        before = _workspace_ids(page)
+        main_id = before["mainTabId"]
+        b_id = before["secondaryTabId"]
+        _wait_pdf_tab(page, b_id)
+
+        page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 3")
+        c_id = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.tabs.find(function (t) {
+                    return t.id !== snap.mainTabId && t.id !== snap.secondaryTree.tabId;
+                }).id;
+            }"""
+        )
+        tabs_before_split = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length")
+
+        dialogs = []
+        page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+        page.evaluate(
+            """(bId) => {
+                const ctx = window.prksGetTabContext(bId);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && ctx && c.tabId === ctx.tabId);
+                };
+                window.__prksOpenSplitB = ctx.getResource('pdf');
+            }""",
+            arg=b_id,
+        )
+
+        page.locator('.prks-workspace-tab[data-tab-id="' + c_id + '"] .prks-workspace-tab__split').click()
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.secondaryTree && snap.secondaryTree.type === 'split';
+            }"""
+        )
+
+        self.assertEqual(dialogs, [])
+        tree = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+        self.assertEqual(tree["axis"], "left-right")
+        self.assertEqual(tree["first"]["tabId"], b_id)
+        self.assertEqual(tree["second"]["tabId"], c_id)
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(snap["mainTabId"], main_id)
+        self.assertEqual(snap["focusedTabId"], c_id)
+        self.assertEqual(len(snap["tabs"]), tabs_before_split)  # C reused, never duplicated
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 3)
+        self.assertEqual(page.locator(".prks-tile").count(), 3)
+        self.assertEqual(page.evaluate("() => location.hash"), before["hash"])
+        self.assertTrue(
+            page.evaluate(
+                "(id) => window.prksGetTabContext(id).getResource('pdf') === window.__prksOpenSplitB",
+                arg=b_id,
+            )
+        )
+
+    def test_navigate_tile_target_splits_single_secondary_leaf(self):
+        """Alt-click / generic {target:'tile'} navigation shares tileTab()'s default-placement
+        rule: with exactly one existing Secondary leaf, it splits that leaf with the new tab
+        instead of replacing it."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        tabs_before = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length")
+        work_hash = page.evaluate("() => location.hash")
+
         page.evaluate(
             """(pid) => window.prksNavigate('#/people/' + pid, { target: 'tile' })""",
             arg=person_id,
         )
-        page.wait_for_selector(".prks-tile--secondary .person-profile")
-        self.assertEqual(page.evaluate("() => location.hash"), before["hash"])
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.secondaryTree && snap.secondaryTree.type === 'split';
+            }"""
+        )
+        tree = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+        self.assertEqual(tree["first"]["tabId"], b_id)
+        self.assertNotEqual(tree["second"]["tabId"], b_id)
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(snap["mainTabId"], main_id)
+        self.assertEqual(snap["focusedTabId"], tree["second"]["tabId"])
+        self.assertEqual(len(snap["tabs"]), tabs_before + 1)
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(page.locator(".prks-tile").count(), 3)
 
     def test_close_secondary_tile_header_keeps_main_url(self):
         # The per-tile header "x" closes that Secondary leaf's tab outright (distinct from the
@@ -2675,64 +2774,6 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertEqual(len(snap["tabs"]), 2)
         self.assertEqual(snap["secondaryTree"]["tabId"], b_id)
 
-    def test_parked_split_replacement_leave_guard(self):
-        server, page, _collector = self._start_app()
-        page.set_viewport_size({"width": 1600, "height": 900})
-        work_b = server.ids["work_b"]
-        person_id = server.ids["person"]
-        _open_work_from_home(page, WORK_A_TITLE)
-        page.evaluate(
-            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
-            arg=work_b,
-        )
-        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
-        page.evaluate(
-            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: false })""",
-            arg=person_id,
-        )
-        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 3")
-        dialogs = []
-        accept_next = {"v": False}
-
-        def on_dialog(dialog):
-            dialogs.append(dialog.message)
-            if accept_next["v"]:
-                dialog.accept()
-            else:
-                dialog.dismiss()
-
-        page.on("dialog", on_dialog)
-        page.evaluate(
-            """() => {
-                const snap = window.prksWorkspaceSnapshot();
-                const ctx = window.prksGetTabContext(snap.secondaryTree.tabId);
-                window.prksHasPendingWorkAnnotationSync = function (c) {
-                    return !!(c && ctx && c.tabId === ctx.tabId);
-                };
-            }"""
-        )
-        before = _workspace_ids(page)
-        page.locator(".prks-workspace-tab.is-parked .prks-workspace-tab__split").click()
-        self.assertEqual(len(dialogs), 1)
-        after = _workspace_ids(page)
-        self.assertEqual(after["secondaryTabId"], before["secondaryTabId"])
-        self.assertEqual(after["mainTabId"], before["mainTabId"])
-        self.assertEqual(after["hash"], before["hash"])
-        self.assertEqual(after["mountedCount"], 2)
-        accept_next["v"] = True
-        page.locator(".prks-workspace-tab.is-parked .prks-workspace-tab__split").click()
-        page.wait_for_function(
-            """(prev) => {
-                const snap = window.prksWorkspaceSnapshot();
-                return snap.secondaryTree && snap.secondaryTree.tabId !== prev;
-            }""",
-            arg=before["secondaryTabId"],
-        )
-        replaced = _workspace_ids(page)
-        self.assertEqual(replaced["mainTabId"], before["mainTabId"])
-        self.assertNotEqual(replaced["secondaryTabId"], before["secondaryTabId"])
-        self.assertEqual(replaced["hash"], before["hash"])
-
     def test_folders_parked_tab_has_no_split_action(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
@@ -3065,56 +3106,186 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertTrue(all("/folders" not in h for h in hashes))
         self.assertIn(work_b, page.evaluate("() => location.hash"))
 
-    def test_secondary_replace_rejected_leave_keeps_layout(self):
-        server, page, _collector = self._start_app()
+    def test_close_main_recursive_preserves_secondary_leaves(self):
+        """Closing Main on a recursive tree (Main A, Secondary B / (C | D)) must not hide or
+        remount unrelated surviving Secondary leaves: only A is destroyed, the deterministic
+        first Secondary leaf B is promoted into Main's exact position, and the C|D split
+        survives untouched -- same tree position, still mounted, no route/PDF reload."""
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+
+        page.evaluate(
+            """(ids) => {
+                window.__prksMainCloseRt = {
+                    bCtx: window.prksGetTabContext(ids.b),
+                    cCtx: window.prksGetTabContext(ids.c),
+                    dCtx: window.prksGetTabContext(ids.d),
+                    dPdf: window.prksGetTabContext(ids.d).getResource('pdf'),
+                    dNotes: window.prksGetTabContext(ids.d).getResource('workNotes'),
+                };
+            }""",
+            arg={"b": tree["b_id"], "c": tree["c_id"], "d": tree["d_id"]},
+        )
+
+        seen_gets = []
+        page.on("request", lambda req: seen_gets.append(req.url) if req.method == "GET" else None)
+
+        closed = page.evaluate("(id) => window.prksWorkspaceCloseTab(id)", arg=tree["main_id"])
+        self.assertTrue(closed)
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(snap["mainTabId"], tree["b_id"])
+        self.assertEqual(snap["focusedTabId"], tree["b_id"])
+        self.assertEqual(snap["mode"], "tiled")
+        self.assertIn(server.ids["person"], page.evaluate("() => location.hash"))
+
+        shape_ok = page.evaluate(
+            """(ids) => {
+                const tree = window.prksWorkspaceSnapshot().secondaryTree;
+                return !!(
+                    tree && tree.type === 'split' &&
+                    tree.first && tree.first.tabId === ids.c &&
+                    tree.second && tree.second.tabId === ids.d
+                );
+            }""",
+            arg={"c": tree["c_id"], "d": tree["d_id"]},
+        )
+        self.assertTrue(shape_ok, "expected surviving C|D split; B was promoted out of the tree")
+        self.assertEqual(page.locator(".prks-tile").count(), 3)
+
+        identity = page.evaluate(
+            """(ids) => {
+                const rt = window.__prksMainCloseRt;
+                const b = window.prksGetTabContext(ids.b);
+                const c = window.prksGetTabContext(ids.c);
+                const d = window.prksGetTabContext(ids.d);
+                return {
+                    bSame: b === rt.bCtx,
+                    cSame: c === rt.cCtx,
+                    dSame: d === rt.dCtx,
+                    dPdfSame: d.getResource('pdf') === rt.dPdf,
+                    dNotesSame: d.getResource('workNotes') === rt.dNotes,
+                };
+            }""",
+            arg={"b": tree["b_id"], "c": tree["c_id"], "d": tree["d_id"]},
+        )
+        self.assertTrue(identity["bSame"], "B's TabContext must survive being promoted to Main")
+        self.assertTrue(identity["cSame"], "C is unrelated to the close and must not remount")
+        self.assertTrue(identity["dSame"], "D is unrelated to the close and must not remount")
+        self.assertTrue(identity["dPdfSame"])
+        self.assertTrue(identity["dNotesSame"])
+
+        for path in (
+            "/api/persons/" + server.ids["person"],
+            "/api/positions/" + server.ids["position"],
+            "/api/works/" + server.ids["work_b"],
+        ):
+            self.assertFalse(
+                any(path in u for u in seen_gets),
+                "surviving unrelated Secondary leaf reloaded during Main close: " + path,
+            )
+
+    def test_close_tabs_to_the_right_preserves_unrelated_secondary(self):
+        """closeTabsToTheRight must apply the same principle as single-tab Main close: only the
+        leaves actually requested to close are removed from the tree. Build a tab order where
+        Main is among "tabs to the right" of the anchor while two unrelated Secondary leaves
+        positioned before the anchor survive untouched."""
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
         person_id = server.ids["person"]
+        position_id = server.ids["position"]
+        argument_id = server.ids["argument"]
+
+        # A idx0 (Main), B idx1 (Secondary leaf).
         _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
         page.evaluate(
-            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
-            arg=work_b,
-        )
-        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
-        ids = _workspace_ids(page)
-        _wait_pdf_tab(page, ids["secondaryTabId"])
-        page.evaluate(
-            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: false })""",
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'tile' })""",
             arg=person_id,
         )
-        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length >= 3")
-        parked = page.evaluate(
-            """() => window.prksWorkspaceSnapshot().tabs.find(function (t) {
-                return t.id !== window.prksWorkspaceSnapshot().mainTabId
-                    && t.id !== window.prksWorkspaceSnapshot().secondaryTree.tabId;
-            }).id"""
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().secondaryTree && window.prksWorkspaceSnapshot().secondaryTree.type === 'leaf'"
         )
-        dialogs = []
+        a_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
 
-        def on_dialog(dialog):
-            dialogs.append(dialog.message)
-            dialog.dismiss()
-
-        page.on("dialog", on_dialog)
+        # K idx2 (parked anchor).
         page.evaluate(
-            """() => {
-                const snap = window.prksWorkspaceSnapshot();
-                const ctx = window.prksGetTabContext(snap.secondaryTree.tabId);
-                window.prksHasPendingWorkAnnotationSync = function (c) {
-                    return !!(c && ctx && c.tabId === ctx.tabId);
-                };
-            }"""
+            """(id) => window.prksNavigate('#/positions/' + id, { target: 'new-tab', activate: false })""",
+            arg=position_id,
         )
-        before = _workspace_ids(page)
-        page.evaluate("(id) => window.prksWorkspaceTileTab(id)", arg=parked)
-        self.assertEqual(len(dialogs), 1)
-        after = _workspace_ids(page)
-        self.assertEqual(after["secondaryTabId"], before["secondaryTabId"])
-        self.assertEqual(after["mainTabId"], before["mainTabId"])
-        self.assertEqual(after["hash"], before["hash"])
-        self.assertEqual(after["mountedCount"], 2)
+        k_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[2].id")
 
-    def test_secondary_replace_does_not_remount_main(self):
+        # D idx3 (Secondary leaf, splits B).
+        d_tab = page.evaluate(
+            """(a) => window.prksWorkspaceSplitLeaf(a.target, 'top-bottom', { hash: '#/works/' + a.work })""",
+            arg={"target": b_id, "work": work_b},
+        )
+        d_id = d_tab["id"]
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+
+        # Make D Main: D keeps its array index (3); A (old Main) takes D's former leaf slot, so
+        # the surviving tree becomes split(B, A) -- both B and A now sit BEFORE the anchor K.
+        page.evaluate("(id) => window.prksWorkspaceMakeMain(id)", arg=d_id)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mainTabId !== undefined")
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"), d_id)
+
+        # E idx4 (parked, also closes alongside Main).
+        page.evaluate(
+            """(id) => window.prksNavigate('#/arguments/' + id, { target: 'new-tab', activate: false })""",
+            arg=argument_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 5")
+
+        page.evaluate(
+            """(ids) => {
+                window.__prksBatchCloseRt = {
+                    bCtx: window.prksGetTabContext(ids.b),
+                    aCtx: window.prksGetTabContext(ids.a),
+                };
+            }""",
+            arg={"b": b_id, "a": a_id},
+        )
+
+        seen_gets = []
+        page.on("request", lambda req: seen_gets.append(req.url) if req.method == "GET" else None)
+
+        closed = page.evaluate("(id) => window.prksWorkspaceCloseTabsToTheRight(id)", arg=k_id)
+        self.assertTrue(closed)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 3")
+
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(snap["mainTabId"], k_id, "K must be promoted to Main in D's place")
+        self.assertEqual(snap["secondaryTree"]["first"]["tabId"], b_id)
+        self.assertEqual(snap["secondaryTree"]["second"]["tabId"], a_id)
+        self.assertEqual(page.locator(".prks-tile").count(), 3)
+
+        identity = page.evaluate(
+            """(ids) => {
+                const rt = window.__prksBatchCloseRt;
+                return {
+                    bSame: window.prksGetTabContext(ids.b) === rt.bCtx,
+                    aSame: window.prksGetTabContext(ids.a) === rt.aCtx,
+                };
+            }""",
+            arg={"b": b_id, "a": a_id},
+        )
+        self.assertTrue(identity["bSame"], "B is unrelated to the close and must not remount")
+        self.assertTrue(identity["aSame"], "A (now a leaf) is unrelated to the close and must not remount")
+
+        for path in ("/api/persons/" + person_id, "/api/works/" + work_a):
+            self.assertFalse(
+                any(path in u for u in seen_gets),
+                "unrelated surviving Secondary leaf reloaded during batch close: " + path,
+            )
+
+    def test_tile_tab_default_split_does_not_remount_main(self):
+        """prksWorkspaceTileTab() on a parked tab, with exactly one existing Secondary leaf,
+        splits that leaf instead of replacing it -- and never touches Main's DOM/runtime."""
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
         work_b = server.ids["work_b"]
@@ -3141,6 +3312,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             }"""
         )
         self.assertTrue(roots["mainRoot"])
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
         parked = page.evaluate(
             """() => window.prksWorkspaceSnapshot().tabs.find(function (t) {
                 return t.id !== window.prksWorkspaceSnapshot().mainTabId
@@ -3151,24 +3323,25 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.wait_for_function(
             """() => {
                 const snap = window.prksWorkspaceSnapshot();
-                const tab = snap.tabs.find(function (t) { return t.id === snap.secondaryTree.tabId; });
-                return !!(tab && tab.route.indexOf('/people/') !== -1);
+                return snap.secondaryTree && snap.secondaryTree.type === 'split';
             }"""
         )
+        tree = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+        self.assertEqual(tree["first"]["tabId"], b_id)
+        self.assertEqual(tree["second"]["tabId"], parked)
         same = page.evaluate(
             """() => {
                 const main = document.querySelector('.prks-tile--main .prks-tab-root');
                 return {
                     sameRoot: main === window.__prksMainRoot,
                     work: !!document.querySelector('.prks-tile--main .work-detail'),
-                    person: !!document.querySelector('.prks-tile--secondary .prks-people-profile, .prks-tile--secondary [data-prks-role], .prks-tile--secondary h2'),
                     tiles: document.querySelectorAll('.prks-tile').length,
                 };
             }"""
         )
         self.assertTrue(same["sameRoot"])
         self.assertTrue(same["work"])
-        self.assertEqual(same["tiles"], 2)
+        self.assertEqual(same["tiles"], 3)
 
     def test_work_status_isolated_per_tab(self):
         server, page, _collector = self._start_app()
