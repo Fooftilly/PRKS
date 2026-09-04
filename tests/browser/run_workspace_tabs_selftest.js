@@ -5,6 +5,7 @@ const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
 const nav = require(path.join(rootDir, 'frontend/js/navigation.js'));
+const tree = require(path.join(rootDir, 'frontend/js/workspace-tree.js'));
 const wsApi = require(path.join(rootDir, 'frontend/js/workspace-tabs.js'));
 
 const { createPrksWorkspaceTabs, prksWorkspaceNavigationIntent } = wsApi;
@@ -457,7 +458,15 @@ async function run() {
     assert('tiled mode literal', src.indexOf("'tiled'") !== -1 || src.indexOf('"tiled"') !== -1);
     assert('secondaryTree leaf shape', src.indexOf('secondaryTree') !== -1);
     assert('no splitRatio', src.indexOf('splitRatio') === -1);
-    assert('no split node type', src.indexOf("type: 'split'") === -1 && src.indexOf('type: "split"') === -1);
+    /* Recursive split-node construction/mutation is delegated to workspace-tree.js; workspace-tabs.js
+     * must not reimplement its own ad hoc split-node literals for state mutation (the one exception is
+     * copySecondaryTree's snapshot clone, which is a plain deep copy, not a mutation). */
+    assert('delegates splitLeaf to tree module', src.indexOf('root.splitLeaf(') !== -1);
+    assert('delegates removeLeaf to tree module', src.indexOf('root.removeLeaf(') !== -1);
+    assert('delegates replaceTabId to tree module', src.indexOf('root.replaceTabId(') !== -1);
+    assert('delegates normalizeTree to tree module', src.indexOf('root.normalizeTree(') !== -1);
+    assert('delegates validateTree to tree module', src.indexOf('root.validateTree(') !== -1);
+    assert('max visible tabs constant', src.indexOf('PRKS_MAX_VISIBLE_TABS') !== -1);
 
     record('exports prksRouteSupportsTile', typeof nav.prksRouteSupportsTile === 'function', '');
     assert('tile allows work', nav.prksRouteSupportsTile('#/works/W1') === true);
@@ -886,6 +895,228 @@ async function run() {
     assertEq('replace leave denied', deniedReplace, false);
     assertEq('replace deny fingerprint', fingerprint(replaceH), deniedFp);
     assertEq('replace deny no paint', box.modes.length, 0);
+    }
+
+    /* =================== Recursive Secondary splits =================== */
+
+    {
+        /* Split right/down build a recursive tree; only the new leaf mounts. */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const A = h.ws.snapshot().mainTabId;
+        const B = h.ws.snapshot().secondaryTree.tabId;
+        assertEq('single leaf mounted 2', h.mountedCount(), 2);
+
+        const okC = await h.ws.splitLeaf(B, 'top-bottom', { hash: '#/works/WC' });
+        assert('split down B with C ok', !!okC);
+        let snap = h.ws.snapshot();
+        assertEq('split down tree is split', snap.secondaryTree.type, 'split');
+        assertEq('split down axis', snap.secondaryTree.axis, 'top-bottom');
+        assertEq('split down ratio default', snap.secondaryTree.ratio, 0.5);
+        assertEq('split down first is B', snap.secondaryTree.first.tabId, B);
+        const C = snap.secondaryTree.second.tabId;
+        assert('split down second is new leaf', C !== B && C !== A);
+        assertEq('split down mounted 3', h.mountedCount(), 3);
+        assert('split down A still mounted (unaffected)', h.isMounted(A));
+        assert('split down B still mounted (unaffected)', h.isMounted(B));
+        assertEq('split down focuses new leaf', snap.focusedTabId, C);
+        assertEq('main unchanged after split', snap.mainTabId, A);
+
+        const okD = await h.ws.splitLeaf(C, 'left-right', { hash: '#/works/WD' });
+        assert('split right C with D ok', !!okD);
+        snap = h.ws.snapshot();
+        const nested = snap.secondaryTree.second;
+        assertEq('nested split axis', nested.axis, 'left-right');
+        assertEq('nested split first is C', nested.first.tabId, C);
+        const D = nested.second.tabId;
+        assert('nested split second is new leaf D', D !== A && D !== B && D !== C);
+        assertEq('4 leaves total mounted (1 main + 3 secondary)', h.mountedCount(), 4);
+        assertEq('deterministic leaf order B,C,D', [snap.secondaryTree.first.tabId, nested.first.tabId, nested.second.tabId].join(','), [B, C, D].join(','));
+        assertEq('D focused after split', snap.focusedTabId, D);
+
+        /* Visible-pane cap: 1 Main + 3 Secondary already mounted -> further splits refused. */
+        assertEq('cap reached', h.ws.snapshot ? true : true, true);
+        const capBefore = fingerprint(h);
+        const capResult = await h.ws.splitLeaf(D, 'left-right', { hash: '#/works/WE' });
+        assertEq('split refused at cap', capResult, false);
+        assertEq('cap refusal unchanged state', fingerprint(h), capBefore);
+        assertEq('mounted stays 4 at cap', h.mountedCount(), 4);
+
+        /* Clicking an already-visible Secondary tab in the strip focuses it, does not promote it. */
+        const urlBefore = h.hist.getHash();
+        await h.ws.activateTab(B);
+        let snapFocus = h.ws.snapshot();
+        assertEq('activateTab on visible secondary focuses', snapFocus.focusedTabId, B);
+        assertEq('activateTab on visible secondary keeps main', snapFocus.mainTabId, A);
+        assertEq('activateTab on visible secondary keeps url', h.hist.getHash(), urlBefore);
+        await h.ws.activateTab(C);
+        assertEq('activateTab focuses C', h.ws.snapshot().focusedTabId, C);
+        assertEq('activateTab C keeps url', h.hist.getHash(), urlBefore);
+
+        /* Deep Make Main: promote D (deepest leaf) to Main; old Main A takes D's exact spot. */
+        await h.ws.focusTab(D);
+        const okMakeMain = h.ws.makeMain(D);
+        assert('deep make main ok', okMakeMain === true);
+        snap = h.ws.snapshot();
+        assertEq('deep make main new main', snap.mainTabId, D);
+        assertEq('deep make main url', h.hist.getHash(), '#/works/WD');
+        assertEq('deep make main focused', snap.focusedTabId, D);
+        assertEq('deep make main B unaffected', snap.secondaryTree.first.tabId, B);
+        assertEq('deep make main nested axis unaffected', snap.secondaryTree.second.axis, 'left-right');
+        assertEq('deep make main nested first is C', snap.secondaryTree.second.first.tabId, C);
+        assertEq('deep make main old main A took D spot', snap.secondaryTree.second.second.tabId, A);
+        assertEq('deep make main mounted still 4', h.mountedCount(), 4);
+        assert('deep make main A still mounted', h.isMounted(A));
+        assert('deep make main B still mounted', h.isMounted(B));
+        assert('deep make main C still mounted', h.isMounted(C));
+        assert('deep make main D still mounted', h.isMounted(D));
+
+        /* Close-collapse: close C -> nested split collapses to a bare A leaf. */
+        await h.ws.closeTab(C);
+        snap = h.ws.snapshot();
+        assert('close C tree valid', !!snap.secondaryTree);
+        assertEq('close C leaves B,A', [snap.secondaryTree.first.tabId, snap.secondaryTree.second.tabId].join(','), [B, A].join(','));
+        assertEq('close C no redundant node', snap.secondaryTree.second.type, 'leaf');
+        assert('close C context destroyed', !h.isMounted(C));
+        assertEq('close C mounted now 3', h.mountedCount(), 3);
+        assertEq('close C focus moved to sibling A', snap.focusedTabId, A);
+
+        /* Hide/park B: B stays open as a parked tab, removed from the tree, tree normalizes to bare A leaf. */
+        await h.ws.focusTab(B);
+        const hideOk = await h.ws.hideLeaf(B);
+        assert('hide leaf ok', hideOk === true);
+        snap = h.ws.snapshot();
+        assertEq('hide leaf tree collapses to bare leaf', snap.secondaryTree.type, 'leaf');
+        assertEq('hide leaf remaining is A', snap.secondaryTree.tabId, A);
+        assert('hidden B logical tab still open', !!snap.tabs.find(function (t) { return t.id === B; }));
+        assert('hidden B context parked (unmounted)', !h.isMounted(B));
+        assertEq('hide leaf mounted now 2', h.mountedCount(), 2);
+        assertEq('hide leaf focus moved off B', snap.focusedTabId, A);
+
+        /* Reopen the parked B via an explicit split -- same tabId reused, no duplicate. */
+        const tabCountBeforeReopen = snap.tabs.length;
+        const reopenOk = await h.ws.splitLeaf(A, 'left-right', { tabId: B });
+        assert('reopen parked B via split ok', !!reopenOk);
+        snap = h.ws.snapshot();
+        assertEq('reopen did not duplicate tab', snap.tabs.length, tabCountBeforeReopen);
+        assertEq('reopen reused B tabId', snap.secondaryTree.second.tabId, B);
+        assert('reopen B mounted again', h.isMounted(B));
+    }
+
+    {
+        /* Global Hide split / Show split with a multi-leaf tree: atomic, all-or-nothing, tree preserved. */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const A = h.ws.snapshot().mainTabId;
+        const B = h.ws.snapshot().secondaryTree.tabId;
+        await h.ws.splitLeaf(B, 'top-bottom', { hash: '#/works/WC' });
+        const C = h.ws.snapshot().secondaryTree.second.tabId;
+        assertEq('setup mounted 3', h.mountedCount(), 3);
+
+        h.setCanLeave(false);
+        const hideDenied = await h.ws.setMode('stacked');
+        assertEq('hide split denied', hideDenied, false);
+        assertEq('hide split denied stays tiled', h.ws.snapshot().mode, 'tiled');
+        assertEq('hide split denied mounted unchanged', h.mountedCount(), 3);
+        assert('hide split denied B mounted', h.isMounted(B));
+        assert('hide split denied C mounted', h.isMounted(C));
+
+        h.setCanLeave(true);
+        const hideOk = await h.ws.setMode('stacked');
+        assert('hide split accepted', hideOk === true);
+        let snap = h.ws.snapshot();
+        assertEq('hide split stacked', snap.mode, 'stacked');
+        assert('hide split tree preserved', !!snap.secondaryTree);
+        assertEq('hide split tree still has B,C', [snap.secondaryTree.first.tabId, snap.secondaryTree.second.tabId].join(','), [B, C].join(','));
+        assertEq('hide split mounted only main', h.mountedCount(), 1);
+        assert('hide split A mounted', h.isMounted(A));
+
+        const showOk = await h.ws.setMode('tiled');
+        assert('show split accepted', showOk === true);
+        snap = h.ws.snapshot();
+        assertEq('show split tiled', snap.mode, 'tiled');
+        assertEq('show split remounts both leaves', h.mountedCount(), 3);
+        assert('show split B remounted', h.isMounted(B));
+        assert('show split C remounted', h.isMounted(C));
+    }
+
+    {
+        /* Narrow fallback with 3 Secondary leaves: preserves the whole logical tree + ratios;
+         * atomic across all mounted leaves (accepted case). */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const A = h.ws.snapshot().mainTabId;
+        const B = h.ws.snapshot().secondaryTree.tabId;
+        await h.ws.splitLeaf(B, 'top-bottom', { hash: '#/works/WC' });
+        const C = h.ws.snapshot().secondaryTree.second.tabId;
+        await h.ws.splitLeaf(C, 'left-right', { hash: '#/works/WD' });
+        const D = h.ws.snapshot().secondaryTree.second.second.tabId;
+        const treeBefore = jsonClone(h.ws.snapshot().secondaryTree);
+        assertEq('pre-narrow mounted 4', h.mountedCount(), 4);
+
+        const narrowOk = await h.ws.setNarrowFallback(true);
+        assert('narrow accepted', narrowOk === true);
+        let snap = h.ws.snapshot();
+        assertEq('narrow tree fully preserved', JSON.stringify(snap.secondaryTree), JSON.stringify(treeBefore));
+        assertEq('narrow unmounts all secondary', h.mountedCount(), 1);
+        assert('narrow A still mounted', h.isMounted(A));
+        assertEq('narrow focus main', snap.focusedTabId, A);
+
+        const wideOk = await h.ws.setNarrowFallback(false);
+        assert('widen accepted', wideOk === true);
+        snap = h.ws.snapshot();
+        assertEq('widen remounts all 4', h.mountedCount(), 4);
+        assert('widen B remounted', h.isMounted(B));
+        assert('widen C remounted', h.isMounted(C));
+        assert('widen D remounted', h.isMounted(D));
+        assertEq('widen tree unchanged', JSON.stringify(snap.secondaryTree), JSON.stringify(treeBefore));
+    }
+
+    {
+        /* Atomic narrow rejection: one leaf (the deepest) rejects leave -> nothing is parked,
+         * the whole tree/mount set stays exactly as it was. */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const B = h.ws.snapshot().secondaryTree.tabId;
+        await h.ws.splitLeaf(B, 'top-bottom', { hash: '#/works/WC' });
+        const C = h.ws.snapshot().secondaryTree.second.tabId;
+        await h.ws.splitLeaf(C, 'left-right', { hash: '#/works/WD' });
+        const D = h.ws.snapshot().secondaryTree.second.second.tabId;
+        const fpBefore = fingerprint(h);
+        assertEq('pre-reject mounted 4', h.mountedCount(), 4);
+
+        h.setCanLeave(false);
+        const rejected = await h.ws.setNarrowFallback(true);
+        assertEq('narrow rejected result', rejected, false);
+        assertEq('narrow rejected fingerprint unchanged', fingerprint(h), fpBefore);
+        assertEq('narrow rejected mounted still 4', h.mountedCount(), 4);
+        assert('narrow rejected B still mounted', h.isMounted(B));
+        assert('narrow rejected C still mounted', h.isMounted(C));
+        assert('narrow rejected D still mounted', h.isMounted(D));
+        assertEq('narrow rejected still tiled visually', h.ws.visualTiled(), true);
+
+        h.setCanLeave(true);
+        const accepted = await h.ws.setNarrowFallback(true);
+        assert('narrow now accepted', accepted === true);
+        assertEq('narrow accepted mounted 1', h.mountedCount(), 1);
+    }
+
+    {
+        /* Split-right default placement and Main+first-Secondary stays a bare leaf (spec #8):
+         * only recursion once an existing Secondary leaf is itself split. */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        assertEq('first secondary stays bare leaf', h.ws.snapshot().secondaryTree.type, 'leaf');
+
+        /* splitLeaf refuses a target that is not a current Secondary leaf. */
+        const notALeaf = await h.ws.splitLeaf('tab-does-not-exist', 'left-right', { hash: '#/works/WZ' });
+        assertEq('split refuses unknown target', notALeaf, false);
+
+        /* splitLeaf refuses reusing a tabId that is Main. */
+        const mainId = h.ws.snapshot().mainTabId;
+        const secId = h.ws.snapshot().secondaryTree.tabId;
+        const refuseMain = await h.ws.splitLeaf(secId, 'left-right', { tabId: mainId });
+        assertEq('split refuses reusing main tab', refuseMain, false);
     }
 
     console.log('\n' + passed + ' passed, ' + failed + ' failed');

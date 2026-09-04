@@ -524,11 +524,13 @@ These are different concepts. Mixing them will break the later workspace project
 .prks-splitter
 ```
 
-The component gallery shows the accessible tab-strip structure (activation control, optional Split action, close control). Tiled v1 ships one Secondary on the right, with a draggable Main/Secondary divider. Recursive Secondary splits are not implemented.
+The component gallery shows the accessible tab-strip structure (activation control, optional Split action, close control). Main is permanently the single root pane and never recursively splits. Secondary is a recursive tree of `left-right`/`top-bottom` split nodes, up to a visible-pane cap (1 Main + 3 Secondary, i.e. 4 mounted TabContexts at once). Every split node owns its own local ratio (default 0.5), independent of the root Main/Secondary ratio and of every other split node.
 
-User-facing copy uses **Split view**. Internal architecture still says tile / Secondary / `secondaryTree`.
+User-facing copy uses **Split view**, **Split right**, **Split down**, **Make main**, **Hide from split**, and **Close**. Internal architecture still says tile / Secondary / `secondaryTree`; internal identifiers like split-node IDs and tree paths are never user-facing.
 
-Parked tile-capable tabs expose a Split action that calls `prksWorkspaceTileTab(tabId)` (no duplicate tab). The workspace Split control is state-aware: **Split** opens the picker, **Show split** restores a parked Secondary, **Hide split** stacks the view. Clicking a parked tab's main area still makes it Main.
+Parked tile-capable tabs expose a Split action that calls `prksWorkspaceTileTab(tabId)` (no duplicate tab). The workspace Split control is state-aware: **Split** opens the picker, **Show split** restores the whole parked Secondary tree, **Hide split** parks every visible Secondary leaf at once while preserving the tree logically. Clicking a parked tab's main area still makes it Main. Clicking a *visible* Secondary tab's entry in the global tab strip focuses it in place; it does not promote it to Main.
+
+A focused Secondary tile additionally exposes local, per-pane actions: **Split right** / **Split down** (open the same split picker, scoped to that leaf), **Make main** (in-place role swap with the current Main, at any tree depth), and **Close** (destroys that tab). A separate **Hide from split** context-menu action parks just that one leaf's logical tab (keeps it open, removes it from the tree) without closing it — distinct from the global **Hide split** button, which parks every leaf but keeps the whole tree intact for **Show split** to restore later.
 
 ### Workspace / tab visual contract
 
@@ -536,7 +538,7 @@ Workspace tabs should feel like application/document tabs, not browser chrome pa
 
 Stacked: one main/visible tab (`mainTabId == focusedTabId`). Parked tabs are unmounted. Main tile chrome is visually transparent.
 
-Tiled v1: Main occupies the left master column; one Secondary occupies the right. `focusedTabId` may differ from `mainTabId`. The right details panel follows the focused tile. Browser URL, document title, sidebar, and History stay with Main.
+Tiled: Main occupies the left master column; the Secondary region holds the recursive tree of one or more Secondary leaves. `focusedTabId` may differ from `mainTabId` and may identify any visible leaf, at any tree depth. The right details panel follows the focused tile. Browser URL, document title, sidebar, and History stay with Main, no matter how deep the focused Secondary leaf is nested.
 
 | State | Visual |
 | --- | --- |
@@ -555,27 +557,36 @@ Tab strip: one row, fixed height, titles ellipsize. Tabs do not shrink below a u
 Tab context menu (user copy only: Split view):
 
 - Parked: Make main, Open in split view (if tile-capable), Close, Close other tabs, Close tabs to the right
-- Secondary: Focus, Make main, Hide split, Close
+- Secondary: Focus (if not already focused), Make main, Split right, Split down, Hide from split, Close
 - Main: Open another tab in split view, Close, Close other tabs, Close tabs to the right
 
-Close: parked closes that tab; Secondary close collapses to stacked and leaves Main; Main close with a Secondary promotes that Secondary; otherwise the right neighbor, then left, then Home. Never flash Home while a successor exists. Leave guards apply before any close or Secondary replacement. Rejected leave changes nothing.
+Split right / Split down open the same split picker used by the global Split button, scoped to that specific focused leaf (`{ targetLeafTabId, axis, placement: 'second' }`); selecting an already-open (often parked) tab reuses it rather than duplicating it. Both actions are disabled with an explanation once the visible-pane cap is reached: "Maximum of 4 visible panes. Close or hide a pane to split again." Ordinary New Tab is unaffected by the cap — it always creates a parked tab.
 
-Replacement (A Main | B Secondary, choose C): preflight B, keep A mounted, do not remove B until accepted; C becomes focused Secondary and B is parked. No intermediate stacked frame.
+If a Secondary leaf is currently focused, the global Split button's picker and "Open in split view" from elsewhere target that focused leaf's default split (right). If exactly one Secondary leaf exists and none is focused, it targets that leaf. Otherwise an explicit Split right/down from a specific focused leaf is required — the system never guesses an arbitrary leaf deep in the tree.
+
+Close: parked closes that tab; a Secondary leaf's close removes it and normalizes the tree (redundant split nodes collapse; if it was the last leaf, the whole Secondary region disappears and the view returns to stacked) — it never touches Main or any other leaf's runtime; Main close promotes the first surviving Secondary leaf (in deterministic tree order) or, absent one, the right neighbor, then left, then Home. Never flash Home while a successor exists. Leave guards apply before any close, hide, or Secondary replacement; a rejected leave changes nothing (no partial tree/DOM mutation).
+
+Hide from split (local, per-leaf) removes that one leaf from the tree and normalizes it, but keeps its logical tab open and parked — distinct from Close (which destroys the tab) and from the global Hide split (which parks every visible leaf at once but keeps the entire tree intact, restorable via Show split).
+
+Focus after a leaf disappears (close, local hide, or narrow fallback) prefers the closest surviving sibling in the locally-collapsed subtree; otherwise the nearest remaining leaf in deterministic depth-first tree order; otherwise Main.
+
+Replacement (A Main | B Secondary, choose C, when the Secondary region is a single bare leaf): preflight B, keep A mounted, do not remove B until accepted; C becomes focused Secondary and B is parked. No intermediate stacked frame. This wholesale-replacement path only applies when there is nothing to split — once a Secondary leaf has been explicitly split, further panes are added via Split right/down, not replacement.
 
 Focus restoration after close / hide / replace / Make main / narrow fallback prefers the resulting focused tile, else that tab’s activation control. Do not leave DOM focus on a destroyed node. Pointer or keyboard entering a tile focuses it without promoting Main or changing the URL.
 
-Split control: **Split** (no leaf), **Show split** (leaf, stacked), **Hide split** (visually tiled). Narrow fallback must not show Hide split; it explains that split needs a wider window.
+Split control: **Split** (no leaf), **Show split** (tree exists but is parked/hidden), **Hide split** (tree visually tiled). Narrow fallback must not show Hide split; it explains that split needs a wider window. The global Split button only ever controls whether the Secondary region as a whole exists/is visible — it never adds another pane; adding panes is always a local Split right/down action on a specific focused leaf.
 
 Tile chrome exists only in tiled mode. Headers keep a stable height. Loading and errors stay inside the route root; the tile shell/header is not torn down.
 
 Work notes side-by-side layout follows that Work’s tile/container width, not a global viewport class that would restyle the other tile.
 
-Tiling v1:
+Tiling:
 
-- main/master tile owns the left column, one secondary tile lives on the right
-- the root Main/Secondary split is directly resizable (default ~58/42)
-- a thin `.prks-splitter` divider separates the tiles; no heavy card shadow around either tile
+- main/master tile owns the left column; the Secondary region holds a recursive tree of one or more tiles
+- the root Main/Secondary split is directly resizable (default ~58/42); every internal Secondary split node has its own independent, locally-scoped ratio (default 0.5)
+- a thin `.prks-splitter` divider separates every pair of adjacent tiles/regions (root and nested alike); no heavy card shadow around any tile
 - stacked mode has no visible tile chrome, and no separator
+- at most 4 TabContexts are ever mounted at once (1 Main + 3 Secondary); the cap is enforced predictably (see below), not silently
 
 ### Main/Secondary divider
 
@@ -590,15 +601,26 @@ Divider contract:
 - `role="separator"`, `tabindex="0"`, `aria-orientation="vertical"`, `aria-valuemin`/`aria-valuemax`/`aria-valuenow`/`aria-valuetext` (whole percentages) kept current on every resize
 - keyboard: Left/Right resize by a small step, Shift+Left/Right by a larger step, Home/End jump to the dynamic min/max allowed width, double-click resets to default with a live-region announcement
 - Main/Secondary each have one centralized minimum pixel width; the ratio is clamped against those minimums recomputed from the *measured* canvas width, not a fixed 0.25–0.75 band
-- resizing is layout-only: it never mounts/unmounts a TabContext, never re-renders a route, and never triggers a leave guard; the canonical ratio updates without a full workspace repaint, and the DOM applies the resulting exact pixel Main width via a CSS custom property
-- rendered only when split view is actually visible (never in stacked/narrow-fallback mode); at most two tiles and one divider, ever
+- resizing is layout-only: it never mounts/unmounts a TabContext, never re-renders a route, and never triggers a leave guard; the canonical ratio updates without a full workspace repaint, and the DOM applies the resulting exact pixel width/height via a CSS custom property
+- rendered only when split view is actually visible (never in stacked/narrow-fallback mode)
 
-Future recursive Secondary splits / horizontal splitter:
+### Nested Secondary split dividers
 
-- `secondaryTree` may grow `type: "split"` nodes (`axis`, `ratio`, `first`, `second`), each with its own ratio distinct from the root `mainSplitRatio`
-- reuse the same divider visual language (1px line, wide hit target, accent focus/drag state) — do not invent another design language then
+Every internal Secondary split node (`type: "split"`, `axis: "left-right" | "top-bottom"`) gets its own separator, sharing the root divider's exact mechanics and visual language — there is one separator implementation, not two:
 
-This specification governs later recursive tiling.
+- `left-right` splits get a vertical `.prks-splitter--vertical` divider (col-resize cursor); `top-bottom` splits get a horizontal `.prks-splitter--horizontal` divider (row-resize cursor)
+- `role="separator"`, `tabindex="0"`, `aria-orientation`, `aria-valuemin`/`aria-valuemax`/`aria-valuenow`/`aria-valuetext` kept current on every resize; keyed by that split node's own stable ID (`data-prks-split-id`)
+- keyboard: the axis-appropriate arrow keys resize by a small step, Shift+arrow by a larger step, Home/End jump to that split's own dynamic min/max, double-click resets that one split to 0.5 (not the root's 58/42) with a live-region announcement
+- each split node's minimum sizes are centralized constants (`PRKS_NESTED_MIN_WIDTH_PX` / `PRKS_NESTED_MIN_HEIGHT_PX`) and are measured against that split's own container, never the window or workspace root; both children of a nested split share the same minimum (no Main/Secondary role distinction inside Secondary)
+- if a split's container becomes too small to honor both children's minimums, its ratio clamps safely to that split's own midpoint rather than producing a negative/overflowing pane — this is expected, container-local behavior, not an error
+- dragging or keyboard-resizing one split node never touches the root `mainSplitRatio` or any other split node's ratio; it never mounts/unmounts a TabContext, re-renders a route, or triggers a leave guard
+- nested ratios are memory-only, exactly like the root ratio; a full reload resets every split back to its default
+
+### Recursive Secondary tree
+
+`secondaryTree` is `null` (no Secondary), a bare `{ type: "leaf", tabId }` (exactly one Secondary tab — the common case), or a `{ type: "split", id, axis, ratio, first, second }` node whose `first`/`second` children are themselves leaves or splits. Split-node IDs are stable per-runtime keys (DOM reuse, resize ownership, focus, targeted mutation) — never array index, DOM position, or a child's tab ID. They are in-memory only; nothing about the tree is persisted across a reload yet.
+
+A recursive DOM renderer mounts exactly one stable host per visible leaf (keyed by `tabId`) and one split container + separator per split node (keyed by `split.id`), reconciling rather than rebuilding: an unrelated leaf's host and TabContext survive any sibling being split, closed, hidden, resized, or promoted to Main elsewhere in the tree. Removing a leaf normalizes the tree — a split node left with only one child is replaced by that child, repeated upward as needed — so the tree never carries a redundant single-child split node.
 
 ### Chips, tags, and badges
 

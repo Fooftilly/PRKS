@@ -12,6 +12,7 @@ const vm = require('vm');
 
 const rootDir = path.resolve(__dirname, '../..');
 const nav = require(path.join(rootDir, 'frontend/js/navigation.js'));
+require(path.join(rootDir, 'frontend/js/workspace-tree.js'));
 const wsApi = require(path.join(rootDir, 'frontend/js/workspace-tabs.js'));
 const splitApi = require(path.join(rootDir, 'frontend/js/workspace-split.js'));
 

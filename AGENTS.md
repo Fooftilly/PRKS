@@ -169,23 +169,33 @@ Normal navigation targets the originating workspace context (the TabContext that
 
 Ctrl/Cmd-click and middle-click target a background PRKS tab.
 
-Alt-click and `prksNavigate(..., { target: "tile" })` open a Secondary tile when the route is tile-capable.
+Alt-click and `prksNavigate(..., { target: "tile" })` open a Secondary leaf when the route is tile-capable.
 
-User-facing copy says "Split view" / "Open in split view". Internal APIs stay `tile`, `secondaryTree`, and `target: "tile"`.
+User-facing copy says "Split view", "Split right", "Split down", "Make main", "Hide from split", "Hide split" / "Show split". Internal APIs stay `tile`, `secondaryTree`, split-node IDs, and `target: "tile"` — never user-facing.
 
-Existing parked tabs should be tiled through `prksWorkspaceTileTab(tabId)`, not duplicated through `navigate(... { target: "tile" })`.
+Existing parked tabs should be tiled through `prksWorkspaceTileTab(tabId)`, not duplicated through `navigate(... { target: "tile" })`. Split right/down onto a specific focused leaf go through `prksWorkspaceSplitLeaf(targetLeafTabId, axis, options)`, reusing an existing tab (`options.tabId`) or creating one (`options.hash`) — never duplicating.
 
-Close: parked closes only that tab. Secondary close stacks and leaves Main. Main close with a visible Secondary promotes that Secondary. Otherwise pick the right neighbor, then left, then Home. Do not flash Home. Keep leave guards. Batch close (other tabs / tabs to the right) preflights every mounted tab being closed and aborts entirely on reject.
+Main never recursively splits; it is permanently the single root pane. Secondary is `workspace-tree.js`'s recursive `leaf`/`split` tree (`secondaryTree`): `null` (no Secondary), a bare `{ type: "leaf", tabId }` (the common single-Secondary case — do not wrap it in a pointless split node), or a `{ type: "split", id, axis, ratio, first, second }` node whose children are themselves leaves or splits. A tab occurs at most once in `secondaryTree`, and Main's own tab never appears inside it. Split-node IDs are stable per-runtime keys (never array index, DOM position, or a child's tab ID) used for DOM reuse, resize ownership, and targeted mutation; they are in-memory only, never persisted. Route capability for a Secondary leaf is unchanged from single-Secondary v1 (works, people, concepts, positions, arguments, playlists) — no new route types become tile-capable as part of recursive splitting.
 
-Focusing a tile must not promote Main, change the URL, remount, or reset PDF/editor. After close, hide split, replace Secondary, Make main, or narrow fallback, restore focus to the resulting focused tile or its workspace tab control.
+Tree mutation goes only through `workspace-tree.js`'s pure helpers (`findLeafByTabId`, `replaceLeaf`, `splitLeaf`, `removeLeaf`, `replaceTabId`, `setSplitRatio`, `normalizeTree`, `validateTree`, `collectLeafTabIds`, `containsTab`, …); routes and UI code must never mutate `secondaryTree` structure directly. Removing a leaf always normalizes the tree afterward: a split node left with one child collapses into that child, repeated upward, so the tree never carries a redundant single-child split node; if the last leaf disappears, `secondaryTree` becomes `null` and the view returns to stacked.
 
-User-facing menu copy is Split view / Make main / Hide split. Do not expose `tileTab`, `secondaryTree`, or `mainTabId`.
+At most `PRKS_MAX_VISIBLE_TABS` (4: 1 Main + 3 Secondary) TabContexts are ever mounted at once. Split right/down are disabled with an explanation once the cap is reached; ordinary New Tab is unaffected and still creates a parked tab.
+
+Close: parked closes only that tab. A Secondary leaf's close removes and normalizes the tree — it must never remount or otherwise touch any other leaf's TabContext — and prefers focusing the closest surviving sibling in the collapsed subtree, else the nearest remaining leaf in deterministic depth-first tree order, else Main. Main close promotes the first surviving Secondary leaf in that same deterministic order, else the right tab-strip neighbor, then left, then Home. Do not flash Home while a successor exists. Keep leave guards. Batch close (other tabs / tabs to the right) preflights every mounted tab being closed and aborts entirely on reject.
+
+Hide/park is two distinct operations. Global "Hide split" (the shell Split button) parks every currently-visible Secondary leaf at once, atomically (depth-first preflight, stop at first rejection, no partial parking), but preserves the whole `secondaryTree` logically for "Show split" to remount unchanged. Local "Hide from split" (per-leaf, context-menu only) removes just that one leaf from the tree and normalizes it, while keeping its logical tab open and parked — distinct from Close, which destroys the tab. Neither ever duplicates a tab: reopening a parked leaf reuses its existing tab ID.
+
+Make main is an in-place role swap, valid from any Secondary leaf at any tree depth: the promoted leaf becomes `mainTabId`, and the old Main takes over that exact leaf position (`replaceTabId`) — never a tree rebuild, a move to the root, or a sibling reorder. Every leaf's TabContext identity (including the promoted and demoted ones) survives untouched; only DOM placement/role and Main-owned chrome (URL, History, title) change.
+
+Focusing a tile must not promote Main, change the URL, remount, or reset PDF/editor. Clicking a *visible* Secondary leaf's global tab-strip entry focuses it in place; it does not promote it — that is reserved for parked tabs and explicit Make main. After close, hide (global or local), replace Secondary, Make main, or narrow fallback, restore focus to the resulting focused tile or its workspace tab control.
+
+User-facing menu copy is Split view / Split right / Split down / Make main / Hide from split / Hide split / Show split. Do not expose `tileTab`, `secondaryTree`, split-node IDs, or `mainTabId`.
 
 Parked tabs must perform no API requests and own no live DOM/resources.
 
-Stacked mode mounts one TabContext (Main). Tiled v1 mounts at most two: Main and one Secondary. Do not introduce a third mounted context until recursive tiling is implemented.
+Stacked mode mounts one TabContext (Main). Tiled mounts Main plus every visible Secondary leaf in the tree, up to the visible-pane cap. Do not introduce a fifth mounted context.
 
-URL always represents Main. Secondary routes never mutate browser History. Make Main uses replaceState.
+URL always represents Main, no matter how deep the focused Secondary leaf is nested. Secondary routes never mutate browser History. Make Main uses replaceState.
 
 The right panel always follows the focused TabContext. Feature navigation uses the originating TabContext when it is known; do not use focused context as a substitute for an originating element/context.
 
@@ -197,26 +207,36 @@ Workspace state is intentionally memory-only in v1.
 
 Root Main/Secondary width is workspace-owned: one normalized ratio (`mainSplitRatio`,
 default `0.58`) lives in workspace-tabs.js state, alongside `mainTabId` /
-`focusedTabId` / `secondaryTree`. Routes must never store or read the workspace
-split ratio, and must never modify it. It is intentionally memory-only until
-Workspace Persistence; do not write it to `localStorage`, `sessionStorage`,
-IndexedDB, or a backend setting.
+`focusedTabId` / `secondaryTree`. Every internal Secondary split node owns its own
+local `ratio` (default `0.5`) inside its own tree node — never on either child tab,
+never inherited from the root ratio or from a sibling split. Routes must never
+store, read, or modify any of these ratios. All of them are intentionally
+memory-only until Workspace Persistence; do not write any of them to
+`localStorage`, `sessionStorage`, IndexedDB, or a backend setting.
 
 Main/Secondary ratio follows roles, not tab IDs. Make Main, Secondary
 replacement, Hide/Show split, and the narrow responsive fallback must never
-invert or reset the ratio.
+invert or reset the root ratio or any nested split's ratio.
 
-The Main/Secondary divider (`workspace-split.js`, class `.prks-splitter`) is the
-one separator implementation. Do not implement independent divider drag,
-keyboard-resize, or ARIA logic in `works.js`, `works-pdf.js`, or other route
-components. `workspace-tiling.js` only calls into it; it does not own pointer,
-keyboard, ARIA, or persistence logic itself.
+The Main/Secondary divider and every nested Secondary split divider
+(`workspace-split.js`, class `.prks-splitter`) share the one separator
+implementation, keyed by split-node ID for nested separators. Do not implement
+independent divider drag, keyboard-resize, or ARIA logic in `works.js`,
+`works-pdf.js`, other route components, or a second implementation inside
+`workspace-tiling.js` for nested splits. `workspace-tiling.js` only calls into
+`workspace-split.js`; it does not own pointer, keyboard, ARIA, or persistence
+logic itself.
 
-Divider resizing is layout-only and must not remount TabContexts, unmount/mount
-a route, re-render a route, or trigger a leave guard. It must not run a full
-workspace paint on every pointer-move; the canonical ratio updates via
-`prksWorkspaceSetMainSplitRatio(ratio, { paint: false })` and the DOM applies the
-resulting Main pixel width through a CSS custom property.
+Divider resizing (root or nested) is layout-only and must not remount
+TabContexts, unmount/mount a route, re-render a route, or trigger a leave guard.
+It must not run a full workspace paint on every pointer-move; the canonical
+ratio updates via `prksWorkspaceSetMainSplitRatio(ratio, { paint: false })` (root)
+or `prksWorkspaceSetNestedSplitRatio(splitId, ratio, { paint: false })` (nested),
+and the DOM applies the resulting pixel width/height through a CSS custom
+property. A nested split's minimum sizes are measured against that split's own
+container only, never the window or workspace root; if its container is too
+small for both children's minimums, its ratio clamps safely to that split's own
+midpoint rather than producing a negative/overflowing pane.
 
 Tile-local components (PDF viewer, EasyMDE, other detail routes) respond to
 divider resizing through their own existing container-aware sizing /
@@ -232,7 +252,7 @@ TabContext owns route runtime:
 - live resources → `ctx.resources` / `ctx.setTimer`
 - shell → main/focused context (`prksGetMainTabContext`, `prksGetFocusedTabContext`)
 
-Stacked mode: one mounted context. Tiled v1: Main + one Secondary, each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
+Stacked mode: one mounted context. Tiled mode: Main + every visible Secondary leaf (up to the visible-pane cap), each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
 is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
 
 ## Saved Views

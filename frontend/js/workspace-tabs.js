@@ -11,6 +11,8 @@
     const HOME_HASH = '#/folders';
     /* Main region width / usable split width (usable excludes the separator track). Session-memory only. */
     const DEFAULT_MAIN_SPLIT_RATIO = 0.58;
+    /* 1 Main + up to 3 Secondary leaves = 4 mounted TabContexts at once, at most. */
+    const PRKS_MAX_VISIBLE_TABS = 4;
     const INTERACTIVE_NEST =
         'button, a, input, select, textarea, [contenteditable="true"],' +
         '[role="button"], [role="link"], [role="menuitem"], [role="tab"],' +
@@ -51,8 +53,15 @@
     }
 
     function copySecondaryTree(tree) {
-        if (!tree || tree.type !== 'leaf' || !tree.tabId) return null;
-        return { type: 'leaf', tabId: String(tree.tabId) };
+        if (!tree) return null;
+        if (tree.type === 'leaf') return tree.tabId ? { type: 'leaf', tabId: String(tree.tabId) } : null;
+        if (tree.type === 'split') {
+            const first = copySecondaryTree(tree.first);
+            const second = copySecondaryTree(tree.second);
+            if (!first || !second) return null;
+            return { type: 'split', id: tree.id, axis: tree.axis, ratio: tree.ratio, first: first, second: second };
+        }
+        return null;
     }
 
     function workspacePayload(tab) {
@@ -214,21 +223,46 @@
             return getTab(state.mainTabId);
         }
 
-        function secondaryTabId() {
-            const tree = state.secondaryTree;
-            if (!tree || tree.type !== 'leaf' || !tree.tabId) return null;
-            if (tree.tabId === state.mainTabId) return null;
-            return tree.tabId;
-        }
-
         function visualTiled() {
-            return state.mode === MODE_TILED && !narrowFallback && !!secondaryTabId();
+            return state.mode === MODE_TILED && !narrowFallback && !!state.secondaryTree;
         }
 
         function isVisibleTab(tabId) {
             if (!tabId) return false;
             if (tabId === state.mainTabId) return true;
-            return visualTiled() && tabId === secondaryTabId();
+            return visualTiled() && root.containsTab(state.secondaryTree, tabId);
+        }
+
+        function paneCapReached() {
+            return root.leafCount(state.secondaryTree) >= PRKS_MAX_VISIBLE_TABS - 1;
+        }
+
+        /** Depth-first order (first before second); the sole leaf when the tree is a bare leaf. */
+        function defaultSplitTargetLeafId() {
+            const tree = state.secondaryTree;
+            if (!tree) return null;
+            if (root.isLeaf(tree)) return tree.tabId;
+            if (state.focusedTabId !== state.mainTabId && root.containsTab(tree, state.focusedTabId)) {
+                return state.focusedTabId;
+            }
+            return null;
+        }
+
+        /** Depth-first, stop-at-first-rejection preflight across several mounted leaves. Used
+         * anywhere a structural transaction would unmount more than one live leaf at once
+         * (global Hide split, physical narrow fallback) so the whole thing is atomic: either
+         * every leaf agrees to leave, or none of them are touched. */
+        function preflightLeaves(leafIds, nextHash) {
+            function step(i) {
+                if (i >= leafIds.length) return Promise.resolve(true);
+                const id = leafIds[i];
+                const p = contextMounted(id) ? awaitLeave(id, nextHash) : Promise.resolve(true);
+                return p.then(function (ok) {
+                    if (!ok) return false;
+                    return step(i + 1);
+                });
+            }
+            return step(0);
         }
 
         function markHandled() {
@@ -263,12 +297,11 @@
             const route = canonical(hash);
             const opts = options || {};
             const visual = visualTiled();
-            const sec = secondaryTabId();
             for (let i = 0; i < state.tabs.length; i++) {
                 const tab = state.tabs[i];
                 if (canonical(tab.route) !== route) continue;
                 if (opts.excludeMain && tab.id === state.mainTabId) continue;
-                if (opts.excludeVisibleSecondary && visual && tab.id === sec) continue;
+                if (opts.excludeVisibleSecondary && visual && root.containsTab(state.secondaryTree, tab.id)) continue;
                 if (opts.excludeTabId && tab.id === opts.excludeTabId) continue;
                 return copyTab(tab);
             }
@@ -410,13 +443,6 @@
             state.focusedTabId = tabId;
         }
 
-        function clearSecondaryIf(tabId) {
-            if (secondaryTabId() === tabId || (state.secondaryTree && state.secondaryTree.tabId === tabId)) {
-                state.secondaryTree = null;
-                state.mode = MODE_STACKED;
-            }
-        }
-
         function navigateTabHistory(tab, hash, replace) {
             if (replace) {
                 tab.history[tab.historyIndex] = hash;
@@ -448,16 +474,28 @@
 
         function enforceInvariants() {
             if (!state.mainTabId && state.tabs.length) state.mainTabId = state.tabs[0].id;
-            const sec = secondaryTabId();
-            if (state.secondaryTree && !sec) {
-                if (!getTab(state.secondaryTree.tabId) || state.secondaryTree.tabId === state.mainTabId) {
-                    state.secondaryTree = null;
+            if (state.secondaryTree) {
+                /* Every leaf must reference an existing logical tab and never the Main tab.
+                 * Drop and normalize any leaf that fails (defensive; should not happen in
+                 * correct operation, since every mutation path already validates this). */
+                const leafIds = root.collectLeafTabIds(state.secondaryTree);
+                for (let i = 0; i < leafIds.length; i++) {
+                    const id = leafIds[i];
+                    if (!getTab(id) || id === state.mainTabId) {
+                        state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, id));
+                    }
+                }
+                if (state.secondaryTree) {
+                    const check = root.validateTree(state.secondaryTree);
+                    if (!check.ok) {
+                        throw new Error('workspace secondaryTree invariant violation: ' + check.errors.join('; '));
+                    }
                 }
             }
-            if (state.mode === MODE_TILED && !secondaryTabId()) state.mode = MODE_STACKED;
+            if (state.mode === MODE_TILED && !state.secondaryTree) state.mode = MODE_STACKED;
             if (state.mode === MODE_STACKED) {
                 state.focusedTabId = state.mainTabId;
-            } else if (state.focusedTabId !== state.mainTabId && state.focusedTabId !== secondaryTabId()) {
+            } else if (state.focusedTabId !== state.mainTabId && !root.containsTab(state.secondaryTree, state.focusedTabId)) {
                 state.focusedTabId = state.mainTabId;
             }
         }
@@ -481,6 +519,7 @@
         function bootstrap(initialHash) {
             const hash = canonical(initialHash != null ? initialHash : getHash());
             seq = 0;
+            root.resetSplitIds();
             lastHandledHref = '';
             lastRenderGen = 0;
             resetAllContexts();
@@ -540,6 +579,13 @@
             });
         }
 
+        /**
+         * In-place role swap: promotes `newMainId` (any Secondary leaf, at any tree depth) to
+         * Main, and puts the old Main into the promoted leaf's exact former tree position.
+         * This never rebuilds the tree, moves the leaf to the root, or reorders siblings --
+         * `replaceTabId` only renames that one leaf node, so runtimes for every other leaf
+         * (and the promoted/demoted ones) are untouched.
+         */
         function swapVisibleRoles(newMainId) {
             const tab = getTab(newMainId);
             if (!tab) return false;
@@ -547,10 +593,10 @@
                 state.focusedTabId = tab.id;
                 return true;
             }
-            if (tab.id !== secondaryTabId()) return false;
+            if (!root.containsTab(state.secondaryTree, tab.id)) return false;
             const oldMain = state.mainTabId;
             state.mainTabId = tab.id;
-            state.secondaryTree = { type: 'leaf', tabId: oldMain };
+            state.secondaryTree = root.replaceTabId(state.secondaryTree, tab.id, oldMain);
             state.mode = MODE_TILED;
             state.focusedTabId = tab.id;
             return true;
@@ -608,12 +654,76 @@
             });
         }
 
+        /** Splits `targetTabId`'s leaf into a new split node holding `tab` as the second child
+         * (spec: existing leaf stays first, new leaf placed second). Mounts only `tab` -- the
+         * target leaf and every other leaf keep their existing TabContext untouched. */
+        function performSplit(targetTabId, axis, tab) {
+            state.secondaryTree = root.splitLeaf(state.secondaryTree, targetTabId, {
+                axis: axis,
+                newTabId: tab.id,
+                placement: 'second',
+            });
+            return mountAndRenderSecondary(tab);
+        }
+
+        /** Explicit Split right ('left-right') / Split down ('top-bottom') action for a specific
+         * focused Secondary leaf. `options.tabId` reuses an existing (often parked) tab;
+         * `options.hash` creates one. Refuses (without side effects on an existing tab) when the
+         * target isn't a visible leaf or the visible-pane cap is already reached. */
+        function splitLeafAction(targetTabId, axis, options) {
+            if (!root.containsTab(state.secondaryTree, targetTabId)) return Promise.resolve(false);
+            if (paneCapReached()) {
+                announce('', 'cap');
+                return Promise.resolve(false);
+            }
+            const opts = options || {};
+            const useAxis = axis === 'top-bottom' ? 'top-bottom' : 'left-right';
+            if (opts.tabId) {
+                const existing = getTab(opts.tabId);
+                if (!existing || existing.id === state.mainTabId || root.containsTab(state.secondaryTree, existing.id)) {
+                    return Promise.resolve(false);
+                }
+                return Promise.resolve(performSplit(targetTabId, useAxis, existing));
+            }
+            const route = canonical(opts.hash);
+            if (!routeSupportsTile(route)) return Promise.resolve(false);
+            const tab = makeTab(route);
+            state.tabs.push(tab);
+            return Promise.resolve(performSplit(targetTabId, useAxis, tab));
+        }
+
+        /** Removes `tabId`'s leaf from secondaryTree while keeping its logical tab open and
+         * parked (spec: "Hide this pane" is distinct from the global "Hide split"). Normalizes
+         * the tree and focuses the closest surviving sibling, else the nearest remaining leaf in
+         * deterministic tree order, else Main. */
+        function hideLeaf(tabId) {
+            if (!root.containsTab(state.secondaryTree, tabId)) return Promise.resolve(false);
+            const needLeave = visualTiled() && contextMounted(tabId);
+            const leaveP = needLeave ? awaitLeave(tabId, homeHash) : Promise.resolve(true);
+            return leaveP.then(function (ok) {
+                if (!ok) return false;
+                if (!root.containsTab(state.secondaryTree, tabId)) return false;
+                const sibling = root.findSiblingLeafTabId(state.secondaryTree, tabId);
+                if (contextMounted(tabId)) parkContext(tabId);
+                state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, tabId));
+                if (!state.secondaryTree) state.mode = MODE_STACKED;
+                if (state.focusedTabId === tabId) {
+                    const nextLeaves = root.collectLeafTabIds(state.secondaryTree);
+                    const preferred = sibling && nextLeaves.indexOf(sibling) !== -1 ? sibling : nextLeaves[0] || null;
+                    state.focusedTabId = preferred || state.mainTabId;
+                }
+                paintAndRestore(state.focusedTabId);
+                refreshFocusedPanel();
+                return true;
+            });
+        }
+
         function tileTab(tabId) {
             const tab = getTab(tabId);
             if (!tab) return Promise.resolve(false);
             if (tab.id === state.mainTabId) return Promise.resolve(false);
-            const curSec = secondaryTabId();
-            if (curSec === tab.id) {
+            const tree = state.secondaryTree;
+            if (root.containsTab(tree, tab.id)) {
                 state.mode = MODE_TILED;
                 if (narrowFallback) {
                     state.focusedTabId = state.mainTabId;
@@ -639,20 +749,38 @@
                 refreshFocusedPanel();
                 return Promise.resolve(copyTab(tab));
             }
-            const replaceId = curSec;
-            const proceed = function () {
-                if (replaceId) parkContext(replaceId);
-                state.secondaryTree = { type: 'leaf', tabId: tab.id };
-                return mountAndRenderSecondary(tab);
-            };
-            if (!replaceId || !visualTiled()) {
-                return Promise.resolve(proceed());
+            if (!tree) {
+                state.secondaryTree = root.makeLeaf(tab.id);
+                return Promise.resolve(mountAndRenderSecondary(tab));
             }
-            return awaitLeave(replaceId, tab.route).then(function (ok) {
-                if (!ok) return false;
-                if (!getTab(tabId)) return false;
-                return proceed();
-            });
+            if (root.isLeaf(tree)) {
+                /* Secondary replacement (spec): a single existing Secondary leaf is replaced
+                 * wholesale, preserving the root ratio and Main. This is intentionally distinct
+                 * from splitting -- there's nothing to split when there's only ever been one
+                 * Secondary leaf. */
+                const replaceId = tree.tabId;
+                const proceed = function () {
+                    if (!getTab(tabId)) return false;
+                    parkContext(replaceId);
+                    state.secondaryTree = root.makeLeaf(tab.id);
+                    return mountAndRenderSecondary(tab);
+                };
+                if (!visualTiled()) return Promise.resolve(proceed());
+                return awaitLeave(replaceId, tab.route).then(function (ok) {
+                    if (!ok) return false;
+                    return proceed();
+                });
+            }
+            /* A recursive tree already exists: splitting is unambiguous only when a Secondary
+             * leaf is focused (split it) or -- degenerate, shouldn't normally reach here -- there
+             * is exactly one leaf. Otherwise this generic entry point declines; callers needing a
+             * specific placement must use the explicit Split right/down action. */
+            const targetLeaf = defaultSplitTargetLeafId();
+            if (!targetLeaf || paneCapReached()) {
+                announce('', paneCapReached() ? 'cap' : 'ambiguous');
+                return Promise.resolve(false);
+            }
+            return Promise.resolve(performSplit(targetLeaf, 'left-right', tab));
         }
 
         function navigateTile(hash, options) {
@@ -665,21 +793,39 @@
             if (opts.tabId && getTab(opts.tabId) && opts.tabId !== state.mainTabId && getTab(opts.tabId).route === route) {
                 return tileTab(opts.tabId);
             }
-            const curSec = secondaryTabId();
-            const proceedCreate = function () {
-                if (curSec) parkContext(curSec);
+            const tree = state.secondaryTree;
+            if (!tree) {
                 const tab = makeTab(route);
                 state.tabs.push(tab);
-                state.secondaryTree = { type: 'leaf', tabId: tab.id };
-                return mountAndRenderSecondary(tab);
-            };
-            if (!curSec || !visualTiled()) {
-                return Promise.resolve(proceedCreate());
+                state.secondaryTree = root.makeLeaf(tab.id);
+                return Promise.resolve(mountAndRenderSecondary(tab));
             }
-            return awaitLeave(curSec, route).then(function (ok) {
-                if (!ok) return false;
-                return proceedCreate();
-            });
+            if (root.isLeaf(tree)) {
+                const curSec = tree.tabId;
+                const proceedCreate = function () {
+                    parkContext(curSec);
+                    const tab = makeTab(route);
+                    state.tabs.push(tab);
+                    state.secondaryTree = root.makeLeaf(tab.id);
+                    return mountAndRenderSecondary(tab);
+                };
+                if (!visualTiled()) return Promise.resolve(proceedCreate());
+                return awaitLeave(curSec, route).then(function (ok) {
+                    if (!ok) return false;
+                    return proceedCreate();
+                });
+            }
+            const targetLeaf = defaultSplitTargetLeafId();
+            if (!targetLeaf || paneCapReached()) {
+                const tab = makeTab(route);
+                state.tabs.push(tab);
+                paint();
+                announce('', paneCapReached() ? 'cap' : 'ambiguous');
+                return Promise.resolve(false);
+            }
+            const tab = makeTab(route);
+            state.tabs.push(tab);
+            return Promise.resolve(performSplit(targetLeaf, 'left-right', tab));
         }
 
         function applyCurrentNavigation(tab, route, replace) {
@@ -715,7 +861,7 @@
                 const leavingId = tab.id;
                 return awaitLeave(leavingId, route).then(function (ok) {
                     if (!ok) return false;
-                    if (!getTab(leavingId) || secondaryTabId() !== leavingId) return false;
+                    if (!getTab(leavingId) || !root.containsTab(state.secondaryTree, leavingId)) return false;
                     if (!makeMain(leavingId)) return false;
                     announce('', 'promote');
                     const promoted = getMainTab();
@@ -740,16 +886,20 @@
                 refreshFocusedPanel();
                 return Promise.resolve(true);
             }
-            if (tab.id === secondaryTabId() && visualTiled() && !opts.fromPopstate) {
-                return Promise.resolve(makeMain(tab.id));
+            /* A visible Secondary leaf just gets focused, not promoted -- clicking its global
+             * tab-strip entry is not the same gesture as an explicit Make main. A leaf that
+             * exists in the tree but isn't currently visible (narrow fallback) still falls
+             * through to the promote path below, matching a parked tab. */
+            if (visualTiled() && root.containsTab(state.secondaryTree, tab.id) && !opts.fromPopstate) {
+                return Promise.resolve(focusTab(tab.id));
             }
             return awaitLeave(state.mainTabId, tab.route).then(function (ok) {
                 if (!ok) return false;
                 if (!getTab(tabId)) return false;
                 const prevId = state.mainTabId;
                 if (prevId && prevId !== tabId) parkContext(prevId);
-                if (secondaryTabId() === tabId) {
-                    state.secondaryTree = prevId ? { type: 'leaf', tabId: prevId } : null;
+                if (root.containsTab(state.secondaryTree, tabId)) {
+                    state.secondaryTree = prevId ? root.replaceTabId(state.secondaryTree, tabId, prevId) : null;
                 }
                 setMain(tabId);
                 mountContext(tabId);
@@ -773,9 +923,9 @@
             if (idx < 0) return Promise.resolve(false);
             const closing = state.tabs[idx];
             const closingMain = closing.id === state.mainTabId;
-            const closingSec = closing.id === secondaryTabId() || (state.secondaryTree && state.secondaryTree.tabId === closing.id);
+            const closingLeaf = root.containsTab(state.secondaryTree, closing.id);
             if (!closingMain) {
-                const needLeave = closingSec && visualTiled();
+                const needLeave = closingLeaf && visualTiled();
                 const leaveP = needLeave ? awaitLeave(closing.id, homeHash) : Promise.resolve(true);
                 return leaveP.then(function (ok) {
                     if (!ok) return false;
@@ -783,16 +933,23 @@
                     destroyContext(closing.id);
                     const i = tabIndex(tabId);
                     if (i >= 0) state.tabs.splice(i, 1);
-                    if (closingSec) {
-                        state.secondaryTree = null;
-                        state.mode = MODE_STACKED;
-                        state.focusedTabId = state.mainTabId;
+                    if (closingLeaf) {
+                        /* Prefer the closest surviving sibling in the collapsed local subtree;
+                         * otherwise the nearest remaining leaf in deterministic (depth-first)
+                         * tree order; otherwise Main. */
+                        const sibling = root.findSiblingLeafTabId(state.secondaryTree, closing.id);
+                        state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, closing.id));
+                        if (!state.secondaryTree) state.mode = MODE_STACKED;
+                        const nextLeaves = root.collectLeafTabIds(state.secondaryTree);
+                        const preferred = sibling && nextLeaves.indexOf(sibling) !== -1 ? sibling : nextLeaves[0] || null;
+                        state.focusedTabId = preferred || state.mainTabId;
                     }
                     paintAndRestore(state.focusedTabId);
                     return true;
                 });
             }
-            const secId = secondaryTabId() || (state.secondaryTree && state.secondaryTree.tabId);
+            const treeLeavesForMainClose = root.collectLeafTabIds(state.secondaryTree);
+            const secId = treeLeavesForMainClose.length ? treeLeavesForMainClose[0] : null;
             let successor = secId && secId !== closing.id ? getTab(secId) : null;
             if (!successor) successor = state.tabs[idx + 1] || state.tabs[idx - 1] || null;
             if (successor && successor.id === closing.id) successor = null;
@@ -802,6 +959,13 @@
                 const i = tabIndex(tabId);
                 if (i < 0) return false;
                 const wasMountedSuccessor = successor && contextMounted(successor.id);
+                /* Closing Main always collapses back to a single stacked tab: every other
+                 * Secondary leaf besides the promoted successor loses its tiled visibility. */
+                for (let k = 0; k < treeLeavesForMainClose.length; k++) {
+                    const leafId = treeLeavesForMainClose[k];
+                    if (successor && leafId === successor.id) continue;
+                    if (contextMounted(leafId)) parkContext(leafId);
+                }
                 destroyContext(tabId);
                 const j = tabIndex(tabId);
                 if (j >= 0) state.tabs.splice(j, 1);
@@ -872,25 +1036,37 @@
                 if (!ok) return false;
                 if (!getTab(keepId)) return false;
                 const closingMain = unique.indexOf(state.mainTabId) >= 0;
-                const secNow = secondaryTabId() || (state.secondaryTree && state.secondaryTree.tabId);
-                const closingSec = !!(secNow && unique.indexOf(secNow) >= 0);
+                const treeLeavesBefore = root.collectLeafTabIds(state.secondaryTree);
+                const closingLeafIds = treeLeavesBefore.filter(function (id) {
+                    return unique.indexOf(id) >= 0;
+                });
                 const keepWasMounted = contextMounted(keepId);
-                const keepWasSec = secNow === keepId;
+                const keepWasLeaf = treeLeavesBefore.indexOf(keepId) !== -1;
                 for (let i = 0; i < unique.length; i++) {
                     destroyContext(unique[i]);
                     const idx = tabIndex(unique[i]);
                     if (idx >= 0) state.tabs.splice(idx, 1);
                 }
-                if (closingSec) {
+                if (closingMain) {
+                    /* Closing Main always collapses to stacked, same as single closeTab. */
+                    for (let k = 0; k < treeLeavesBefore.length; k++) {
+                        if (unique.indexOf(treeLeavesBefore[k]) >= 0) continue;
+                        if (contextMounted(treeLeavesBefore[k])) parkContext(treeLeavesBefore[k]);
+                    }
                     state.secondaryTree = null;
                     state.mode = MODE_STACKED;
+                } else if (closingLeafIds.length) {
+                    let nextTree = state.secondaryTree;
+                    for (let k = 0; k < closingLeafIds.length; k++) nextTree = root.removeLeaf(nextTree, closingLeafIds[k]);
+                    state.secondaryTree = root.normalizeTree(nextTree);
+                    if (!state.secondaryTree) state.mode = MODE_STACKED;
                 }
                 if (closingMain) {
                     setMain(keepId);
                     if (!keepWasMounted) mountContext(keepId);
                     commitUrl(keep, 'replace');
                     paintAndRestore(keepId);
-                    if (keepWasMounted && (keepWasSec || keepId === state.mainTabId)) {
+                    if (keepWasMounted && (keepWasLeaf || keepId === state.mainTabId)) {
                         publishShell(keepId);
                         refreshFocusedPanel();
                         return true;
@@ -927,37 +1103,50 @@
             return closeTabIds(ids, tabId);
         }
 
-        function setMode(mode) {
-            if (mode !== MODE_STACKED && mode !== MODE_TILED) return Promise.resolve(false);
-            if (mode === MODE_TILED) {
-                const sec = secondaryTabId();
-                if (!sec) return Promise.resolve(false);
-                state.mode = MODE_TILED;
-                state.focusedTabId = state.mainTabId;
-                paint();
-                if (!contextMounted(sec) && !narrowFallback) {
-                    mountContext(sec);
-                    const tab = getTab(sec);
+        /** Mounts+renders every currently-unmounted leaf in the tree (used by both Show split
+         * and leaving narrow fallback -- both remount the whole logical tree at once). */
+        function mountAllSecondaryLeaves() {
+            const leaves = root.collectLeafTabIds(state.secondaryTree);
+            const toMount = leaves.filter(function (id) {
+                return !contextMounted(id);
+            });
+            if (!toMount.length) return Promise.resolve(true);
+            toMount.forEach(mountContext);
+            return Promise.all(
+                toMount.map(function (id) {
+                    const tab = getTab(id);
                     return Promise.resolve(
                         invokeRender({
                             workspaceSwitch: true,
-                            tabId: sec,
+                            tabId: id,
                             hash: tab ? tab.route : null,
                             leaveApproved: true,
                         })
-                    ).then(function () {
-                        return true;
-                    });
-                }
-                return Promise.resolve(true);
+                    );
+                })
+            ).then(function () {
+                return true;
+            });
+        }
+
+        function setMode(mode) {
+            if (mode !== MODE_STACKED && mode !== MODE_TILED) return Promise.resolve(false);
+            if (mode === MODE_TILED) {
+                if (!state.secondaryTree) return Promise.resolve(false);
+                state.mode = MODE_TILED;
+                state.focusedTabId = state.mainTabId;
+                paint();
+                if (narrowFallback) return Promise.resolve(true);
+                return mountAllSecondaryLeaves();
             }
             if (state.mode === MODE_STACKED && !visualTiled()) return Promise.resolve(true);
-            const sec = secondaryTabId();
-            const leaveP =
-                sec && visualTiled() ? awaitLeave(sec, homeHash) : Promise.resolve(true);
-            return leaveP.then(function (ok) {
+            /* Global Hide split parks every visible leaf at once; this must be atomic (spec:
+             * depth-first preflight, stop at first rejection, no partial unmounting). */
+            const leaves = root.collectLeafTabIds(state.secondaryTree);
+            const mountedLeaves = visualTiled() ? leaves.filter(contextMounted) : [];
+            return preflightLeaves(mountedLeaves, homeHash).then(function (ok) {
                 if (!ok) return false;
-                if (sec) parkContext(sec);
+                mountedLeaves.forEach(parkContext);
                 state.mode = MODE_STACKED;
                 state.focusedTabId = state.mainTabId;
                 paintAndRestore(state.mainTabId);
@@ -969,43 +1158,35 @@
         function setNarrowFallback(narrow) {
             const next = !!narrow;
             if (next === narrowFallback) return Promise.resolve(true);
-            const sec = secondaryTabId();
             if (next) {
-                if (sec && contextMounted(sec)) {
-                    const leavingId = sec;
-                    return awaitLeave(leavingId, homeHash).then(function (ok) {
-                        if (!ok) return false;
-                        if (secondaryTabId() !== leavingId) return false;
-                        if (contextMounted(leavingId)) parkContext(leavingId);
-                        narrowFallback = true;
-                        state.focusedTabId = state.mainTabId;
-                        paintAndRestore(state.mainTabId);
-                        refreshFocusedPanel();
-                        return true;
-                    });
+                const leaves = root.collectLeafTabIds(state.secondaryTree);
+                const mountedLeaves = leaves.filter(contextMounted);
+                if (!mountedLeaves.length) {
+                    narrowFallback = true;
+                    state.focusedTabId = state.mainTabId;
+                    paintAndRestore(state.mainTabId);
+                    refreshFocusedPanel();
+                    return Promise.resolve(true);
                 }
-                narrowFallback = true;
-                state.focusedTabId = state.mainTabId;
-                paintAndRestore(state.mainTabId);
-                refreshFocusedPanel();
-                return Promise.resolve(true);
-            }
-            narrowFallback = false;
-            if (state.mode === MODE_TILED && sec && !contextMounted(sec)) {
-                state.focusedTabId = state.mainTabId;
-                paint();
-                mountContext(sec);
-                const tab = getTab(sec);
-                return Promise.resolve(
-                    invokeRender({
-                        workspaceSwitch: true,
-                        tabId: sec,
-                        hash: tab ? tab.route : null,
-                        leaveApproved: true,
-                    })
-                ).then(function () {
+                /* Atomic across every mounted Secondary leaf: depth-first preflight order, stop
+                 * at the first rejection, and no partial parking if any leaf rejects. */
+                return preflightLeaves(mountedLeaves, homeHash).then(function (ok) {
+                    if (!ok) return false;
+                    const stillLeaves = root.collectLeafTabIds(state.secondaryTree);
+                    if (stillLeaves.join(',') !== leaves.join(',')) return false;
+                    mountedLeaves.forEach(parkContext);
+                    narrowFallback = true;
+                    state.focusedTabId = state.mainTabId;
+                    paintAndRestore(state.mainTabId);
+                    refreshFocusedPanel();
                     return true;
                 });
+            }
+            narrowFallback = false;
+            if (state.mode === MODE_TILED && state.secondaryTree) {
+                state.focusedTabId = state.mainTabId;
+                paint();
+                return mountAllSecondaryLeaves();
             }
             paint();
             return Promise.resolve(true);
@@ -1072,7 +1253,7 @@
             const targetId = raw && raw.tabId ? raw.tabId : null;
             const target = targetId ? getTab(targetId) : null;
             const main = getMainTab();
-            const secId = visualTiled() ? secondaryTabId() : null;
+            const isVisibleSecondaryTarget = !!(target && visualTiled() && root.containsTab(state.secondaryTree, target.id));
 
             if (!main) {
                 bootstrap(locHash);
@@ -1081,7 +1262,7 @@
                 });
             }
 
-            if (target && secId && target.id === secId) {
+            if (isVisibleSecondaryTarget) {
                 const want = historyWant(target, raw, locHash);
                 const routeChanging = target.route !== want.route;
                 const preflight = routeChanging ? awaitLeave(target.id, want.route) : Promise.resolve(true);
@@ -1090,7 +1271,7 @@
                         restoreMainUrl();
                         return false;
                     }
-                    if (!getTab(target.id) || secondaryTabId() !== target.id) {
+                    if (!getTab(target.id) || !root.containsTab(state.secondaryTree, target.id)) {
                         restoreMainUrl();
                         return false;
                     }
@@ -1188,6 +1369,22 @@
             return lastRenderGen;
         }
 
+        /** Nested split ratios are node-local and memory-only, same discipline as the root
+         * mainSplitRatio. `options.paint === false` skips a full repaint (used by drag). */
+        function setNestedSplitRatio(splitId, ratio, options) {
+            const node = root.findNodeById(state.secondaryTree, splitId);
+            if (!node) return null;
+            state.secondaryTree = root.setSplitRatio(state.secondaryTree, splitId, ratio);
+            const updated = root.findNodeById(state.secondaryTree, splitId);
+            if (options && options.paint === false) return updated ? updated.ratio : null;
+            paint();
+            return updated ? updated.ratio : null;
+        }
+
+        function canAddSecondaryLeaf() {
+            return !paneCapReached();
+        }
+
         return {
             bootstrap: bootstrap,
             navigate: navigate,
@@ -1199,6 +1396,10 @@
             focusTab: focusTab,
             makeMain: makeMain,
             tileTab: tileTab,
+            splitLeaf: splitLeafAction,
+            hideLeaf: hideLeaf,
+            canAddSecondaryLeaf: canAddSecondaryLeaf,
+            setNestedSplitRatio: setNestedSplitRatio,
             findTabByRoute: findTabByRoute,
             setMode: setMode,
             setNarrowFallback: setNarrowFallback,
@@ -1277,11 +1478,11 @@
         const btn = document.getElementById('prks-workspace-tile-layout');
         if (!btn) return;
         const snap = production.snapshot();
-        const hasLeaf = !!(snap.secondaryTree && snap.secondaryTree.type === 'leaf' && snap.secondaryTree.tabId);
+        const hasTree = !!snap.secondaryTree;
         const visual =
             typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
         const labelEl = btn.querySelector('.prks-workspace-split-btn__label');
-        const narrowBlocked = hasLeaf && snap.mode === MODE_TILED && !visual;
+        const narrowBlocked = hasTree && snap.mode === MODE_TILED && !visual;
         btn.classList.toggle('is-active', visual);
         btn.setAttribute('aria-pressed', visual ? 'true' : 'false');
         if (narrowBlocked) {
@@ -1296,7 +1497,7 @@
             btn.setAttribute('title', 'Hide split view');
             return;
         }
-        if (hasLeaf) {
+        if (hasTree) {
             if (labelEl) labelEl.textContent = 'Show split';
             btn.setAttribute('aria-label', 'Show split view');
             btn.setAttribute('title', 'Show split view');
@@ -1318,6 +1519,18 @@
         }
         if (kind === 'narrow') {
             el.textContent = 'Split view needs a wider window. The tab remains open.';
+            return;
+        }
+        if (kind === 'cap') {
+            el.textContent = 'Maximum of 4 visible panes. Close or hide a pane to split again.';
+            return;
+        }
+        if (kind === 'ambiguous') {
+            el.textContent = 'Focus a split pane, then use Split right or Split down.';
+            return;
+        }
+        if (kind === 'hide-pane') {
+            el.textContent = 'Hid ' + label + ' from split view. It remains open as a tab.';
             return;
         }
         if (kind === 'split' || kind === 'tile') {
@@ -1465,9 +1678,9 @@
         }
     }
 
-    function tabRoleFlags(tab, snap, visualTiled, secId) {
+    function tabRoleFlags(tab, snap, visualTiled, secIds) {
         const isMain = tab.id === snap.mainTabId;
-        const isTiled = visualTiled && tab.id === secId && !isMain;
+        const isTiled = visualTiled && !isMain && secIds.indexOf(tab.id) !== -1;
         const isFocused = tab.id === snap.focusedTabId;
         return {
             isMain: isMain,
@@ -1610,8 +1823,7 @@
         if (!list) return;
         bindTabStripChrome();
         const snap = production.snapshot();
-        const secId =
-            snap.secondaryTree && snap.secondaryTree.type === 'leaf' ? snap.secondaryTree.tabId : null;
+        const secIds = root.collectLeafTabIds(snap.secondaryTree);
         const visualTiled = typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
         const byId = Object.create(null);
         const kids = Array.prototype.slice.call(list.children);
@@ -1622,7 +1834,7 @@
         const nextIds = {};
         snap.tabs.forEach(function (tab, i) {
             nextIds[tab.id] = true;
-            const flags = tabRoleFlags(tab, snap, visualTiled, secId);
+            const flags = tabRoleFlags(tab, snap, visualTiled, secIds);
             let wrap = byId[tab.id];
             if (!wrap) wrap = createTabWrap(tab, flags, i);
             else applyTabWrap(wrap, tab, flags, i);
@@ -1854,10 +2066,10 @@
         btn.addEventListener('click', function () {
             if (!production) return;
             const snap = production.snapshot();
-            const hasLeaf = !!(snap.secondaryTree && snap.secondaryTree.type === 'leaf' && snap.secondaryTree.tabId);
+            const hasTree = !!snap.secondaryTree;
             const visual =
                 typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
-            if (!hasLeaf) {
+            if (!hasTree) {
                 if (typeof root.prksOpenCommandPalette === 'function') {
                     root.prksOpenCommandPalette({ scope: 'all', navigationTarget: 'tile' });
                 }
@@ -2034,6 +2246,30 @@
         return production.tileTab(tabId);
     }
 
+    /** Split right (axis 'left-right') / Split down (axis 'top-bottom') for `targetTabId`, a
+     * currently-visible Secondary leaf. `options.tabId` reuses an existing tab; `options.hash`
+     * creates a new one. */
+    function prksWorkspaceSplitLeaf(targetTabId, axis, options) {
+        if (!production || typeof production.splitLeaf !== 'function') return Promise.resolve(false);
+        return production.splitLeaf(targetTabId, axis, options);
+    }
+
+    /** Removes `tabId`'s leaf from the Secondary tree while keeping the tab open and parked. */
+    function prksWorkspaceHideLeaf(tabId) {
+        if (!production || typeof production.hideLeaf !== 'function') return Promise.resolve(false);
+        return production.hideLeaf(tabId);
+    }
+
+    function prksWorkspaceCanAddSecondaryLeaf() {
+        if (!production || typeof production.canAddSecondaryLeaf !== 'function') return true;
+        return production.canAddSecondaryLeaf();
+    }
+
+    function prksWorkspaceSetNestedSplitRatio(splitId, ratio, options) {
+        if (!production || typeof production.setNestedSplitRatio !== 'function') return null;
+        return production.setNestedSplitRatio(splitId, ratio, options);
+    }
+
     function prksWorkspaceSetMode(mode) {
         if (!production) return Promise.resolve(false);
         return production.setMode(mode);
@@ -2139,6 +2375,10 @@
         prksWorkspaceFocusTab: prksWorkspaceFocusTab,
         prksWorkspaceMakeMain: prksWorkspaceMakeMain,
         prksWorkspaceTileTab: prksWorkspaceTileTab,
+        prksWorkspaceSplitLeaf: prksWorkspaceSplitLeaf,
+        prksWorkspaceHideLeaf: prksWorkspaceHideLeaf,
+        prksWorkspaceCanAddSecondaryLeaf: prksWorkspaceCanAddSecondaryLeaf,
+        prksWorkspaceSetNestedSplitRatio: prksWorkspaceSetNestedSplitRatio,
         prksWorkspaceFindTabByRoute: prksWorkspaceFindTabByRoute,
         prksWorkspaceVisualTiled: prksWorkspaceVisualTiled,
         prksWorkspaceSetMode: prksWorkspaceSetMode,

@@ -176,11 +176,11 @@ People, Progress, and Research sidebar shortcuts are collapsible. Active child r
 
 ## Workspace tabs
 
-PRKS keeps a strip of in-app tabs under the top ribbon. Stacked mode shows one page at a time. Split view can show Main on the left and one Secondary on the right, with a draggable divider between them. Tabs do not yet survive a full app reload, and the divider position resets to its default on reload too. Recursive splits are not included yet.
+PRKS keeps a strip of in-app tabs under the top ribbon. Stacked mode shows one page at a time. Split view shows Main on the left and a Secondary area on the right that can itself be split further, up to 4 panes on screen at once (Main plus 3 Secondary). Tabs do not yet survive a full app reload, and every divider position resets to its default on reload too.
 
 **Tab actions**
 
-Right-click a tab, or press Shift+F10 while it is focused, for tab actions. From that menu you can close the tab, **Close other tabs**, or **Close tabs to the right**. Parked tabs can also be opened in split view there.
+Right-click a tab, or press Shift+F10 while it is focused, for tab actions. From that menu you can close the tab, **Close other tabs**, or **Close tabs to the right**. Parked tabs can also be opened in split view there. A visible Secondary tab's menu additionally offers **Split right**, **Split down**, **Make main**, and **Hide from split**.
 
 If the strip is too narrow for every tab, an overflow button at the end lists the open tabs. Choose a tab to switch to it. Parked rows also offer split view and close.
 
@@ -199,22 +199,28 @@ Then the shortcuts:
 - Ctrl/Cmd-click or middle-click: open a background PRKS tab (no extra browser page)
 - Alt-click a link, or Alt+Enter in the command palette: open in split view
 - Click inside a split pane: focus it (the details panel follows focus; the browser URL does not)
+- Click a Secondary tab that's already visible, in the workspace strip: focus it in place (it does not become Main)
 - **Make main**: Secondary header, or click that tab in the workspace strip (swaps roles; URL becomes that page)
-- **Hide split view**: Split control or Hide on the Secondary header. The tab stays open.
+- **Hide split view**: Split control beside the workspace tabs. Parks every visible Secondary pane at once; the layout comes back with **Show split**.
+- **Hide from split**: per-pane action on a Secondary tab's context menu. Keeps that pane's tab open (parked) but removes just that one pane.
 - **+**: choose a page in the command palette (“Open in new tab”) and open it as a new main tab
-- Close: the tab-strip close button closes that PRKS tab. Closing the last tab leaves Folders
+- Close: a pane header's **×** closes that PRKS tab outright. Closing the last tab leaves Folders
 
 Only Main controls the browser URL. The details panel follows whichever pane is focused.
 
+**Split a pane further**
+
+Any Secondary pane can be split again: use its header's **Split ▾** control, or **Split right** / **Split down** from its context menu, then pick a page the same way as the main Split button. The new pane opens beside (or below) that specific pane and becomes focused. Once 4 panes are visible at once, further splitting is disabled with an explanation until you close or hide a pane — ordinary new tabs still open normally, just parked.
+
 **Resize split view**
 
-Drag the thin divider between Main and Secondary to resize them. Keyboard: focus the divider, then Left / Right to resize (Shift + Left / Right for a larger step), Home / End for the smallest / largest allowed Main width. Double-click the divider to reset it to the default size. Both panes keep a comfortable minimum width. The split size is remembered for the rest of your session but resets to the default on a full reload.
+Drag the thin divider between any two adjacent panes to resize them — this includes the root Main/Secondary divider and every divider between nested panes. Keyboard: focus a divider, then the appropriate arrow keys to resize (Shift + arrow for a larger step), Home / End for the smallest / largest allowed size for that divider. Double-click a divider to reset just that one split to its default size. Every pane keeps a comfortable minimum size. Resizing one divider never changes any other divider's size. Split sizes are remembered for the rest of your session but reset to their defaults on a full reload.
 
 Parked tabs do no rendering or network work until you activate them.
 
 Each visible tab has a TabContext. Route state, page DOM (`ctx.root` / `ctx.query`),
 async generation, and live resources (PDF viewer, notes editor, graph) live
-there. Stacked mode mounts one context. Split view mounts Main and one Secondary.
+there. Stacked mode mounts one context. Split view mounts Main plus every visible Secondary pane (up to 4 panes total).
 
 ## Research network
 

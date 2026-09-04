@@ -91,6 +91,45 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
         self.assertNotIn("prksWorkspaceRestoreFocus(", split)
         self.assertNotIn("handleRoute", split)
 
+    def test_nested_separator_mechanics_shared_with_root(self):
+        split = _read(_SPLIT)
+        # Nested Secondary split dividers reuse the same pointer/keyboard engine as the root
+        # divider (one separator implementation), parameterized by axis + node-local ratio.
+        self.assertIn("prksWorkspaceSyncNestedSeparator", split)
+        self.assertIn("prksWorkspaceReleaseNestedSeparator", split)
+        self.assertIn("PRKS_NESTED_MIN_WIDTH_PX", split)
+        self.assertIn("PRKS_NESTED_MIN_HEIGHT_PX", split)
+        self.assertIn("beginPointerDrag", split)
+        self.assertIn("prks-splitter--horizontal", split)
+        self.assertIn("prksWorkspaceSetNestedSplitRatio", split)
+        # Nested ratios are percentage-based (auto-reflow with ancestor resize, no JS needed);
+        # only the root divider uses an exact px value.
+        self.assertIn("--prks-split-first-size", split)
+        self.assertIn("--prks-main-split-width", split)
+        tiling = _read(_TILING)
+        self.assertIn("renderTreeNode", tiling)
+        self.assertIn("prks-workspace-split", tiling)
+        self.assertIn("data-prks-split-id", tiling)
+        self.assertIn("data-prks-secondary-root", tiling)
+        self.assertIn("pruneStale", tiling)
+
+    def test_nested_tiling_recursive_selftest(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for workspace tiling tests")
+        runner = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tiling_recursive_selftest.js")
+        self.assertTrue(os.path.isfile(runner))
+        proc = subprocess.run(
+            [node, runner],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn(", 0 failed", proc.stdout)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
     def test_css_grid_and_min_hit_target(self):
         css = _read(_CSS)
         self.assertIn("--prks-workspace-separator-size", css)

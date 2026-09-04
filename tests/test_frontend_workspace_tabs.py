@@ -18,6 +18,8 @@ _DESIGN = os.path.join(_PROJECT_DIR, "DESIGN.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
 _README = os.path.join(_PROJECT_DIR, "README.md")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tabs_selftest.js")
+_TREE = os.path.join(_FRONTEND, "js", "workspace-tree.js")
+_TREE_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tree_selftest.js")
 
 _HASH_ASSIGN_RE = re.compile(r"(?:window\.)?location\.hash\s*=(?!=)")
 _OPEN_BLANK_RE = re.compile(r"""window\.open\s*\([^)]*['_"]_blank['_"]""")
@@ -110,8 +112,12 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("focusedTabId", src)
         self.assertIn("secondaryTree", src)
         self.assertIn("type: 'leaf'", src)
-        self.assertNotIn("type: 'split'", src)
-        self.assertNotIn('type: "split"', src)
+        # Recursive split nodes are now legitimate (Recursive Secondary Splits); the tree
+        # helper module owns split-node construction/mutation, workspace-tabs.js only clones.
+        self.assertIn("root.splitLeaf(", src)
+        self.assertIn("root.removeLeaf(", src)
+        self.assertIn("root.validateTree(", src)
+        self.assertIn("PRKS_MAX_VISIBLE_TABS", src)
         self.assertNotIn("splitRatio", src)
         self.assertNotIn("localStorage", src)
         self.assertNotIn("sessionStorage", src)
@@ -248,6 +254,29 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn(", 0 failed", proc.stdout)
         self.assertNotIn("FAIL  ", proc.stdout)
 
+    def test_tree_module_load_order_and_selftest(self):
+        self.assertTrue(os.path.isfile(_TREE))
+        self.assertTrue(os.path.isfile(_TREE_RUNNER))
+        html = _read(_INDEX)
+        tree_at = html.find('src="/js/workspace-tree.js"')
+        ws_at = html.find('src="/js/workspace-tabs.js"')
+        self.assertNotEqual(tree_at, -1)
+        self.assertLess(tree_at, ws_at)
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for workspace tree tests")
+        proc = subprocess.run(
+            [node, _TREE_RUNNER],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("passed", proc.stdout)
+        self.assertIn(", 0 failed", proc.stdout)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
     def test_tiling_observer_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for workspace tiling tests")
@@ -261,6 +290,23 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
+    def test_tiling_recursive_selftest(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for workspace tiling tests")
+        runner = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tiling_recursive_selftest.js")
+        self.assertTrue(os.path.isfile(runner))
+        proc = subprocess.run(
+            [node, runner],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn(", 0 failed", proc.stdout)
         self.assertNotIn("FAIL  ", proc.stdout)
 
 

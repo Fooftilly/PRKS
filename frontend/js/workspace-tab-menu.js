@@ -30,8 +30,9 @@
         return !!(snap && snap.mode === 'tiled');
     }
 
-    function secondaryId(snap) {
-        return snap && snap.secondaryTree && snap.secondaryTree.type === 'leaf' ? snap.secondaryTree.tabId : null;
+    function visibleSecondaryIds(snap) {
+        if (!snap) return [];
+        return typeof root.collectLeafTabIds === 'function' ? root.collectLeafTabIds(snap.secondaryTree) : [];
     }
 
     function findTab(snap, tabId) {
@@ -53,8 +54,7 @@
     function roleOf(snap, tab) {
         if (!snap || !tab) return 'parked';
         if (tab.id === snap.mainTabId) return 'main';
-        const sec = secondaryId(snap);
-        if (visualTiled(snap) && tab.id === sec) return 'secondary';
+        if (visualTiled(snap) && visibleSecondaryIds(snap).indexOf(tab.id) !== -1) return 'secondary';
         return 'parked';
     }
 
@@ -129,8 +129,23 @@
             void root.prksWorkspaceTileTab(action.tabId);
             return;
         }
-        if (action.kind === 'hide' && typeof root.prksWorkspaceSetMode === 'function') {
-            void root.prksWorkspaceSetMode('stacked');
+        if (action.kind === 'hide-leaf' && typeof root.prksWorkspaceHideLeaf === 'function') {
+            void root.prksWorkspaceHideLeaf(action.tabId);
+            return;
+        }
+        if (
+            (action.kind === 'split-right' || action.kind === 'split-down') &&
+            typeof root.prksOpenCommandPalette === 'function'
+        ) {
+            root.prksOpenCommandPalette({
+                scope: 'all',
+                navigationTarget: 'tile',
+                splitPlacement: {
+                    targetLeafTabId: action.tabId,
+                    axis: action.kind === 'split-down' ? 'top-bottom' : 'left-right',
+                    placement: 'second',
+                },
+            });
             return;
         }
         if (action.kind === 'close' && typeof root.prksWorkspaceCloseTab === 'function') {
@@ -155,6 +170,11 @@
         btn.type = 'button';
         btn.className = 'prks-workspace-menu__item';
         btn.setAttribute('role', 'menuitem');
+        if (spec.disabled) {
+            btn.disabled = true;
+            btn.setAttribute('aria-disabled', 'true');
+            if (spec.disabledTitle) btn.title = spec.disabledTitle;
+        }
         if (spec.icon) {
             const ic = doc().createElement('span');
             ic.className = 'prks-workspace-menu__icon';
@@ -215,11 +235,27 @@
             return specs;
         }
         if (role === 'secondary') {
+            const canSplit = typeof root.prksWorkspaceCanAddSecondaryLeaf !== 'function' || root.prksWorkspaceCanAddSecondaryLeaf();
+            const capTitle = 'Maximum of 4 visible panes. Close or hide a pane to split again.';
             if (snap.focusedTabId !== tabId) {
                 specs.push({ label: 'Focus', action: { kind: 'focus', tabId: tabId } });
             }
             specs.push({ label: 'Make main', icon: 'arrow-left', action: { kind: 'make-main', tabId: tabId } });
-            specs.push({ label: 'Hide split', icon: 'x', action: { kind: 'hide', tabId: tabId } });
+            specs.push({
+                label: 'Split right',
+                icon: 'columns-2',
+                action: { kind: 'split-right', tabId: tabId },
+                disabled: !canSplit,
+                disabledTitle: capTitle,
+            });
+            specs.push({
+                label: 'Split down',
+                icon: 'rows-2',
+                action: { kind: 'split-down', tabId: tabId },
+                disabled: !canSplit,
+                disabledTitle: capTitle,
+            });
+            specs.push({ label: 'Hide from split', icon: 'eye-off', action: { kind: 'hide-leaf', tabId: tabId } });
             specs.push({ label: 'Close', action: { kind: 'close', tabId: tabId } });
             return specs;
         }

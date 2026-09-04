@@ -1659,6 +1659,63 @@ def _open_work_work_split(page, server):
     return work_a, work_b, ids
 
 
+def _build_three_leaf_tree(page, server):
+    """Main = Work A. Secondary tree: B (person) on top; bottom split into C (position) | D
+    (Work B). Matches the recursive-split spec example (split B down with C, then split C
+    right with D). D is a real Work/PDF leaf deep in the tree so Work-runtime-preservation and
+    leave-guard behavior can be exercised on more than a top-level leaf."""
+    work_a = server.ids["work_a"]
+    work_b = server.ids["work_b"]
+    person_id = server.ids["person"]
+    position_id = server.ids["position"]
+    _open_work_from_home(page, WORK_A_TITLE)
+    _wait_pdf_viewer(page)
+    page.evaluate(
+        """(id) => window.prksNavigate('#/people/' + id, { target: 'tile' })""",
+        arg=person_id,
+    )
+    page.wait_for_function(
+        """() => {
+            const snap = window.prksWorkspaceSnapshot();
+            return snap && snap.mode === 'tiled' && snap.secondaryTree && snap.secondaryTree.type === 'leaf';
+        }"""
+    )
+    main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+    b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+    c_tab = page.evaluate(
+        """(a) => window.prksWorkspaceSplitLeaf(a.target, 'top-bottom', { hash: '#/positions/' + a.position })""",
+        arg={"target": b_id, "position": position_id},
+    )
+    c_id = c_tab["id"]
+    page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+    d_tab = page.evaluate(
+        """(a) => window.prksWorkspaceSplitLeaf(a.target, 'left-right', { hash: '#/works/' + a.work })""",
+        arg={"target": c_id, "work": work_b},
+    )
+    d_id = d_tab["id"]
+    page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 4")
+    _wait_pdf_tab(page, main_id)
+    _wait_pdf_tab(page, d_id)
+    page.wait_for_function(
+        """(ids) => {
+            const a = window.prksGetTabContext(ids.main);
+            const d = window.prksGetTabContext(ids.d);
+            return !!(a && a.getResource('workNotes') && d && d.getResource('workNotes'));
+        }""",
+        arg={"main": main_id, "d": d_id},
+    )
+    return {
+        "work_a": work_a,
+        "work_b": work_b,
+        "person": person_id,
+        "position": position_id,
+        "main_id": main_id,
+        "b_id": b_id,
+        "c_id": c_id,
+        "d_id": d_id,
+    }
+
+
 def _capture_divider_runtime_ids(page):
     page.evaluate(
         """() => {
@@ -1980,7 +2037,9 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.wait_for_selector(".prks-tile--secondary .person-profile")
         self.assertEqual(page.evaluate("() => location.hash"), before["hash"])
 
-    def test_close_secondary_and_hide_keep_main_url(self):
+    def test_close_secondary_tile_header_keeps_main_url(self):
+        # The per-tile header "x" closes that Secondary leaf's tab outright (distinct from the
+        # global Split toolbar button's Hide/Show split, which is covered elsewhere).
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
         work_b = server.ids["work_b"]
@@ -1991,19 +2050,368 @@ class WorkspaceTilingTests(_BrowserE2E):
         )
         page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
         work_hash = page.evaluate("() => location.hash")
-        page.locator(".prks-tile--secondary .prks-tile-header__hide").click()
+        sec_before = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.locator(".prks-tile--secondary .prks-tile-header__close").click()
         page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
         snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
-        self.assertTrue(snap["secondaryTree"])
-        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
-        page.evaluate("() => window.prksWorkspaceSetMode('tiled')")
-        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
-        sec = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
-        page.evaluate("(id) => window.prksWorkspaceCloseTab(id)", arg=sec)
-        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
-        self.assertIsNone(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"))
+        self.assertIsNone(snap["secondaryTree"])
+        self.assertFalse(any(t["id"] == sec_before for t in snap["tabs"]))
         self.assertEqual(page.evaluate("() => location.hash"), work_hash)
         self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+
+    def test_hide_leaf_parks_tab_without_closing_it(self):
+        # Local "Hide from split" (per-pane park) keeps the logical tab open, distinct from
+        # Close (which destroys it) and from the global Hide split (which parks every pane but
+        # preserves the whole tree). Reopening reuses the same tab id.
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        work_hash = page.evaluate("() => location.hash")
+        sec = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.evaluate("(id) => window.prksWorkspaceHideLeaf(id)", arg=sec)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().secondaryTree === null")
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertTrue(any(t["id"] == sec for t in snap["tabs"]))
+        self.assertEqual(snap["mode"], "stacked")
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+
+        reopened = page.evaluate("(id) => window.prksWorkspaceTileTab(id)", arg=sec)
+        self.assertIsNotNone(reopened)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        after = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(after["secondaryTree"]["tabId"], sec)
+        self.assertEqual(len(after["tabs"]), len(snap["tabs"]))
+
+    def test_recursive_multi_pane_tree_focus_and_request_count(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        work_hash = page.evaluate("() => location.hash")
+
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(snap["mode"], "tiled")
+        self.assertEqual(snap["mainTabId"], tree["main_id"])
+        self.assertEqual(snap["focusedTabId"], tree["d_id"])  # newly split D becomes focused
+        self.assertIn(server.ids["work_a"], work_hash)
+        leaves = page.evaluate(
+            "() => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)"
+        )
+        self.assertEqual(sorted(leaves), sorted([tree["b_id"], tree["c_id"], tree["d_id"]]))
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
+        self.assertEqual(page.locator(".prks-tile").count(), 4)
+
+        seen = []
+
+        def on_request(req):
+            if req.method == "GET":
+                seen.append(urlparse(req.url).path)
+
+        page.on("request", on_request)
+
+        # Focus B then C; right panel/focus follows, Main/URL do not move.
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=tree["b_id"])
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId"), tree["b_id"])
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=tree["c_id"])
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId"), tree["c_id"])
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+
+        # Resize the nested C|D separator; Main/Secondary root ratio is unaffected.
+        inner_split_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.second.id")
+        inner_sep = page.locator('[data-prks-split-id="' + inner_split_id + '"][role="separator"]')
+        box = inner_sep.bounding_box()
+        start_x = box["x"] + box["width"] / 2
+        start_y = box["y"] + box["height"] / 2
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        page.mouse.move(start_x + 40, start_y, steps=6)
+        page.mouse.up()
+
+        # Make D Main, then close its former sibling C. Deep tree mutations must not reload
+        # any unaffected Work.
+        page.evaluate("(id) => window.prksWorkspaceMakeMain(id)", arg=tree["d_id"])
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mainTabId !== undefined")
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"), tree["d_id"])
+        self.assertIn(server.ids["work_b"], page.evaluate("() => location.hash"))
+        page.evaluate("(id) => window.prksWorkspaceCloseTab(id)", arg=tree["c_id"])
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+
+        for path in ("/api/works/" + server.ids["work_a"], "/api/works/" + server.ids["work_b"]):
+            self.assertNotIn(path, seen, "unaffected leaf reloaded during focus/resize/make-main/close: " + path)
+
+    def test_make_main_deep_leaf_preserves_runtimes(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+
+        page.evaluate(
+            """(ids) => {
+                window.__prksMultiRt = {
+                    aPdf: window.prksGetTabContext(ids.main).getResource('pdf'),
+                    aNotes: window.prksGetTabContext(ids.main).getResource('workNotes'),
+                    dPdf: window.prksGetTabContext(ids.d).getResource('pdf'),
+                    dNotes: window.prksGetTabContext(ids.d).getResource('workNotes'),
+                };
+            }""",
+            arg={"main": tree["main_id"], "d": tree["d_id"]},
+        )
+
+        made_main = page.evaluate("(id) => window.prksWorkspaceMakeMain(id)", arg=tree["d_id"])
+        self.assertTrue(made_main)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mainTabId !== undefined")
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(snap["mainTabId"], tree["d_id"])
+        self.assertEqual(snap["focusedTabId"], tree["d_id"])
+        self.assertIn(server.ids["work_b"], page.evaluate("() => location.hash"))
+
+        # Old Main (A) now occupies D's exact former leaf position; tree shape (B on top,
+        # bottom split of C|A) is otherwise unchanged -- no rebuild, no reorder.
+        shape_ok = page.evaluate(
+            """(ids) => {
+                const tree = window.prksWorkspaceSnapshot().secondaryTree;
+                if (!tree || tree.type !== 'split' || tree.axis !== 'top-bottom') return false;
+                if (!tree.first || tree.first.type !== 'leaf' || tree.first.tabId !== ids.b) return false;
+                const inner = tree.second;
+                if (!inner || inner.type !== 'split' || inner.axis !== 'left-right') return false;
+                if (!inner.first || inner.first.tabId !== ids.c) return false;
+                if (!inner.second || inner.second.tabId !== ids.oldMain) return false;
+                return true;
+            }""",
+            arg={"b": tree["b_id"], "c": tree["c_id"], "oldMain": tree["main_id"]},
+        )
+        self.assertTrue(shape_ok, "expected an in-place role swap, not a rebuilt tree")
+
+        identity = page.evaluate(
+            """(ids) => {
+                const rt = window.__prksMultiRt;
+                const a = window.prksGetTabContext(ids.main);
+                const d = window.prksGetTabContext(ids.d);
+                return {
+                    aPdfSame: a.getResource('pdf') === rt.aPdf,
+                    aNotesSame: a.getResource('workNotes') === rt.aNotes,
+                    dPdfSame: d.getResource('pdf') === rt.dPdf,
+                    dNotesSame: d.getResource('workNotes') === rt.dNotes,
+                    mounted: window.prksTabContextDebugSnapshot().mountedCount,
+                };
+            }""",
+            arg={"main": tree["main_id"], "d": tree["d_id"]},
+        )
+        self.assertTrue(identity["aPdfSame"])
+        self.assertTrue(identity["aNotesSame"])
+        self.assertTrue(identity["dPdfSame"])
+        self.assertTrue(identity["dNotesSame"])
+        self.assertEqual(identity["mounted"], 4)
+
+    def test_close_leaf_collapses_tree_without_remount(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+
+        page.evaluate(
+            """(ids) => {
+                window.__prksCollapseRt = {
+                    bCtx: window.prksGetTabContext(ids.b),
+                    dCtx: window.prksGetTabContext(ids.d),
+                };
+            }""",
+            arg={"b": tree["b_id"], "d": tree["d_id"]},
+        )
+        closed = page.evaluate("(id) => window.prksWorkspaceCloseTab(id)", arg=tree["c_id"])
+        self.assertTrue(closed)
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+
+        shape_ok = page.evaluate(
+            """(ids) => {
+                const tree = window.prksWorkspaceSnapshot().secondaryTree;
+                return !!(
+                    tree && tree.type === 'split' &&
+                    tree.first && tree.first.type === 'leaf' && tree.first.tabId === ids.b &&
+                    tree.second && tree.second.type === 'leaf' && tree.second.tabId === ids.d
+                );
+            }""",
+            arg={"b": tree["b_id"], "d": tree["d_id"]},
+        )
+        self.assertTrue(shape_ok, "expected a collapsed 2-leaf tree with no redundant split node")
+
+        identity = page.evaluate(
+            """(ids) => {
+                const rt = window.__prksCollapseRt;
+                return {
+                    bSame: window.prksGetTabContext(ids.b) === rt.bCtx,
+                    dSame: window.prksGetTabContext(ids.d) === rt.dCtx,
+                };
+            }""",
+            arg={"b": tree["b_id"], "d": tree["d_id"]},
+        )
+        self.assertTrue(identity["bSame"])
+        self.assertTrue(identity["dSame"])
+        self.assertEqual(page.locator(".prks-tile").count(), 3)
+        # Workspace dividers only (excludes each Work pane's own internal PDF/notes resizer).
+        self.assertEqual(page.locator(".prks-splitter").count(), 2)
+
+    def test_visible_secondary_tab_click_focuses_not_promotes(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        work_hash = page.evaluate("() => location.hash")
+
+        page.locator('.prks-workspace-tab[data-tab-id="' + tree["c_id"] + '"] .prks-workspace-tab__activate').click()
+        snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+        self.assertEqual(snap["focusedTabId"], tree["c_id"])
+        self.assertEqual(snap["mainTabId"], tree["main_id"])
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
+
+        # Clicking Main's own tab entry just focuses Main back; no remount, no history entry.
+        page.locator('.prks-workspace-tab[data-tab-id="' + tree["main_id"] + '"] .prks-workspace-tab__activate').click()
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId"), tree["main_id"])
+        self.assertEqual(page.evaluate("() => location.hash"), work_hash)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
+
+    def test_nested_divider_pointer_and_keyboard_resize(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        # Wide enough that the doubly-nested C|D pane clears its own left-right minimum-width
+        # bounds (280px per side) even after the shell sidebar and the root 58/42 Main/Secondary
+        # split; otherwise its ratio legitimately (and correctly) clamps to a safe 50/50 midpoint.
+        page.set_viewport_size({"width": 2200, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+
+        root_ratio_before = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        top_split_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.id")
+        inner_split_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.second.id")
+
+        top_sep = page.locator('[data-prks-split-id="' + top_split_id + '"][role="separator"]')
+        self.assertEqual(top_sep.get_attribute("aria-orientation"), "horizontal")
+        inner_sep = page.locator('[data-prks-split-id="' + inner_split_id + '"][role="separator"]')
+        self.assertEqual(inner_sep.get_attribute("aria-orientation"), "vertical")
+
+        def ratio_of(split_id):
+            return page.evaluate(
+                "(id) => window.findNodeById(window.prksWorkspaceSnapshot().secondaryTree, id).ratio",
+                arg=split_id,
+            )
+
+        # Pointer-drag the nested vertical (C|D) separator; the sibling B and the root
+        # Main/Secondary ratio are unaffected.
+        box = inner_sep.bounding_box()
+        start_x = box["x"] + box["width"] / 2
+        start_y = box["y"] + box["height"] / 2
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        page.mouse.move(start_x + 60, start_y, steps=8)
+        page.mouse.up()
+        self.assertNotEqual(ratio_of(inner_split_id), 0.5)
+        self.assertEqual(ratio_of(top_split_id), 0.5)
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), root_ratio_before)
+
+        # Keyboard resize on the nested horizontal (B / C+D) separator: arrows, shift+arrows,
+        # Home/End, and ARIA values track the ratio.
+        top_sep.focus()
+        page.keyboard.press("ArrowDown")
+        after_down = ratio_of(top_split_id)
+        self.assertGreater(after_down, 0.5)
+        self.assertEqual(top_sep.get_attribute("aria-valuenow"), str(round(after_down * 100)))
+        page.keyboard.press("ArrowUp")
+        page.keyboard.press("Shift+ArrowDown")
+        after_shift = ratio_of(top_split_id)
+        self.assertGreater(after_shift, 0.5)
+        page.keyboard.press("Home")
+        min_ratio = ratio_of(top_split_id)
+        self.assertLess(min_ratio, 0.5)
+        page.keyboard.press("End")
+        max_ratio = ratio_of(top_split_id)
+        self.assertGreater(max_ratio, 0.5)
+
+        # Double-click resets that split back to 0.5; the other nested split is untouched.
+        top_sep.dblclick()
+        self.assertAlmostEqual(ratio_of(top_split_id), 0.5, places=2)
+        self.assertNotEqual(ratio_of(inner_split_id), 0.5)
+
+        # Resizing never fetches a route/PDF.
+        seen = []
+        page.on("request", lambda req: seen.append(req.url))
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        page.mouse.move(start_x - 30, start_y, steps=5)
+        page.mouse.up()
+        self.assertEqual(seen, [])
+
+    def test_narrow_fallback_preserves_recursive_tree_and_atomic_rejection(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        tree_before = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+
+        dialogs = []
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+
+        # D (a real Work/PDF leaf, deep in the tree) has a pending PDF annotation sync.
+        page.evaluate(
+            """(id) => {
+                const target = window.prksGetTabContext(id);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && target && c.tabId === target.tabId);
+                };
+            }""",
+            arg=tree["d_id"],
+        )
+        rejected = page.evaluate("() => window.prksWorkspaceSetNarrowFallback(true)")
+        self.assertFalse(rejected)
+        self.assertEqual(len(dialogs), 1)
+        self.assertTrue(page.evaluate("() => window.prksWorkspaceVisualTiled()"))
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"), tree_before)
+
+        # Ordinary paints (a sibling focus change) must not re-trigger the rejected prompt.
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=tree["b_id"])
+        self.assertEqual(len(dialogs), 1)
+
+        # Clear the guard and retry: succeeds, every leaf unmounts, the tree survives logically.
+        page.evaluate("() => { window.prksHasPendingWorkAnnotationSync = function () { return false; }; }")
+        ok = page.evaluate("() => window.prksWorkspaceSetNarrowFallback(true)")
+        self.assertTrue(ok)
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === false")
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"), tree_before)
+
+        widened = page.evaluate("() => window.prksWorkspaceSetNarrowFallback(false)")
+        self.assertTrue(widened)
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"), tree_before)
+
+    def test_visible_pane_cap_blocks_split(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)  # 1 Main + 3 Secondary already mounted
+        self.assertFalse(page.evaluate("() => window.prksWorkspaceCanAddSecondaryLeaf()"))
+
+        blocked = page.evaluate(
+            """(a) => window.prksWorkspaceSplitLeaf(a.target, 'left-right', { hash: '#/works/' + a.workA })""",
+            arg={"target": tree["b_id"], "workA": server.ids["work_a"]},
+        )
+        self.assertFalse(blocked)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
+
+        split_btn = page.locator('.prks-tile[data-prks-tab-id="' + tree["b_id"] + '"] .prks-tile-header__split')
+        self.assertTrue(split_btn.is_disabled())
+        self.assertIn("Maximum of 4 visible panes", split_btn.get_attribute("title") or "")
+
+        # Ordinary New Tab still works, and the new tab stays parked (not mounted).
+        page.evaluate("() => window.prksNavigate('#/folders', { target: 'new-tab', activate: false })")
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 5")
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
 
     def test_unsupported_secondary_nav_respects_leave(self):
         server, page, _collector = self._start_app()
@@ -2846,7 +3254,9 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.locator(".prks-workspace-tab.is-tiled").click(button="right")
         page.wait_for_selector("#prks-workspace-menu:not([hidden])")
         tiled_labels = page.locator("#prks-workspace-menu .prks-workspace-menu__item").all_text_contents()
-        self.assertTrue(any("Hide split" in t for t in tiled_labels))
+        self.assertTrue(any("Hide from split" in t for t in tiled_labels))
+        self.assertTrue(any("Split right" in t for t in tiled_labels))
+        self.assertTrue(any("Split down" in t for t in tiled_labels))
         self.assertFalse(any("tileTab" in t or "secondaryTree" in t for t in tiled_labels))
 
     def test_loading_secondary_leaves_main_intact(self):

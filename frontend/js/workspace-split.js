@@ -1,9 +1,12 @@
 /**
- * Root Main/Secondary divider. Owns the canonical ratio's DOM presentation only;
- * canonical `mainSplitRatio` state lives in workspace-tabs.js. This is the one
- * separator implementation: pointer drag, keyboard resize, ARIA, and min-width
- * clamping. Tile-local consumers (PDF viewer, EasyMDE, etc.) merely react to
- * their own container resizing; they must not duplicate this logic.
+ * Workspace divider mechanics. Owns every separator's DOM presentation and
+ * interaction only; canonical ratio state lives in workspace-tabs.js
+ * (`mainSplitRatio` for the root Main/Secondary divider, `secondaryTree`
+ * split-node `ratio` for nested Secondary dividers). This is the one
+ * separator implementation: pointer drag, keyboard resize, ARIA, and
+ * min-size clamping, shared by the root divider and every nested Secondary
+ * split divider. Tile-local consumers (PDF viewer, EasyMDE, etc.) merely
+ * react to their own container resizing; they must not duplicate this logic.
  *
  * Layout-only: dragging never mounts/unmounts a TabContext, never renders a
  * route, and never triggers a leave guard.
@@ -14,17 +17,25 @@
     /* Single source of truth for minimum pane widths (do not scatter literals in CSS/JS). */
     const PRKS_SPLIT_MAIN_MIN_PX = 360;
     const PRKS_SPLIT_SECONDARY_MIN_PX = 320;
+    /* Single source of truth for minimum nested Secondary leaf dimensions. Nested splits are
+     * symmetric (no Main/Secondary role distinction inside the Secondary region), so both
+     * children of a nested split share the same minimum. */
+    const PRKS_NESTED_MIN_WIDTH_PX = 280;
+    const PRKS_NESTED_MIN_HEIGHT_PX = 200;
     /* Must match the --prks-workspace-separator-size default in style.css. */
     const PRKS_SPLIT_SEPARATOR_TRACK_PX = 1;
     const PRKS_SPLIT_STEP = 0.02;
     const PRKS_SPLIT_STEP_SHIFT = 0.05;
     const DEFAULT_RATIO_FALLBACK = 0.58;
+    const DEFAULT_NESTED_RATIO_FALLBACK = 0.5;
 
     let canvasRef = null;
     let separatorRef = null;
-    /* Single active-drag cleanup handle. Every termination path (pointerup, pointercancel,
-     * lostpointercapture, or the separator being removed from the DOM) funnels through this
-     * same idempotent function so no path can leave a stuck cursor/class/capture behind. */
+    /* Single active-drag cleanup handle shared by the root divider and every nested Secondary
+     * separator: only one physical pointer drag can be in flight at a time. Every termination
+     * path (pointerup, pointercancel, lostpointercapture, or the separator being removed from
+     * the DOM) funnels through this same idempotent function so no path can leave a stuck
+     * cursor/class/capture behind. */
     let activeDragCleanup = null;
 
     function terminateActiveDrag() {
@@ -38,12 +49,29 @@
         return typeof document !== 'undefined' ? document : null;
     }
 
-    /** Dynamic ratio bounds from measured usable width. Impossible splits collapse to a safe midpoint. */
-    function prksSplitComputeBounds(usableWidth) {
-        const w = Number(usableWidth);
+    /** Direct-child search (not a full-subtree querySelector): critical once nested split
+     * containers exist, since a container's own separator/root marker must never be confused
+     * with one belonging to a deeper descendant split node. */
+    function directChild(container, predicate) {
+        if (!container || !container.children) return null;
+        const kids = container.children;
+        for (let i = 0; i < kids.length; i++) {
+            if (predicate(kids[i])) return kids[i];
+        }
+        return null;
+    }
+
+    function isSplitterEl(el) {
+        return !!(el && el.className && el.className.indexOf('prks-splitter') !== -1);
+    }
+
+    /* Dynamic ratio bounds from a measured usable size and each side's minimum pixels.
+     * Impossible splits collapse to a safe midpoint rather than negative/zero panes. */
+    function computeBoundsGeneric(usable, minFirstPx, minSecondPx) {
+        const w = Number(usable);
         if (!(w > 0)) return { minRatio: 0, maxRatio: 1 };
-        let minRatio = PRKS_SPLIT_MAIN_MIN_PX / w;
-        let maxRatio = 1 - PRKS_SPLIT_SECONDARY_MIN_PX / w;
+        let minRatio = minFirstPx / w;
+        let maxRatio = 1 - minSecondPx / w;
         if (minRatio > maxRatio) {
             const mid = Math.max(0, Math.min(1, (minRatio + maxRatio) / 2));
             return { minRatio: mid, maxRatio: mid };
@@ -51,6 +79,11 @@
         minRatio = Math.max(0, Math.min(1, minRatio));
         maxRatio = Math.max(0, Math.min(1, maxRatio));
         return { minRatio: minRatio, maxRatio: maxRatio };
+    }
+
+    /** Root Main/Secondary bounds from measured usable width. */
+    function prksSplitComputeBounds(usableWidth) {
+        return computeBoundsGeneric(usableWidth, PRKS_SPLIT_MAIN_MIN_PX, PRKS_SPLIT_SECONDARY_MIN_PX);
     }
 
     function prksSplitClampRatio(ratio, bounds) {
@@ -65,18 +98,18 @@
         return DEFAULT_RATIO_FALLBACK;
     }
 
-    function measureUsable(canvas) {
-        if (!canvas) return 0;
-        let w = 0;
-        if (typeof canvas.getBoundingClientRect === 'function') {
-            const rect = canvas.getBoundingClientRect();
-            w = rect ? rect.width : 0;
+    function measureUsable(container, axis) {
+        if (!container) return 0;
+        let size = 0;
+        if (typeof container.getBoundingClientRect === 'function') {
+            const rect = container.getBoundingClientRect();
+            size = rect ? (axis === 'top-bottom' ? rect.height : rect.width) : 0;
         }
-        if (!w) w = canvas.clientWidth || 0;
-        return Math.max(0, w - PRKS_SPLIT_SEPARATOR_TRACK_PX);
+        if (!size) size = axis === 'top-bottom' ? container.clientHeight || 0 : container.clientWidth || 0;
+        return Math.max(0, size - PRKS_SPLIT_SEPARATOR_TRACK_PX);
     }
 
-    function updateAria(el, ratio, bounds) {
+    function updateAria(el, ratio, bounds, axis, valueTextFor) {
         if (!el) return;
         const now = Math.round(ratio * 100);
         const min = Math.round(bounds.minRatio * 100);
@@ -84,19 +117,24 @@
         el.setAttribute('aria-valuemin', String(min));
         el.setAttribute('aria-valuemax', String(max));
         el.setAttribute('aria-valuenow', String(now));
-        el.setAttribute('aria-valuetext', 'Main ' + now + '%, secondary ' + (100 - now) + '%');
+        el.setAttribute('aria-valuetext', valueTextFor(now));
+        el.setAttribute('aria-orientation', axis === 'top-bottom' ? 'horizontal' : 'vertical');
     }
+
+    /* ==================== Root Main/Secondary divider ==================== */
 
     /** Applies a ratio to the canvas CSS var + separator ARIA. Returns the clamped ratio actually applied. */
     function applyRatioToDom(canvas, el, ratio) {
-        const usable = measureUsable(canvas);
+        const usable = measureUsable(canvas, 'left-right');
         const bounds = prksSplitComputeBounds(usable);
         const clamped = prksSplitClampRatio(ratio, bounds);
         const mainPx = usable * clamped;
         if (canvas && canvas.style && typeof canvas.style.setProperty === 'function') {
             canvas.style.setProperty('--prks-main-split-width', mainPx + 'px');
         }
-        updateAria(el, clamped, bounds);
+        updateAria(el, clamped, bounds, 'left-right', function (now) {
+            return 'Main ' + now + '%, secondary ' + (100 - now) + '%';
+        });
         return clamped;
     }
 
@@ -119,81 +157,56 @@
         el.textContent = text;
     }
 
-    function beginDragCursor() {
+    function dragCursorClass(axis) {
+        return axis === 'top-bottom' ? 'prks-resizing-split--horizontal' : 'prks-resizing-split';
+    }
+
+    function beginDragCursor(axis) {
         const d = doc();
-        if (d && d.body && d.body.classList) d.body.classList.add('prks-resizing-split');
+        if (d && d.body && d.body.classList) d.body.classList.add(dragCursorClass(axis));
     }
 
-    function endDragCursor() {
+    function endDragCursor(axis) {
         const d = doc();
-        if (d && d.body && d.body.classList) d.body.classList.remove('prks-resizing-split');
+        if (d && d.body && d.body.classList) d.body.classList.remove(dragCursorClass(axis));
     }
 
-    function onSeparatorKeydown(el, e) {
-        const canvas = el.closest ? el.closest('.prks-workspace-canvas') : canvasRef;
-        if (!canvas) return;
-        const key = e.key;
-        if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'Home' && key !== 'End') return;
-        canvasRef = canvas;
-        separatorRef = el;
-        const usable = measureUsable(canvas);
-        const bounds = prksSplitComputeBounds(usable);
-        const current = getCurrentRatio();
-        e.preventDefault();
-        if (key === 'ArrowLeft' || key === 'ArrowRight') {
-            const step = e.shiftKey ? PRKS_SPLIT_STEP_SHIFT : PRKS_SPLIT_STEP;
-            const delta = key === 'ArrowLeft' ? -step : step;
-            commitRatio(current + delta);
-            return;
-        }
-        e.stopPropagation();
-        if (key === 'Home') commitRatio(bounds.minRatio);
-        else commitRatio(bounds.maxRatio);
+    /** Called whenever a separator is about to be removed (hide split, narrow fallback, a
+     * Secondary leaf closing/collapsing). Must run before the DOM removal so a mid-drag
+     * pointer never keeps a stale capture, cursor, or listener alive. */
+    function releaseDragState(el, axis) {
+        terminateActiveDrag();
+        if (el && el.classList) el.classList.remove('is-dragging');
+        endDragCursor(axis);
     }
 
-    function onSeparatorDblClick(el, e) {
-        e.preventDefault();
-        const canvas = el.closest ? el.closest('.prks-workspace-canvas') : canvasRef;
-        if (!canvas) return;
-        canvasRef = canvas;
-        separatorRef = el;
-        const def =
-            typeof root.prksWorkspaceDefaultSplitRatio === 'function'
-                ? root.prksWorkspaceDefaultSplitRatio()
-                : DEFAULT_RATIO_FALLBACK;
-        commitRatio(def);
-        liveAnnounce('Split size reset.');
-    }
-
-    function onSeparatorPointerDown(el, e) {
+    /**
+     * Generic pointer-drag lifecycle shared by the root divider and every nested Secondary
+     * separator. `cfg`: { el, axis, getContainer(), ratioFromClientPoint(container, clientX,
+     * clientY), commit(ratio) }. Single active-drag cleanup owner (`activeDragCleanup`);
+     * pointer capture; every termination path (pointerup/pointercancel/lostpointercapture)
+     * converges on one idempotent cleanup.
+     */
+    function beginPointerDrag(cfg, e) {
         if (e.pointerType === 'mouse' && typeof e.button === 'number' && e.button !== 0) return;
-        const canvas = el.closest ? el.closest('.prks-workspace-canvas') : null;
-        if (!canvas) return;
+        const container = cfg.getContainer();
+        if (!container) return;
         e.preventDefault();
         /* Defensively terminate any stale drag (e.g. a lost pointerup) before starting a new one. */
         terminateActiveDrag();
-        canvasRef = canvas;
-        separatorRef = el;
         let dragging = true;
         const pointerId = e.pointerId;
+        const el = cfg.el;
         if (el.classList) el.classList.add('is-dragging');
-        beginDragCursor();
+        beginDragCursor(cfg.axis);
         try {
             if (typeof el.setPointerCapture === 'function') el.setPointerCapture(pointerId);
         } catch (_err) {}
 
-        function ratioFromClientX(clientX) {
-            const rect = canvas.getBoundingClientRect();
-            const usable = Math.max(0, rect.width - PRKS_SPLIT_SEPARATOR_TRACK_PX);
-            if (usable <= 0) return getCurrentRatio();
-            const mainWidth = clientX - rect.left;
-            return mainWidth / usable;
-        }
-
         function onMove(ev) {
             if (!dragging) return;
             ev.preventDefault();
-            commitRatio(ratioFromClientX(ev.clientX));
+            cfg.commit(cfg.ratioFromClientPoint(container, ev.clientX, ev.clientY));
         }
 
         /* Idempotent: safe to invoke more than once (pointerup+lostpointercapture can both fire,
@@ -202,7 +215,7 @@
             if (!dragging) return;
             dragging = false;
             if (el.classList) el.classList.remove('is-dragging');
-            endDragCursor();
+            endDragCursor(cfg.axis);
             const d = doc();
             if (d) {
                 d.removeEventListener('pointermove', onMove, true);
@@ -235,6 +248,73 @@
         }
     }
 
+    function onSeparatorKeydown(el, e) {
+        const canvas = el.closest ? el.closest('.prks-workspace-canvas') : canvasRef;
+        if (!canvas) return;
+        const key = e.key;
+        if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'Home' && key !== 'End') return;
+        canvasRef = canvas;
+        separatorRef = el;
+        const usable = measureUsable(canvas, 'left-right');
+        const bounds = prksSplitComputeBounds(usable);
+        const current = getCurrentRatio();
+        e.preventDefault();
+        if (key === 'ArrowLeft' || key === 'ArrowRight') {
+            const step = e.shiftKey ? PRKS_SPLIT_STEP_SHIFT : PRKS_SPLIT_STEP;
+            const delta = key === 'ArrowLeft' ? -step : step;
+            commitRatio(current + delta);
+            return;
+        }
+        e.stopPropagation();
+        if (key === 'Home') commitRatio(bounds.minRatio);
+        else commitRatio(bounds.maxRatio);
+    }
+
+    function onSeparatorDblClick(el, e) {
+        e.preventDefault();
+        const canvas = el.closest ? el.closest('.prks-workspace-canvas') : canvasRef;
+        if (!canvas) return;
+        canvasRef = canvas;
+        separatorRef = el;
+        const def =
+            typeof root.prksWorkspaceDefaultSplitRatio === 'function'
+                ? root.prksWorkspaceDefaultSplitRatio()
+                : DEFAULT_RATIO_FALLBACK;
+        commitRatio(def);
+        liveAnnounce('Split size reset.');
+    }
+
+    function ratioFromClientX(canvas, clientX) {
+        const rect = canvas.getBoundingClientRect();
+        const usable = Math.max(0, rect.width - PRKS_SPLIT_SEPARATOR_TRACK_PX);
+        if (usable <= 0) return getCurrentRatio();
+        const mainWidth = clientX - rect.left;
+        return mainWidth / usable;
+    }
+
+    function onSeparatorPointerDown(el, e) {
+        const canvas = el.closest ? el.closest('.prks-workspace-canvas') : null;
+        if (!canvas) return;
+        canvasRef = canvas;
+        separatorRef = el;
+        beginPointerDrag(
+            {
+                el: el,
+                axis: 'left-right',
+                getContainer: function () {
+                    return canvas;
+                },
+                ratioFromClientPoint: function (container, clientX) {
+                    return ratioFromClientX(container, clientX);
+                },
+                commit: function (ratio) {
+                    commitRatio(ratio);
+                },
+            },
+            e
+        );
+    }
+
     function bindSeparatorEvents(el) {
         el.addEventListener('pointerdown', function (e) {
             onSeparatorPointerDown(el, e);
@@ -260,26 +340,22 @@
     }
 
     function findSeparator(canvas) {
-        if (!canvas || typeof canvas.querySelector !== 'function') return null;
-        return canvas.querySelector('.prks-splitter');
+        return directChild(canvas, isSplitterEl);
+    }
+
+    function isSecondaryRootEl(el) {
+        return !!(el && el.getAttribute && el.getAttribute('data-prks-secondary-root') === '1');
     }
 
     function positionSeparator(canvas, el) {
-        const secondary = canvas.querySelector('.prks-tile--secondary');
+        const secondary = directChild(canvas, function (c) {
+            return c !== el && isSecondaryRootEl(c);
+        });
         if (secondary && secondary.parentNode === canvas) {
             if (el.nextSibling !== secondary) canvas.insertBefore(el, secondary);
         } else if (el.parentNode !== canvas) {
             canvas.appendChild(el);
         }
-    }
-
-    /** Called whenever the separator is about to be removed (hide split, narrow fallback,
-     * Secondary closes). Must run before the DOM removal so a mid-drag pointer never keeps
-     * a stale capture, cursor, or listener alive. */
-    function releaseDragState(el) {
-        terminateActiveDrag();
-        if (el && el.classList) el.classList.remove('is-dragging');
-        endDragCursor();
     }
 
     /** Called by workspace-tiling.js after it positions Main/Secondary tiles. */
@@ -288,7 +364,7 @@
         const existing = findSeparator(canvas);
         if (!visualTiled) {
             if (existing) {
-                releaseDragState(existing);
+                releaseDragState(existing, 'left-right');
                 if (existing.parentNode) existing.parentNode.removeChild(existing);
             }
             if (canvasRef === canvas) {
@@ -330,9 +406,188 @@
         }
     }
 
+    /* ==================== Nested Secondary split separators ==================== */
+
+    function nestedMinPx(axis) {
+        return axis === 'top-bottom' ? PRKS_NESTED_MIN_HEIGHT_PX : PRKS_NESTED_MIN_WIDTH_PX;
+    }
+
+    function nestedBounds(usable, axis) {
+        const min = nestedMinPx(axis);
+        return computeBoundsGeneric(usable, min, min);
+    }
+
+    function getNestedRatio(splitId) {
+        if (typeof root.prksWorkspaceSnapshot !== 'function' || typeof root.findNodeById !== 'function') {
+            return DEFAULT_NESTED_RATIO_FALLBACK;
+        }
+        const snap = root.prksWorkspaceSnapshot();
+        const node = root.findNodeById(snap.secondaryTree, splitId);
+        return node && Number.isFinite(node.ratio) ? node.ratio : DEFAULT_NESTED_RATIO_FALLBACK;
+    }
+
+    /** Applies a ratio to the split container's CSS var (percentage, so ancestor resizes such as
+     * dragging the root divider reflow nested panes automatically with no JS) + separator ARIA.
+     * Returns the clamped ratio actually applied. */
+    function applyNestedRatioToDom(container, el, axis, ratio) {
+        const usable = measureUsable(container, axis);
+        const bounds = nestedBounds(usable, axis);
+        const clamped = prksSplitClampRatio(ratio, bounds);
+        if (container && container.style && typeof container.style.setProperty === 'function') {
+            container.style.setProperty('--prks-split-first-size', clamped * 100 + '%');
+        }
+        const firstLabel = axis === 'top-bottom' ? 'top' : 'first';
+        const secondLabel = axis === 'top-bottom' ? 'bottom' : 'second';
+        updateAria(el, clamped, bounds, axis, function (now) {
+            return firstLabel + ' pane ' + now + '%, ' + secondLabel + ' pane ' + (100 - now) + '%';
+        });
+        return clamped;
+    }
+
+    /** Applies + persists (silently) a nested split's ratio. Used by drag/keyboard/reset. */
+    function commitNestedRatio(splitId, container, el, axis, ratio) {
+        const clamped = applyNestedRatioToDom(container, el, axis, ratio);
+        if (typeof root.prksWorkspaceSetNestedSplitRatio === 'function') {
+            root.prksWorkspaceSetNestedSplitRatio(splitId, clamped, { paint: false });
+        }
+        return clamped;
+    }
+
+    function nestedContainerFor(el) {
+        return el && el.parentNode && el.parentNode.getAttribute && el.parentNode.getAttribute('data-prks-split-id')
+            ? el.parentNode
+            : null;
+    }
+
+    function onNestedKeydown(splitId, axis, el, e) {
+        const container = nestedContainerFor(el);
+        if (!container) return;
+        const isHorizontalAxis = axis === 'top-bottom';
+        const forwardKey = isHorizontalAxis ? 'ArrowDown' : 'ArrowRight';
+        const backwardKey = isHorizontalAxis ? 'ArrowUp' : 'ArrowLeft';
+        const key = e.key;
+        if (key !== forwardKey && key !== backwardKey && key !== 'Home' && key !== 'End') return;
+        const usable = measureUsable(container, axis);
+        const bounds = nestedBounds(usable, axis);
+        const current = getNestedRatio(splitId);
+        e.preventDefault();
+        if (key === forwardKey || key === backwardKey) {
+            const step = e.shiftKey ? PRKS_SPLIT_STEP_SHIFT : PRKS_SPLIT_STEP;
+            const delta = key === backwardKey ? -step : step;
+            commitNestedRatio(splitId, container, el, axis, current + delta);
+            return;
+        }
+        e.stopPropagation();
+        if (key === 'Home') commitNestedRatio(splitId, container, el, axis, bounds.minRatio);
+        else commitNestedRatio(splitId, container, el, axis, bounds.maxRatio);
+    }
+
+    function onNestedDblClick(splitId, axis, el, e) {
+        e.preventDefault();
+        const container = nestedContainerFor(el);
+        if (!container) return;
+        commitNestedRatio(splitId, container, el, axis, DEFAULT_NESTED_RATIO_FALLBACK);
+        liveAnnounce('Split size reset.');
+    }
+
+    function ratioFromClientPointNested(container, axis, clientX, clientY) {
+        const rect = container.getBoundingClientRect();
+        const usable =
+            axis === 'top-bottom'
+                ? Math.max(0, rect.height - PRKS_SPLIT_SEPARATOR_TRACK_PX)
+                : Math.max(0, rect.width - PRKS_SPLIT_SEPARATOR_TRACK_PX);
+        if (usable <= 0) return DEFAULT_NESTED_RATIO_FALLBACK;
+        const firstSize = axis === 'top-bottom' ? clientY - rect.top : clientX - rect.left;
+        return firstSize / usable;
+    }
+
+    function onNestedPointerDown(splitId, axis, el, e) {
+        beginPointerDrag(
+            {
+                el: el,
+                axis: axis,
+                getContainer: function () {
+                    return nestedContainerFor(el);
+                },
+                ratioFromClientPoint: function (container, clientX, clientY) {
+                    return ratioFromClientPointNested(container, axis, clientX, clientY);
+                },
+                commit: function (ratio) {
+                    const container = nestedContainerFor(el);
+                    if (container) commitNestedRatio(splitId, container, el, axis, ratio);
+                },
+            },
+            e
+        );
+    }
+
+    /** Creates one nested Secondary separator for split node `splitId`/`axis`. Bound once;
+     * `prksWorkspaceSyncNestedSeparator` repositions/restyles it on every paint. */
+    function createNestedSeparator(splitId, axis) {
+        const d = doc();
+        const el = d.createElement('div');
+        el.setAttribute('data-prks-split-id', splitId);
+        el.className = 'prks-splitter ' + (axis === 'top-bottom' ? 'prks-splitter--horizontal' : 'prks-splitter--vertical');
+        el.setAttribute('role', 'separator');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('aria-label', 'Resize split pane');
+        el.setAttribute('aria-orientation', axis === 'top-bottom' ? 'horizontal' : 'vertical');
+        el.addEventListener('pointerdown', function (e) {
+            onNestedPointerDown(splitId, axis, el, e);
+        });
+        el.addEventListener('keydown', function (e) {
+            onNestedKeydown(splitId, axis, el, e);
+        });
+        el.addEventListener('dblclick', function (e) {
+            onNestedDblClick(splitId, axis, el, e);
+        });
+        return el;
+    }
+
+    /** Called by workspace-tiling.js once per split node while walking the Secondary tree.
+     * `container` is that split node's own DOM container (already carries
+     * `data-prks-split-id`/`data-prks-axis`); `firstEl`/`secondEl` are the already-rendered
+     * child DOM nodes (leaf tile or nested split container) for `node.first`/`node.second`.
+     * Ensures container children are ordered [firstEl, separator, secondEl] and applies the
+     * node's current ratio. Returns the separator element (for keyed reuse bookkeeping only;
+     * callers do not need to retain it). */
+    function prksWorkspaceSyncNestedSeparator(container, node, firstEl, secondEl) {
+        if (!container || !node || !firstEl || !secondEl) return null;
+        let el = findSeparator(container);
+        if (el && el.getAttribute('data-prks-split-id') !== node.id) {
+            /* A stale separator for a different split id somehow ended up here (should not
+             * happen given split ids are unique DOM keys) -- rebuild defensively. */
+            releaseDragState(el, el.getAttribute('aria-orientation') === 'horizontal' ? 'top-bottom' : 'left-right');
+            if (el.parentNode) el.parentNode.removeChild(el);
+            el = null;
+        }
+        if (!el) el = createNestedSeparator(node.id, node.axis);
+        if (firstEl.parentNode !== container || container.children[0] !== firstEl) {
+            container.insertBefore(firstEl, container.firstChild);
+        }
+        if (el.parentNode !== container || firstEl.nextSibling !== el) {
+            container.insertBefore(el, firstEl.nextSibling);
+        }
+        if (secondEl.parentNode !== container || el.nextSibling !== secondEl) {
+            container.insertBefore(secondEl, el.nextSibling);
+        }
+        applyNestedRatioToDom(container, el, node.axis, node.ratio);
+        return el;
+    }
+
+    /** Called by workspace-tiling.js when a split container is about to be removed from the DOM
+     * (leaf close/hide collapse, tree normalization). Ensures no mid-drag pointer state leaks. */
+    function prksWorkspaceReleaseNestedSeparator(container) {
+        const el = findSeparator(container);
+        if (!el) return;
+        releaseDragState(el, el.getAttribute('aria-orientation') === 'horizontal' ? 'top-bottom' : 'left-right');
+    }
+
     const api = {
         prksWorkspaceSyncSplitSeparator: prksWorkspaceSyncSplitSeparator,
         prksWorkspaceReapplySplitRatio: prksWorkspaceReapplySplitRatio,
+        prksWorkspaceSyncNestedSeparator: prksWorkspaceSyncNestedSeparator,
+        prksWorkspaceReleaseNestedSeparator: prksWorkspaceReleaseNestedSeparator,
         prksSplitComputeBounds: prksSplitComputeBounds,
         prksSplitClampRatio: prksSplitClampRatio,
     };

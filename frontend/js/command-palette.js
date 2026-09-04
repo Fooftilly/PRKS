@@ -400,6 +400,7 @@
         inited: false,
         emptyCreate: false,
         navigationTarget: 'current',
+        splitPlacement: null,
     };
 
     function debounceMs() {
@@ -871,13 +872,13 @@
         if (!snap || !Array.isArray(snap.tabs)) return [];
         const visual =
             typeof root.prksWorkspaceVisualTiled === 'function' ? !!root.prksWorkspaceVisualTiled() : snap.mode === 'tiled';
-        const sec = snap.secondaryTree && snap.secondaryTree.type === 'leaf' ? snap.secondaryTree.tabId : null;
+        const visibleSecondaryIds = visual && typeof root.collectLeafTabIds === 'function' ? root.collectLeafTabIds(snap.secondaryTree) : [];
         const q = normalizeQuery(rawQuery);
         const out = [];
         for (let i = 0; i < snap.tabs.length; i++) {
             const tab = snap.tabs[i];
             if (!tab || tab.id === snap.mainTabId) continue;
-            if (visual && tab.id === sec) continue;
+            if (visual && visibleSecondaryIds.indexOf(tab.id) !== -1) continue;
             if (typeof root.prksRouteSupportsTile === 'function' && !root.prksRouteSupportsTile(tab.route)) continue;
             if (q && bestScore([String(tab.title || '')], q) <= 0) continue;
             out.push({
@@ -895,6 +896,28 @@
 
     function executeTileSelection(row, hash) {
         const tabId = row && row.workspaceTabId ? row.workspaceTabId : null;
+        const placement = state.splitPlacement;
+        if (placement && placement.targetLeafTabId && typeof root.prksWorkspaceSplitLeaf === 'function') {
+            /* Explicit Split right/down from a specific focused Secondary leaf: reuse the
+             * existing tab if the row already resolves to one (parked or otherwise), else
+             * create a new one from `hash`. Never duplicates a tab. */
+            if (tabId) {
+                void root.prksWorkspaceSplitLeaf(placement.targetLeafTabId, placement.axis, { tabId: tabId });
+                return;
+            }
+            if (typeof root.prksWorkspaceFindTabByRoute === 'function') {
+                const existing = root.prksWorkspaceFindTabByRoute(hash, {
+                    excludeMain: true,
+                    excludeVisibleSecondary: true,
+                });
+                if (existing && existing.id) {
+                    void root.prksWorkspaceSplitLeaf(placement.targetLeafTabId, placement.axis, { tabId: existing.id });
+                    return;
+                }
+            }
+            void root.prksWorkspaceSplitLeaf(placement.targetLeafTabId, placement.axis, { hash: hash });
+            return;
+        }
         if (tabId && typeof root.prksWorkspaceTileTab === 'function') {
             root.prksWorkspaceTileTab(tabId);
             return;
@@ -1560,6 +1583,13 @@
             options && (options.navigationTarget === 'new-tab' || options.navigationTarget === 'tile') && state.scope !== 'create'
                 ? options.navigationTarget
                 : 'current';
+        /* Split right/down from a specific focused Secondary leaf: {targetLeafTabId, axis,
+         * placement}. Only meaningful together with navigationTarget 'tile'; ephemeral, never
+         * persisted, cleared on close like every other palette session field. */
+        state.splitPlacement =
+            state.navigationTarget === 'tile' && options && options.splitPlacement && options.splitPlacement.targetLeafTabId
+                ? options.splitPlacement
+                : null;
         state.query = '';
         state.activeIndex = 0;
         state.queryGen += 1;
@@ -1601,6 +1631,7 @@
         state.open = false;
         state.scope = 'all';
         state.navigationTarget = 'current';
+        state.splitPlacement = null;
         state.query = '';
         state.activeIndex = 0;
         state.prevFocus = null;
@@ -1666,6 +1697,7 @@
         state.sessionGen = 0;
         state.results = [];
         state.navigationTarget = 'current';
+        state.splitPlacement = null;
     }
 
     const api = {
