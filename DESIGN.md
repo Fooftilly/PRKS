@@ -524,7 +524,7 @@ These are different concepts. Mixing them will break the later workspace project
 .prks-splitter
 ```
 
-The component gallery shows the accessible tab-strip structure (activation control, optional Split action, close control). Tiled v1 ships one Secondary on the right. Recursive splits and draggable splitters are not implemented.
+The component gallery shows the accessible tab-strip structure (activation control, optional Split action, close control). Tiled v1 ships one Secondary on the right, with a draggable Main/Secondary divider. Recursive Secondary splits are not implemented.
 
 User-facing copy uses **Split view**. Internal architecture still says tile / Secondary / `secondaryTree`.
 
@@ -572,23 +572,33 @@ Work notes side-by-side layout follows that Work’s tile/container width, not a
 
 Tiling v1:
 
-- main/master tile owns the left column (~58/42 split, fixed)
-- one secondary tile lives on the right
-- a simple border separates tiles
-- no heavy card shadow around every tile
-- stacked mode has no visible tile chrome
+- main/master tile owns the left column, one secondary tile lives on the right
+- the root Main/Secondary split is directly resizable (default ~58/42)
+- a thin `.prks-splitter` divider separates the tiles; no heavy card shadow around either tile
+- stacked mode has no visible tile chrome, and no separator
 
-Future recursive Secondary splits / vertical-horizontal splitter:
+### Main/Secondary divider
 
-- `secondaryTree` may grow `type: "split"` nodes (`axis`, `ratio`, `first`, `second`)
-- 1px normal separator
-- larger invisible pointer hit target
-- accent focus/drag indication
+The root split between Main and Secondary is workspace-owned, session-memory state: one normalized ratio (`mainSplitRatio`, default `0.58`, meaning Main width / usable split width, usable width excluding the separator track). It is not persisted; a full reload resets it to default. It follows workspace *roles*, not tab identity — Make Main, Secondary replacement, Hide/Show split, and the narrow responsive fallback all preserve the current ratio unchanged.
+
+Divider contract:
+
+- 1px normal separator (`.prks-splitter.prks-splitter--vertical`); a substantially wider invisible pointer hit target via `::after`
+- normal: subtle neutral divider; hover: slightly stronger border; keyboard focus / active drag: accent focus treatment
 - do not make the divider visually thick just to make it draggable
-- `role="separator"`, `aria-orientation`, `aria-valuenow` where applicable, keyboard arrows
-- splitter resizing is not shipped yet
+- pointer drag uses `setPointerCapture()` so dragging stays stable while the pointer crosses tile content (PDF viewer, EasyMDE, buttons)
+- `role="separator"`, `tabindex="0"`, `aria-orientation="vertical"`, `aria-valuemin`/`aria-valuemax`/`aria-valuenow`/`aria-valuetext` (whole percentages) kept current on every resize
+- keyboard: Left/Right resize by a small step, Shift+Left/Right by a larger step, Home/End jump to the dynamic min/max allowed width, double-click resets to default with a live-region announcement
+- Main/Secondary each have one centralized minimum pixel width; the ratio is clamped against those minimums recomputed from the *measured* canvas width, not a fixed 0.25–0.75 band
+- resizing is layout-only: it never mounts/unmounts a TabContext, never re-renders a route, and never triggers a leave guard; the canonical ratio updates without a full workspace repaint, and the DOM applies the resulting exact pixel Main width via a CSS custom property
+- rendered only when split view is actually visible (never in stacked/narrow-fallback mode); at most two tiles and one divider, ever
 
-This specification governs later recursive tiling. Do not invent another design language then.
+Future recursive Secondary splits / horizontal splitter:
+
+- `secondaryTree` may grow `type: "split"` nodes (`axis`, `ratio`, `first`, `second`), each with its own ratio distinct from the root `mainSplitRatio`
+- reuse the same divider visual language (1px line, wide hit target, accent focus/drag state) — do not invent another design language then
+
+This specification governs later recursive tiling.
 
 ### Chips, tags, and badges
 

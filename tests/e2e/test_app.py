@@ -1634,6 +1634,76 @@ def _workspace_ids(page):
     )
 
 
+def _open_work_work_split(page, server):
+    """Work A Main, Work B Secondary, both PDFs ready. Returns (work_a, work_b, ids)."""
+    work_a = server.ids["work_a"]
+    work_b = server.ids["work_b"]
+    _open_work_from_home(page, WORK_A_TITLE)
+    _wait_pdf_viewer(page)
+    page.evaluate(
+        """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+        arg=work_b,
+    )
+    page.wait_for_function("() => document.querySelectorAll('.work-detail').length === 2")
+    page.wait_for_function(
+        """() => {
+            const snap = window.prksWorkspaceSnapshot();
+            return snap && snap.mode === 'tiled' && snap.secondaryTree && snap.secondaryTree.type === 'leaf';
+        }"""
+    )
+    ids = _workspace_ids(page)
+    _wait_pdf_tab(page, ids["mainTabId"])
+    _wait_pdf_tab(page, ids["secondaryTabId"])
+    page.wait_for_selector(".prks-splitter")
+    page.wait_for_function("() => document.querySelectorAll('.CodeMirror').length === 2")
+    return work_a, work_b, ids
+
+
+def _capture_divider_runtime_ids(page):
+    page.evaluate(
+        """() => {
+            const snap = window.prksWorkspaceSnapshot();
+            const a = window.prksGetTabContext(snap.mainTabId);
+            const b = window.prksGetTabContext(snap.secondaryTree.tabId);
+            window.__prksDividerRt = {
+                aPdf: a.getResource('pdf'),
+                bPdf: b.getResource('pdf'),
+                aNotes: a.getResource('workNotes'),
+                bNotes: b.getResource('workNotes'),
+            };
+        }"""
+    )
+
+
+def _divider_runtime_ids_unchanged(page):
+    return page.evaluate(
+        """() => {
+            const snap = window.prksWorkspaceSnapshot();
+            const a = window.prksGetTabContext(snap.mainTabId);
+            const b = window.prksGetTabContext(snap.secondaryTree.tabId);
+            const rt = window.__prksDividerRt;
+            return {
+                aPdf: a.getResource('pdf') === rt.aPdf,
+                bPdf: b.getResource('pdf') === rt.bPdf,
+                aNotes: a.getResource('workNotes') === rt.aNotes,
+                bNotes: b.getResource('workNotes') === rt.bNotes,
+                mounted: window.prksTabContextDebugSnapshot().mountedCount,
+            };
+        }"""
+    )
+
+
+def _drag_divider(page, dx):
+    sep = page.locator(".prks-splitter")
+    box = sep.bounding_box()
+    start_x = box["x"] + box["width"] / 2
+    start_y = box["y"] + box["height"] / 2
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(start_x + dx, start_y, steps=10)
+    page.mouse.up()
+
+
 class WorkspaceTilingTests(_BrowserE2E):
     def test_work_work_runtimes_focus_notes_make_main(self):
         server, page, _collector = self._start_app()
@@ -2863,5 +2933,291 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertFalse(dist["mainTileFocused"])
         self.assertTrue(dist["mainHasRole"])
         self.assertTrue(dist["secHasMakeMain"])
+
+
+class MainSecondaryDividerTests(_BrowserE2E):
+    def test_divider_hidden_in_stacked_and_present_in_split_with_aria(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_from_home(page, WORK_A_TITLE)
+        self.assertEqual(page.locator(".prks-splitter").count(), 0)
+
+        _open_work_work_split(page, server)
+        sep = page.locator(".prks-splitter")
+        self.assertEqual(sep.count(), 1)
+        self.assertEqual(sep.get_attribute("role"), "separator")
+        self.assertEqual(sep.get_attribute("aria-orientation"), "vertical")
+        self.assertEqual(sep.get_attribute("tabindex"), "0")
+        now = int(sep.get_attribute("aria-valuenow"))
+        self.assertTrue(50 <= now <= 66, "default ~58%% got %s" % now)
+        text = sep.get_attribute("aria-valuetext") or ""
+        self.assertIn("Main", text)
+        self.assertIn("secondary", text)
+
+        page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        self.assertEqual(page.locator(".prks-splitter").count(), 0)
+
+    def test_divider_pointer_drag_resizes_live_and_preserves_runtime(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+        _capture_divider_runtime_ids(page)
+
+        ratio_before = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        main_before = page.locator(".prks-tile--main").bounding_box()
+        sec_before = page.locator(".prks-tile--secondary").bounding_box()
+
+        _drag_divider(page, 150)
+        page.wait_for_function(
+            "r => window.prksWorkspaceSnapshot().mainSplitRatio > r + 0.02",
+            arg=ratio_before,
+        )
+        ratio_after = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        main_after = page.locator(".prks-tile--main").bounding_box()
+        sec_after = page.locator(".prks-tile--secondary").bounding_box()
+        self.assertGreater(ratio_after, ratio_before)
+        self.assertGreater(main_after["width"], main_before["width"])
+        self.assertLess(sec_after["width"], sec_before["width"])
+        self.assertGreater(main_after["width"], 0)
+        self.assertGreater(sec_after["width"], 0)
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
+
+        _drag_divider(page, -220)
+        page.wait_for_function(
+            "r => window.prksWorkspaceSnapshot().mainSplitRatio < r - 0.02",
+            arg=ratio_after,
+        )
+        ratio_final = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        main_final = page.locator(".prks-tile--main").bounding_box()
+        self.assertLess(main_final["width"], main_after["width"])
+
+        same = _divider_runtime_ids_unchanged(page)
+        self.assertTrue(same["aPdf"])
+        self.assertTrue(same["bPdf"])
+        self.assertTrue(same["aNotes"])
+        self.assertTrue(same["bNotes"])
+        self.assertEqual(same["mounted"], 2)
+        self.assertNotEqual(ratio_final, ratio_before)
+
+    def test_divider_keyboard_resize_home_end_and_aria(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+        sep = page.locator(".prks-splitter")
+        sep.focus()
+        focused_before = page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId")
+
+        ratio0 = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        page.keyboard.press("ArrowRight")
+        page.wait_for_function("r => window.prksWorkspaceSnapshot().mainSplitRatio > r", arg=ratio0)
+        ratio1 = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        self.assertAlmostEqual(ratio1 - ratio0, 0.02, delta=0.005)
+
+        page.keyboard.press("Shift+ArrowRight")
+        page.wait_for_function("r => window.prksWorkspaceSnapshot().mainSplitRatio > r", arg=ratio1)
+        ratio2 = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        self.assertAlmostEqual(ratio2 - ratio1, 0.05, delta=0.005)
+
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_function("r => window.prksWorkspaceSnapshot().mainSplitRatio < r", arg=ratio2)
+        ratio3 = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        now_attr = int(sep.get_attribute("aria-valuenow"))
+        self.assertEqual(now_attr, round(ratio3 * 100))
+
+        page.keyboard.press("Home")
+        page.wait_for_function(
+            """() => {
+                const s = document.querySelector('.prks-splitter');
+                return s && s.getAttribute('aria-valuenow') === s.getAttribute('aria-valuemin');
+            }"""
+        )
+        min_ratio = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+
+        page.keyboard.press("End")
+        page.wait_for_function(
+            """() => {
+                const s = document.querySelector('.prks-splitter');
+                return s && s.getAttribute('aria-valuenow') === s.getAttribute('aria-valuemax');
+            }"""
+        )
+        max_ratio = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        self.assertGreater(max_ratio, min_ratio)
+
+        focused_after = page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId")
+        self.assertEqual(focused_after, focused_before)
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
+
+    def test_divider_double_click_resets_default(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+        _capture_divider_runtime_ids(page)
+
+        _drag_divider(page, 250)
+        page.wait_for_function(
+            "() => Math.abs(window.prksWorkspaceSnapshot().mainSplitRatio - 0.58) > 0.05"
+        )
+        page.locator(".prks-splitter").dblclick()
+        page.wait_for_function(
+            "() => Math.abs(window.prksWorkspaceSnapshot().mainSplitRatio - 0.58) < 0.02"
+        )
+        live_text = (page.locator("#prks-workspace-live").inner_text() or "").lower()
+        self.assertIn("reset", live_text)
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
+        same = _divider_runtime_ids_unchanged(page)
+        self.assertTrue(same["aPdf"])
+        self.assertTrue(same["bPdf"])
+        self.assertEqual(same["mounted"], 2)
+
+    def test_divider_hide_show_preserves_ratio(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+
+        _drag_divider(page, -140)
+        page.wait_for_function(
+            "() => Math.abs(window.prksWorkspaceSnapshot().mainSplitRatio - 0.58) > 0.03"
+        )
+        custom_ratio = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+
+        page.locator("#prks-workspace-tile-layout").click()
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        self.assertEqual(page.locator(".prks-splitter").count(), 0)
+        self.assertAlmostEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), custom_ratio, delta=1e-6
+        )
+
+        page.locator("#prks-workspace-tile-layout").click()
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.wait_for_selector(".prks-splitter")
+        self.assertAlmostEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), custom_ratio, delta=0.02
+        )
+
+    def test_divider_make_main_preserves_ratio_and_runtime(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _work_a, work_b, _ids0 = _open_work_work_split(page, server)
+
+        _drag_divider(page, 130)
+        page.wait_for_function(
+            "() => Math.abs(window.prksWorkspaceSnapshot().mainSplitRatio - 0.58) > 0.03"
+        )
+        custom_ratio = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+        _capture_divider_runtime_ids(page)
+
+        page.locator(".prks-tile--secondary .prks-tile-header__make-main").click()
+        page.wait_for_function(
+            """(b) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.mainTabId && location.hash.indexOf(b) !== -1 && snap.secondaryTree
+                    && snap.mainTabId !== snap.secondaryTree.tabId;
+            }""",
+            arg=work_b,
+        )
+        self.assertAlmostEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), custom_ratio, delta=1e-6
+        )
+        same = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const a = window.prksGetTabContext(snap.secondaryTree.tabId);
+                const b = window.prksGetTabContext(snap.mainTabId);
+                const rt = window.__prksDividerRt;
+                return {
+                    aPdf: a.getResource('pdf') === rt.aPdf,
+                    bPdf: b.getResource('pdf') === rt.bPdf,
+                    aNotes: a.getResource('workNotes') === rt.aNotes,
+                    bNotes: b.getResource('workNotes') === rt.bNotes,
+                    mounted: window.prksTabContextDebugSnapshot().mountedCount,
+                };
+            }"""
+        )
+        self.assertTrue(same["aPdf"])
+        self.assertTrue(same["bPdf"])
+        self.assertTrue(same["aNotes"])
+        self.assertTrue(same["bNotes"])
+        self.assertEqual(same["mounted"], 2)
+        self.assertIn(work_b, page.evaluate("() => location.hash"))
+        self.assertEqual(page.locator(".prks-splitter").count(), 1)
+
+    def test_divider_narrow_fallback_preserves_ratio(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+
+        _drag_divider(page, 140)
+        page.wait_for_function(
+            "() => Math.abs(window.prksWorkspaceSnapshot().mainSplitRatio - 0.58) > 0.03"
+        )
+        custom_ratio = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
+
+        page.evaluate("() => window.prksWorkspaceSetNarrowFallback(true)")
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === false")
+        self.assertEqual(page.locator(".prks-splitter").count(), 0)
+        self.assertAlmostEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), custom_ratio, delta=1e-6
+        )
+
+        page.evaluate("() => window.prksWorkspaceSetNarrowFallback(false)")
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        page.wait_for_selector(".prks-splitter")
+        self.assertAlmostEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio"), custom_ratio, delta=0.02
+        )
+
+    def test_divider_resize_does_not_trigger_leave_prompt(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+
+        dialogs = []
+
+        def on_dialog(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+
+        page.on("dialog", on_dialog)
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(snap.secondaryTree.tabId);
+                window.prksHasPendingWorkAnnotationSync = function (c) {
+                    return !!(c && ctx && c.tabId === ctx.tabId);
+                };
+            }"""
+        )
+        _drag_divider(page, 150)
+        page.wait_for_timeout(200)
+        self.assertEqual(dialogs, [])
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
+
+    def test_divider_pointer_cancel_recovers_cleanly(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+        sep = page.locator(".prks-splitter")
+        box = sep.bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + 80, box["y"] + box["height"] / 2, steps=5)
+        result = page.evaluate(
+            """() => {
+                const s = document.querySelector('.prks-splitter');
+                s.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 1, bubbles: true }));
+                return {
+                    dragging: s.classList.contains('is-dragging'),
+                    bodyResizing: document.body.classList.contains('prks-resizing-split'),
+                    ratio: window.prksWorkspaceSnapshot().mainSplitRatio,
+                };
+            }"""
+        )
+        page.mouse.up()
+        self.assertFalse(result["dragging"])
+        self.assertFalse(result["bodyResizing"])
+        self.assertGreaterEqual(result["ratio"], 0)
+        self.assertLessEqual(result["ratio"], 1)
+        self.assertEqual(page.locator(".prks-tile").count(), 2)
 
 

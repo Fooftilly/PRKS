@@ -195,6 +195,34 @@ Tab switching must not create contextual Back origins.
 
 Workspace state is intentionally memory-only in v1.
 
+Root Main/Secondary width is workspace-owned: one normalized ratio (`mainSplitRatio`,
+default `0.58`) lives in workspace-tabs.js state, alongside `mainTabId` /
+`focusedTabId` / `secondaryTree`. Routes must never store or read the workspace
+split ratio, and must never modify it. It is intentionally memory-only until
+Workspace Persistence; do not write it to `localStorage`, `sessionStorage`,
+IndexedDB, or a backend setting.
+
+Main/Secondary ratio follows roles, not tab IDs. Make Main, Secondary
+replacement, Hide/Show split, and the narrow responsive fallback must never
+invert or reset the ratio.
+
+The Main/Secondary divider (`workspace-split.js`, class `.prks-splitter`) is the
+one separator implementation. Do not implement independent divider drag,
+keyboard-resize, or ARIA logic in `works.js`, `works-pdf.js`, or other route
+components. `workspace-tiling.js` only calls into it; it does not own pointer,
+keyboard, ARIA, or persistence logic itself.
+
+Divider resizing is layout-only and must not remount TabContexts, unmount/mount
+a route, re-render a route, or trigger a leave guard. It must not run a full
+workspace paint on every pointer-move; the canonical ratio updates via
+`prksWorkspaceSetMainSplitRatio(ratio, { paint: false })` and the DOM applies the
+resulting Main pixel width through a CSS custom property.
+
+Tile-local components (PDF viewer, EasyMDE, other detail routes) respond to
+divider resizing through their own existing container-aware sizing /
+ResizeObserver lifecycle. Do not use `window.dispatchEvent(new Event('resize'))`
+as a substitute for tile-local container sizing.
+
 TabContext owns route runtime:
 
 - route state → TabContext (`ctx.navigation`, `ctx.lastResolvedRoute`, `ctx.entity`)

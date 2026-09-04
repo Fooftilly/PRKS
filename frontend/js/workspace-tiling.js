@@ -257,8 +257,11 @@
 
         const existing = Array.prototype.slice.call(canvas.children);
         for (let i = 0; i < existing.length; i++) {
-            const id = existing[i].getAttribute('data-prks-tab-id');
-            if (!keep[id]) canvas.removeChild(existing[i]);
+            const child = existing[i];
+            /* The Main/Secondary divider owns its own lifecycle (workspace-split.js); do not sweep it here. */
+            if (child.classList && child.classList.contains('prks-splitter')) continue;
+            const id = child.getAttribute('data-prks-tab-id');
+            if (!keep[id]) canvas.removeChild(child);
         }
 
         for (let i = 0; i < ids.length; i++) {
@@ -273,6 +276,9 @@
         }
         for (let i = 0; i < ordered.length; i++) {
             if (canvas.children[i] !== ordered[i]) canvas.appendChild(ordered[i]);
+        }
+        if (typeof root.prksWorkspaceSyncSplitSeparator === 'function') {
+            root.prksWorkspaceSyncSplitSeparator(canvas, visualTiled, snap);
         }
     }
 
@@ -333,6 +339,9 @@
         observedCanvas = canvas;
         resizeObserver = new ResizeObserver(function () {
             applyNarrow(canvas);
+            if (typeof root.prksWorkspaceReapplySplitRatio === 'function') {
+                root.prksWorkspaceReapplySplitRatio(canvas);
+            }
         });
         resizeObserver.observe(canvas);
         applyNarrow(canvas);

@@ -9,6 +9,8 @@
     const MODE_STACKED = 'stacked';
     const MODE_TILED = 'tiled';
     const HOME_HASH = '#/folders';
+    /* Main region width / usable split width (usable excludes the separator track). Session-memory only. */
+    const DEFAULT_MAIN_SPLIT_RATIO = 0.58;
     const INTERACTIVE_NEST =
         'button, a, input, select, textarea, [contenteditable="true"],' +
         '[role="button"], [role="link"], [role="menuitem"], [role="tab"],' +
@@ -147,6 +149,7 @@
             focusedTabId: null,
             secondaryTree: null,
             tabs: [],
+            mainSplitRatio: DEFAULT_MAIN_SPLIT_RATIO,
         };
 
         function nextId() {
@@ -280,7 +283,30 @@
                 focusedTabId: state.focusedTabId,
                 secondaryTree: copySecondaryTree(state.secondaryTree),
                 tabs: state.tabs.map(copyTab),
+                mainSplitRatio: state.mainSplitRatio,
             };
+        }
+
+        function clampUnitRatio(value) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return DEFAULT_MAIN_SPLIT_RATIO;
+            return Math.max(0, Math.min(1, n));
+        }
+
+        function getMainSplitRatio() {
+            return state.mainSplitRatio;
+        }
+
+        function setMainSplitRatio(ratio, options) {
+            const opts = options || {};
+            state.mainSplitRatio = clampUnitRatio(ratio);
+            if (opts.paint === false) return state.mainSplitRatio;
+            paint();
+            return state.mainSplitRatio;
+        }
+
+        function resetMainSplitRatio(options) {
+            return setMainSplitRatio(DEFAULT_MAIN_SPLIT_RATIO, options);
         }
 
         function commitUrl(tab, mode) {
@@ -462,6 +488,7 @@
             state.tabs = [tab];
             state.secondaryTree = null;
             state.mode = MODE_STACKED;
+            state.mainSplitRatio = DEFAULT_MAIN_SPLIT_RATIO;
             setMain(tab.id);
             paint();
             mountContext(tab.id);
@@ -1177,6 +1204,9 @@
             setNarrowFallback: setNarrowFallback,
             setResolvedTitle: setResolvedTitle,
             setResolvedTitleForTab: setResolvedTitleForTab,
+            getMainSplitRatio: getMainSplitRatio,
+            setMainSplitRatio: setMainSplitRatio,
+            resetMainSplitRatio: resetMainSplitRatio,
             snapshot: snapshot,
             adoptLocation: adoptLocation,
             handlePopState: handlePopState,
@@ -2029,6 +2059,33 @@
         return production.setResolvedTitleForTab(tabId, hash, title, routeGen);
     }
 
+    function prksWorkspaceGetSplitRatio() {
+        if (!production) return DEFAULT_MAIN_SPLIT_RATIO;
+        return production.getMainSplitRatio();
+    }
+
+    function prksWorkspaceSetMainSplitRatio(ratio, options) {
+        const ws = ensureProduction();
+        if (!productionReady) {
+            ws.bootstrap();
+            productionReady = true;
+        }
+        return ws.setMainSplitRatio(ratio, options);
+    }
+
+    function prksWorkspaceResetMainSplitRatio(options) {
+        const ws = ensureProduction();
+        if (!productionReady) {
+            ws.bootstrap();
+            productionReady = true;
+        }
+        return ws.resetMainSplitRatio(options);
+    }
+
+    function prksWorkspaceDefaultSplitRatio() {
+        return DEFAULT_MAIN_SPLIT_RATIO;
+    }
+
     function emptySnapshot() {
         return {
             version: WORKSPACE_VERSION,
@@ -2037,6 +2094,7 @@
             focusedTabId: null,
             secondaryTree: null,
             tabs: [],
+            mainSplitRatio: DEFAULT_MAIN_SPLIT_RATIO,
         };
     }
 
@@ -2087,6 +2145,10 @@
         prksWorkspaceSetNarrowFallback: prksWorkspaceSetNarrowFallback,
         prksWorkspaceSetResolvedTitle: prksWorkspaceSetResolvedTitle,
         prksWorkspaceSetResolvedTitleForTab: prksWorkspaceSetResolvedTitleForTab,
+        prksWorkspaceGetSplitRatio: prksWorkspaceGetSplitRatio,
+        prksWorkspaceSetMainSplitRatio: prksWorkspaceSetMainSplitRatio,
+        prksWorkspaceResetMainSplitRatio: prksWorkspaceResetMainSplitRatio,
+        prksWorkspaceDefaultSplitRatio: prksWorkspaceDefaultSplitRatio,
         prksWorkspaceAdoptLocation: prksWorkspaceAdoptLocation,
         prksWorkspaceSnapshot: prksWorkspaceSnapshot,
         prksNavigate: prksNavigate,

@@ -98,6 +98,8 @@
     --control-height-sm: 28px;
     --control-height-md: 32px;
     --control-height-lg: 36px;
+    /* Main/Secondary divider grid track. Must match PRKS_SPLIT_SEPARATOR_TRACK_PX in workspace-split.js. */
+    --prks-workspace-separator-size: 1px;
     --icon-sm: 14px;
     --icon-md: 16px;
     --icon-lg: 18px;
@@ -1045,8 +1047,13 @@ body {
 
 .prks-splitter {
     position: relative;
-    flex: 0 0 1px;
+    width: var(--prks-workspace-separator-size);
+    min-width: var(--prks-workspace-separator-size);
     background: var(--border);
+    cursor: col-resize;
+    outline: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .prks-splitter::after {
@@ -1059,9 +1066,25 @@ body {
     inset: 0 -6px;
 }
 
+.prks-splitter:hover,
 .prks-splitter:focus-visible,
 .prks-splitter.is-dragging {
     background: var(--accent);
+}
+
+.prks-splitter:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+}
+
+body.prks-resizing-split {
+    cursor: col-resize;
+    user-select: none;
+}
+
+body.prks-resizing-split * {
+    cursor: col-resize !important;
+    user-select: none;
 }
 
 .prks-workspace-canvas {
@@ -1080,7 +1103,9 @@ body {
 
 .prks-workspace-canvas--tiled {
     display: grid;
-    grid-template-columns: minmax(0, 58fr) minmax(0, 42fr);
+    /* --prks-main-split-width is an exact px value written by workspace-split.js from the
+       canonical mainSplitRatio; the 58% fallback only covers the instant before JS applies it. */
+    grid-template-columns: var(--prks-main-split-width, 58%) var(--prks-workspace-separator-size) minmax(0, 1fr);
     gap: 0;
     min-height: 0;
     height: 100%;
@@ -1105,13 +1130,8 @@ body {
 
 .prks-workspace-canvas--tiled .prks-tile {
     border: none;
-    border-right: 1px solid var(--border);
     background: var(--bg-color);
     min-height: 0;
-}
-
-.prks-workspace-canvas--tiled .prks-tile--secondary {
-    border-right: none;
 }
 
 .prks-workspace-canvas--tiled .prks-tile--main {

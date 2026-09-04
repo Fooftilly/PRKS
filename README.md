@@ -176,7 +176,7 @@ People, Progress, and Research sidebar shortcuts are collapsible. Active child r
 
 ## Workspace tabs
 
-PRKS keeps a strip of in-app tabs under the top ribbon. Stacked mode shows one page at a time. Split view can show Main on the left and one Secondary on the right. Tabs do not yet survive a full app reload. Recursive splits and splitter resizing are not included yet.
+PRKS keeps a strip of in-app tabs under the top ribbon. Stacked mode shows one page at a time. Split view can show Main on the left and one Secondary on the right, with a draggable divider between them. Tabs do not yet survive a full app reload, and the divider position resets to its default on reload too. Recursive splits are not included yet.
 
 **Tab actions**
 
@@ -205,6 +205,10 @@ Then the shortcuts:
 - Close: the tab-strip close button closes that PRKS tab. Closing the last tab leaves Folders
 
 Only Main controls the browser URL. The details panel follows whichever pane is focused.
+
+**Resize split view**
+
+Drag the thin divider between Main and Secondary to resize them. Keyboard: focus the divider, then Left / Right to resize (Shift + Left / Right for a larger step), Home / End for the smallest / largest allowed Main width. Double-click the divider to reset it to the default size. Both panes keep a comfortable minimum width. The split size is remembered for the rest of your session but resets to the default on a full reload.
 
 Parked tabs do no rendering or network work until you activate them.
 
