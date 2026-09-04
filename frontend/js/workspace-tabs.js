@@ -1306,15 +1306,16 @@
         const pdfErr = !!(pdf && pdf.syncState && pdf.syncState.lastError);
         const notesErr = !!(notes && notes.saveError);
         if (pdfErr || notesErr) return 'error';
-        const saveToken = notes ? Number(notes.saveToken) || 0 : 0;
-        const settledToken = notes ? Number(notes.settledToken) || 0 : 0;
+        const saveToken = notes ? Number(notes.latestSaveToken) || 0 : 0;
+        const settledToken = notes ? Number(notes.settledSaveToken) || 0 : 0;
         const notesSaving = !!(notes && saveToken > settledToken);
         const pdfSaving =
             typeof root.prksHasPendingWorkAnnotationSync === 'function' &&
             root.prksHasPendingWorkAnnotationSync(ctx);
         if (notesSaving || pdfSaving) return 'saving';
         const editGen = notes ? Number(notes.editGeneration) || 0 : 0;
-        if (notes && (notes.drafting || editGen > saveToken)) return 'drafting';
+        const savedEdit = notes ? Number(notes.latestSaveEditGeneration) || 0 : 0;
+        if (notes && (notes.drafting || editGen > savedEdit)) return 'drafting';
         return '';
     }
 

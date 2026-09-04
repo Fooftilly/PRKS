@@ -1086,6 +1086,43 @@ class WorkspaceTabsTests(_BrowserE2E):
             arg=unique,
         )
 
+    def test_research_notes_debounce_save_does_not_patch_on_tab_switch(self):
+        server, page, _collector = self._start_app()
+        person_id = server.ids["person"]
+        work_a = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector(".CodeMirror")
+        page.evaluate(
+            """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        patches = []
+
+        def on_request(req):
+            path = urlparse(req.url).path
+            if req.method == "PATCH" and path == "/api/works/" + work_a:
+                patches.append(path)
+
+        page.on("request", on_request)
+        unique = "DEBOUNCE-SAVE-NOTE-%s" % int(time.time() * 1000)
+        page.locator(".CodeMirror").click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text(unique)
+        page.locator('[data-prks-role="editor-status"]', has_text="Drafting").wait_for()
+        page.wait_for_function(
+            """() => {
+                const el = document.querySelector('[data-prks-role="editor-status"]');
+                return !!(el && /All changes saved/i.test(el.innerText || ''));
+            }""",
+            timeout=15000,
+        )
+        after_save = len(patches)
+        self.assertGreaterEqual(after_save, 1)
+        page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        self.assertEqual(len(patches), after_save)
+
     def test_pdf_unmounts_when_parked_and_remounts(self):
         server, page, _collector = self._start_app()
         person_id = server.ids["person"]

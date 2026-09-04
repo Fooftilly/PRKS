@@ -206,6 +206,8 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         self.assertIn("prksFlushPendingWorkResearchNotes", works)
         self.assertIn("work-research-notes:", works)
+        self.assertIn("latestSaveToken", works)
+        self.assertIn("saveSequence", works)
 
     def test_docs_and_design_contract(self):
         design = _read(_DESIGN)

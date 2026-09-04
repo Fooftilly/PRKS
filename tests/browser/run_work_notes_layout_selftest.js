@@ -207,8 +207,10 @@ async function runSaveGenerationRace() {
             },
         },
         editGeneration: 0,
-        saveToken: 0,
-        settledToken: 0,
+        saveSequence: 0,
+        latestSaveToken: 0,
+        latestSaveEditGeneration: 0,
+        settledSaveToken: 0,
         drafting: false,
         saveError: false,
         pendingSave: false,
@@ -217,27 +219,27 @@ async function runSaveGenerationRace() {
 
     sandbox.prksWorkNotesMarkEdit(notes);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
-    assertEq('A save token', notes.saveToken, 1);
-    assertEq('A pending after enqueue', notes.saveToken > notes.settledToken, true);
+    assertEq('A save token', notes.latestSaveToken, 1);
+    assertEq('A pending after enqueue', notes.latestSaveToken > notes.settledSaveToken, true);
     assertEq('one delayed mutation', pending.length, 1);
 
     sandbox.prksWorkNotesMarkEdit(notes);
     assertEq('edit while A in flight drafts', notes.drafting, true);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
-    assertEq('B save token newest', notes.saveToken, 2);
+    assertEq('B save token newest', notes.latestSaveToken, 2);
     assertEq('two delayed mutations', pending.length, 2);
 
     pending[0]({ ok: true });
     await tick();
-    assertEq('stale A does not settle newest', notes.settledToken, 0);
-    assertEq('stale A leaves pending', notes.saveToken > notes.settledToken, true);
-    assert('status after stale A still busy', !!(notes.drafting || notes.saveToken > notes.settledToken));
+    assertEq('stale A does not settle newest', notes.settledSaveToken, 0);
+    assertEq('stale A leaves pending', notes.latestSaveToken > notes.settledSaveToken, true);
+    assert('status after stale A still busy', !!(notes.drafting || notes.latestSaveToken > notes.settledSaveToken));
     assertEq('stale A does not mark saved', statusEl.innerText === 'All changes saved', false);
 
     pending[1]({ ok: true });
     await tick();
-    assertEq('B settles newest', notes.settledToken, 2);
-    assertEq('B clears pending', notes.saveToken > notes.settledToken, false);
+    assertEq('B settles newest', notes.settledSaveToken, 2);
+    assertEq('B clears pending', notes.latestSaveToken > notes.settledSaveToken, false);
     assertEq('B clears drafting', notes.drafting, false);
     assertEq('B clears error', notes.saveError, false);
     assertEq('newest success status', statusEl.innerText, 'All changes saved');
@@ -250,16 +252,114 @@ async function runSaveGenerationRace() {
     pending[2]({ ok: false });
     await tick();
     assertEq('stale failure ignored', notes.saveError, false);
-    assertEq('stale failure does not settle B', notes.settledToken, 2);
+    assertEq('stale failure does not settle B', notes.settledSaveToken, 2);
     pending[3]({ ok: true });
     await tick();
-    assertEq('newest retry settled', notes.settledToken, 4);
+    assertEq('newest retry settled', notes.settledSaveToken, 4);
     assertEq('newest retry not error', notes.saveError, false);
+
+    const dup = {
+        editor: {
+            value: function () {
+                return 'same';
+            },
+        },
+        editGeneration: 1,
+        saveSequence: 0,
+        latestSaveToken: 0,
+        latestSaveEditGeneration: 0,
+        settledSaveToken: 0,
+        drafting: false,
+        saveError: false,
+        pendingSave: false,
+    };
+    ctxS.setResource('workNotes', dup);
+    statusEl.innerText = '';
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
+    const tokenA = dup.latestSaveToken;
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
+    const tokenB = dup.latestSaveToken;
+    assert('same-generation A token != B token', tokenA !== tokenB);
+    assertEq('same-generation B is newest', dup.latestSaveToken, tokenB);
+    assertEq('same-generation two PATCHes', pending.length, 6);
+    pending[4]({ ok: false });
+    await tick();
+    assertEq('same-generation A does not settle B', dup.settledSaveToken, 0);
+    assertEq('same-generation still pending', dup.latestSaveToken > dup.settledSaveToken, true);
+    assertEq('same-generation A failure hidden', dup.saveError, false);
+    assertEq('same-generation A cannot mark saved', statusEl.innerText === 'All changes saved', false);
+    pending[5]({ ok: true });
+    await tick();
+    assertEq('same-generation B settled', dup.settledSaveToken, tokenB);
+    assertEq('same-generation idle pending', dup.latestSaveToken > dup.settledSaveToken, false);
+    assertEq('same-generation idle drafting', dup.drafting, false);
+    assertEq('same-generation B success status', statusEl.innerText, 'All changes saved');
+}
+
+function runDebounceBookkeeping() {
+    const fakeTimers = [];
+    let nextTid = 1000;
+    sandbox.setTimeout = function (fn, ms) {
+        const id = ++nextTid;
+        fakeTimers.push({ id: id, fn: fn, ms: ms, cleared: false });
+        return id;
+    };
+    sandbox.clearTimeout = function (id) {
+        for (let i = 0; i < fakeTimers.length; i++) {
+            if (fakeTimers[i].id === id) fakeTimers[i].cleared = true;
+        }
+    };
+
+    let patches = 0;
+    sandbox.prksRequest = function () {
+        assertEq('timer key gone at PATCH', ctxD.timers.has('saveNotesTimeout'), false);
+        patches += 1;
+        return Promise.resolve({ ok: true });
+    };
+
+    const ctxD = prksEnsureTabContext('notes-debounce');
+    ctxD.mounted = true;
+    ctxD.tabId = 'notes-debounce';
+    ctxD.setEntity('work', { id: 'W-debounce' });
+    const statusEl = { innerText: '' };
+    ctxD.query = function () {
+        return statusEl;
+    };
+    const notes = {
+        editor: {
+            value: function () {
+                return 'debounced';
+            },
+        },
+        editGeneration: 0,
+        saveSequence: 0,
+        latestSaveToken: 0,
+        latestSaveEditGeneration: 0,
+        settledSaveToken: 0,
+        drafting: false,
+        saveError: false,
+        pendingSave: false,
+    };
+    ctxD.setResource('workNotes', notes);
+
+    sandbox.prksWorkNotesMarkEdit(notes);
+    sandbox.prksScheduleWorkResearchNotesSave(ctxD, 'W-debounce');
+    assertEq('debounce timer key exists', ctxD.timers.has('saveNotesTimeout'), true);
+    assertEq('debounce delay', fakeTimers.length === 1 && fakeTimers[0].ms, 2000);
+    assertEq('no PATCH before fire', patches, 0);
+
+    fakeTimers[0].fn();
+    assertEq('timer key removed before enqueue', ctxD.timers.has('saveNotesTimeout'), false);
+    assertEq('exactly one PATCH after fire', patches, 1);
+
+    sandbox.prksFlushPendingWorkResearchNotes(ctxD);
+    assertEq('flush after fire does not PATCH again', patches, 1);
 }
 
 (async function () {
     try {
         await runSaveGenerationRace();
+        runDebounceBookkeeping();
     } catch (err) {
         console.error(err);
         process.exit(1);

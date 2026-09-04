@@ -1049,8 +1049,10 @@ function initEasyMDE(ctx, work) {
         drafting: false,
         saveError: false,
         editGeneration: 0,
-        saveToken: 0,
-        settledToken: 0,
+        saveSequence: 0,
+        latestSaveToken: 0,
+        latestSaveEditGeneration: 0,
+        settledSaveToken: 0,
         destroy: function () {
             try {
                 const cm = easyMDE.codemirror;
@@ -1098,12 +1100,7 @@ function initEasyMDE(ctx, work) {
         if (ctx && ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
             window.prksWorkspaceRefreshTabStatus(ctx.tabId);
         }
-        if (ctx && typeof ctx.clearTimer === 'function') ctx.clearTimer('saveNotesTimeout');
-        const workId = work.id;
-        const _tid = setTimeout(function () {
-            prksEnqueueWorkResearchNotesSave(ctx, workId);
-        }, 2000);
-        if (ctx && typeof ctx.setTimer === 'function') ctx.setTimer('saveNotesTimeout', _tid);
+        prksScheduleWorkResearchNotesSave(ctx, work.id);
     };
     easyMDE.codemirror.on("change", notesChangeHandler);
     easyMDE.__notesChangeHandler = notesChangeHandler;
@@ -1118,26 +1115,42 @@ function prksWorkNotesMarkEdit(notes) {
 
 function prksWorkNotesBeginSave(notes) {
     if (!notes) return 0;
-    const token = Number(notes.editGeneration) || 0;
-    notes.saveToken = token;
-    notes.drafting = notes.editGeneration > token;
-    notes.pendingSave = notes.saveToken > (Number(notes.settledToken) || 0);
+    notes.saveSequence = (Number(notes.saveSequence) || 0) + 1;
+    const token = notes.saveSequence;
+    const capturedEditGeneration = Number(notes.editGeneration) || 0;
+    notes.latestSaveToken = token;
+    notes.latestSaveEditGeneration = capturedEditGeneration;
+    notes.pendingSave = notes.latestSaveToken > (Number(notes.settledSaveToken) || 0);
+    notes.drafting = (Number(notes.editGeneration) || 0) > capturedEditGeneration;
     return token;
 }
 
 function prksWorkNotesSettleSave(notes, token, ok) {
     if (!notes) return false;
-    if (token !== notes.saveToken) return false;
-    notes.settledToken = token;
-    notes.pendingSave = notes.saveToken > notes.settledToken;
+    if (token !== notes.latestSaveToken) return false;
+    notes.settledSaveToken = token;
+    notes.pendingSave = notes.latestSaveToken > notes.settledSaveToken;
     notes.saveError = !ok;
-    notes.drafting = (Number(notes.editGeneration) || 0) > notes.saveToken;
+    notes.drafting =
+        (Number(notes.editGeneration) || 0) > (Number(notes.latestSaveEditGeneration) || 0);
     return true;
+}
+
+function prksScheduleWorkResearchNotesSave(ctx, workId) {
+    if (ctx && typeof ctx.clearTimer === 'function') ctx.clearTimer('saveNotesTimeout');
+    const tid = setTimeout(function () {
+        if (ctx && ctx.timers && ctx.timers.get('saveNotesTimeout') === tid) {
+            ctx.clearTimer('saveNotesTimeout');
+        }
+        prksEnqueueWorkResearchNotesSave(ctx, workId);
+    }, 2000);
+    if (ctx && typeof ctx.setTimer === 'function') ctx.setTimer('saveNotesTimeout', tid);
 }
 
 window.prksWorkNotesMarkEdit = prksWorkNotesMarkEdit;
 window.prksWorkNotesBeginSave = prksWorkNotesBeginSave;
 window.prksWorkNotesSettleSave = prksWorkNotesSettleSave;
+window.prksScheduleWorkResearchNotesSave = prksScheduleWorkResearchNotesSave;
 
 function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
