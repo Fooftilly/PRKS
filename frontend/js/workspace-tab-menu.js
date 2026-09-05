@@ -9,6 +9,7 @@
     let menuItems = [];
     let menuIndex = 0;
     let restoreTarget = null;
+    let expandedTrigger = null;
 
     function doc() {
         return typeof document !== 'undefined' ? document : null;
@@ -79,6 +80,7 @@
     function closeMenu() {
         if (!menuEl || menuEl.hidden) {
             restoreTarget = null;
+            clearExpandedTrigger();
             return;
         }
         menuEl.hidden = true;
@@ -87,11 +89,19 @@
         menuItems = [];
         const overflow = doc() && doc().getElementById('prks-workspace-tab-overflow');
         if (overflow) overflow.setAttribute('aria-expanded', 'false');
+        clearExpandedTrigger();
         const target = restoreTarget;
         restoreTarget = null;
         if (target && typeof target.focus === 'function' && doc().contains(target)) {
             target.focus({ preventScroll: true });
         }
+    }
+
+    function clearExpandedTrigger() {
+        if (expandedTrigger && expandedTrigger.setAttribute) {
+            expandedTrigger.setAttribute('aria-expanded', 'false');
+        }
+        expandedTrigger = null;
     }
 
     function setActiveItem(index) {
@@ -355,15 +365,29 @@
         setActiveItem(0);
     }
 
-    function prksWorkspaceOpenTabMenu(tabId, ev) {
+    function prksWorkspaceOpenTabMenu(tabId, ev, anchorElement) {
         const d = doc();
         if (!d || !tabId) return;
         const wrap = d.querySelector('.prks-workspace-tab[data-tab-id="' + String(tabId).replace(/"/g, '') + '"]');
         const specs = contextSpecs(tabId);
         if (!specs.length) return;
-        restoreTarget = (ev && ev.currentTarget) || (wrap && wrap.querySelector('.prks-workspace-tab__activate'));
+        const trigger = anchorElement || null;
         const menu = ensureMenu();
+        if (trigger && menu && !menu.hidden && expandedTrigger === trigger) {
+            closeMenu();
+            return;
+        }
+        restoreTarget = trigger || (ev && ev.currentTarget) || (wrap && wrap.querySelector('.prks-workspace-tab__activate'));
         if (menu) menu.removeAttribute('data-kind');
+        if (trigger) {
+            if (expandedTrigger && expandedTrigger !== trigger) clearExpandedTrigger();
+            trigger.setAttribute('aria-expanded', 'true');
+            expandedTrigger = trigger;
+            const rect = typeof trigger.getBoundingClientRect === 'function' ? trigger.getBoundingClientRect() : null;
+            fillAndShow(specs, rect, null, null, 'Pane actions');
+            return;
+        }
+        clearExpandedTrigger();
         const rect = wrap ? wrap.getBoundingClientRect() : null;
         const x = ev && typeof ev.clientX === 'number' && ev.clientX ? ev.clientX : null;
         const y = ev && typeof ev.clientY === 'number' && ev.clientY ? ev.clientY : null;
@@ -395,6 +419,7 @@
             closeMenu();
             return;
         }
+        clearExpandedTrigger();
         const rows = overflowSpecs();
         menu.replaceChildren();
         menuItems = [];
@@ -477,6 +502,10 @@
         if (menuEl.contains(ev.target)) return;
         const overflow = doc().getElementById('prks-workspace-tab-overflow');
         if (overflow && overflow.contains(ev.target)) return;
+        if (restoreTarget && restoreTarget.contains && restoreTarget.contains(ev.target)) return;
+        if (restoreTarget === ev.target) return;
+        if (expandedTrigger && expandedTrigger.contains && expandedTrigger.contains(ev.target)) return;
+        if (expandedTrigger === ev.target) return;
         closeMenu();
     }
 

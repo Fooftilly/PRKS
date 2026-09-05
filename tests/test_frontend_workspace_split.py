@@ -139,6 +139,9 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
         self.assertIn("is-dragging", css)
         self.assertIn("prks-resizing-split", css)
         self.assertIn("col-resize", css)
+        self.assertIn("prks-tile-header__menu", css)
+        self.assertNotIn("prks-tile-header__split-menu", css)
+        self.assertNotIn("prks-tile-header__make-main", css)
 
     def test_docs_contract(self):
         design = _read(_DESIGN)

@@ -530,7 +530,7 @@ User-facing copy uses **Split view**, **Split right**, **Split down**, **Make ma
 
 Parked tile-capable tabs expose a Split action that calls `prksWorkspaceTileTab(tabId)` (no duplicate tab). The workspace Split control is state-aware: **Split** opens the picker, **Show split** restores the whole parked Secondary tree, **Hide split** parks every visible Secondary leaf at once while preserving the tree logically. Clicking a parked tab's main area still makes it Main. Clicking a *visible* Secondary tab's entry in the global tab strip focuses it in place; it does not promote it to Main.
 
-A focused Secondary tile additionally exposes local, per-pane actions: **Split right** / **Split down** (open the same split picker, scoped to that leaf), **Make main** (in-place role swap with the current Main, at any tree depth), and **Close** (destroys that tab). A separate **Hide from split** context-menu action parks just that one leaf's logical tab (keeps it open, removes it from the tree) without closing it — distinct from the global **Hide split** button, which parks every leaf but keeps the whole tree intact for **Show split** to restore later.
+A focused Secondary tile keeps Close directly on the header. Infrequent pane actions — **Split right**, **Split down**, **Make main**, and **Hide from split** — live in the shared workspace tab menu, opened from the header **Pane actions** (`…`) control or from the tab-strip context menu. Those two entry points use the same action list and handlers; there is no second tile-specific menu. A separate **Hide from split** action parks just that one leaf's logical tab (keeps it open, removes it from the tree) without closing it — distinct from the global **Hide split** button, which parks every leaf but keeps the whole tree intact for **Show split** to restore later.
 
 ### Workspace / tab visual contract
 
@@ -540,11 +540,14 @@ Stacked: one main/visible tab (`mainTabId == focusedTabId`). Parked tabs are unm
 
 Tiled: Main occupies the left master column; the Secondary region holds the recursive tree of one or more Secondary leaves. `focusedTabId` may differ from `mainTabId` and may identify any visible leaf, at any tree depth. The right details panel follows the focused tile. Browser URL, document title, sidebar, and History stay with Main, no matter how deep the focused Secondary leaf is nested.
 
+Tiled pane headers are intentionally restrained. Secondary: drag grip, route/entity icon, title, **Pane actions** (`…`), Close. Main: icon and title only — no grip, Split, Make main, or Close. Main is identified by a persistent structural marker (`.prks-tile--main`, a narrow accent edge) plus an accessible “Main pane: …” label, not a textual badge. Focus (`.prks-tile--focused`) is a separate, temporary header/surface highlight. When Main is also focused, both treatments combine without stacking heavy outlines.
+
 | State | Visual |
 | --- | --- |
 | Main tab | Strongest selected indication (accent border/background) |
+| Tiled Main pane | Persistent narrow accent edge; accessible Main label |
 | Tiled secondary tab | Visible as a tile, not visually equal to main |
-| Focused secondary tile | Subtle focus indicator; does not imply promotion to main |
+| Focused secondary tile | Subtle header highlight; does not imply promotion to main |
 | Parked / open tab | Normal tab-strip state; tile-capable parked tabs show a quiet Split action |
 | Dirty / queued / syncing / error | Small semantic state marker (icon + not color alone) |
 
@@ -574,7 +577,7 @@ Focus restoration after close / hide / split / Make main / narrow fallback prefe
 
 Split control: **Split** (no leaf), **Show split** (tree exists but is parked/hidden), **Hide split** (tree visually tiled). Narrow fallback must not show Hide split; it explains that split needs a wider window. The global Split button only ever controls whether the Secondary region as a whole exists/is visible — it never adds another pane; adding panes is always a local Split right/down action on a specific focused leaf.
 
-Tile chrome exists only in tiled mode. Headers keep a stable height. Loading and errors stay inside the route root; the tile shell/header is not torn down.
+Tile chrome exists only in tiled mode. Headers keep a stable height. Loading and errors stay inside the route root; the tile shell/header is not torn down. The Work Notes divider (`.work-split-handle`) keeps its nested-content grip and sizing behavior; hover, drag, and keyboard-focus strength match the workspace splitter’s idle-thin / obvious-when-interacting language.
 
 Work notes side-by-side layout follows that Work’s tile/container width, not a global viewport class that would restyle the other tile.
 
@@ -593,8 +596,8 @@ The root split between Main and Secondary is workspace-owned canonical preferenc
 Divider contract:
 
 - 1px normal separator (`.prks-splitter.prks-splitter--vertical`); a substantially wider invisible pointer hit target via `::after`
-- normal: subtle neutral divider; hover: slightly stronger border; keyboard focus / active drag: accent focus treatment
-- do not make the divider visually thick just to make it draggable
+- idle: almost invisible 1px track; hover / active drag: a centered indicator (`::before`) without changing the grid track; keyboard focus: the same indicator plus a clear `:focus-visible` outline
+- do not make the divider visually thick just to make it draggable; the visual indicator must not shift pane geometry
 - pointer drag uses `setPointerCapture()` so dragging stays stable while the pointer crosses tile content (PDF viewer, EasyMDE, buttons)
 - `role="separator"`, `tabindex="0"`, `aria-orientation="vertical"`, `aria-valuemin`/`aria-valuemax`/`aria-valuenow`/`aria-valuetext` (whole percentages) kept current on every resize
 - keyboard: Left/Right resize by a small step, Shift+Left/Right by a larger step, Home/End jump to the dynamic min/max allowed width, double-click resets to default with a live-region announcement

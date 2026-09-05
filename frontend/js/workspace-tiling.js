@@ -155,139 +155,8 @@
         return 'file-text';
     }
 
-    /* At most one per-pane Split menu can be open at a time; module-level so opening a new one
-     * closes any other, and a single set of document-level listeners (registered once) can close
-     * whichever one is currently open on Escape or a pointer/focus move outside it. */
-    let openSplitMenu = null; // { wrap, btn, menu }
-
-    function closeSplitMenu(wrap, options) {
-        const menu = wrap.querySelector && wrap.querySelector('.prks-tile-header__split-menu');
-        if (menu) menu.hidden = true;
-        const btn = wrap.querySelector && wrap.querySelector('.prks-tile-header__split');
-        if (btn) btn.setAttribute('aria-expanded', 'false');
-        if (openSplitMenu && openSplitMenu.wrap === wrap) openSplitMenu = null;
-        if (options && options.restoreFocus && btn && typeof btn.focus === 'function') btn.focus();
-    }
-
-    function onSplitMenuDocPointer(ev) {
-        if (!openSplitMenu) return;
-        if (openSplitMenu.wrap.contains && openSplitMenu.wrap.contains(ev.target)) return;
-        closeSplitMenu(openSplitMenu.wrap);
-    }
-
-    function onSplitMenuDocFocusIn(ev) {
-        if (!openSplitMenu) return;
-        if (openSplitMenu.wrap.contains && openSplitMenu.wrap.contains(ev.target)) return;
-        closeSplitMenu(openSplitMenu.wrap);
-    }
-
-    function onSplitMenuDocKey(ev) {
-        if (!openSplitMenu) return;
-        if (ev.key === 'Escape') {
-            ev.preventDefault();
-            closeSplitMenu(openSplitMenu.wrap, { restoreFocus: true });
-            return;
-        }
-        if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
-        const items = openSplitMenu.menu.querySelectorAll('.prks-tile-header__split-menu-item');
-        if (!items.length) return;
-        const active = doc().activeElement;
-        let idx = Array.prototype.indexOf.call(items, active);
-        ev.preventDefault();
-        if (ev.key === 'ArrowDown') idx = idx < 0 ? 0 : (idx + 1) % items.length;
-        else idx = idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length;
-        items[idx].focus();
-    }
-
-    let splitMenuLayerBound = false;
-
-    function bindSplitMenuLayer() {
-        const d = doc();
-        if (!d || splitMenuLayerBound) return;
-        splitMenuLayerBound = true;
-        d.addEventListener('pointerdown', onSplitMenuDocPointer, true);
-        d.addEventListener('focusin', onSplitMenuDocFocusIn, true);
-        d.addEventListener('keydown', onSplitMenuDocKey, true);
-    }
-
-    function buildSplitDropdown(tabId) {
-        const d = doc();
-        const wrap = d.createElement('span');
-        wrap.className = 'prks-tile-header__split-wrap';
-
-        const btn = d.createElement('button');
-        btn.type = 'button';
-        btn.className = 'prks-btn prks-btn--secondary prks-tile-header__split';
-        btn.textContent = 'Split \u25be';
-        btn.setAttribute('aria-haspopup', 'true');
-        btn.setAttribute('aria-expanded', 'false');
-
-        const menu = d.createElement('div');
-        menu.className = 'prks-tile-header__split-menu';
-        menu.hidden = true;
-        menu.setAttribute('role', 'menu');
-
-        function addItem(label, axis) {
-            const item = d.createElement('button');
-            item.type = 'button';
-            item.className = 'prks-tile-header__split-menu-item';
-            item.setAttribute('role', 'menuitem');
-            item.textContent = label;
-            item.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                closeSplitMenu(wrap);
-                if (typeof root.prksOpenCommandPalette === 'function') {
-                    /* Opens the existing split picker (OPEN TABS/library/quick-open) scoped to
-                     * this specific focused Secondary leaf; reuses a parked tab if selected,
-                     * otherwise creates one. No second/parallel picker implementation. */
-                    root.prksOpenCommandPalette({
-                        scope: 'all',
-                        navigationTarget: 'tile',
-                        splitPlacement: { targetLeafTabId: tabId, axis: axis, placement: 'second' },
-                    });
-                }
-            });
-            menu.appendChild(item);
-        }
-        addItem('Split right', 'left-right');
-        addItem('Split down', 'top-bottom');
-
-        btn.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            const willOpen = menu.hidden;
-            if (!willOpen) {
-                closeSplitMenu(wrap);
-                return;
-            }
-            if (openSplitMenu && openSplitMenu.wrap !== wrap) closeSplitMenu(openSplitMenu.wrap);
-            menu.hidden = false;
-            btn.setAttribute('aria-expanded', 'true');
-            openSplitMenu = { wrap: wrap, btn: btn, menu: menu };
-            const items = menu.querySelectorAll('.prks-tile-header__split-menu-item');
-            if (items[0] && typeof items[0].focus === 'function') items[0].focus();
-        });
-
-        wrap.appendChild(btn);
-        wrap.appendChild(menu);
-        return wrap;
-    }
-
-    /** Single owner of per-pane Split-button availability (disabled/title, and closing an
-     * already-open Split menu once the cap is reached). Called both when a Secondary header is
-     * freshly built and whenever an existing header is refreshed, so a newly-created fourth
-     * visible pane's own Split button -- and every sibling's -- reflects the cap immediately,
-     * with no window where a capped pane's Split button is still enabled. No-op for headers with
-     * no Split button (Main, or not yet built). */
-    function syncSecondarySplitAvailability(header) {
-        if (!header) return;
-        const splitBtn = header.querySelector('.prks-tile-header__split');
-        if (!splitBtn) return;
-        const canSplit = typeof root.prksWorkspaceCanAddSecondaryLeaf !== 'function' || root.prksWorkspaceCanAddSecondaryLeaf();
-        splitBtn.disabled = !canSplit;
-        splitBtn.title = canSplit ? '' : 'Maximum of 4 visible panes. Close or hide a pane to split again.';
-        if (!canSplit) closeSplitMenu(header);
+    function mainPaneLabel(snap, tabId) {
+        return 'Main pane: ' + headerTitle(snap, tabId);
     }
 
     function fillHeader(header, snap, tabId, role, visualTiled) {
@@ -297,6 +166,7 @@
             header.replaceChildren();
             if (!visualTiled) {
                 header.hidden = true;
+                header.removeAttribute('aria-label');
                 return;
             }
             header.hidden = false;
@@ -332,25 +202,25 @@
             header.appendChild(icon);
             header.appendChild(title);
 
-            const actions = doc().createElement('span');
-            actions.className = 'prks-tile-header__actions';
-
             if (role === 'main') {
-                const badge = doc().createElement('span');
-                badge.className = 'prks-tile-header__role';
-                badge.textContent = 'Main';
-                actions.appendChild(badge);
+                header.setAttribute('aria-label', mainPaneLabel(snap, tabId));
             } else {
-                const splitWrap = buildSplitDropdown(tabId);
-                const makeMain = doc().createElement('button');
-                makeMain.type = 'button';
-                makeMain.className = 'prks-btn prks-btn--secondary prks-tile-header__make-main';
-                makeMain.textContent = 'Make main';
-                makeMain.addEventListener('click', function (e) {
+                header.removeAttribute('aria-label');
+                const actions = doc().createElement('span');
+                actions.className = 'prks-tile-header__actions';
+                const more = doc().createElement('button');
+                more.type = 'button';
+                more.className = 'prks-icon-btn prks-icon-btn--ghost prks-tile-header__menu';
+                more.setAttribute('aria-label', 'Pane actions');
+                more.title = 'Pane actions';
+                more.setAttribute('aria-haspopup', 'menu');
+                more.setAttribute('aria-expanded', 'false');
+                more.innerHTML = iconHtml('ellipsis');
+                more.addEventListener('click', function (e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    if (typeof root.prksWorkspaceMakeMain === 'function') {
-                        void root.prksWorkspaceMakeMain(tabId);
+                    if (typeof root.prksWorkspaceOpenTabMenu === 'function') {
+                        root.prksWorkspaceOpenTabMenu(tabId, e, more);
                     }
                 });
                 const close = doc().createElement('button');
@@ -366,19 +236,23 @@
                         void root.prksWorkspaceCloseTab(tabId);
                     }
                 });
-                actions.appendChild(splitWrap);
-                actions.appendChild(makeMain);
+                actions.appendChild(more);
                 actions.appendChild(close);
+                header.appendChild(actions);
             }
-            header.appendChild(actions);
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(header);
-            syncSecondarySplitAvailability(header);
             return;
         }
         header.hidden = !visualTiled;
-        if (!visualTiled) return;
+        if (!visualTiled) {
+            header.removeAttribute('aria-label');
+            return;
+        }
+        const titleText = headerTitle(snap, tabId);
         const titleEl = header.querySelector('.prks-tile-header__title');
-        if (titleEl) titleEl.textContent = headerTitle(snap, tabId);
+        if (titleEl) titleEl.textContent = titleText;
+        if (role === 'main') header.setAttribute('aria-label', mainPaneLabel(snap, tabId));
+        else header.removeAttribute('aria-label');
         const iconEl = header.querySelector('.prks-tile-header__icon');
         const wantIcon = headerIcon(snap, tabId);
         if (iconEl && iconEl.getAttribute('data-icon') !== wantIcon) {
@@ -386,7 +260,6 @@
             iconEl.innerHTML = iconHtml(wantIcon);
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(iconEl);
         }
-        syncSecondarySplitAvailability(header);
     }
 
     function createTile(tabId) {
@@ -458,6 +331,8 @@
         tile.classList.toggle('prks-tile--secondary', !isMain);
         tile.classList.toggle('prks-tile--focused', isFocused);
         tile.setAttribute('data-prks-tab-id', tabId);
+        if (visualTiled && isMain) tile.setAttribute('aria-label', mainPaneLabel(snap, tabId));
+        else tile.removeAttribute('aria-label');
         const header = tile.querySelector(':scope > .prks-tile-header') || tile.querySelector('.prks-tile-header');
         if (header) fillHeader(header, snap, tabId, isMain ? 'main' : 'secondary', visualTiled);
     }
@@ -520,7 +395,6 @@
         }
         for (let i = 0; i < staleTiles.length; i++) {
             const el = staleTiles[i];
-            if (openSplitMenu && el.contains && el.contains(openSplitMenu.wrap)) openSplitMenu = null;
             if (el.parentNode) el.parentNode.removeChild(el);
         }
         for (let i = 0; i < staleContainers.length; i++) {
@@ -627,7 +501,7 @@
         if (
             ev.target &&
             ev.target.closest &&
-            ev.target.closest('.prks-tile-header__make-main, .prks-tile-header__close, .prks-tile-header__split, .prks-tile-header__split-menu')
+            ev.target.closest('.prks-tile-header__menu, .prks-tile-header__close')
         ) {
             return;
         }
@@ -701,7 +575,6 @@
         bound = true;
         d.addEventListener('pointerdown', onPointerDownCapture, true);
         d.addEventListener('focusin', onFocusIn);
-        bindSplitMenuLayer();
     }
 
     function prksWorkspaceCanvasIsNarrow() {

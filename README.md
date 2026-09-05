@@ -200,7 +200,7 @@ Then the shortcuts:
 - Alt-click a link, or Alt+Enter in the command palette: open in split view
 - Click inside a split pane: focus it (the details panel follows focus; the browser URL does not)
 - Click a Secondary tab that's already visible, in the workspace strip: focus it in place (it does not become Main)
-- **Make main**: Secondary pane header, or a Secondary tab/pane's context-menu action (swaps roles; URL becomes that page)
+- **Make main**: **Pane actions** (`…`) on a Secondary header, or a Secondary tab/pane's context-menu action (swaps roles; URL becomes that page)
 - **Hide split view**: Split control beside the workspace tabs. Parks every visible Secondary pane at once; the layout comes back with **Show split**.
 - **Hide from split**: per-pane action on a Secondary tab's context menu. Keeps that pane's tab open (parked) but removes just that one pane.
 - **+**: choose a page in the command palette (“Open in new tab”) and open it as a new main tab
@@ -210,7 +210,7 @@ Only Main controls the browser URL. The details panel follows whichever pane is 
 
 **Split a pane further**
 
-Any Secondary pane can be split again: use its header's **Split ▾** control, or **Split right** / **Split down** from its context menu, then pick a page the same way as the main Split button. The new pane opens beside (or below) that specific pane and becomes focused. Once 4 panes are visible at once, further splitting is disabled with an explanation until you close or hide a pane — ordinary new tabs still open normally, just parked.
+Any Secondary pane can be split again: open **Pane actions** (`…`) on that header, or **Split right** / **Split down** from its tab context menu, then pick a page the same way as the main Split button. The new pane opens beside (or below) that specific pane and becomes focused. Once 4 panes are visible at once, further splitting is disabled with an explanation until you close or hide a pane — ordinary new tabs still open normally, just parked.
 
 **Resize split view**
 

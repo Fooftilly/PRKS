@@ -15,6 +15,7 @@ const rootDir = path.resolve(__dirname, '../..');
 const tilingSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-tiling.js'), 'utf8');
 const splitSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-split.js'), 'utf8');
 const treeSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-tree.js'), 'utf8');
+const menuSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-tab-menu.js'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -120,6 +121,24 @@ function createNode(tag) {
         clientWidth: 0,
         clientHeight: 0,
     };
+    Object.defineProperty(node, 'id', {
+        get: function () {
+            return attrs.id || '';
+        },
+        set: function (v) {
+            attrs.id = String(v);
+        },
+    });
+    Object.defineProperty(node, 'offsetWidth', {
+        get: function () {
+            return node.clientWidth || 0;
+        },
+    });
+    Object.defineProperty(node, 'offsetHeight', {
+        get: function () {
+            return node.clientHeight || 0;
+        },
+    });
     Object.defineProperty(node, 'className', {
         get: function () {
             return node.__classes.join(' ');
@@ -224,7 +243,11 @@ function createNode(tag) {
         return null;
     };
     node.getBoundingClientRect = function () {
-        return { width: node.clientWidth || 0, height: node.clientHeight || 0, left: node.__left || 0, top: node.__top || 0 };
+        const left = node.__left || 0;
+        const top = node.__top || 0;
+        const width = node.clientWidth || 0;
+        const height = node.clientHeight || 0;
+        return { width: width, height: height, left: left, top: top, right: left + width, bottom: top + height };
     };
     node.setPointerCapture = function () {};
     node.releasePointerCapture = function () {};
@@ -246,7 +269,7 @@ function createNode(tag) {
     node.dispatch = function (type, evt, capture) {
         const key = type + (capture ? '|capture' : '');
         const fns = (listeners[key] || []).slice();
-        const e = Object.assign({ type: type, target: node, preventDefault: function () {}, stopPropagation: function () {} }, evt || {});
+        const e = Object.assign({ type: type, target: node, currentTarget: node, preventDefault: function () {}, stopPropagation: function () {} }, evt || {});
         fns.forEach(function (fn) {
             fn(e);
         });
@@ -283,20 +306,52 @@ function makeDocumentSandbox() {
     const pageContent = createNode('div');
     pageContent.id = 'page-content';
     const body = createNode('body');
+    const live = createNode('div');
+    live.id = 'prks-workspace-live';
+    body.appendChild(live);
+    const html = createNode('html');
+    html.clientWidth = 1600;
+    html.clientHeight = 900;
+
+    function findById(node, id) {
+        if (!node) return null;
+        if (node.id === id) return node;
+        const kids = node.__children || [];
+        for (let i = 0; i < kids.length; i++) {
+            const found = findById(kids[i], id);
+            if (found) return found;
+        }
+        return null;
+    }
+
     const documentMock = Object.assign(makeEventTarget(), {
         getElementById: function (id) {
             if (id === 'page-content') return pageContent;
-            if (id === 'prks-workspace-tabs') return createNode('div');
-            if (id === 'prks-workspace-live') return createNode('div');
-            return null;
+            return findById(body, id) || findById(pageContent, id);
         },
         createElement: function (tag) {
             return createNode(tag);
         },
-        querySelector: function () {
-            return null;
+        querySelector: function (sel) {
+            if (matchesSimpleSelector(body, sel)) return body;
+            const fromBody = body.querySelector(sel);
+            if (fromBody) return fromBody;
+            if (matchesSimpleSelector(pageContent, sel)) return pageContent;
+            return pageContent.querySelector(sel);
+        },
+        querySelectorAll: function (sel) {
+            const out = [];
+            const fromBody = body.querySelectorAll(sel);
+            for (let i = 0; i < fromBody.length; i++) out.push(fromBody[i]);
+            const fromPage = pageContent.querySelectorAll(sel);
+            for (let i = 0; i < fromPage.length; i++) out.push(fromPage[i]);
+            return out;
+        },
+        contains: function (el) {
+            return body.contains(el) || pageContent.contains(el);
         },
         body: body,
+        documentElement: html,
     });
     Object.defineProperty(documentMock, 'activeElement', {
         get: function () {
@@ -341,6 +396,28 @@ function makeSandbox() {
             const count = tree ? sandbox.leafCount(tree) : 0;
             return count < 3;
         },
+        innerWidth: 1600,
+        innerHeight: 900,
+        __lastPalette: null,
+        __lastMakeMain: null,
+        __lastHideLeaf: null,
+        __lastCloseTab: null,
+        prksOpenCommandPalette: function (opts) {
+            sandbox.__lastPalette = opts || null;
+        },
+        prksWorkspaceMakeMain: function (id) {
+            sandbox.__lastMakeMain = id;
+        },
+        prksWorkspaceHideLeaf: function (id) {
+            sandbox.__lastHideLeaf = id;
+        },
+        prksWorkspaceCloseTab: function (id) {
+            sandbox.__lastCloseTab = id;
+        },
+        prksWorkspaceMoveTabStep: function () {},
+        prksRouteSupportsTile: function () {
+            return true;
+        },
     };
     sandbox.window = sandbox;
     sandbox.globalThis = sandbox;
@@ -348,6 +425,7 @@ function makeSandbox() {
     vm.runInNewContext(treeSrc, sandbox);
     vm.runInNewContext(splitSrc, sandbox);
     vm.runInNewContext(tilingSrc, sandbox);
+    vm.runInNewContext(menuSrc, sandbox);
 
     let currentSnap = null;
     sandbox.prksWorkspaceSnapshot = function () {
@@ -450,14 +528,29 @@ function run() {
     assert('D is focused (per snapshot)', tileD.className.indexOf('prks-tile--focused') !== -1);
     assert('B is not focused', tileB.className.indexOf('prks-tile--focused') === -1);
 
-    /* Header actions on a Secondary tile: split dropdown, make main, close -- not on Main. */
+    /* Header chrome: Main is icon+title with an accessible Main label; Secondary is
+     * grip + icon + title + Pane actions + Close. No dedicated Split/Make-main buttons. */
     const headerA = tileA.querySelector('.prks-tile-header');
     const headerB = tileB.querySelector('.prks-tile-header');
-    assert('Main header has role badge, no actions', !!headerA.querySelector('.prks-tile-header__role'));
+    assert('Main header has no role badge', !headerA.querySelector('.prks-tile-header__role'));
+    assert('Main header has no drag grip', !headerA.querySelector('.prks-tile-header__grip'));
     assert('Main header has no make-main button', !headerA.querySelector('.prks-tile-header__make-main'));
-    assert('Secondary header has split dropdown', !!headerB.querySelector('.prks-tile-header__split'));
-    assert('Secondary header has make-main button', !!headerB.querySelector('.prks-tile-header__make-main'));
+    assert('Main header has no dedicated Split button', !headerA.querySelector('.prks-tile-header__split'));
+    assert('Main header has no pane-actions button', !headerA.querySelector('.prks-tile-header__menu'));
+    assert('Main header has no Secondary Close button', !headerA.querySelector('.prks-tile-header__close'));
+    assert('Main header has icon', !!headerA.querySelector('.prks-tile-header__icon'));
+    assert('Main header has title', !!headerA.querySelector('.prks-tile-header__title'));
+    assertEq('Main tile accessible label', tileA.getAttribute('aria-label'), 'Main pane: Work A');
+    assertEq('Main header accessible label', headerA.getAttribute('aria-label'), 'Main pane: Work A');
+    assert('Secondary header has drag grip', !!headerB.querySelector('.prks-tile-header__grip'));
+    assert('Secondary header has icon', !!headerB.querySelector('.prks-tile-header__icon'));
+    assert('Secondary header has title', !!headerB.querySelector('.prks-tile-header__title'));
+    assert('Secondary header has Pane actions button', !!headerB.querySelector('.prks-tile-header__menu'));
+    assertEq('Pane actions aria-label', headerB.querySelector('.prks-tile-header__menu').getAttribute('aria-label'), 'Pane actions');
+    assertEq('Pane actions haspopup', headerB.querySelector('.prks-tile-header__menu').getAttribute('aria-haspopup'), 'menu');
     assert('Secondary header has close button', !!headerB.querySelector('.prks-tile-header__close'));
+    assert('Secondary header has no make-main button', !headerB.querySelector('.prks-tile-header__make-main'));
+    assert('Secondary header has no dedicated Split button', !headerB.querySelector('.prks-tile-header__split'));
 
     /* ---- Runtime identity survives an unrelated resync (repaint with identical tree). ---- */
     h.sandbox.prksWorkspaceSyncTiles(h.getSnap(), { visualMode: 'tiled' });
@@ -650,9 +743,7 @@ function run() {
     assert('collapse removed the split container from the DOM', canvas.querySelector('[data-prks-split-id="' + resizeSplitId + '"]') === null);
     assertEq('collapse did not create a fresh observer', h.roCount(), roCountBeforeCollapse);
 
-    /* ---- Pane-cap header sync: 1 Main + 3 Secondary is the cap. Every Secondary tile's
-     * Split button must be disabled immediately (not just after the next unrelated repaint),
-     * and re-enabled as soon as a pane closes/hides and the cap is no longer reached. ---- */
+    /* ---- Pane-cap: Split right/down in the shared workspace menu disable at 4 visible panes. ---- */
     tree.resetSplitIds();
     let capTree = tree.makeLeaf('G');
     capTree = tree.splitLeaf(capTree, 'G', { axis: 'top-bottom', newTabId: 'H' });
@@ -664,19 +755,22 @@ function run() {
         { id: 'I', title: 'Work I', icon: 'file-text' },
     ] }));
     h.sandbox.prksWorkspaceSyncTiles(h.getSnap(), { visualMode: 'tiled' });
+    h.sandbox.prksWorkspaceInitTiles();
+    h.sandbox.prksWorkspaceInitTabMenus();
     assertEq('cap setup mounted 4 (1 main + 3 secondary)', canvas.querySelectorAll('.prks-tile').length, 4);
     const capTileG = canvas.querySelector('[data-prks-tab-id="G"]');
-    const capTileH = canvas.querySelector('[data-prks-tab-id="H"]');
-    const capTileI = canvas.querySelector('[data-prks-tab-id="I"]');
-    const capSplitG = capTileG.querySelector('.prks-tile-header__split');
-    const capSplitH = capTileH.querySelector('.prks-tile-header__split');
-    const capSplitI = capTileI.querySelector('.prks-tile-header__split');
-    assert('cap: G split button disabled at 4-pane cap', !!(capSplitG && capSplitG.disabled));
-    assert('cap: H split button disabled at 4-pane cap', !!(capSplitH && capSplitH.disabled));
-    assert('cap: I split button disabled at 4-pane cap', !!(capSplitI && capSplitI.disabled));
-    assert('cap: disabled button carries an explanatory title', !!(capSplitG && capSplitG.title));
+    const capMenuBtnG = capTileG.querySelector('.prks-tile-header__menu');
+    capMenuBtnG.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    const capMenu = h.sandbox.document.getElementById('prks-workspace-menu');
+    assert('cap: shared workspace menu opens', !!(capMenu && capMenu.hidden === false));
+    const capSplitRight = menuItemByLabel(capMenu, 'Split right');
+    const capSplitDown = menuItemByLabel(capMenu, 'Split down');
+    assert('cap: Split right disabled at 4-pane cap', !!(capSplitRight && capSplitRight.disabled));
+    assert('cap: Split down disabled at 4-pane cap', !!(capSplitDown && capSplitDown.disabled));
+    assert('cap: disabled Split carries an explanatory title', !!(capSplitRight && capSplitRight.title));
+    h.sandbox.prksWorkspaceCloseTabMenu();
 
-    /* Close I -> only 2 Secondary leaves remain (G, H); cap no longer reached, buttons re-enable. */
+    /* Close I -> only 2 Secondary leaves remain (G, H); cap no longer reached, Split re-enables. */
     const capTreeAfterClose = tree.normalizeTree(tree.removeLeaf(capTree, 'I'));
     h.setSnap(baseSnap({ secondaryTree: capTreeAfterClose, focusedTabId: 'G', tabs: [
         { id: 'A', title: 'Work A', icon: 'file-text' },
@@ -685,13 +779,14 @@ function run() {
     ] }));
     h.sandbox.prksWorkspaceSyncTiles(h.getSnap(), { visualMode: 'tiled' });
     assert('cap released: I removed from DOM', canvas.querySelector('[data-prks-tab-id="I"]') === null);
-    assert('cap released: G split button re-enabled', !(capSplitG.disabled));
-    assert('cap released: H split button re-enabled', !(capSplitH.disabled));
-    assertEq('cap released: title cleared', capSplitG.title, '');
+    capMenuBtnG.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    const capSplitRightOpen = menuItemByLabel(h.sandbox.document.getElementById('prks-workspace-menu'), 'Split right');
+    const capSplitDownOpen = menuItemByLabel(h.sandbox.document.getElementById('prks-workspace-menu'), 'Split down');
+    assert('cap released: Split right re-enabled', !!(capSplitRightOpen && !capSplitRightOpen.disabled));
+    assert('cap released: Split down re-enabled', !!(capSplitDownOpen && !capSplitDownOpen.disabled));
+    h.sandbox.prksWorkspaceCloseTabMenu();
 
-    /* ---- Split-menu usability/accessibility pass: singleton open menu, Escape closes +
-     * restores focus, item choice closes, outside pointer/focus closes, coherent Arrow
-     * keyboard route between the two menu items. ---- */
+    /* ---- Unified pane menu: same action list as the tab-strip menu, anchored to the … control. ---- */
     tree.resetSplitIds();
     let menuTree = tree.makeLeaf('J');
     menuTree = tree.splitLeaf(menuTree, 'J', { axis: 'left-right', newTabId: 'K' });
@@ -700,72 +795,139 @@ function run() {
         { id: 'J', title: 'Work J', icon: 'file-text' },
         { id: 'K', title: 'Work K', icon: 'file-text' },
     ] }));
-    /* The document-level Escape/outside-pointer/outside-focus listeners are bound by
-     * prksWorkspaceInitTiles() (once, idempotently) rather than every syncTiles repaint --
-     * exercise the real init path so this test matches production wiring. */
+    h.sandbox.prksWorkspaceSyncTiles(h.getSnap(), { visualMode: 'tiled' });
     h.sandbox.prksWorkspaceInitTiles();
+    h.sandbox.prksWorkspaceInitTabMenus();
     const tileJ = canvas.querySelector('[data-prks-tab-id="J"]');
     const tileK = canvas.querySelector('[data-prks-tab-id="K"]');
-    const wrapJ = tileJ.querySelector('.prks-tile-header__split-wrap');
-    const btnJ = wrapJ.querySelector('.prks-tile-header__split');
-    const menuJ = wrapJ.querySelector('.prks-tile-header__split-menu');
-    const itemsJ = menuJ.querySelectorAll('.prks-tile-header__split-menu-item');
-    const wrapK = tileK.querySelector('.prks-tile-header__split-wrap');
-    const btnK = wrapK.querySelector('.prks-tile-header__split');
-    const menuK = wrapK.querySelector('.prks-tile-header__split-menu');
+    const btnJ = tileJ.querySelector('.prks-tile-header__menu');
+    const btnK = tileK.querySelector('.prks-tile-header__menu');
+    btnJ.__left = 420;
+    btnJ.__top = 80;
+    btnJ.clientWidth = 32;
+    btnJ.clientHeight = 32;
+    btnK.__left = 720;
+    btnK.__top = 80;
+    btnK.clientWidth = 32;
+    btnK.clientHeight = 32;
 
-    /* Open: menu becomes visible, button reflects aria-expanded, first item gets focus. */
-    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
-    assertEq('split menu opens (hidden=false)', menuJ.hidden, false);
-    assertEq('split menu button aria-expanded true', btnJ.getAttribute('aria-expanded'), 'true');
-    assertEq('split menu focuses first item on open', __lastFocusedNode, itemsJ[0]);
+    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {}, clientX: 12, clientY: 9 });
+    const paneMenu = h.sandbox.document.getElementById('prks-workspace-menu');
+    assert('pane menu opens', !!(paneMenu && paneMenu.hidden === false));
+    assertEq('pane menu button aria-expanded true', btnJ.getAttribute('aria-expanded'), 'true');
+    assertEq('pane menu anchors to control left, not click coords', paneMenu.style.left, '420px');
+    assertEq('pane menu anchors to control bottom', paneMenu.style.top, '112px');
+    const labels = menuLabels(paneMenu);
+    assert('pane menu contains Make main', labels.indexOf('Make main') !== -1);
+    assert('pane menu contains Split right', labels.indexOf('Split right') !== -1);
+    assert('pane menu contains Split down', labels.indexOf('Split down') !== -1);
+    assert('pane menu contains Hide from split', labels.indexOf('Hide from split') !== -1);
+    assert('pane menu contains Close', labels.indexOf('Close') !== -1);
+    assertEq('pane menu focuses first enabled item', __lastFocusedNode, paneMenu.querySelector('[role="menuitem"]'));
 
-    /* Escape: closes and restores focus to the Split button. */
     h.sandbox.document.dispatch('keydown', { key: 'Escape' }, true);
-    assertEq('escape closes split menu', menuJ.hidden, true);
+    assertEq('escape closes pane menu', paneMenu.hidden, true);
     assertEq('escape clears aria-expanded', btnJ.getAttribute('aria-expanded'), 'false');
-    assertEq('escape restores focus to split button', __lastFocusedNode, btnJ);
+    assertEq('escape restores focus to Pane actions button', __lastFocusedNode, btnJ);
 
-    /* Singleton: opening J's menu again, then opening K's menu, closes J's. */
     btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
-    assertEq('split menu J reopened', menuJ.hidden, false);
+    assertEq('pane menu J reopened', paneMenu.hidden, false);
     btnK.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
-    assertEq('opening K closes J (only one open at once)', menuJ.hidden, true);
-    assertEq('K menu now open', menuK.hidden, false);
+    assertEq('opening K leaves a single shared menu open', paneMenu.hidden, false);
+    assertEq('opening K clears J aria-expanded', btnJ.getAttribute('aria-expanded'), 'false');
+    assertEq('K button aria-expanded true', btnK.getAttribute('aria-expanded'), 'true');
     btnK.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
-    assertEq('K menu closed via toggle', menuK.hidden, true);
+    assertEq('K menu closed via toggle', paneMenu.hidden, true);
 
-    /* ArrowDown/ArrowUp routes focus between the two menu items; Home/End style wraparound. */
     btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
-    assertEq('split menu J open for arrow nav', __lastFocusedNode, itemsJ[0]);
+    const firstItem = paneMenu.querySelector('[role="menuitem"]');
+    assertEq('pane menu open for arrow nav', __lastFocusedNode, firstItem);
     h.sandbox.document.dispatch('keydown', { key: 'ArrowDown' }, true);
-    assertEq('ArrowDown moves focus to second item', __lastFocusedNode, itemsJ[1]);
-    h.sandbox.document.dispatch('keydown', { key: 'ArrowDown' }, true);
-    assertEq('ArrowDown wraps back to first item', __lastFocusedNode, itemsJ[0]);
-    h.sandbox.document.dispatch('keydown', { key: 'ArrowUp' }, true);
-    assertEq('ArrowUp wraps to last item', __lastFocusedNode, itemsJ[1]);
+    const itemsNow = enabledMenuItems(paneMenu);
+    assertEq('ArrowDown moves to second enabled item', __lastFocusedNode, itemsNow[1]);
+    h.sandbox.document.dispatch('keydown', { key: 'End' }, true);
+    assertEq('End moves to last enabled item', __lastFocusedNode, itemsNow[itemsNow.length - 1]);
+    h.sandbox.document.dispatch('keydown', { key: 'Home' }, true);
+    assertEq('Home moves to first enabled item', __lastFocusedNode, itemsNow[0]);
 
-    /* Choosing an item closes the menu (item click handler calls closeSplitMenu itself). */
-    itemsJ[0].dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
-    assertEq('choosing an item closes the menu', menuJ.hidden, true);
-    assertEq('choosing an item clears aria-expanded', btnJ.getAttribute('aria-expanded'), 'false');
+    menuItemByLabel(paneMenu, 'Make main').dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('Make main uses prksWorkspaceMakeMain', h.sandbox.__lastMakeMain, 'J');
+    assertEq('choosing Make main closes the menu', paneMenu.hidden, true);
 
-    /* Outside pointer/focus closes the open menu. */
     btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
-    assertEq('split menu J reopened for outside-pointer test', menuJ.hidden, false);
+    menuItemByLabel(paneMenu, 'Split right').dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assert('Split right uses prksOpenCommandPalette', !!(h.sandbox.__lastPalette && h.sandbox.__lastPalette.splitPlacement));
+    assertEq('Split right axis is left-right', h.sandbox.__lastPalette.splitPlacement.axis, 'left-right');
+    assertEq('Split right targets this leaf', h.sandbox.__lastPalette.splitPlacement.targetLeafTabId, 'J');
+
+    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    menuItemByLabel(paneMenu, 'Split down').dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('Split down axis is top-bottom', h.sandbox.__lastPalette.splitPlacement.axis, 'top-bottom');
+
+    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    menuItemByLabel(paneMenu, 'Hide from split').dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('Hide from split uses prksWorkspaceHideLeaf', h.sandbox.__lastHideLeaf, 'J');
+
+    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
+    assertEq('pane menu reopened for outside-pointer test', paneMenu.hidden, false);
     h.sandbox.document.dispatch('pointerdown', { target: tileK }, true);
-    assertEq('outside pointerdown closes open menu', menuJ.hidden, true);
+    assertEq('outside pointerdown closes open menu', paneMenu.hidden, true);
 
-    btnJ.dispatch('click', { preventDefault: function () {}, stopPropagation: function () {} });
-    assertEq('split menu J reopened for outside-focus test', menuJ.hidden, false);
-    h.sandbox.document.dispatch('focusin', { target: tileK }, true);
-    assertEq('outside focusin closes open menu', menuJ.hidden, true);
+    /* Tab-strip invocation still uses click coordinates against the tab wrap. */
+    const stripWrap = createNode('div');
+    stripWrap.className = 'prks-workspace-tab';
+    stripWrap.setAttribute('data-tab-id', 'J');
+    stripWrap.__left = 40;
+    stripWrap.__top = 8;
+    stripWrap.clientWidth = 120;
+    stripWrap.clientHeight = 32;
+    const activate = createNode('button');
+    activate.className = 'prks-workspace-tab__activate';
+    stripWrap.appendChild(activate);
+    h.dom.body.appendChild(stripWrap);
+    h.sandbox.prksWorkspaceOpenTabMenu('J', { clientX: 88, clientY: 20, currentTarget: stripWrap });
+    assertEq('tab-strip menu opens', paneMenu.hidden, false);
+    assertEq('tab-strip menu uses pointer coordinates', paneMenu.style.left, '88px');
+    assertEq('tab-strip menu uses pointer y', paneMenu.style.top, '20px');
+    const stripLabels = menuLabels(paneMenu);
+    assert('tab-strip menu still contains Make main', stripLabels.indexOf('Make main') !== -1);
+    assert('tab-strip menu still contains Split right', stripLabels.indexOf('Split right') !== -1);
+    h.sandbox.prksWorkspaceCloseTabMenu();
+    assertEq('tab-strip close restores the invoking control', __lastFocusedNode, stripWrap);
 
     if (failed) {
         console.log(failed + ' failed, ' + passed + ' passed');
         process.exit(1);
     }
     console.log('All ' + passed + ' recursive workspace tiling checks passed, 0 failed');
+}
+
+function menuLabels(menu) {
+    const items = menu.querySelectorAll('[role="menuitem"]');
+    const out = [];
+    for (let i = 0; i < items.length; i++) {
+        const label = items[i].querySelector('.prks-workspace-menu__label');
+        out.push(label ? label.textContent : items[i].textContent);
+    }
+    return out;
+}
+
+function menuItemByLabel(menu, label) {
+    const items = menu.querySelectorAll('[role="menuitem"]');
+    for (let i = 0; i < items.length; i++) {
+        const el = items[i].querySelector('.prks-workspace-menu__label');
+        if (el && el.textContent === label) return items[i];
+    }
+    return null;
+}
+
+function enabledMenuItems(menu) {
+    const items = menu.querySelectorAll('[role="menuitem"]');
+    const out = [];
+    for (let i = 0; i < items.length; i++) {
+        if (!items[i].disabled && items[i].getAttribute('aria-disabled') !== 'true') out.push(items[i]);
+    }
+    return out;
 }
 
 run();

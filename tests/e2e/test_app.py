@@ -2105,8 +2105,20 @@ def _tile_box(page, tab_id):
     return page.locator('.prks-tile[data-prks-tab-id="%s"]' % tab_id).bounding_box()
 
 
-def _grip_box(page, tab_id):
-    return page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__grip' % tab_id).bounding_box()
+def _open_pane_actions(page, tab_id=None):
+    loc = (
+        '.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__menu' % tab_id
+        if tab_id
+        else ".prks-tile--secondary .prks-tile-header__menu"
+    )
+    btn = page.locator(loc).first
+    btn.scroll_into_view_if_needed()
+    btn.click()
+    page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+
+
+def _click_workspace_menu(page, label):
+    page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text=label).click()
 
 
 def _center(box):
@@ -2922,7 +2934,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             }"""
         )
 
-        page.locator(".prks-tile--secondary .prks-tile-header__make-main").click()
+        page.evaluate("() => window.prksWorkspaceMakeMain(window.prksWorkspaceSnapshot().secondaryTree.tabId)")
         page.wait_for_function(
             """(b) => {
                 const snap = window.prksWorkspaceSnapshot();
@@ -3555,9 +3567,14 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertFalse(blocked)
         self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 4)
 
-        split_btn = page.locator('.prks-tile[data-prks-tab-id="' + tree["b_id"] + '"] .prks-tile-header__split')
-        self.assertTrue(split_btn.is_disabled())
-        self.assertIn("Maximum of 4 visible panes", split_btn.get_attribute("title") or "")
+        _open_pane_actions(page, tree["d_id"])
+        split_right = page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text="Split right")
+        split_down = page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text="Split down")
+        self.assertTrue(split_right.is_disabled())
+        self.assertTrue(split_down.is_disabled())
+        self.assertIn("Maximum of 4 visible panes", split_right.get_attribute("title") or "")
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#prks-workspace-menu[hidden]", state="attached")
 
         # Ordinary New Tab still works, and the new tab stays parked (not mounted).
         page.evaluate("() => window.prksNavigate('#/folders', { target: 'new-tab', activate: false })")
@@ -4556,8 +4573,16 @@ class WorkspaceTilingTests(_BrowserE2E):
                     mainFocusedTab: mainTab && mainTab.classList.contains('is-focused'),
                     mainTileFocused: mainTile && mainTile.classList.contains('prks-tile--focused'),
                     secTileFocused: secTile && secTile.classList.contains('prks-tile--focused'),
-                    mainHasRole: !!(mainTile && mainTile.querySelector('.prks-tile-header__role')),
+                    mainHasMainClass: !!(mainTile && mainTile.classList.contains('prks-tile--main')),
+                    secHasMainClass: !!(secTile && secTile.classList.contains('prks-tile--main')),
+                    mainHasRoleBadge: !!(mainTile && mainTile.querySelector('.prks-tile-header__role')),
                     secHasMakeMain: !!(secTile && secTile.querySelector('.prks-tile-header__make-main')),
+                    secHasSplitBtn: !!(secTile && secTile.querySelector('.prks-tile-header__split')),
+                    secHasPaneMenu: !!(secTile && secTile.querySelector('.prks-tile-header__menu')),
+                    secHasClose: !!(secTile && secTile.querySelector('.prks-tile-header__close')),
+                    mainHasGrip: !!(mainTile && mainTile.querySelector('.prks-tile-header__grip')),
+                    mainHasClose: !!(mainTile && mainTile.querySelector('.prks-tile-header__close')),
+                    mainLabel: (mainTile && mainTile.getAttribute('aria-label')) || '',
                 };
             }"""
         )
@@ -4566,8 +4591,124 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertTrue(dist["secFocused"])
         self.assertTrue(dist["secTileFocused"])
         self.assertFalse(dist["mainTileFocused"])
-        self.assertTrue(dist["mainHasRole"])
-        self.assertTrue(dist["secHasMakeMain"])
+        self.assertTrue(dist["mainHasMainClass"])
+        self.assertFalse(dist["secHasMainClass"])
+        self.assertFalse(dist["mainHasRoleBadge"])
+        self.assertFalse(dist["secHasMakeMain"])
+        self.assertFalse(dist["secHasSplitBtn"])
+        self.assertTrue(dist["secHasPaneMenu"])
+        self.assertTrue(dist["secHasClose"])
+        self.assertFalse(dist["mainHasGrip"])
+        self.assertFalse(dist["mainHasClose"])
+        self.assertTrue(dist["mainLabel"].startswith("Main pane:"))
+
+    def test_pane_actions_menu_unified_with_tab_strip(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        btn = page.locator(".prks-tile--secondary .prks-tile-header__menu")
+        box = btn.bounding_box()
+        btn.click()
+        page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+        menu_box = page.locator("#prks-workspace-menu").bounding_box()
+        self.assertIsNotNone(box)
+        self.assertIsNotNone(menu_box)
+        self.assertLess(abs(menu_box["x"] - box["x"]), 320)
+        self.assertLess(abs(menu_box["y"] - (box["y"] + box["height"])), 96)
+        labels = page.locator("#prks-workspace-menu .prks-workspace-menu__item").all_text_contents()
+        self.assertTrue(any("Make main" in t for t in labels))
+        self.assertTrue(any("Split right" in t for t in labels))
+        self.assertTrue(any("Split down" in t for t in labels))
+        self.assertTrue(any("Hide from split" in t for t in labels))
+        self.assertTrue(any(t.strip() == "Close" for t in labels))
+        page.keyboard.press("Escape")
+        page.wait_for_function(
+            """() => {
+                const menu = document.getElementById('prks-workspace-menu');
+                const actions = document.querySelector('.prks-tile--secondary .prks-tile-header__menu');
+                return !!(menu && menu.hidden && document.activeElement === actions);
+            }"""
+        )
+        page.locator(".prks-workspace-tab.is-tiled").click(button="right")
+        page.wait_for_selector("#prks-workspace-menu:not([hidden])")
+        strip_labels = page.locator("#prks-workspace-menu .prks-workspace-menu__item").all_text_contents()
+        self.assertTrue(any("Make main" in t for t in strip_labels))
+        self.assertTrue(any("Split right" in t for t in strip_labels))
+        page.keyboard.press("Escape")
+
+    def test_main_and_focus_survive_make_main_from_pane_menu(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _work_a, work_b, _ids = _open_work_work_split(page, server)
+        page.locator(".prks-tile--main").click(position={"x": 24, "y": 80})
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().focusedTabId === window.prksWorkspaceSnapshot().mainTabId"
+        )
+        main_focus = page.evaluate(
+            """() => {
+                const main = document.querySelector('.prks-tile--main');
+                const sec = document.querySelector('.prks-tile--secondary');
+                return {
+                    mainMain: main.classList.contains('prks-tile--main'),
+                    mainFocused: main.classList.contains('prks-tile--focused'),
+                    secFocused: sec.classList.contains('prks-tile--focused'),
+                    hash: location.hash,
+                };
+            }"""
+        )
+        self.assertTrue(main_focus["mainMain"])
+        self.assertTrue(main_focus["mainFocused"])
+        self.assertFalse(main_focus["secFocused"])
+        page.locator(".prks-tile--secondary").click(position={"x": 24, "y": 80})
+        page.wait_for_function(
+            "() => window.prksWorkspaceSnapshot().focusedTabId === window.prksWorkspaceSnapshot().secondaryTree.tabId"
+        )
+        hash_before = page.evaluate("() => location.hash")
+        page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                window.__prksMainCtx = window.prksGetTabContext(snap.mainTabId);
+                window.__prksSecCtx = window.prksGetTabContext(snap.secondaryTree.tabId);
+            }"""
+        )
+        _open_pane_actions(page)
+        _click_workspace_menu(page, "Make main")
+        page.wait_for_function(
+            """(b) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.mainTabId && location.hash.indexOf(b) !== -1 && snap.secondaryTree
+                    && snap.mainTabId !== snap.secondaryTree.tabId;
+            }""",
+            arg=work_b,
+        )
+        after = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const main = document.querySelector('.prks-tile--main');
+                const sec = document.querySelector('.prks-tile--secondary');
+                return {
+                    mainHasMain: main.classList.contains('prks-tile--main'),
+                    secHasMain: sec.classList.contains('prks-tile--main'),
+                    sameMainCtx: window.prksGetTabContext(snap.mainTabId) === window.__prksSecCtx,
+                    sameSecCtx: window.prksGetTabContext(snap.secondaryTree.tabId) === window.__prksMainCtx,
+                    mounted: window.prksTabContextDebugSnapshot().mountedCount,
+                    hash: location.hash,
+                };
+            }"""
+        )
+        self.assertNotEqual(after["hash"], hash_before)
+        self.assertIn(work_b, after["hash"])
+        self.assertTrue(after["mainHasMain"])
+        self.assertFalse(after["secHasMain"])
+        self.assertTrue(after["sameMainCtx"])
+        self.assertTrue(after["sameSecCtx"])
+        self.assertEqual(after["mounted"], 2)
 
 
 class MainSecondaryDividerTests(_BrowserE2E):
@@ -4742,7 +4883,7 @@ class MainSecondaryDividerTests(_BrowserE2E):
         custom_ratio = page.evaluate("() => window.prksWorkspaceSnapshot().mainSplitRatio")
         _capture_divider_runtime_ids(page)
 
-        page.locator(".prks-tile--secondary .prks-tile-header__make-main").click()
+        page.evaluate("() => window.prksWorkspaceMakeMain(window.prksWorkspaceSnapshot().secondaryTree.tabId)")
         page.wait_for_function(
             """(b) => {
                 const snap = window.prksWorkspaceSnapshot();
