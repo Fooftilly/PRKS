@@ -2165,7 +2165,7 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     panel.innerHTML = prksWorkRightPanelStackHtml(work, mode, ctx);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
     if (typeof initPrksPrivateNotesEditor === 'function') initPrksPrivateNotesEditor('work', work.id, ctx);
-    if (mode === 'tags' && typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id);
+    if (mode === 'tags' && typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id, ctx);
     if (mode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
         void mountPlaylistAttachControls(work, ctx);
     }
@@ -2175,7 +2175,7 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     if (typeof initWorkDetailRightPanelActions === 'function') {
         initWorkDetailRightPanelActions(work, ctx);
     }
-    if (mode === 'metadata') prksBindWorkMetaDraftEditor(ctx, work);
+    if (mode === 'metadata') prksMountWorkMetaEditor(ctx, work);
     return true;
 }
 
@@ -2484,11 +2484,11 @@ function updatePanelContent(tabId) {
             if (mode !== 'metadata' && typeof mountFolderAttachControlsForWork === 'function') {
                 void mountFolderAttachControlsForWork(_cw, focusedCtx);
             }
-            if (mode === 'tags') initWorkTagCombobox(_cw.id);
+            if (mode === 'tags') initWorkTagCombobox(_cw.id, focusedCtx);
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(_cw, focusedCtx);
             }
-            if (mode === 'metadata') prksBindWorkMetaDraftEditor(focusedCtx, _cw);
+            if (mode === 'metadata') prksMountWorkMetaEditor(focusedCtx, _cw);
         } else if (tabId === 'annotations') {
             panel.innerHTML = renderWorkAnnotationsTab(_cw);
             if (typeof window.applyCachedAnnotationListToPanel === 'function') {
@@ -2882,7 +2882,30 @@ function prksBindWorkMetaDraftEditor(ownerCtx, work) {
         el.addEventListener('input', capture);
         el.addEventListener('change', capture);
     });
+    const date = panel.querySelector('#meta-date');
+    const dateError = panel.querySelector('#meta-date-error');
+    if (date && dateError) {
+        const clearDateError = () => {
+            date.removeAttribute('aria-invalid');
+            dateError.textContent = '';
+        };
+        date.addEventListener('input', clearDateError);
+        date.addEventListener('change', clearDateError);
+    }
     panel.addEventListener('click', () => window.setTimeout(capture, 0));
+}
+
+function prksMountWorkMetaEditor(ownerCtx, work) {
+    if (!ownerCtx || !work || !prksRightPanelOwnedBy(ownerCtx)) return;
+    if (prksWorkDetailsMode(ownerCtx, work) !== 'metadata') return;
+    prksBindSegmentedHidden('meta-status');
+    if (typeof initPrksDocTypeMenu === 'function') {
+        const sourceKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
+        initPrksDocTypeMenu('meta-doc-type', { disabled: sourceKind === 'video' });
+    }
+    prksBindWorkMetaDraftEditor(ownerCtx, work);
+    const panel = document.getElementById('panel-content');
+    if (panel && typeof prksBindAutosizeTextareas === 'function') prksBindAutosizeTextareas(panel);
 }
 
 function toggleWorkMetaEdit(isEditing) {
@@ -2950,7 +2973,7 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
         if (panel) {
             panel.innerHTML = prksWorkRightPanelStackHtml(_cw, ownerCtx.ui.workDetailsMode, ownerCtx);
             if (!isEditing) initPrksPrivateNotesEditor('work', _cw.id, ownerCtx);
-            if (ownerCtx.ui.workDetailsMode === 'tags') initWorkTagCombobox(_cw.id);
+            if (ownerCtx.ui.workDetailsMode === 'tags') initWorkTagCombobox(_cw.id, ownerCtx);
             if (!isEditing && typeof mountPlaylistAttachControls === 'function') {
                 void mountPlaylistAttachControls(_cw, ownerCtx);
             }
@@ -2961,17 +2984,9 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
                 initWorkDetailRightPanelActions(_cw, ownerCtx);
             }
             if (isEditing) {
-                prksBindSegmentedHidden('meta-status');
-                if (typeof initPrksDocTypeMenu === 'function') {
-                    const inf =
-                        typeof prksInferWorkSourceKind === 'function'
-                            ? prksInferWorkSourceKind(_cw)
-                            : '';
-                    initPrksDocTypeMenu('meta-doc-type', { disabled: inf === 'video' });
-                }
-                prksBindWorkMetaDraftEditor(ownerCtx, _cw);
+                prksMountWorkMetaEditor(ownerCtx, _cw);
             }
-            prksBindAutosizeTextareas(panel);
+            if (!isEditing) prksBindAutosizeTextareas(panel);
         }
         if (ownerCtx.ui) ownerCtx.ui.rightPanelTab = 'details';
         prksSyncRightPanelTabStrip('details');
@@ -3645,8 +3660,20 @@ async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx) {
     }
 }
 
-async function prksAttachExistingTag(entityType, entityId, tagId) {
-    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+function prksWorkTagOwnerLive(ownerCtx, generation, workId, input) {
+    if (!ownerCtx || ownerCtx.destroyed || !ownerCtx.ui || ownerCtx.ui.workDetailsMode !== 'tags') return false;
+    if (
+        typeof prksTabContextOwnsEntityRoute === 'function' &&
+        !prksTabContextOwnsEntityRoute(ownerCtx, generation, 'work', workId, 'work')
+    ) return false;
+    if (!prksOwnerTabIsFocused(ownerCtx) || !prksRightPanelOwnedBy(ownerCtx)) return false;
+    const liveInput = document.getElementById('work-tag-search');
+    return !!liveInput && liveInput === input && prksRightPanelOwnedBy(ownerCtx, liveInput);
+}
+
+async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx) {
+    const owner = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const generation = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
     try {
         const url =
             entityType === 'work' ? `/api/works/${entityId}/tags` : `/api/folders/${entityId}/tags`;
@@ -3657,9 +3684,14 @@ async function prksAttachExistingTag(entityType, entityId, tagId) {
         });
         if (!res.ok) throw new Error('attach failed');
         window.__prksAllTagsCache = null;
-        const input = document.getElementById(entityType === 'work' ? 'work-tag-search' : 'folder-tag-search');
-        if (input) input.value = '';
-        await prksReloadEntityTagsUI(entityType, entityId, ownerCtx);
+        if (entityType === 'work') {
+            const input = document.getElementById('work-tag-search');
+            if (prksWorkTagOwnerLive(owner, generation, entityId, input)) input.value = '';
+        } else {
+            const input = document.getElementById('folder-tag-search');
+            if (input) input.value = '';
+        }
+        await prksReloadEntityTagsUI(entityType, entityId, owner);
     } catch (e) {
         console.error(e);
         await prksAlertMessage('Could not add tag.', 'Error');
@@ -3692,7 +3724,7 @@ function prksTagComboboxLabel(tag, valLower) {
     return name;
 }
 
-async function prksSubmitNewTag(entityType, entityId, name) {
+async function prksSubmitNewTag(entityType, entityId, name, ownerCtx) {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
     try {
@@ -3704,19 +3736,29 @@ async function prksSubmitNewTag(entityType, entityId, name) {
         const data = await res.json();
         if (!res.ok || !data.id) throw new Error(data.error || 'No tag id');
         window.__prksAllTagsCache = null;
-        await prksAttachExistingTag(entityType, entityId, data.id);
+        await prksAttachExistingTag(entityType, entityId, data.id, ownerCtx);
     } catch (e) {
         console.error(e);
         await prksAlertMessage('Could not create tag.', 'Error');
     }
 }
 
-function initTagComboboxForEntity(entityType, entityId, inputId, resultsId) {
+function initTagComboboxForEntity(entityType, entityId, inputId, resultsId, ownerCtx) {
     const input = document.getElementById(inputId);
     const results = document.getElementById(resultsId);
     if (!input || !results) return;
+    const generation = ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined;
+
+    function liveWorkInput() {
+        return entityType !== 'work' || prksWorkTagOwnerLive(ownerCtx, generation, entityId, input);
+    }
 
     function getAttachedIds() {
+        if (entityType === 'work' && ownerCtx && ownerCtx.getEntity) {
+            const work = ownerCtx.getEntity('work');
+            if (!work || String(work.id) !== String(entityId)) return new Set();
+            return new Set((work.tags || []).map((t) => t.id));
+        }
         const ent = typeof prksFocusedEntity === 'function'
             ? prksFocusedEntity(entityType === 'work' ? 'work' : 'folder')
             : null;
@@ -3725,9 +3767,11 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId) {
     }
 
     async function renderDropdown() {
+        if (!liveWorkInput()) return;
         if (!window.__prksAllTagsCache) {
             window.__prksAllTagsCache = await fetchTags({ used: false });
         }
+        if (!liveWorkInput()) return;
         const all = window.__prksAllTagsCache;
         const val = input.value.trim();
         const valLower = val.toLowerCase();
@@ -3745,7 +3789,7 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId) {
             c.textContent = 'Create tag "' + val + '"';
             c.onmousedown = (ev) => {
                 ev.preventDefault();
-                prksSubmitNewTag(entityType, entityId, val);
+                prksSubmitNewTag(entityType, entityId, val, ownerCtx);
             };
             results.appendChild(c);
         }
@@ -3755,7 +3799,7 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId) {
             div.textContent = prksTagComboboxLabel(tag, valLower);
             div.onmousedown = (ev) => {
                 ev.preventDefault();
-                prksAttachExistingTag(entityType, entityId, tag.id);
+                prksAttachExistingTag(entityType, entityId, tag.id, ownerCtx);
             };
             results.appendChild(div);
         });
@@ -3766,21 +3810,19 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId) {
         }
     }
 
-    input.onfocus = async () => {
-        window.__prksAllTagsCache = await fetchTags({ used: false });
-        renderDropdown();
-    };
-    input.oninput = () => renderDropdown();
+    input.onfocus = () => void renderDropdown();
+    input.oninput = () => void renderDropdown();
     input.onblur = () =>
         setTimeout(() => {
             prksHideInlineComboboxResults(results);
         }, 200);
 }
 
-function initWorkTagCombobox(workId) {
-    const _cw = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
+function initWorkTagCombobox(workId, ownerCtx) {
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const _cw = ctx && ctx.getEntity ? ctx.getEntity('work') : (typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null);
     if (!_cw || _cw.id !== workId) return;
-    initTagComboboxForEntity('work', workId, 'work-tag-search', 'work-tag-search-results');
+    initTagComboboxForEntity('work', workId, 'work-tag-search', 'work-tag-search-results', ctx);
 }
 
 function initFolderTagCombobox(folderId) {

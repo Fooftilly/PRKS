@@ -2747,23 +2747,28 @@ function initForms() {
                     tab === 'details' &&
                     typeof prksWorkRightPanelStackHtml === 'function'
                 ) {
+                    const panelMode =
+                        typeof prksWorkDetailsMode === 'function' ? prksWorkDetailsMode(ownerCtx, _rw) : 'view';
                     panel.innerHTML = prksWorkRightPanelStackHtml(
                         _rw,
-                        typeof prksWorkDetailsMode === 'function' ? prksWorkDetailsMode(ownerCtx, _rw) : 'view',
+                        panelMode,
                         ownerCtx
                     );
-                    if (typeof initPrksPrivateNotesEditor === 'function') {
+                    if (panelMode !== 'metadata' && typeof initPrksPrivateNotesEditor === 'function') {
                         initPrksPrivateNotesEditor('work', _rw.id, ownerCtx);
                     }
-                    if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(_rw.id);
+                    if (panelMode === 'tags' && typeof initWorkTagCombobox === 'function') initWorkTagCombobox(_rw.id, ownerCtx);
                     if (typeof initWorkDetailRightPanelActions === 'function') {
                         initWorkDetailRightPanelActions(_rw, ownerCtx);
                     }
-                    if (typeof mountPlaylistAttachControls === 'function') {
+                    if (panelMode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
                         void mountPlaylistAttachControls(_rw, ownerCtx);
                     }
-                    if (typeof mountFolderAttachControlsForWork === 'function') {
+                    if (panelMode !== 'metadata' && typeof mountFolderAttachControlsForWork === 'function') {
                         void mountFolderAttachControlsForWork(_rw, ownerCtx);
+                    }
+                    if (panelMode === 'metadata' && typeof prksMountWorkMetaEditor === 'function') {
+                        prksMountWorkMetaEditor(ownerCtx, _rw);
                     }
                 }
             }
