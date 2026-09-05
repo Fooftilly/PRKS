@@ -454,6 +454,7 @@
             assert('People stays collapsed on Author', !peopleWrap.classList.contains('nav-disclosure--open'));
             root.prksSyncNavDisclosures(parse('#/people/P-1'));
             assert('People stays collapsed on Person detail', !peopleWrap.classList.contains('nav-disclosure--open'));
+            assert('People retains contains-current on Person detail', peopleWrap.classList.contains('nav-disclosure--contains-current'));
             root.prksSyncNavDisclosures(reviewerRoute);
             assert('People stays collapsed back on Reviewer', !peopleWrap.classList.contains('nav-disclosure--open'));
 
@@ -490,6 +491,34 @@
             try {
                 root.localStorage.removeItem(peopleKey);
             } catch (_e) {}
+
+            // A Person detail is still inside the People section even though
+            // it is not one of the sidebar shortcut destinations: with an
+            // unset preference it may auto-expand People, same as a role route.
+            const personRoute = parse('#/people/P-1');
+            assertEq('unset pref reads unset before person check', root.prksReadNavExpandedPref(peopleKey), 'unset');
+            assert('unset + person route auto-expands People', root.prksNavDisclosureExpanded('people', personRoute) === true);
+            if (root.location) root.location.hash = personRoute.canonicalHash;
+            root.prksSyncNavDisclosures(personRoute);
+            assert('People auto-opens on unset pref for Person detail', peopleWrap.classList.contains('nav-disclosure--open'));
+            assertEq('People aria-expanded true on Person detail auto-open', peopleToggle.getAttribute('aria-expanded'), 'true');
+            assert('People has contains-current on Person detail', peopleWrap.classList.contains('nav-disclosure--contains-current'));
+
+            try {
+                root.localStorage.removeItem(peopleKey);
+            } catch (_e) {}
+
+            // People-family route membership, tested directly against the predicate.
+            if (typeof root.prksNavFamilyForcesOpen === 'function') {
+                assert('person is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/P-1')) === true);
+                assert('people-role is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/role/Author')) === true);
+                assert('people-groups is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/groups')) === true);
+                assert(
+                    'person-group-detail is in People family',
+                    root.prksNavFamilyForcesOpen('people', parse('#/people/groups/PG-1')) === true
+                );
+                assert('folders is not in People family', root.prksNavFamilyForcesOpen('people', parse('#/folders')) === false);
+            }
 
             // Research / Progress: full-row native buttons, not link+chevron.
             ['research', 'progress'].forEach(function (which) {

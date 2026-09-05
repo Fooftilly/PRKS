@@ -832,7 +832,8 @@
     function prksPeopleRouteForcesOpen(route) {
         return !!(
             route &&
-            (route.name === 'people-role' ||
+            (route.name === 'person' ||
+                route.name === 'people-role' ||
                 route.name === 'people-groups' ||
                 route.name === 'person-group-detail')
         );
