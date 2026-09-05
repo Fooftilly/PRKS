@@ -159,14 +159,15 @@
                         <span class="prks-palette-launch__label">Search or jump…</span>
                         <kbd class="prks-palette-launch__hint" data-palette-shortcut-hint>Ctrl K</kbd>
                     </button>
-                    <button type="button" class="prks-btn prks-btn--secondary ribbon-btn" onclick="openModal('work-modal')" title="New File" id="prks-ribbon-new-file">
-                        <span class="ribbon-btn__icon"><i data-lucide="file-plus" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
-                        <span class="ribbon-btn__label">New File</span>
-                    </button>
-                    <button type="button" id="prks-ribbon-new-more" class="prks-btn prks-btn--secondary ribbon-btn" title="New…" aria-label="New" aria-haspopup="dialog">
-                        <span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
-                        <span class="ribbon-btn__label">New…</span>
-                    </button>
+                    <div class="prks-split-btn" id="prks-ribbon-create">
+                        <button type="button" class="prks-btn prks-btn--secondary ribbon-btn prks-split-btn__main" onclick="openModal('work-modal')" title="New File" id="prks-ribbon-new-file">
+                            <span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
+                            <span class="ribbon-btn__label">New File</span>
+                        </button>
+                        <button type="button" id="prks-ribbon-new-more" class="prks-btn prks-btn--secondary ribbon-btn prks-split-btn__chevron" title="More" aria-label="More create actions" aria-haspopup="menu" aria-expanded="false" aria-controls="prks-create-menu">
+                            <span class="ribbon-btn__icon"><i data-lucide="chevron-down" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
+                        </button>
+                    </div>
                 </div>
                 <div class="top-ribbon__right">
                     <button
@@ -464,29 +465,16 @@
         </div>
     </div>
 
-    <div id="work-modal" class="modal modal-wide hidden">
+    <div id="work-modal" class="modal modal-wide modal--create-file hidden">
         <div class="modal-header">
             <h3>New File</h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="upload-grid">
-                <!-- Left: Preview -->
-                <div class="preview-pane" id="upload-drop-zone">
-                    <div id="upload-pdf-preview-actions" class="upload-pdf-preview-actions hidden" role="toolbar" aria-label="PDF preview actions">
-                        <button type="button" class="prks-btn prks-btn--secondary" id="upload-pdf-remove-btn" title="Clear preview to choose a different PDF">Remove PDF</button>
-                    </div>
-                    <div id="upload-viewer" class="hidden"></div>
-                    <div id="drop-zone-prompt" class="drop-zone">
-                        <span class="drop-zone__icon"><i data-lucide="file-text" class="prks-icon" aria-hidden="true"></i></span>
-                        <p id="drop-zone-label">Drag & Drop a PDF here<br><span class="drop-zone__label-sub">or click to browse</span></p>
-                        <input type="file" id="work-file" accept=".pdf,application/pdf" class="file-input-hidden">
-                    </div>
-                </div>
-
-                <!-- Right: Form -->
-                <div class="form-pane">
-                    <p id="work-file-kind-label" class="form-field-label">File kind</p>
+        <div class="modal-body modal-body--scroll">
+            <div class="upload-grid form-pane">
+                <section class="prks-create-section" aria-labelledby="work-create-source-heading">
+                    <h4 id="work-create-source-heading" class="prks-create-section__title">Source</h4>
+                    <p id="work-file-kind-label" class="form-field-label">Source type</p>
                     <input type="hidden" id="work-source-kind" value="pdf" autocomplete="off">
                     <div class="prks-kind-toggle" role="tablist" aria-labelledby="work-file-kind-label">
                         <button type="button" class="prks-kind-toggle__btn is-active" data-kind="pdf" role="tab" aria-selected="true">
@@ -499,20 +487,35 @@
                         </button>
                     </div>
 
-                    <div id="work-pdf-source-url-row">
-                        <label for="work-pdf-source-url">Original URL (optional)</label>
-                        <input type="url" id="work-pdf-source-url" placeholder="https://… (article or source page)" autocomplete="off">
-                        <p class="meta-row meta-row--hint">
-                            If this PDF was saved from the web, keep the link here for reference and BibTeX.
-                        </p>
+                    <div id="upload-source-pdf">
+                        <div class="preview-pane" id="upload-drop-zone" tabindex="0" role="button" aria-labelledby="drop-zone-label" aria-describedby="work-file-error">
+                            <div id="drop-zone-prompt" class="drop-zone">
+                                <span class="drop-zone__icon"><i data-lucide="file-text" class="prks-icon" aria-hidden="true"></i></span>
+                                <p id="drop-zone-label">Drop a PDF here<br><span class="drop-zone__label-sub">or click to browse · PDF files only</span></p>
+                            </div>
+                            <div id="upload-selected-file" class="upload-selected-file hidden">
+                                <span class="upload-selected-file__icon" aria-hidden="true"><i data-lucide="file-text" class="prks-icon"></i></span>
+                                <div class="upload-selected-file__meta">
+                                    <p class="upload-selected-file__kind">PDF</p>
+                                    <p class="upload-selected-file__name" id="upload-selected-file-name"></p>
+                                    <p class="upload-selected-file__size" id="upload-selected-file-size"></p>
+                                </div>
+                                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="upload-pdf-change-btn" title="Choose a different PDF">Change</button>
+                            </div>
+                            <div id="upload-pdf-preview-actions" class="upload-pdf-preview-actions hidden" hidden></div>
+                            <input type="file" id="work-file" accept=".pdf,application/pdf" class="file-input-hidden">
+                        </div>
+                        <p id="work-file-error" class="folder-field-error hidden" data-prks-field-error="work-file" role="alert"></p>
                     </div>
 
                     <div id="work-video-url-row" class="hidden">
                         <label for="work-video-url">Video URL</label>
                         <input type="url" id="work-video-url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
+                        <p id="work-video-url-error" class="folder-field-error hidden" data-prks-field-error="work-video-url" role="alert"></p>
                         <p class="meta-row meta-row--hint">
                             We’ll embed the video in the file view and auto-fill title/channel when possible.
                         </p>
+                        <div id="upload-viewer" class="upload-video-preview hidden"></div>
                         <div class="form-grid-2">
                             <div>
                                 <label for="work-video-channel">Channel / author</label>
@@ -521,6 +524,7 @@
                             <div>
                                 <label for="work-video-published-date">Date published</label>
                                 <input type="text" id="work-video-published-date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off">
+                                <p id="work-video-published-date-error" class="folder-field-error hidden" data-prks-field-error="work-video-published-date" role="alert"></p>
                             </div>
                         </div>
                         <div>
@@ -545,16 +549,21 @@
                             </p>
                         </div>
                     </div>
+                </section>
 
-                    <label for="work-title">Document Title</label>
-                    <input type="text" id="work-title" placeholder="e.g. Capital Volume 1">
-                    
+                <section class="prks-create-section" aria-labelledby="work-create-basic-heading">
+                    <h4 id="work-create-basic-heading" class="prks-create-section__title">Basic information</h4>
+
+                    <label for="work-title">Title</label>
+                    <input type="text" id="work-title" placeholder="e.g. Capital Volume 1" autocomplete="off">
+                    <p id="work-title-error" class="folder-field-error hidden" data-prks-field-error="work-title" role="alert"></p>
+
                     <label for="work-folder-search">Folder</label>
                     <div class="prks-combobox-with-action">
                         <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                             <div class="tag-add-shell__field">
                                 <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
-                                <input type="text" id="work-folder-search" class="tag-add-shell__input" placeholder="Search folder..." autocomplete="off" aria-label="Search folder">
+                                <input type="text" id="work-folder-search" class="tag-add-shell__input" placeholder="Library root" autocomplete="off" aria-label="Folder">
                             </div>
                             <input type="hidden" id="work-folder-id">
                             <div id="folder-results" class="combobox-results combobox-results--tag-panel hidden"></div>
@@ -562,10 +571,10 @@
                         <button type="button" onclick="quickCreateFolder()" class="prks-btn prks-btn--secondary prks-btn--sm" title="Create New Folder" aria-label="Create New Folder"><span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span></button>
                     </div>
 
-                    <label for="work-doc-type-trigger">Document type (BibLaTeX)</label>
+                    <label for="work-doc-type-trigger">Document type</label>
                     <div class="prks-doc-type-menu combobox-container">
                         <input type="hidden" id="work-doc-type" value="article">
-                        <button type="button" class="prks-doc-type-menu__trigger" id="work-doc-type-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="work-doc-type-listbox" aria-label="BibLaTeX document type">
+                        <button type="button" class="prks-doc-type-menu__trigger" id="work-doc-type-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="work-doc-type-listbox" aria-label="Document type">
                             <span class="prks-doc-type-menu__label">Article</span>
                             <span class="prks-doc-type-menu__caret"><i data-lucide="chevron-down" class="prks-icon" aria-hidden="true"></i></span>
                         </button>
@@ -580,10 +589,12 @@
                         <div id="work-upload-published-date-col">
                             <label for="work-date">Published date</label>
                             <input type="text" id="work-date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-label="Published date">
+                            <p id="work-date-error" class="folder-field-error hidden" data-prks-field-error="work-date" role="alert"></p>
                         </div>
                     </div>
 
-                    <label for="upload-person-search">Link Person(s) - <span class="meta-row--hint">Added in order for BibTeX</span></label>
+                    <label for="upload-person-search">People</label>
+                    <p class="meta-row meta-row--hint meta-row--compact">Search, then Link. Author is the default role.</p>
                     <div class="prks-upload-person-stack">
                         <div class="form-row prks-upload-person-stack__search">
                             <div class="prks-combobox-with-action">
@@ -619,85 +630,109 @@
                     <div id="upload-roles-list" class="tag-cloud status-chip-list">
                         <span class="status-chip-list__empty">No persons linked yet</span>
                     </div>
+                </section>
 
-                    <div id="work-upload-pdf-only-meta">
-                        <details id="work-upload-biblio-details" class="work-upload-meta__details">
-                            <summary class="work-upload-meta__summary">
-                                <span class="work-upload-meta__summary-chevron" aria-hidden="true"></span>
-                                <span class="work-upload-meta__summary-text">
-                                    <span class="work-upload-meta__summary-title-row">
-                                        <span class="work-upload-meta__summary-title">Bibliographic details</span>
-                                        <button type="button" class="prks-hint-btn work-upload-meta__hint-btn" data-prks-hint-type="upload-biblio-details" aria-label="What is included in bibliographic details" aria-expanded="false" aria-controls="prks-hint-popover">?</button>
-                                    </span>
+                <div id="work-upload-pdf-only-meta">
+                    <details id="work-upload-biblio-details" class="work-upload-meta__details">
+                        <summary class="work-upload-meta__summary">
+                            <span class="work-upload-meta__summary-chevron" aria-hidden="true"></span>
+                            <span class="work-upload-meta__summary-text">
+                                <span class="work-upload-meta__summary-title-row">
+                                    <span class="work-upload-meta__summary-title">Bibliographic details</span>
+                                    <span class="work-upload-meta__summary-optional">Optional</span>
+                                    <button type="button" class="prks-hint-btn work-upload-meta__hint-btn" data-prks-hint-type="upload-biblio-details" aria-label="What is included in bibliographic details" aria-expanded="false" aria-controls="prks-hint-popover">?</button>
                                 </span>
-                            </summary>
-                            <div class="work-upload-meta__details-body form-pane form-pane--tight">
-                                <label for="work-publisher">Publisher</label>
-                                <input type="text" id="work-publisher" autocomplete="off">
-
-                                <label for="work-location">Location (place of publication)</label>
-                                <input type="text" id="work-location" autocomplete="off" placeholder="e.g. Cambridge, UK or Paris; Berlin">
-
-                                <label for="work-edition">Edition</label>
-                                <input type="text" id="work-edition" placeholder="e.g. 2 or revised" autocomplete="off">
-
-                                <label for="work-journal">Journal</label>
-                                <input type="text" id="work-journal" autocomplete="off">
-
-                                <div class="form-grid-2">
-                                    <div><label for="work-volume">Volume</label><input type="text" id="work-volume" autocomplete="off"></div>
-                                    <div><label for="work-issue">Issue</label><input type="text" id="work-issue" autocomplete="off"></div>
-                                </div>
-                                <div class="form-grid-2">
-                                    <div><label for="work-pages">Pages</label><input type="text" id="work-pages" autocomplete="off"></div>
-                                    <div><label for="work-isbn">ISBN</label><input type="text" id="work-isbn" autocomplete="off"></div>
-                                </div>
-
-                                <label for="work-doi">DOI</label>
-                                <input type="text" id="work-doi" autocomplete="off">
-
-                                <label for="work-thumb-page">Thumbnail page (PDF)</label>
-                                <input type="number" id="work-thumb-page" min="1" step="1" inputmode="numeric" placeholder="1" autocomplete="off">
+                            </span>
+                        </summary>
+                        <div class="work-upload-meta__details-body form-pane form-pane--tight" inert>
+                            <div id="work-pdf-source-url-row">
+                                <label for="work-pdf-source-url">Original URL</label>
+                                <input type="url" id="work-pdf-source-url" placeholder="https://… (article or source page)" autocomplete="off">
+                                <p class="meta-row meta-row--hint">
+                                    If this PDF was saved from the web, keep the link here for reference and BibTeX.
+                                </p>
                             </div>
-                        </details>
-                    </div>
 
-                    <div id="work-upload-tags-block">
-                        <p class="tag-add-field__caption">Tags (optional)</p>
-                        <div class="tag-add-shell combobox-container tag-add-shell--flush">
-                            <div class="tag-add-shell__field">
-                                <span class="tag-add-shell__icon"><i data-lucide="plus" class="prks-icon" aria-hidden="true"></i></span>
-                                <input type="text" id="upload-tag-search" class="tag-add-shell__input" placeholder="Search or create tag…" maxlength="300" autocomplete="off" aria-label="Add tag for new file">
+                            <label for="work-publisher">Publisher</label>
+                            <input type="text" id="work-publisher" autocomplete="off">
+
+                            <label for="work-location">Location (place of publication)</label>
+                            <input type="text" id="work-location" autocomplete="off" placeholder="e.g. Cambridge, UK or Paris; Berlin">
+
+                            <label for="work-edition">Edition</label>
+                            <input type="text" id="work-edition" placeholder="e.g. 2 or revised" autocomplete="off">
+
+                            <label for="work-journal">Journal</label>
+                            <input type="text" id="work-journal" autocomplete="off">
+
+                            <div class="form-grid-2">
+                                <div><label for="work-volume">Volume</label><input type="text" id="work-volume" autocomplete="off"></div>
+                                <div><label for="work-issue">Issue</label><input type="text" id="work-issue" autocomplete="off"></div>
                             </div>
-                            <div id="upload-tag-results" class="combobox-results combobox-results--tag-panel hidden"></div>
+                            <div class="form-grid-2">
+                                <div><label for="work-pages">Pages</label><input type="text" id="work-pages" autocomplete="off"></div>
+                                <div><label for="work-isbn">ISBN</label><input type="text" id="work-isbn" autocomplete="off"></div>
+                            </div>
+
+                            <label for="work-doi">DOI</label>
+                            <input type="text" id="work-doi" autocomplete="off">
+
+                            <label for="work-thumb-page">Thumbnail page (PDF)</label>
+                            <input type="number" id="work-thumb-page" min="1" step="1" inputmode="numeric" placeholder="1" autocomplete="off">
                         </div>
-                        <div id="upload-tags-list" class="tag-cloud work-tags-list"></div>
-                    </div>
-
-                    <div class="prks-work-upload-status-field">
-                        <label for="work-status">Status</label>
-                        <div class="prks-segmented-wrap prks-segmented-wrap--status-row">
-                            <input type="hidden" id="work-status" value="Not Started">
-                            <div class="prks-segmented prks-segmented--status prks-segmented--single-row" role="radiogroup" aria-label="File status">
-                                <button type="button" class="prks-segmented__btn prks-segmented__btn--active" data-value="Not Started" aria-pressed="true" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="circle" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Not Started</span></button>
-                                <button type="button" class="prks-segmented__btn" data-value="Planned" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="clipboard-list" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Planned</span></button>
-                                <button type="button" class="prks-segmented__btn" data-value="In Progress" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="play" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">In Progress</span></button>
-                                <button type="button" class="prks-segmented__btn" data-value="Completed" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="check" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Completed</span></button>
-                                <button type="button" class="prks-segmented__btn" data-value="Paused" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="pause" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Paused</span></button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <label for="work-private-notes">Private notes (optional)</label>
-                    <textarea id="work-private-notes" class="textarea-sm" placeholder="Reminders for yourself; not shown in search index."></textarea>
-
-                    <label for="work-abstract">Abstract / Preface</label>
-                    <textarea id="work-abstract" class="textarea-lg textarea-flex" placeholder="Briefly describe why this document is relevant, or use paper abstract..."></textarea>
-                    
-                    <button id="save-work-btn" class="prks-btn prks-btn--primary">Add File</button>
-                    <div id="upload-status-msg" class="upload-status hidden"></div>
+                    </details>
                 </div>
+
+                <details id="work-upload-more-details" class="work-upload-meta__details">
+                    <summary class="work-upload-meta__summary">
+                        <span class="work-upload-meta__summary-chevron" aria-hidden="true"></span>
+                        <span class="work-upload-meta__summary-text">
+                            <span class="work-upload-meta__summary-title-row">
+                                <span class="work-upload-meta__summary-title">Tags, status &amp; notes</span>
+                                <span class="work-upload-meta__summary-optional">Optional</span>
+                            </span>
+                        </span>
+                    </summary>
+                    <div class="work-upload-meta__details-body form-pane form-pane--tight" inert>
+                        <div id="work-upload-tags-block">
+                            <p class="tag-add-field__caption">Tags</p>
+                            <div class="tag-add-shell combobox-container tag-add-shell--flush">
+                                <div class="tag-add-shell__field">
+                                    <span class="tag-add-shell__icon"><i data-lucide="plus" class="prks-icon" aria-hidden="true"></i></span>
+                                    <input type="text" id="upload-tag-search" class="tag-add-shell__input" placeholder="Search or create tag…" maxlength="300" autocomplete="off" aria-label="Add tag for new file">
+                                </div>
+                                <div id="upload-tag-results" class="combobox-results combobox-results--tag-panel hidden"></div>
+                            </div>
+                            <div id="upload-tags-list" class="tag-cloud work-tags-list"></div>
+                        </div>
+
+                        <div class="prks-work-upload-status-field">
+                            <label for="work-status">Status</label>
+                            <div class="prks-segmented-wrap prks-segmented-wrap--status-row">
+                                <input type="hidden" id="work-status" value="Not Started">
+                                <div class="prks-segmented prks-segmented--status prks-segmented--single-row" role="radiogroup" aria-label="File status">
+                                    <button type="button" class="prks-segmented__btn prks-segmented__btn--active" data-value="Not Started" aria-pressed="true" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="circle" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Not Started</span></button>
+                                    <button type="button" class="prks-segmented__btn" data-value="Planned" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="clipboard-list" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Planned</span></button>
+                                    <button type="button" class="prks-segmented__btn" data-value="In Progress" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="play" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">In Progress</span></button>
+                                    <button type="button" class="prks-segmented__btn" data-value="Completed" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="check" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Completed</span></button>
+                                    <button type="button" class="prks-segmented__btn" data-value="Paused" aria-pressed="false" role="radio"><span class="prks-segmented__btn-icon"><i data-lucide="pause" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span><span class="prks-segmented__btn-label">Paused</span></button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <label for="work-private-notes">Private notes</label>
+                        <textarea id="work-private-notes" class="textarea-sm" placeholder="Reminders for yourself; not shown in search index."></textarea>
+
+                        <label for="work-abstract">Abstract / Preface</label>
+                        <textarea id="work-abstract" class="textarea-lg textarea-flex" placeholder="Briefly describe why this document is relevant, or use paper abstract..."></textarea>
+                    </div>
+                </details>
             </div>
+        </div>
+        <div class="modal-footer modal-footer--sticky prks-form-actions">
+            <p id="upload-status-msg" class="upload-status hidden" role="status"></p>
+            <button type="button" class="prks-btn prks-btn--secondary" id="work-modal-cancel">Cancel</button>
+            <button type="button" id="save-work-btn" class="prks-btn prks-btn--primary">Create File</button>
         </div>
     </div>
 
@@ -958,6 +993,7 @@
     <script src="/js/api.js"></script>
     <script src="/js/doc-types.js"></script>
     <script src="/js/ui.js"></script>
+    <script src="/js/ribbon-create.js"></script>
     <script src="/js/components/work-cards.js"></script>
     <script src="/js/components/folders.js"></script>
     <script src="/js/research-links.js"></script>

@@ -47,15 +47,22 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertNotIn("function initSearch(", app)
         self.assertNotIn("prks.search.mode", app)
 
-    def test_ribbon_is_launcher_new_file_and_new_more(self):
+    def test_ribbon_is_launcher_new_file_and_create_menu(self):
         html = _read(_INDEX)
         self.assertIn('id="prks-command-palette-launch"', html)
         self.assertIn("Search or jump", html)
+        self.assertIn('id="prks-ribbon-create"', html)
         self.assertIn('id="prks-ribbon-new-file"', html)
         self.assertIn("openModal('work-modal')", html)
         self.assertIn('id="prks-ribbon-new-more"', html)
-        self.assertIn("New…", html)
+        self.assertIn('aria-haspopup="menu"', html)
+        self.assertNotIn("New…", html.split("top-ribbon__center", 1)[1].split("top-ribbon__right", 1)[0])
         center = html.split('top-ribbon__center', 1)[1].split("top-ribbon__right", 1)[0]
+        self.assertIn("New File", center)
+        self.assertIn('id="prks-ribbon-new-file"', center)
+        self.assertIn('id="prks-ribbon-new-more"', center)
+        self.assertEqual(center.count('id="prks-ribbon-new-file"'), 1)
+        self.assertEqual(center.count('id="prks-ribbon-new-more"'), 1)
         self.assertNotIn("Link Person to Work", center)
         self.assertNotIn("openModal('folder-modal')", center)
         self.assertNotIn("openModal('person-modal')", center)
@@ -64,6 +71,10 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertIn('id="prks-mobile-details-btn"', html)
         self.assertIn('id="role-modal"', html)
         self.assertIn("work-link-person-btn", _read(os.path.join(_FRONTEND, "js", "ui.js")))
+        self.assertIn('src="/js/ribbon-create.js"', html)
+        pal_at = html.find('src="/js/command-palette.js"')
+        ribbon_at = html.find('src="/js/ribbon-create.js"')
+        self.assertLess(ribbon_at, pal_at)
 
     def test_people_and_progress_disclosures(self):
         html = _read(_INDEX)

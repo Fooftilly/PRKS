@@ -6555,3 +6555,195 @@ class WorkspaceDragDropTests(_BrowserE2E):
         labels = page.locator("#prks-workspace-menu .prks-workspace-menu__item").all_text_contents()
         self.assertTrue(any("split view" in t for t in labels), labels)
         page.keyboard.press("Escape")
+
+
+class WorkCreateWorkflowTests(_BrowserE2E):
+    def test_unified_create_control_and_menu(self):
+        _server, page, _collector = self._start_app()
+        page.wait_for_selector("#prks-ribbon-create")
+        self.assertEqual(page.locator("#prks-ribbon-new-file").count(), 1)
+        self.assertEqual(page.locator("#prks-ribbon-new-more").count(), 1)
+        self.assertIn("New File", page.locator("#prks-ribbon-new-file").inner_text())
+        self.assertEqual(page.locator(".top-ribbon__center .ribbon-btn__label", has_text="New…").count(), 0)
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        self.assertTrue(page.locator("#work-create-source-heading").is_visible())
+        self.assertTrue(page.locator("#save-work-btn").is_visible())
+        page.locator("#work-modal-cancel").click()
+        page.locator("#work-modal").wait_for(state="hidden")
+        page.locator("#prks-ribbon-new-more").click()
+        page.wait_for_selector("#prks-create-menu:not([hidden])")
+        labels = [t.strip() for t in page.locator("#prks-create-menu [role='menuitem']").all_text_contents()]
+        self.assertEqual(labels, ["New File", "New Folder", "New Person", "New Group"])
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#folder-modal:not(.hidden)")
+        self.assertTrue(page.locator("#work-modal").evaluate("el => el.classList.contains('hidden')"))
+
+    def test_modal_hierarchy_source_state_and_sticky_footer(self):
+        _server, page, _collector = self._start_app()
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        self.assertTrue(page.locator("#work-title").is_visible())
+        self.assertTrue(page.locator("#work-folder-search").is_visible())
+        self.assertFalse(page.locator("#work-doi").is_visible())
+        self.assertFalse(page.locator("#work-abstract").is_visible())
+        self.assertEqual(
+            page.evaluate("() => document.getElementById('work-upload-biblio-details').open"),
+            False,
+        )
+        self.assertEqual(
+            page.evaluate(
+                "() => document.querySelector('#work-upload-biblio-details .work-upload-meta__details-body').hasAttribute('inert')"
+            ),
+            True,
+        )
+        page.fill("#work-title", "Kept Title")
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        self.assertIn("minimal.pdf", page.locator("#upload-selected-file-name").inner_text())
+        self.assertFalse(page.locator("#drop-zone-prompt").is_visible())
+        self.assertTrue(page.locator("#upload-drop-zone").evaluate("el => el.classList.contains('preview-pane--compact')"))
+        page.evaluate(
+            """() => {
+                const d = document.getElementById('work-upload-biblio-details');
+                d.open = true;
+                const m = document.getElementById('work-upload-more-details');
+                m.open = true;
+                if (window.prksSyncWorkModalDisclosureInert) window.prksSyncWorkModalDisclosureInert();
+            }"""
+        )
+        page.fill("#work-doi", "10.1000/e2e")
+        page.locator("#work-abstract").fill("Abstract for scroll")
+        page.evaluate(
+            """() => {
+                const body = document.querySelector('#work-modal .modal-body--scroll');
+                body.scrollTop = body.scrollHeight;
+            }"""
+        )
+        footer_visible = page.evaluate(
+            """() => {
+                const f = document.querySelector('#work-modal .modal-footer');
+                const r = f.getBoundingClientRect();
+                return r.height > 0 && r.top < window.innerHeight && r.bottom > 0;
+            }"""
+        )
+        self.assertTrue(footer_visible)
+        page.locator("#work-abstract").focus()
+        covered = page.evaluate(
+            """() => {
+                const el = document.getElementById('work-abstract');
+                const footer = document.querySelector('#work-modal .modal-footer');
+                const er = el.getBoundingClientRect();
+                const fr = footer.getBoundingClientRect();
+                return er.bottom > fr.top + 8 && er.top < fr.bottom;
+            }"""
+        )
+        self.assertFalse(covered)
+        self.assertEqual(page.locator("#work-doi").input_value(), "10.1000/e2e")
+        page.evaluate(
+            """() => {
+                document.getElementById('work-upload-biblio-details').open = false;
+                if (window.prksSyncWorkModalDisclosureInert) window.prksSyncWorkModalDisclosureInert();
+            }"""
+        )
+        self.assertEqual(
+            page.evaluate(
+                "() => document.querySelector('#work-upload-biblio-details .work-upload-meta__details-body').hasAttribute('inert')"
+            ),
+            True,
+        )
+        page.evaluate(
+            """() => {
+                document.getElementById('work-upload-biblio-details').open = true;
+                if (window.prksSyncWorkModalDisclosureInert) window.prksSyncWorkModalDisclosureInert();
+            }"""
+        )
+        self.assertEqual(page.locator("#work-doi").input_value(), "10.1000/e2e")
+        page.locator("#upload-pdf-change-btn").click()
+        page.locator("#drop-zone-prompt").wait_for(state="visible")
+        self.assertEqual(page.locator("#work-title").input_value(), "Kept Title")
+        self.assertEqual(
+            page.evaluate("() => window.__prksPendingUploadPdfFile instanceof File"),
+            False,
+        )
+
+    def test_kind_switch_clears_stale_source(self):
+        _server, page, _collector = self._start_app()
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.fill("#work-title", "Switch Title")
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file").wait_for(state="visible")
+        page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
+        page.locator("#work-video-url").wait_for(state="visible")
+        self.assertFalse(page.locator("#upload-source-pdf").is_visible())
+        self.assertEqual(page.evaluate("() => window.__prksPendingUploadPdfFile instanceof File"), False)
+        page.evaluate(
+            "() => { document.getElementById('work-video-url').value = 'https://example.com/watch?v=stale'; }"
+        )
+        page.locator(".prks-kind-toggle__btn[data-kind='pdf']").click()
+        page.locator("#upload-source-pdf").wait_for(state="visible")
+        self.assertEqual(page.locator("#work-video-url").input_value(), "")
+        self.assertEqual(page.locator("#work-title").input_value(), "Switch Title")
+
+    def test_validation_keeps_input_then_create_navigates(self):
+        _server, page, _collector = self._start_app()
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.fill("#work-title", "E2E Created Work")
+        page.locator("#save-work-btn").click()
+        page.locator("#work-file-error", has_text="Choose a PDF file.").wait_for()
+        self.assertFalse(page.locator("#work-modal").evaluate("el => el.classList.contains('hidden')"))
+        self.assertEqual(page.locator("#work-title").input_value(), "E2E Created Work")
+        focused = page.evaluate("() => document.activeElement && document.activeElement.id")
+        self.assertEqual(focused, "upload-drop-zone")
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        page.locator(".prks-pdf-toolbar__title, h2.page-header--work-title", has_text="E2E Created Work").first.wait_for()
+        self.assertTrue(page.locator("#work-modal").evaluate("el => el.classList.contains('hidden')"))
+
+    def test_create_button_blocks_duplicate_post(self):
+        _server, page, _collector = self._start_app()
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.fill("#work-title", "E2E Once")
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        held = []
+
+        def hold_create(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "POST" and path == "/api/works":
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/works", hold_create)
+        try:
+            page.locator("#save-work-btn").click()
+            page.wait_for_function("() => document.getElementById('save-work-btn').disabled === true")
+            self.assertEqual(page.locator("#save-work-btn").inner_text().strip(), "Creating…")
+            page.locator("#save-work-btn").click(force=True)
+            deadline = time.time() + 8
+            while time.time() < deadline and len(held) < 1:
+                page.wait_for_timeout(50)
+            self.assertEqual(len(held), 1)
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works", hold_create)
+            except Exception:
+                pass
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        titles = page.evaluate(
+            """async () => {
+                const rows = await fetchWorks();
+                return rows.filter(w => w.title === 'E2E Once').length;
+            }"""
+        )
+        self.assertEqual(titles, 1)
+

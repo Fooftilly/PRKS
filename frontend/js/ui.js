@@ -447,6 +447,11 @@ function openModal(id) {
         window.prksCloseTagsAliasModal();
     }
     prksHideModalUnsavedConfirm();
+    const backdrop = document.getElementById('modal-backdrop');
+    if (backdrop && backdrop.classList.contains('hidden')) {
+        const ae = document.activeElement;
+        window.__prksModalFocusRestore = ae && ae !== document.body ? ae : window.__prksModalFocusRestore;
+    }
     document.getElementById('modal-backdrop').classList.remove('hidden');
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     const modalEl = document.getElementById(id);
@@ -455,8 +460,31 @@ function openModal(id) {
     if (id === 'role-modal') {
         prepareRoleModal();
     } else if (id === 'work-modal') {
-        populateUploadComboboxes();
         resetUploadModal();
+        const after = () => {
+            if (typeof window.prksSetWorkModalFolderFromId === 'function') {
+                window.prksSetWorkModalFolderFromId(window.prksFolderIdFromLocation ? window.prksFolderIdFromLocation() : '');
+            }
+            if (typeof window.prksSyncWorkModalDisclosureInert === 'function') {
+                window.prksSyncWorkModalDisclosureInert();
+            }
+            if (typeof window.prksClearWorkModalErrors === 'function') {
+                window.prksClearWorkModalErrors();
+            }
+            if (typeof window.prksSetWorkModalCreateBusy === 'function') {
+                window.prksSetWorkModalCreateBusy(false);
+            }
+            if (typeof window.prksFocusWorkModalInitial === 'function') {
+                window.prksFocusWorkModalInitial();
+            }
+            prksScheduleModalBaselineCapture('work-modal');
+        };
+        const p = populateUploadComboboxes();
+        if (p && typeof p.then === 'function') {
+            p.then(after).catch(after);
+        } else {
+            after();
+        }
     } else if (id === 'person-modal') {
         resetPersonAliasAutoSyncState();
         syncPersonAliasesFromNames();
@@ -863,15 +891,27 @@ function closeModals() {
     // If playlist modal was opened from "New File" flow, return to it.
     if (playlistWasOpen && window.__prksReturnToWorkModalAfterPlaylist === true) {
         window.__prksReturnToWorkModalAfterPlaylist = false;
-        if (typeof openModal === 'function') {
-            openModal('work-modal');
-            if (typeof window.prksSyncUploadModalKindUi === 'function') {
-                window.prksSyncUploadModalKindUi();
-            }
-            if (typeof window.__prksRefreshAllPlaylistSelects === 'function') {
-                void window.__prksRefreshAllPlaylistSelects();
-            }
+        document.getElementById('modal-backdrop').classList.remove('hidden');
+        const workModal = document.getElementById('work-modal');
+        if (workModal) workModal.classList.remove('hidden');
+        if (typeof window.prksSyncUploadModalKindUi === 'function') {
+            window.prksSyncUploadModalKindUi();
         }
+        if (typeof window.__prksRefreshAllPlaylistSelects === 'function') {
+            void window.__prksRefreshAllPlaylistSelects();
+        }
+        return;
+    }
+    const restore = window.__prksModalFocusRestore;
+    window.__prksModalFocusRestore = null;
+    if (restore && typeof restore.focus === 'function') {
+        try {
+            if (!document.contains(restore) && restore !== document.body) {
+                /* skip */
+            } else {
+                restore.focus({ preventScroll: true });
+            }
+        } catch (_e) {}
     }
     prksResetModalBaselines();
 }
@@ -4203,12 +4243,204 @@ function removeUploadPdfPreview() {
     }
     const actions = document.getElementById('upload-pdf-preview-actions');
     if (actions) actions.classList.add('hidden');
+    const selected = document.getElementById('upload-selected-file');
+    if (selected) selected.classList.add('hidden');
+    const nameEl = document.getElementById('upload-selected-file-name');
+    if (nameEl) nameEl.textContent = '';
+    const sizeEl = document.getElementById('upload-selected-file-size');
+    if (sizeEl) sizeEl.textContent = '';
     const prompt = document.getElementById('drop-zone-prompt');
     if (prompt) prompt.classList.remove('hidden');
+    const zone = document.getElementById('upload-drop-zone');
+    if (zone) {
+        zone.classList.remove('preview-pane--compact');
+        zone.removeAttribute('aria-invalid');
+    }
     const f = document.getElementById('work-file');
     if (f) f.value = '';
     window.__prksPendingUploadPdfFile = null;
 }
+
+function prksFormatByteSize(n) {
+    const bytes = Number(n);
+    if (!Number.isFinite(bytes) || bytes < 0) return '';
+    if (bytes < 1024) return `${Math.round(bytes)} B`;
+    if (bytes < 1024 * 1024) {
+        const kb = bytes / 1024;
+        return `${kb >= 10 ? Math.round(kb) : kb.toFixed(1).replace(/\.0$/, '')} KB`;
+    }
+    const mb = bytes / (1024 * 1024);
+    return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1).replace(/\.0$/, '')} MB`;
+}
+
+function prksShowUploadPdfSelected(file) {
+    if (!file) return;
+    const prompt = document.getElementById('drop-zone-prompt');
+    const selected = document.getElementById('upload-selected-file');
+    const zone = document.getElementById('upload-drop-zone');
+    const nameEl = document.getElementById('upload-selected-file-name');
+    const sizeEl = document.getElementById('upload-selected-file-size');
+    const viewer = document.getElementById('upload-viewer');
+    if (prompt) prompt.classList.add('hidden');
+    if (viewer) {
+        viewer.innerHTML = '';
+        viewer.classList.add('hidden');
+    }
+    if (nameEl) nameEl.textContent = String(file.name || 'PDF');
+    if (sizeEl) sizeEl.textContent = prksFormatByteSize(file.size);
+    if (selected) selected.classList.remove('hidden');
+    if (zone) {
+        zone.classList.add('preview-pane--compact');
+        zone.removeAttribute('aria-invalid');
+    }
+    if (typeof prksRefreshIcons === 'function' && selected) prksRefreshIcons(selected);
+}
+
+function prksWorkModalDisclosureIds() {
+    return ['work-upload-biblio-details', 'work-upload-more-details'];
+}
+
+function prksSyncWorkModalDisclosureInert() {
+    prksWorkModalDisclosureIds().forEach((id) => {
+        const details = document.getElementById(id);
+        if (!details) return;
+        const body = details.querySelector('.work-upload-meta__details-body');
+        if (!body) return;
+        if (details.open) body.removeAttribute('inert');
+        else body.setAttribute('inert', '');
+    });
+}
+
+function prksBindWorkModalDisclosures() {
+    prksWorkModalDisclosureIds().forEach((id) => {
+        const details = document.getElementById(id);
+        if (!details || details.dataset.prksInertBound === '1') return;
+        details.dataset.prksInertBound = '1';
+        details.addEventListener('toggle', () => prksSyncWorkModalDisclosureInert());
+    });
+}
+
+function prksClearWorkModalErrors() {
+    const modal = document.getElementById('work-modal');
+    if (!modal) return;
+    modal.querySelectorAll('[data-prks-field-error]').forEach((el) => {
+        el.textContent = '';
+        el.classList.add('hidden');
+    });
+    modal.querySelectorAll('[aria-invalid="true"]').forEach((el) => {
+        el.removeAttribute('aria-invalid');
+    });
+    const status = document.getElementById('upload-status-msg');
+    if (status) {
+        status.textContent = '';
+        status.classList.add('hidden');
+    }
+}
+
+function prksSetWorkModalFieldError(control, message, errorId) {
+    const msg = String(message || '').trim();
+    if (control && control.setAttribute) control.setAttribute('aria-invalid', 'true');
+    const err = errorId ? document.getElementById(errorId) : null;
+    if (err) {
+        err.textContent = msg;
+        err.classList.remove('hidden');
+        if (control && control.id) err.setAttribute('for', control.id);
+    }
+    return control;
+}
+
+function prksFocusWorkModalControl(el) {
+    if (!el || typeof el.focus !== 'function') return;
+    try {
+        el.focus({ preventScroll: false });
+        if (typeof el.scrollIntoView === 'function') {
+            el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+    } catch (_e) {
+        try {
+            el.focus();
+        } catch (_e2) {}
+    }
+}
+
+function prksFocusWorkModalInitial() {
+    const kindEl = document.getElementById('work-source-kind');
+    const kind = kindEl ? String(kindEl.value || 'pdf') : 'pdf';
+    if (kind === 'video') {
+        const url = document.getElementById('work-video-url');
+        prksFocusWorkModalControl(url);
+        return;
+    }
+    if (window.__prksPendingUploadPdfFile instanceof File) {
+        prksFocusWorkModalControl(document.getElementById('work-title'));
+        return;
+    }
+    const zone = document.getElementById('upload-drop-zone');
+    prksFocusWorkModalControl(zone || document.getElementById('work-title'));
+}
+
+function prksSetWorkModalCreateBusy(busy) {
+    const btn = document.getElementById('save-work-btn');
+    if (!btn) return;
+    const on = !!busy;
+    btn.disabled = on;
+    btn.setAttribute('aria-busy', on ? 'true' : 'false');
+    if (!btn.dataset.prksIdleLabel) btn.dataset.prksIdleLabel = 'Create File';
+    btn.textContent = on ? 'Creating…' : btn.dataset.prksIdleLabel;
+}
+
+function prksFolderIdFromLocation() {
+    if (typeof prksParseRoute === 'function') {
+        const r = prksParseRoute(window.location.hash);
+        if (r && r.name === 'folder-detail' && r.params && r.params.folderId) {
+            return String(r.params.folderId);
+        }
+    }
+    const hash = String(window.location.hash || '');
+    if (hash.startsWith('#/folders/')) {
+        const part = hash.split('/')[2] || '';
+        return decodeURIComponent(part.split('?')[0] || '');
+    }
+    return '';
+}
+
+function prksSetWorkModalFolderFromId(folderId) {
+    const hidden = document.getElementById('work-folder-id');
+    const search = document.getElementById('work-folder-search');
+    if (!hidden || !search) return;
+    const id = String(folderId || '').trim();
+    if (!id) {
+        hidden.value = '';
+        search.value = 'Library root';
+        return;
+    }
+    hidden.value = id;
+    let folders = [];
+    try {
+        folders = Array.isArray(allFolders) ? allFolders : [];
+    } catch (_e) {
+        folders = [];
+    }
+    const row = folders.find((f) => String(f.id) === id);
+    const label =
+        row && typeof window.prksFolderRowLabel === 'function'
+            ? window.prksFolderRowLabel(row, folders)
+            : row && row.title
+              ? String(row.title)
+              : id;
+    search.value = label;
+}
+
+window.prksFormatByteSize = prksFormatByteSize;
+window.prksShowUploadPdfSelected = prksShowUploadPdfSelected;
+window.prksSyncWorkModalDisclosureInert = prksSyncWorkModalDisclosureInert;
+window.prksClearWorkModalErrors = prksClearWorkModalErrors;
+window.prksSetWorkModalFieldError = prksSetWorkModalFieldError;
+window.prksFocusWorkModalControl = prksFocusWorkModalControl;
+window.prksFocusWorkModalInitial = prksFocusWorkModalInitial;
+window.prksSetWorkModalCreateBusy = prksSetWorkModalCreateBusy;
+window.prksFolderIdFromLocation = prksFolderIdFromLocation;
+window.prksSetWorkModalFolderFromId = prksSetWorkModalFolderFromId;
 
 function resetUploadModal() {
     uploadRoles = [];
@@ -4247,13 +4479,22 @@ function resetUploadModal() {
     if (wPriv) wPriv.value = '';
     const bibDetails = document.getElementById('work-upload-biblio-details');
     if (bibDetails) bibDetails.open = false;
+    const moreDetails = document.getElementById('work-upload-more-details');
+    if (moreDetails) moreDetails.open = false;
+    if (typeof prksSyncWorkModalDisclosureInert === 'function') {
+        prksSyncWorkModalDisclosureInert();
+    }
     document.getElementById('work-abstract').value = '';
     const f = document.getElementById('work-file');
     if (f) f.value = '';
     const vid = document.getElementById('work-video-url');
     if (vid) vid.value = '';
-    document.getElementById('work-folder-id').value = '';
-    document.getElementById('work-folder-search').value = '';
+    if (typeof prksSetWorkModalFolderFromId === 'function') {
+        prksSetWorkModalFolderFromId('');
+    } else {
+        document.getElementById('work-folder-id').value = '';
+        document.getElementById('work-folder-search').value = 'Library root';
+    }
     document.getElementById('upload-person-id').value = '';
     document.getElementById('upload-person-search').value = '';
     prksRefreshRoleCreditPicker('upload-role', null);
@@ -4268,6 +4509,7 @@ function resetUploadModal() {
     if (pdfSrc) pdfSrc.value = '';
     const kind = document.getElementById('work-source-kind');
     if (kind) kind.value = 'pdf';
+    window.__prksUploadUiKind = 'pdf';
     if (typeof window.prksSyncUploadModalKindUi === 'function') {
         window.prksSyncUploadModalKindUi();
     }
@@ -4412,7 +4654,19 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
     const excludePersonIds =
         comboboxOptions.excludePersonIds instanceof Set ? comboboxOptions.excludePersonIds : null;
 
-    input.onfocus = () => renderResults();
+    input.onfocus = () => {
+        if (
+            type === 'folder' &&
+            hidden &&
+            !String(hidden.value || '').trim() &&
+            String(input.value || '') === 'Library root'
+        ) {
+            try {
+                input.select();
+            } catch (_e) {}
+        }
+        renderResults();
+    };
     input.oninput = () => {
         hidden.value = '';
         renderResults();
@@ -4455,11 +4709,38 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
             if (type === 'person') {
                 return personMatchesComboboxQuery(item, val);
             }
+            if (type === 'folder') {
+                const hier =
+                    typeof window.prksFolderRowLabel === 'function'
+                        ? window.prksFolderRowLabel(item, data)
+                        : String(item.title || '');
+                const title = String(item.title || '');
+                return (
+                    !val ||
+                    hier.toLowerCase().includes(val) ||
+                    title.toLowerCase().includes(val)
+                );
+            }
             const label = item.title || '';
             return label.toLowerCase().includes(val);
         });
 
         results.innerHTML = '';
+        if (type === 'folder') {
+            const rootItem = document.createElement('div');
+            rootItem.className = 'result-item';
+            rootItem.textContent = 'Library root';
+            rootItem.onmousedown = (e) => {
+                e.preventDefault();
+                input.value = 'Library root';
+                hidden.value = '';
+                prksHideInlineComboboxResults(results);
+            };
+            const q = valRaw.trim().toLowerCase();
+            if (!q || 'library root'.includes(q) || 'no folder'.includes(q)) {
+                results.appendChild(rootItem);
+            }
+        }
         if (type === 'person' && valRaw.trim() && typeof comboboxOptions.onQuickCreate === 'function') {
             const create = document.createElement('div');
             create.className = 'result-item result-item--create';
@@ -4487,7 +4768,9 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
                 const label =
                     type === 'person'
                         ? `${item.first_name || ''} ${item.last_name || ''}`.trim()
-                        : item.title || '';
+                        : type === 'folder' && typeof window.prksFolderRowLabel === 'function'
+                          ? window.prksFolderRowLabel(item, data)
+                          : item.title || '';
                 const div = document.createElement('div');
                 div.className =
                     type === 'person' ? 'result-item result-item--person-pick' : 'result-item';
@@ -4590,7 +4873,7 @@ function renderUploadRoles() {
         return;
     }
     container.innerHTML = uploadRoles.map((r, idx) => `
-        <span class="tag author-tag">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${escapeHtml(r.person_name)} (${escapeHtml(r.role_type)}) <i onclick="removeUploadRole(${idx})" class="status-chip-remove">&times;</i></span>
+        <span class="tag author-tag">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} <span class="author-tag__name">${escapeHtml(r.person_name)}</span> <span class="author-tag__role">${escapeHtml(r.role_type)}</span> <button type="button" class="status-chip-remove" onclick="removeUploadRole(${idx})" aria-label="Remove ${escapeHtml(r.person_name)}">&times;</button></span>
     `).join(' ');
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
@@ -4604,47 +4887,54 @@ function initUploadDragAndDrop() {
     const zone = document.getElementById('upload-drop-zone');
     const input = document.getElementById('work-file');
     if (!zone) return;
+    prksBindWorkModalDisclosures();
+
+    const cancelBtn = document.getElementById('work-modal-cancel');
+    if (cancelBtn && cancelBtn.dataset.bound !== '1') {
+        cancelBtn.dataset.bound = '1';
+        cancelBtn.addEventListener('click', () => requestModalClose('button'));
+    }
+
+    const personSearch = document.getElementById('upload-person-search');
+    if (personSearch && personSearch.dataset.prksEnterLinkBound !== '1') {
+        personSearch.dataset.prksEnterLinkBound = '1';
+        personSearch.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            const hidden = document.getElementById('upload-person-id');
+            if (hidden && hidden.value) {
+                e.preventDefault();
+                addRoleToUploadList();
+            }
+        });
+    }
 
     if (zone.dataset.prksClickBound !== '1') {
         zone.dataset.prksClickBound = '1';
         zone.addEventListener('click', (e) => {
-            const viewer = document.getElementById('upload-viewer');
+            if (e.target.closest('#upload-pdf-change-btn') || e.target.closest('#upload-selected-file')) {
+                if (e.target.closest('#upload-pdf-change-btn')) return;
+                return;
+            }
             const prompt = document.getElementById('drop-zone-prompt');
-            const actions = document.getElementById('upload-pdf-preview-actions');
-            if (e.target.closest('#upload-pdf-remove-btn')) {
-                return;
-            }
-            let clickInsideViewer = false;
-            if (viewer && !viewer.classList.contains('hidden')) {
-                if (typeof e.composedPath === 'function') {
-                    const path = e.composedPath();
-                    clickInsideViewer = path.includes(viewer);
-                }
-                if (!clickInsideViewer) {
-                    clickInsideViewer = viewer.contains(e.target);
-                }
-            }
-            if (clickInsideViewer) {
-                return;
-            }
-            if (actions && !actions.classList.contains('hidden') && actions.contains(e.target)) {
-                return;
-            }
             if (prompt && !prompt.classList.contains('hidden')) {
                 input.click();
                 return;
             }
-            if (viewer && !viewer.classList.contains('hidden')) {
-                return;
+        });
+        zone.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const prompt = document.getElementById('drop-zone-prompt');
+            if (prompt && !prompt.classList.contains('hidden')) {
+                e.preventDefault();
+                input.click();
             }
-            input.click();
         });
     }
 
-    const removePdfBtn = document.getElementById('upload-pdf-remove-btn');
-    if (removePdfBtn && removePdfBtn.dataset.bound !== '1') {
-        removePdfBtn.dataset.bound = '1';
-        removePdfBtn.addEventListener('click', (e) => {
+    const changePdfBtn = document.getElementById('upload-pdf-change-btn');
+    if (changePdfBtn && changePdfBtn.dataset.bound !== '1') {
+        changePdfBtn.dataset.bound = '1';
+        changePdfBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             removeUploadPdfPreview();
         });
@@ -4671,7 +4961,7 @@ function initUploadDragAndDrop() {
         // If some other code updates kind.value, keep UI in sync.
         kind.addEventListener('change', () => {
             if (typeof window.prksSyncUploadModalKindUi === 'function') {
-                window.prksSyncUploadModalKindUi();
+                window.prksSyncUploadModalKindUi({ switched: true });
             }
         });
     }
@@ -4682,13 +4972,14 @@ function initUploadDragAndDrop() {
             btn.addEventListener('click', () => {
                 const next = String(btn.getAttribute('data-kind') || '').trim();
                 if (!next || !kind) return;
+                const prev = String(kind.value || 'pdf');
+                if (next === prev) return;
                 kind.value = next;
-                // Fire a change event so existing logic reacts.
                 try {
                     kind.dispatchEvent(new Event('change', { bubbles: true }));
                 } catch (_e) {
                     if (typeof window.prksSyncUploadModalKindUi === 'function') {
-                        window.prksSyncUploadModalKindUi();
+                        window.prksSyncUploadModalKindUi({ switched: true });
                     }
                 }
             });
@@ -4723,10 +5014,12 @@ function initUploadDragAndDrop() {
     }
 
     if (!window.prksSyncUploadModalKindUi) {
-        window.prksSyncUploadModalKindUi = function () {
+        window.prksSyncUploadModalKindUi = function (opts) {
+            const switched = !!(opts && opts.switched);
             const kindEl = document.getElementById('work-source-kind');
             const toggleBtns = Array.from(document.querySelectorAll('.prks-kind-toggle__btn[data-kind]'));
             const vrow = document.getElementById('work-video-url-row');
+            const pdfSource = document.getElementById('upload-source-pdf');
             const pdfUrlRow = document.getElementById('work-pdf-source-url-row');
             const dropLabel = document.getElementById('drop-zone-label');
             const prompt = document.getElementById('drop-zone-prompt');
@@ -4735,8 +5028,9 @@ function initUploadDragAndDrop() {
             const docType = document.getElementById('work-doc-type');
             const urlDate = document.getElementById('work-video-urldate');
             const kindVal = kindEl ? String(kindEl.value || 'pdf') : 'pdf';
+            const prevKind = window.__prksUploadUiKind != null ? String(window.__prksUploadUiKind) : 'pdf';
+            window.__prksUploadUiKind = kindVal;
 
-            // Sync toggle button active state.
             if (toggleBtns.length) {
                 toggleBtns.forEach((b) => {
                     const k = String(b.getAttribute('data-kind') || '').trim();
@@ -4747,6 +5041,7 @@ function initUploadDragAndDrop() {
             }
 
             if (vrow) vrow.classList.toggle('hidden', kindVal !== 'video');
+            if (pdfSource) pdfSource.classList.toggle('hidden', kindVal !== 'pdf');
             if (pdfUrlRow) pdfUrlRow.classList.toggle('hidden', kindVal !== 'pdf');
 
             const pdfMeta = document.getElementById('work-upload-pdf-only-meta');
@@ -4754,29 +5049,36 @@ function initUploadDragAndDrop() {
             const pubCol = document.getElementById('work-upload-published-date-col');
             if (pubCol) pubCol.classList.toggle('hidden', kindVal !== 'pdf');
 
-            const pdfActions = document.getElementById('upload-pdf-preview-actions');
-            if (pdfActions) pdfActions.classList.add('hidden');
-            if (kindVal === 'video' && window.__prksUploadPdfBlobUrl) {
-                try {
-                    URL.revokeObjectURL(window.__prksUploadPdfBlobUrl);
-                } catch (_e) {}
-                window.__prksUploadPdfBlobUrl = null;
-                prksTeardownUploadEmbedViewer();
+            if (switched && kindVal !== prevKind) {
+                if (kindVal === 'video') {
+                    removeUploadPdfPreview();
+                } else {
+                    const vid = document.getElementById('work-video-url');
+                    if (vid) vid.value = '';
+                    window.__prksLastVideoPreviewUrl = '';
+                    window.__prksUploadVideoMeta = null;
+                    if (viewer) {
+                        viewer.innerHTML = '';
+                        viewer.classList.add('hidden');
+                    }
+                    const chan = document.getElementById('work-video-channel');
+                    if (chan) chan.value = '';
+                }
+                if (typeof prksClearWorkModalErrors === 'function') prksClearWorkModalErrors();
             }
-            if (kindVal === 'video') {
-                window.__prksPendingUploadPdfFile = null;
-            }
-            if (viewer) viewer.innerHTML = '';
-            if (viewer) viewer.classList.add('hidden');
-            if (prompt) prompt.classList.remove('hidden');
-            window.__prksLastVideoPreviewUrl = '';
-            window.__prksUploadVideoMeta = null;
 
             if (dropLabel) {
-                if (kindVal === 'pdf') dropLabel.innerHTML = 'Drag & Drop a PDF here<br><span class="drop-zone__label-sub">or click to browse</span>';
-                else dropLabel.innerHTML = 'Video URL mode<br><span class="drop-zone__label-sub">Paste a link on the right</span>';
+                dropLabel.innerHTML = 'Drop a PDF here<br><span class="drop-zone__label-sub">or click to browse · PDF files only</span>';
             }
             if (fileInput) fileInput.disabled = kindVal === 'video';
+
+            if (kindVal === 'pdf' && window.__prksPendingUploadPdfFile instanceof File) {
+                if (typeof prksShowUploadPdfSelected === 'function') {
+                    prksShowUploadPdfSelected(window.__prksPendingUploadPdfFile);
+                }
+            } else if (kindVal === 'pdf' && prompt && !window.__prksPendingUploadPdfFile) {
+                prompt.classList.remove('hidden');
+            }
 
             if (kindVal === 'video') {
                 if (typeof initPrksDocTypeMenu === 'function') {
@@ -4815,7 +5117,7 @@ function initUploadDragAndDrop() {
             const prompt = document.getElementById('drop-zone-prompt');
             const pdfActions = document.getElementById('upload-pdf-preview-actions');
             const channelInput = document.getElementById('work-video-channel');
-            if (!viewer || !prompt) return;
+            if (!viewer) return;
 
             if (
                 url &&
@@ -4830,7 +5132,7 @@ function initUploadDragAndDrop() {
             if (pdfActions) pdfActions.classList.add('hidden');
             viewer.innerHTML = '';
             viewer.classList.add('hidden');
-            prompt.classList.remove('hidden');
+            if (prompt) prompt.classList.remove('hidden');
 
             if (!url) {
                 window.__prksLastVideoPreviewUrl = '';
@@ -4856,7 +5158,7 @@ function initUploadDragAndDrop() {
 
             if (embedUrl) {
                 if (pdfActions) pdfActions.classList.add('hidden');
-                prompt.classList.add('hidden');
+                if (prompt) prompt.classList.add('hidden');
                 viewer.classList.remove('hidden');
                 viewer.innerHTML =
                     `<div class="prks-video-preview">` +
@@ -5015,57 +5317,38 @@ function handleUploadFile(file) {
     const kindEl = document.getElementById('work-source-kind');
     const kind = kindEl ? String(kindEl.value || 'pdf') : 'pdf';
     if (kind === 'video') {
-        void prksAlertMessage('In Video URL mode, paste the link on the right.', 'Notice');
+        void prksAlertMessage('In Video URL mode, paste the link in Source.', 'Notice');
         return;
     }
     if (!file) return;
     const name = String(file.name || '').toLowerCase();
     const isPdf = name.endsWith('.pdf') || file.type === 'application/pdf';
     if (kind === 'pdf' && !isPdf) {
-        void prksAlertMessage('Please select a valid PDF file.', 'Validation');
+        if (typeof prksClearWorkModalErrors === 'function') prksClearWorkModalErrors();
+        const zone = document.getElementById('upload-drop-zone');
+        if (typeof prksSetWorkModalFieldError === 'function') {
+            prksSetWorkModalFieldError(zone, 'Choose a PDF file.', 'work-file-error');
+            prksFocusWorkModalControl(zone);
+        } else {
+            void prksAlertMessage('Please select a valid PDF file.', 'Validation');
+        }
         return;
     }
-    
-    // Preview Logic
-    const viewerContainer = document.getElementById('upload-viewer');
-    const prompt = document.getElementById('drop-zone-prompt');
-    const pdfActions = document.getElementById('upload-pdf-preview-actions');
-
-    if (!viewerContainer || !prompt) return;
-
-    if (window.__prksUploadPdfBlobUrl) {
-        try {
-            URL.revokeObjectURL(window.__prksUploadPdfBlobUrl);
-        } catch (_e) {}
-        window.__prksUploadPdfBlobUrl = null;
-    }
-    prksTeardownUploadEmbedViewer();
-    if (viewerContainer) viewerContainer.innerHTML = '';
-
-    prompt.classList.add('hidden');
-    viewerContainer.classList.remove('hidden');
-    if (pdfActions) pdfActions.classList.remove('hidden');
 
     window.__prksPendingUploadPdfFile = file;
-    import('/js/pdf-viewer-runtime.js')
-        .then((mod) =>
-            mod.createPrksPdfViewer({
-                target: viewerContainer,
-                src: file,
-                mode: 'preview',
-                annotationAuthor: getPrksAnnotationAuthor(),
-            })
-        )
-        .then((viewer) => {
-            window.uploadViewer = viewer;
-        })
-        .catch((err) => {
-            console.error('Failed to load PDF preview', err);
-        });
-        
-    // Auto-fill title if empty
+    prksShowUploadPdfSelected(file);
+    if (typeof prksClearWorkModalErrors === 'function') {
+        const err = document.getElementById('work-file-error');
+        if (err) {
+            err.textContent = '';
+            err.classList.add('hidden');
+        }
+        const zone = document.getElementById('upload-drop-zone');
+        if (zone) zone.removeAttribute('aria-invalid');
+    }
+
     const titleInput = document.getElementById('work-title');
-    if (!titleInput.value) {
+    if (titleInput && !titleInput.value) {
         titleInput.value = file.name
             .replace(/\.pdf$/i, '')
             .replace(/_/g, ' ');

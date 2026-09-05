@@ -908,7 +908,9 @@ Promise.resolve()
         });
 
         newMore.click();
-        assertEq('New… create scope', root.prksCommandPaletteScope(), 'create');
+        assertEq('New… does not open palette', root.prksCommandPaletteIsOpen(), false);
+        root.prksOpenCommandPalette({ scope: 'create' });
+        assertEq('create scope via API', root.prksCommandPaletteScope(), 'create');
         root.prksCloseCommandPalette();
 
         location.hash = '#/folders';

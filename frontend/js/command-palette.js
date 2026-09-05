@@ -1671,13 +1671,6 @@
                 openPalette({ scope: 'all' });
             });
         }
-        const more = d.getElementById('prks-ribbon-new-more');
-        if (more && more.getAttribute('data-palette-bound') !== '1') {
-            more.setAttribute('data-palette-bound', '1');
-            more.addEventListener('click', function () {
-                openPalette({ scope: 'create' });
-            });
-        }
         syncShortcutHint();
     }
 

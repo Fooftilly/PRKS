@@ -753,6 +753,20 @@ Destructive action uses the danger visual treatment, not ordinary accent primary
 
 Close controls are `.prks-icon-btn`.
 
+### New File / Work creation
+
+Creating a Work is a short primary workflow with optional depth, not a database form. Production creation goes through `#work-modal` (`POST /api/works`). Do not duplicate that path.
+
+**Entry:** One ribbon control (`#prks-ribbon-create`). Primary click opens New File. The chevron menu lists the existing create actions (New File, New Folder, New Person, New Group) and calls the same `openModal` handlers. Do not keep a second permanent `New…` button. Command-palette create commands remain available.
+
+**Hierarchy:** Source (type + PDF drop or video URL) → basic information (title, folder, document type, date/year, people) → optional bibliographic details and tags/status/notes via disclosure. Do not remove fields; hide advanced ones until opened. Collapsed disclosure content is not keyboard-focusable (`inert`).
+
+**Source state:** The current source type and the selected file or URL stay visible. A selected PDF uses a compact filename/size/Change chip, not an oversized empty drop target. Switching PDF ↔ Video clears the other source so a hidden value cannot be submitted.
+
+**Actions:** Sticky modal footer keeps Cancel (secondary) and Create File (primary) visible while the body scrolls. Create File is the only prominent submit. Duplicate submit is blocked (`Creating…`). Recoverable validation stays inline (`aria-invalid`), focuses the first invalid control, and preserves entered metadata. Success closes the modal and uses `prksNavigate` to the new Work.
+
+Processing Inbox stays a separate production path. This dialog is not a post-creation PDF attach flow.
+
 ### Application shell
 
 The shell is one visual system, not three.

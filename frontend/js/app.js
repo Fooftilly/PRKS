@@ -131,6 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initTabs();
     initForms();
     if (typeof prksInitNavDisclosures === 'function') prksInitNavDisclosures();
+    if (typeof prksInitRibbonCreate === 'function') prksInitRibbonCreate();
     if (typeof prksInitCommandPalette === 'function') prksInitCommandPalette();
     if (typeof prksInitSavedViews === 'function') prksInitSavedViews();
     initUploadDragAndDrop();
@@ -1930,6 +1931,7 @@ function initForms() {
     }
 
     document.getElementById('save-work-btn').onclick = async () => {
+        if (window.__prksWorkCreateInFlight) return;
         const kindEl = document.getElementById('work-source-kind');
         const sourceKind = kindEl ? String(kindEl.value || 'pdf') : 'pdf';
         const fileInput = document.getElementById('work-file');
@@ -1941,6 +1943,67 @@ function initForms() {
                 : sourceKind !== 'video' && window.__prksPendingUploadPdfFile instanceof File
                   ? window.__prksPendingUploadPdfFile
                   : null;
+
+        const folderId = document.getElementById('work-folder-id').value;
+        const videoUrlEl = document.getElementById('work-video-url');
+        const videoChanEl = document.getElementById('work-video-channel');
+        const videoPubEl = document.getElementById('work-video-published-date');
+        const videoUrlDateEl = document.getElementById('work-video-urldate');
+        const videoPlaylistEl = document.getElementById('work-video-playlist-id');
+        const pdfSourceUrlEl = document.getElementById('work-pdf-source-url');
+        let sourceUrl = '';
+        if (sourceKind === 'video' && videoUrlEl) {
+            sourceUrl = String(videoUrlEl.value || '').trim();
+        } else if (sourceKind === 'pdf' && pdfSourceUrlEl) {
+            sourceUrl = String(pdfSourceUrlEl.value || '').trim();
+        }
+        const publishedDate =
+            sourceKind === 'video' && videoPubEl ? String(videoPubEl.value || '').trim() : '';
+        const publishedIso =
+            sourceKind === 'video' ? prksParsePublishedDateInput(publishedDate) : '';
+        const workDateEl = document.getElementById('work-date');
+        const pdfPublishedRaw =
+            sourceKind === 'pdf' && workDateEl ? String(workDateEl.value || '').trim() : '';
+        const pdfPublished =
+            sourceKind === 'pdf' ? prksParsePublishedDateInput(pdfPublishedRaw) : '';
+
+        if (typeof prksClearWorkModalErrors === 'function') prksClearWorkModalErrors();
+        let firstInvalid = null;
+        const setErr = (control, message, errorId) => {
+            if (typeof prksSetWorkModalFieldError === 'function') {
+                prksSetWorkModalFieldError(control, message, errorId);
+            }
+            if (!firstInvalid) firstInvalid = control;
+        };
+        if (sourceKind === 'pdf' && !pdfFileForUpload) {
+            setErr(
+                document.getElementById('upload-drop-zone'),
+                'Choose a PDF file.',
+                'work-file-error'
+            );
+        }
+        if (sourceKind === 'video' && !sourceUrl) {
+            setErr(videoUrlEl, 'Enter a valid URL.', 'work-video-url-error');
+        }
+        if (sourceKind === 'video' && publishedDate && !publishedIso) {
+            setErr(videoPubEl, 'Use dd/mm/yyyy.', 'work-video-published-date-error');
+        }
+        if (sourceKind === 'pdf' && pdfPublishedRaw && !pdfPublished) {
+            setErr(workDateEl, 'Use dd/mm/yyyy.', 'work-date-error');
+        }
+        if (firstInvalid) {
+            if (typeof prksFocusWorkModalControl === 'function') {
+                prksFocusWorkModalControl(firstInvalid);
+            } else if (firstInvalid.focus) {
+                firstInvalid.focus();
+            }
+            return;
+        }
+
+        window.__prksWorkCreateInFlight = true;
+        if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+
+        try {
         if (pdfFileForUpload) {
             const file = pdfFileForUpload;
             fileName = file.name;
@@ -1953,19 +2016,6 @@ function initForms() {
             });
         }
 
-        const folderId = document.getElementById('work-folder-id').value;
-        const videoUrlEl = document.getElementById('work-video-url');
-        const videoChanEl = document.getElementById('work-video-channel');
-        const videoPubEl = document.getElementById('work-video-published-date');
-        const videoUrlDateEl = document.getElementById('work-video-urldate');
-        const videoPlaylistEl = document.getElementById('work-video-playlist-id'); // hidden input
-        const pdfSourceUrlEl = document.getElementById('work-pdf-source-url');
-        let sourceUrl = '';
-        if (sourceKind === 'video' && videoUrlEl) {
-            sourceUrl = String(videoUrlEl.value || '').trim();
-        } else if (sourceKind === 'pdf' && pdfSourceUrlEl) {
-            sourceUrl = String(pdfSourceUrlEl.value || '').trim();
-        }
         if (
             sourceKind === 'video' &&
             sourceUrl &&
@@ -1983,19 +2033,8 @@ function initForms() {
             sourceKind === 'video' && videoChanEl
                 ? String(videoChanEl.value || '').trim()
                 : '';
-        const publishedDate =
-            sourceKind === 'video' && videoPubEl ? String(videoPubEl.value || '').trim() : '';
-        const urlDate =
-            sourceKind === 'video' && videoUrlDateEl ? String(videoUrlDateEl.value || '').trim() : '';
         const playlistId =
             sourceKind === 'video' && videoPlaylistEl ? String(videoPlaylistEl.value || '').trim() : '';
-        const publishedIso =
-            sourceKind === 'video' ? prksParsePublishedDateInput(publishedDate) : '';
-        const workDateEl = document.getElementById('work-date');
-        const pdfPublishedRaw =
-            sourceKind === 'pdf' && workDateEl ? String(workDateEl.value || '').trim() : '';
-        const pdfPublished =
-            sourceKind === 'pdf' ? prksParsePublishedDateInput(pdfPublishedRaw) : '';
 
         let thumb_page = null;
         if (sourceKind === 'pdf') {
@@ -2030,7 +2069,7 @@ function initForms() {
             folder_id: folderId && folderId.trim() !== "" ? folderId : null,
             file_b64: fileBase64,
             file_name: fileName,
-            roles: uploadRoles, // From ui.js
+            roles: uploadRoles,
             source_kind: sourceKind,
             source_url: sourceUrl,
             thumb_url: sourceKind === 'video' && meta && meta.thumbnail_url ? String(meta.thumbnail_url) : "",
@@ -2054,30 +2093,15 @@ function initForms() {
             payload.isbn = gv('work-isbn');
             payload.doi = gv('work-doi');
         }
-
-        if (sourceKind === 'video' && !payload.source_url) {
-            await prksAlertMessage('Please paste a video URL.', 'Validation');
-            return;
-        }
-        if (sourceKind === 'video' && publishedDate && !publishedIso) {
-            await prksAlertMessage('Published date must be in dd/mm/yyyy.', 'Validation');
-            return;
-        }
-        if (sourceKind === 'pdf' && pdfPublishedRaw && !pdfPublished) {
-            await prksAlertMessage('Published date must be in dd/mm/yyyy.', 'Validation');
-            return;
-        }
-        if (sourceKind === 'pdf' && !payload.file_b64) {
-            await prksAlertMessage('Please select a PDF file.', 'Validation');
-            return;
-        }
         if (sourceKind === 'video') {
             payload.doc_type = 'online';
         }
 
-
         const statusMsg = document.getElementById('upload-status-msg');
-        if (statusMsg) { statusMsg.innerText = "Adding..."; statusMsg.classList.remove('hidden'); }
+        if (statusMsg) {
+            statusMsg.textContent = '';
+            statusMsg.classList.add('hidden');
+        }
 
         let res;
         try {
@@ -2088,16 +2112,24 @@ function initForms() {
             });
         } catch (e) {
             if (statusMsg) {
-                statusMsg.innerText = 'Network error.';
+                statusMsg.textContent = 'Could not create the file. Try again.';
                 statusMsg.classList.remove('hidden');
             }
             return;
         }
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
+            const errText = data.error || 'Could not create the file.';
             if (statusMsg) {
-                statusMsg.innerText = data.error || 'Could not add file.';
+                statusMsg.textContent = errText;
                 statusMsg.classList.remove('hidden');
+            }
+            const lower = String(errText).toLowerCase();
+            if (sourceKind === 'video' && videoUrlEl && lower.indexOf('url') !== -1) {
+                if (typeof prksSetWorkModalFieldError === 'function') {
+                    prksSetWorkModalFieldError(videoUrlEl, 'Enter a valid URL.', 'work-video-url-error');
+                }
+                if (typeof prksFocusWorkModalControl === 'function') prksFocusWorkModalControl(videoUrlEl);
             }
             return;
         }
@@ -2113,7 +2145,7 @@ function initForms() {
                     if (!tr.ok) throw new Error('tag attach failed');
                 } catch (_e) {
                     if (statusMsg) {
-                        statusMsg.innerText = 'File added, but one or more tags could not be attached.';
+                        statusMsg.textContent = 'File added, but one or more tags could not be attached.';
                         statusMsg.classList.remove('hidden');
                     }
                     break;
@@ -2121,7 +2153,17 @@ function initForms() {
             }
         }
         closeModals();
-        window.location.reload();
+        if (newId && typeof prksNavigate === 'function') {
+            prksNavigate('#/works/' + encodeURIComponent(newId));
+        }
+        } finally {
+            window.__prksWorkCreateInFlight = false;
+            const modal = document.getElementById('work-modal');
+            const stillOpen = modal && !modal.classList.contains('hidden');
+            if (stillOpen && typeof prksSetWorkModalCreateBusy === 'function') {
+                prksSetWorkModalCreateBusy(false);
+            }
+        }
     };
 
 
