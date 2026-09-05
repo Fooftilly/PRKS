@@ -809,7 +809,7 @@ function renderFolderDetails(ctx, folder, container) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
-async function prksRemoveFolderTag(folderId, tagId) {
+async function prksRemoveFolderTag(folderId, tagId, btn) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
         const res = await prksRequest(
@@ -821,6 +821,7 @@ async function prksRemoveFolderTag(folderId, tagId) {
         await prksReloadEntityTagsUI('folder', folderId, ownerCtx);
     } catch (e) {
         console.error(e);
+        if (btn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
         await prksAlertMessage('Could not remove tag.', 'Error');
     }
 }

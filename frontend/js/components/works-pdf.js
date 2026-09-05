@@ -369,12 +369,15 @@ function prksBuildPdfAnnWikiLink(annId, label) {
 async function prksCopyTextToClipboard(text) {
     const s = text == null ? '' : String(text);
     if (!s) return;
-    try {
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    let clipboardErr = null;
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
             await navigator.clipboard.writeText(s);
             return;
+        } catch (e) {
+            clipboardErr = e;
         }
-    } catch (_e) {}
+    }
 
     // Fallback for older browsers / blocked clipboard access.
     const ta = document.createElement('textarea');
@@ -386,7 +389,8 @@ async function prksCopyTextToClipboard(text) {
     document.body.appendChild(ta);
     try {
         ta.select();
-        document.execCommand('copy');
+        const ok = document.execCommand('copy');
+        if (!ok) throw clipboardErr || new Error('Copy failed');
     } finally {
         document.body.removeChild(ta);
     }
@@ -558,11 +562,17 @@ window.deletePdfAnnotationFromEditor = async function () {
     const pdf = prksPdfRuntime(owner);
     const st = pdf && pdf.annotationEditorState;
     if (!st || !st.annId) return;
-    if (!window.confirm('Delete this annotation from the PDF?')) return;
+    const annId = st.annId;
+    const confirmed =
+        typeof prksConfirmDeletePdfAnnotation === 'function'
+            ? await prksConfirmDeletePdfAnnotation()
+            : window.confirm('Delete this annotation from the PDF?');
+    if (!confirmed) return;
+    if (owner && owner.destroyed) return;
     try {
         const viewer = prksPdfViewer(owner);
         if (!viewer || typeof viewer.deleteAnnotation !== 'function') return;
-        await viewer.deleteAnnotation(st.annId);
+        await viewer.deleteAnnotation(annId);
         if (typeof window.closePdfAnnotationEditor === 'function') {
             window.closePdfAnnotationEditor(owner);
         }
@@ -821,7 +831,7 @@ ${commentHtml}
     }).join('');
     target.innerHTML = statusHtml + html;
 
-    target.onclick = (e) => {
+    target.onclick = async (e) => {
         const row = e.target.closest('.annotation-row');
         if (!row || !target.contains(row)) return;
         const idx = Number(row.getAttribute('data-ann-idx'));
@@ -838,17 +848,23 @@ ${commentHtml}
             const rowItem = cache && Array.isArray(cache.items) ? cache.items[idx] : null;
             const annId = rowItem && (rowItem.id || rowItem.uuid || rowItem.annotationId || rowItem._id);
             if (!annId) return;
-            if (!window.confirm('Delete this annotation from the PDF?')) return;
+            const confirmed =
+                typeof prksConfirmDeletePdfAnnotation === 'function'
+                    ? await prksConfirmDeletePdfAnnotation()
+                    : window.confirm('Delete this annotation from the PDF?');
+            if (!confirmed) return;
+            if (owner && owner.destroyed) return;
             const viewer = prksPdfViewer(owner);
             if (viewer && typeof viewer.deleteAnnotation === 'function') {
-                void viewer.deleteAnnotation(String(annId)).then(() => {
+                try {
+                    await viewer.deleteAnnotation(String(annId));
                     if (typeof window.closePdfAnnotationEditor === 'function') {
                         const st = pdf && pdf.annotationEditorState;
                         if (st && String(st.annId) === String(annId)) {
                             window.closePdfAnnotationEditor(owner);
                         }
                     }
-                });
+                } catch (_e) {}
             }
             return;
         }
@@ -867,17 +883,17 @@ ${commentHtml}
                     ? `${base} - p. ${pageDisp}`
                     : base;
             const wikiLink = prksBuildPdfAnnWikiLink(annId, label);
-            void prksCopyTextToClipboard(wikiLink).then(() => {
-                const btn = e.target.closest('.annotation-row__copy-link');
-                if (!btn) return;
-                const original = btn.textContent;
-                btn.textContent = 'Copied';
-                setTimeout(() => {
-                    try {
-                        btn.textContent = original;
-                    } catch (_e) {}
-                }, 1200);
-            });
+            const btn = e.target.closest('.annotation-row__copy-link');
+            try {
+                await prksCopyTextToClipboard(wikiLink);
+                if (typeof prksFlashButtonLabel === 'function') {
+                    prksFlashButtonLabel(btn, true, { successLabel: 'Copied', errorLabel: 'Copy failed', restoreMs: 1200 });
+                }
+            } catch (_e) {
+                if (typeof prksFlashButtonLabel === 'function') {
+                    prksFlashButtonLabel(btn, false, { successLabel: 'Copied', errorLabel: 'Copy failed', restoreMs: 1200 });
+                }
+            }
             return;
         }
         if (e.target.closest('.annotation-row__jump') || e.target.closest('.annotation-row__page-jump')) {

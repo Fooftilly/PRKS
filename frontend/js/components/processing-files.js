@@ -958,24 +958,34 @@ function renderProcessingFilesPage(items, container, ownerCtx) {
         if (saveBtn) {
             saveBtn.addEventListener('click', async () => {
                 const payload = prksProcessingCollectDraft(card);
-                try {
+                if (typeof prksSetButtonBusy === 'function') {
+                    prksSetButtonBusy(saveBtn, true, { busyLabel: 'Saving…' });
+                } else {
                     saveBtn.disabled = true;
-                    if (msgEl) msgEl.textContent = 'Saving...';
+                }
+                try {
                     await patchProcessingFile(fileId, payload);
                     if (msgEl) msgEl.textContent = 'Saved.';
                 } catch (e) {
                     if (msgEl) msgEl.textContent = e && e.message ? e.message : 'Save failed.';
                 } finally {
-                    saveBtn.disabled = false;
+                    if (typeof prksSetButtonBusy === 'function') {
+                        prksSetButtonBusy(saveBtn, false);
+                    } else {
+                        saveBtn.disabled = false;
+                    }
                 }
             });
         }
         if (importBtn) {
             importBtn.addEventListener('click', async () => {
-                try {
+                if (typeof prksSetButtonBusy === 'function') {
+                    prksSetButtonBusy(importBtn, true, { busyLabel: 'Importing…' });
+                } else {
                     importBtn.disabled = true;
-                    if (saveBtn) saveBtn.disabled = true;
-                    if (msgEl) msgEl.textContent = 'Importing...';
+                }
+                if (saveBtn) saveBtn.disabled = true;
+                try {
                     const payload = prksProcessingCollectDraft(card);
                     await patchProcessingFile(fileId, payload);
                     await importProcessingFile(fileId);
@@ -987,7 +997,11 @@ function renderProcessingFilesPage(items, container, ownerCtx) {
                     });
                 } catch (e) {
                     if (msgEl) msgEl.textContent = e && e.message ? e.message : 'Import failed.';
-                    importBtn.disabled = false;
+                    if (typeof prksSetButtonBusy === 'function') {
+                        prksSetButtonBusy(importBtn, false);
+                    } else {
+                        importBtn.disabled = false;
+                    }
                     if (saveBtn) saveBtn.disabled = false;
                 }
             });

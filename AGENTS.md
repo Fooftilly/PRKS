@@ -423,3 +423,29 @@ contain private URL, query, body, Work ID, search text, or coalesce-key content.
 Persistent cache, IndexedDB, outbox, and offline synchronization do not belong in
 `frontend/js/request-coordinator.js`. The burst catalog cache is memory-only and
 short-lived. It is not offline support.
+
+## Interaction feedback
+
+Do not replace the synchronous pending-annotation-sync navigation guard
+(`prksCanLeaveTabContext` and the mirrored check inside `prksRenderTabRoute`,
+both in `frontend/js/app.js`) with `prksConfirmDialog`/`prksConfirmDestructive`
+without redesigning the navigation contract. It must stay a native
+`window.confirm`: every `workspace-tabs.js` call path that reaches it
+(`awaitLeave` and the raw `hashchange` listener) is written assuming the
+guard blocks the main thread until the user answers, so no other navigation,
+tab action, or drag can interleave mid-decision. An async modal yields control
+back to the event loop while the dialog is open, which those call paths do not
+handle. This is an intentional, permanent exception to the app-wide "avoid
+native dialogs" rule — not a gap to close in a later polish pass.
+
+Every other confirmation, including both PDF annotation-delete entry points
+(the annotation editor's Delete button and the annotation-list row's Delete
+button), goes through the shared `prksConfirmDeletePdfAnnotation()` helper in
+`frontend/js/ui.js`, which wraps `prksConfirmDestructive`. Keep both entry
+points on that one helper rather than duplicating the confirmation copy.
+
+`prksSetButtonBusy(button, busy, { busyLabel })` (`frontend/js/ui.js`) is the
+shared busy-button helper for async mutations with meaningful latency. It
+snapshots and restores exact button contents (icon markup included), so
+callers must restore it from a `finally` rather than only on the success or
+failure path.

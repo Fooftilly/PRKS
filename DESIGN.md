@@ -892,6 +892,22 @@ Use native HTML semantics first. Future workspace splitters use `role="separator
 
 ---
 
+## Interaction feedback contract
+
+Established by the Usability Polish 10 pass. Governs how async mutations, destructive actions, and copy actions communicate with the user.
+
+- **Async mutations expose busy state and prevent duplicate submission.** A button whose click starts an awaited request disables itself, sets `aria-busy="true"`, and shows an active verb (`Saving…`, `Adding…`, `Linking…`) before the request starts — not after. `prksSetButtonBusy(button, busy, { busyLabel })` in `frontend/js/ui.js` is the shared helper: it snapshots the idle contents on the first `busy(true)` call and restores them exactly (icon markup included) on `busy(false)`, so it is safe to call from a `finally` block unconditionally. Not every button needs this — navigation, disclosure toggles, local-only filters, and local copy actions do not have meaningful request latency and stay untouched.
+- **Failed mutations always restore the control.** Every converted action restores busy state in a `finally` (or an equivalent guaranteed path), so a rejected request never leaves a control stuck disabled. The user can always retry without a route reload.
+- **Errors stay near the action when there's a local surface for them.** Prefer an inline field/status message over a modal alert for recoverable async failures. Reserve `prksAlertDialog`/`prksConfirmDestructive` (`frontend/js/ui.js`) for cases with no local surface, duplicate-entry conflicts, or explanatory content that needs acknowledgement.
+- **Successful saves do not require acknowledgement.** A normal save updates the UI (and usually closes the editor) rather than leaving a permanent "Saved!" banner or popping a confirmation dialog. A temporary inline "Saved" status is fine when the surface doesn't otherwise visibly change. Autosave (Research Notes, private/reminder notes) stays deliberately quiet — no new animation, no visual promotion beyond its existing tertiary status line.
+- **Destructive confirmations name the destructive action.** The confirm button reads `Delete Person`, `Delete annotation`, `Remove from group`, `Unlink person`, etc. — never a bare `Confirm`/`Yes`/`OK` when a concrete verb is available. `Delete` destroys the entity itself; `Remove` ends a membership/relationship; `Unlink` ends a relationship between two records. `Cancel` stays `Cancel`.
+- **Native dialogs are avoided except for one documented, intentional exception.** `window.confirm` is reserved for the synchronous pending-annotation-sync route-leave guard in `frontend/js/app.js` (`prksCanLeaveTabContext` and the mirrored check inside `prksRenderTabRoute`). See `AGENTS.md` for why this one stays synchronous. Every other confirmation — including both PDF annotation-delete entry points — goes through `prksConfirmDestructive`/`prksConfirmDeletePdfAnnotation`.
+- **Copy feedback reflects the actual Clipboard promise.** Never show "Copied" until the clipboard write has resolved; show a distinct failure state ("Copy failed") when it rejects, then restore the idle label/icon after a short interval. `prksFlashInlineCopyButton` (icon-only buttons) and `prksFlashButtonLabel` (textual buttons, e.g. annotation "Copy link") are the two shared helpers — prefer one of them over a new one-off timeout.
+- **No new notification framework.** Toasts, a notification center, and progress overlays are explicitly out of scope. Inline status regions, inline field errors, temporary button feedback, and the existing confirm/alert modal cover this app's needs.
+- **Focus-visible and reduced motion are application-wide, not per-feature.** New interaction states must render through `:focus-visible` (never suppress focus without a replacement) and must not add motion outside what `prefers-reduced-motion: reduce` already accounts for.
+
+---
+
 ## Inline-style policy
 
 Static layout/style attributes in `frontend/index.html` and first-party `frontend/js/` are forbidden.

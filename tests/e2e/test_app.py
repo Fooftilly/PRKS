@@ -1682,6 +1682,7 @@ class PdfPersistenceTests(_BrowserE2E):
         collector.reset_handshake()
         since_delete = _sync_success_at(page)
         page.locator(".annotation-row__delete").first.click()
+        page.locator("#prks-modal-confirm-ok").click()
         page.wait_for_function(
             "() => document.querySelectorAll('.annotation-row').length === 0"
         )
@@ -1692,6 +1693,156 @@ class PdfPersistenceTests(_BrowserE2E):
         _open_annotations_tab(page)
         page.wait_for_selector("#annotation-fallback-list")
         self.assertEqual(page.locator(".annotation-row").count(), 0)
+
+    def test_annotation_delete_confirm_preserves_owner_across_focus_change(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+
+        # Create the highlight before introducing a second PDF tile -- with two
+        # PDF viewers visible at once, [data-prks-role="pdf-viewer"] is ambiguous.
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _commit_pdf_highlight(page)
+        _open_annotations_tab(page)
+        page.wait_for_selector(".annotation-row")
+        self.assertEqual(page.locator(".annotation-row").count(), 1)
+
+        page.evaluate("""(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""", arg=work_b)
+        page.wait_for_function("() => document.querySelectorAll('.work-detail').length === 2")
+        ids = _workspace_ids(page)
+        _wait_pdf_tab(page, ids["mainTabId"])
+        _wait_pdf_tab(page, ids["secondaryTabId"])
+
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
+        page.wait_for_function(
+            "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+            arg=ids["mainTabId"],
+        )
+        page.wait_for_function(
+            "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+            arg=ids["mainTabId"],
+        )
+        _open_annotations_tab(page)
+        page.wait_for_selector(".annotation-row")
+
+        page.locator(".annotation-row__delete").first.click()
+        page.wait_for_selector("#prks-modal-confirm:not(.hidden)")
+        self.assertIn("Delete annotation?", page.locator("#prks-modal-confirm-title").inner_text())
+
+        # Focus Work B while the delete confirmation is still open and unanswered --
+        # the eventual confirm must still resolve against Work A, not whatever is focused now.
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["secondaryTabId"])
+        page.wait_for_function(
+            "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+            arg=ids["secondaryTabId"],
+        )
+        page.wait_for_function(
+            "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+            arg=ids["secondaryTabId"],
+        )
+        b_before = page.locator("#panel-content").inner_html()
+        self.assertIn(WORK_B_TITLE, b_before)
+
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function(
+            """id => {
+                const ctx = window.prksGetTabContext(id);
+                const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+                const v = pdf && pdf.viewer;
+                return !!(v && v.getAnnotations && v.getAnnotations().length === 0);
+            }""",
+            arg=ids["mainTabId"],
+        )
+
+        # Work B's panel must be untouched by A's confirmed delete.
+        self.assertEqual(
+            page.evaluate("() => document.getElementById('panel-content').dataset.prksOwnerTabId"),
+            ids["secondaryTabId"],
+        )
+        b_after = page.locator("#panel-content").inner_html()
+        self.assertIn(WORK_B_TITLE, b_after)
+        self.assertNotIn(WORK_A_TITLE, b_after)
+
+        # Refocus Work A: the deletion actually landed there, no stale row remains.
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
+        page.wait_for_function(
+            "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+            arg=ids["mainTabId"],
+        )
+        page.wait_for_function(
+            "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+            arg=ids["mainTabId"],
+        )
+        _open_annotations_tab(page)
+        self.assertEqual(page.locator(".annotation-row").count(), 0)
+
+    def test_annotation_delete_confirm_cancel_does_not_delete(self):
+        _server, page, _collector = self._start_app()
+        _open_work_from_home(page, WORK_A_TITLE)
+        _commit_pdf_highlight(page)
+        _open_annotations_tab(page)
+        page.wait_for_selector(".annotation-row")
+
+        page.locator(".annotation-row__delete").first.click()
+        page.wait_for_selector("#prks-modal-confirm:not(.hidden)")
+        page.locator("#prks-modal-confirm-cancel").click()
+        page.wait_for_selector("#prks-modal-confirm", state="hidden")
+        self.assertEqual(page.locator(".annotation-row").count(), 1)
+        # Cancel restores focus to the Delete button that opened the dialog.
+        page.wait_for_function(
+            "() => document.activeElement && document.activeElement.classList.contains('annotation-row__delete')"
+        )
+
+    def test_annotation_copy_link_reports_clipboard_success_and_failure(self):
+        _server, page, _collector = self._start_app()
+        _open_work_from_home(page, WORK_A_TITLE)
+        _commit_pdf_highlight(page)
+        _open_annotations_tab(page)
+        page.wait_for_selector(".annotation-row")
+
+        page.evaluate(
+            """() => {
+                window.__prksClipboardFail = false;
+                navigator.clipboard.writeText = (text) => {
+                    window.__prksLastClipboardText = text;
+                    if (window.__prksClipboardFail) return Promise.reject(new Error('stub-denied'));
+                    return Promise.resolve();
+                };
+                const origExec = document.execCommand.bind(document);
+                document.execCommand = (cmd, ...rest) => {
+                    if (cmd === 'copy' && window.__prksClipboardFail) return false;
+                    return origExec(cmd, ...rest);
+                };
+            }"""
+        )
+
+        row = page.locator(".annotation-row").first
+        row.hover()
+        copy_btn = row.locator(".annotation-row__copy-link")
+        copy_btn.wait_for(state="visible")
+        self.assertEqual(copy_btn.inner_text(), "Copy link")
+
+        copy_btn.click()
+        page.wait_for_function(
+            "() => document.querySelector('.annotation-row__copy-link').textContent === 'Copied'"
+        )
+        page.wait_for_function(
+            "() => document.querySelector('.annotation-row__copy-link').textContent === 'Copy link'",
+            timeout=3000,
+        )
+        self.assertTrue(page.evaluate("() => !!window.__prksLastClipboardText"))
+
+        page.evaluate("() => { window.__prksClipboardFail = true; }")
+        row.hover()
+        copy_btn.click()
+        page.wait_for_function(
+            "() => document.querySelector('.annotation-row__copy-link').textContent === 'Copy failed'"
+        )
+        page.wait_for_function(
+            "() => document.querySelector('.annotation-row__copy-link').textContent === 'Copy link'",
+            timeout=3000,
+        )
 
 
 def _release_held_routes(held):

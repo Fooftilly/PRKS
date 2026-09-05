@@ -137,6 +137,7 @@ function prksDiscardConfirmedClose() {
 
 let prksModalConfirmResolve = null;
 let prksModalConfirmAlertOnly = false;
+let prksModalConfirmOpener = null;
 
 function prksIsModalConfirmOpen() {
     const root = document.getElementById('prks-modal-confirm');
@@ -162,6 +163,11 @@ function prksHideModalConfirm() {
     }
     prksRestoreModalConfirmCancel();
     prksModalConfirmResolve = null;
+    const opener = prksModalConfirmOpener;
+    prksModalConfirmOpener = null;
+    if (opener && typeof opener.focus === 'function' && document.contains(opener)) {
+        opener.focus();
+    }
 }
 
 function prksFinishModalConfirm(confirmed) {
@@ -227,6 +233,8 @@ function prksConfirmDialog(options = {}) {
         }
 
         prksModalConfirmResolve = resolve;
+        const active = document.activeElement;
+        prksModalConfirmOpener = active && active !== document.body ? active : null;
         root.classList.remove('hidden');
         root.setAttribute('aria-hidden', 'false');
         const focusEl =
@@ -318,6 +326,90 @@ async function prksNotifyRoleLinkFailure(errorMsg, roleType) {
 
 function prksAlertMessage(message, title = 'Notice') {
     return prksAlertDialog({ title, message: String(message ?? '') });
+}
+
+const _prksButtonBusySnapshots = new WeakMap();
+
+/**
+ * Shared busy-button helper: disable, set aria-busy, swap in a busy label, and
+ * later restore the exact original contents. Safe to call repeatedly with the
+ * same busy state -- only the first busy(true) snapshots the idle contents.
+ * @param {HTMLElement|null|undefined} button
+ * @param {boolean} busy
+ * @param {{busyLabel?: string}} [options]
+ */
+function prksSetButtonBusy(button, busy, options = {}) {
+    if (!button) return;
+    const on = !!busy;
+    if (on) {
+        if (!_prksButtonBusySnapshots.has(button)) {
+            _prksButtonBusySnapshots.set(button, {
+                html: button.innerHTML,
+                disabled: !!button.disabled,
+            });
+        }
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        if (options.busyLabel != null) button.textContent = String(options.busyLabel);
+    } else {
+        const snap = _prksButtonBusySnapshots.get(button);
+        button.setAttribute('aria-busy', 'false');
+        if (snap) {
+            button.innerHTML = snap.html;
+            button.disabled = snap.disabled;
+            _prksButtonBusySnapshots.delete(button);
+        } else {
+            button.disabled = false;
+        }
+        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(button);
+    }
+}
+
+const PRKS_BUTTON_LABEL_FLASH_MS = 1500;
+const _prksButtonLabelFlashTimers = new WeakMap();
+
+/**
+ * Brief success/error text flash for textual (non-icon-only) buttons, e.g. the
+ * annotation-list "Copy link" action. Mirrors prksFlashInlineCopyButton's
+ * icon-flash contract but swaps textContent instead of innerHTML/icon.
+ * @param {HTMLElement|null|undefined} btn
+ * @param {boolean} ok
+ * @param {{successLabel?: string, errorLabel?: string, restoreMs?: number}} [options]
+ */
+function prksFlashButtonLabel(btn, ok = true, options = {}) {
+    if (!btn || !(btn instanceof HTMLElement)) return;
+    const prev = _prksButtonLabelFlashTimers.get(btn);
+    if (prev) clearTimeout(prev);
+    if (btn.dataset.prksLabelRestore == null) {
+        btn.dataset.prksLabelRestore = btn.textContent || '';
+    }
+    const successLabel = options.successLabel != null ? String(options.successLabel) : 'Copied';
+    const errorLabel = options.errorLabel != null ? String(options.errorLabel) : 'Copy failed';
+    const restoreMs = typeof options.restoreMs === 'number' ? options.restoreMs : PRKS_BUTTON_LABEL_FLASH_MS;
+    btn.textContent = ok ? successLabel : errorLabel;
+    const t = setTimeout(() => {
+        btn.textContent = btn.dataset.prksLabelRestore || '';
+        delete btn.dataset.prksLabelRestore;
+        _prksButtonLabelFlashTimers.delete(btn);
+    }, restoreMs);
+    _prksButtonLabelFlashTimers.set(btn, t);
+}
+
+/**
+ * Shared destructive-confirm for both PDF annotation-delete entry points
+ * (annotation editor Delete, annotation-list row Delete) so the copy and
+ * behavior can't drift between the two call sites.
+ * @returns {Promise<boolean>}
+ */
+function prksConfirmDeletePdfAnnotation() {
+    if (typeof prksConfirmDestructive === 'function') {
+        return prksConfirmDestructive({
+            title: 'Delete annotation?',
+            message: 'This annotation will be removed from the PDF.',
+            confirmLabel: 'Delete',
+        });
+    }
+    return Promise.resolve(window.confirm('Delete this annotation from the PDF?'));
 }
 
 function prksConfirmDestructive(options) {
@@ -932,6 +1024,9 @@ window.prksNotifyRoleLinkFailure = prksNotifyRoleLinkFailure;
 window.prksAlertMessage = prksAlertMessage;
 window.prksConfirmDestructive = prksConfirmDestructive;
 window.prksPromptTextDialog = prksPromptTextDialog;
+window.prksSetButtonBusy = prksSetButtonBusy;
+window.prksFlashButtonLabel = prksFlashButtonLabel;
+window.prksConfirmDeletePdfAnnotation = prksConfirmDeletePdfAnnotation;
 
 function personDisplayName(p) {
     return `${(p.first_name || '').trim()} ${p.last_name || ''}`.trim();
@@ -3045,9 +3140,8 @@ async function submitWorkMetaEdit(workId) {
     
     // Disable save button to prevent double submission
     const saveBtn = ownerCtx && ownerCtx.query ? ownerCtx.query('#inline-save-metadata-btn') : null;
-    if (saveBtn) {
-        saveBtn.innerText = "Saving...";
-        saveBtn.disabled = true;
+    if (saveBtn && typeof prksSetButtonBusy === 'function') {
+        prksSetButtonBusy(saveBtn, true, { busyLabel: 'Saving…' });
     }
 
     try {
@@ -3095,9 +3189,9 @@ async function submitWorkMetaEdit(workId) {
     } catch (err) {
         if (!ownsWork()) return;
         console.error("Failed to save metadata", err);
-        if (saveBtn) {
-            saveBtn.innerText = "Save Changes";
-            saveBtn.disabled = false;
+    } finally {
+        if (saveBtn && typeof prksSetButtonBusy === 'function') {
+            prksSetButtonBusy(saveBtn, false);
         }
     }
 }
@@ -3671,9 +3765,13 @@ function prksWorkTagOwnerLive(ownerCtx, generation, workId, input) {
     return !!liveInput && liveInput === input && prksRightPanelOwnedBy(ownerCtx, liveInput);
 }
 
-async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx) {
+async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, triggerInput) {
     const owner = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const generation = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
+    if (triggerInput) {
+        triggerInput.disabled = true;
+        triggerInput.setAttribute('aria-busy', 'true');
+    }
     try {
         const url =
             entityType === 'work' ? `/api/works/${entityId}/tags` : `/api/folders/${entityId}/tags`;
@@ -3694,6 +3792,10 @@ async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx) {
         await prksReloadEntityTagsUI(entityType, entityId, owner);
     } catch (e) {
         console.error(e);
+        if (triggerInput) {
+            triggerInput.disabled = false;
+            triggerInput.removeAttribute('aria-busy');
+        }
         await prksAlertMessage('Could not add tag.', 'Error');
     }
 }
@@ -3724,9 +3826,13 @@ function prksTagComboboxLabel(tag, valLower) {
     return name;
 }
 
-async function prksSubmitNewTag(entityType, entityId, name, ownerCtx) {
+async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInput) {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
+    if (triggerInput) {
+        triggerInput.disabled = true;
+        triggerInput.setAttribute('aria-busy', 'true');
+    }
     try {
         const res = await prksRequest('/api/tags', {
             method: 'POST',
@@ -3736,9 +3842,13 @@ async function prksSubmitNewTag(entityType, entityId, name, ownerCtx) {
         const data = await res.json();
         if (!res.ok || !data.id) throw new Error(data.error || 'No tag id');
         window.__prksAllTagsCache = null;
-        await prksAttachExistingTag(entityType, entityId, data.id, ownerCtx);
+        await prksAttachExistingTag(entityType, entityId, data.id, ownerCtx, triggerInput);
     } catch (e) {
         console.error(e);
+        if (triggerInput) {
+            triggerInput.disabled = false;
+            triggerInput.removeAttribute('aria-busy');
+        }
         await prksAlertMessage('Could not create tag.', 'Error');
     }
 }
@@ -3789,7 +3899,8 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId, owne
             c.textContent = 'Create tag "' + val + '"';
             c.onmousedown = (ev) => {
                 ev.preventDefault();
-                prksSubmitNewTag(entityType, entityId, val, ownerCtx);
+                if (input.disabled) return;
+                prksSubmitNewTag(entityType, entityId, val, ownerCtx, input);
             };
             results.appendChild(c);
         }
@@ -3799,7 +3910,8 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId, owne
             div.textContent = prksTagComboboxLabel(tag, valLower);
             div.onmousedown = (ev) => {
                 ev.preventDefault();
-                prksAttachExistingTag(entityType, entityId, tag.id, ownerCtx);
+                if (input.disabled) return;
+                prksAttachExistingTag(entityType, entityId, tag.id, ownerCtx, input);
             };
             results.appendChild(div);
         });
@@ -4064,7 +4176,7 @@ async function mountFolderLibraryAttachControls(folder) {
     input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 }
 
-async function prksRemoveWorkTag(workId, tagId) {
+async function prksRemoveWorkTag(workId, tagId, btn) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
         await prksRequest(
@@ -4075,6 +4187,7 @@ async function prksRemoveWorkTag(workId, tagId) {
         await prksReloadEntityTagsUI('work', workId, ownerCtx);
     } catch (e) {
         console.error(e);
+        if (btn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
         await prksAlertMessage('Could not remove tag.', 'Error');
     }
 }
@@ -5621,16 +5734,17 @@ function handleUploadFile(file) {
             const tagId = btn.getAttribute('data-tag-id');
             if (!tagId) return;
             e.stopPropagation();
+            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, true);
             const folderId = btn.getAttribute('data-folder-id');
             if (folderId != null && folderId !== '') {
                 if (typeof prksRemoveFolderTag === 'function') {
-                    void prksRemoveFolderTag(folderId, tagId);
+                    void prksRemoveFolderTag(folderId, tagId, btn);
                 }
                 return;
             }
             const workId = btn.getAttribute('data-work-id');
             if (workId != null && workId !== '') {
-                void prksRemoveWorkTag(workId, tagId);
+                void prksRemoveWorkTag(workId, tagId, btn);
             }
         },
         true

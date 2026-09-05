@@ -716,6 +716,7 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
                 confirmLabel: 'Remove from group',
             });
             if (!confirmed) return;
+            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, true);
             try {
                 const res = await prksRequest(
                     `/api/person-groups/${encodeURIComponent(g.id)}/members/${encodeURIComponent(pid)}`,
@@ -734,6 +735,8 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not remove member.', 'Error');
+            } finally {
+                if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
             }
         });
     });
@@ -775,6 +778,7 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
                 await prksAlertMessage('Choose a person from the search list.', 'Validation');
                 return;
             }
+            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(addBtn, true, { busyLabel: 'Adding…' });
             try {
                 const res = await prksRequest(`/api/person-groups/${encodeURIComponent(g.id)}/members`, {
                     method: 'POST',
@@ -794,6 +798,8 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not add member.', 'Error');
+            } finally {
+                if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(addBtn, false);
             }
         };
     }

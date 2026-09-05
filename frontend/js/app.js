@@ -2611,6 +2611,7 @@ function initForms() {
                 await prksAlertMessage('Last name is required.', 'Validation');
                 return;
             }
+            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(personBtn, true, { busyLabel: 'Saving…' });
             try {
                 const res = await prksRequest('/api/persons', {
                     method: 'POST',
@@ -2625,6 +2626,8 @@ function initForms() {
             } catch (e) {
                 await prksAlertMessage('Network error — could not save person.', 'Error');
                 return;
+            } finally {
+                if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(personBtn, false);
             }
             closeModals(); window.location.reload();
         };
@@ -2647,24 +2650,32 @@ function initForms() {
             }
             if (parentHid) payload.parent_id = parentHid;
             else if (parentSearch) payload.parent_name = parentSearch;
-            const res = await prksRequest('/api/person-groups', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                await prksAlertMessage(data.error || 'Could not create group.', 'Could not save');
-                return;
-            }
-            closeModals();
-            if (typeof prksNavigate === 'function') {
-                prksNavigate('#/people/groups/' + (data.id || ''));
+            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveGroupBtn, true, { busyLabel: 'Creating…' });
+            try {
+                const res = await prksRequest('/api/person-groups', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    await prksAlertMessage(data.error || 'Could not create group.', 'Could not save');
+                    return;
+                }
+                closeModals();
+                if (typeof prksNavigate === 'function') {
+                    prksNavigate('#/people/groups/' + (data.id || ''));
+                }
+            } catch (e) {
+                await prksAlertMessage('Network error — could not create group.', 'Error');
+            } finally {
+                if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveGroupBtn, false);
             }
         };
     }
 
-    document.getElementById('save-role-btn').onclick = async () => {
+    const saveRoleBtn = document.getElementById('save-role-btn');
+    saveRoleBtn.onclick = async () => {
         const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
         const person_id = document.getElementById('role-person-id').value;
         const work_id = document.getElementById('role-work-id').value;
@@ -2701,6 +2712,7 @@ function initForms() {
             }
             return;
         }
+        if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, true, { busyLabel: 'Linking…' });
         try {
             const res = await prksRequest('/api/roles', {
                 method: 'POST',
@@ -2723,6 +2735,8 @@ function initForms() {
                 });
             }
             return;
+        } finally {
+            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, false);
         }
         closeModals();
         const expectedWork = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
