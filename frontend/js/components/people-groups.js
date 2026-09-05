@@ -745,7 +745,7 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
     if (!input) return;
     const generation = ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined;
 
-    allPersons = await fetchPersons();
+    const persons = await fetchPersons();
     const liveGroup = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('personGroup') : null;
     const liveInput = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-search') : null;
     if (
@@ -760,6 +760,8 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
     ) {
         return;
     }
+    allPersons = persons;
+    window.allPersons = persons;
     const memberIds = new Set((g.members || []).map((m) => String(m.id)));
     initSearchableCombobox('group-add-member-search', 'group-add-member-results', 'group-add-member-id', 'person', {
         excludePersonIds: memberIds,

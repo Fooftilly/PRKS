@@ -1,5 +1,7 @@
 """Regression contracts for Person Group presentation and ownership."""
 import os
+import json
+import subprocess
 import unittest
 
 
@@ -13,6 +15,57 @@ _UI = os.path.join(_ROOT, "frontend", "js", "ui.js")
 def _read(path):
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _member_picker_harness(case):
+    src = _read(_GROUPS)
+    mount = src.split("async function mountPersonGroupAddMemberControls", 1)[1].split(
+        "function renderPersonGroupAddMemberPanelHtml", 1
+    )[0]
+    mount = "async function mountPersonGroupAddMemberControls" + mount
+    script = r"""
+const vm = require('vm');
+const mountSource = %s;
+const stale = [{ id: 'stale-person' }];
+const fresh = [{ id: 'fresh-person' }];
+const input = {};
+const group = { id: 'group-a', members: [] };
+let initCalls = 0;
+let resolvePersons;
+const owner = {
+  generation: 7,
+  ui: { personGroupMembersEditing: true },
+  isCurrent: (generation) => generation === owner.generation,
+  getEntity: () => group,
+  query: (selector) => selector === '#group-add-member-search' ? input : null,
+};
+const context = {
+  allPersons: stale,
+  window: { allPersons: stale },
+  initSearchableCombobox: () => { initCalls += 1; },
+};
+vm.createContext(context);
+vm.runInContext(mountSource + '; this.mount = mountPersonGroupAddMemberControls;', context);
+(async () => {
+  if (%s === 'fresh') {
+    context.fetchPersons = async () => fresh;
+    await context.mount(group, owner);
+    if (initCalls !== 1 || context.allPersons !== fresh || context.window.allPersons !== fresh) {
+      throw new Error('fresh picker did not publish fetched people');
+    }
+  } else {
+    context.fetchPersons = () => new Promise((resolve) => { resolvePersons = resolve; });
+    const pending = context.mount(group, owner);
+    owner.ui.personGroupMembersEditing = false;
+    resolvePersons(fresh);
+    await pending;
+    if (initCalls !== 0 || context.allPersons !== stale || context.window.allPersons !== stale) {
+      throw new Error('stale picker replaced current people cache');
+    }
+  }
+})().catch((error) => { console.error(error.stack || error); process.exit(1); });
+""" % (json.dumps(mount), json.dumps(case))
+    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
 
 
 class FrontendPeopleGroupsTests(unittest.TestCase):
@@ -82,6 +135,14 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
         self.assertIn("ownerCtx.ui.personGroupMembersEditing", mount)
         self.assertIn("ownerCtx.getEntity('personGroup')", mount)
         self.assertIn("liveInput !== input", mount)
+        self.assertLess(mount.index("const persons = await fetchPersons();"), mount.index("allPersons = persons;"))
+        self.assertLess(mount.index("allPersons = persons;"), mount.index("initSearchableCombobox("))
+
+    def test_member_picker_publishes_fresh_people_only_for_live_owner(self):
+        _member_picker_harness("fresh")
+
+    def test_stale_member_picker_keeps_existing_people_cache(self):
+        _member_picker_harness("stale")
 
     def test_metadata_form_keeps_typed_parent_and_separate_delete(self):
         src = _read(_GROUPS)
