@@ -1923,6 +1923,16 @@ def _reload_workspace(page):
     page.wait_for_function("() => window.__prksWorkspaceReady === true")
 
 
+def _open_workspace_at_hash(page, origin, hash_route):
+    """Full document load at `hash_route` so startup URL reconciliation runs."""
+    if not hash_route.startswith("#"):
+        hash_route = "#" + hash_route
+    page.goto("about:blank", wait_until="domcontentloaded")
+    page.goto(origin + "/" + hash_route, wait_until="domcontentloaded")
+    page.wait_for_selector("#sidebar")
+    page.wait_for_function("() => window.__prksWorkspaceReady === true")
+
+
 def _open_work_work_split(page, server):
     """Work A Main, Work B Secondary, both PDFs ready. Returns (work_a, work_b, ids)."""
     work_a = server.ids["work_a"]
@@ -5031,6 +5041,59 @@ class WorkspacePersistenceTests(_BrowserE2E):
         self.assertEqual(shown["mode"], "tiled")
         self.assertEqual(shown["mountedCount"], 4)
 
+    def test_hidden_split_direct_link_stays_stacked(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        hidden = _logical_workspace(page)
+        self.assertEqual(hidden["mode"], "stacked")
+        self.assertIsNotNone(hidden["tree"])
+        self.assertEqual(hidden["mountedCount"], 1)
+        _flush_workspace(page)
+        seen = []
+
+        def on_request(req):
+            if req.method == "GET":
+                seen.append(urlparse(req.url).path)
+
+        page.on("request", on_request)
+        _open_workspace_at_hash(page, server.origin, "#/people/" + tree["person"])
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.wait_for_timeout(400)
+        after = _logical_workspace(page)
+        self.assertIn(tree["person"], after["hash"])
+        self.assertEqual(after["mode"], "stacked")
+        self.assertFalse(after["visualTiled"])
+        self.assertEqual(after["mountedCount"], 1)
+        self.assertIsNotNone(after["tree"])
+        self.assertEqual(after["mainTabId"], hidden["tree"]["first"]["tabId"])
+        self.assertEqual(after["tree"]["first"]["tabId"], hidden["mainTabId"])
+        self.assertEqual(after["tree"]["second"], hidden["tree"]["second"])
+        main_route = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const tab = snap.tabs.find(function (t) { return t.id === snap.mainTabId; });
+                return tab ? tab.route : '';
+            }"""
+        )
+        self.assertIn(tree["person"], main_route)
+        self.assertNotIn("/api/positions/" + tree["position"], seen)
+        self.assertNotIn("/api/works/" + tree["work_b"], seen)
+        self.assertNotIn("/api/works/" + tree["work_a"], seen)
+        page.locator("#prks-workspace-tile-layout").click()
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 4")
+        shown = _logical_workspace(page)
+        self.assertEqual(shown["mode"], "tiled")
+        self.assertTrue(shown["visualTiled"])
+        self.assertEqual(shown["tree"], after["tree"])
+        self.assertEqual(shown["mountedCount"], 4)
+        self.assertEqual(shown["mainTabId"], after["mainTabId"])
+        self.assertEqual(shown["tree"]["first"]["tabId"], hidden["mainTabId"])
+        self.assertEqual(shown["tree"]["second"], hidden["tree"]["second"])
+
     def test_narrow_reload_keeps_tree_and_preferred_ratios(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         page.set_viewport_size({"width": 1600, "height": 900})
@@ -5047,6 +5110,33 @@ class WorkspacePersistenceTests(_BrowserE2E):
                 seen.append(urlparse(req.url).path)
 
         page.on("request", on_request)
+        page.add_init_script(
+            """
+            window.__prksSawTiledCanvas = false;
+            (function () {
+                function scan() {
+                    try {
+                        if (document.querySelector('.prks-workspace-canvas--tiled')) {
+                            window.__prksSawTiledCanvas = true;
+                        }
+                        if (document.querySelector('.prks-tile--secondary')) {
+                            window.__prksSawTiledCanvas = true;
+                        }
+                    } catch (_e) {}
+                }
+                const obs = new MutationObserver(scan);
+                if (document.documentElement) {
+                    obs.observe(document.documentElement, {
+                        subtree: true,
+                        childList: true,
+                        attributes: true,
+                        attributeFilter: ['class']
+                    });
+                }
+                scan();
+            })();
+            """
+        )
         _reload_workspace(page)
         page.wait_for_function("() => window.prksWorkspaceSnapshot().secondaryTree")
         page.wait_for_timeout(400)
@@ -5056,6 +5146,9 @@ class WorkspacePersistenceTests(_BrowserE2E):
         self.assertEqual(narrow["mode"], "tiled")
         self.assertFalse(narrow["visualTiled"])
         self.assertEqual(narrow["mountedCount"], 1)
+        self.assertEqual(page.locator(".prks-tile--secondary").count(), 0)
+        self.assertEqual(page.locator(".prks-workspace-canvas--tiled").count(), 0)
+        self.assertFalse(page.evaluate("() => window.__prksSawTiledCanvas === true"))
         self.assertNotIn("/api/persons/" + tree["person"], seen)
         self.assertNotIn("/api/positions/" + tree["position"], seen)
         self.assertNotIn("/api/works/" + tree["work_b"], seen)
@@ -5074,9 +5167,7 @@ class WorkspacePersistenceTests(_BrowserE2E):
         before = _logical_workspace(page)
         self.assertIn(tree["work_a"], before["hash"])
         _flush_workspace(page)
-        page.goto(server.origin + "/#/people/" + tree["person"], wait_until="domcontentloaded")
-        page.wait_for_selector("#sidebar")
-        page.wait_for_function("() => window.__prksWorkspaceReady === true")
+        _open_workspace_at_hash(page, server.origin, "#/people/" + tree["person"])
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
         after = _logical_workspace(page)
         self.assertIn(tree["person"], after["hash"])
@@ -5091,6 +5182,11 @@ class WorkspacePersistenceTests(_BrowserE2E):
         self.assertIn(tree["person"], main_route)
         self.assertIsNotNone(after["tree"])
         self.assertEqual(len(after["tabIds"]), len(before["tabIds"]))
+        self.assertEqual(after["mainTabId"], before["tree"]["first"]["tabId"])
+        self.assertEqual(after["tree"]["first"]["tabId"], before["mainTabId"])
+        self.assertEqual(after["mode"], "tiled")
+        self.assertTrue(after["visualTiled"])
+        self.assertEqual(after["tree"]["second"], before["tree"]["second"])
 
     def test_corrupt_localStorage_falls_back_to_url(self):
         server, page, _collector = self._start_app()

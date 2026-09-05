@@ -172,9 +172,22 @@
             mainSplitRatio: DEFAULT_MAIN_SPLIT_RATIO,
         };
 
+        function generatedTabSeq(id) {
+            const match = /^tab-([1-9]\d*)$/.exec(String(id || ''));
+            if (!match) return 0;
+            const n = Number(match[1]);
+            if (!Number.isSafeInteger(n) || n < 1) return 0;
+            return n;
+        }
+
         function nextId() {
-            seq += 1;
-            return 'tab-' + seq;
+            let id;
+            do {
+                seq += 1;
+                if (!Number.isSafeInteger(seq) || seq < 1) seq = 1;
+                id = 'tab-' + seq;
+            } while (tabIndex(id) !== -1);
+            return id;
         }
 
         function getHash() {
@@ -325,9 +338,7 @@
         function adoptSeqFromTabs() {
             let max = 0;
             for (let i = 0; i < state.tabs.length; i++) {
-                const match = /^tab-(\d+)$/.exec(state.tabs[i].id);
-                if (!match) continue;
-                const n = Number(match[1]);
+                const n = generatedTabSeq(state.tabs[i].id);
                 if (n > max) max = n;
             }
             seq = max;
@@ -380,7 +391,6 @@
                     const oldMain = state.mainTabId;
                     state.mainTabId = match.id;
                     state.secondaryTree = root.replaceTabId(state.secondaryTree, match.id, oldMain);
-                    if (state.secondaryTree) state.mode = MODE_TILED;
                 } else {
                     state.mainTabId = match.id;
                 }
@@ -708,8 +718,8 @@
                 state.mainSplitRatio = DEFAULT_MAIN_SPLIT_RATIO;
                 setMain(tab.id);
             }
-            paint();
             applyNarrowHint();
+            paint();
             mountVisibleContexts();
             const main = getMainTab();
             if (main) commitUrl(main, 'replace');

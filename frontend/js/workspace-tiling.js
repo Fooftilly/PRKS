@@ -720,7 +720,11 @@
         bindFocusLayer();
         if (typeof root.prksWorkspaceSnapshot === 'function') {
             const snap = root.prksWorkspaceSnapshot();
-            prksWorkspaceSyncTiles(snap, { visualMode: snap && snap.mode === 'tiled' ? 'tiled' : 'stacked' });
+            let visualTiled = !!(snap && snap.mode === 'tiled');
+            if (typeof root.prksWorkspaceVisualTiled === 'function') {
+                visualTiled = !!root.prksWorkspaceVisualTiled();
+            }
+            prksWorkspaceSyncTiles(snap, { visualMode: visualTiled ? 'tiled' : 'stacked' });
         }
     }
 

@@ -58,6 +58,36 @@ function assert(name, ok, detail) {
     record(name, !!ok, ok ? '' : detail || '');
 }
 
+function withFakeTimers(fn) {
+    const realSet = global.setTimeout;
+    const realClear = global.clearTimeout;
+    const timers = [];
+    let nextId = 1;
+    global.setTimeout = function (cb, _ms) {
+        const id = nextId;
+        nextId += 1;
+        timers.push({ id: id, cb: cb });
+        return id;
+    };
+    global.clearTimeout = function (id) {
+        for (let i = timers.length - 1; i >= 0; i--) {
+            if (timers[i].id === id) timers.splice(i, 1);
+        }
+    };
+    try {
+        return fn({
+            timers: timers,
+            fire: function () {
+                const batch = timers.splice(0, timers.length);
+                for (let i = 0; i < batch.length; i++) batch[i].cb();
+            },
+        });
+    } finally {
+        global.setTimeout = realSet;
+        global.clearTimeout = realClear;
+    }
+}
+
 function collectKeys(value, out) {
     if (!value || typeof value !== 'object') return out;
     if (Array.isArray(value)) {
@@ -335,6 +365,34 @@ async function run() {
     const afterParked = await parked.ws.openTab('#/folders', { activate: false });
     assertEq('id generator skips to tab-9', afterParked.id, 'tab-9');
 
+    const gapSnap = {
+        version: 1,
+        tabs: [
+            { id: 'tab-1', route: '#/works/WA' },
+            { id: 'tab-2', route: '#/people/PA' },
+            { id: 'tab-4', route: '#/works/WB' },
+        ],
+        mainTabId: 'tab-1',
+        secondaryTree: null,
+        mode: 'stacked',
+        mainSplitRatio: 0.58,
+    };
+    const gap = makeHarness({
+        hash: '#/works/WA',
+        loadSnapshot: function () {
+            return persist.prksValidateWorkspaceSnapshot(gapSnap);
+        },
+    });
+    const restoredGapIds = gap.ws.snapshot().tabs.map(function (t) { return t.id; });
+    const gapNext = await gap.ws.openTab('#/folders', { activate: false });
+    assertEq('gap restore next id is tab-5', gapNext.id, 'tab-5');
+    assert('gap restore next not a restored id', restoredGapIds.indexOf(gapNext.id) === -1);
+    const gapNext2 = await gap.ws.openTab('#/positions/PO', { activate: false });
+    assertEq('gap restore second next is tab-6', gapNext2.id, 'tab-6');
+    const gapIds = gap.ws.snapshot().tabs.map(function (t) { return t.id; });
+    assertEq('gap restore ids unique', new Set(gapIds).size, gapIds.length);
+    assert('gap restore kept tab-1,2,4', restoredGapIds.join(',') === 'tab-1,tab-2,tab-4');
+
     const deepLink = makeHarness({
         hash: '#/people/PA',
         loadSnapshot: function () {
@@ -345,6 +403,33 @@ async function run() {
     assertEq('direct link Main route', deepLink.ws.snapshot().tabs.filter(function (t) { return t.id === 'tab-2'; })[0].route, '#/people/PA');
     assert('direct link keeps tree', !!deepLink.ws.snapshot().secondaryTree);
     assert('direct link did not drop Work A', deepLink.ws.snapshot().tabs.some(function (t) { return t.route === '#/works/WA'; }));
+    assertEq('direct link stays tiled', deepLink.ws.snapshot().mode, 'tiled');
+    assertEq('direct link mounts visible secondaries', deepLink.mountedCount(), 4);
+
+    const hiddenDeepSnap = validSnapshot();
+    hiddenDeepSnap.mode = 'stacked';
+    const hiddenDeep = makeHarness({
+        hash: '#/people/PA',
+        loadSnapshot: function () {
+            return persist.prksValidateWorkspaceSnapshot(hiddenDeepSnap);
+        },
+    });
+    assertEq('hidden deep-link Main is B', hiddenDeep.ws.snapshot().mainTabId, 'tab-2');
+    assertEq('hidden deep-link stays stacked', hiddenDeep.ws.snapshot().mode, 'stacked');
+    assertEq('hidden deep-link mounts only Main', hiddenDeep.mountedCount(), 1);
+    assert('hidden deep-link secondaries unmounted', !hiddenDeep.isMounted('tab-1') && !hiddenDeep.isMounted('tab-3') && !hiddenDeep.isMounted('tab-4'));
+    assertEq('hidden deep-link no secondary render', hiddenDeep.renders.length, 0);
+    assertEq('hidden deep-link tree first is old Main', hiddenDeep.ws.snapshot().secondaryTree.first.tabId, 'tab-1');
+    assertEq('hidden deep-link nested C', hiddenDeep.ws.snapshot().secondaryTree.second.first.tabId, 'tab-3');
+    assertEq('hidden deep-link nested D', hiddenDeep.ws.snapshot().secondaryTree.second.second.tabId, 'tab-4');
+    await hiddenDeep.ws.setMode('tiled');
+    assertEq('show split after hidden deep-link', hiddenDeep.ws.snapshot().mode, 'tiled');
+    assert('show split remounts A', hiddenDeep.isMounted('tab-1'));
+    assert('show split remounts C', hiddenDeep.isMounted('tab-3'));
+    assert('show split remounts D', hiddenDeep.isMounted('tab-4'));
+    assertEq('show split keeps swapped topology', hiddenDeep.ws.snapshot().secondaryTree.first.tabId, 'tab-1');
+    assertEq('show split nested C preserved', hiddenDeep.ws.snapshot().secondaryTree.second.first.tabId, 'tab-3');
+    assertEq('show split nested D preserved', hiddenDeep.ws.snapshot().secondaryTree.second.second.tabId, 'tab-4');
 
     const staleMain = validSnapshot();
     staleMain.tabs[0].route = '#/works/WA';
@@ -400,6 +485,27 @@ async function run() {
     rejectCase('history field', function (s) { s.tabs[0].history = ['#/works/WA']; });
     rejectCase('unknown route', function (s) { s.tabs[0].route = '#/not-a-route'; });
     rejectCase('tiled without tree', function (s) { s.secondaryTree = null; });
+    rejectCase('unsafe tab-N suffix', function (s) {
+        s.tabs[0].id = 'tab-9007199254740992';
+        s.mainTabId = 'tab-9007199254740992';
+    });
+    rejectCase('zero tab-N suffix', function (s) {
+        s.tabs[0].id = 'tab-0';
+        s.mainTabId = 'tab-0';
+    });
+    rejectCase('leading-zero tab-N', function (s) {
+        s.tabs[0].id = 'tab-01';
+        s.mainTabId = 'tab-01';
+    });
+
+    const customIdSnap = validSnapshot();
+    customIdSnap.tabs[0].id = 'home_tab';
+    customIdSnap.mainTabId = 'home_tab';
+    assert('non-generated tab id still valid', !!persist.prksValidateWorkspaceSnapshot(customIdSnap));
+    const maxSafeSnap = validSnapshot();
+    maxSafeSnap.tabs[3].id = 'tab-' + String(Number.MAX_SAFE_INTEGER);
+    maxSafeSnap.secondaryTree.second.second.tabId = maxSafeSnap.tabs[3].id;
+    assert('max safe tab-N still valid', !!persist.prksValidateWorkspaceSnapshot(maxSafeSnap));
 
     assert('invalid JSON validate', persist.prksValidateWorkspaceSnapshot(null) == null);
     assert('string validate', persist.prksValidateWorkspaceSnapshot('{x}') == null);
@@ -426,6 +532,69 @@ async function run() {
     assertEq('corrupt fallback no tree', fallback.ws.snapshot().secondaryTree, null);
 
     persist.prksClearWorkspaceSnapshot();
+    const unsafeStored = {
+        version: 1,
+        tabs: [{ id: 'tab-9007199254740992', route: '#/folders' }],
+        mainTabId: 'tab-9007199254740992',
+        secondaryTree: null,
+        mode: 'stacked',
+        mainSplitRatio: 0.58,
+    };
+    store.store[KEY] = JSON.stringify(unsafeStored);
+    assert('unsafe tab-N load null', persist.prksLoadWorkspaceSnapshot() == null);
+    assert('unsafe tab-N cleared', store.getItem(KEY) == null);
+    const unsafeBoot = makeHarness({
+        hash: '#/folders',
+        loadSnapshot: function () {
+            return persist.prksLoadWorkspaceSnapshot();
+        },
+    });
+    assertEq('unsafe tab-N fallback one Main', unsafeBoot.ws.snapshot().tabs.length, 1);
+    assertEq('unsafe tab-N fallback route', unsafeBoot.ws.snapshot().tabs[0].route, '#/folders');
+    assert('unsafe tab-N fallback new id', unsafeBoot.ws.snapshot().tabs[0].id !== 'tab-9007199254740992');
+
+    persist.prksClearWorkspaceSnapshot();
+    store.writes = 0;
+    withFakeTimers(function (clock) {
+        const a = validSnapshot();
+        a.mainSplitRatio = 0.41;
+        const b = validSnapshot();
+        b.mainSplitRatio = 0.52;
+        const c = validSnapshot();
+        c.mainSplitRatio = 0.63;
+        persist.prksScheduleWorkspacePersistence(a);
+        assertEq('trailing debounce no write after first', store.writes, 0);
+        assertEq('trailing debounce one timer after first', clock.timers.length, 1);
+        persist.prksScheduleWorkspacePersistence(b);
+        assertEq('trailing debounce no write after second', store.writes, 0);
+        assertEq('trailing debounce timer restarted', clock.timers.length, 1);
+        persist.prksScheduleWorkspacePersistence(c);
+        assertEq('trailing debounce no intermediate writes', store.writes, 0);
+        assertEq('trailing debounce one timer after burst', clock.timers.length, 1);
+        clock.fire();
+        assertEq('trailing debounce one final write', store.writes, 1);
+        assertEq('trailing debounce wrote latest', JSON.parse(store.getItem(KEY)).mainSplitRatio, 0.63);
+        assertEq('trailing debounce timer cleared after fire', clock.timers.length, 0);
+    });
+
+    persist.prksClearWorkspaceSnapshot();
+    store.writes = 0;
+    withFakeTimers(function (clock) {
+        const a = validSnapshot();
+        a.mainSplitRatio = 0.41;
+        const b = validSnapshot();
+        b.mainSplitRatio = 0.77;
+        persist.prksScheduleWorkspacePersistence(a);
+        persist.prksScheduleWorkspacePersistence(b);
+        persist.prksFlushWorkspacePersistence();
+        assertEq('flush writes immediately', store.writes, 1);
+        assertEq('flush wrote latest', JSON.parse(store.getItem(KEY)).mainSplitRatio, 0.77);
+        assertEq('flush cleared timer', clock.timers.length, 0);
+        clock.fire();
+        assertEq('flush does not double-write', store.writes, 1);
+    });
+
+    persist.prksClearWorkspaceSnapshot();
     store.writes = 0;
     persist.prksScheduleWorkspacePersistence(validSnapshot());
     persist.prksScheduleWorkspacePersistence(validSnapshot());
@@ -444,6 +613,44 @@ async function run() {
     const quotaHarness = makeHarness({ hash: '#/folders', loadSnapshot: function () { return null; } });
     assertEq('quota failure still bootstraps', quotaHarness.ws.snapshot().tabs.length, 1);
     persist.prksClearWorkspaceSnapshot();
+
+    const tileSyncs = [];
+    const prevNarrowFn = global.prksWorkspaceCanvasIsNarrow;
+    const prevSyncFn = global.prksWorkspaceSyncTiles;
+    global.prksWorkspaceCanvasIsNarrow = function () { return true; };
+    global.prksWorkspaceSyncTiles = function (_snap, opts) {
+        tileSyncs.push(opts && opts.visualMode);
+    };
+    try {
+        const narrowStart = makeHarness({
+            hash: '#/works/WA',
+            loadSnapshot: function () {
+                return persist.prksValidateWorkspaceSnapshot(validSnapshot());
+            },
+        });
+        const bootstrapSyncs = tileSyncs.slice();
+        assertEq('narrow restore logical tiled', narrowStart.ws.snapshot().mode, 'tiled');
+        assertEq('narrow restore mounts Main only', narrowStart.mountedCount(), 1);
+        assert('narrow restore keeps tree', !!narrowStart.ws.snapshot().secondaryTree);
+        assertEq('narrow restore preferred ratio', narrowStart.ws.snapshot().mainSplitRatio, 0.7);
+        assertEq('narrow restore nested ratio', narrowStart.ws.snapshot().secondaryTree.second.ratio, 0.55);
+        assert('narrow restore first paints exist', bootstrapSyncs.length > 0);
+        assert('narrow restore no tiled paint', bootstrapSyncs.every(function (m) { return m !== 'tiled'; }));
+        assert('narrow restore no secondary mount', !narrowStart.isMounted('tab-2') && !narrowStart.isMounted('tab-3') && !narrowStart.isMounted('tab-4'));
+        const widenOk = await narrowStart.ws.setNarrowFallback(false);
+        assert('narrow restore widen ok', widenOk === true);
+        assertEq('narrow restore widen mounts all', narrowStart.mountedCount(), 4);
+        assertEq('narrow restore widen tree first', narrowStart.ws.snapshot().secondaryTree.first.tabId, 'tab-2');
+        assertEq('narrow restore widen nested C', narrowStart.ws.snapshot().secondaryTree.second.first.tabId, 'tab-3');
+        assertEq('narrow restore widen nested D', narrowStart.ws.snapshot().secondaryTree.second.second.tabId, 'tab-4');
+        assertEq('narrow restore widen ratio', narrowStart.ws.snapshot().mainSplitRatio, 0.7);
+        assertEq('narrow restore widen nested ratio', narrowStart.ws.snapshot().secondaryTree.second.ratio, 0.55);
+    } finally {
+        if (prevNarrowFn) global.prksWorkspaceCanvasIsNarrow = prevNarrowFn;
+        else delete global.prksWorkspaceCanvasIsNarrow;
+        if (prevSyncFn) global.prksWorkspaceSyncTiles = prevSyncFn;
+        else delete global.prksWorkspaceSyncTiles;
+    }
 
     const srcFiles = [
         'workspace-tabs.js',

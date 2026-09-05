@@ -80,8 +80,18 @@
         return ICON_RE.test(value) ? value : '';
     }
 
+    function generatedTabSeq(id) {
+        if (typeof id !== 'string' || !/^tab-\d+$/.test(id)) return undefined;
+        const match = /^tab-([1-9]\d*)$/.exec(id);
+        if (!match) return null;
+        const n = Number(match[1]);
+        if (!Number.isSafeInteger(n) || n < 1) return null;
+        return n;
+    }
+
     function isTabId(value) {
-        return typeof value === 'string' && TAB_ID_RE.test(value);
+        if (typeof value !== 'string' || !TAB_ID_RE.test(value)) return false;
+        return generatedTabSeq(value) !== null;
     }
 
     function isRouteString(value) {
@@ -382,7 +392,7 @@
     function prksScheduleWorkspacePersistence(state) {
         if (persistDisabled) return;
         pendingState = state;
-        if (debounceTimer != null) return;
+        clearTimer();
         const delay = DEBOUNCE_MS;
         try {
             const setter = typeof root.setTimeout === 'function' ? root.setTimeout : setTimeout;
