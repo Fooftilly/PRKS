@@ -49,6 +49,9 @@ class SettingsCategoryStructureTests(unittest.TestCase):
     def test_tablist_accessibility_markup(self):
         modal = _settings_modal_html()
         self.assertIn('role="tablist"', modal)
+        # Static markup ships the desktop/default orientation; JS
+        # (prksSyncSettingsNavOrientation) synchronizes it with the actual
+        # responsive layout before interactive use — it is not always vertical.
         self.assertIn('aria-orientation="vertical"', modal)
         for cat in _CATEGORIES:
             self.assertIn(f'aria-controls="prks-settings-panel-{cat}"', modal)
@@ -181,6 +184,24 @@ class SettingsCategoryJsTests(unittest.TestCase):
         self.assertIn("setAttribute('inert'", fn)
         self.assertIn("removeAttribute('inert')", fn)
         self.assertIn("aria-selected", fn)
+
+    def test_orientation_sync_helper_exists_and_shares_css_breakpoint(self):
+        app = _read(_APP)
+        self.assertIn("function prksSyncSettingsNavOrientation(", app)
+        self.assertIn("window.prksSyncSettingsNavOrientation", app)
+        css = _read(_CSS)
+        self.assertIn("PRKS_SETTINGS_NARROW_MEDIA_QUERY = '(max-width: 640px)'", app)
+        self.assertIn("@media (max-width: 640px)", css)
+
+    def test_orientation_sync_uses_matchmedia_change_not_raw_resize(self):
+        app = _read(_APP)
+        fn_start = app.index("function initPrksSettingsCategoryNav(")
+        fn_end = app.index("\nwindow.initPrksSettingsCategoryNav", fn_start)
+        fn = app[fn_start:fn_end]
+        self.assertIn("prksSyncSettingsNavOrientation()", fn)
+        self.assertIn("matchMedia(PRKS_SETTINGS_NARROW_MEDIA_QUERY)", fn)
+        self.assertIn("addEventListener('change'", fn)
+        self.assertNotIn("window.addEventListener('resize'", fn)
 
     def test_keyboard_navigation_supports_arrows_home_end(self):
         app = _read(_APP)

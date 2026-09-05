@@ -7233,6 +7233,9 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
             "() => getComputedStyle(document.getElementById('prks-settings-nav')).flexDirection"
         )
         self.assertEqual(nav_display, "row")
+        self.assertEqual(
+            page.locator("#prks-settings-nav").get_attribute("aria-orientation"), "horizontal"
+        )
         page.locator("#prks-settings-tab-reading").click()
         page.wait_for_selector("#prks-settings-panel-reading:not([hidden])")
         overflow = page.evaluate("() => document.documentElement.scrollWidth > document.documentElement.clientWidth")
@@ -7256,8 +7259,29 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
             "() => getComputedStyle(document.getElementById('prks-settings-nav')).flexDirection"
         )
         self.assertEqual(nav_display, "column")
+        self.assertEqual(
+            page.locator("#prks-settings-nav").get_attribute("aria-orientation"), "vertical"
+        )
         workspace_display = page.evaluate(
             "() => getComputedStyle(document.getElementById('prks-settings-nav').parentElement).display"
         )
         self.assertEqual(workspace_display, "flex")
+
+    def test_nav_orientation_updates_on_runtime_viewport_transition(self):
+        _server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1280, "height": 800})
+        _open_settings(page)
+        self.assertEqual(
+            page.locator("#prks-settings-nav").get_attribute("aria-orientation"), "vertical"
+        )
+        page.set_viewport_size({"width": 420, "height": 800})
+        page.wait_for_function(
+            "() => document.getElementById('prks-settings-nav')"
+            ".getAttribute('aria-orientation') === 'horizontal'"
+        )
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.wait_for_function(
+            "() => document.getElementById('prks-settings-nav')"
+            ".getAttribute('aria-orientation') === 'vertical'"
+        )
 

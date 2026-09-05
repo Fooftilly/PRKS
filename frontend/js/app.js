@@ -1249,8 +1249,22 @@ function initPrksPerformanceDiagnostics() {
 // Settings modal category navigation. Presentation state only: never persisted,
 // never routed. See DESIGN.md "Settings" and the storage rule in AGENTS.md.
 const PRKS_SETTINGS_CATEGORIES = ['general', 'reading', 'export', 'backup', 'maintenance', 'diagnostics'];
+// Same breakpoint as the `.prks-settings-nav` responsive rule in style.css.
+const PRKS_SETTINGS_NARROW_MEDIA_QUERY = '(max-width: 640px)';
 let __prksSettingsActiveCategory = 'general';
 let __prksSettingsDiagnosticsLoaded = false;
+
+// Keeps the tablist's aria-orientation in sync with its actual visual layout:
+// vertical on desktop, horizontal once the nav becomes a horizontal strip.
+function prksSyncSettingsNavOrientation() {
+    const nav = document.getElementById('prks-settings-nav');
+    if (!nav) return;
+    const narrow =
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia(PRKS_SETTINGS_NARROW_MEDIA_QUERY).matches;
+    nav.setAttribute('aria-orientation', narrow ? 'horizontal' : 'vertical');
+}
+window.prksSyncSettingsNavOrientation = prksSyncSettingsNavOrientation;
 
 function prksActivateSettingsCategory(categoryId, options) {
     const opts = options || {};
@@ -1313,6 +1327,16 @@ function initPrksSettingsCategoryNav() {
         const nextTab = tabs[nextIdx];
         prksActivateSettingsCategory(nextTab.dataset.prksSettingsCategory, { focusTab: true });
     });
+
+    prksSyncSettingsNavOrientation();
+    if (typeof window.matchMedia === 'function') {
+        const mq = window.matchMedia(PRKS_SETTINGS_NARROW_MEDIA_QUERY);
+        if (typeof mq.addEventListener === 'function') {
+            mq.addEventListener('change', prksSyncSettingsNavOrientation);
+        } else if (typeof mq.addListener === 'function') {
+            mq.addListener(prksSyncSettingsNavOrientation);
+        }
+    }
 }
 window.initPrksSettingsCategoryNav = initPrksSettingsCategoryNav;
 
