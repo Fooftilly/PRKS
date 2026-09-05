@@ -769,6 +769,28 @@ Creating a Work is a short primary workflow with optional depth, not a database 
 
 Processing Inbox stays a separate production path. This dialog is not a post-creation PDF attach flow.
 
+### Settings
+
+Settings is task-grouped, not one long scrolling page. `#settings-modal` shows a fixed header, a quiet vertical category nav (`role="tablist"`), and one scrollable content pane holding six category panels: **General**, **Reading & layout**, **Export**, **Backup**, **Maintenance**, **Diagnostics**. Inactive panels stay in the DOM as `hidden` + `inert` — never removed/recreated — so operations (an in-flight backup, a chosen restore file, a running maintenance action) and unsaved control state survive switching categories. `prksActivateSettingsCategory(categoryId, options)` is the single helper that shows/hides panels, updates `aria-selected`/`tabindex`, and drives any category-specific lazy behavior; no per-category logic is scattered across separate click handlers. Category nav supports Arrow Up/Down/Left/Right, Home, and End with selection-follows-focus.
+
+**General is the default and stays calm.** It only shows Appearance (theme), Annotation author, and Show help hints — no backup, maintenance, or diagnostics language anywhere in it. This is the everyday-preferences first impression the reorganization exists to protect.
+
+**Reading & layout** groups the three device-local layout toggles (Force mobile layout, Research notes beside PDF on mobile, Remember PDF page per file) with a panel-level "Stored on this device" note. The mobile-notes toggle explains its narrow-layout dependency without ever disabling the control itself.
+
+**Export** is the BibTeX/BibLaTeX field toggles plus Restore export defaults, given real width instead of a squeezed disclosure. A compact "N of M fields included" summary sits above the toggle grid and is derived from the existing toggle `aria-checked` state — it is not a second source of truth.
+
+**Backup** keeps the full existing verified backup/restore workflow (progress, cancel, verify, the separate RESTORE confirmation modal) unchanged, but visually separates "Create backup" from "Restore backup" with headings and a rule instead of one undifferentiated block.
+
+**Maintenance** groups PDF text index rebuild and PDF linearization behind a short "these tools are normally unnecessary" intro and ordinary secondary-button styling — no danger treatment, no additional maintenance tools beyond what already existed.
+
+**Diagnostics** holds all performance instrumentation (summary, route table, spans, thumbnail metrics, client request coordinator, Refresh/Reset/Copy). Diagnostics loads lazily: opening Settings never calls `prksLoadPerformanceDiagnostics()` by itself. The first activation of the Diagnostics category triggers exactly one load; switching away and back reuses the retained `__prksPerfSnapshot`/`__prksClientRequestSnapshot` without an automatic re-fetch; Refresh explicitly fetches again.
+
+**Storage-scope badges** (`Library-wide` / `This device`) sit next to Annotation author, BibTeX export fields, Appearance, and Show help hints so persistence scope is scannable without a paragraph per row. `Library-wide` means stored server-side in the PRKS library, not cloud sync. Backup, Maintenance, and Diagnostics are actions, not persisted preferences, and carry no scope badge.
+
+**Category selection is presentation state only**, not a setting: it lives in an in-memory module variable, defaults to General on page load, and may remember the last-viewed category for the remainder of that page session. It is never written to `localStorage`, `/api/settings`, or a URL hash — Settings stays a modal with no `#/settings/...` routes. Closing Settings restores focus to whatever launched it (icon button or command palette), never to the last category tab.
+
+At narrow modal widths the vertical nav becomes a single-line horizontally scrollable strip instead of squeezing panel content; the active category auto-scrolls into view and stays visually obvious.
+
 ### Application shell
 
 The shell is one visual system, not three.

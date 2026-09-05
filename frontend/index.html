@@ -278,162 +278,202 @@
         </div>
     </div>
 
-    <div id="settings-modal" class="modal hidden">
+    <div id="settings-modal" class="modal modal--settings hidden">
         <div class="modal-header">
             <h3>Settings</h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
-        <div class="modal-body">
-            <fieldset class="prks-theme-picker">
-                <legend class="prks-theme-picker__legend">App theme</legend>
-                <div class="prks-theme-picker__options" role="group" aria-label="Choose app theme">
-                    <button type="button" class="prks-theme-option" data-prks-theme="system" title="System default" aria-label="System default theme">
-                        <svg class="prks-theme-option__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-                            <path d="M8 21h8M12 17v4"/>
-                        </svg>
-                        <span class="prks-theme-option__label">System</span>
-                    </button>
-                    <button type="button" class="prks-theme-option" data-prks-theme="light" title="Light theme" aria-label="Light theme">
-                        <svg class="prks-theme-option__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <circle cx="12" cy="12" r="4"/>
-                            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
-                        </svg>
-                        <span class="prks-theme-option__label">Light</span>
-                    </button>
-                    <button type="button" class="prks-theme-option" data-prks-theme="dark" title="Dark theme" aria-label="Dark theme">
-                        <svg class="prks-theme-option__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-                        </svg>
-                        <span class="prks-theme-option__label">Dark</span>
-                    </button>
-                </div>
-            </fieldset>
-            <section class="prks-settings-section" aria-labelledby="prks-settings-author-heading">
-                <h4 id="prks-settings-author-heading" class="prks-settings-section__title">Annotation author</h4>
-                <label for="annotation-author-input" class="prks-sr-only">Name shown on new PDF annotations</label>
-                <input type="text" id="annotation-author-input" class="prks-settings-text-input" autocomplete="name" placeholder="Name shown on new PDF annotations">
-                <p class="prks-settings-hint">Leave empty to use “You”. Stored with your library so every device using this PRKS server sees the same name. Applies to viewers opened after you change this.</p>
-            </section>
-            <section class="prks-settings-section" aria-labelledby="prks-settings-bibtex-heading">
-                <h4 id="prks-settings-bibtex-heading" class="prks-settings-section__title">BibTeX / BibLaTeX export</h4>
-                <p class="prks-settings-hint">When a toggle is on, that field is included when you copy BibTeX. Turn off to keep data in the app but omit it from export. Stored with your library for all devices using this server.</p>
-                <div class="prks-bibtex-export-toggles" id="prks-bibtex-export-fields" role="group" aria-label="Fields to include in BibTeX export"></div>
-                <button type="button" class="prks-btn prks-btn--secondary prks-bibtex-export-reset" id="prks-bibtex-export-reset">Restore export defaults</button>
-            </section>
-            <section class="prks-settings-section" aria-labelledby="prks-settings-backup-heading">
-                <h4 id="prks-settings-backup-heading" class="prks-settings-section__title">Backup &amp; restore</h4>
-                <p class="prks-settings-hint">Create a verified backup of your PRKS library. Includes database, PDFs and managed person files. Search index and thumbnails are rebuilt automatically.</p>
-                <div class="prks-backup-restore-row">
-                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-download-btn">Download backup</button>
-                    <button type="button" class="prks-btn prks-btn--secondary hidden" id="prks-backup-cancel-btn">Stop backup</button>
-                </div>
-                <div id="prks-backup-progress" class="prks-backup-progress hidden">
-                    <progress id="prks-backup-progress-bar" max="100" value="0"></progress>
-                    <p class="prks-settings-hint" id="prks-backup-progress-label"></p>
-                </div>
-                <p class="prks-settings-hint" id="prks-backup-download-status" aria-live="polite"></p>
-                <p class="prks-settings-hint prks-backup-restore-heading">Restore a PRKS backup</p>
-                <p class="prks-settings-hint">Before restoring, download a backup of the current library if you may want to return to it.</p>
-                <div class="prks-backup-restore-row">
-                    <input type="file" id="prks-backup-file-input" class="prks-backup-file-input" accept=".prks-backup,application/octet-stream,application/zip">
-                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-choose-btn">Choose backup…</button>
-                    <span class="prks-settings-hint" id="prks-backup-file-label">No file selected</span>
-                </div>
-                <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-verify-btn">Verify backup</button>
-                <p class="prks-settings-hint" id="prks-backup-restore-status" aria-live="polite"></p>
-                <div id="prks-backup-verified-panel" class="prks-backup-verified-panel hidden">
-                    <p class="prks-backup-verified-title">Backup verified</p>
-                    <ul class="prks-backup-summary" id="prks-backup-summary"></ul>
-                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-restore-btn">Restore this backup</button>
-                </div>
-            </section>
-            <section class="prks-settings-section" aria-labelledby="prks-settings-pdf-index-heading">
-                <h4 id="prks-settings-pdf-index-heading" class="prks-settings-section__title">PDF text index</h4>
-                <p class="prks-settings-hint">PDF text search is maintained automatically. Use a full rebuild if PDF search results seem incomplete or stale.</p>
-                <button type="button" class="prks-btn prks-btn--secondary" id="prks-reindex-pdf-text-btn">Rebuild PDF text index</button>
-                <p class="prks-settings-hint" id="prks-reindex-pdf-text-status" aria-live="polite"></p>
-            </section>
-            <section class="prks-settings-section" aria-labelledby="prks-settings-pdf-linearize-heading">
-                <h4 id="prks-settings-pdf-linearize-heading" class="prks-settings-section__title">PDF linearization</h4>
-                <p class="prks-settings-hint">Optimize existing library PDFs for progressive loading. Only non-linearized PDFs are processed.</p>
-                <button type="button" class="prks-btn prks-btn--secondary" id="prks-linearize-existing-pdfs-btn">Linearize existing PDFs</button>
-                <p class="prks-settings-hint" id="prks-linearize-existing-pdfs-status" aria-live="polite"></p>
-            </section>
-            <section class="prks-settings-section" aria-labelledby="prks-settings-perf-heading">
-                <h4 id="prks-settings-perf-heading" class="prks-settings-section__title">Performance diagnostics</h4>
-                <p class="prks-settings-hint">Runtime-only measurements from this PRKS process. No research content, search terms or file names are recorded. Measurements reset when PRKS restarts.</p>
-                <p class="prks-settings-hint" id="prks-perf-summary" aria-live="polite">Open Settings to load measurements, or click Refresh.</p>
-                <div class="prks-perf-table-wrap">
-                    <table class="prks-perf-table" id="prks-perf-routes">
-                        <caption class="prks-sr-only">Slowest API routes</caption>
-                        <thead>
-                            <tr>
-                                <th scope="col">Route</th>
-                                <th scope="col">Calls</th>
-                                <th scope="col">Avg</th>
-                                <th scope="col">P95</th>
-                                <th scope="col">Max</th>
-                                <th scope="col">DB</th>
-                                <th scope="col">DB/call</th>
-                            </tr>
-                        </thead>
-                        <tbody id="prks-perf-routes-body">
-                            <tr><td colspan="7">No API requests measured yet.</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-                <p class="prks-settings-hint" id="prks-perf-spans"></p>
-                <p class="prks-settings-hint" id="prks-perf-thumbs"></p>
-                <div id="prks-perf-client" class="prks-perf-client">
-                    <h5 class="prks-settings-section__title">Client request coordinator</h5>
-                    <p class="prks-settings-hint" id="prks-perf-client-body">Open Settings to load measurements, or click Refresh.</p>
-                </div>
-                <div class="prks-backup-restore-row">
-                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-refresh-btn">Refresh</button>
-                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-reset-btn">Reset</button>
-                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-copy-btn">Copy report</button>
-                </div>
-                <p class="prks-settings-hint" id="prks-perf-status" aria-live="polite"></p>
-            </section>
-            <section class="prks-settings-section" aria-labelledby="prks-settings-device-heading">
-                <h4 id="prks-settings-device-heading" class="prks-settings-section__title">This device</h4>
-                <div class="prks-setting-row">
-                    <div class="prks-setting-row__text">
-                        <span class="prks-setting-row__label" id="prks-lbl-ui-hints">Show help hints (? buttons)</span>
+        <div class="prks-settings-workspace">
+            <nav class="prks-settings-nav" id="prks-settings-nav" role="tablist" aria-orientation="vertical" aria-label="Settings categories">
+                <button type="button" class="prks-settings-nav__item" id="prks-settings-tab-general" role="tab" aria-selected="false" tabindex="-1" aria-controls="prks-settings-panel-general" data-prks-settings-category="general">General</button>
+                <button type="button" class="prks-settings-nav__item" id="prks-settings-tab-reading" role="tab" aria-selected="false" tabindex="-1" aria-controls="prks-settings-panel-reading" data-prks-settings-category="reading">Reading &amp; layout</button>
+                <button type="button" class="prks-settings-nav__item" id="prks-settings-tab-export" role="tab" aria-selected="false" tabindex="-1" aria-controls="prks-settings-panel-export" data-prks-settings-category="export">Export</button>
+                <button type="button" class="prks-settings-nav__item" id="prks-settings-tab-backup" role="tab" aria-selected="false" tabindex="-1" aria-controls="prks-settings-panel-backup" data-prks-settings-category="backup">Backup</button>
+                <button type="button" class="prks-settings-nav__item" id="prks-settings-tab-maintenance" role="tab" aria-selected="false" tabindex="-1" aria-controls="prks-settings-panel-maintenance" data-prks-settings-category="maintenance">Maintenance</button>
+                <button type="button" class="prks-settings-nav__item" id="prks-settings-tab-diagnostics" role="tab" aria-selected="false" tabindex="-1" aria-controls="prks-settings-panel-diagnostics" data-prks-settings-category="diagnostics">Diagnostics</button>
+            </nav>
+            <div class="prks-settings-content" id="prks-settings-content">
+
+                <section class="prks-settings-panel" id="prks-settings-panel-general" role="tabpanel" aria-labelledby="prks-settings-tab-general" tabindex="0" hidden inert>
+                    <h4 class="prks-settings-panel__title">General</h4>
+                    <fieldset class="prks-theme-picker">
+                        <legend class="prks-theme-picker__legend">Appearance <span class="prks-settings-scope">This device</span></legend>
+                        <div class="prks-theme-picker__options" role="group" aria-label="Choose app theme">
+                            <button type="button" class="prks-theme-option" data-prks-theme="system" title="System default" aria-label="System default theme">
+                                <svg class="prks-theme-option__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                                    <path d="M8 21h8M12 17v4"/>
+                                </svg>
+                                <span class="prks-theme-option__label">System</span>
+                            </button>
+                            <button type="button" class="prks-theme-option" data-prks-theme="light" title="Light theme" aria-label="Light theme">
+                                <svg class="prks-theme-option__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <circle cx="12" cy="12" r="4"/>
+                                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+                                </svg>
+                                <span class="prks-theme-option__label">Light</span>
+                            </button>
+                            <button type="button" class="prks-theme-option" data-prks-theme="dark" title="Dark theme" aria-label="Dark theme">
+                                <svg class="prks-theme-option__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                                </svg>
+                                <span class="prks-theme-option__label">Dark</span>
+                            </button>
+                        </div>
+                    </fieldset>
+                    <section class="prks-settings-section" aria-labelledby="prks-settings-author-heading">
+                        <h5 id="prks-settings-author-heading" class="prks-settings-section__title">Annotation author <span class="prks-settings-scope">Library-wide</span></h5>
+                        <label for="annotation-author-input" class="prks-sr-only">Name shown on new PDF annotations</label>
+                        <input type="text" id="annotation-author-input" class="prks-settings-text-input" autocomplete="name" placeholder="Name shown on new PDF annotations">
+                        <p class="prks-settings-hint">Leave empty to use “You”. Stored with your library so every device using this PRKS server sees the same name. Applies to viewers opened after you change this.</p>
+                    </section>
+                    <section class="prks-settings-section" aria-labelledby="prks-settings-help-heading">
+                        <h5 id="prks-settings-help-heading" class="prks-settings-section__title">Help <span class="prks-settings-scope">This device</span></h5>
+                        <div class="prks-setting-row">
+                            <div class="prks-setting-row__text">
+                                <span class="prks-setting-row__label" id="prks-lbl-ui-hints">Show help hints (? buttons)</span>
+                            </div>
+                            <button type="button" class="prks-toggle" role="switch" id="prks-setting-ui-hints" aria-labelledby="prks-lbl-ui-hints" aria-checked="false">
+                                <span class="prks-toggle__thumb" aria-hidden="true"></span>
+                            </button>
+                        </div>
+                    </section>
+                </section>
+
+                <section class="prks-settings-panel" id="prks-settings-panel-reading" role="tabpanel" aria-labelledby="prks-settings-tab-reading" tabindex="0" hidden inert>
+                    <h4 class="prks-settings-panel__title">Reading &amp; layout</h4>
+                    <p class="prks-settings-hint">Stored on this device.</p>
+                    <div class="prks-setting-row">
+                        <div class="prks-setting-row__text">
+                            <span class="prks-setting-row__label" id="prks-lbl-force-mobile">Force mobile layout</span>
+                            <p id="prks-hint-force-mobile" class="prks-settings-hint prks-setting-row__hint">Drawer navigation and details overlay, even on wide screens.</p>
+                        </div>
+                        <button type="button" class="prks-toggle" role="switch" id="prks-setting-force-mobile" aria-labelledby="prks-lbl-force-mobile" aria-describedby="prks-hint-force-mobile" aria-checked="false">
+                            <span class="prks-toggle__thumb" aria-hidden="true"></span>
+                        </button>
                     </div>
-                    <button type="button" class="prks-toggle" role="switch" id="prks-setting-ui-hints" aria-labelledby="prks-lbl-ui-hints" aria-checked="false">
-                        <span class="prks-toggle__thumb" aria-hidden="true"></span>
-                    </button>
-                </div>
-                <div class="prks-setting-row">
-                    <div class="prks-setting-row__text">
-                        <span class="prks-setting-row__label" id="prks-lbl-force-mobile">Force mobile layout</span>
-                        <p id="prks-hint-force-mobile" class="prks-settings-hint prks-setting-row__hint">Drawer navigation and details overlay, even on wide screens. Stored on this device only.</p>
+                    <div class="prks-setting-row">
+                        <div class="prks-setting-row__text">
+                            <span class="prks-setting-row__label" id="prks-lbl-mobile-work-notes">Research notes beside PDF on mobile</span>
+                            <p id="prks-hint-mobile-work-notes" class="prks-settings-hint prks-setting-row__hint">Only affects narrow/mobile layout (or <strong>Force mobile layout</strong> above).</p>
+                        </div>
+                        <button type="button" class="prks-toggle" role="switch" id="prks-setting-mobile-work-notes-right" aria-labelledby="prks-lbl-mobile-work-notes" aria-describedby="prks-hint-mobile-work-notes" aria-checked="false">
+                            <span class="prks-toggle__thumb" aria-hidden="true"></span>
+                        </button>
                     </div>
-                    <button type="button" class="prks-toggle" role="switch" id="prks-setting-force-mobile" aria-labelledby="prks-lbl-force-mobile" aria-describedby="prks-hint-force-mobile" aria-checked="false">
-                        <span class="prks-toggle__thumb" aria-hidden="true"></span>
-                    </button>
-                </div>
-                <div class="prks-setting-row">
-                    <div class="prks-setting-row__text">
-                        <span class="prks-setting-row__label" id="prks-lbl-mobile-work-notes">Research notes beside the PDF (mobile)</span>
-                        <p id="prks-hint-mobile-work-notes" class="prks-settings-hint prks-setting-row__hint">Only applies in mobile / narrow layout (or with <strong>Force mobile layout</strong> on a wide screen). Stored on this device only.</p>
+                    <div class="prks-setting-row">
+                        <div class="prks-setting-row__text">
+                            <span class="prks-setting-row__label" id="prks-lbl-pdf-remember">Remember PDF page per file</span>
+                            <p id="prks-hint-pdf-remember-page" class="prks-settings-hint prks-setting-row__hint">Last viewed page per file is kept in this browser.</p>
+                        </div>
+                        <button type="button" class="prks-toggle" role="switch" id="prks-setting-pdf-remember-page" aria-labelledby="prks-lbl-pdf-remember" aria-describedby="prks-hint-pdf-remember-page" aria-checked="false">
+                            <span class="prks-toggle__thumb" aria-hidden="true"></span>
+                        </button>
                     </div>
-                    <button type="button" class="prks-toggle" role="switch" id="prks-setting-mobile-work-notes-right" aria-labelledby="prks-lbl-mobile-work-notes" aria-describedby="prks-hint-mobile-work-notes" aria-checked="false">
-                        <span class="prks-toggle__thumb" aria-hidden="true"></span>
-                    </button>
-                </div>
-                <div class="prks-setting-row">
-                    <div class="prks-setting-row__text">
-                        <span class="prks-setting-row__label" id="prks-lbl-pdf-remember">Remember PDF page per file</span>
-                        <p id="prks-hint-pdf-remember-page" class="prks-settings-hint prks-setting-row__hint">Last viewed page per file is kept in this browser. Stored on this device only.</p>
-                    </div>
-                    <button type="button" class="prks-toggle" role="switch" id="prks-setting-pdf-remember-page" aria-labelledby="prks-lbl-pdf-remember" aria-describedby="prks-hint-pdf-remember-page" aria-checked="false">
-                        <span class="prks-toggle__thumb" aria-hidden="true"></span>
-                    </button>
-                </div>
-            </section>
+                </section>
+
+                <section class="prks-settings-panel" id="prks-settings-panel-export" role="tabpanel" aria-labelledby="prks-settings-tab-export" tabindex="0" hidden inert>
+                    <h4 class="prks-settings-panel__title">Export</h4>
+                    <section class="prks-settings-section" aria-labelledby="prks-settings-bibtex-heading">
+                        <h5 id="prks-settings-bibtex-heading" class="prks-settings-section__title">BibTeX / BibLaTeX export <span class="prks-settings-scope">Library-wide</span></h5>
+                        <p class="prks-settings-hint">When a toggle is on, that field is included when you copy BibTeX. Turn off to keep data in the app but omit it from export.</p>
+                        <p class="prks-settings-hint prks-bibtex-export-summary" id="prks-bibtex-export-summary" aria-live="polite"></p>
+                        <div class="prks-bibtex-export-toggles" id="prks-bibtex-export-fields" role="group" aria-label="Fields to include in BibTeX export"></div>
+                        <button type="button" class="prks-btn prks-btn--secondary prks-bibtex-export-reset" id="prks-bibtex-export-reset">Restore export defaults</button>
+                    </section>
+                </section>
+
+                <section class="prks-settings-panel" id="prks-settings-panel-backup" role="tabpanel" aria-labelledby="prks-settings-tab-backup" tabindex="0" hidden inert>
+                    <h4 class="prks-settings-panel__title">Backup</h4>
+                    <section class="prks-settings-section" aria-labelledby="prks-settings-backup-create-heading">
+                        <h5 id="prks-settings-backup-create-heading" class="prks-settings-section__title">Create backup</h5>
+                        <p class="prks-settings-hint">Create a verified backup of your PRKS library. Includes database, PDFs and managed person files. Search index and thumbnails are rebuilt automatically.</p>
+                        <div class="prks-backup-restore-row">
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-download-btn">Download backup</button>
+                            <button type="button" class="prks-btn prks-btn--secondary hidden" id="prks-backup-cancel-btn">Stop backup</button>
+                        </div>
+                        <div id="prks-backup-progress" class="prks-backup-progress hidden">
+                            <progress id="prks-backup-progress-bar" max="100" value="0"></progress>
+                            <p class="prks-settings-hint" id="prks-backup-progress-label"></p>
+                        </div>
+                        <p class="prks-settings-hint" id="prks-backup-download-status" aria-live="polite"></p>
+                    </section>
+                    <section class="prks-settings-section prks-settings-section--sep" aria-labelledby="prks-settings-backup-restore-heading">
+                        <h5 id="prks-settings-backup-restore-heading" class="prks-settings-section__title">Restore backup</h5>
+                        <p class="prks-settings-hint">Choose a PRKS backup and verify it before restoring. Before restoring, download a backup of the current library if you may want to return to it.</p>
+                        <div class="prks-backup-restore-row">
+                            <input type="file" id="prks-backup-file-input" class="prks-backup-file-input" accept=".prks-backup,application/octet-stream,application/zip">
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-choose-btn">Choose backup…</button>
+                            <span class="prks-settings-hint" id="prks-backup-file-label">No file selected</span>
+                        </div>
+                        <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-verify-btn">Verify backup</button>
+                        <p class="prks-settings-hint" id="prks-backup-restore-status" aria-live="polite"></p>
+                        <div id="prks-backup-verified-panel" class="prks-backup-verified-panel hidden">
+                            <p class="prks-backup-verified-title">Backup verified</p>
+                            <ul class="prks-backup-summary" id="prks-backup-summary"></ul>
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-restore-btn">Restore this backup</button>
+                        </div>
+                    </section>
+                </section>
+
+                <section class="prks-settings-panel" id="prks-settings-panel-maintenance" role="tabpanel" aria-labelledby="prks-settings-tab-maintenance" tabindex="0" hidden inert>
+                    <h4 class="prks-settings-panel__title">Maintenance</h4>
+                    <p class="prks-settings-hint">These tools are normally unnecessary. Use them when troubleshooting search or optimizing existing PDFs.</p>
+                    <section class="prks-settings-section" aria-labelledby="prks-settings-pdf-index-heading">
+                        <h5 id="prks-settings-pdf-index-heading" class="prks-settings-section__title">PDF text index</h5>
+                        <p class="prks-settings-hint">PDF text search is maintained automatically. Use a full rebuild if PDF search results seem incomplete or stale.</p>
+                        <button type="button" class="prks-btn prks-btn--secondary" id="prks-reindex-pdf-text-btn">Rebuild PDF text index</button>
+                        <p class="prks-settings-hint" id="prks-reindex-pdf-text-status" aria-live="polite"></p>
+                    </section>
+                    <section class="prks-settings-section prks-settings-section--sep" aria-labelledby="prks-settings-pdf-linearize-heading">
+                        <h5 id="prks-settings-pdf-linearize-heading" class="prks-settings-section__title">PDF linearization</h5>
+                        <p class="prks-settings-hint">Optimize existing library PDFs for progressive loading. Only non-linearized PDFs are processed.</p>
+                        <button type="button" class="prks-btn prks-btn--secondary" id="prks-linearize-existing-pdfs-btn">Linearize existing PDFs</button>
+                        <p class="prks-settings-hint" id="prks-linearize-existing-pdfs-status" aria-live="polite"></p>
+                    </section>
+                </section>
+
+                <section class="prks-settings-panel" id="prks-settings-panel-diagnostics" role="tabpanel" aria-labelledby="prks-settings-tab-diagnostics" tabindex="0" hidden inert>
+                    <h4 class="prks-settings-panel__title">Diagnostics</h4>
+                    <section class="prks-settings-section" aria-labelledby="prks-settings-perf-heading">
+                        <h5 id="prks-settings-perf-heading" class="prks-settings-section__title">Performance diagnostics</h5>
+                        <p class="prks-settings-hint">Runtime-only measurements from this PRKS process. No research content, search terms or file names are recorded. Measurements reset when PRKS restarts.</p>
+                        <p class="prks-settings-hint" id="prks-perf-summary" aria-live="polite">Loading measurements…</p>
+                        <div class="prks-perf-table-wrap">
+                            <table class="prks-perf-table" id="prks-perf-routes">
+                                <caption class="prks-sr-only">Slowest API routes</caption>
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Route</th>
+                                        <th scope="col">Calls</th>
+                                        <th scope="col">Avg</th>
+                                        <th scope="col">P95</th>
+                                        <th scope="col">Max</th>
+                                        <th scope="col">DB</th>
+                                        <th scope="col">DB/call</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="prks-perf-routes-body">
+                                    <tr><td colspan="7">No API requests measured yet.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="prks-settings-hint" id="prks-perf-spans"></p>
+                        <p class="prks-settings-hint" id="prks-perf-thumbs"></p>
+                        <div id="prks-perf-client" class="prks-perf-client">
+                            <h5 class="prks-settings-section__title">Client request coordinator</h5>
+                            <p class="prks-settings-hint" id="prks-perf-client-body">Loading measurements…</p>
+                        </div>
+                        <div class="prks-backup-restore-row">
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-refresh-btn">Refresh</button>
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-reset-btn">Reset</button>
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-copy-btn">Copy report</button>
+                        </div>
+                        <p class="prks-settings-hint" id="prks-perf-status" aria-live="polite"></p>
+                    </section>
+                </section>
+
+            </div>
         </div>
     </div>
 

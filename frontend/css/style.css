@@ -5595,6 +5595,118 @@ body.prks-workspace-dragging * {
     line-height: 1.1;
 }
 
+/* Settings modal: category workspace (nav + scrollable content) */
+.modal--settings {
+    width: 860px !important;
+    max-width: 94vw;
+    max-height: 90vh;
+    overflow: hidden;
+}
+.modal--settings:not(.hidden) {
+    display: flex;
+    flex-direction: column;
+}
+.modal--settings .modal-header {
+    flex-shrink: 0;
+}
+.prks-settings-workspace {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.prks-settings-nav {
+    flex: 0 0 168px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-md) var(--space-sm);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+}
+.prks-settings-nav__item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-secondary);
+    font-family: var(--font-family);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: var(--transition);
+}
+.prks-settings-nav__item:hover {
+    background: var(--surface-muted);
+    color: var(--text-primary);
+}
+.prks-settings-nav__item:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+}
+.prks-settings-nav__item.is-active {
+    background: var(--surface-muted);
+    color: var(--accent);
+    font-weight: 600;
+}
+.prks-settings-content {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-xl) var(--space-2xl);
+}
+.prks-settings-panel__title {
+    margin: 0 0 var(--space-lg);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+.prks-settings-scope {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    font-size: 0.62rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    vertical-align: middle;
+}
+.prks-settings-section--sep {
+    margin-top: var(--space-xl);
+    padding-top: var(--space-lg);
+    border-top: 1px solid var(--border);
+}
+.prks-bibtex-export-summary {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+@media (max-width: 640px) {
+    .prks-settings-workspace {
+        flex-direction: column;
+    }
+    .prks-settings-nav {
+        flex: 0 0 auto;
+        flex-direction: row;
+        overflow-x: auto;
+        overflow-y: hidden;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding: var(--space-sm);
+        white-space: nowrap;
+    }
+    .prks-settings-nav__item {
+        flex: 0 0 auto;
+    }
+    .prks-settings-content {
+        padding: var(--space-lg);
+    }
+}
+
 /* Settings modal: sections, author field, toggle rows */
 .prks-settings-section {
     margin-top: 16px;

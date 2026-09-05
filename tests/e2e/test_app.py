@@ -6999,3 +6999,265 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#upload-selected-file-name").wait_for(state="visible")
         self.assertIsNone(page.locator("#upload-drop-zone").get_attribute("aria-invalid"))
 
+
+def _open_settings(page):
+    page.locator("button.settings-btn").click()
+    page.wait_for_selector("#settings-modal:not(.hidden)")
+
+
+def _diagnostics_requests(page):
+    return [
+        r
+        for r in page.evaluate(
+            "() => performance.getEntriesByType('resource').map(e => e.name)"
+        )
+        if urlparse(r).path == "/api/diagnostics/performance"
+    ]
+
+
+class SettingsCategoryWorkflowTests(_BrowserE2E):
+    def test_categories_present_general_default_and_calm(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        for cat in ("general", "reading", "export", "backup", "maintenance", "diagnostics"):
+            self.assertEqual(page.locator(f"#prks-settings-tab-{cat}").count(), 1)
+            self.assertEqual(page.locator(f"#prks-settings-panel-{cat}").count(), 1)
+        self.assertEqual(
+            page.locator("#prks-settings-tab-general").get_attribute("aria-selected"), "true"
+        )
+        self.assertFalse(page.locator("#prks-settings-panel-general").is_hidden())
+        for cat in ("reading", "export", "backup", "maintenance", "diagnostics"):
+            self.assertTrue(page.locator(f"#prks-settings-panel-{cat}").is_hidden())
+            self.assertIsNotNone(
+                page.evaluate(
+                    "id => document.getElementById(id).hasAttribute('inert')",
+                    f"prks-settings-panel-{cat}",
+                )
+            )
+        general_text = page.locator("#prks-settings-panel-general").inner_text()
+        for noisy in ("Backup", "Diagnostics", "Maintenance", "Linearize", "Rebuild"):
+            self.assertNotIn(noisy, general_text)
+
+    def test_click_navigation_switches_categories_and_state_retained(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.fill("#annotation-author-input", "E2E Author")
+        page.locator("#prks-settings-tab-reading").click()
+        page.wait_for_selector("#prks-settings-panel-reading:not([hidden])")
+        self.assertTrue(page.locator("#prks-settings-panel-general").is_hidden())
+        self.assertTrue(page.locator("#prks-setting-force-mobile").is_visible())
+        page.locator("#prks-settings-tab-general").click()
+        page.wait_for_selector("#prks-settings-panel-general:not([hidden])")
+        self.assertEqual(page.locator("#annotation-author-input").input_value(), "E2E Author")
+
+    def test_keyboard_category_navigation(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-general").focus()
+        page.keyboard.press("ArrowDown")
+        self.assertEqual(
+            page.evaluate("() => document.activeElement && document.activeElement.id"),
+            "prks-settings-tab-reading",
+        )
+        page.wait_for_selector("#prks-settings-panel-reading:not([hidden])")
+        page.keyboard.press("End")
+        self.assertEqual(
+            page.evaluate("() => document.activeElement && document.activeElement.id"),
+            "prks-settings-tab-diagnostics",
+        )
+        page.wait_for_selector("#prks-settings-panel-diagnostics:not([hidden])")
+        page.keyboard.press("Home")
+        self.assertEqual(
+            page.evaluate("() => document.activeElement && document.activeElement.id"),
+            "prks-settings-tab-general",
+        )
+        page.wait_for_selector("#prks-settings-panel-general:not([hidden])")
+
+    def test_diagnostics_lazy_load_contract(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        self.assertEqual(_diagnostics_requests(page), [])
+        page.locator("#prks-settings-tab-diagnostics").click()
+        page.wait_for_function(
+            "() => performance.getEntriesByType('resource').some("
+            "e => e.name.indexOf('/api/diagnostics/performance') !== -1)"
+        )
+        self.assertEqual(len(_diagnostics_requests(page)), 1)
+        page.locator("#prks-settings-tab-general").click()
+        page.locator("#prks-settings-tab-diagnostics").click()
+        page.wait_for_timeout(200)
+        self.assertEqual(len(_diagnostics_requests(page)), 1)
+        page.locator("#prks-perf-refresh-btn").click()
+        page.wait_for_function(
+            "() => performance.getEntriesByType('resource').filter("
+            "e => e.name.indexOf('/api/diagnostics/performance') !== -1).length >= 2"
+        )
+        self.assertEqual(len(_diagnostics_requests(page)), 2)
+
+    def test_diagnostics_table_remains_usable(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-diagnostics").click()
+        page.wait_for_selector("#prks-perf-summary")
+        self.assertTrue(page.locator("#prks-perf-routes").is_visible())
+        self.assertTrue(page.locator("#prks-perf-client").is_visible())
+        self.assertTrue(page.locator("#prks-perf-refresh-btn").is_visible())
+        self.assertTrue(page.locator("#prks-perf-reset-btn").is_visible())
+        self.assertTrue(page.locator("#prks-perf-copy-btn").is_visible())
+
+    def test_backup_state_survives_category_switch(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-backup").click()
+        page.wait_for_selector("#prks-settings-panel-backup:not([hidden])")
+        page.evaluate(
+            "() => { document.getElementById('prks-backup-file-label').textContent = 'chosen-e2e.prks-backup'; }"
+        )
+        page.locator("#prks-settings-tab-general").click()
+        page.locator("#prks-settings-tab-export").click()
+        page.locator("#prks-settings-tab-backup").click()
+        page.wait_for_selector("#prks-settings-panel-backup:not([hidden])")
+        self.assertEqual(
+            page.locator("#prks-backup-file-label").inner_text(), "chosen-e2e.prks-backup"
+        )
+
+    def test_maintenance_status_survives_category_switch(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-maintenance").click()
+        page.wait_for_selector("#prks-settings-panel-maintenance:not([hidden])")
+        page.evaluate(
+            "() => { document.getElementById('prks-reindex-pdf-text-status').textContent = 'Rebuilt 3 files.'; }"
+        )
+        page.locator("#prks-settings-tab-diagnostics").click()
+        page.locator("#prks-settings-tab-maintenance").click()
+        page.wait_for_selector("#prks-settings-panel-maintenance:not([hidden])")
+        self.assertEqual(
+            page.locator("#prks-reindex-pdf-text-status").inner_text(), "Rebuilt 3 files."
+        )
+
+    def test_export_summary_updates_with_toggle_state(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-export").click()
+        page.wait_for_selector("#prks-bibtex-export-fields button.prks-toggle")
+        total = page.locator("#prks-bibtex-export-fields button.prks-toggle").count()
+        summary_before = page.locator("#prks-bibtex-export-summary").inner_text()
+        self.assertIn(f"of {total} fields included", summary_before)
+        page.locator("#prks-bibtex-export-fields button.prks-toggle").first.click()
+        page.wait_for_function(
+            "total => document.getElementById('prks-bibtex-export-summary').textContent"
+            ".indexOf((total - 1) + ' of ' + total) !== -1",
+            arg=total,
+        )
+
+    def test_device_local_setting_persists_across_reload(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        before = page.evaluate(
+            "() => document.getElementById('prks-setting-ui-hints').getAttribute('aria-checked')"
+        )
+        page.locator("#prks-setting-ui-hints").click()
+        after_click = page.evaluate(
+            "() => document.getElementById('prks-setting-ui-hints').getAttribute('aria-checked')"
+        )
+        self.assertNotEqual(before, after_click)
+        page.reload(wait_until="domcontentloaded")
+        _open_settings(page)
+        page.wait_for_selector("#prks-settings-panel-general:not([hidden])")
+        after_reload = page.evaluate(
+            "() => document.getElementById('prks-setting-ui-hints').getAttribute('aria-checked')"
+        )
+        self.assertEqual(after_reload, after_click)
+
+    def test_library_wide_setting_persists_via_server(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.fill("#annotation-author-input", "Persisted Author")
+        page.wait_for_function(
+            """() => window.__prksAnnotationAuthor === 'Persisted Author'"""
+        )
+        page.wait_for_timeout(600)
+        server_value = page.evaluate(
+            """async () => {
+                const res = await prksRequest('/api/settings');
+                const data = await res.json();
+                return data.annotation_author;
+            }"""
+        )
+        self.assertEqual(server_value, "Persisted Author")
+        page.reload(wait_until="domcontentloaded")
+        _open_settings(page)
+        page.wait_for_selector("#prks-settings-panel-general:not([hidden])")
+        self.assertEqual(
+            page.locator("#annotation-author-input").input_value(), "Persisted Author"
+        )
+
+    def test_reopening_settings_in_same_session_returns_to_last_category(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-backup").click()
+        page.wait_for_selector("#prks-settings-panel-backup:not([hidden])")
+        page.locator("#settings-modal .close-btn").click()
+        page.locator("#settings-modal").wait_for(state="hidden")
+        _open_settings(page)
+        page.wait_for_selector("#prks-settings-panel-backup:not([hidden])")
+
+    def test_close_restores_focus_to_launcher_not_category_tab(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-backup").click()
+        page.wait_for_selector("#prks-settings-panel-backup:not([hidden])")
+        page.locator("#settings-modal .close-btn").click()
+        page.locator("#settings-modal").wait_for(state="hidden")
+        self.assertEqual(
+            page.evaluate(
+                "() => document.activeElement && document.activeElement.className"
+            ),
+            "prks-icon-btn prks-icon-btn--ghost settings-btn",
+        )
+
+    def test_no_settings_hash_routes_introduced(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-backup").click()
+        page.wait_for_selector("#prks-settings-panel-backup:not([hidden])")
+        self.assertNotIn("settings", page.evaluate("() => location.hash"))
+
+    def test_responsive_narrow_category_strip(self):
+        _server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 420, "height": 800})
+        page.evaluate("() => { openModal('settings-modal'); }")
+        page.wait_for_selector("#settings-modal:not(.hidden)")
+        nav_display = page.evaluate(
+            "() => getComputedStyle(document.getElementById('prks-settings-nav')).flexDirection"
+        )
+        self.assertEqual(nav_display, "row")
+        page.locator("#prks-settings-tab-reading").click()
+        page.wait_for_selector("#prks-settings-panel-reading:not([hidden])")
+        overflow = page.evaluate("() => document.documentElement.scrollWidth > document.documentElement.clientWidth")
+        self.assertFalse(overflow)
+        active_visible = page.evaluate(
+            """() => {
+                const nav = document.getElementById('prks-settings-nav');
+                const tab = document.getElementById('prks-settings-tab-reading');
+                const navRect = nav.getBoundingClientRect();
+                const tabRect = tab.getBoundingClientRect();
+                return tabRect.left >= navRect.left - 1 && tabRect.right <= navRect.right + 1;
+            }"""
+        )
+        self.assertTrue(active_visible)
+
+    def test_desktop_category_layout_two_columns(self):
+        _server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1280, "height": 800})
+        _open_settings(page)
+        nav_display = page.evaluate(
+            "() => getComputedStyle(document.getElementById('prks-settings-nav')).flexDirection"
+        )
+        self.assertEqual(nav_display, "column")
+        workspace_display = page.evaluate(
+            "() => getComputedStyle(document.getElementById('prks-settings-nav').parentElement).display"
+        )
+        self.assertEqual(workspace_display, "flex")
+

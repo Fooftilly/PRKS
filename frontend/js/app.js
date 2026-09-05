@@ -118,6 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initPrksPdfTextReindexAction();
     initPrksExistingPdfLinearizeAction();
     initPrksPerformanceDiagnostics();
+    initPrksSettingsCategoryNav();
     initPrksPdfRememberPageSetting();
     initPrksPdfLastPageVisibilityFlush();
     initPrksHintsSetting();
@@ -450,6 +451,17 @@ async function initAnnotationAuthorSetting() {
     input.addEventListener('input', persist);
 }
 
+function prksUpdateBibtexExportSummary() {
+    const summary = document.getElementById('prks-bibtex-export-summary');
+    if (!summary) return;
+    const host = document.getElementById('prks-bibtex-export-fields');
+    const total = PRKS_BIBTEX_EXPORT_FIELD_DEFS.length;
+    const on = host
+        ? host.querySelectorAll('button[data-bibtex-field].prks-toggle[aria-checked="true"]').length
+        : 0;
+    summary.textContent = on + ' of ' + total + ' fields included';
+}
+
 async function initBibtexExportFieldsSetting() {
     const host = document.getElementById('prks-bibtex-export-fields');
     if (!host || host.dataset.bound === '1') return;
@@ -488,6 +500,7 @@ async function initBibtexExportFieldsSetting() {
             const fid = btn.dataset.bibtexField;
             prksSyncSwitchUi(btn, map[fid] !== false);
         });
+        prksUpdateBibtexExportSummary();
     };
 
     syncTogglesFromMap({});
@@ -531,6 +544,7 @@ async function initBibtexExportFieldsSetting() {
         const flip = () => {
             const on = btn.getAttribute('aria-checked') !== 'true';
             prksSyncSwitchUi(btn, on);
+            prksUpdateBibtexExportSummary();
             persist();
         };
         btn.addEventListener('click', flip);
@@ -1231,6 +1245,76 @@ function initPrksPerformanceDiagnostics() {
         });
     }
 }
+
+// Settings modal category navigation. Presentation state only: never persisted,
+// never routed. See DESIGN.md "Settings" and the storage rule in AGENTS.md.
+const PRKS_SETTINGS_CATEGORIES = ['general', 'reading', 'export', 'backup', 'maintenance', 'diagnostics'];
+let __prksSettingsActiveCategory = 'general';
+let __prksSettingsDiagnosticsLoaded = false;
+
+function prksActivateSettingsCategory(categoryId, options) {
+    const opts = options || {};
+    const resolved = PRKS_SETTINGS_CATEGORIES.indexOf(categoryId) !== -1 ? categoryId : 'general';
+    __prksSettingsActiveCategory = resolved;
+    PRKS_SETTINGS_CATEGORIES.forEach((cat) => {
+        const tab = document.getElementById('prks-settings-tab-' + cat);
+        const panel = document.getElementById('prks-settings-panel-' + cat);
+        const active = cat === resolved;
+        if (tab) {
+            tab.classList.toggle('is-active', active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            tab.tabIndex = active ? 0 : -1;
+        }
+        if (panel) {
+            panel.hidden = !active;
+            if (active) panel.removeAttribute('inert');
+            else panel.setAttribute('inert', '');
+        }
+    });
+    const activeTab = document.getElementById('prks-settings-tab-' + resolved);
+    if (activeTab) {
+        if (opts.focusTab) activeTab.focus();
+        if (typeof activeTab.scrollIntoView === 'function') {
+            activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+    }
+    if (resolved === 'diagnostics' && !__prksSettingsDiagnosticsLoaded) {
+        __prksSettingsDiagnosticsLoaded = true;
+        void prksLoadPerformanceDiagnostics();
+    }
+}
+window.prksActivateSettingsCategory = prksActivateSettingsCategory;
+
+function prksOpenSettingsToLastCategory() {
+    prksActivateSettingsCategory(__prksSettingsActiveCategory);
+}
+window.prksOpenSettingsToLastCategory = prksOpenSettingsToLastCategory;
+
+function initPrksSettingsCategoryNav() {
+    const nav = document.getElementById('prks-settings-nav');
+    if (!nav || nav.dataset.bound === '1') return;
+    nav.dataset.bound = '1';
+    const tabs = Array.prototype.slice.call(nav.querySelectorAll('.prks-settings-nav__item'));
+    tabs.forEach((tab) => {
+        tab.addEventListener('click', () => {
+            prksActivateSettingsCategory(tab.dataset.prksSettingsCategory);
+        });
+    });
+    nav.addEventListener('keydown', (e) => {
+        const idx = tabs.indexOf(document.activeElement);
+        if (idx === -1) return;
+        let nextIdx = null;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight') nextIdx = (idx + 1) % tabs.length;
+        else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') nextIdx = (idx - 1 + tabs.length) % tabs.length;
+        else if (e.key === 'Home') nextIdx = 0;
+        else if (e.key === 'End') nextIdx = tabs.length - 1;
+        if (nextIdx === null) return;
+        e.preventDefault();
+        const nextTab = tabs[nextIdx];
+        prksActivateSettingsCategory(nextTab.dataset.prksSettingsCategory, { focusTab: true });
+    });
+}
+window.initPrksSettingsCategoryNav = initPrksSettingsCategoryNav;
 
 function applyTheme(theme) {
     if (theme === 'system') {

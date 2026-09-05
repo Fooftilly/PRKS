@@ -296,6 +296,20 @@ defensively end an active drag before a real narrow/wide transition and before p
 stale tile that could contain the live drag source — it is always safe to call when nothing is
 active. `workspace-drag.js` must never itself mutate responsive/narrow-fallback state.
 
+## Settings
+
+Settings category navigation is presentation state; it must not create another
+settings persistence model. The active category lives only in an in-memory module
+variable, never `localStorage`, never `/api/settings`, never a URL hash.
+
+Inactive Settings category panels are hidden and inert, never removed/recreated.
+Switching categories must not reset a running Backup/Maintenance operation, a
+chosen restore file, or any control's in-progress value.
+
+Diagnostics data loads only on first activation of the Diagnostics category, not
+whenever Settings opens. Revisiting Diagnostics reuses the retained snapshot;
+only the explicit Refresh action re-fetches.
+
 ## Saved Views
 
 Saved Views store search definitions, never cached work membership.

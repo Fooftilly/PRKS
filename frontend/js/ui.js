@@ -500,8 +500,8 @@ function openModal(id) {
         if (parentSearch && !window.__prksPendingWorkFolderAttach) parentSearch.value = '';
         if (parentId && !window.__prksPendingWorkFolderAttach) parentId.value = '';
         window.prksRefreshFolderModalValidation();
-    } else if (id === 'settings-modal' && typeof window.prksLoadPerformanceDiagnostics === 'function') {
-        window.prksLoadPerformanceDiagnostics();
+    } else if (id === 'settings-modal' && typeof window.prksOpenSettingsToLastCategory === 'function') {
+        window.prksOpenSettingsToLastCategory();
     } else if (id === 'group-modal' && typeof window.prksInitNewGroupModal === 'function') {
         void window.prksInitNewGroupModal();
     }
