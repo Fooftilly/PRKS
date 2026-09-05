@@ -2733,43 +2733,8 @@ function initForms() {
         if (ownsWork && typeof fetchWorkDetails === 'function') {
             const _rw = await fetchWorkDetails(work_id);
             if (prksApplyOwnedWorkEntity(ownerCtx, work_id, _rw)) {
-                const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-                const tab = (ownerCtx.ui && ownerCtx.ui.rightPanelTab) || 'details';
-                const panel =
-                    typeof prksPrepareRightPanelReplace === 'function'
-                        ? prksPrepareRightPanelReplace(ownerCtx)
-                        : document.getElementById('panel-content');
-                if (
-                    panel &&
-                    focused &&
-                    ownerCtx &&
-                    focused.tabId === ownerCtx.tabId &&
-                    tab === 'details' &&
-                    typeof prksWorkRightPanelStackHtml === 'function'
-                ) {
-                    const panelMode =
-                        typeof prksWorkDetailsMode === 'function' ? prksWorkDetailsMode(ownerCtx, _rw) : 'view';
-                    panel.innerHTML = prksWorkRightPanelStackHtml(
-                        _rw,
-                        panelMode,
-                        ownerCtx
-                    );
-                    if (panelMode !== 'metadata' && typeof initPrksPrivateNotesEditor === 'function') {
-                        initPrksPrivateNotesEditor('work', _rw.id, ownerCtx);
-                    }
-                    if (panelMode === 'tags' && typeof initWorkTagCombobox === 'function') initWorkTagCombobox(_rw.id, ownerCtx);
-                    if (typeof initWorkDetailRightPanelActions === 'function') {
-                        initWorkDetailRightPanelActions(_rw, ownerCtx);
-                    }
-                    if (panelMode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
-                        void mountPlaylistAttachControls(_rw, ownerCtx);
-                    }
-                    if (panelMode !== 'metadata' && typeof mountFolderAttachControlsForWork === 'function') {
-                        void mountFolderAttachControlsForWork(_rw, ownerCtx);
-                    }
-                    if (panelMode === 'metadata' && typeof prksMountWorkMetaEditor === 'function') {
-                        prksMountWorkMetaEditor(ownerCtx, _rw);
-                    }
+                if (typeof prksReplaceFocusedWorkDetailsPanel === 'function') {
+                    prksReplaceFocusedWorkDetailsPanel(ownerCtx, _rw);
                 }
             }
         } else {

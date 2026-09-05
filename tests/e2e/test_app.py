@@ -3311,6 +3311,134 @@ class WorkspaceTilingTests(_BrowserE2E):
             except Exception:
                 pass
 
+    def test_delayed_role_link_refresh_cannot_claim_other_focused_work_panel(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_a, work_b, ids = _open_work_work_split(page, server)
+        person_id = server.ids["person"]
+
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
+        page.wait_for_function(
+            "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+            arg=ids["mainTabId"],
+        )
+        page.wait_for_function(
+            "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+            arg=ids["mainTabId"],
+        )
+
+        work_gets = []
+
+        def on_request(req):
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/works/%s" % work_a:
+                work_gets.append(req.url)
+
+        page.on("request", on_request)
+
+        page.locator("#panel-content button", has_text="Manage relationships").click()
+        page.locator("#panel-content .work-link-person-btn", has_text="Link person").click()
+        page.wait_for_selector("#role-modal:not(.hidden)")
+        page.wait_for_function(
+            "id => document.getElementById('role-work-id').value === id",
+            arg=work_a,
+        )
+        page.evaluate(
+            """(pid) => {
+                document.getElementById('role-person-id').value = pid;
+                document.getElementById('role-person-search').value = 'E2E Author';
+            }""",
+            arg=person_id,
+        )
+        page.locator('#role-role-seg-mount .prks-segmented__btn[data-value="Editor"]').click()
+
+        held = []
+
+        def hold_work_get(route):
+            req = route.request
+            if req.method == "GET" and urlparse(req.url).path == "/api/works/" + work_a:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/works/*", hold_work_get)
+        try:
+            page.locator("#save-role-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Work GET refresh was not intercepted")
+            self.assertEqual(page.locator("#role-modal:not(.hidden)").count(), 0)
+
+            page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["secondaryTabId"])
+            page.wait_for_function(
+                "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+                arg=ids["secondaryTabId"],
+            )
+            page.wait_for_function(
+                "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+                arg=ids["secondaryTabId"],
+            )
+            before = page.evaluate(
+                """() => {
+                    const panel = document.getElementById('panel-content');
+                    return { ownerTabId: panel.dataset.prksOwnerTabId, html: panel.innerHTML };
+                }"""
+            )
+            self.assertEqual(before["ownerTabId"], ids["secondaryTabId"])
+            self.assertIn(WORK_B_TITLE, before["html"])
+            self.assertNotIn(WORK_A_TITLE, before["html"])
+
+            _continue_held_routes(held)
+            page.wait_for_function(
+                """(args) => {
+                    const ctx = window.prksGetTabContext(args.tabId);
+                    const work = ctx && ctx.getEntity && ctx.getEntity('work');
+                    return !!(
+                        work &&
+                        Array.isArray(work.roles) &&
+                        work.roles.some(r => String(r.person_id || r.id) === args.personId)
+                    );
+                }""",
+                arg={"tabId": ids["mainTabId"], "personId": str(person_id)},
+            )
+            page.wait_for_timeout(200)
+            after = page.evaluate(
+                """() => {
+                    const panel = document.getElementById('panel-content');
+                    return { ownerTabId: panel.dataset.prksOwnerTabId, html: panel.innerHTML };
+                }"""
+            )
+            self.assertEqual(after["ownerTabId"], ids["secondaryTabId"])
+            self.assertIn(WORK_B_TITLE, after["html"])
+            self.assertNotIn(WORK_A_TITLE, after["html"])
+            self.assertGreater(
+                page.locator("#panel-content button", has_text="Manage relationships").count(), 0
+            )
+
+            page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
+            page.wait_for_function(
+                "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+                arg=ids["mainTabId"],
+            )
+            page.wait_for_function(
+                "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+                arg=ids["mainTabId"],
+            )
+            manage_btn = page.locator("#panel-content button", has_text="Manage relationships")
+            if manage_btn.count():
+                manage_btn.click()
+            editor_role = page.locator(".work-linked-persons__role", has_text="Editor")
+            editor_role.wait_for()
+            self.assertIn(PERSON_DISPLAY, editor_role.inner_text())
+            self.assertEqual(len(work_gets), 1)
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/*", hold_work_get)
+            except Exception:
+                pass
+
     def test_delayed_person_save_refreshes_focused_person_panel(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
