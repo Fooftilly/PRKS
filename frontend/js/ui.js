@@ -463,7 +463,13 @@ function openModal(id) {
         resetUploadModal();
         const after = () => {
             if (typeof window.prksSetWorkModalFolderFromId === 'function') {
-                window.prksSetWorkModalFolderFromId(window.prksFolderIdFromLocation ? window.prksFolderIdFromLocation() : '');
+                window.prksSetWorkModalFolderFromId(
+                    typeof window.prksFolderIdFromFocusedContext === 'function'
+                        ? window.prksFolderIdFromFocusedContext()
+                        : window.prksFolderIdFromLocation
+                          ? window.prksFolderIdFromLocation()
+                          : ''
+                );
             }
             if (typeof window.prksSyncWorkModalDisclosureInert === 'function') {
                 window.prksSyncWorkModalDisclosureInert();
@@ -4339,12 +4345,20 @@ function prksClearWorkModalErrors() {
 
 function prksSetWorkModalFieldError(control, message, errorId) {
     const msg = String(message || '').trim();
-    if (control && control.setAttribute) control.setAttribute('aria-invalid', 'true');
     const err = errorId ? document.getElementById(errorId) : null;
+    if (control && control.setAttribute) {
+        control.setAttribute('aria-invalid', 'true');
+        // `<p>` has no `for` semantics; connect via aria-describedby instead.
+        if (errorId) {
+            const existing = String(control.getAttribute('aria-describedby') || '');
+            if (existing.split(/\s+/).indexOf(errorId) === -1) {
+                control.setAttribute('aria-describedby', (existing + ' ' + errorId).trim());
+            }
+        }
+    }
     if (err) {
         err.textContent = msg;
         err.classList.remove('hidden');
-        if (control && control.id) err.setAttribute('for', control.id);
     }
     return control;
 }
@@ -4404,23 +4418,72 @@ function prksFolderIdFromLocation() {
     return '';
 }
 
+// Focused-pane context wins over Main's URL. A valid focused TabContext that
+// is not a Folder means "default to Uncategorized", not "inherit Main".
+// window.location.hash is only a compatibility fallback when there is no
+// usable focused TabContext at all.
+function prksFolderIdFromFocusedContext() {
+    if (typeof window.prksFocusedRouteRecord === 'function') {
+        const route = window.prksFocusedRouteRecord();
+        if (route) {
+            if (route.name === 'folder-detail' && route.params && route.params.folderId) {
+                return String(route.params.folderId);
+            }
+            return '';
+        }
+    }
+    return prksFolderIdFromLocation();
+}
+
+// The real top-level folder titled "Uncategorized", if it has already been
+// materialized. Used so the combobox never shows a synthetic default row
+// duplicating a real Uncategorized folder already present in loaded data.
+function prksCanonicalUncategorizedFolder(folders) {
+    const list = Array.isArray(folders) ? folders : [];
+    return (
+        list.find(
+            (f) =>
+                !f.parent_id &&
+                String(f.title || '')
+                    .trim()
+                    .toLowerCase() === 'uncategorized'
+        ) || null
+    );
+}
+
 function prksSetWorkModalFolderFromId(folderId) {
     const hidden = document.getElementById('work-folder-id');
     const search = document.getElementById('work-folder-search');
     if (!hidden || !search) return;
     const id = String(folderId || '').trim();
-    if (!id) {
-        hidden.value = '';
-        search.value = 'Library root';
-        return;
-    }
-    hidden.value = id;
     let folders = [];
     try {
         folders = Array.isArray(allFolders) ? allFolders : [];
     } catch (_e) {
         folders = [];
     }
+    if (!id) {
+        // Default destination. If the real Uncategorized folder is already
+        // known, select it explicitly (transport ID) so display and stored
+        // destination always agree. Otherwise use the committed empty-default
+        // state, which the server materializes as Uncategorized on create.
+        const canonical = prksCanonicalUncategorizedFolder(folders);
+        delete search.dataset.prksFolderDefault;
+        if (canonical) {
+            hidden.value = canonical.id;
+            search.value =
+                typeof window.prksFolderRowLabel === 'function'
+                    ? window.prksFolderRowLabel(canonical, folders)
+                    : 'Uncategorized';
+        } else {
+            hidden.value = '';
+            search.value = 'Uncategorized';
+            search.dataset.prksFolderDefault = '1';
+        }
+        return;
+    }
+    hidden.value = id;
+    delete search.dataset.prksFolderDefault;
     const row = folders.find((f) => String(f.id) === id);
     const label =
         row && typeof window.prksFolderRowLabel === 'function'
@@ -4429,6 +4492,51 @@ function prksSetWorkModalFolderFromId(folderId) {
               ? String(row.title)
               : id;
     search.value = label;
+}
+
+// A folder selection is committed (never a bare, unselected search query)
+// when either a real folder ID was explicitly chosen, or the explicit
+// default-destination state is set. Free text the user typed but never
+// selected/committed is invalid.
+function prksIsWorkModalFolderCommitted() {
+    const hidden = document.getElementById('work-folder-id');
+    const search = document.getElementById('work-folder-search');
+    if (hidden && String(hidden.value || '').trim()) return true;
+    return !!(search && search.dataset.prksFolderDefault === '1');
+}
+
+// Shared YouTube URL/host contract used by creation validation. Kept in sync
+// with backend _is_youtube_host()/_youtube_video_id() and
+// components/works-video.js's embed-URL parsing.
+const PRKS_YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
+
+function prksIsRecognizedYoutubeHost(hostname) {
+    return PRKS_YOUTUBE_HOSTS.has(String(hostname || '').trim().toLowerCase());
+}
+
+function prksExtractYoutubeVideoId(rawUrl) {
+    let u;
+    try {
+        u = new URL(String(rawUrl || '').trim());
+    } catch (_e) {
+        return '';
+    }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    const host = (u.hostname || '').toLowerCase();
+    if (!prksIsRecognizedYoutubeHost(host)) return '';
+    if (host === 'youtu.be') {
+        const id = u.pathname.replace(/^\//, '').split('/')[0];
+        return id || '';
+    }
+    const v = u.searchParams.get('v') || '';
+    if (v) return v;
+    const parts = u.pathname.replace(/^\//, '').split('/');
+    if (parts[0] === 'embed' && parts[1]) return parts[1];
+    return '';
+}
+
+function prksIsValidYoutubeUrl(rawUrl) {
+    return !!prksExtractYoutubeVideoId(rawUrl);
 }
 
 window.prksFormatByteSize = prksFormatByteSize;
@@ -4440,7 +4548,13 @@ window.prksFocusWorkModalControl = prksFocusWorkModalControl;
 window.prksFocusWorkModalInitial = prksFocusWorkModalInitial;
 window.prksSetWorkModalCreateBusy = prksSetWorkModalCreateBusy;
 window.prksFolderIdFromLocation = prksFolderIdFromLocation;
+window.prksFolderIdFromFocusedContext = prksFolderIdFromFocusedContext;
+window.prksCanonicalUncategorizedFolder = prksCanonicalUncategorizedFolder;
 window.prksSetWorkModalFolderFromId = prksSetWorkModalFolderFromId;
+window.prksIsWorkModalFolderCommitted = prksIsWorkModalFolderCommitted;
+window.prksIsRecognizedYoutubeHost = prksIsRecognizedYoutubeHost;
+window.prksExtractYoutubeVideoId = prksExtractYoutubeVideoId;
+window.prksIsValidYoutubeUrl = prksIsValidYoutubeUrl;
 
 function resetUploadModal() {
     uploadRoles = [];
@@ -4493,7 +4607,8 @@ function resetUploadModal() {
         prksSetWorkModalFolderFromId('');
     } else {
         document.getElementById('work-folder-id').value = '';
-        document.getElementById('work-folder-search').value = 'Library root';
+        document.getElementById('work-folder-search').value = 'Uncategorized';
+        document.getElementById('work-folder-search').dataset.prksFolderDefault = '1';
     }
     document.getElementById('upload-person-id').value = '';
     document.getElementById('upload-person-search').value = '';
@@ -4655,12 +4770,7 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
         comboboxOptions.excludePersonIds instanceof Set ? comboboxOptions.excludePersonIds : null;
 
     input.onfocus = () => {
-        if (
-            type === 'folder' &&
-            hidden &&
-            !String(hidden.value || '').trim() &&
-            String(input.value || '') === 'Library root'
-        ) {
+        if (type === 'folder' && input.dataset.prksFolderDefault === '1') {
             try {
                 input.select();
             } catch (_e) {}
@@ -4669,6 +4779,7 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
     };
     input.oninput = () => {
         hidden.value = '';
+        if (type === 'folder') delete input.dataset.prksFolderDefault;
         renderResults();
     };
     
@@ -4727,18 +4838,28 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
 
         results.innerHTML = '';
         if (type === 'folder') {
-            const rootItem = document.createElement('div');
-            rootItem.className = 'result-item';
-            rootItem.textContent = 'Library root';
-            rootItem.onmousedown = (e) => {
-                e.preventDefault();
-                input.value = 'Library root';
-                hidden.value = '';
-                prksHideInlineComboboxResults(results);
-            };
-            const q = valRaw.trim().toLowerCase();
-            if (!q || 'library root'.includes(q) || 'no folder'.includes(q)) {
-                results.appendChild(rootItem);
+            // Only offer the synthetic default row when the real Uncategorized
+            // folder doesn't exist yet in loaded data, to avoid two
+            // duplicate-looking "Uncategorized" entries.
+            const canonical =
+                typeof prksCanonicalUncategorizedFolder === 'function'
+                    ? prksCanonicalUncategorizedFolder(data)
+                    : null;
+            if (!canonical) {
+                const rootItem = document.createElement('div');
+                rootItem.className = 'result-item';
+                rootItem.textContent = 'Uncategorized';
+                rootItem.onmousedown = (e) => {
+                    e.preventDefault();
+                    input.value = 'Uncategorized';
+                    hidden.value = '';
+                    input.dataset.prksFolderDefault = '1';
+                    prksHideInlineComboboxResults(results);
+                };
+                const q = valRaw.trim().toLowerCase();
+                if (!q || 'uncategorized'.includes(q)) {
+                    results.appendChild(rootItem);
+                }
             }
         }
         if (type === 'person' && valRaw.trim() && typeof comboboxOptions.onQuickCreate === 'function') {
@@ -4793,6 +4914,7 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
                     e.preventDefault(); // Prevent input blur before click
                     input.value = label;
                     hidden.value = item.id;
+                    if (type === 'folder') delete input.dataset.prksFolderDefault;
                     if (type === 'person' && typeof comboboxOptions.onPersonPick === 'function') {
                         comboboxOptions.onPersonPick(item);
                     }
@@ -4827,6 +4949,7 @@ async function quickCreateFolder() {
     allFolders = await fetchFolders(); // Refresh cache
     document.getElementById('work-folder-id').value = data.id;
     document.getElementById('work-folder-search').value = title;
+    delete document.getElementById('work-folder-search').dataset.prksFolderDefault;
     prksHideInlineComboboxResults(document.getElementById('folder-results'));
 }
 
@@ -5140,21 +5263,11 @@ function initUploadDragAndDrop() {
             }
 
             let embedUrl = '';
-            try {
-                const u = new URL(url);
-                const host = (u.hostname || '').toLowerCase();
-                if (host.includes('youtu.be')) {
-                    const id = u.pathname.replace(/^\//, '').split('/')[0];
-                    if (id) embedUrl = `https://www.youtube.com/embed/${encodeURIComponent(id)}`;
-                } else if (host.includes('youtube.com')) {
-                    const v = u.searchParams.get('v') || '';
-                    if (v) embedUrl = `https://www.youtube.com/embed/${encodeURIComponent(v)}`;
-                    const parts = u.pathname.replace(/^\//, '').split('/');
-                    if (!embedUrl && parts[0] === 'embed' && parts[1]) {
-                        embedUrl = `https://www.youtube.com/embed/${encodeURIComponent(parts[1])}`;
-                    }
-                }
-            } catch (_e) {}
+            const previewVideoId =
+                typeof prksExtractYoutubeVideoId === 'function' ? prksExtractYoutubeVideoId(url) : '';
+            if (previewVideoId) {
+                embedUrl = `https://www.youtube.com/embed/${encodeURIComponent(previewVideoId)}`;
+            }
 
             if (embedUrl) {
                 if (pdfActions) pdfActions.classList.add('hidden');
@@ -5169,6 +5282,7 @@ function initUploadDragAndDrop() {
             }
 
             try {
+                if (!previewVideoId) throw new Error('not a recognized YouTube URL');
                 const oembed = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`;
                 const res = await fetch(oembed, { method: 'GET' });
                 if (res.ok) {
@@ -5317,7 +5431,7 @@ function handleUploadFile(file) {
     const kindEl = document.getElementById('work-source-kind');
     const kind = kindEl ? String(kindEl.value || 'pdf') : 'pdf';
     if (kind === 'video') {
-        void prksAlertMessage('In Video URL mode, paste the link in Source.', 'Notice');
+        void prksAlertMessage('In YouTube URL mode, paste the link in Source.', 'Notice');
         return;
     }
     if (!file) return;

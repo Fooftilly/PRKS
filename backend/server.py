@@ -602,25 +602,61 @@ _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _SAVE_TOKEN_LOCK = threading.Lock()
 
+# Explicit recognized YouTube hostnames. Never substring-match (rejects
+# "notyoutube.com" / "youtube.com.example.org"). Shared contract with
+# frontend prksIsRecognizedYoutubeHost() and works-video.js.
+_YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+
+
+def _youtube_host(netloc: str) -> str:
+    host = (netloc or "").lower()
+    if "@" in host:
+        host = host.rsplit("@", 1)[-1]
+    if ":" in host:
+        host = host.rsplit(":", 1)[0]
+    return host
+
+
+def _is_youtube_host(netloc: str) -> bool:
+    return _youtube_host(netloc) in _YOUTUBE_HOSTS
+
+
 def _youtube_video_id(url: str) -> str | None:
     try:
         u = urlparse(url)
     except Exception:
         return None
-    host = (u.netloc or "").lower()
-    if host.endswith("youtu.be"):
+    host = _youtube_host(u.netloc)
+    if not _is_youtube_host(host):
+        return None
+    if host == "youtu.be":
         vid = (u.path or "").strip("/").split("/")[0].strip()
         return vid or None
-    if "youtube.com" in host:
-        qs = parse_qs(u.query or "")
-        vid = (qs.get("v") or [""])[0].strip()
-        if vid:
-            return vid
-        # /embed/<id>
-        parts = (u.path or "").strip("/").split("/")
-        if len(parts) >= 2 and parts[0] == "embed" and parts[1].strip():
-            return parts[1].strip()
+    qs = parse_qs(u.query or "")
+    vid = (qs.get("v") or [""])[0].strip()
+    if vid:
+        return vid
+    # /embed/<id>
+    parts = (u.path or "").strip("/").split("/")
+    if len(parts) >= 2 and parts[0] == "embed" and parts[1].strip():
+        return parts[1].strip()
     return None
+
+
+def _validate_youtube_url(url: str) -> str | None:
+    """Return the extracted video ID for a supported YouTube URL, else None."""
+    u = str(url or "").strip()
+    if not u:
+        return None
+    try:
+        parsed = urlparse(u)
+    except Exception:
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return None
+    if not _is_youtube_host(parsed.netloc):
+        return None
+    return _youtube_video_id(u)
 
 
 def _fetch_youtube_oembed(url: str) -> dict | None:
@@ -2379,6 +2415,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 source_kind = (data.get('source_kind') or '').strip().lower()
                 source_url = (data.get('source_url') or '').strip()
 
+                # Video sources are currently supported for YouTube only. Validate
+                # authoritatively before any mutation so a malformed/non-YouTube
+                # URL can never create a broken Video Work.
+                if source_kind == 'video' and not _validate_youtube_url(source_url):
+                    self.send_json(400, {'error': 'Invalid YouTube URL'})
+                    return
+
                 # Upload: PDF (existing behavior)
                 if data.get('file_b64') and data.get('file_name'):
                     os.makedirs(pdfs_dir, exist_ok=True)
@@ -2414,7 +2457,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             host = (urlparse(source_url).netloc or '').lower()
                         except Exception:
                             host = ''
-                        if 'youtube.com' in host or 'youtu.be' in host:
+                        if _is_youtube_host(host):
                             provider = 'youtube'
                     if provider == 'youtube' and not provider_id:
                         provider_id = _youtube_video_id(source_url) or ''

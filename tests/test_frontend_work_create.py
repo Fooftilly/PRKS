@@ -74,7 +74,9 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("Change", modal)
         self.assertIn('id="work-file-error"', modal)
         self.assertIn('id="work-video-url-error"', modal)
-        self.assertIn("Library root", modal)
+        self.assertIn('id="work-folder-error"', modal)
+        self.assertIn("Uncategorized", modal)
+        self.assertNotIn("Library root", modal)
 
     def test_js_preserves_canonical_create_path(self):
         app = _read(_APP)
@@ -85,15 +87,64 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("__prksWorkCreateInFlight", work_chunk)
         self.assertIn("prksSetWorkModalCreateBusy", work_chunk)
         self.assertIn("Choose a PDF file.", work_chunk)
-        self.assertIn("Enter a valid URL.", work_chunk)
+        self.assertIn("Enter a valid YouTube URL.", work_chunk)
+        self.assertIn("prksIsWorkModalFolderCommitted", work_chunk)
+        self.assertIn("Choose a folder from the list", work_chunk)
+        self.assertIn("Could not read this PDF", work_chunk)
         self.assertIn("prksNavigate", work_chunk)
         self.assertNotIn("window.location.reload()", work_chunk)
         self.assertIn("Creating…", ui)
         self.assertIn("prksShowUploadPdfSelected", ui)
         self.assertIn("prksSetWorkModalFolderFromId", ui)
-        self.assertIn("Library root", ui)
+        self.assertIn("prksFolderIdFromFocusedContext", ui)
+        self.assertIn("prksCanonicalUncategorizedFolder", ui)
+        self.assertIn("prksIsWorkModalFolderCommitted", ui)
+        self.assertIn("prksIsValidYoutubeUrl", ui)
+        self.assertIn("prksIsRecognizedYoutubeHost", ui)
+        self.assertNotIn("Library root", ui)
         self.assertIn("prksSyncWorkModalDisclosureInert", ui)
         self.assertIn("switched: true", ui)
+
+    def test_folder_combobox_commit_semantics(self):
+        ui = _read(_UI)
+        # Free text must not be treated as a selection: oninput clears both
+        # the hidden folder ID and the explicit default-commit flag.
+        oninput_chunk = ui.split(
+            "hidden.value = '';\n        if (type === 'folder') delete input.dataset.prksFolderDefault;",
+            1,
+        )
+        self.assertEqual(len(oninput_chunk), 2, "expected exactly one folder-aware oninput clearer")
+        # Selecting a real folder result clears the default flag too.
+        self.assertIn("delete input.dataset.prksFolderDefault", ui)
+        # The synthetic default row is suppressed when a real Uncategorized
+        # folder already exists in loaded data (no duplicate-looking rows).
+        self.assertIn("prksCanonicalUncategorizedFolder(data)", ui)
+
+    def test_no_meaningless_for_attribute_on_error_paragraphs(self):
+        ui = _read(_UI)
+        set_field_error = ui.split("function prksSetWorkModalFieldError", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertNotIn("setAttribute('for'", set_field_error)
+        self.assertIn("aria-describedby", set_field_error)
+        self.assertIn("aria-invalid", set_field_error)
+
+    def test_video_source_is_youtube_only_contract(self):
+        html = _read(_INDEX)
+        modal = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
+        self.assertIn(">YouTube<", modal)
+        self.assertIn("YouTube URL", modal)
+        self.assertIn('aria-describedby="work-video-url-error"', modal)
+        self.assertIn('aria-describedby="work-folder-error"', modal)
+        self.assertIn('aria-describedby="work-date-error"', modal)
+
+    def test_backend_video_url_is_authoritative(self):
+        server = _read(os.path.join(_PROJECT_DIR, "backend", "server.py"))
+        self.assertIn("_validate_youtube_url", server)
+        self.assertIn("Invalid YouTube URL", server)
+        # Hostname matching must be an explicit set, not substring matching.
+        self.assertIn("_YOUTUBE_HOSTS", server)
+        self.assertNotIn("'youtube.com' in host", server)
 
     def test_css_sticky_create_footer(self):
         css = _read(_CSS)

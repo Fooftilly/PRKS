@@ -6747,3 +6747,255 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         )
         self.assertEqual(titles, 1)
 
+    # -- Folder destination semantics ---------------------------------------
+
+    def _create_folder_via_api(self, page, title, parent_id=None):
+        return page.evaluate(
+            """async (a) => {
+                const res = await prksRequest('/api/folders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: a.title, parent_id: a.parentId || null }),
+                });
+                const data = await res.json();
+                return data.id;
+            }""",
+            arg={"title": title, "parentId": parent_id},
+        )
+
+    def _work_folder_title(self, page, work_id):
+        return page.evaluate(
+            """async (id) => {
+                const res = await prksRequest('/api/works/' + encodeURIComponent(id));
+                const w = await res.json();
+                if (!w.folder_id) return null;
+                const fres = await prksRequest('/api/folders');
+                const folders = await fres.json();
+                const row = folders.find(f => f.id === w.folder_id);
+                return row ? row.title : null;
+            }""",
+            arg=work_id,
+        )
+
+    def test_default_folder_visible_destination_matches_stored_destination(self):
+        _server, page, _collector = self._start_app()
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        self.assertEqual(page.locator("#work-folder-search").input_value(), "Uncategorized")
+        self.assertEqual(page.locator("#work-folder-id").input_value(), "")
+        page.fill("#work-title", "Default Folder E2E Work")
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        work_id = unquote(page.evaluate("() => location.hash")).split("/")[-1]
+        self.assertEqual(self._work_folder_title(page, work_id), "Uncategorized")
+
+    def test_typed_unselected_folder_blocks_submit_then_selection_succeeds(self):
+        _server, page, _collector = self._start_app()
+        philosophy_id = self._create_folder_via_api(page, "Philosophy")
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.fill("#work-title", "Typed Folder E2E Work")
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-folder-search", "Philosophy")
+        self.assertEqual(page.locator("#work-folder-id").input_value(), "")
+        page.locator("#save-work-btn").click()
+        page.locator("#work-folder-error", has_text="Choose a folder").wait_for()
+        self.assertFalse(page.locator("#work-modal").evaluate("el => el.classList.contains('hidden')"))
+        focused = page.evaluate("() => document.activeElement && document.activeElement.id")
+        self.assertEqual(focused, "work-folder-search")
+        self.assertEqual(page.locator("#work-title").input_value(), "Typed Folder E2E Work")
+        self.assertEqual(page.locator("#upload-selected-file-name").is_visible(), True)
+        titles = page.evaluate(
+            """async () => (await fetchWorks()).map(w => w.title)"""
+        )
+        self.assertNotIn("Typed Folder E2E Work", titles)
+
+        page.locator("#folder-results .result-item", has_text="Philosophy").first.click()
+        self.assertEqual(page.locator("#work-folder-id").input_value(), philosophy_id)
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        work_id = unquote(page.evaluate("() => location.hash")).split("/")[-1]
+        self.assertEqual(self._work_folder_title(page, work_id), "Philosophy")
+
+    def test_explicit_default_after_typing_commits_uncategorized(self):
+        _server, page, _collector = self._start_app()
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.fill("#work-title", "Explicit Default E2E Work")
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.click("#work-folder-search")
+        page.fill("#work-folder-search", "unc")
+        page.locator("#folder-results .result-item", has_text="Uncategorized").first.click()
+        self.assertEqual(page.locator("#work-folder-search").input_value(), "Uncategorized")
+        self.assertEqual(
+            page.evaluate("() => document.getElementById('work-folder-search').dataset.prksFolderDefault"),
+            "1",
+        )
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        work_id = unquote(page.evaluate("() => location.hash")).split("/")[-1]
+        self.assertEqual(self._work_folder_title(page, work_id), "Uncategorized")
+
+    # -- Split-context folder inheritance -----------------------------------
+
+    def _focus_secondary_leaf(self, page):
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap && snap.secondaryTree && snap.secondaryTree.type === 'leaf';
+            }"""
+        )
+        secondary_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=secondary_id)
+        page.wait_for_function(
+            "(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=secondary_id
+        )
+        return secondary_id
+
+    def test_focused_folder_route_context_is_inherited(self):
+        # Folder is not a tile-capable route (works/people/concepts/positions/
+        # arguments/playlists only), so a real Folder Secondary pane cannot be
+        # constructed. Exercise the same contract New File actually consumes --
+        # prksFocusedRouteRecord() -- by stubbing the focused route directly,
+        # which is exactly what a focused Secondary Folder leaf would report.
+        server, page, _collector = self._start_app()
+        folder_id = self._create_folder_via_api(page, "Split Secondary Folder")
+        page.evaluate("(wid) => window.prksNavigate('#/works/' + wid)", arg=server.ids["work_a"])
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        page.evaluate(
+            """(fid) => {
+                window.__prksRealFocusedRouteRecord = window.prksFocusedRouteRecord;
+                window.prksFocusedRouteRecord = () => ({
+                    name: 'folder-detail',
+                    params: { folderId: fid },
+                });
+            }""",
+            arg=folder_id,
+        )
+        try:
+            page.locator("#prks-ribbon-new-file").click()
+            page.wait_for_selector("#work-modal:not(.hidden)")
+            self.assertEqual(page.locator("#work-folder-id").input_value(), folder_id)
+            self.assertEqual(
+                page.locator("#work-folder-search").input_value(), "Split Secondary Folder"
+            )
+        finally:
+            page.evaluate(
+                "() => { window.prksFocusedRouteRecord = window.__prksRealFocusedRouteRecord; }"
+            )
+
+    def test_main_folder_but_secondary_work_focused_defaults_to_uncategorized(self):
+        server, page, _collector = self._start_app()
+        folder_id = self._create_folder_via_api(page, "Main Folder Not Inherited")
+        # Main = Folder A, Secondary = Work B, focus Secondary (Work B).
+        page.evaluate("(fid) => window.prksNavigate('#/folders/' + fid)", arg=folder_id)
+        page.wait_for_function("() => location.hash.indexOf('#/folders/') === 0")
+        page.evaluate(
+            "(wid) => window.prksNavigate('#/works/' + wid, { target: 'tile' })",
+            arg=server.ids["work_b"],
+        )
+        self._focus_secondary_leaf(page)
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        self.assertEqual(page.locator("#work-folder-id").input_value(), "")
+        self.assertEqual(page.locator("#work-folder-search").input_value(), "Uncategorized")
+
+    def test_single_pane_focused_folder_is_inherited(self):
+        _server, page, _collector = self._start_app()
+        folder_id = self._create_folder_via_api(page, "Single Pane Folder")
+        page.evaluate("(fid) => window.prksNavigate('#/folders/' + fid)", arg=folder_id)
+        page.wait_for_function("() => location.hash.indexOf('#/folders/') === 0")
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        self.assertEqual(page.locator("#work-folder-id").input_value(), folder_id)
+        self.assertEqual(page.locator("#work-folder-search").input_value(), "Single Pane Folder")
+
+    # -- Video (YouTube-only) source validation ------------------------------
+
+    def _open_video_mode(self, page):
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
+        page.locator("#work-video-url").wait_for(state="visible")
+
+    def test_video_blank_url_shows_inline_error(self):
+        _server, page, _collector = self._start_app()
+        self._open_video_mode(page)
+        page.fill("#work-title", "Video Blank URL Work")
+        page.locator("#save-work-btn").click()
+        page.locator("#work-video-url-error", has_text="valid YouTube URL").wait_for()
+        self.assertFalse(page.locator("#work-modal").evaluate("el => el.classList.contains('hidden')"))
+
+    def test_video_malformed_url_shows_inline_error_and_retains_input(self):
+        _server, page, _collector = self._start_app()
+        self._open_video_mode(page)
+        page.fill("#work-title", "Video Malformed URL Work")
+        page.fill("#work-video-url", "javascript:alert(1)")
+        page.locator("#save-work-btn").click()
+        page.locator("#work-video-url-error", has_text="valid YouTube URL").wait_for()
+        self.assertEqual(page.locator("#work-video-url").input_value(), "javascript:alert(1)")
+        self.assertEqual(page.locator("#work-title").input_value(), "Video Malformed URL Work")
+
+    def test_video_non_youtube_url_shows_inline_error(self):
+        _server, page, _collector = self._start_app()
+        self._open_video_mode(page)
+        page.fill("#work-title", "Video Non YouTube URL Work")
+        page.fill("#work-video-url", "https://example.com/video")
+        page.locator("#save-work-btn").click()
+        page.locator("#work-video-url-error", has_text="valid YouTube URL").wait_for()
+        titles = page.evaluate("""async () => (await fetchWorks()).map(w => w.title)""")
+        self.assertNotIn("Video Non YouTube URL Work", titles)
+
+    def test_video_valid_watch_and_short_urls_accepted(self):
+        _server, page, _collector = self._start_app()
+
+        # Stub youtube.com network (oEmbed metadata + iframe embed) so this
+        # regression exercises URL/creation validation without depending on
+        # (or being flagged for) real external network access.
+        def _stub_youtube(route):
+            url = route.request.url
+            if "oembed" in url:
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"title": "Stub Video", "author_name": "Stub Channel"}),
+                )
+            else:
+                route.fulfill(status=200, content_type="text/html", body="<html></html>")
+
+        page.route("https://www.youtube.com/**", _stub_youtube)
+        self.addCleanup(lambda: page.unroute("https://www.youtube.com/**", _stub_youtube))
+
+        for url, title in (
+            ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "Video Watch URL Work"),
+            ("https://youtu.be/dQw4w9WgXcQ", "Video Short URL Work"),
+        ):
+            self._open_video_mode(page)
+            page.fill("#work-title", title)
+            page.fill("#work-video-url", url)
+            page.locator("#save-work-btn").click()
+            page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+            page.wait_for_selector("#work-modal", state="hidden")
+
+    # -- Error accessibility -------------------------------------------------
+
+    def test_inline_errors_use_aria_describedby_not_for(self):
+        _server, page, _collector = self._start_app()
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.locator("#save-work-btn").click()
+        page.locator("#work-file-error", has_text="Choose a PDF file.").wait_for()
+        self.assertIn(
+            "work-file-error",
+            page.locator("#upload-drop-zone").get_attribute("aria-describedby") or "",
+        )
+        self.assertEqual(page.locator("#upload-drop-zone").get_attribute("aria-invalid"), "true")
+        self.assertIsNone(page.locator("#work-file-error").get_attribute("for"))
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        self.assertIsNone(page.locator("#upload-drop-zone").get_attribute("aria-invalid"))
+

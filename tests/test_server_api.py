@@ -3152,6 +3152,117 @@ class TestServerAPI(unittest.TestCase):
         self.assertNotIn("A-MISSING", ids)
         self.assertIn(aid, ids)
 
+    # -- Video source (YouTube-only) creation contract ---------------------
+
+    def _work_titles(self):
+        status, works = self._sv_json("GET", "/api/works")
+        self.assertEqual(status, 200)
+        return [w.get("title") for w in works]
+
+    def test_video_work_malformed_url_rejected_no_work_created(self):
+        before = self._work_titles()
+        status, body = self._sv_json(
+            "POST",
+            "/api/works",
+            {"title": "Malformed Video Work", "source_kind": "video", "source_url": "not a url"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body.get("error"), "Invalid YouTube URL")
+        self.assertEqual(self._work_titles(), before)
+
+    def test_video_work_non_youtube_url_rejected_no_work_created(self):
+        before = self._work_titles()
+        status, body = self._sv_json(
+            "POST",
+            "/api/works",
+            {
+                "title": "Non-YouTube Video Work",
+                "source_kind": "video",
+                "source_url": "https://example.com/video",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body.get("error"), "Invalid YouTube URL")
+        self.assertEqual(self._work_titles(), before)
+
+    def test_video_work_lookalike_youtube_hostname_rejected(self):
+        before = self._work_titles()
+        for bad_url in (
+            "https://notyoutube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ",
+            "javascript://youtube.com/watch?v=dQw4w9WgXcQ",
+        ):
+            status, body = self._sv_json(
+                "POST",
+                "/api/works",
+                {"title": "Lookalike Host Work", "source_kind": "video", "source_url": bad_url},
+            )
+            self.assertEqual(status, 400, bad_url)
+            self.assertEqual(body.get("error"), "Invalid YouTube URL")
+        self.assertEqual(self._work_titles(), before)
+
+    def test_video_work_missing_url_rejected(self):
+        before = self._work_titles()
+        status, body = self._sv_json(
+            "POST",
+            "/api/works",
+            {"title": "No URL Video Work", "source_kind": "video", "source_url": ""},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body.get("error"), "Invalid YouTube URL")
+        self.assertEqual(self._work_titles(), before)
+
+    def test_video_work_valid_watch_url_accepted(self):
+        status, created = self._sv_json(
+            "POST",
+            "/api/works",
+            {
+                "title": "Valid Watch URL Work",
+                "source_kind": "video",
+                "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("Valid Watch URL Work", self._work_titles())
+        status, work = self._sv_json("GET", f"/api/works/{created['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(work.get("provider"), "youtube")
+        self.assertEqual(work.get("provider_id"), "dQw4w9WgXcQ")
+
+    def test_video_work_valid_short_url_accepted(self):
+        status, created = self._sv_json(
+            "POST",
+            "/api/works",
+            {
+                "title": "Valid Short URL Work",
+                "source_kind": "video",
+                "source_url": "https://youtu.be/dQw4w9WgXcQ",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("Valid Short URL Work", self._work_titles())
+        status, work = self._sv_json("GET", f"/api/works/{created['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(work.get("provider"), "youtube")
+        self.assertEqual(work.get("provider_id"), "dQw4w9WgXcQ")
+
+    # -- Folder destination semantics: UI-visible default vs. stored folder -
+
+    def test_default_folder_destination_is_uncategorized(self):
+        status, created = self._sv_json(
+            "POST",
+            "/api/works",
+            {"title": "Default Folder Work", "folder_id": None},
+        )
+        self.assertEqual(status, 200)
+        status, work = self._sv_json("GET", f"/api/works/{created['id']}")
+        self.assertEqual(status, 200)
+        status, folders = self._sv_json("GET", "/api/folders")
+        self.assertEqual(status, 200)
+        folder_row = next((f for f in folders if f.get("id") == work.get("folder_id")), None)
+        self.assertIsNotNone(folder_row)
+        self.assertEqual(folder_row.get("title"), "Uncategorized")
+
 
 if __name__ == '__main__':
     unittest.main()

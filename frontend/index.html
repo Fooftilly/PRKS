@@ -483,7 +483,7 @@
                         </button>
                         <button type="button" class="prks-kind-toggle__btn" data-kind="video" role="tab" aria-selected="false">
                             <span class="prks-kind-toggle__icon"><i data-lucide="play" class="prks-icon" aria-hidden="true"></i></span>
-                            <span class="prks-kind-toggle__label">Video</span>
+                            <span class="prks-kind-toggle__label">YouTube</span>
                         </button>
                     </div>
 
@@ -509,8 +509,8 @@
                     </div>
 
                     <div id="work-video-url-row" class="hidden">
-                        <label for="work-video-url">Video URL</label>
-                        <input type="url" id="work-video-url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
+                        <label for="work-video-url">YouTube URL</label>
+                        <input type="url" id="work-video-url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" aria-describedby="work-video-url-error">
                         <p id="work-video-url-error" class="folder-field-error hidden" data-prks-field-error="work-video-url" role="alert"></p>
                         <p class="meta-row meta-row--hint">
                             We’ll embed the video in the file view and auto-fill title/channel when possible.
@@ -523,7 +523,7 @@
                             </div>
                             <div>
                                 <label for="work-video-published-date">Date published</label>
-                                <input type="text" id="work-video-published-date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off">
+                                <input type="text" id="work-video-published-date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-describedby="work-video-published-date-error">
                                 <p id="work-video-published-date-error" class="folder-field-error hidden" data-prks-field-error="work-video-published-date" role="alert"></p>
                             </div>
                         </div>
@@ -555,7 +555,7 @@
                     <h4 id="work-create-basic-heading" class="prks-create-section__title">Basic information</h4>
 
                     <label for="work-title">Title</label>
-                    <input type="text" id="work-title" placeholder="e.g. Capital Volume 1" autocomplete="off">
+                    <input type="text" id="work-title" placeholder="e.g. Capital Volume 1" autocomplete="off" aria-describedby="work-title-error">
                     <p id="work-title-error" class="folder-field-error hidden" data-prks-field-error="work-title" role="alert"></p>
 
                     <label for="work-folder-search">Folder</label>
@@ -563,13 +563,14 @@
                         <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
                             <div class="tag-add-shell__field">
                                 <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
-                                <input type="text" id="work-folder-search" class="tag-add-shell__input" placeholder="Library root" autocomplete="off" aria-label="Folder">
+                                <input type="text" id="work-folder-search" class="tag-add-shell__input" placeholder="Uncategorized" autocomplete="off" aria-label="Folder" aria-describedby="work-folder-error">
                             </div>
                             <input type="hidden" id="work-folder-id">
                             <div id="folder-results" class="combobox-results combobox-results--tag-panel hidden"></div>
                         </div>
                         <button type="button" onclick="quickCreateFolder()" class="prks-btn prks-btn--secondary prks-btn--sm" title="Create New Folder" aria-label="Create New Folder"><span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span></button>
                     </div>
+                    <p id="work-folder-error" class="folder-field-error hidden" data-prks-field-error="work-folder" role="alert"></p>
 
                     <label for="work-doc-type-trigger">Document type</label>
                     <div class="prks-doc-type-menu combobox-container">
@@ -588,7 +589,7 @@
                         </div>
                         <div id="work-upload-published-date-col">
                             <label for="work-date">Published date</label>
-                            <input type="text" id="work-date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-label="Published date">
+                            <input type="text" id="work-date" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-label="Published date" aria-describedby="work-date-error">
                             <p id="work-date-error" class="folder-field-error hidden" data-prks-field-error="work-date" role="alert"></p>
                         </div>
                     </div>

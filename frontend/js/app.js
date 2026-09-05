@@ -1982,8 +1982,24 @@ function initForms() {
                 'work-file-error'
             );
         }
-        if (sourceKind === 'video' && !sourceUrl) {
-            setErr(videoUrlEl, 'Enter a valid URL.', 'work-video-url-error');
+        if (sourceKind === 'video') {
+            const validVideoUrl =
+                typeof window.prksIsValidYoutubeUrl === 'function' &&
+                window.prksIsValidYoutubeUrl(sourceUrl);
+            if (!validVideoUrl) {
+                setErr(videoUrlEl, 'Enter a valid YouTube URL.', 'work-video-url-error');
+            }
+        }
+        const folderSearchEl = document.getElementById('work-folder-search');
+        if (
+            typeof window.prksIsWorkModalFolderCommitted === 'function' &&
+            !window.prksIsWorkModalFolderCommitted()
+        ) {
+            setErr(
+                folderSearchEl,
+                'Choose a folder from the list, create this folder, or select Uncategorized.',
+                'work-folder-error'
+            );
         }
         if (sourceKind === 'video' && publishedDate && !publishedIso) {
             setErr(videoPubEl, 'Use dd/mm/yyyy.', 'work-video-published-date-error');
@@ -2007,13 +2023,27 @@ function initForms() {
         if (pdfFileForUpload) {
             const file = pdfFileForUpload;
             fileName = file.name;
-            await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = e => { fileBase64 = e.target.result.split(',')[1]; resolve(); };
-                reader.onerror = () => reject(reader.error);
-                reader.onabort = () => reject(new Error('File read aborted'));
-                reader.readAsDataURL(file);
-            });
+            try {
+                await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = e => { fileBase64 = e.target.result.split(',')[1]; resolve(); };
+                    reader.onerror = () => reject(reader.error || new Error('File read error'));
+                    reader.onabort = () => reject(new Error('File read aborted'));
+                    reader.readAsDataURL(file);
+                });
+            } catch (_readErr) {
+                if (typeof prksSetWorkModalFieldError === 'function') {
+                    prksSetWorkModalFieldError(
+                        document.getElementById('upload-drop-zone'),
+                        'Could not read this PDF. Choose the file again.',
+                        'work-file-error'
+                    );
+                }
+                if (typeof prksFocusWorkModalControl === 'function') {
+                    prksFocusWorkModalControl(document.getElementById('upload-drop-zone'));
+                }
+                return;
+            }
         }
 
         if (
@@ -2127,7 +2157,7 @@ function initForms() {
             const lower = String(errText).toLowerCase();
             if (sourceKind === 'video' && videoUrlEl && lower.indexOf('url') !== -1) {
                 if (typeof prksSetWorkModalFieldError === 'function') {
-                    prksSetWorkModalFieldError(videoUrlEl, 'Enter a valid URL.', 'work-video-url-error');
+                    prksSetWorkModalFieldError(videoUrlEl, 'Enter a valid YouTube URL.', 'work-video-url-error');
                 }
                 if (typeof prksFocusWorkModalControl === 'function') prksFocusWorkModalControl(videoUrlEl);
             }

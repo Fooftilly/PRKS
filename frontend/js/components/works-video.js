@@ -6,14 +6,18 @@ function prksVideoEscapeAttr(s) {
 function prksYoutubeEmbedUrl(sourceUrl, providerId) {
     const pid = (providerId || '').trim();
     if (pid) return `https://www.youtube.com/embed/${encodeURIComponent(pid)}`;
+    // Explicit recognized hosts, not substring matching (rejects
+    // "notyoutube.com" / "youtube.com.example.org"). Shared contract with
+    // backend _is_youtube_host() and frontend prksIsRecognizedYoutubeHost().
+    const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
     try {
         const u = new URL(sourceUrl);
         const host = (u.hostname || '').toLowerCase();
-        if (host.includes('youtu.be')) {
+        if (!YOUTUBE_HOSTS.has(host)) return '';
+        if (host === 'youtu.be') {
             const id = u.pathname.replace(/^\//, '').split('/')[0];
             if (id) return `https://www.youtube.com/embed/${encodeURIComponent(id)}`;
-        }
-        if (host.includes('youtube.com')) {
+        } else {
             const v = u.searchParams.get('v') || '';
             if (v) return `https://www.youtube.com/embed/${encodeURIComponent(v)}`;
             const parts = u.pathname.replace(/^\//, '').split('/');
