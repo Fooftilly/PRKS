@@ -258,10 +258,10 @@ TabContext owns route runtime:
 - live resources → `ctx.resources` / `ctx.setTimer`
 - shell → main/focused context (`prksGetMainTabContext`, `prksGetFocusedTabContext`)
 
-People-library search runtime belongs to each rendered `.prks-people-library` root
+People-library search runtime belongs to rendered `.prks-people-library` root
 (`root.__prksPeopleLibraryState`), never a `window` singleton or tab-ID global map.
-Each mounted People/role index rerenders only its own root. SessionStorage preserves
-the shared query preference; it is not workspace persistence or route state.
+Rerender only that root. SessionStorage preserves shared query preference; it is not
+workspace persistence or route state.
 
 Stacked mode: one mounted context. Tiled mode: Main + every visible Secondary leaf (up to the visible-pane cap), each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
 is `ctx.getResource('researchGraph')`; no module-level singleton fallback.

@@ -104,18 +104,3 @@ def seed_graph_context_library(storage_root: str) -> dict:
     ids["concept_a"] = GRAPH_CONCEPT_A
     ids["concept_b"] = GRAPH_CONCEPT_B
     return ids
-
-
-def seed_people_search_library(storage_root: str) -> dict:
-    """Two Authors make split People search ownership observable."""
-    ids = seed_library(storage_root)
-    cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
-    second_author = db.add_person(
-        first_name="Ada",
-        last_name="Search",
-        about="Second author for split People search ownership.",
-    )
-    db.add_role(second_author, ids["work_b"], "Author")
-    ids["second_author"] = second_author
-    return ids
