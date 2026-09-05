@@ -173,6 +173,56 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("isResearchGraphHash", ui)
         self.assertIn('id="prks-graph-inspector"', ui)
 
+    def test_compact_toolbar_and_disclosure_panels(self):
+        graph = _read(_GRAPH)
+        # Permanent primary toolbar: Find, Fit, Reset layout, Filters, Legend toggles.
+        self.assertIn('data-prks-role="graph-find"', graph)
+        self.assertIn('data-prks-role="graph-fit">Fit', graph)
+        self.assertIn('data-prks-role="graph-reset">Reset layout', graph)
+        self.assertIn('data-prks-role="graph-filters-toggle"', graph)
+        self.assertIn('data-prks-role="graph-legend-toggle"', graph)
+        self.assertIn(">Filters</button>", graph)
+        self.assertIn(">Legend</button>", graph)
+        # Filters/legend are real disclosure buttons, not a floating popover.
+        self.assertIn("aria-expanded=\"false\"", graph)
+        self.assertIn("aria-controls=", graph)
+        # Filter checkboxes and legend content are disclosed, hidden by default.
+        self.assertIn('data-prks-role="graph-filters-panel" hidden', graph)
+        self.assertIn('data-prks-role="graph-legend-panel"', graph)
+        self.assertIn("toggleAuxPanel", graph)
+        self.assertIn("setAuxPanelOpen", graph)
+        self.assertIn("Escape", graph)
+        # CSS makes the disclosure panels actually collapse (not just an empty flex box).
+        css = _read(_CSS)
+        self.assertIn(".research-graph__filters-panel[hidden]", css)
+        self.assertIn(".research-graph__legend[hidden]", css)
+
+    def test_selection_driven_inspector_contract(self):
+        graph = _read(_GRAPH)
+        # No empty "Select a node or edge" placeholder card any more.
+        self.assertNotIn("Select a node or edge", graph)
+        self.assertIn("hasSelection", graph)
+        self.assertIn("prksResearchGraphHasInspectorSelection", graph)
+        self.assertIn("data-graph-clear-selection", graph)
+        self.assertIn("Clear graph selection", graph)
+        # Status messages live in a dedicated graph-local region, not the inspector.
+        self.assertIn('data-prks-role="graph-status"', graph)
+        self.assertIn("renderStatusMessage", graph)
+        # Selection changes resync right-panel visibility without forcing fit()/layout.
+        self.assertIn("syncInspectorVisibility", graph)
+        self.assertIn("prksRefreshFocusedRightPanelVisibility", graph)
+        self.assertIn("cy.resize", graph)
+
+        ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
+        self.assertIn("function prksRefreshFocusedRightPanelVisibility", ui)
+        self.assertIn("prksResearchGraphHasInspectorSelection", ui)
+        # Graph route visibility is selection-aware, not unconditionally actionable.
+        actionable = ui.split("function prksRightPanelHasActionableContent", 1)[1].split(
+            "function prksShouldHideRightPanel", 1
+        )[0]
+        self.assertNotIn("if (isResearchGraphHash(h)) return true;", actionable)
+        self.assertIn("isResearchGraphHash(h)", actionable)
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for research graph tests")

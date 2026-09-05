@@ -1002,7 +1002,15 @@ Profile pages separate summary metadata (lifespan, aliases, groups) from long-fo
 
 ## Research visualization
 
-The Research Graph is allowed a full-width canvas. Chrome around it (header, find, filters, legend) uses page / toolbar / field / panel / filter-toggle primitives. Selection details live in the application right panel (`doc-meta-card` / `right-panel-stack`), the same auxiliary column as Work and Person — not a second boxed inspector beside the canvas.
+The Research Graph canvas is the primary surface: when nothing is being configured or inspected, almost all available space belongs to it. The permanently visible toolbar is compact (Find, Fit, Reset layout, Filters, Legend); filter checkboxes and the legend are disclosed on demand from that toolbar, not rendered permanently underneath it. Chrome around the graph (header, find, filters, legend) uses page / toolbar / field / panel / filter-toggle primitives.
+
+Filters and Legend are mutually exclusive inline disclosure panels local to the Research Graph, not a floating popover: opening one closes the other, and each collapses to zero height when closed while its controls stay alive in the DOM. Graph filter state (which node/relation types are shown) is runtime-only — never persisted to localStorage, workspace persistence, `/api/settings`, or the URL — except the People toggle, which still triggers a graph reload with `people=1/0` as before.
+
+The inspector exists only for an actual node or edge selection; it is TabContext-owned runtime state exposed by the focused Research Graph runtime (`hasSelection()`), never inferred from DOM markup. With no selection the global right panel is hidden and the canvas reclaims that width — there is no permanent empty "Selection" placeholder card. Selecting a node or edge reveals the panel; clearing the selection (canvas click, the inspector's explicit close control, or a filter hiding the current selection) hides it again. An unfocused Graph tile never controls the global right panel — only the focused Graph runtime's own selection does, and switching workspace focus away and back preserves that selection without remounting the graph or refetching data.
+
+Status messages (a node hidden by filters, a failed reload, a graph-too-large notice) belong to a Graph-local status region near the toolbar, not the inspector — the inspector's contract is selection details only, so it can be safely hidden when there is no selection without losing status feedback.
+
+Showing or hiding the inspector must not reset the graph's pan, zoom, or layout: it only triggers a Cytoscape container resize (`cy.resize()`) on the next frame, never `fit()` or a layout re-run.
 
 Graph node colors are domain visualization (documented exception). Node types use the same Lucide icons as Research / People navigation (Concept `network`, Position `flag`, Argument/Stance `messages-square`, Work `file-text`, Person `user`) on a muted surface with a semantic border.
 

@@ -415,6 +415,104 @@ class ResearchGraphContextTests(_BrowserE2E):
         self.assertEqual(cleared["dimmed"], 0)
 
 
+class ResearchGraphChromeTests(_BrowserE2E):
+    def _open_graph(self, page):
+        _expand_research(page)
+        page.locator('#prks-nav-research-children a.nav-link[href="#/graph"]').click()
+        page.wait_for_function("() => location.hash === '#/graph' || location.hash.indexOf('#/graph?') === 0")
+        page.wait_for_function(_GRAPH_HAS_NODES)
+
+    def test_no_selection_hides_right_panel_selection_reveals_it(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_id = server.ids["work_a"]
+        self._open_graph(page)
+        self.assertTrue(
+            page.evaluate(
+                "() => document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+            )
+        )
+        self.assertFalse(page.locator("#right-panel").is_visible())
+
+        work_node = "work:" + work_id
+        page.evaluate("(wid) => { window.selectGraphNode(wid, { center: false }); }", arg=work_node)
+        page.locator("#prks-graph-inspector-title").wait_for()
+        page.wait_for_function(
+            "() => !document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+        )
+        self.assertTrue(page.locator("#right-panel").is_visible())
+        self.assertTrue(page.locator("[data-graph-clear-selection]").is_visible())
+
+        page.locator("[data-graph-clear-selection]").click()
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), "")
+        page.wait_for_function(
+            "() => document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+        )
+
+    def test_filters_and_legend_disclosure_are_mutually_exclusive(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        self._open_graph(page)
+
+        filters_btn = page.locator('[data-prks-role="graph-filters-toggle"]')
+        legend_btn = page.locator('[data-prks-role="graph-legend-toggle"]')
+        filters_panel = page.locator('[data-prks-role="graph-filters-panel"]')
+        legend_panel = page.locator('[data-prks-role="graph-legend-panel"]')
+
+        self.assertFalse(filters_panel.is_visible())
+        self.assertFalse(legend_panel.is_visible())
+
+        filters_btn.click()
+        self.assertTrue(filters_panel.is_visible())
+        self.assertEqual(filters_btn.get_attribute("aria-expanded"), "true")
+        concepts_box = page.locator('[data-graph-filter="concepts"]')
+        self.assertTrue(concepts_box.is_checked())
+
+        legend_btn.click()
+        self.assertFalse(filters_panel.is_visible())
+        self.assertTrue(legend_panel.is_visible())
+        self.assertEqual(filters_btn.get_attribute("aria-expanded"), "false")
+        self.assertEqual(legend_btn.get_attribute("aria-expanded"), "true")
+        self.assertIn("Concept", legend_panel.inner_text())
+        self.assertIn("Hierarchy", legend_panel.inner_text())
+
+        legend_btn.click()
+        self.assertFalse(legend_panel.is_visible())
+
+    def test_escape_closes_filters_and_returns_focus(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        self._open_graph(page)
+
+        filters_btn = page.locator('[data-prks-role="graph-filters-toggle"]')
+        filters_panel = page.locator('[data-prks-role="graph-filters-panel"]')
+        filters_btn.click()
+        self.assertTrue(filters_panel.is_visible())
+        page.locator('[data-graph-filter="concepts"]').focus()
+        page.keyboard.press("Escape")
+        self.assertFalse(filters_panel.is_visible())
+        self.assertEqual(
+            page.evaluate(
+                "() => document.activeElement && document.activeElement.getAttribute('data-prks-role')"
+            ),
+            "graph-filters-toggle",
+        )
+        # Escape inside the disclosure must not touch graph selection.
+        self.assertEqual(page.evaluate("() => location.hash.indexOf('#/graph')"), 0)
+
+    def test_filter_hiding_selection_clears_inspector_and_right_panel(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_id = server.ids["work_a"]
+        self._open_graph(page)
+        work_node = "work:" + work_id
+        page.evaluate("(wid) => { window.selectGraphNode(wid, { center: false }); }", arg=work_node)
+        page.locator("#prks-graph-inspector-title").wait_for()
+
+        page.locator('[data-prks-role="graph-filters-toggle"]').click()
+        page.locator('[data-graph-filter="works"]').uncheck()
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), "")
+        page.wait_for_function(
+            "() => document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+        )
+
+
 class ResearchPickerTests(_BrowserE2E):
     def test_insert_concept_and_argument_pickers(self):
         server, page, _collector = self._start_app()
@@ -2103,6 +2201,10 @@ def _tab_box(page, tab_id):
 
 def _tile_box(page, tab_id):
     return page.locator('.prks-tile[data-prks-tab-id="%s"]' % tab_id).bounding_box()
+
+
+def _grip_box(page, tab_id):
+    return page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__grip' % tab_id).bounding_box()
 
 
 def _open_pane_actions(page, tab_id=None):

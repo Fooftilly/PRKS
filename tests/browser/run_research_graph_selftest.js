@@ -398,6 +398,7 @@ function makeGraphHost() {
         addEventListener: noop,
     };
     const inspector = { innerHTML: '' };
+    const status = { textContent: '', hidden: true };
     const canvas = { id: 'prks-graph-canvas' };
     const graphRoot = {
         addEventListener: noop,
@@ -410,6 +411,7 @@ function makeGraphHost() {
                 return { innerHTML: '', hidden: true };
             }
             if (sel === '#prks-graph-inspector') return inspector;
+            if (sel === '[data-prks-role="graph-status"]') return status;
             if (sel === '#prks-graph-canvas' || sel === '[data-prks-role="graph-canvas"]') return canvas;
             if (sel === '[data-graph-filter="people"]') return peopleBox;
             return null;
@@ -432,6 +434,7 @@ function makeGraphHost() {
         },
         _peopleBox: peopleBox,
         _inspector: inspector,
+        _status: status,
     };
     graphRoot.parentNode = host;
     return host;
@@ -460,6 +463,25 @@ function makeGraphHost() {
     );
     assertEq(rows, 'person focus selects person node', g.getSelectedGraphNodeId(), 'person:P-123');
     assertEq(rows, 'person focus checks People filter', personHost._peopleBox.checked, true);
+    assertEq(
+        rows,
+        'person focus reports inspector selection',
+        g.prksResearchGraphHasInspectorSelection(),
+        true
+    );
+    assert(
+        rows,
+        'person inspector renders close control',
+        String(personHost._inspector.innerHTML).indexOf('data-graph-clear-selection') >= 0
+    );
+    g.clearGraphSelection();
+    assertEq(rows, 'clear selection empties inspector', personHost._inspector.innerHTML, '');
+    assertEq(
+        rows,
+        'clear selection reports no inspector selection',
+        g.prksResearchGraphHasInspectorSelection(),
+        false
+    );
 
     fetchCalls.length = 0;
     const conceptHost = makeGraphHost();
@@ -491,8 +513,9 @@ function makeGraphHost() {
     assert(
         rows,
         'graph_too_large status shown',
-        String(conceptHost._inspector.innerHTML).indexOf('too large to render as a single snapshot') >= 0
+        String(conceptHost._status.textContent).indexOf('too large to render as a single snapshot') >= 0
     );
+    assertEq(rows, 'graph_too_large status visible', conceptHost._status.hidden, false);
 
     fetchImpl = async function () {
         throw new Error('network');
@@ -505,7 +528,7 @@ function makeGraphHost() {
     assert(
         rows,
         'ordinary load failure status shown',
-        String(conceptHost._inspector.innerHTML).indexOf('Could not load Research Graph.') >= 0
+        String(conceptHost._status.textContent).indexOf('Could not load Research Graph.') >= 0
     );
 
     const leaveHost = makeGraphHost();
@@ -546,6 +569,7 @@ function makeGraphHost() {
     assertEq(rows, 'latest people-off reload applies', offResult, true);
     assertEq(rows, 'people checkbox follows latest toggle', raceHost._peopleBox.checked, false);
     raceHost._inspector.innerHTML = '';
+    raceHost._status.textContent = '';
     const tooLarge = new Error('too large');
     tooLarge.code = 'graph_too_large';
     deferred[0].reject(tooLarge);
@@ -555,7 +579,8 @@ function makeGraphHost() {
     assert(
         rows,
         'stale people-on failure does not paint error',
-        String(raceHost._inspector.innerHTML).indexOf('too large') < 0
+        String(raceHost._inspector.innerHTML).indexOf('too large') < 0 &&
+            String(raceHost._status.textContent).indexOf('too large') < 0
     );
 
     const passed = rows.filter((r) => r.ok).length;

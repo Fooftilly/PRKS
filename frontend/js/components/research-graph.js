@@ -631,6 +631,17 @@
         return html;
     }
 
+    function inspectorHeadHtml(kicker) {
+        return (
+            '<div class="research-graph__inspector-head">' +
+            '<p class="saved-view-detail__kicker">' +
+            esc(kicker) +
+            '</p>' +
+            '<button type="button" class="prks-icon-btn close-btn research-graph__inspector-close" data-graph-clear-selection aria-label="Clear graph selection">&times;</button>' +
+            '</div>'
+        );
+    }
+
     function inspectorNeighborHtml(item) {
         return (
             '<button type="button" class="prks-list-row research-graph__neighbor" data-graph-node="' +
@@ -850,6 +861,7 @@
                 applySelectionContext(cy);
             }
             renderInspector();
+            syncInspectorVisibility();
             return selectedId;
         }
 
@@ -866,6 +878,7 @@
                 applySelectionContext(cy);
             }
             renderInspector();
+            syncInspectorVisibility();
             return selectedEdgeId;
         }
 
@@ -879,11 +892,18 @@
                 applySelectionContext(cy);
             }
             renderInspector();
+            syncInspectorVisibility();
         }
 
         function inspectorClick(ev) {
             const t = ev.target;
             if (!t || !t.closest) return;
+            const clearBtn = t.closest('[data-graph-clear-selection]');
+            if (clearBtn) {
+                ev.preventDefault();
+                clearGraphSelection();
+                return;
+            }
             const hit = t.closest('[data-graph-node]');
             if (hit) {
                 ev.preventDefault();
@@ -919,19 +939,42 @@
             ensureInspectorBound(el);
         }
 
+        function renderStatusMessage() {
+            const el = queryRole('graph-status');
+            if (!el) return;
+            if (statusMessage) {
+                el.textContent = statusMessage;
+                el.hidden = false;
+            } else {
+                el.textContent = '';
+                el.hidden = true;
+            }
+        }
+
+        function syncInspectorVisibility() {
+            if (typeof root.prksRefreshFocusedRightPanelVisibility === 'function') {
+                root.prksRefreshFocusedRightPanelVisibility();
+            }
+            const cy = liveCy;
+            if (!cy || typeof cy.resize !== 'function') return;
+            if (typeof root.requestAnimationFrame === 'function') {
+                root.requestAnimationFrame(function () {
+                    if (!destroyed && liveCy === cy) cy.resize();
+                });
+            } else {
+                cy.resize();
+            }
+        }
+
         function renderInspector() {
             const edgeModel = selectedEdgeId ? inspectorEdgeModel(snapshot, selectedEdgeId) : null;
             const model = !edgeModel ? inspectorModel(snapshot, selectedId) : null;
             let html = '';
-            if (statusMessage) {
-                html += '<p class="prks-inline-message" role="status">' + esc(statusMessage) + '</p>';
-            }
             if (edgeModel) {
                 html +=
                     '<div class="doc-meta-card">' +
-                    '<p class="saved-view-detail__kicker">' +
-                    esc(edgeModel.kicker) +
-                    '</p><p class="card-title" id="prks-graph-inspector-title">' +
+                    inspectorHeadHtml(edgeModel.kicker) +
+                    '<p class="card-title" id="prks-graph-inspector-title">' +
                     esc(edgeModel.relation) +
                     '</p>' +
                     '<p class="meta-row meta-row--compact research-graph__edge-ends">' +
@@ -965,19 +1008,13 @@
                 return edgeModel;
             }
             if (!model) {
-                html +=
-                    '<div class="doc-meta-card">' +
-                    '<p class="saved-view-detail__kicker">Selection</p>' +
-                    '<p class="meta-row">Select a node or edge. Relationships stay on the canvas as highlights, not mass labels.</p>' +
-                    '</div>';
-                paintInspector(html);
+                paintInspector('');
                 return model;
             }
             html +=
                 '<div class="doc-meta-card">' +
-                '<p class="saved-view-detail__kicker">' +
-                esc(model.typeLabel) +
-                '</p><p class="card-title" id="prks-graph-inspector-title">' +
+                inspectorHeadHtml(model.typeLabel) +
+                '<p class="card-title" id="prks-graph-inspector-title">' +
                 esc(model.label) +
                 '</p>' +
                 inspectorStatsHtml(model.stats) +
@@ -1045,10 +1082,11 @@
             });
             if (!allowed) {
                 statusMessage = 'That node is hidden by the current filters.';
-                renderInspector();
+                renderStatusMessage();
                 return;
             }
             statusMessage = '';
+            renderStatusMessage();
             selectNode(id);
         }
 
@@ -1065,6 +1103,42 @@
             if (!liveCy) return;
             const layout = liveCy.layout(coseLayoutOptions(true));
             layout.run();
+        }
+
+        function focusRole(role) {
+            const el = queryRole(role);
+            if (el && typeof el.focus === 'function') el.focus();
+        }
+
+        function auxPanelEls() {
+            return {
+                filtersBtn: queryRole('graph-filters-toggle'),
+                filtersPanel: queryRole('graph-filters-panel'),
+                legendBtn: queryRole('graph-legend-toggle'),
+                legendPanel: queryRole('graph-legend-panel'),
+            };
+        }
+
+        function setAuxPanelOpen(which, open) {
+            const els = auxPanelEls();
+            const btn = which === 'filters' ? els.filtersBtn : els.legendBtn;
+            const panel = which === 'filters' ? els.filtersPanel : els.legendPanel;
+            if (panel) panel.hidden = !open;
+            if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        }
+
+        function toggleAuxPanel(which) {
+            const els = auxPanelEls();
+            const panel = which === 'filters' ? els.filtersPanel : els.legendPanel;
+            const isOpen = !!(panel && !panel.hidden);
+            setAuxPanelOpen('filters', false);
+            setAuxPanelOpen('legend', false);
+            if (!isOpen) setAuxPanelOpen(which, true);
+        }
+
+        function closeAuxPanels() {
+            setAuxPanelOpen('filters', false);
+            setAuxPanelOpen('legend', false);
         }
 
         function bindShell(host) {
@@ -1096,6 +1170,28 @@
                 }
                 if (t.closest('[data-prks-role="graph-reset"]')) {
                     rerunLayout();
+                    return;
+                }
+                if (t.closest('[data-prks-role="graph-filters-toggle"]')) {
+                    toggleAuxPanel('filters');
+                    return;
+                }
+                if (t.closest('[data-prks-role="graph-legend-toggle"]')) {
+                    toggleAuxPanel('legend');
+                }
+            });
+            listen(liveDom, 'keydown', function (ev) {
+                if (ev.key !== 'Escape') return;
+                const t = ev.target;
+                if (!t || !t.closest) return;
+                if (t.closest('[data-prks-role="graph-filters-panel"]')) {
+                    ev.stopPropagation();
+                    setAuxPanelOpen('filters', false);
+                    focusRole('graph-filters-toggle');
+                } else if (t.closest('[data-prks-role="graph-legend-panel"]')) {
+                    ev.stopPropagation();
+                    setAuxPanelOpen('legend', false);
+                    focusRole('graph-legend-toggle');
                 }
             });
             const findInput = queryRole('graph-find');
@@ -1151,6 +1247,7 @@
                             if (liveCy) liveCy.elements().unselect();
                             applySelectionContext(liveCy);
                             renderInspector();
+                            syncInspectorVisibility();
                         } else {
                             applySelectionContext(liveCy);
                         }
@@ -1203,28 +1300,9 @@
             }
             const findId = chromeId('graph-find');
             const resultsId = chromeId('graph-find-results');
-            return (
-                '<div class="research-graph">' +
-                '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2 class="prks-page-title">' +
-                (typeof root.prksPageHeaderIconHtml === 'function'
-                    ? root.prksPageHeaderIconHtml('share-2')
-                    : '') +
-                ' Research Graph</h2></div></div>' +
-                '<div class="prks-toolbar research-graph__toolbar">' +
-                '<label class="research-graph__find-label"' +
-                (findId ? ' for="' + esc(findId) + '"' : '') +
-                '>Find node</label>' +
-                '<input' +
-                (findId ? ' id="' + esc(findId) + '"' : '') +
-                ' class="prks-input" type="search" autocomplete="off" placeholder="Find node…" data-prks-role="graph-find"' +
-                (resultsId ? ' aria-controls="' + esc(resultsId) + '"' : '') +
-                '>' +
-                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-fit">Fit</button>' +
-                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-reset">Reset layout</button>' +
-                '</div>' +
-                '<div' +
-                (resultsId ? ' id="' + esc(resultsId) + '"' : '') +
-                ' class="research-graph__find-results" role="listbox" hidden data-prks-role="graph-find-results"></div>' +
+            const filtersPanelId = chromeId('graph-filters-panel');
+            const legendPanelId = chromeId('graph-legend-panel');
+            const filtersHtml =
                 '<div class="research-graph__filters">' +
                 '<span class="research-graph__filter-group">Nodes</span>' +
                 chk('concepts', 'Concepts', filters.concepts) +
@@ -1239,8 +1317,8 @@
                 chk('responds', 'Responses', filters.responds) +
                 chk('sources', 'Sources', filters.sources) +
                 chk('mentions', 'Note mentions', filters.mentions) +
-                '</div>' +
-                '<div class="research-graph__legend" aria-label="Graph legend">' +
+                '</div>';
+            const legendHtml =
                 '<div class="research-graph__legend-group"><span class="research-graph__filter-group">Nodes</span>' +
                 '<ul>' +
                 '<li>' +
@@ -1269,7 +1347,49 @@
                 '<li><span class="research-graph__line research-graph__line--source"></span> Source</li>' +
                 '<li><span class="research-graph__line research-graph__line--mentions"></span> Note mention</li>' +
                 '<li><span class="research-graph__line research-graph__line--author"></span> Author</li>' +
-                '</ul></div>' +
+                '</ul></div>';
+            return (
+                '<div class="research-graph">' +
+                '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2 class="prks-page-title">' +
+                (typeof root.prksPageHeaderIconHtml === 'function'
+                    ? root.prksPageHeaderIconHtml('share-2')
+                    : '') +
+                ' Research Graph</h2></div></div>' +
+                '<div class="prks-toolbar research-graph__toolbar">' +
+                '<label class="research-graph__find-label"' +
+                (findId ? ' for="' + esc(findId) + '"' : '') +
+                '>Find node</label>' +
+                '<input' +
+                (findId ? ' id="' + esc(findId) + '"' : '') +
+                ' class="prks-input" type="search" autocomplete="off" placeholder="Find node…" data-prks-role="graph-find"' +
+                (resultsId ? ' aria-controls="' + esc(resultsId) + '"' : '') +
+                '>' +
+                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-fit">Fit</button>' +
+                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-reset">Reset layout</button>' +
+                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-filters-toggle" aria-expanded="false"' +
+                (filtersPanelId ? ' aria-controls="' + esc(filtersPanelId) + '"' : '') +
+                '>Filters</button>' +
+                '<button type="button" class="prks-btn prks-btn--secondary" data-prks-role="graph-legend-toggle" aria-expanded="false"' +
+                (legendPanelId ? ' aria-controls="' + esc(legendPanelId) + '"' : '') +
+                '>Legend</button>' +
+                '</div>' +
+                '<div' +
+                (resultsId ? ' id="' + esc(resultsId) + '"' : '') +
+                ' class="research-graph__find-results" role="listbox" hidden data-prks-role="graph-find-results"></div>' +
+                '<div class="research-graph__status prks-inline-message" role="status" data-prks-role="graph-status"' +
+                (statusMessage ? '' : ' hidden') +
+                '>' +
+                esc(statusMessage) +
+                '</div>' +
+                '<div' +
+                (filtersPanelId ? ' id="' + esc(filtersPanelId) + '"' : '') +
+                ' class="research-graph__aux-panel research-graph__filters-panel" data-prks-role="graph-filters-panel" hidden>' +
+                filtersHtml +
+                '</div>' +
+                '<div' +
+                (legendPanelId ? ' id="' + esc(legendPanelId) + '"' : '') +
+                ' class="research-graph__aux-panel research-graph__legend" data-prks-role="graph-legend-panel" aria-label="Graph legend" hidden>' +
+                legendHtml +
                 '</div>' +
                 body +
                 '</div>'
@@ -1286,10 +1406,12 @@
             const node = nodeById(snapshot, focus);
             if (!node) {
                 statusMessage = 'Requested node is not present in this graph.';
+                renderStatusMessage();
                 renderInspector();
                 return;
             }
             statusMessage = '';
+            renderStatusMessage();
             selectNode(focus);
         }
 
@@ -1396,7 +1518,7 @@
                 filters.people = prevPeople;
                 syncPeopleCheckbox();
                 statusMessage = reloadGraphFailureMessage(e);
-                renderInspector();
+                renderStatusMessage();
                 return false;
             }
         }
@@ -1458,6 +1580,9 @@
             },
             getSelectedEdgeId: function () {
                 return selectedEdgeId;
+            },
+            hasSelection: function () {
+                return !!(selectedId || selectedEdgeId);
             },
         };
         return runtime;
@@ -1536,6 +1661,11 @@
         return null;
     }
 
+    function researchGraphHasInspectorSelection() {
+        const rt = resolveActiveRuntime();
+        return !!(rt && typeof rt.hasSelection === 'function' && rt.hasSelection());
+    }
+
     const api = {
         renderResearchGraph: renderResearchGraph,
         destroyResearchGraph: destroyResearchGraph,
@@ -1543,6 +1673,7 @@
         prksGetResearchGraphDebug: prksGetResearchGraphDebug,
         reloadGraph: reloadGraph,
         peopleRequiredForFocus: peopleRequiredForFocus,
+        prksResearchGraphHasInspectorSelection: researchGraphHasInspectorSelection,
         getSelectedGraphNodeId: function () {
             const rt = resolveActiveRuntime();
             return rt && typeof rt.getSelectedId === 'function' ? rt.getSelectedId() : '';

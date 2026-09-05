@@ -8845,6 +8845,27 @@ button.prks-research-row {
     border-color: var(--accent);
 }
 
+.research-graph__status {
+    margin: 0;
+}
+
+.research-graph__aux-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding-bottom: var(--space-sm);
+    border-bottom: 1px solid var(--border);
+}
+
+.research-graph__filters-panel[hidden],
+.research-graph__legend[hidden] {
+    display: none;
+}
+
+.research-graph__aux-panel.research-graph__legend {
+    flex-direction: row;
+}
+
 .research-graph__filters {
     display: flex;
     flex-wrap: wrap;
@@ -9016,6 +9037,21 @@ button.prks-research-row {
 
 .research-graph__inspector {
     min-width: 0;
+}
+
+.research-graph__inspector-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-sm);
+}
+
+.research-graph__inspector-head .saved-view-detail__kicker {
+    margin: 0;
+}
+
+.research-graph__inspector-close {
+    flex: 0 0 auto;
 }
 
 .research-graph__inspector .card-title {

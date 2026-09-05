@@ -1822,13 +1822,19 @@ function prksRightPanelHasActionableContent(hash) {
     if (_fe('person') && isPersonDetailHash(h)) return true;
     if (_fe('personGroup') && isPersonGroupDetailHash(h)) return true;
     if (_fe('playlist') && (h.startsWith('#/playlists/') || h === '#/playlists')) return true;
-    if (isResearchGraphHash(h)) return true;
+    if (isResearchGraphHash(h)) {
+        return !!(
+            typeof window.prksResearchGraphHasInspectorSelection === 'function' &&
+            window.prksResearchGraphHasInspectorSelection()
+        );
+    }
     return false;
 }
 
 function prksShouldHideRightPanel(hash) {
     const h = hash || '';
     if (h === '#/processing-files') return true;
+    if (isResearchGraphHash(h)) return !prksRightPanelHasActionableContent(h);
     if (prksRightPanelHasActionableContent(h)) return false;
     const mode = inferRightPanelListMode(h);
     return PRKS_RIGHT_PANEL_HIDE_LIST_MODES.has(mode);
@@ -1843,6 +1849,14 @@ function prksApplyRightPanelVisibility(hash) {
     if (hide && document.body.classList.contains('prks-right-panel-open')) {
         prksCloseOverlays();
     }
+}
+
+/** Focused Graph runtime alone controls Graph inspector visibility; refresh after selection changes. */
+function prksRefreshFocusedRightPanelVisibility() {
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const route = ctx && (ctx.lastResolvedRoute || ctx.route);
+    const hash = (route && (route.hash || route.canonicalHash)) || window.location.hash || '';
+    prksApplyRightPanelVisibility(hash);
 }
 
 function renderRouteContextSidebar(mode) {

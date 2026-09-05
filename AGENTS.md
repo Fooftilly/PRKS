@@ -381,6 +381,14 @@ Research Graph.
 The research graph and research-reference index are read-only projections. Their
 presence or absence must never authorize deletion or other canonical mutation.
 
+The global right panel on the Research Graph route is selection-aware, not
+route-aware: it follows the focused Graph runtime's own `hasSelection()`
+(`ctx.getResource('researchGraph')`), never DOM markup and never an unfocused
+Graph tile. Graph filter state (which node/relation types are visible) is
+runtime-only; do not persist it to `localStorage`, workspace persistence,
+`/api/settings`, or the URL. Toggling the graph inspector must never call
+`fit()` or rerun the Cytoscape layout — only a container `resize()`.
+
 ## Client request coordinator
 
 Ordinary first-party `/api` traffic from `frontend/js` uses `prksRequest()`. Do not
