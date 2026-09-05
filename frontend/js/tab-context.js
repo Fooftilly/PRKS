@@ -19,6 +19,7 @@
             personDetailEditing: false,
             personWorksEditing: false,
             personGroupEditing: false,
+            personGroupMembersEditing: false,
             playlistEditing: false,
             playlistRename: {},
             argumentEditing: false,
@@ -33,6 +34,7 @@
         ui.personDetailEditing = false;
         ui.personWorksEditing = false;
         ui.personGroupEditing = false;
+        ui.personGroupMembersEditing = false;
         ui.playlistEditing = false;
         ui.playlistRename = {};
         ui.argumentEditing = false;

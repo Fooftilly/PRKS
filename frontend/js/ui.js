@@ -2555,11 +2555,7 @@ function updatePanelContent(tabId) {
             } else {
                 topHtml = '<p class="meta-row">Group panel unavailable.</p>';
             }
-            const addMemberHtml =
-                typeof renderPersonGroupAddMemberPanelHtml === 'function'
-                    ? renderPersonGroupAddMemberPanelHtml()
-                    : '';
-            panel.innerHTML = '<div class="right-panel-stack">' + topHtml + addMemberHtml + '</div>';
+            panel.innerHTML = '<div class="right-panel-stack">' + topHtml + '</div>';
             if (
                 focusedCtx &&
                 focusedCtx.ui &&
@@ -2567,9 +2563,6 @@ function updatePanelContent(tabId) {
                 typeof mountPersonGroupEditPanel === 'function'
             ) {
                 void mountPersonGroupEditPanel(g);
-            }
-            if (typeof mountPersonGroupAddMemberControls === 'function') {
-                void mountPersonGroupAddMemberControls(g);
             }
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';

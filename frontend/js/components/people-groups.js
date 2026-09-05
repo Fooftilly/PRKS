@@ -127,10 +127,8 @@ function prksGroupTreeIdCssEscape(groupId) {
     return typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(id) : id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function prksGroupTreeHost() {
-    const st = window.__prksGroupLibraryState;
-    if (!st || !st.container) return null;
-    return st.container.querySelector('[data-prks-group-tree-host]');
+function prksGroupTreeHost(root) {
+    return root ? root.querySelector('[data-prks-group-tree-host]') : null;
 }
 
 function prksGroupTreeMetaLabel(node) {
@@ -202,11 +200,15 @@ function prksGroupLibraryExpandToggleInnerHtml() {
     return `<span class="ribbon-btn__icon">${iconHtml}</span>`;
 }
 
-function prksUpdateGroupLibraryExpandToggleBtn() {
-    const st = window.__prksGroupLibraryState;
-    if (!st || !st.container) return;
-    const btn = st.container.querySelector('#prks-group-library-expand-toggle');
+function prksUpdateGroupLibraryExpandToggleBtn(root) {
+    const st = root && root.__prksGroupLibraryState;
+    if (!st) return;
+    const btn = root.querySelector('#prks-group-library-expand-toggle');
     if (!btn) return;
+    const filtering = Boolean(String(st.filterQuery || '').trim());
+    btn.hidden = filtering;
+    btn.disabled = filtering;
+    if (filtering) return;
     const label = prksGroupLibraryExpandToggleLabel(st.groups);
     const allCollapsed = prksGroupTreeAllCollapsed(st.groups);
     if (!btn.querySelector('.ribbon-btn__icon')) {
@@ -218,32 +220,36 @@ function prksUpdateGroupLibraryExpandToggleBtn() {
     btn.setAttribute('title', label);
 }
 
-function prksToggleAllGroupNodes() {
-    const st = window.__prksGroupLibraryState;
-    if (!st || !Array.isArray(st.groups)) return;
+function prksToggleAllGroupNodes(control) {
+    const root = control && control.closest ? control.closest('.prks-group-library') : null;
+    const st = root && root.__prksGroupLibraryState;
+    if (!st || !Array.isArray(st.groups) || String(st.filterQuery || '').trim()) return;
     const allCollapsed = prksGroupTreeAllCollapsed(st.groups);
     prksSetAllGroupNodesCollapsed(st.groups, !allCollapsed);
-    const host = prksGroupTreeHost();
+    const host = prksGroupTreeHost(root);
     if (host) {
         prksSyncAllGroupTreeBranchesUi(host, st.groups);
-        prksUpdateGroupLibraryExpandToggleBtn();
+        prksUpdateGroupLibraryExpandToggleBtn(root);
     } else {
-        prksRerenderGroupTreeOnly();
+        prksRerenderGroupTreeOnly(root);
     }
 }
 
-function prksToggleGroupNode(groupId) {
+function prksToggleGroupNode(groupId, control) {
+    const root = control && control.closest ? control.closest('.prks-group-library') : null;
+    const st = root && root.__prksGroupLibraryState;
+    if (!st || String(st.filterQuery || '').trim()) return;
     const idRaw = String(groupId || '').trim();
     const id = idRaw ? decodeURIComponent(idRaw) : '';
     if (!id) return;
     prksSetGroupNodeCollapsed(id, !prksGroupNodeCollapsed(id));
     const collapsed = prksGroupNodeCollapsed(id);
-    const host = prksGroupTreeHost();
+    const host = prksGroupTreeHost(root);
     if (host) {
         prksSyncGroupTreeBranchUi(host, id, collapsed);
-        prksUpdateGroupLibraryExpandToggleBtn();
+        prksUpdateGroupLibraryExpandToggleBtn(root);
     } else {
-        prksRerenderGroupTreeOnly();
+        prksRerenderGroupTreeOnly(root);
     }
 }
 
@@ -288,20 +294,20 @@ function prksGroupTreeEmptySearchHtml() {
 
 function prksGroupLibraryTreeInnerHtml(list, filterQuery) {
     if (!list || !list.length) {
-        return '<p class="prks-inline-message prks-group-tree__empty">No groups yet. Use <strong>New group</strong> in the ribbon or open a group from a person’s profile.</p>';
+        return '<div class="prks-group-library__empty-state"><p class="prks-inline-message prks-group-tree__empty">No Person Groups yet.</p><button type="button" class="prks-btn prks-btn--primary" onclick="openModal(\'group-modal\')">New Group</button></div>';
     }
     return `<div class="prks-group-tree" role="tree">${renderGroupTreeRoots(list, { filterQuery })}</div>`;
 }
 
-function prksRerenderGroupTreeOnly() {
-    const st = window.__prksGroupLibraryState;
-    if (!st || !st.container) return;
-    const host = st.container.querySelector('[data-prks-group-tree-host]');
+function prksRerenderGroupTreeOnly(root) {
+    const st = root && root.__prksGroupLibraryState;
+    if (!st) return;
+    const host = root.querySelector('[data-prks-group-tree-host]');
     if (host) {
         host.innerHTML = prksGroupLibraryTreeInnerHtml(st.groups, st.filterQuery);
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
     }
-    prksUpdateGroupLibraryExpandToggleBtn();
+    prksUpdateGroupLibraryExpandToggleBtn(root);
 }
 
 function prksSyncGroupLibrarySearchClear(input, clearBtn) {
@@ -312,7 +318,8 @@ function prksSyncGroupLibrarySearchClear(input, clearBtn) {
 }
 
 function prksApplyGroupLibrarySearchFilter(input) {
-    const st = window.__prksGroupLibraryState;
+    const root = input && input.closest('.prks-group-library');
+    const st = root && root.__prksGroupLibraryState;
     if (!st || !input) return;
     const q = String(input.value || '');
     st.filterQuery = q;
@@ -321,7 +328,7 @@ function prksApplyGroupLibrarySearchFilter(input) {
     } catch (_e) {
         /* ignore */
     }
-    prksRerenderGroupTreeOnly();
+    prksRerenderGroupTreeOnly(root);
 }
 
 function prksBindGroupLibrarySearch(root) {
@@ -394,9 +401,11 @@ function renderGroupTreeRoots(groups, options = {}) {
         const nodeIdAttr = escapeHtmlGroup(String(node.id || ''));
         const collapsedClass = collapsed ? ' is-collapsed' : '';
         const toggleHtml = hasChildren
-            ? `<button type="button" class="prks-group-tree__toggle" aria-expanded="${expanded ? 'true' : 'false'}" title="${
+            ? filtering
+                ? '<span class="prks-group-tree__toggle-spacer" aria-hidden="true"></span>'
+                : `<button type="button" class="prks-group-tree__toggle" aria-expanded="${expanded ? 'true' : 'false'}" title="${
                   collapsed ? 'Expand subgroups' : 'Collapse subgroups'
-              }" onclick="event.preventDefault(); event.stopPropagation(); prksToggleGroupNode('${gidEnc}');">${
+              }" onclick="event.preventDefault(); event.stopPropagation(); prksToggleGroupNode('${gidEnc}', this);">${
                   typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 14 }) : '▸'
               }</button>`
             : '<span class="prks-group-tree__toggle-spacer" aria-hidden="true"></span>';
@@ -432,13 +441,14 @@ function renderPersonGroupsPage(groups, container) {
     const list = Array.isArray(groups) ? groups : [];
     const filterQuery = prksGroupLibraryFilterFromStorage();
     const filterEsc = escapeHtmlGroup(filterQuery);
+    const filtering = Boolean(String(filterQuery || '').trim());
     const hasCollapsible = prksGroupTreeHasCollapsibleNodes(list);
     const expandToggleLabel = prksGroupLibraryExpandToggleLabel(list);
     const expandToggleInner = prksGroupLibraryExpandToggleInnerHtml();
     const expandToggleCollapseAll = !prksGroupTreeAllCollapsed(list);
     const toolbarActions = hasCollapsible
         ? `<div class="prks-group-library__toolbar-actions">
-            <button type="button" id="prks-group-library-expand-toggle" class="prks-btn prks-btn--secondary prks-group-library__toolbar-btn${expandToggleCollapseAll ? ' is-collapse-all' : ''}" aria-label="${escapeHtmlGroup(expandToggleLabel)}" title="${escapeHtmlGroup(expandToggleLabel)}">${expandToggleInner}</button>
+            <button type="button" id="prks-group-library-expand-toggle" class="prks-btn prks-btn--secondary prks-group-library__toolbar-btn${expandToggleCollapseAll ? ' is-collapse-all' : ''}" aria-label="${escapeHtmlGroup(expandToggleLabel)}" title="${escapeHtmlGroup(expandToggleLabel)}"${filtering ? ' hidden disabled' : ''}>${expandToggleInner}</button>
            </div>`
         : '';
     const searchToolbar =
@@ -457,7 +467,7 @@ function renderPersonGroupsPage(groups, container) {
     const treeHost =
         list.length > 0
             ? `<div class="prks-group-library__scroll" data-prks-group-tree-host>${prksGroupLibraryTreeInnerHtml(list, filterQuery)}</div>`
-            : '<p class="meta-row prks-group-library__empty">No groups yet. Use <strong>New group</strong> in the ribbon or open a group from a person’s profile.</p>';
+            : '<div class="prks-group-library__empty-state"><p class="prks-inline-message prks-group-library__empty">No Person Groups yet.</p><button type="button" class="prks-btn prks-btn--primary" onclick="openModal(\'group-modal\')">New Group</button></div>';
 
     container.innerHTML = `
         <div class="prks-group-library">
@@ -465,19 +475,19 @@ function renderPersonGroupsPage(groups, container) {
             <h2 class="prks-page-title">People groups</h2>
             <button type="button" class="prks-btn prks-btn--secondary" onclick="openModal('group-modal')">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New group</button>
         </div>
-        <p class="meta-row prks-group-library__intro">Organize people under hierarchical groups (e.g. <em>Philosophy</em> → <em>Frankfurt School</em>). Group names are unique. A person can belong to several groups.</p>
+        <p class="meta-row prks-group-library__intro">Organize people into hierarchical groups. A person can belong to multiple groups.</p>
         ${searchToolbar}
         ${treeHost}
         </div>`;
 
-    window.__prksGroupLibraryState = { groups: list, container, filterQuery };
     const root = container.querySelector('.prks-group-library');
     if (root) {
+        root.__prksGroupLibraryState = { groups: list, container, filterQuery };
         prksBindGroupLibrarySearch(root);
         const expandToggle = root.querySelector('#prks-group-library-expand-toggle');
         if (expandToggle && expandToggle.dataset.bound !== '1') {
             expandToggle.dataset.bound = '1';
-            expandToggle.addEventListener('click', () => prksToggleAllGroupNodes());
+            expandToggle.addEventListener('click', () => prksToggleAllGroupNodes(expandToggle));
         }
     }
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
@@ -495,10 +505,11 @@ function prksCollectDescendantIds(groupId, allList) {
     return out;
 }
 
-function renderPersonGroupSubgroupsListHtml(g) {
+function renderPersonGroupSubgroupsListHtml(g, options = {}) {
     if (!g.children || g.children.length === 0) return '';
+    const className = options.main ? 'group-detail__relationship-list' : 'group-sidebar__subgroup-list';
     let subHtml =
-        '<h4 class="group-sidebar__subheading">Subgroups</h4><ul class="person-link-list group-sidebar__subgroup-list">';
+        `<ul class="person-link-list ${className}">`;
     g.children.forEach((ch) => {
         subHtml += `<li><a href="#/people/groups/${escapeHtmlGroup(ch.id)}" class="route-sidebar__link">${escapeHtmlGroup(ch.name)}</a></li>`;
     });
@@ -509,20 +520,15 @@ function renderPersonGroupSubgroupsListHtml(g) {
 function renderPersonGroupSummarySidebarHtml(g) {
     const nMem = Array.isArray(g.members) ? g.members.length : 0;
     const nSub = Array.isArray(g.children) ? g.children.length : 0;
-    const bits = [];
-    if (nMem) bits.push(`${nMem} member${nMem === 1 ? '' : 's'}`);
-    if (nSub) bits.push(`${nSub} subgroup${nSub === 1 ? '' : 's'}`);
-    const meta = bits.length ? `<p class="group-sidebar__meta">${escapeHtmlGroup(bits.join(' · '))}</p>` : '';
-    const parentLine = g.parent
-        ? `<p class="meta-row meta-row--tight">Parent: <a href="#/people/groups/${escapeHtmlGroup(g.parent.id)}" class="route-sidebar__link">${escapeHtmlGroup(g.parent.name)}</a></p>`
-        : '<p class="meta-row meta-row--tight">Top-level group</p>';
     return `
         <div class="group-sidebar-pane">
-            <h3 class="group-sidebar__title">${escapeHtmlGroup(g.name)}</h3>
-            ${meta}
-            ${parentLine}
-            ${renderPersonGroupSubgroupsListHtml(g)}
+            <p class="saved-view-detail__kicker">Group</p>
+            <ul class="person-sidebar__stats">
+                <li>${nMem} member${nMem === 1 ? '' : 's'}</li>
+                <li>${nSub} subgroup${nSub === 1 ? '' : 's'}</li>
+            </ul>
             <button type="button" class="prks-btn prks-btn--primary group-sidebar__primary-btn" onclick="openPersonGroupEdit()">Edit group</button>
+            <p class="route-sidebar__action"><a href="#/people/groups" class="route-sidebar__link">All groups</a></p>
         </div>`;
 }
 
@@ -530,48 +536,36 @@ function renderPersonGroupEditSidebarHtml(g) {
     const parentSearchPlaceholder = 'Search or type a new parent name…';
     return `
         <div class="group-sidebar-pane group-sidebar-pane--edit">
-            <div class="group-sidebar-edit-header">
-                <h3 class="group-sidebar__title">Edit group</h3>
-                <button type="button" class="group-sidebar__cancel" onclick="closePersonGroupEdit()">Cancel</button>
-            </div>
+            <h3 class="group-sidebar__title">Edit group</h3>
             <div class="form-pane group-sidebar-form">
-                <label for="gd-name">Name</label>
-                <input type="text" id="gd-name" value="${escapeHtmlGroup(g.name)}">
-                <div class="group-sidebar__label-with-hint">
-                    <label for="gd-parent-search" class="group-sidebar__label-text">Parent group</label>
-                    ${prksHintBtnHtml('group-edit-parent', 'About parent group', 'group-sidebar__hint-btn')}
-                </div>
-                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
-                    <div class="tag-add-shell__field">
-                        ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
-                        <input type="text" id="gd-parent-search" class="tag-add-shell__input" placeholder="${escapeHtmlGroup(parentSearchPlaceholder)}" autocomplete="off" aria-label="Search parent group">
-                    </div>
-                    <input type="hidden" id="gd-parent-id" value="">
-                    <div id="gd-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-                </div>
-                <label for="gd-description">Description</label>
-                <textarea id="gd-description" class="prks-textarea prks-textarea--short">${escapeHtmlGroup(g.description || '')}</textarea>
-                <div class="group-sidebar__actions">
-                    <button type="button" class="prks-btn prks-btn--primary" id="gd-save-btn">Save changes</button>
-                    <button type="button" class="prks-btn prks-btn--secondary group-sidebar__delete" id="gd-delete-btn">Delete group</button>
-                </div>
+                <section class="group-sidebar-form__section"><h4>Identity</h4><label for="gd-name">Name</label><input type="text" id="gd-name" value="${escapeHtmlGroup(g.name)}"></section>
+                <section class="group-sidebar-form__section"><h4>Hierarchy</h4><div class="group-sidebar__label-with-hint"><label for="gd-parent-search" class="group-sidebar__label-text">Parent group</label>${prksHintBtnHtml('group-edit-parent', 'About parent group', 'group-sidebar__hint-btn')}</div>
+                    <p class="meta-row">Choose an existing Group, leave blank for top-level, or type a new name to create a parent when saving.</p>
+                    <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell"><div class="tag-add-shell__field">${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}<input type="text" id="gd-parent-search" class="tag-add-shell__input" placeholder="${escapeHtmlGroup(parentSearchPlaceholder)}" autocomplete="off" aria-label="Search parent group"></div><input type="hidden" id="gd-parent-id" value=""><div id="gd-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div></div></section>
+                <section class="group-sidebar-form__section"><h4>Description</h4><label for="gd-description" class="sr-only">Description</label><textarea id="gd-description" class="prks-textarea prks-textarea--short">${escapeHtmlGroup(g.description || '')}</textarea></section>
             </div>
-            ${renderPersonGroupSubgroupsListHtml(g)}
+            <div class="form-actions prks-form-actions--split group-sidebar__sticky-actions"><button type="button" class="prks-btn prks-btn--secondary" onclick="closePersonGroupEdit()">Cancel</button><button type="button" class="prks-btn prks-btn--primary" id="gd-save-btn">Save changes</button></div>
+            <details class="group-sidebar__advanced"><summary>Advanced</summary><button type="button" class="prks-btn prks-btn--danger group-sidebar__delete" id="gd-delete-btn">Delete group</button></details>
         </div>`;
 }
 
 function prksSyncPersonGroupMemberEditUi(ownerCtx) {
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    const editing = !!(ctx && ctx.ui && ctx.ui.personGroupEditing);
+    const editing = !!(ctx && ctx.ui && ctx.ui.personGroupMembersEditing);
     const view =
         (ctx && ctx.query ? ctx.query('.document-view--group-detail') : null) ||
         document.querySelector('.document-view--group-detail');
-    if (view) view.classList.toggle('is-group-editing', editing);
+    if (view) view.classList.toggle('is-group-members-editing', editing);
 }
 
 function openPersonGroupEdit() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    if (ctx && ctx.ui) ctx.ui.personGroupEditing = true;
+    if (ctx && ctx.ui) {
+        ctx.ui.personGroupMembersEditing = false;
+        ctx.ui.personGroupEditing = true;
+    }
+    const g = ctx && ctx.getEntity ? ctx.getEntity('personGroup') : null;
+    if (ctx && ctx.root && g) renderPersonGroupDetail(g, ctx.root);
     prksSyncPersonGroupMemberEditUi(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
@@ -585,6 +579,17 @@ function closePersonGroupEdit() {
 
 window.openPersonGroupEdit = openPersonGroupEdit;
 window.closePersonGroupEdit = closePersonGroupEdit;
+
+function prksTogglePersonGroupMembersEdit() {
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const g = ctx && ctx.getEntity ? ctx.getEntity('personGroup') : null;
+    if (!ctx || !g) return;
+    ctx.ui.personGroupEditing = false;
+    ctx.ui.personGroupMembersEditing = !ctx.ui.personGroupMembersEditing;
+    if (ctx.root) renderPersonGroupDetail(g, ctx.root);
+    if (typeof updatePanelContent === 'function') updatePanelContent('details');
+}
+window.prksTogglePersonGroupMembersEdit = prksTogglePersonGroupMembersEdit;
 
 function prksNavigateIfOwnerFocused(ownerCtx, hash, expectedGroupId) {
     if (!ownerCtx || ownerCtx.destroyed) return;
@@ -648,7 +653,10 @@ async function mountPersonGroupEditPanel(g) {
                     await prksAlertMessage(data.error || 'Could not save group.', 'Could not save');
                     return;
                 }
-                if (saveCtx && saveCtx.ui) saveCtx.ui.personGroupEditing = false;
+                if (saveCtx && saveCtx.ui) {
+                    saveCtx.ui.personGroupEditing = false;
+                    saveCtx.ui.personGroupMembersEditing = false;
+                }
                 prksNavigateIfOwnerFocused(
                     saveCtx,
                     '#/people/groups/' + encodeURIComponent(g.id),
@@ -690,11 +698,11 @@ async function mountPersonGroupEditPanel(g) {
     }
 }
 
-function mountPersonGroupMemberRemoveButtons(g) {
-    document.querySelectorAll('[data-remove-member]').forEach((btn) => {
+function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
+    const buttons = ownerCtx && ownerCtx.queryAll ? ownerCtx.queryAll('[data-remove-member]') : [];
+    buttons.forEach((btn) => {
         btn.addEventListener('click', async (ev) => {
             ev.stopPropagation();
-            const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
             const pid = btn.getAttribute('data-remove-member');
             if (!pid) return;
             const member = (g.members || []).find((m) => String(m.id) === String(pid));
@@ -731,21 +739,22 @@ function mountPersonGroupMemberRemoveButtons(g) {
     });
 }
 
-/** Right-panel “Add person” combobox; call after panel HTML includes #group-add-member-search. */
-async function mountPersonGroupAddMemberControls(g) {
-    const input = document.getElementById('group-add-member-search');
+/** Members-section searchable Person combobox. */
+async function mountPersonGroupAddMemberControls(g, ownerCtx) {
+    const input = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-search') : null;
     if (!input) return;
 
     allPersons = await fetchPersons();
+    if (ownerCtx && ownerCtx.isCurrent && !ownerCtx.isCurrent(ownerCtx.generation)) return;
     const memberIds = new Set((g.members || []).map((m) => String(m.id)));
     initSearchableCombobox('group-add-member-search', 'group-add-member-results', 'group-add-member-id', 'person', {
         excludePersonIds: memberIds,
     });
-    const addBtn = document.getElementById('group-add-member-btn');
+    const addBtn = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-btn') : null;
     if (addBtn) {
         addBtn.onclick = async () => {
-            const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-            const pid = document.getElementById('group-add-member-id').value;
+            const idInput = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-id') : null;
+            const pid = idInput ? idInput.value : '';
             if (!pid) {
                 await prksAlertMessage('Choose a person from the search list.', 'Validation');
                 return;
@@ -776,8 +785,8 @@ async function mountPersonGroupAddMemberControls(g) {
 
 function renderPersonGroupAddMemberPanelHtml() {
     return `
-        <div class="group-sidebar-pane group-sidebar-pane--add-member">
-            <p class="tag-add-field__caption group-sidebar-pane--add-member__caption">Add a person</p>
+        <div class="group-detail__member-add">
+            <p class="tag-add-field__caption">Add a person</p>
             <div class="tag-add-shell combobox-container">
                 <input type="hidden" id="group-add-member-id" value="">
                 <div class="tag-add-shell__field">
@@ -786,22 +795,32 @@ function renderPersonGroupAddMemberPanelHtml() {
                 </div>
                 <div id="group-add-member-results" class="combobox-results combobox-results--tag-panel hidden"></div>
             </div>
-            <button type="button" class="prks-btn prks-btn--primary group-sidebar-pane--add-member__btn" id="group-add-member-btn">Add to group</button>
+            <button type="button" class="prks-btn prks-btn--primary" id="group-add-member-btn">Add to group</button>
         </div>`;
 }
 
 function renderPersonGroupDetail(group, container) {
     const g = group;
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const membersEditing = !!(ctx && ctx.ui && ctx.ui.personGroupMembersEditing);
     const parentLink = g.parent
-        ? `<a href="#/people/groups/${escapeHtmlGroup(g.parent.id)}" class="route-sidebar__link">${escapeHtmlGroup(g.parent.name)}</a>`
+        ? `<a href="#/people/groups/${encodeURIComponent(String(g.parent.id || ''))}" class="route-sidebar__link">${escapeHtmlGroup(g.parent.name)}</a>`
         : '';
     const breadcrumb = `
         <p class="meta-row meta-row--lede">
             <a href="#/people/groups" class="route-sidebar__link">All groups</a>
-            ${g.parent ? ` · ${parentLink}` : ''}
+            ${g.parent ? ` <span aria-hidden="true">›</span> ${parentLink}` : ''}
         </p>`;
-
-    let membersHtml = `<h3 class="prks-section-kicker">Members</h3>`;
+    const description = String(g.description || '').trim();
+    const children = Array.isArray(g.children) ? g.children : [];
+    const hierarchyHtml = `
+        <section class="group-detail__section" aria-labelledby="group-hierarchy-heading">
+            <h3 id="group-hierarchy-heading">Hierarchy</h3>
+            <div class="group-detail__relationship"><span>Parent</span><span>${parentLink || 'Top-level group'}</span></div>
+            <div class="group-detail__relationship"><span>Subgroups · ${children.length}</span>${children.length ? renderPersonGroupSubgroupsListHtml(g, { main: true }) : '<span class="meta-row">No subgroups.</span>'}</div>
+        </section>`;
+    let membersHtml = `<section class="group-detail__section group-detail__members" aria-labelledby="group-members-heading"><div class="group-detail__section-head"><h3 id="group-members-heading">Members</h3><span class="group-detail__count">${Array.isArray(g.members) ? g.members.length : 0}</span><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksTogglePersonGroupMembersEdit()">${membersEditing ? 'Done' : 'Manage members'}</button></div>`;
+    if (membersEditing) membersHtml += renderPersonGroupAddMemberPanelHtml();
 
     if (g.members && g.members.length > 0) {
         const rowFn =
@@ -814,7 +833,7 @@ function renderPersonGroupDetail(group, container) {
             '<div class="prks-people-library__scroll prks-people-library__scroll--embedded" data-prks-group-members-host><div class="prks-people-list" role="list">';
         g.members.forEach((p) => {
             if (rowFn) {
-                membersHtml += rowFn(p, { showGroups: false, removeButton: true });
+                membersHtml += rowFn(p, { showGroups: false, removeButton: membersEditing });
             } else {
                 const pid = escapeHtmlGroup(p.id);
                 membersHtml += `<div class="prks-people-list__row"><a href="#/people/${pid}">${escapeHtmlGroup(`${p.first_name || ''} ${p.last_name || ''}`.trim())}</a></div>`;
@@ -824,6 +843,7 @@ function renderPersonGroupDetail(group, container) {
     } else {
         membersHtml += '<p class="meta-row">No members in this group yet.</p>';
     }
+    membersHtml += '</section>';
 
     container.innerHTML = `
         <div class="prks-page-header page-header page-header--split">
@@ -832,12 +852,17 @@ function renderPersonGroupDetail(group, container) {
         ${breadcrumb}
         <div class="document-view document-view--person document-view--group-detail">
             <div class="doc-content">
+                <section class="group-detail__section" aria-labelledby="group-description-heading"><h3 id="group-description-heading">Description</h3><p class="group-detail__description">${description ? escapeHtmlGroup(description) : 'No description yet.'}</p></section>
+                ${hierarchyHtml}
                 ${membersHtml}
             </div>
         </div>`;
 
-    mountPersonGroupMemberRemoveButtons(g);
-    prksSyncPersonGroupMemberEditUi();
+    if (membersEditing) {
+        mountPersonGroupMemberRemoveButtons(g, ctx);
+        void mountPersonGroupAddMemberControls(g, ctx);
+    }
+    prksSyncPersonGroupMemberEditUi(ctx);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 

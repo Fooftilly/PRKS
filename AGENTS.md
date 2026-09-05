@@ -263,6 +263,11 @@ People-library search runtime belongs to rendered `.prks-people-library` root
 Rerender only that root. SessionStorage preserves shared query preference; it is not
 workspace persistence or route state.
 
+Group-library runtime likewise belongs to rendered `.prks-group-library` root, never
+a route-scoped `window` singleton. `personGroupEditing` and
+`personGroupMembersEditing` are mutually exclusive TabContext UI modes: metadata
+editing owns the right panel; membership management owns the Members section.
+
 Stacked mode: one mounted context. Tiled mode: Main + every visible Secondary leaf (up to the visible-pane cap), each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
 is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
 

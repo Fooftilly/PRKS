@@ -1698,6 +1698,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 } else {
                     ctx.setEntity('personGroup', group);
                     ctx.ui.personGroupEditing = false;
+                    ctx.ui.personGroupMembersEditing = false;
                     publishSidebar({
                         groupName: group.name,
                         memberCount: Array.isArray(group.members) ? group.members.length : 0,

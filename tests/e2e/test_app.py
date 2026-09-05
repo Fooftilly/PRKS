@@ -338,6 +338,65 @@ class PeopleSearchEmptyRoleTests(_BrowserE2E):
         self.assertEqual(page.evaluate("() => sessionStorage.getItem('prks-people-library-filter')"), "E2E")
 
 
+class PersonGroupPolishTests(_BrowserE2E):
+    def test_group_detail_separates_metadata_from_membership_management(self):
+        server, page, _collector = self._start_app()
+        page.evaluate("() => window.prksNavigate('#/people/groups')")
+        page.wait_for_function("() => location.hash === '#/people/groups'")
+        page.locator(".prks-group-library__empty-state .prks-btn", has_text="New Group").click()
+        page.locator("#group-modal:not(.hidden)").wait_for()
+        page.fill("#group-name", "E2E Group Polish")
+        page.fill("#group-description", "A rendered Group description.")
+        page.locator("#save-group-btn").click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/groups/') === 0")
+        page.locator("#group-description-heading", has_text="Description").wait_for()
+        page.locator(".group-detail__description", has_text="A rendered Group description.").wait_for()
+        self.assertEqual(page.locator("#group-add-member-search").count(), 0)
+        self.assertEqual(page.locator("[data-remove-member]").count(), 0)
+
+        page.locator("#panel-content button", has_text="Edit group").click()
+        page.locator("#gd-name").wait_for()
+        self.assertEqual(page.locator("[data-remove-member]").count(), 0)
+        self.assertEqual(page.locator("#group-add-member-search").count(), 0)
+        page.locator(".group-sidebar__sticky-actions button", has_text="Cancel").click()
+
+        page.locator(".group-detail__section-head button", has_text="Manage members").click()
+        page.locator("#group-add-member-search").wait_for()
+        self.assertEqual(page.locator("#gd-name").count(), 0)
+        member_posts = []
+        member_deletes = []
+
+        def on_request(req):
+            if req.method == "POST" and "/members" in urlparse(req.url).path:
+                member_posts.append(req.url)
+            if req.method == "DELETE" and "/members/" in urlparse(req.url).path:
+                member_deletes.append(req.url)
+
+        page.on("request", on_request)
+        page.locator("#group-add-member-search").fill(PERSON_DISPLAY)
+        page.locator("#group-add-member-results .result-item--person-pick").click()
+        page.locator("#group-add-member-btn").click()
+        page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).wait_for()
+        self.assertEqual(len(member_posts), 1)
+        self.assertEqual(page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).count(), 1)
+
+        page.locator(".group-detail__section-head button", has_text="Manage members").click()
+        page.locator("[data-remove-member]").click()
+        page.locator("#prks-modal-confirm", has_text="person profile is not deleted").wait_for()
+        page.locator("#prks-modal-confirm-cancel").click()
+        self.assertEqual(page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).count(), 1)
+        page.locator(".group-detail__section-head button", has_text="Done").click()
+        self.assertEqual(page.locator("#group-add-member-search").count(), 0)
+        page.locator(".group-detail__section-head button", has_text="Manage members").click()
+        page.locator("[data-remove-member]").click()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).wait_for(state="detached")
+        self.assertEqual(len(member_deletes), 1)
+        page.evaluate("id => window.prksNavigate('#/people/' + id)", server.ids["person"])
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.locator("h2", has_text=PERSON_DISPLAY).wait_for()
+
+
 class ResearchGraphContextTests(_BrowserE2E):
     def test_node_selection_dims_without_mass_edge_labels(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
