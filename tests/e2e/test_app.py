@@ -512,6 +512,272 @@ class ResearchGraphChromeTests(_BrowserE2E):
             "() => document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
         )
 
+    def _first_argument_source_edge_id(self, page):
+        edge_id = page.evaluate(
+            """() => {
+                const d = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();
+                const cy = d && d.cy;
+                const hit = cy ? cy.edges().filter(function (e) {
+                    return e.data('type') === 'argument_source';
+                })[0] : null;
+                return hit ? hit.id() : null;
+            }"""
+        )
+        self.assertIsNotNone(edge_id, "fixture must seed an argument_source edge")
+        return edge_id
+
+    def test_relation_filter_hiding_selected_edge_clears_selection(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        self._open_graph(page)
+        edge_id = self._first_argument_source_edge_id(page)
+
+        page.evaluate("(eid) => { window.selectGraphEdge(eid); }", arg=edge_id)
+        page.locator("#prks-graph-inspector-title", has_text="Made/taken in").wait_for()
+        page.wait_for_function(
+            "() => !document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+        )
+
+        page.locator('[data-prks-role="graph-filters-toggle"]').click()
+        page.locator('[data-graph-filter="sources"]').uncheck()
+
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphEdgeId()"), "")
+        self.assertEqual(page.locator("#prks-graph-inspector").inner_text().strip(), "")
+        page.wait_for_function(
+            "() => document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+        )
+        self.assertEqual(page.evaluate("() => location.hash.indexOf('#/graph')"), 0)
+
+        # Re-enabling the relation filter must not resurrect the cleared selection.
+        page.locator('[data-graph-filter="sources"]').check()
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphEdgeId()"), "")
+        self.assertTrue(
+            page.evaluate(
+                "() => document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+            )
+        )
+
+    def test_node_filter_hiding_edge_endpoint_clears_selection(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        self._open_graph(page)
+        edge_id = self._first_argument_source_edge_id(page)
+
+        page.evaluate("(eid) => { window.selectGraphEdge(eid); }", arg=edge_id)
+        page.locator("#prks-graph-inspector-title").wait_for()
+
+        page.locator('[data-prks-role="graph-filters-toggle"]').click()
+        page.locator('[data-graph-filter="works"]').uncheck()
+
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphEdgeId()"), "")
+        self.assertEqual(page.locator("#prks-graph-inspector").inner_text().strip(), "")
+        page.wait_for_function(
+            "() => document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+        )
+
+    def test_filters_toggle_keyboard_escape_closes_and_keeps_focus(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        self._open_graph(page)
+        filters_btn = page.locator('[data-prks-role="graph-filters-toggle"]')
+        filters_panel = page.locator('[data-prks-role="graph-filters-panel"]')
+
+        filters_btn.focus()
+        page.keyboard.press("Enter")
+        self.assertTrue(filters_panel.is_visible())
+        self.assertEqual(
+            page.evaluate(
+                "() => document.activeElement && document.activeElement.getAttribute('data-prks-role')"
+            ),
+            "graph-filters-toggle",
+        )
+        before_node = page.evaluate("() => window.getSelectedGraphNodeId()")
+        before_edge = page.evaluate("() => window.getSelectedGraphEdgeId()")
+
+        page.keyboard.press("Escape")
+        self.assertFalse(filters_panel.is_visible())
+        self.assertEqual(
+            page.evaluate(
+                "() => document.activeElement && document.activeElement.getAttribute('data-prks-role')"
+            ),
+            "graph-filters-toggle",
+        )
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), before_node)
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphEdgeId()"), before_edge)
+
+    def test_legend_keyboard_escape_closes_with_no_focusable_content(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        self._open_graph(page)
+        legend_btn = page.locator('[data-prks-role="graph-legend-toggle"]')
+        legend_panel = page.locator('[data-prks-role="graph-legend-panel"]')
+
+        legend_btn.focus()
+        page.keyboard.press("Enter")
+        self.assertTrue(legend_panel.is_visible())
+
+        # Legend has no focusable content of its own -- focus stays on the toggle.
+        page.keyboard.press("Escape")
+        self.assertFalse(legend_panel.is_visible())
+        self.assertEqual(
+            page.evaluate(
+                "() => document.activeElement && document.activeElement.getAttribute('data-prks-role')"
+            ),
+            "graph-legend-toggle",
+        )
+
+    def test_find_escape_clears_query_without_touching_selection_or_panels(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_id = server.ids["work_a"]
+        self._open_graph(page)
+        work_node = "work:" + work_id
+        page.evaluate("(wid) => { window.selectGraphNode(wid, { center: false }); }", arg=work_node)
+        page.locator("#prks-graph-inspector-title").wait_for()
+
+        find_input = page.locator('[data-prks-role="graph-find"]')
+        find_input.fill("Culture")
+        page.locator(".research-graph__find-hit").first.wait_for()
+        find_input.press("Escape")
+        self.assertEqual(find_input.input_value(), "")
+        self.assertFalse(page.locator(".research-graph__find-hit").first.is_visible())
+        # Find owns its own Escape semantics -- it must not disturb graph selection.
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), work_node)
+        page.locator("#prks-graph-inspector-title").wait_for()
+
+    def test_mobile_selection_does_not_auto_open_overlay(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_id = server.ids["work_a"]
+        page.evaluate("() => document.documentElement.classList.add('prks-force-mobile')")
+        # The nav sidebar is a closed drawer in forced-mobile layout, so navigate directly
+        # instead of clicking through it (as _open_graph does).
+        page.evaluate("() => window.prksNavigate('#/graph')")
+        page.wait_for_function("() => location.hash === '#/graph' || location.hash.indexOf('#/graph?') === 0")
+        page.wait_for_function(_GRAPH_HAS_NODES)
+        work_node = "work:" + work_id
+        page.evaluate("(wid) => { window.selectGraphNode(wid, { center: false }); }", arg=work_node)
+        page.locator("#prks-graph-inspector-title").wait_for()
+
+        self.assertFalse(page.evaluate("() => document.body.classList.contains('prks-right-panel-open')"))
+        details_btn = page.locator("#prks-mobile-details-btn")
+        self.assertTrue(details_btn.is_visible())
+
+        details_btn.click()
+        self.assertTrue(page.evaluate("() => document.body.classList.contains('prks-right-panel-open')"))
+        page.locator("#prks-graph-inspector-title").wait_for()
+
+
+class ResearchGraphSplitWorkspaceTests(_BrowserE2E):
+    def test_focus_switch_preserves_graph_selection_and_right_panel_ownership(self):
+        """`research-graph` is not in navigation.js's PRKS_TILE_ROUTE_NAMES, so today the Graph
+        can only ever be Main -- it cannot be split into a Secondary tile (prksNavigate/
+        prksWorkspaceSplitLeaf both decline via routeSupportsTile()). That's a pre-existing,
+        unrelated restriction, not something this pass touches. This regression instead puts
+        the Graph on Main and Work A on Secondary, which exercises the identical mechanism this
+        polish pass actually owns -- focused-TabContext right-panel ownership, and an unfocused
+        Graph runtime retaining its own selection without remount/refetch."""
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_a = server.ids["work_a"]
+
+        seen_graph_requests = []
+
+        def on_request(req):
+            if req.method == "GET" and urlparse(req.url).path == "/api/research-graph":
+                seen_graph_requests.append(req.url)
+
+        page.on("request", on_request)
+
+        page.evaluate("() => window.prksNavigate('#/graph')")
+        page.wait_for_function("() => location.hash === '#/graph' || location.hash.indexOf('#/graph?') === 0")
+        page.wait_for_function(_GRAPH_HAS_NODES)
+        self.assertEqual(len(seen_graph_requests), 1)
+
+        graph_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        node_id = page.evaluate(
+            """(tid) => {
+                const ctx = window.prksGetTabContext(tid);
+                const cy = ctx.getResource('researchGraph').debug().cy;
+                return cy.nodes()[0].id();
+            }""",
+            arg=graph_id,
+        )
+
+        # Split Work A into Secondary; opening a new pane focuses it.
+        page.evaluate("(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })", arg=work_a)
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return !!(
+                    snap && snap.mode === 'tiled' &&
+                    snap.secondaryTree && snap.secondaryTree.type === 'leaf' &&
+                    snap.focusedTabId === snap.secondaryTree.tabId
+                );
+            }"""
+        )
+        work_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        self.assertEqual(page.evaluate("() => location.hash"), "#/graph")
+
+        # Focus Graph (Main) and select a deterministic node.
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=graph_id)
+        page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=graph_id)
+        page.evaluate("(nid) => { window.selectGraphNode(nid, { center: false }); }", arg=node_id)
+        page.locator("#prks-graph-inspector-title").wait_for()
+        page.wait_for_function(
+            "() => !document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+        )
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), node_id)
+
+        # Stash the live Cytoscape instance identity to prove no remount happens later.
+        page.evaluate(
+            """(tid) => {
+                const ctx = window.prksGetTabContext(tid);
+                window.__prksTestGraphCy = ctx.getResource('researchGraph').debug().cy;
+            }""",
+            arg=graph_id,
+        )
+
+        # Focus Work (Secondary): it must take ownership of the global right panel.
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=work_id)
+        page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=work_id)
+        self.assertEqual(
+            page.evaluate(
+                "() => document.getElementById('right-panel').getAttribute('data-right-panel-mode')"
+            ),
+            "work",
+        )
+        self.assertEqual(page.locator("#prks-graph-inspector").count(), 0)
+        self.assertEqual(page.evaluate("() => location.hash"), "#/graph")
+
+        # The unfocused Graph runtime must still be mounted and must still hold its own selection --
+        # inspected through its owning TabContext, not the focused-runtime global helpers.
+        retained = page.evaluate(
+            """(tid) => {
+                const ctx = window.prksGetTabContext(tid);
+                const g = ctx && ctx.getResource && ctx.getResource('researchGraph');
+                return g ? { hasSelection: g.hasSelection(), selectedId: g.getSelectedId() } : null;
+            }""",
+            arg=graph_id,
+        )
+        self.assertIsNotNone(retained)
+        self.assertTrue(retained["hasSelection"])
+        self.assertEqual(retained["selectedId"], node_id)
+
+        # Focus Graph again: its own selection must resurface without a remount or refetch.
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=graph_id)
+        page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=graph_id)
+        page.wait_for_function(
+            "() => !document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
+        )
+        page.locator("#prks-graph-inspector-title").wait_for()
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), node_id)
+
+        same_cy = page.evaluate(
+            """(tid) => {
+                const ctx = window.prksGetTabContext(tid);
+                const cy = ctx.getResource('researchGraph').debug().cy;
+                return cy === window.__prksTestGraphCy;
+            }""",
+            arg=graph_id,
+        )
+        self.assertTrue(same_cy)
+        self.assertEqual(len(seen_graph_requests), 1)
+        self.assertEqual(page.evaluate("() => location.hash"), "#/graph")
+
 
 class ResearchPickerTests(_BrowserE2E):
     def test_insert_concept_and_argument_pickers(self):

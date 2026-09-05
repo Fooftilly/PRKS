@@ -76,6 +76,7 @@ GRAPH_CONCEPT_A = "Culture"
 GRAPH_CONCEPT_B = "Philosophy"
 GRAPH_UNRELATED_POSITION = "Unrelated Position"
 GRAPH_UNRELATED_ARGUMENT = "Unrelated Argument"
+GRAPH_SOURCED_ARGUMENT = "Sourced Argument"
 
 
 def seed_graph_context_library(storage_root: str) -> dict:
@@ -87,8 +88,19 @@ def seed_graph_context_library(storage_root: str) -> dict:
     PRKSResearchIndex(storage=cfg).sync_work(ids["work_a"], notes, db)
     pos = create_position(db, GRAPH_UNRELATED_POSITION)
     arg = create_argument(db, name=GRAPH_UNRELATED_ARGUMENT, kind="argument")
+    # Deliberately separate from GRAPH_UNRELATED_ARGUMENT and sourced to work_b (not work_a):
+    # this gives tests a deterministic argument_source edge (e.g. relation-filter selection
+    # regressions) without perturbing edge counts incident to work_a, which other graph tests
+    # (e.g. the node-selection dimming test) assert exactly.
+    sourced_arg = create_argument(
+        db,
+        name=GRAPH_SOURCED_ARGUMENT,
+        kind="argument",
+        sources=[{"work_id": ids["work_b"], "pages": "1-2"}],
+    )
     ids["position"] = pos["id"]
     ids["argument"] = arg["id"]
+    ids["sourced_argument"] = sourced_arg["id"]
     ids["concept_a"] = GRAPH_CONCEPT_A
     ids["concept_b"] = GRAPH_CONCEPT_B
     return ids

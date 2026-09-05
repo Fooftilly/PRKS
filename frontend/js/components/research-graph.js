@@ -1184,11 +1184,20 @@
                 if (ev.key !== 'Escape') return;
                 const t = ev.target;
                 if (!t || !t.closest) return;
-                if (t.closest('[data-prks-role="graph-filters-panel"]')) {
+                const els = auxPanelEls();
+                const partOfFilters = !!(
+                    t.closest('[data-prks-role="graph-filters-panel"]') ||
+                    t.closest('[data-prks-role="graph-filters-toggle"]')
+                );
+                const partOfLegend = !!(
+                    t.closest('[data-prks-role="graph-legend-panel"]') ||
+                    t.closest('[data-prks-role="graph-legend-toggle"]')
+                );
+                if (partOfFilters && els.filtersPanel && !els.filtersPanel.hidden) {
                     ev.stopPropagation();
                     setAuxPanelOpen('filters', false);
                     focusRole('graph-filters-toggle');
-                } else if (t.closest('[data-prks-role="graph-legend-panel"]')) {
+                } else if (partOfLegend && els.legendPanel && !els.legendPanel.hidden) {
                     ev.stopPropagation();
                     setAuxPanelOpen('legend', false);
                     focusRole('graph-legend-toggle');
@@ -1235,23 +1244,20 @@
                         return;
                     }
                     filters[key] = !!el.checked;
-                    applyGraphFilters(liveCy, snapshot, filters);
-                    if (selectedId) {
-                        const vis = visibleGraph(snapshot, filters);
-                        const still = vis.nodes.some(function (n) {
+                    const vis = applyGraphFilters(liveCy, snapshot, filters);
+                    const selectedNodeStillVisible =
+                        !selectedId ||
+                        vis.nodes.some(function (n) {
                             return n.id === selectedId;
                         });
-                        if (!still) {
-                            selectedId = '';
-                            selectedEdgeId = '';
-                            if (liveCy) liveCy.elements().unselect();
-                            applySelectionContext(liveCy);
-                            renderInspector();
-                            syncInspectorVisibility();
-                        } else {
-                            applySelectionContext(liveCy);
-                        }
-                    } else if (selectedEdgeId) {
+                    const selectedEdgeStillVisible =
+                        !selectedEdgeId ||
+                        vis.edges.some(function (e) {
+                            return e.id === selectedEdgeId;
+                        });
+                    if (!selectedNodeStillVisible || !selectedEdgeStillVisible) {
+                        clearGraphSelection();
+                    } else if (selectedId || selectedEdgeId) {
                         applySelectionContext(liveCy);
                     }
                 });
