@@ -41,7 +41,33 @@ class FrontendPeopleTests(unittest.TestCase):
         self.assertIn('href="#/people/groups/${encodeURIComponent', details)
         self.assertNotIn("personExternalRefsSummary", details)
         self.assertNotIn("prks-people-list__refs", details)
+        self.assertNotIn("No biography or links yet.", details)
         self.assertIn("-webkit-line-clamp: 2", _read(_CSS))
+
+    def test_people_search_runtime_state_is_local_to_its_rendered_root(self):
+        src = _read(_PEOPLE)
+        rerender = src.split("function prksRerenderPeopleListOnly", 1)[1].split(
+            "function prksSyncPeopleLibrarySearchClear", 1
+        )[0]
+        apply_filter = src.split("function prksApplyPeopleLibrarySearchFilter", 1)[1].split(
+            "function prksBindPeopleLibrarySearch", 1
+        )[0]
+        render = src.split("function renderPeopleList", 1)[1].split(
+            "async function openPersonProfileEdit", 1
+        )[0]
+        empty = src.split("function prksPeopleListEmptyHtml", 1)[1].split(
+            "function prksPeopleListInnerHtml", 1
+        )[0]
+        self.assertNotIn("window.__prksPeopleLibraryState", src)
+        self.assertIn("root.__prksPeopleLibraryState", rerender)
+        self.assertIn("function prksRerenderPeopleListOnly(root)", src)
+        self.assertIn("input.closest('.prks-people-library')", apply_filter)
+        self.assertIn("prksRerenderPeopleListOnly(root)", apply_filter)
+        self.assertIn("root.__prksPeopleLibraryState = { persons: list, container, filterQuery, roleFilter }", render)
+        self.assertLess(
+            empty.index("if (roleFilter && roleFiltered.length === 0)"),
+            empty.index("if (q)"),
+        )
 
     def test_role_route_hides_redundant_role_and_keeps_other_roles(self):
         src = _read(_PEOPLE)

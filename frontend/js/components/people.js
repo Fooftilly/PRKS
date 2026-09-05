@@ -462,8 +462,6 @@ function buildPersonListDetailsHtml(p, options = {}) {
     }
     if (metaBits.length) {
         body += `<p class="meta-row prks-people-list__meta-line">${metaBits.join('')}</p>`;
-    } else if (!aboutPreview) {
-        body += `<p class="meta-row person-card-about person-card-about--empty">No biography or links yet.</p>`;
     }
     return body;
 }
@@ -571,11 +569,11 @@ function prksPeopleListEmptyHtml(persons, filterQuery, roleFilter) {
     const q = String(filterQuery || '').trim();
     const all = Array.isArray(persons) ? persons : [];
     const roleFiltered = filterPersonsByAssignedRole(all, roleFilter);
-    if (q) {
-        return '<p class="prks-inline-message prks-people-list__empty">No people match your search.</p>';
-    }
     if (roleFilter && roleFiltered.length === 0) {
         return `<p class="prks-inline-message prks-people-list__empty">No people with the <strong>${escapeHtmlPerson(roleFilter)}</strong> role yet. Use <strong>Link Person to Work</strong> in the ribbon to assign roles.</p>`;
+    }
+    if (q) {
+        return '<p class="prks-inline-message prks-people-list__empty">No people match your search.</p>';
     }
     return '<div class="prks-people-list__empty-state"><p class="prks-inline-message prks-people-list__empty">No people yet.</p><button type="button" class="prks-btn prks-btn--primary" onclick="openModal(\'person-modal\')">New Person</button></div>';
 }
@@ -593,10 +591,10 @@ function prksPeopleListInnerHtml(persons, filterQuery, roleFilter) {
     return `<div class="prks-people-list" role="list">${list.map((p) => buildPersonListRowHtml(p, { roleFilter })).join('')}</div>`;
 }
 
-function prksRerenderPeopleListOnly() {
-    const st = window.__prksPeopleLibraryState;
-    if (!st || !st.container) return;
-    const host = st.container.querySelector('[data-prks-people-list-host]');
+function prksRerenderPeopleListOnly(root) {
+    const st = root && root.__prksPeopleLibraryState;
+    if (!st) return;
+    const host = root.querySelector('[data-prks-people-list-host]');
     if (host) {
         host.innerHTML = prksPeopleListInnerHtml(st.persons, st.filterQuery, st.roleFilter);
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
@@ -611,7 +609,8 @@ function prksSyncPeopleLibrarySearchClear(input, clearBtn) {
 }
 
 function prksApplyPeopleLibrarySearchFilter(input) {
-    const st = window.__prksPeopleLibraryState;
+    const root = input && input.closest('.prks-people-library');
+    const st = root && root.__prksPeopleLibraryState;
     if (!st || !input) return;
     const q = String(input.value || '');
     st.filterQuery = q;
@@ -620,7 +619,7 @@ function prksApplyPeopleLibrarySearchFilter(input) {
     } catch (_e) {
         /* ignore */
     }
-    prksRerenderPeopleListOnly();
+    prksRerenderPeopleListOnly(root);
 }
 
 function prksBindPeopleLibrarySearch(root) {
@@ -683,9 +682,11 @@ function renderPeopleList(persons, container, options = {}) {
         ${listHost}
         </div>`;
 
-    window.__prksPeopleLibraryState = { persons: list, container, filterQuery, roleFilter };
     const root = container.querySelector('.prks-people-library');
-    if (root) prksBindPeopleLibrarySearch(root);
+    if (root) {
+        root.__prksPeopleLibraryState = { persons: list, container, filterQuery, roleFilter };
+        prksBindPeopleLibrarySearch(root);
+    }
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 

@@ -1182,6 +1182,8 @@
 
     const PRKS_TILE_ROUTE_NAMES = {
         work: true,
+        people: true,
+        'people-role': true,
         person: true,
         'concept-detail': true,
         'position-detail': true,

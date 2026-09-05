@@ -1043,7 +1043,7 @@ Promise.resolve()
                 assert('open tabs skip main', !splitRows.some(function (r) { return r.workspaceTabId === 'tab-1'; }));
                 assert('open tabs skip folders tab', !splitRows.some(function (r) { return r.workspaceTabId === 'tab-3'; }));
                 assert('split palette no folders goto', !splitRows.some(function (r) { return r.id === 'navigate-folders'; }));
-                assert('split palette no people list', !splitRows.some(function (r) { return r.id === 'navigate-people'; }));
+                assert('split palette allows people list', splitRows.some(function (r) { return r.id === 'navigate-people'; }));
                 assert('split palette no search-all', !splitRows.some(function (r) { return r.id === 'search-all'; }));
                 navCalls.length = 0;
                 tileCalls.length = 0;

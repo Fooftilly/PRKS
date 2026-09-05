@@ -15,6 +15,7 @@ from tests.e2e.fixtures import (
     WORK_B_TITLE,
     seed_graph_context_library,
     seed_library,
+    seed_people_search_library,
 )
 from tests.e2e.harness import (
     AppServer,
@@ -320,6 +321,66 @@ class PersonGraphFocusTests(_BrowserE2E):
         page.wait_for_function(_GRAPH_DESTROYED)
         page.wait_for_selector(".prks-folder-library, #page-content")
         self.assertNotIn("graph", page.evaluate("() => location.hash"))
+
+
+class PeopleSearchWorkspaceOwnershipTests(_BrowserE2E):
+    def test_split_people_indexes_filter_only_their_own_root_without_api_reads(self):
+        server, page, _collector = self._start_app(seed_people_search_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.locator('#sidebar a.nav-link[href="#/people"]').click()
+        page.wait_for_function("() => location.hash === '#/people'")
+        page.locator(".prks-tile--main .prks-people-list__title", has_text=PERSON_DISPLAY).wait_for()
+
+        # Render Main People first, then Secondary Authors: former global state bug only
+        # appears when interacting with the first root after the second has mounted.
+        page.evaluate("() => window.prksNavigate('#/people/role/Author', { target: 'tile' })")
+        page.wait_for_selector(".prks-tile--secondary .prks-people-library")
+        page.locator(".prks-tile--secondary .prks-people-list__title", has_text="Ada Search").wait_for()
+
+        person_api_reads = []
+
+        def on_request(req):
+            if req.method == "GET" and urlparse(req.url).path.startswith("/api/persons"):
+                person_api_reads.append(req.url)
+
+        page.on("request", on_request)
+        main_search = page.locator(".prks-tile--main #prks-people-library-search")
+        authors_search = page.locator(".prks-tile--secondary #prks-people-library-search")
+        main_search.fill("E2E")
+        page.wait_for_function(
+            """() => {
+                const main = document.querySelector('.prks-tile--main .prks-people-library');
+                const secondary = document.querySelector('.prks-tile--secondary .prks-people-library');
+                return !!(main && secondary && main.innerText.includes('E2E Author') &&
+                    !main.innerText.includes('Ada Search') && secondary.innerText.includes('Ada Search'));
+            }"""
+        )
+
+        authors_search.fill("Ada")
+        page.wait_for_function(
+            """() => {
+                const main = document.querySelector('.prks-tile--main .prks-people-library');
+                const secondary = document.querySelector('.prks-tile--secondary .prks-people-library');
+                return !!(main && secondary && main.innerText.includes('E2E Author') &&
+                    !main.innerText.includes('Ada Search') && secondary.innerText.includes('Ada Search') &&
+                    !secondary.innerText.includes('E2E Author'));
+            }"""
+        )
+        self.assertEqual(person_api_reads, [])
+
+    def test_retained_query_does_not_hide_empty_role_explanation(self):
+        _server, page, _collector = self._start_app(seed_people_search_library)
+        page.locator('#sidebar a.nav-link[href="#/people"]').click()
+        page.wait_for_function("() => location.hash === '#/people'")
+        page.locator("#prks-people-library-search").fill("E2E")
+        page.wait_for_timeout(200)
+        page.evaluate("() => window.prksNavigate('#/people/role/Reviewer')")
+        role_empty = page.locator(".prks-people-library__empty")
+        role_empty.wait_for()
+        self.assertIn("No people with the Reviewer role yet.", role_empty.inner_text())
+        self.assertNotIn("No people match your search.", role_empty.inner_text())
+        self.assertEqual(page.locator("#prks-people-library-search-clear").count(), 0)
+        self.assertEqual(page.evaluate("() => sessionStorage.getItem('prks-people-library-filter')"), "E2E")
 
 
 class ResearchGraphContextTests(_BrowserE2E):
