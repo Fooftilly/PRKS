@@ -7275,6 +7275,24 @@ textarea[data-prks-autosize="1"] {
     --prks-icon-size: 14px;
 }
 
+.work-details-metadata summary,
+.work-details-advanced summary {
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    font-weight: 600;
+}
+.work-details-metadata__body { padding-top: var(--space-sm); }
+.work-details-advanced .prks-btn--danger { width: 100%; margin-top: var(--space-sm); }
+.work-tag-chip__link { color: inherit; text-decoration: none; }
+.work-tag-chip__link:hover { text-decoration: underline; }
+.work-meta-editor__section { display: flex; flex-direction: column; gap: var(--space-xs); padding-top: var(--space-sm); }
+.work-meta-editor__section + .work-meta-editor__section { border-top: 1px solid var(--border); margin-top: var(--space-sm); }
+.work-meta-editor__section h4 { margin: 0; font-size: var(--text-sm); }
+.work-meta-editor__sticky-actions { position: sticky; bottom: 0; margin-bottom: 0; padding-top: var(--space-sm); background: var(--surface); border-top: 1px solid var(--border); }
+.field-error { min-height: 1.2em; margin: var(--space-xs) 0 0; color: var(--danger); font-size: var(--text-sm); }
+
 .panel-empty-message {
     padding: var(--space-xl);
     color: var(--text-secondary);

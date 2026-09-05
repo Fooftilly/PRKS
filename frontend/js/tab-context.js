@@ -25,6 +25,9 @@
             argumentEditing: false,
             workFolderEditing: false,
             workPlaylistEditing: false,
+            workDetailsMode: 'view',
+            workMetaDraft: null,
+            workMetaDraftWorkId: null,
             currentSavedView: null,
             researchNotesHints: null,
         };
@@ -40,6 +43,9 @@
         ui.argumentEditing = false;
         ui.workFolderEditing = false;
         ui.workPlaylistEditing = false;
+        ui.workDetailsMode = 'view';
+        ui.workMetaDraft = null;
+        ui.workMetaDraftWorkId = null;
         ui.currentSavedView = null;
         ui.researchNotesHints = null;
     }

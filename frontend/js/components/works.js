@@ -1441,6 +1441,20 @@ function prksWorkNotesEditor(ctx) {
     return ctx && typeof ctx.getResource === 'function' ? ctx.getResource('workNotes') : null;
 }
 
+function prksSyncWorkNotesSplitAria(ws, handle, side) {
+    if (!ws || !handle) return;
+    const vertical = side != null ? side : ws.classList.contains('work-workspace--side');
+    const min = 160;
+    const max = vertical
+        ? prksClampWorkNotesSideWidth(ws, handle, Number.MAX_SAFE_INTEGER)
+        : prksClampWorkNotesHeight(ws, handle, Number.MAX_SAFE_INTEGER);
+    const raw = ws.style.getPropertyValue(vertical ? '--work-notes-width' : '--work-notes-height').trim();
+    const now = parseInt(raw, 10) || min;
+    handle.setAttribute('aria-valuemin', String(min));
+    handle.setAttribute('aria-valuemax', String(max));
+    handle.setAttribute('aria-valuenow', String(Math.max(min, Math.min(max, now))));
+}
+
 function prksReapplyWorkNotesSplitLayout(ctx) {
     if (!ctx || typeof ctx.query !== 'function') return;
     const ws = ctx.query('.work-workspace[data-work-id]');
@@ -1483,6 +1497,7 @@ function prksReapplyWorkNotesSplitLayout(ctx) {
             ? 'Drag to resize research notes panel width'
             : 'Drag to resize research notes panel height'
     );
+    prksSyncWorkNotesSplitAria(ws, handle, prksWorkNotesMobileSideActive(ctx));
 
     requestAnimationFrame(() => {
         const _mde = prksWorkNotesEditor(ctx);
@@ -1546,6 +1561,7 @@ function setupWorkNotesSplitResize(ctx, workId) {
             ? 'Drag to resize research notes panel width'
             : 'Drag to resize research notes panel height'
     );
+    prksSyncWorkNotesSplitAria(ws, handle, prksWorkNotesMobileSideActive(ctx));
 
     function refreshNotesEditor() {
         const _mde = prksWorkNotesEditor(ctx);
@@ -1583,6 +1599,7 @@ function setupWorkNotesSplitResize(ctx, workId) {
                 const next = prksClampWorkNotesHeight(ws, handle, startNh - delta);
                 ws.style.setProperty('--work-notes-height', next + 'px');
             }
+            prksSyncWorkNotesSplitAria(ws, handle, side);
             refreshNotesEditor();
         }
 
@@ -1631,6 +1648,7 @@ function setupWorkNotesSplitResize(ctx, workId) {
                 const next = prksClampWorkNotesSideWidth(ws, handle, cur + delta);
                 ws.style.setProperty('--work-notes-width', next + 'px');
                 localStorage.setItem(storageKeyW, String(next));
+                prksSyncWorkNotesSplitAria(ws, handle, side);
                 refreshNotesEditor();
             }
         } else {
@@ -1642,6 +1660,7 @@ function setupWorkNotesSplitResize(ctx, workId) {
                 const next = prksClampWorkNotesHeight(ws, handle, cur + delta);
                 ws.style.setProperty('--work-notes-height', next + 'px');
                 localStorage.setItem(storageKeyH, String(next));
+                prksSyncWorkNotesSplitAria(ws, handle, side);
                 refreshNotesEditor();
             }
         }
@@ -1844,6 +1863,7 @@ async function copyBibTeX(workId, btn) {
 /** Wire Copy BibTeX / Delete File in #panel-content (right column Details tab). */
 function initWorkDetailRightPanelActions(work, ownerCtx) {
     const panel = document.getElementById('panel-content');
+    if (ownerCtx && typeof prksRightPanelOwnedBy === 'function' && !prksRightPanelOwnedBy(ownerCtx, panel)) return;
     if (!panel || !work || !work.id) return;
     const copyBtn = panel.querySelector('.copy-bibtex-btn');
     if (copyBtn) {

@@ -2143,6 +2143,7 @@ function prksMarkRightPanelOwner(ctx) {
 }
 
 function prksPrepareRightPanelReplace(ctx) {
+    if (typeof prksCaptureWorkMetaDraft === 'function') prksCaptureWorkMetaDraft(ctx);
     if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('privateNotesEditor')) {
         if (typeof prksFlushPendingPrivateNotes === 'function') prksFlushPendingPrivateNotes(ctx);
         ctx.clearResource('privateNotesEditor');
@@ -2160,19 +2161,21 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     if (tab !== 'details') return false;
     const panel = prksPrepareRightPanelReplace(ctx);
     if (!panel || typeof prksWorkRightPanelStackHtml !== 'function') return false;
-    panel.innerHTML = prksWorkRightPanelStackHtml(work, false, ctx);
+    const mode = prksWorkDetailsMode(ctx, work);
+    panel.innerHTML = prksWorkRightPanelStackHtml(work, mode, ctx);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
     if (typeof initPrksPrivateNotesEditor === 'function') initPrksPrivateNotesEditor('work', work.id, ctx);
-    if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id);
-    if (typeof mountPlaylistAttachControls === 'function') {
+    if (mode === 'tags' && typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id);
+    if (mode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
         void mountPlaylistAttachControls(work, ctx);
     }
-    if (typeof mountFolderAttachControlsForWork === 'function') {
+    if (mode !== 'metadata' && typeof mountFolderAttachControlsForWork === 'function') {
         void mountFolderAttachControlsForWork(work, ctx);
     }
     if (typeof initWorkDetailRightPanelActions === 'function') {
         initWorkDetailRightPanelActions(work, ctx);
     }
+    if (mode === 'metadata') prksBindWorkMetaDraftEditor(ctx, work);
     return true;
 }
 
@@ -2397,20 +2400,21 @@ window.prksResetPrivateNoteDraftsForTest = function () {
     prksPrivateNoteDrafts.clear();
 };
 
-function prksWorkPanelActionsHtml() {
-    return (
-        '<div class="right-panel-work-actions">' +
-        '<button type="button" class="tab-btn copy-bibtex-btn" aria-live="polite">' +
-        (typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : '') +
-        ' Copy BibTeX</button>' +
-        '<button type="button" class="prks-btn prks-btn--danger delete-work-btn" title="Delete this file">' +
-        (typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : '') +
-        ' Delete File</button>' +
-        '</div>'
-    );
+function prksWorkDetailsMode(ownerCtx, work) {
+    if (!ownerCtx || !ownerCtx.ui || !work) return 'view';
+    const live = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+    if (!live || String(live.id) !== String(work.id)) return 'view';
+    const mode = String(ownerCtx.ui.workDetailsMode || 'view');
+    return ['view', 'metadata', 'people', 'tags'].includes(mode) ? mode : 'view';
 }
 
-function prksWorkRightPanelStackHtml(work, isEditing = false, ownerCtx) {
+function prksWorkRightPanelStackHtml(work, mode = 'view', ownerCtx) {
+    const detailsMode = typeof mode === 'boolean' ? (mode ? 'metadata' : 'view') : mode;
+    if (detailsMode === 'metadata') {
+        return '<div class="right-panel-stack work-details-panel work-details-panel--metadata">' +
+            renderWorkMetaEditTab(work, ownerCtx && ownerCtx.ui ? ownerCtx.ui.workMetaDraft : null) +
+            '</div>';
+    }
     const notes = renderPrksPrivateNotesCard('work', work.id, work.private_notes);
     const inferred = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
     const playlistCard =
@@ -2421,11 +2425,10 @@ function prksWorkRightPanelStackHtml(work, isEditing = false, ownerCtx) {
         typeof renderFolderAttachControlsHtml === 'function' ? renderFolderAttachControlsHtml(work, ownerCtx) : '';
     return (
         '<div class="right-panel-stack">' +
-        prksWorkPanelActionsHtml() +
         notes +
         playlistCard +
         folderCard +
-        renderWorkMetaTab(work, isEditing) +
+        renderWorkMetaTab(work, detailsMode) +
         '</div>'
     );
 }
@@ -2450,6 +2453,7 @@ function updatePanelContent(tabId) {
         const previousOwner =
             typeof prksGetTabContext === 'function' ? prksGetTabContext(previousOwnerId) : null;
         if (previousOwner) {
+            if (typeof prksCaptureWorkMetaDraft === 'function') prksCaptureWorkMetaDraft(previousOwner);
             if (typeof prksFlushPendingPrivateNotes === 'function') prksFlushPendingPrivateNotes(previousOwner);
             if (typeof previousOwner.clearResource === 'function') previousOwner.clearResource('privateNotesEditor');
         }
@@ -2471,18 +2475,20 @@ function updatePanelContent(tabId) {
 
     if (_cw) {
         if (tabId === 'details') {
-            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, false, focusedCtx);
-            initPrksPrivateNotesEditor('work', _cw.id, focusedCtx);
-            if (typeof mountPlaylistAttachControls === 'function') {
+            const mode = prksWorkDetailsMode(focusedCtx, _cw);
+            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, mode, focusedCtx);
+            if (mode !== 'metadata') initPrksPrivateNotesEditor('work', _cw.id, focusedCtx);
+            if (mode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
                 void mountPlaylistAttachControls(_cw, focusedCtx);
             }
-            if (typeof mountFolderAttachControlsForWork === 'function') {
+            if (mode !== 'metadata' && typeof mountFolderAttachControlsForWork === 'function') {
                 void mountFolderAttachControlsForWork(_cw, focusedCtx);
             }
-            initWorkTagCombobox(_cw.id);
+            if (mode === 'tags') initWorkTagCombobox(_cw.id);
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(_cw, focusedCtx);
             }
+            if (mode === 'metadata') prksBindWorkMetaDraftEditor(focusedCtx, _cw);
         } else if (tabId === 'annotations') {
             panel.innerHTML = renderWorkAnnotationsTab(_cw);
             if (typeof window.applyCachedAnnotationListToPanel === 'function') {
@@ -2825,24 +2831,130 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
     input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 }
 
+function prksWorkMetaDraftFromWork(work) {
+    const inferredKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
+    const published = typeof prksIsoToDdMmYyyy === 'function' ? prksIsoToDdMmYyyy(work.published_date) : work.published_date;
+    return {
+        title: work.title || '', status: work.status || '', doc_type: work.doc_type || 'article',
+        year: work.year || '', published_date: published || '', publisher: work.publisher || '',
+        location: work.location || '', edition: work.edition || '', journal: work.journal || '',
+        volume: work.volume || '', issue: work.issue || '', pages: work.pages || '', isbn: work.isbn || '',
+        doi: work.doi || '', source_url: work.source_url || '', abstract: work.abstract || '',
+        thumb_page: work.thumb_page == null ? '' : String(work.thumb_page),
+        author_text: inferredKind === 'video' ? work.author_text || '' : '',
+    };
+}
+
+function prksWorkMetaDraftIsDirty(ctx, work) {
+    if (!ctx || !ctx.ui || ctx.ui.workMetaDraftWorkId !== String(work.id) || !ctx.ui.workMetaDraft) return false;
+    const original = prksWorkMetaDraftFromWork(work);
+    const draft = ctx.ui.workMetaDraft;
+    return Object.keys(original).some((key) => String(original[key] || '') !== String(draft[key] || ''));
+}
+
+function prksCaptureWorkMetaDraft(ownerCtx) {
+    if (!ownerCtx || !ownerCtx.ui || ownerCtx.ui.workDetailsMode !== 'metadata') return;
+    const work = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+    if (!work || ownerCtx.ui.workMetaDraftWorkId !== String(work.id)) return;
+    const panel = document.getElementById('panel-content');
+    if (!prksRightPanelOwnedBy(ownerCtx, panel)) return;
+    const draft = ownerCtx.ui.workMetaDraft || prksWorkMetaDraftFromWork(work);
+    const fields = {
+        title: 'meta-title', status: 'meta-status', doc_type: 'meta-doc-type', year: 'meta-year',
+        published_date: 'meta-date', publisher: 'meta-publisher', location: 'meta-location',
+        edition: 'meta-edition', journal: 'meta-journal', volume: 'meta-volume', issue: 'meta-issue',
+        pages: 'meta-pages', isbn: 'meta-isbn', doi: 'meta-doi', source_url: 'meta-source-url',
+        abstract: 'meta-abstract', thumb_page: 'meta-thumb-page', author_text: 'meta-author-text',
+    };
+    Object.keys(fields).forEach((key) => {
+        const el = panel.querySelector('#' + fields[key]);
+        if (el) draft[key] = el.value;
+    });
+    ownerCtx.ui.workMetaDraft = draft;
+}
+
+function prksBindWorkMetaDraftEditor(ownerCtx, work) {
+    if (!ownerCtx || !ownerCtx.ui || ownerCtx.ui.workDetailsMode !== 'metadata') return;
+    const panel = document.getElementById('panel-content');
+    if (!prksRightPanelOwnedBy(ownerCtx, panel)) return;
+    const capture = () => prksCaptureWorkMetaDraft(ownerCtx);
+    panel.querySelectorAll('.work-meta-editor input, .work-meta-editor textarea').forEach((el) => {
+        el.addEventListener('input', capture);
+        el.addEventListener('change', capture);
+    });
+    panel.addEventListener('click', () => window.setTimeout(capture, 0));
+}
+
 function toggleWorkMetaEdit(isEditing) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     toggleWorkMetaEditForContext(ownerCtx, isEditing);
 }
 
+function prksSetWorkDetailsMode(mode) {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const work = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+    const next = ['view', 'metadata', 'people', 'tags'].includes(mode) ? mode : 'view';
+    if (!ownerCtx || !ownerCtx.ui || !work || !prksOwnerTabIsFocused(ownerCtx)) return;
+    prksCaptureWorkMetaDraft(ownerCtx);
+    ownerCtx.ui.workDetailsMode = next;
+    if (next === 'metadata') {
+        if (ownerCtx.ui.workMetaDraftWorkId !== String(work.id) || !ownerCtx.ui.workMetaDraft) {
+            ownerCtx.ui.workMetaDraft = prksWorkMetaDraftFromWork(work);
+            ownerCtx.ui.workMetaDraftWorkId = String(work.id);
+        }
+    } else if (next !== 'metadata' && ownerCtx.ui.workDetailsMode !== 'metadata') {
+        /* A metadata draft only lives while metadata editing is active. */
+    }
+    if (next !== 'metadata') {
+        ownerCtx.ui.workMetaDraft = null;
+        ownerCtx.ui.workMetaDraftWorkId = null;
+    }
+    if (typeof updatePanelContent === 'function') updatePanelContent('details');
+}
+window.prksSetWorkDetailsMode = prksSetWorkDetailsMode;
+
+async function prksCancelWorkMetaEdit() {
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const work = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+    if (!ownerCtx || !ownerCtx.ui || !work) return;
+    prksCaptureWorkMetaDraft(ownerCtx);
+    if (prksWorkMetaDraftIsDirty(ownerCtx, work)) {
+        const confirmed = await prksConfirmDestructive({
+            title: 'Discard metadata changes?',
+            message: 'Your unsaved metadata edits will be discarded.',
+            confirmLabel: 'Discard changes',
+        });
+        if (!confirmed) return;
+    }
+    toggleWorkMetaEditForContext(ownerCtx, false);
+}
+window.prksCancelWorkMetaEdit = prksCancelWorkMetaEdit;
+
 function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
     if (!ownerCtx || !prksOwnerTabIsFocused(ownerCtx)) return;
     const _cw = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
     if (_cw) {
+        if (!ownerCtx.ui) return;
+        if (isEditing) {
+            ownerCtx.ui.workDetailsMode = 'metadata';
+            if (ownerCtx.ui.workMetaDraftWorkId !== String(_cw.id) || !ownerCtx.ui.workMetaDraft) {
+                ownerCtx.ui.workMetaDraft = prksWorkMetaDraftFromWork(_cw);
+                ownerCtx.ui.workMetaDraftWorkId = String(_cw.id);
+            }
+        } else {
+            ownerCtx.ui.workDetailsMode = 'view';
+            ownerCtx.ui.workMetaDraft = null;
+            ownerCtx.ui.workMetaDraftWorkId = null;
+        }
         const panel = prksPrepareRightPanelReplace(ownerCtx);
         if (panel) {
-            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, isEditing, ownerCtx);
-            initPrksPrivateNotesEditor('work', _cw.id, ownerCtx);
-            if (!isEditing) initWorkTagCombobox(_cw.id);
-            if (typeof mountPlaylistAttachControls === 'function') {
+            panel.innerHTML = prksWorkRightPanelStackHtml(_cw, ownerCtx.ui.workDetailsMode, ownerCtx);
+            if (!isEditing) initPrksPrivateNotesEditor('work', _cw.id, ownerCtx);
+            if (ownerCtx.ui.workDetailsMode === 'tags') initWorkTagCombobox(_cw.id);
+            if (!isEditing && typeof mountPlaylistAttachControls === 'function') {
                 void mountPlaylistAttachControls(_cw, ownerCtx);
             }
-            if (typeof mountFolderAttachControlsForWork === 'function') {
+            if (!isEditing && typeof mountFolderAttachControlsForWork === 'function') {
                 void mountFolderAttachControlsForWork(_cw, ownerCtx);
             }
             if (typeof initWorkDetailRightPanelActions === 'function') {
@@ -2850,7 +2962,6 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
             }
             if (isEditing) {
                 prksBindSegmentedHidden('meta-status');
-                void initWorkMetaRoleLinker(_cw.id);
                 if (typeof initPrksDocTypeMenu === 'function') {
                     const inf =
                         typeof prksInferWorkSourceKind === 'function'
@@ -2858,6 +2969,7 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
                             : '';
                     initPrksDocTypeMenu('meta-doc-type', { disabled: inf === 'video' });
                 }
+                prksBindWorkMetaDraftEditor(ownerCtx, _cw);
             }
             prksBindAutosizeTextareas(panel);
         }
@@ -2876,61 +2988,48 @@ async function submitWorkMetaEdit(workId) {
         );
     };
     if (!ownsWork()) return;
-    const metaDoc = document.getElementById('meta-doc-type');
-    const v = (id) => {
-        const el = document.getElementById(id);
-        return el ? el.value : '';
-    };
-    const metaDateRaw = String(v('meta-date') || '').trim();
+    prksCaptureWorkMetaDraft(ownerCtx);
+    const draft = ownerCtx && ownerCtx.ui && ownerCtx.ui.workMetaDraftWorkId === String(workId)
+        ? ownerCtx.ui.workMetaDraft : null;
+    if (!draft) return;
+    const metaDateRaw = String(draft.published_date || '').trim();
     const metaDateIso =
         typeof prksParsePublishedDateInput === 'function'
             ? prksParsePublishedDateInput(metaDateRaw)
             : metaDateRaw;
     if (metaDateRaw && !metaDateIso) {
-        await prksAlertMessage('Published date must be in dd/mm/yyyy.', 'Validation');
+        const dateEl = ownerCtx && ownerCtx.query ? ownerCtx.query('#meta-date') : null;
+        const errorEl = ownerCtx && ownerCtx.query ? ownerCtx.query('#meta-date-error') : null;
+        if (dateEl) {
+            dateEl.setAttribute('aria-invalid', 'true');
+            dateEl.focus();
+        }
+        if (errorEl) errorEl.textContent = 'Use dd/mm/yyyy.';
         return;
     }
     const payload = {
-        title: v('meta-title'),
-        status: v('meta-status'),
-        doc_type: metaDoc ? metaDoc.value : 'article',
+        title: draft.title,
+        status: draft.status,
+        doc_type: draft.doc_type || 'article',
         thumb_page: (() => {
-            const el = document.getElementById('meta-thumb-page');
-            if (!el) return null;
-            const raw = String(el.value || '').trim();
+            const raw = String(draft.thumb_page || '').trim();
             if (!raw) return null;
             const n = Number(raw);
             if (!Number.isFinite(n)) return null;
             const i = Math.floor(n);
             return i >= 1 ? i : null;
         })(),
-        year: v('meta-year'),
+        year: draft.year,
         published_date: metaDateIso || null,
-        publisher: v('meta-publisher'),
-        location: (() => {
-            const el = document.getElementById('meta-location');
-            return el ? String(el.value || '') : '';
-        })(),
-        edition: v('meta-edition'),
-        journal: v('meta-journal'),
-        volume: v('meta-volume'),
-        issue: v('meta-issue'),
-        pages: v('meta-pages'),
-        isbn: v('meta-isbn'),
-        doi: v('meta-doi'),
-        abstract: v('meta-abstract')
+        publisher: draft.publisher, location: draft.location, edition: draft.edition,
+        journal: draft.journal, volume: draft.volume, issue: draft.issue, pages: draft.pages,
+        isbn: draft.isbn, doi: draft.doi, abstract: draft.abstract
     };
-    const metaAuthorEl = document.getElementById('meta-author-text');
-    if (metaAuthorEl) {
-        payload.author_text = String(metaAuthorEl.value || '').trim();
-    }
-    const metaSrcEl = document.getElementById('meta-source-url');
-    if (metaSrcEl) {
-        payload.source_url = String(metaSrcEl.value || '').trim();
-    }
+    if (draft.author_text != null) payload.author_text = String(draft.author_text || '').trim();
+    if (draft.source_url != null) payload.source_url = String(draft.source_url || '').trim();
     
     // Disable save button to prevent double submission
-    const saveBtn = document.getElementById('inline-save-metadata-btn');
+    const saveBtn = ownerCtx && ownerCtx.query ? ownerCtx.query('#inline-save-metadata-btn') : null;
     if (saveBtn) {
         saveBtn.innerText = "Saving...";
         saveBtn.disabled = true;
@@ -3000,7 +3099,8 @@ function prksWorkHasRoleLink(roles, personId, roleType) {
 }
 
 /** Linked persons on the work details panel, grouped by role (order follows DB order_index). */
-function buildWorkLinkedPersonsHtml(work) {
+function buildWorkLinkedPersonsHtml(work, options = {}) {
+    const editable = !!options.editable;
     if (!work.roles || work.roles.length === 0) {
         return '<p class="meta-row work-linked-persons__empty">No persons linked.</p>';
     }
@@ -3032,7 +3132,10 @@ function buildWorkLinkedPersonsHtml(work) {
                         display !== canonical
                             ? ` title="Profile: ${escapeHtml(canonical)}"`
                             : '';
-                    return `<span class="work-linked-persons__chip tag"><a class="work-linked-persons__chip-link" href="#/people/${safePersonId}"${titleAttr}>${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${escapeHtml(display)}</a><button type="button" class="work-linked-persons__edit-credit" aria-label="Edit name on this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" data-display-name="${escapeHtml(display)}" data-canonical-name="${escapeHtml(canonical)}" onclick="event.stopPropagation(); void prksEditRoleCreditOnWork(this);">${typeof prksIcon === 'function' ? prksIcon('pencil', { size: 'sm' }) : '✎'}</button><button type="button" class="work-linked-persons__unlink" aria-label="Remove link from this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></span>`;
+                    const controls = editable
+                        ? `<button type="button" class="work-linked-persons__edit-credit" aria-label="Edit name on this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" data-display-name="${escapeHtml(display)}" data-canonical-name="${escapeHtml(canonical)}" onclick="event.stopPropagation(); void prksEditRoleCreditOnWork(this);">${typeof prksIcon === 'function' ? prksIcon('pencil', { size: 'sm' }) : '✎'}</button><button type="button" class="work-linked-persons__unlink" aria-label="Remove link from this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button>`
+                        : '';
+                    return `<span class="work-linked-persons__chip tag"><a class="work-linked-persons__chip-link" href="#/people/${safePersonId}"${titleAttr}>${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${escapeHtml(display)}</a>${controls}</span>`;
                 })
                 .join(' ');
             return `<div class="work-linked-persons__role"><h4 class="work-linked-persons__role-title">${escapeHtml(rt)}</h4><div class="tag-cloud">${chips}</div></div>`;
@@ -3123,8 +3226,9 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx) {
     }
 }
 
-function renderWorkMetaTab(work, isEditing = false) {
-    if (isEditing) return renderWorkMetaEditTab(work);
+function renderWorkMetaTab(work, mode = 'view') {
+    const managingPeople = mode === 'people';
+    const managingTags = mode === 'tags';
 
     const renderRow = (label, val) =>
         val ? `<p class="meta-row"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(val)}</p>` : '';
@@ -3157,7 +3261,7 @@ function renderWorkMetaTab(work, isEditing = false) {
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Title</h3>
-                <button onclick="toggleWorkMetaEdit(true)" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn">Edit</button>
+                <button type="button" onclick="prksSetWorkDetailsMode('metadata')" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn">Edit metadata</button>
             </div>
             <p class="card-title">${escapeHtml(work.title)}</p>
             <div class="card-heading-row card-heading-row--wrap">
@@ -3169,8 +3273,9 @@ function renderWorkMetaTab(work, isEditing = false) {
                 ${typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : ''}
             </div>
         </div>
-        <div class="doc-meta-card">
-            <h3>Metadata</h3>
+        <details class="doc-meta-card work-details-metadata">
+            <summary><span>Metadata</span><span class="meta-row">Bibliographic details</span></summary>
+            <div class="work-details-metadata__body">
             ${renderRow('Year', work.year)}
             ${showPublishedDate ? renderRow('Published', typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date) : ''}
             ${
@@ -3193,28 +3298,35 @@ function renderWorkMetaTab(work, isEditing = false) {
             }
             ${renderRow('Abstract', work.abstract)}
             ${!hasMetadata ? '<p class="meta-row meta-row--muted-italic">No metadata available.</p>' : ''}
-        </div>
+            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm copy-bibtex-btn" aria-live="polite">${typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : ''} Copy BibTeX</button>
+            </div>
+        </details>
         <div class="doc-meta-card">
             <div class="card-heading-row card-heading-row--wrap">
                 <h3>Linked Persons</h3>
-                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm work-link-person-btn" onclick="openModal('role-modal')" title="Link a person to this file (search or quick-create)">Link person</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('${managingPeople ? 'view' : 'people'}')">${managingPeople ? 'Done' : 'Manage relationships'}</button>
             </div>
-            <div class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work)}</div>
+            ${managingPeople ? '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm work-link-person-btn" onclick="openModal(\'role-modal\')" title="Link a person to this file">Link person</button>' : ''}
+            <div class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work, { editable: managingPeople })}</div>
         </div>
         <div class="doc-meta-card">
-            <h3>Tags</h3>
+            <div class="card-heading-row card-heading-row--wrap"><h3>Tags</h3><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('${managingTags ? 'view' : 'tags'}')">${managingTags ? 'Done' : 'Manage tags'}</button></div>
             <div id="work-tags-list" class="tag-cloud work-tags-list">
-                ${renderWorkTagsChips(work)}
+                ${renderWorkTagsChips(work, { editable: managingTags })}
             </div>
-            <p class="tag-add-field__caption">Add a tag</p>
+            ${managingTags ? `<p class="tag-add-field__caption">Add a tag</p>
             <div class="tag-add-shell combobox-container">
                 <div class="tag-add-shell__field">
                     ${typeof prksTagPlusIconHtml === 'function' ? prksTagPlusIconHtml() : '<span class="tag-add-shell__icon"></span>'}
                     <input type="text" id="work-tag-search" class="tag-add-shell__input" placeholder="Search tags or add…" maxlength="120" autocomplete="off" aria-label="Search or add tag">
                 </div>
                 <div id="work-tag-search-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-            </div>
+            </div>` : ''}
         </div>
+        <details class="doc-meta-card work-details-advanced">
+            <summary>More</summary>
+            <button type="button" class="prks-btn prks-btn--danger delete-work-btn" title="Delete this file">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete File</button>
+        </details>
     `;
 }
 
@@ -3477,7 +3589,8 @@ function prksBindSegmentedHidden(hiddenId) {
     });
 }
 
-function renderWorkTagsChips(work) {
+function renderWorkTagsChips(work, options = {}) {
+    const editable = !!options.editable;
     const tags = work.tags || [];
     if (tags.length === 0) {
         return '<span class="work-tags-empty">No tags yet.</span>';
@@ -3485,12 +3598,9 @@ function renderWorkTagsChips(work) {
     return tags
         .map(
             (t) =>
-                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};" ` +
-                `role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}" ` +
-                `data-prks-route="#/search?tag=${encodeURIComponent(t.name)}" ` +
-                `onkeydown="if(event && (event.key==='Enter' || event.key===' ')) {event.preventDefault(); this.click();}">` +
-                `${escapeHtml(t.name)}` +
-                `<button type="button" class="work-tag-remove" title="Remove tag" aria-label="Remove" data-work-id="${escapeHtml(work.id)}" data-tag-id="${escapeHtml(t.id)}">×</button>` +
+                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};">` +
+                `<a href="#/search?tag=${encodeURIComponent(t.name)}" class="work-tag-chip__link">${escapeHtml(t.name)}</a>` +
+                (editable ? `<button type="button" class="work-tag-remove" title="Remove tag" aria-label="Remove" data-work-id="${escapeHtml(work.id)}" data-tag-id="${escapeHtml(t.id)}">×</button>` : '') +
                 `</span>`
         )
         .join('');
@@ -3927,7 +4037,9 @@ async function prksRemoveWorkTag(workId, tagId) {
     }
 }
 
-function renderWorkMetaEditTab(work) {
+function renderWorkMetaEditTab(work, draft) {
+    const hasDraft = !!draft;
+    work = Object.assign({}, work || {}, draft || {});
     const safeStr = (str) => (str || '').toString().replace(/"/g, '&quot;');
     const filePath = work && work.file_path ? String(work.file_path).trim() : '';
     const inferredKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
@@ -3951,7 +4063,7 @@ function renderWorkMetaEditTab(work) {
             : '';
     const dateLabel = isVideo ? 'Published date' : 'Published Date';
     const publishedDateValue =
-        typeof prksIsoToDdMmYyyy === 'function'
+        !hasDraft && typeof prksIsoToDdMmYyyy === 'function'
             ? prksIsoToDdMmYyyy(work.published_date)
             : safeStr(work.published_date);
     const channelField = isVideo
@@ -4001,13 +4113,13 @@ function renderWorkMetaEditTab(work) {
         `;
 
     return `
-        <div class="doc-meta-card form-pane doc-meta-card--editing">
+        <div class="doc-meta-card form-pane doc-meta-card--editing work-meta-editor">
             <div class="card-heading-row">
                 <h3 class="doc-meta-card__accent-title">Edit Metadata</h3>
-                <button onclick="toggleWorkMetaEdit(false)" class="prks-icon-btn prks-icon-btn--ghost inline-action-btn inline-action-btn--close">&times;</button>
+                <button type="button" onclick="void prksCancelWorkMetaEdit()" class="prks-icon-btn prks-icon-btn--ghost inline-action-btn inline-action-btn--close">&times;</button>
             </div>
             
-            <label for="meta-title">Title</label>
+            <section class="work-meta-editor__section"><h4>Identity &amp; progress</h4><label for="meta-title">Title</label>
             <input type="text" id="meta-title" value="${safeStr(work.title)}">
             
             <div class="prks-work-upload-status-field">
@@ -4017,47 +4129,27 @@ function renderWorkMetaEditTab(work) {
 
             <label for="meta-doc-type-trigger">Document type (BibLaTeX)</label>
             ${metaDocMenu}
+            </section>
             
-            <div class="form-grid-2 form-grid-2--compact">
+            <section class="work-meta-editor__section"><h4>Publication</h4><div class="form-grid-2 form-grid-2--compact">
                 <div><label for="meta-year">Year</label><input type="text" id="meta-year" value="${safeStr(work.year)}"></div>
-                <div><label for="meta-date">${dateLabel}</label><input type="text" id="meta-date" value="${safeStr(publishedDateValue)}" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off"></div>
+                <div><label for="meta-date">${dateLabel}</label><input type="text" id="meta-date" value="${safeStr(publishedDateValue)}" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-describedby="meta-date-error"></div>
             </div>
             ${channelField}
             
             ${bibFields}
+            </section>
+            <section class="work-meta-editor__section"><h4>Presentation</h4>
             ${thumbField}
-            
+            </section>
+            <section class="work-meta-editor__section"><h4>Abstract</h4>
             <label for="meta-abstract">Abstract</label>
             <textarea id="meta-abstract" class="textarea-md">${safeStr(work.abstract)}</textarea>
+            </section>
+            <p id="meta-date-error" class="field-error" aria-live="polite"></p>
             
-            <div class="card-heading-row card-heading-row--wrap">
-                <h4>Linked Persons</h4>
-            </div>
-            <p class="meta-row meta-row--hint">Search a person, choose a role (including <strong>Translator</strong>), then click <strong>+ Link</strong>.</p>
-            <input type="hidden" id="meta-role-work-id" value="${safeStr(work.id)}">
-            <div class="prks-upload-person-stack">
-                <div class="form-row prks-upload-person-stack__search">
-                    <div class="prks-combobox-with-action">
-                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
-                            <div class="tag-add-shell__field">
-                                ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : '<span class="tag-add-shell__icon"></span>'}
-                                <input type="text" id="meta-role-person-search" class="tag-add-shell__input" placeholder="Search person..." autocomplete="off" aria-label="Search person for role link">
-                            </div>
-                            <input type="hidden" id="meta-role-person-id">
-                            <div id="meta-role-person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-                        </div>
-                    </div>
-                    <button type="button" id="meta-role-add-btn" onclick="addRoleToWorkFromMetaEditor('${work.id}')" class="prks-btn prks-btn--secondary">+ Link</button>
-                </div>
-                <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles prks-upload-person-stack__roles--tiles-2row">
-                    <div class="prks-upload-role-seg" id="meta-role-seg-mount"></div>
-                </div>
-                ${typeof prksRoleCreditPickerHtml === 'function' ? prksRoleCreditPickerHtml('meta-role') : ''}
-            </div>
-            <div id="meta-linked-persons-list" class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work)}</div>
-            
-            <div class="prks-form-actions prks-form-actions--split form-actions">
-                <button class="prks-btn prks-btn--secondary" onclick="toggleWorkMetaEdit(false)">Cancel</button>
+            <div class="prks-form-actions prks-form-actions--split form-actions work-meta-editor__sticky-actions">
+                <button type="button" class="prks-btn prks-btn--secondary" onclick="void prksCancelWorkMetaEdit()">Cancel</button>
                 <button id="inline-save-metadata-btn" class="prks-btn prks-btn--primary" onclick="submitWorkMetaEdit('${work.id}')">Save Changes</button>
             </div>
         </div>

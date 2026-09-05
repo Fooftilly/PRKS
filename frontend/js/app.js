@@ -2747,7 +2747,11 @@ function initForms() {
                     tab === 'details' &&
                     typeof prksWorkRightPanelStackHtml === 'function'
                 ) {
-                    panel.innerHTML = prksWorkRightPanelStackHtml(_rw, false, ownerCtx);
+                    panel.innerHTML = prksWorkRightPanelStackHtml(
+                        _rw,
+                        typeof prksWorkDetailsMode === 'function' ? prksWorkDetailsMode(ownerCtx, _rw) : 'view',
+                        ownerCtx
+                    );
                     if (typeof initPrksPrivateNotesEditor === 'function') {
                         initPrksPrivateNotesEditor('work', _rw.id, ownerCtx);
                     }

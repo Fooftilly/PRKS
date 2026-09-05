@@ -322,6 +322,54 @@ class PersonGraphFocusTests(_BrowserE2E):
         self.assertNotIn("graph", page.evaluate("() => location.hash"))
 
 
+class WorkDetailsPolishTests(_BrowserE2E):
+    def test_metadata_draft_isolated_to_its_work_context(self):
+        server, page, _collector = self._start_app()
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").fill("Only Work A Draft")
+        page.evaluate("id => window.prksNavigate('#/works/' + id)", server.ids["work_b"])
+        page.wait_for_function("id => location.hash.indexOf('#/works/' + id) === 0", arg=server.ids["work_b"])
+        page.locator("#panel-content .card-title", has_text=WORK_B_TITLE).wait_for()
+        self.assertEqual(page.locator("#meta-title").count(), 0)
+        self.assertNotIn("Only Work A Draft", page.locator("#panel-content").inner_text())
+
+    def test_details_modes_and_metadata_draft_survive_panel_tab_changes(self):
+        _server, page, _collector = self._start_app()
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator("#panel-content .card-title", has_text=WORK_A_TITLE).wait_for()
+        self.assertEqual(page.locator(".right-panel-work-actions").count(), 0)
+        self.assertGreaterEqual(page.locator("#panel-content", has_text="Status").count(), 1)
+        self.assertGreaterEqual(page.locator("#panel-content", has_text="Document type").count(), 1)
+        self.assertEqual(page.locator(".work-linked-persons__unlink").count(), 0)
+
+        page.locator("#panel-content button", has_text="Manage relationships").click()
+        page.locator("#panel-content .work-link-person-btn", has_text="Link person").wait_for()
+        page.locator("#panel-content .work-linked-persons__unlink").wait_for()
+        page.locator("#panel-content button", has_text="Done").first.click()
+        self.assertEqual(page.locator(".work-linked-persons__unlink").count(), 0)
+
+        page.locator("#panel-content button", has_text="Manage tags").click()
+        page.locator("#work-tag-search").wait_for()
+        page.locator("#panel-content button", has_text="Done").last.click()
+        self.assertEqual(page.locator("#work-tag-search").count(), 0)
+
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").fill("Unsaved Work Title")
+        page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
+        page.locator("#annotation-fallback-list").wait_for()
+        page.locator('#right-panel .tab-btn[data-target="details"]').click()
+        page.locator("#meta-title").wait_for()
+        self.assertEqual(page.locator("#meta-title").input_value(), "Unsaved Work Title")
+        page.locator("#panel-content button", has_text="Cancel").click()
+        page.locator("#prks-modal-confirm").wait_for()
+        page.locator("#prks-modal-confirm-cancel").click()
+        self.assertEqual(page.locator("#meta-title").input_value(), "Unsaved Work Title")
+        page.locator("#panel-content button", has_text="Cancel").click()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.locator("#panel-content .card-title", has_text=WORK_A_TITLE).wait_for()
+
+
 class PeopleSearchEmptyRoleTests(_BrowserE2E):
     def test_retained_query_does_not_hide_empty_role_explanation(self):
         _server, page, _collector = self._start_app()
