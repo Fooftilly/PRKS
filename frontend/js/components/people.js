@@ -989,7 +989,11 @@ async function savePersonProfile(personId) {
         if (person && root && ctx && ctx.mounted) {
             renderPersonDetails(ctx, person, root);
         }
-        if (typeof updatePanelContent === 'function') {
+        if (
+            typeof updatePanelContent === 'function' &&
+            typeof prksRightPanelOwnedBy === 'function' &&
+            prksRightPanelOwnedBy(ctx)
+        ) {
             updatePanelContent('details');
         }
     } catch (e) {

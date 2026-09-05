@@ -1897,6 +1897,28 @@ def _open_work_work_split(page, server):
     return work_a, work_b, ids
 
 
+def _open_work_person_split(page, server):
+    """Work B Main, Person A Secondary and focused. Returns workspace tab IDs."""
+    _open_work_from_home(page, WORK_B_TITLE)
+    _wait_pdf_viewer(page)
+    page.evaluate(
+        """(id) => window.prksNavigate('#/people/' + id, { target: 'tile' })""",
+        arg=server.ids["person"],
+    )
+    page.wait_for_function(
+        """() => {
+            const snap = window.prksWorkspaceSnapshot();
+            return !!(
+                snap && snap.mode === 'tiled' &&
+                snap.secondaryTree && snap.secondaryTree.type === 'leaf' &&
+                snap.focusedTabId === snap.secondaryTree.tabId
+            );
+        }"""
+    )
+    page.wait_for_selector(".prks-tile--secondary .person-profile__summary")
+    return _workspace_ids(page)
+
+
 def _build_three_leaf_tree(page, server):
     """Main = Work A. Secondary tree: B (person) on top; bottom split into C (position) | D
     (Work B). Matches the recursive-split spec example (split B down with C, then split C
@@ -2099,6 +2121,169 @@ def _assert_no_drag_residue(test, page, msg=""):
 
 
 class WorkspaceTilingTests(_BrowserE2E):
+    def test_delayed_person_save_updates_owner_without_replacing_other_focused_panel(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        ids = _open_work_person_split(page, server)
+        held = []
+
+        def hold_person_patch(route):
+            req = route.request
+            if req.method == "PATCH" and urlparse(req.url).path == "/api/persons/" + person_id:
+                held.append(route)
+                return
+            route.fallback()
+
+        saved_about = "PERSON-CROSS-FOCUS-%s" % int(time.time() * 1000)
+        page.route("**/api/persons/*", hold_person_patch)
+        try:
+            page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
+            page.wait_for_selector("#pd-about")
+            page.fill("#pd-about", saved_about)
+            page.locator("#pd-save-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Person PATCH was not intercepted")
+
+            page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
+            page.wait_for_function(
+                "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+                arg=ids["mainTabId"],
+            )
+            page.wait_for_function(
+                "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+                arg=ids["mainTabId"],
+            )
+            page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
+            page.wait_for_selector("#annotation-fallback-list")
+            before = page.evaluate(
+                """() => {
+                    const snap = window.prksWorkspaceSnapshot();
+                    const ctx = window.prksGetTabContext(snap.mainTabId);
+                    const panel = document.getElementById('panel-content');
+                    const marker = document.getElementById('annotation-fallback-list');
+                    const editor = document.getElementById('pdf-annotation-editor');
+                    window.__prksPersonSavePanelMarker = marker;
+                    window.__prksPersonSaveEditorMarker = editor;
+                    return {
+                        focusedTabId: snap.focusedTabId,
+                        panelOwnerTabId: panel && panel.dataset.prksOwnerTabId,
+                        rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
+                        annotationMarker: !!marker,
+                        editorMarker: !!editor,
+                    };
+                }"""
+            )
+            self.assertEqual(before["focusedTabId"], ids["mainTabId"])
+            self.assertEqual(before["panelOwnerTabId"], ids["mainTabId"])
+            self.assertEqual(before["rightPanelTab"], "annotations")
+            self.assertTrue(before["annotationMarker"])
+            self.assertTrue(before["editorMarker"])
+
+            _continue_held_routes(held)
+            page.wait_for_function(
+                """(args) => {
+                    const ctx = window.prksGetTabContext(args.tabId);
+                    const person = ctx && ctx.getEntity && ctx.getEntity('person');
+                    const about = ctx && ctx.query && ctx.query('.person-profile__about');
+                    return !!(
+                        person && person.about === args.about &&
+                        about && about.textContent.indexOf(args.about) !== -1
+                    );
+                }""",
+                arg={"tabId": ids["secondaryTabId"], "about": saved_about},
+            )
+            after = page.evaluate(
+                """() => {
+                    const snap = window.prksWorkspaceSnapshot();
+                    const ctx = window.prksGetTabContext(snap.mainTabId);
+                    const panel = document.getElementById('panel-content');
+                    const marker = document.getElementById('annotation-fallback-list');
+                    const editor = document.getElementById('pdf-annotation-editor');
+                    const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
+                    return {
+                        focusedTabId: snap.focusedTabId,
+                        panelOwnerTabId: panel && panel.dataset.prksOwnerTabId,
+                        rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
+                        annotationsActive: !!(annBtn && annBtn.classList.contains('active')),
+                        sameAnnotationMarker: marker === window.__prksPersonSavePanelMarker,
+                        sameEditorMarker: editor === window.__prksPersonSaveEditorMarker,
+                        hasPersonPanel: !!(panel && panel.querySelector('.person-sidebar-summary, .person-panel-edit')),
+                    };
+                }"""
+            )
+            self.assertEqual(after["focusedTabId"], ids["mainTabId"])
+            self.assertEqual(after["panelOwnerTabId"], ids["mainTabId"])
+            self.assertEqual(after["rightPanelTab"], "annotations")
+            self.assertTrue(after["annotationsActive"])
+            self.assertTrue(after["sameAnnotationMarker"])
+            self.assertTrue(after["sameEditorMarker"])
+            self.assertFalse(after["hasPersonPanel"])
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/persons/*", hold_person_patch)
+            except Exception:
+                pass
+
+    def test_delayed_person_save_refreshes_focused_person_panel(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        person_id = server.ids["person"]
+        ids = _open_work_person_split(page, server)
+        held = []
+
+        def hold_person_patch(route):
+            req = route.request
+            if req.method == "PATCH" and urlparse(req.url).path == "/api/persons/" + person_id:
+                held.append(route)
+                return
+            route.fallback()
+
+        saved_about = "PERSON-FOCUSED-SAVE-%s" % int(time.time() * 1000)
+        page.route("**/api/persons/*", hold_person_patch)
+        try:
+            page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
+            page.wait_for_selector("#pd-about")
+            page.fill("#pd-about", saved_about)
+            page.locator("#pd-save-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Person PATCH was not intercepted")
+            self.assertEqual(
+                page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId"),
+                ids["secondaryTabId"],
+            )
+
+            _continue_held_routes(held)
+            page.wait_for_function(
+                """(args) => {
+                    const snap = window.prksWorkspaceSnapshot();
+                    const ctx = window.prksGetTabContext(args.tabId);
+                    const person = ctx && ctx.getEntity && ctx.getEntity('person');
+                    const about = ctx && ctx.query && ctx.query('.person-profile__about');
+                    const panel = document.getElementById('panel-content');
+                    return !!(
+                        snap.focusedTabId === args.tabId &&
+                        person && person.about === args.about &&
+                        about && about.textContent.indexOf(args.about) !== -1 &&
+                        panel && panel.dataset.prksOwnerTabId === args.tabId &&
+                        panel.querySelector('.person-sidebar-summary') &&
+                        !panel.querySelector('.person-panel-edit')
+                    );
+                }""",
+                arg={"tabId": ids["secondaryTabId"], "about": saved_about},
+            )
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/persons/*", hold_person_patch)
+            except Exception:
+                pass
+
     def test_deep_focus_survives_async_sibling_title_resolution(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         page.set_viewport_size({"width": 1600, "height": 900})
