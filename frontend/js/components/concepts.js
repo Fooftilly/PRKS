@@ -41,6 +41,98 @@
         return root.prksPromptTextDialog(opts);
     }
 
+    /** Shared research-index search: normalize once, filter already-loaded rows locally,
+     * rerender via the caller's own row markup, and distinguish "no data" from "no matches". */
+    function normalizeSearchQuery(q) {
+        return String(q == null ? '' : q)
+            .trim()
+            .toLowerCase();
+    }
+
+    function bindResearchIndexSearch(container, config) {
+        const input = container && container.querySelector ? container.querySelector(config.inputSelector) : null;
+        if (!input) return null;
+        function apply() {
+            const q = normalizeSearchQuery(input.value);
+            const filtered = !q
+                ? config.items.slice()
+                : config.items.filter(function (item) {
+                      return config.matchFn(item, q);
+                  });
+            config.renderRows(filtered, q);
+        }
+        input.addEventListener('input', apply);
+        if (!container.__prksResearchSearchClearBound) {
+            container.__prksResearchSearchClearBound = true;
+            container.addEventListener('click', function (ev) {
+                const btn = ev.target.closest && ev.target.closest('[data-research-search-clear]');
+                if (!btn) return;
+                input.value = '';
+                input.focus();
+                apply();
+            });
+        }
+        apply();
+        return { refresh: apply };
+    }
+
+    function researchIndexToolbarHtml(inputId, placeholder) {
+        return (
+            '<div class="prks-toolbar prks-research-index__toolbar">' +
+            '<input type="search" class="prks-input" id="' +
+            esc(inputId) +
+            '" autocomplete="off" placeholder="' +
+            esc(placeholder) +
+            '" aria-label="' +
+            esc(placeholder) +
+            '">' +
+            '</div>'
+        );
+    }
+
+    function researchIndexSearchEmptyHtml(pluralLabel, query) {
+        return (
+            '<div class="prks-research-index__empty">' +
+            '<p class="meta-row">No ' +
+            esc(pluralLabel) +
+            ' match “' +
+            esc(query) +
+            '”.</p>' +
+            '<p><button type="button" class="prks-btn prks-btn--ghost prks-btn--sm" data-research-search-clear>Clear search</button></p>' +
+            '</div>'
+        );
+    }
+
+    /** Section head for `.research-entity__section`: title, optional count, optional
+     * section-local action button. Keeps edit controls visually tied to their section
+     * instead of floating below the content they modify. */
+    function researchSectionHeadHtml(title, opts) {
+        const o = opts || {};
+        let actionsHtml = '';
+        if (o.count != null) {
+            actionsHtml += '<span class="research-entity__section-count">' + esc(String(o.count)) + '</span>';
+        }
+        if (o.actionId) {
+            actionsHtml +=
+                '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="' +
+                esc(o.actionId) +
+                '">' +
+                esc(o.actionLabel || 'Edit') +
+                '</button>';
+        }
+        return (
+            '<div class="research-entity__section-head">' +
+            '<h3' +
+            (o.headingId ? ' id="' + esc(o.headingId) + '"' : '') +
+            '>' +
+            esc(title) +
+            '</h3>' +
+            (actionsHtml ? '<div class="research-entity__section-head-actions">' + actionsHtml + '</div>' : '') +
+            '</div>' +
+            (o.sub ? '<p class="research-entity__section-sub meta-row">' + esc(o.sub) + '</p>' : '')
+        );
+    }
+
     function researchIndexRowHtml(opts) {
         const o = opts || {};
         const icon = o.icon
@@ -74,47 +166,97 @@
         );
     }
 
+    function conceptsEmptyDataHtml() {
+        return (
+            '<div class="prks-research-index__empty">' +
+            '<p class="meta-row">No Concepts yet.</p>' +
+            '<p><button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-new-empty">New Concept</button></p>' +
+            '<p class="meta-row prks-research-index__empty-hint">Concepts are also created automatically when you type <code>[[concept:Name]]</code> in research notes.</p>' +
+            '</div>'
+        );
+    }
+
+    function conceptRowHtml(c, icon) {
+        const id = String(c.id || '');
+        const parentNames = (c.parents || [])
+            .map(function (p) {
+                return esc(p.name || p.id);
+            })
+            .filter(Boolean);
+        const parentLabel = parentNames.length ? 'Parent: ' + parentNames.join(', ') : 'Top-level concept';
+        const subs = Number(c.subconcept_count) || 0;
+        const notes = Number(c.mention_count) || 0;
+        return researchIndexRowHtml({
+            href: '#/concepts/' + encodeURIComponent(id),
+            icon: icon,
+            title: esc(c.name || 'Concept'),
+            meta: [
+                parentLabel,
+                String(subs) + (subs === 1 ? ' subconcept' : ' subconcepts'),
+                String(notes) + (notes === 1 ? ' note mention' : ' note mentions'),
+            ],
+        });
+    }
+
+    function matchConcept(c, q) {
+        if (String(c.name || '').toLowerCase().indexOf(q) >= 0) return true;
+        const aliases = Array.isArray(c.aliases) ? c.aliases : [];
+        for (let i = 0; i < aliases.length; i++) {
+            if (String(aliases[i] || '').toLowerCase().indexOf(q) >= 0) return true;
+        }
+        const parents = Array.isArray(c.parents) ? c.parents : [];
+        for (let j = 0; j < parents.length; j++) {
+            if (String((parents[j] && parents[j].name) || '').toLowerCase().indexOf(q) >= 0) return true;
+        }
+        return false;
+    }
+
     function renderConceptsIndex(items, container) {
         const list = Array.isArray(items) ? items : [];
         const icon = typeof root.prksIcon === 'function' ? root.prksIcon('network', { size: 'sm' }) : '';
-        const rows = list.length
-            ? list
-                  .map(function (c) {
-                      const id = String(c.id || '');
-                      const parentNames = (c.parents || [])
-                          .map(function (p) {
-                              return esc(p.name || p.id);
-                          })
-                          .filter(Boolean);
-                      const parentLabel = parentNames.length ? parentNames.join(', ') : 'No parent';
-                      const subs = Number(c.subconcept_count) || 0;
-                      const notes = Number(c.mention_count) || 0;
-                      return researchIndexRowHtml({
-                          href: '#/concepts/' + encodeURIComponent(id),
-                          icon: icon,
-                          title: esc(c.name || 'Concept'),
-                          meta: [
-                              parentLabel,
-                              String(subs) + (subs === 1 ? ' subconcept' : ' subconcepts'),
-                              String(notes) + (notes === 1 ? ' note mention' : ' note mentions'),
-                          ],
-                      });
-                  })
-                  .join('')
-            : '<p class="meta-row">No Concepts yet. Type <code>[[concept:Name]]</code> in research notes, or create one here.</p>';
+
+        function renderRows(filtered, query) {
+            const host = container.querySelector('#prks-concept-rows');
+            if (!host) return;
+            host.innerHTML = !filtered.length
+                ? query
+                    ? researchIndexSearchEmptyHtml('Concepts', query)
+                    : conceptsEmptyDataHtml()
+                : filtered
+                      .map(function (c) {
+                          return conceptRowHtml(c, icon);
+                      })
+                      .join('');
+            if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
+            if (!filtered.length && !query) {
+                const emptyBtn = host.querySelector('#prks-concept-new-empty');
+                if (emptyBtn) emptyBtn.addEventListener('click', function () { void createConceptFlow(); });
+            }
+        }
+
         container.innerHTML =
             '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2 class="prks-page-title">' +
             (typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('network') : '') +
             ' Concepts</h2>' +
             '<div class="page-header__actions">' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-new">New Concept</button>' +
-            '</div></div></div><div class="list-view prks-research-index">' +
-            rows +
-            '</div>';
+            '</div></div></div>' +
+            (list.length ? researchIndexToolbarHtml('prks-concept-search', 'Search concepts…') : '') +
+            '<div class="list-view prks-research-index" id="prks-concept-rows"></div>';
+
         const btn = container.querySelector('#prks-concept-new');
         if (btn) {
             btn.addEventListener('click', function () {
                 void createConceptFlow();
+            });
+        }
+        renderRows(list, '');
+        if (list.length) {
+            bindResearchIndexSearch(container, {
+                inputSelector: '#prks-concept-search',
+                items: list,
+                matchFn: matchConcept,
+                renderRows: renderRows,
             });
         }
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
@@ -167,43 +309,72 @@
                 tabId: ctx.tabId,
             });
         };
-        const aliases = (c.aliases || []).map(function (a) {
-            return '<li>' + esc(a) + '</li>';
-        }).join('') || '<li class="meta-row">None</li>';
-        const parents = (c.parents || []).map(function (p) {
-            return (
-                '<li><a href="#/concepts/' +
-                encodeURIComponent(p.id) +
-                '">' +
-                esc(p.name) +
-                '</a></li>'
-            );
-        }).join('') || '<li class="meta-row">None</li>';
-        const children = (c.children || []).map(function (p) {
-            return (
-                '<li><a href="#/concepts/' +
-                encodeURIComponent(p.id) +
-                '">' +
-                esc(p.name) +
-                '</a></li>'
-            );
-        }).join('') || '<li class="meta-row">None</li>';
-        const mentions = (c.mentions || []).map(function (m) {
-            const occ = (m.occurrences || [])
-                .map(function (o) {
-                    return '<p class="meta-row">…' + esc(o.snippet || '') + '…</p>';
-                })
-                .join('');
-            return (
-                '<div class="project-card"><a href="#/works/' +
-                encodeURIComponent(m.work_id) +
-                '">' +
-                esc(m.title || m.work_id) +
-                '</a>' +
-                occ +
-                '</div>'
-            );
-        }).join('') || '<p class="meta-row">No research-note references.</p>';
+        const aliasList = Array.isArray(c.aliases) ? c.aliases : [];
+        const aliasesHtml = aliasList.length
+            ? '<div class="research-entity__chips">' +
+              aliasList
+                  .map(function (a) {
+                      return '<span class="tag research-entity__alias-chip">' + esc(a) + '</span>';
+                  })
+                  .join('') +
+              '</div>'
+            : '<p class="meta-row">No aliases.</p>';
+        const parentList = Array.isArray(c.parents) ? c.parents : [];
+        const parentsHtml = parentList.length
+            ? '<div class="list-view prks-research-index">' +
+              parentList
+                  .map(function (p) {
+                      return researchIndexRowHtml({
+                          href: '#/concepts/' + encodeURIComponent(p.id),
+                          title: esc(p.name || p.id),
+                          kind: 'Concept',
+                      });
+                  })
+                  .join('') +
+              '</div>'
+            : '<p class="meta-row">Top-level concept.</p>';
+        const childList = Array.isArray(c.children) ? c.children : [];
+        const childrenHtml = childList.length
+            ? '<div class="list-view prks-research-index">' +
+              childList
+                  .map(function (p) {
+                      return researchIndexRowHtml({
+                          href: '#/concepts/' + encodeURIComponent(p.id),
+                          title: esc(p.name || p.id),
+                          kind: 'Concept',
+                      });
+                  })
+                  .join('') +
+              '</div>'
+            : '<p class="meta-row">No subconcepts.</p>';
+        const mentionList = Array.isArray(c.mentions) ? c.mentions : [];
+        const mentionsHtml = mentionList.length
+            ? '<div class="research-entity__mentions">' +
+              mentionList
+                  .map(function (m) {
+                      const occ = (m.occurrences || [])
+                          .map(function (o) {
+                              return (
+                                  '<p class="research-entity__mention-snippet meta-row">…' +
+                                  esc(o.snippet || '') +
+                                  '…</p>'
+                              );
+                          })
+                          .join('');
+                      return (
+                          '<div class="research-entity__mention">' +
+                          '<a class="research-entity__mention-title" href="#/works/' +
+                          encodeURIComponent(m.work_id) +
+                          '">' +
+                          esc(m.title || m.work_id) +
+                          '</a>' +
+                          occ +
+                          '</div>'
+                      );
+                  })
+                  .join('') +
+              '</div>'
+            : '<p class="meta-row">No research-note references.</p>';
         container.innerHTML =
             '<div class="prks-page-header page-header"><div class="page-header__title-row"><div>' +
             '<p class="saved-view-detail__kicker">Concept</p><h2 class="prks-page-title">' +
@@ -211,28 +382,42 @@
             '</h2></div><div class="page-header__actions">' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-view-graph">View in graph</button>' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-rename">Rename</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-delete">Delete</button>' +
+            '<button type="button" class="prks-btn prks-btn--quiet-danger prks-page-action--destructive" id="prks-concept-delete">Delete</button>' +
             '</div></div></div>' +
-            '<h3>Definition</h3><div class="research-md">' +
+            '<div class="research-entity">' +
+            '<section class="research-entity__section" aria-labelledby="prks-concept-def-h">' +
+            researchSectionHeadHtml('Definition', { headingId: 'prks-concept-def-h', actionId: 'prks-concept-edit-def' }) +
+            '<div class="research-md">' +
             md(c.description) +
-            '</div>' +
-            '<p><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="prks-concept-edit-def">Edit definition</button></p>' +
-            '<h3>Search keys / aliases</h3><ul>' +
-            aliases +
-            '</ul>' +
-            '<p><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="prks-concept-edit-aliases">Edit aliases</button></p>' +
-            '<h3>Parent concepts</h3><ul>' +
-            parents +
-            '</ul>' +
-            '<p><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="prks-concept-edit-parents">Edit parents</button></p>' +
-            '<h3>Subconcepts</h3><ul>' +
-            children +
-            '</ul>' +
-            '<h3>Mentioned in research notes</h3>' +
-            '<p class="meta-row">' +
-            esc(String(c.mention_count || 0)) +
-            ' references</p>' +
-            mentions;
+            '</div></section>' +
+            '<section class="research-entity__section" aria-labelledby="prks-concept-aliases-h">' +
+            researchSectionHeadHtml('Search keys / aliases', {
+                headingId: 'prks-concept-aliases-h',
+                actionId: 'prks-concept-edit-aliases',
+                sub: aliasList.length ? String(aliasList.length) + (aliasList.length === 1 ? ' alias' : ' aliases') : '',
+            }) +
+            aliasesHtml +
+            '</section>' +
+            '<section class="research-entity__section" aria-labelledby="prks-concept-parents-h">' +
+            researchSectionHeadHtml('Parent concepts', {
+                headingId: 'prks-concept-parents-h',
+                actionId: 'prks-concept-edit-parents',
+                sub: parentList.length ? String(parentList.length) + (parentList.length === 1 ? ' parent' : ' parents') : '',
+            }) +
+            parentsHtml +
+            '</section>' +
+            '<section class="research-entity__section" aria-labelledby="prks-concept-children-h">' +
+            researchSectionHeadHtml('Subconcepts', { headingId: 'prks-concept-children-h' }) +
+            childrenHtml +
+            '</section>' +
+            '<section class="research-entity__section" aria-labelledby="prks-concept-mentions-h">' +
+            researchSectionHeadHtml('Mentioned in research notes', {
+                headingId: 'prks-concept-mentions-h',
+                count: Number(c.mention_count) || 0,
+            }) +
+            mentionsHtml +
+            '</section>' +
+            '</div>';
         const viewGraph = container.querySelector('#prks-concept-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
@@ -276,7 +461,7 @@
                 if (next == null) return;
                 if (!ownsConcept()) return;
                 const aliases = next.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean);
-                await root.replaceConceptAliases(c.id, aliases);
+                await root.putConceptAliases(c.id, aliases);
                 refreshConcept();
             })();
         });
@@ -291,7 +476,7 @@
                 if (next == null) return;
                 if (!ownsConcept()) return;
                 const ids = next.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-                await root.replaceConceptParents(c.id, ids);
+                await root.putConceptParents(c.id, ids);
                 refreshConcept();
             })();
         });
@@ -365,6 +550,11 @@
         prksCreateConceptFlow: createConceptFlow,
         prksResearchMarkdownHtml: md,
         prksResearchIndexRowHtml: researchIndexRowHtml,
+        prksNormalizeSearchQuery: normalizeSearchQuery,
+        prksBindResearchIndexSearch: bindResearchIndexSearch,
+        prksResearchIndexToolbarHtml: researchIndexToolbarHtml,
+        prksResearchIndexSearchEmptyHtml: researchIndexSearchEmptyHtml,
+        prksResearchSectionHeadHtml: researchSectionHeadHtml,
     };
     Object.keys(api).forEach(function (k) {
         root[k] = api[k];

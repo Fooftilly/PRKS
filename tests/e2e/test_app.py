@@ -779,6 +779,324 @@ class ResearchGraphSplitWorkspaceTests(_BrowserE2E):
         self.assertEqual(page.evaluate("() => location.hash"), "#/graph")
 
 
+class ResearchIndexAndDetailPolishTests(_BrowserE2E):
+    def test_concept_index_search_matches_name_alias_and_parent(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        ids = page.evaluate(
+            """async () => {
+                const rows = await (await fetch('/api/concepts')).json();
+                const culture = rows.find(r => r.name === 'Culture');
+                const philosophy = rows.find(r => r.name === 'Philosophy');
+                await fetch('/api/concepts/' + culture.id + '/aliases', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ aliases: ['Kulturindustrie'] }),
+                });
+                await fetch('/api/concepts/' + philosophy.id + '/parents', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parent_ids: [culture.id] }),
+                });
+                return { cultureId: culture.id, philosophyId: philosophy.id, totalCount: rows.length };
+            }"""
+        )
+        self.assertTrue(ids["cultureId"])
+        page.evaluate("() => window.prksNavigate('#/concepts')")
+        page.wait_for_function("() => location.hash === '#/concepts'")
+        rows = page.locator("#prks-concept-rows .prks-research-row")
+        rows.first.wait_for()
+        search = page.locator("#prks-concept-search")
+
+        search.fill("Kulturindustrie")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-concept-rows .prks-research-row').length === 1"
+        )
+        self.assertIn("Culture", rows.first.inner_text())
+
+        search.fill("Culture")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-concept-rows .prks-research-row').length === 2"
+        )
+
+        seen = []
+
+        def on_request(req):
+            if req.method == "GET" and "/api/concepts" in req.url:
+                seen.append(req.url)
+
+        page.on("request", on_request)
+        search.fill("zzz-nonexistent")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-concept-rows .prks-research-row').length === 0"
+        )
+        empty_text = page.locator("#prks-concept-rows").inner_text()
+        self.assertIn("No Concepts match", empty_text)
+        self.assertNotIn("New Concept", empty_text)
+        self.assertEqual(page.locator("#prks-concept-rows [data-research-search-clear]").count(), 1)
+        self.assertEqual(seen, [], "typing into research-index search must not hit the network")
+
+        page.locator("#prks-concept-rows [data-research-search-clear]").click()
+        self.assertEqual(search.input_value(), "")
+        page.wait_for_function(
+            "(n) => document.querySelectorAll('#prks-concept-rows .prks-research-row').length === n",
+            arg=ids["totalCount"],
+        )
+
+    def test_concept_index_truly_empty_state_exposes_create_action(self):
+        server, page, _collector = self._start_app()
+        work_a = server.ids["work_a"]
+        # seed_library's own research note creates one Concept via [[concept:...]] markup;
+        # clear that reference first, then delete it, so the index is genuinely empty
+        # rather than search-empty.
+        page.evaluate(
+            """async (workId) => {
+                await fetch('/api/works/' + workId, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text_content: 'No concept markup here.' }),
+                });
+                const rows = await (await fetch('/api/concepts')).json();
+                await Promise.all(rows.map(r => fetch('/api/concepts/' + r.id, { method: 'DELETE' })));
+            }""",
+            arg=work_a,
+        )
+        page.evaluate("() => window.prksNavigate('#/concepts')")
+        page.wait_for_function("() => location.hash === '#/concepts'")
+        page.locator("h2.prks-page-title", has_text="Concepts").wait_for()
+        self.assertEqual(page.locator("#prks-concept-search").count(), 0)
+        self.assertIn("No Concepts yet.", page.locator("#prks-concept-rows").inner_text())
+        page.locator("#prks-concept-new-empty").click()
+        page.locator("#prks-modal-confirm .prks-modal-prompt__input").fill("Ideology")
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function("() => location.hash.indexOf('#/concepts/') === 0")
+        page.locator("h2.prks-page-title", has_text="Ideology").wait_for()
+
+    def test_position_index_search_matches_title_and_description(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        position_id = server.ids["position"]
+        page.evaluate(
+            """(id) => fetch('/api/positions/' + id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description: 'A distinctive research phrase about standardization.' }),
+            })""",
+            arg=position_id,
+        )
+        page.evaluate("() => window.prksNavigate('#/positions')")
+        page.wait_for_function("() => location.hash === '#/positions'")
+        page.locator("#prks-position-rows .prks-research-row").first.wait_for()
+        search = page.locator("#prks-position-search")
+
+        search.fill("Unrelated Position")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-position-rows .prks-research-row').length === 1"
+        )
+        search.fill("standardization")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-position-rows .prks-research-row').length === 1"
+        )
+        search.fill("no-such-position-text")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-position-rows .prks-research-row').length === 0"
+        )
+        self.assertIn("No Positions match", page.locator("#prks-position-rows").inner_text())
+
+    def test_argument_index_search_respects_kind_filter(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.evaluate(
+            """() => fetch('/api/arguments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'Marx on alienation', kind: 'stance' }),
+            })"""
+        )
+        page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
+        page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
+        page.locator("#prks-argument-rows .prks-research-row").first.wait_for()
+        search = page.locator("#prks-argument-search")
+
+        search.fill("Marx")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 1"
+        )
+        self.assertIn("Marx on alienation", page.locator("#prks-argument-rows").inner_text())
+
+        # An Argument name must not surface while the Stances kind filter is active.
+        search.fill("Unrelated Argument")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 0"
+        )
+
+        search.fill("")
+        page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 1"
+        )
+
+    def test_concept_detail_sections_and_relationship_navigation(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_a = server.ids["work_a"]
+        ids = page.evaluate(
+            """async () => {
+                const rows = await (await fetch('/api/concepts')).json();
+                const culture = rows.find(r => r.name === 'Culture');
+                const philosophy = rows.find(r => r.name === 'Philosophy');
+                await fetch('/api/concepts/' + culture.id, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: 'Adorno and Horkheimer coinage.' }),
+                });
+                await fetch('/api/concepts/' + philosophy.id + '/parents', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parent_ids: [culture.id] }),
+                });
+                return { cultureId: culture.id, philosophyId: philosophy.id };
+            }"""
+        )
+        page.evaluate("(id) => window.prksNavigate('#/concepts/' + id)", arg=ids["cultureId"])
+        page.wait_for_function("() => location.hash.indexOf('#/concepts/') === 0")
+        page.locator("h2.prks-page-title", has_text="Culture").wait_for()
+
+        for heading in (
+            "Definition",
+            "Search keys / aliases",
+            "Parent concepts",
+            "Subconcepts",
+            "Mentioned in research notes",
+        ):
+            page.locator(".research-entity__section h3", has_text=heading).wait_for()
+        self.assertIn("Adorno and Horkheimer coinage.", page.locator(".research-entity").inner_text())
+
+        # Subconcept row (Philosophy) is a real link back to #/concepts/<id>.
+        child_row = page.locator(".research-entity__section a.prks-research-row", has_text="Philosophy")
+        child_row.wait_for()
+        self.assertEqual(child_row.get_attribute("href"), "#/concepts/" + ids["philosophyId"])
+        child_row.click()
+        page.wait_for_function("() => location.hash.indexOf('#/concepts/') === 0")
+        page.locator("h2.prks-page-title", has_text="Philosophy").wait_for()
+
+        # Parent row (Culture) is a real link back.
+        parent_row = page.locator(".research-entity__section a.prks-research-row", has_text="Culture")
+        parent_row.wait_for()
+        self.assertEqual(parent_row.get_attribute("href"), "#/concepts/" + ids["cultureId"])
+        parent_row.click()
+        page.wait_for_function("() => location.hash.indexOf('#/concepts/') === 0")
+        page.locator("h2.prks-page-title", has_text="Culture").wait_for()
+
+        # Mention row links to the Work that mentions this Concept.
+        mention_link = page.locator("a.research-entity__mention-title")
+        mention_link.first.wait_for()
+        self.assertEqual(mention_link.first.get_attribute("href"), "#/works/" + work_a)
+
+    def test_position_relationship_rows_use_shared_research_row_language(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        position_id = server.ids["position"]
+        argument_id = page.evaluate(
+            """async (posId) => {
+                const res = await fetch('/api/arguments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: 'Supporting argument',
+                        kind: 'argument',
+                        targets: [{ type: 'position', id: posId, verdict_id: 'supports' }],
+                    }),
+                });
+                const created = await res.json();
+                return created.id;
+            }""",
+            arg=position_id,
+        )
+        self.assertTrue(argument_id)
+        page.evaluate("(id) => window.prksNavigate('#/positions/' + id)", arg=position_id)
+        page.wait_for_function("() => location.hash.indexOf('#/positions/') === 0")
+        row = page.locator(".research-entity__section a.prks-research-row", has_text="Supporting argument")
+        row.wait_for()
+        row_text = row.inner_text()
+        self.assertIn("Supporting argument", row_text)
+        self.assertIn("Argument", row_text)
+        self.assertIn("Supports", row_text)
+        self.assertEqual(row.get_attribute("href"), "#/arguments/" + argument_id)
+        self.assertEqual(page.locator(".research-entity__section-count").first.inner_text(), "1")
+
+    def test_argument_detail_counts_and_contextual_empty_wording(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_a = server.ids["work_a"]
+        position_id = server.ids["position"]
+        populated_id = page.evaluate(
+            """async (args) => {
+                const res = await fetch('/api/arguments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: 'Populated argument',
+                        kind: 'argument',
+                        main_text: 'Body text.',
+                        targets: [{ type: 'position', id: args.posId, verdict_id: 'supports' }],
+                        sources: [{ work_id: args.workId, pages: '1-2' }],
+                    }),
+                });
+                return (await res.json()).id;
+            }""",
+            arg={"posId": position_id, "workId": work_a},
+        )
+        empty_id = page.evaluate(
+            """async () => {
+                const res = await fetch('/api/arguments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: 'Bare argument', kind: 'argument' }),
+                });
+                return (await res.json()).id;
+            }"""
+        )
+
+        page.evaluate("(id) => window.prksNavigate('#/arguments/' + id)", arg=populated_id)
+        page.wait_for_function("() => location.hash.indexOf('#/arguments/') === 0")
+        page.locator(".research-entity__section-head", has_text="Responds to").locator(
+            ".research-entity__section-count"
+        ).first.wait_for()
+        counts = {}
+        for label in ("Responds to", "Sources", "Responses", "Mentioned in notes"):
+            head = page.locator(".research-entity__section-head", has_text=label)
+            counts[label] = head.locator(".research-entity__section-count").inner_text()
+        self.assertEqual(counts["Responds to"], "1")
+        self.assertEqual(counts["Sources"], "1")
+        self.assertEqual(counts["Responses"], "0")
+        self.assertEqual(counts["Mentioned in notes"], "0")
+
+        page.evaluate("(id) => window.prksNavigate('#/arguments/' + id)", arg=empty_id)
+        page.wait_for_function("() => location.hash.indexOf('#/arguments/') === 0")
+        page.locator("h2.prks-page-title", has_text="Bare argument").wait_for()
+        body = page.locator(".research-entity").inner_text()
+        self.assertIn("No targets.", body)
+        self.assertIn("No sources.", body)
+        self.assertIn("No responses.", body)
+        self.assertIn("Not mentioned in research notes.", body)
+
+    def test_header_actions_remain_reachable(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        concept_id = page.evaluate(
+            """async () => {
+                const rows = await (await fetch('/api/concepts')).json();
+                return rows[0] && rows[0].id;
+            }"""
+        )
+        page.evaluate("(id) => window.prksNavigate('#/concepts/' + id)", arg=concept_id)
+        page.wait_for_function("() => location.hash.indexOf('#/concepts/') === 0")
+        for sel in ("#prks-concept-view-graph", "#prks-concept-rename", "#prks-concept-delete"):
+            self.assertTrue(page.locator(sel).is_visible(), sel)
+        self.assertTrue(page.locator("#prks-concept-delete").is_enabled())
+
+        argument_id = server.ids["argument"]
+        page.evaluate("(id) => window.prksNavigate('#/arguments/' + id)", arg=argument_id)
+        page.wait_for_function("() => location.hash.indexOf('#/arguments/') === 0")
+        for sel in ("#prks-arg-view-graph", "#prks-arg-edit", "#prks-arg-response", "#prks-arg-delete"):
+            self.assertTrue(page.locator(sel).is_visible(), sel)
+        self.assertTrue(page.locator("#prks-arg-delete").is_enabled())
+
+
 class ResearchPickerTests(_BrowserE2E):
     def test_insert_concept_and_argument_pickers(self):
         server, page, _collector = self._start_app()

@@ -8704,6 +8704,105 @@ button.prks-research-row {
     color: var(--text-secondary);
 }
 
+.research-entity__section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-sm) var(--space-md);
+}
+
+.research-entity__section-head h3 {
+    margin: 0;
+}
+
+.research-entity__section-head-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex: 0 0 auto;
+}
+
+.research-entity__section-count {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--text-tertiary);
+}
+
+.research-entity__section-sub {
+    margin: 0 0 var(--space-sm);
+}
+
+.research-entity__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs) var(--space-sm);
+}
+
+.research-entity__alias-chip {
+    cursor: default;
+}
+
+.research-entity__alias-chip:hover {
+    border-color: var(--border);
+    color: var(--text-secondary);
+}
+
+.research-entity__mentions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.research-entity__mention {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.research-entity__mention-title {
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+.research-entity__mention-snippet {
+    margin: 0;
+    padding-left: var(--space-md);
+}
+
+.prks-research-index__toolbar {
+    margin-bottom: var(--space-sm);
+}
+
+.prks-research-index__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-sm);
+    padding: var(--space-sm) 0;
+}
+
+.prks-research-index__empty-hint {
+    color: var(--text-tertiary);
+}
+
+.prks-btn--quiet-danger {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-tertiary);
+}
+
+.prks-btn--quiet-danger:hover,
+.prks-btn--quiet-danger:focus-visible {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+.prks-page-action--destructive {
+    margin-left: var(--space-md);
+}
+
 .research-graph__inspector .person-sidebar__section-label {
     margin-top: var(--space-md);
 }

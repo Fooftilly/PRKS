@@ -113,12 +113,108 @@ class FrontendResearchLinksTests(unittest.TestCase):
         args = _read(_ARGS)
         self.assertIn("prks-research-row", concepts)
         self.assertIn("prksResearchIndexRowHtml", concepts)
-        self.assertIn("No parent", concepts)
-        self.assertNotIn("Parents:", concepts.split("function renderConceptsIndex", 1)[1].split("function createConceptFlow", 1)[0])
+        self.assertIn("Top-level concept", concepts)
+        self.assertNotIn("No parent", concepts)
+        self.assertNotIn("Parents:", concepts.split("function conceptRowHtml", 1)[1].split("function matchConcept", 1)[0])
         self.assertIn("prks-research-row", positions)
         self.assertIn("prks-research-row", args)
         self.assertIn("prks-tab", args)
         self.assertIn("prks-tabs", args)
+
+    def test_research_index_search_is_shared_and_client_only(self):
+        concepts = _read(_CONCEPTS)
+        positions = _read(_POSITIONS)
+        args = _read(_ARGS)
+        # One shared helper, reused by the other two index modules -- not three
+        # unrelated search implementations.
+        self.assertIn("function bindResearchIndexSearch", concepts)
+        self.assertIn("function normalizeSearchQuery", concepts)
+        self.assertIn("prksBindResearchIndexSearch: bindResearchIndexSearch", concepts)
+        self.assertIn("root.prksBindResearchIndexSearch", positions)
+        self.assertIn("root.prksBindResearchIndexSearch", args)
+        self.assertNotIn("function bindResearchIndexSearch", positions)
+        self.assertNotIn("function bindResearchIndexSearch", args)
+        # Purely local filtering: no network call is part of the search path.
+        search_block = concepts.split("function bindResearchIndexSearch", 1)[1].split(
+            "function researchIndexToolbarHtml", 1
+        )[0]
+        self.assertNotIn("fetch", search_block)
+        self.assertNotIn("prksRequest", search_block)
+        self.assertIn("input.addEventListener('input'", search_block)
+        # Argument kind filter stays a real route/query param; search only narrows within it.
+        self.assertIn("k === 'all' ? '#/arguments' : '#/arguments?kind=", args)
+        self.assertIn("matchArgument", args)
+        self.assertIn("function matchConcept", concepts)
+        self.assertIn("function matchPosition", positions)
+
+    def test_research_index_empty_states_are_distinct(self):
+        concepts = _read(_CONCEPTS)
+        positions = _read(_POSITIONS)
+        args = _read(_ARGS)
+        self.assertIn("function conceptsEmptyDataHtml", concepts)
+        self.assertIn("function researchIndexSearchEmptyHtml", concepts)
+        self.assertIn("data-research-search-clear", concepts)
+        self.assertIn("prks-concept-new-empty", concepts)
+        self.assertIn("prks-position-new-empty", positions)
+        self.assertIn("prks-argument-new-empty", args)
+        self.assertIn("prks-stance-new-empty", args)
+        self.assertIn("No Concepts yet.", concepts)
+        self.assertIn("No Positions yet.", positions)
+        self.assertIn("No Arguments or Stances yet.", args)
+
+    def test_research_entity_sections_use_shared_head_pattern(self):
+        concepts = _read(_CONCEPTS)
+        positions = _read(_POSITIONS)
+        args = _read(_ARGS)
+        self.assertIn("function researchSectionHeadHtml", concepts)
+        self.assertIn("research-entity__section-head", concepts)
+        self.assertIn("prksResearchSectionHeadHtml: researchSectionHeadHtml", concepts)
+        self.assertIn("root.prksResearchSectionHeadHtml", positions)
+        self.assertIn("root.prksResearchSectionHeadHtml", args)
+        # Concept detail: canonical section set, each a real .research-entity__section.
+        for heading in (
+            "Definition",
+            "Search keys / aliases",
+            "Parent concepts",
+            "Subconcepts",
+            "Mentioned in research notes",
+        ):
+            self.assertIn(heading, concepts)
+        self.assertIn("research-entity__chips", concepts)
+        self.assertIn("research-entity__alias-chip", concepts)
+        self.assertIn("research-entity__mentions", concepts)
+        self.assertIn("research-entity__mention-title", concepts)
+        # Parent/child rows are canonical research rows, not raw <li> anchors.
+        detail = concepts.split("function renderConceptDetail", 1)[1].split(
+            "async function renameConcept", 1
+        )[0]
+        self.assertNotIn("<li><a href=", detail)
+        self.assertIn("researchIndexRowHtml({", detail)
+        # Position detail uses the same research-entity shell.
+        self.assertIn("research-entity", positions)
+        self.assertIn("No description yet.", positions)
+        self.assertNotIn("project-card", positions)
+        # Argument section counts/contextual empty wording, without disturbing edit mode.
+        self.assertIn("No targets.", args)
+        self.assertIn("No sources.", args)
+        self.assertIn("No responses.", args)
+        self.assertIn("Not mentioned in research notes.", args)
+        self.assertIn("count: targetList.length", args)
+        self.assertIn("count: sourceList.length", args)
+        self.assertIn("count: responseList.length", args)
+        self.assertIn("count: mentionList.length", args)
+
+    def test_destructive_actions_are_visually_subordinate(self):
+        concepts = _read(_CONCEPTS)
+        args = _read(_ARGS)
+        css = _read(os.path.join(_FRONTEND, "css", "style.css"))
+        self.assertIn(".prks-btn--quiet-danger", css)
+        self.assertIn("prks-concept-delete", concepts)
+        self.assertIn("prks-btn--quiet-danger", concepts)
+        self.assertIn("prks-arg-delete", args)
+        self.assertIn("prks-btn--quiet-danger", args)
+        # New response stays a prominent, always-visible primary action -- not moved aside.
+        self.assertIn('id="prks-arg-response">New response', args)
 
     def test_argument_editor_uses_form_pane_controls(self):
         args = _read(_ARGS)

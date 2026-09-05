@@ -18,6 +18,61 @@
         return '<p>' + esc(text || '') + '</p>';
     }
 
+    function rowHtml(opts) {
+        return typeof root.prksResearchIndexRowHtml === 'function'
+            ? root.prksResearchIndexRowHtml(opts)
+            : '<a class="prks-list-row prks-research-row" href="' + opts.href + '">' + opts.title + '</a>';
+    }
+
+    function sectionHead(title, opts) {
+        if (typeof root.prksResearchSectionHeadHtml === 'function') return root.prksResearchSectionHeadHtml(title, opts);
+        return '<h3>' + esc(title) + '</h3>';
+    }
+
+    async function createPositionFlow(ctx, ownsIndex) {
+        if (typeof root.prksPromptTextDialog !== 'function') return null;
+        const name = await root.prksPromptTextDialog({
+            title: 'New Position',
+            okLabel: 'Create',
+        });
+        if (!name || !String(name).trim()) return null;
+        if (ctx && !ownsIndex()) return null;
+        const created = await root.createPosition({ name: String(name).trim() });
+        if (created && created.id && (!ctx || ownsIndex()) && typeof root.prksNavigate === 'function') {
+            root.prksNavigate('#/positions/' + encodeURIComponent(created.id), {
+                tabId: ctx && ctx.tabId,
+            });
+        }
+        return created;
+    }
+
+    function positionsEmptyDataHtml() {
+        return (
+            '<div class="prks-research-index__empty">' +
+            '<p class="meta-row">No Positions yet.</p>' +
+            '<p><button type="button" class="prks-btn prks-btn--secondary" id="prks-position-new-empty">New Position</button></p>' +
+            '</div>'
+        );
+    }
+
+    function positionRowHtml(p, icon) {
+        const excerpt = String(p.description || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const clip = excerpt.length > 160 ? excerpt.slice(0, 159).trim() + '…' : excerpt;
+        return rowHtml({
+            href: '#/positions/' + encodeURIComponent(p.id),
+            icon: icon,
+            title: esc(p.name || 'Position'),
+            meta: clip ? [esc(clip)] : [],
+        });
+    }
+
+    function matchPosition(p, q) {
+        if (String(p.name || '').toLowerCase().indexOf(q) >= 0) return true;
+        return String(p.description || '').toLowerCase().indexOf(q) >= 0;
+    }
+
     function renderPositionsIndex(ctx, items, container) {
         if (arguments.length < 3) {
             container = items;
@@ -32,58 +87,54 @@
         };
         const list = Array.isArray(items) ? items : [];
         const icon = typeof root.prksIcon === 'function' ? root.prksIcon('flag', { size: 'sm' }) : '';
-        const rowHtml =
-            typeof root.prksResearchIndexRowHtml === 'function' ? root.prksResearchIndexRowHtml : null;
-        const rows = list.length
-            ? list
-                  .map(function (p) {
-                      const excerpt = String(p.description || '')
-                          .replace(/\s+/g, ' ')
-                          .trim();
-                      const clip =
-                          excerpt.length > 160 ? excerpt.slice(0, 159).trim() + '…' : excerpt;
-                      return rowHtml
-                          ? rowHtml({
-                                href: '#/positions/' + encodeURIComponent(p.id),
-                                icon: icon,
-                                title: esc(p.name || 'Position'),
-                                meta: clip ? [esc(clip)] : [],
-                            })
-                          : '<a class="prks-list-row prks-research-row" href="#/positions/' +
-                            encodeURIComponent(p.id) +
-                            '">' +
-                            esc(p.name || 'Position') +
-                            '</a>';
-                  })
-                  .join('')
-            : '<p class="meta-row">No Positions yet. Create one to use as an Argument target.</p>';
+
+        function renderRows(filtered, query) {
+            const host = container.querySelector('#prks-position-rows');
+            if (!host) return;
+            host.innerHTML = !filtered.length
+                ? query && typeof root.prksResearchIndexSearchEmptyHtml === 'function'
+                    ? root.prksResearchIndexSearchEmptyHtml('Positions', query)
+                    : positionsEmptyDataHtml()
+                : filtered
+                      .map(function (p) {
+                          return positionRowHtml(p, icon);
+                      })
+                      .join('');
+            if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
+            if (!filtered.length && !query) {
+                const emptyBtn = host.querySelector('#prks-position-new-empty');
+                if (emptyBtn) {
+                    emptyBtn.addEventListener('click', function () {
+                        void createPositionFlow(ctx, ownsIndex);
+                    });
+                }
+            }
+        }
+
         container.innerHTML =
             '<div class="prks-page-header page-header"><div class="page-header__title-row"><h2 class="prks-page-title">' +
             (typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('flag') : '') +
             ' Positions</h2>' +
             '<div class="page-header__actions">' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-new">New Position</button>' +
-            '</div></div></div><div class="list-view prks-research-index">' +
-            rows +
-            '</div>';
+            '</div></div></div>' +
+            (list.length && typeof root.prksResearchIndexToolbarHtml === 'function'
+                ? root.prksResearchIndexToolbarHtml('prks-position-search', 'Search positions…')
+                : '') +
+            '<div class="list-view prks-research-index" id="prks-position-rows"></div>';
         const btn = container.querySelector('#prks-position-new');
         if (btn) {
             btn.addEventListener('click', function () {
-                void (async function () {
-                    if (typeof root.prksPromptTextDialog !== 'function') return;
-                    const name = await root.prksPromptTextDialog({
-                        title: 'New Position',
-                        okLabel: 'Create',
-                    });
-                    if (!name || !String(name).trim()) return;
-                    if (ctx && !ownsIndex()) return;
-                    const created = await root.createPosition({ name: String(name).trim() });
-                    if (created && created.id && (!ctx || ownsIndex()) && typeof root.prksNavigate === 'function') {
-                        root.prksNavigate('#/positions/' + encodeURIComponent(created.id), {
-                            tabId: ctx && ctx.tabId,
-                        });
-                    }
-                })();
+                void createPositionFlow(ctx, ownsIndex);
+            });
+        }
+        renderRows(list, '');
+        if (list.length && typeof root.prksBindResearchIndexSearch === 'function') {
+            root.prksBindResearchIndexSearch(container, {
+                inputSelector: '#prks-position-search',
+                items: list,
+                matchFn: matchPosition,
+                renderRows: renderRows,
             });
         }
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
@@ -98,19 +149,22 @@
     function renderPositionDetail(ctx, position, container) {
         if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('position', position);
         const p = position || {};
-        const args = (p.arguments || [])
-            .map(function (a) {
-                return (
-                    '<div class="project-card">' +
-                    esc(a.verdict_label || a.verdict_id || '') +
-                    ' · <a href="#/arguments/' +
-                    encodeURIComponent(a.id) +
-                    '">' +
-                    esc(a.name || a.id) +
-                    '</a></div>'
-                );
-            })
-            .join('') || '<p class="meta-row">No Arguments or Stances target this Position yet.</p>';
+        const argList = Array.isArray(p.arguments) ? p.arguments : [];
+        const argsHtml = argList.length
+            ? '<div class="list-view prks-research-index">' +
+              argList
+                  .map(function (a) {
+                      const kindLabel = a.kind === 'stance' ? 'Stance' : 'Argument';
+                      return rowHtml({
+                          href: '#/arguments/' + encodeURIComponent(a.id),
+                          title: esc(a.name || a.id),
+                          kind: esc(kindLabel),
+                          meta: [esc(a.verdict_label || a.verdict_id || '')],
+                      });
+                  })
+                  .join('') +
+              '</div>'
+            : '<p class="meta-row">No Arguments or Stances target this Position yet.</p>';
         container.innerHTML =
             '<div class="prks-page-header page-header"><div class="page-header__title-row"><div>' +
             '<p class="saved-view-detail__kicker">Position</p><h2 class="prks-page-title">' +
@@ -118,11 +172,17 @@
             '</h2></div><div class="page-header__actions">' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-view-graph">View in graph</button>' +
             '</div></div></div>' +
+            '<div class="research-entity">' +
+            '<section class="research-entity__section" aria-labelledby="prks-position-desc-h">' +
+            sectionHead('Description', { headingId: 'prks-position-desc-h' }) +
             '<div class="research-md">' +
-            md(p.description) +
-            '</div>' +
-            '<h3>Arguments / Stances</h3>' +
-            args;
+            (String(p.description || '').trim() ? md(p.description) : '<p class="meta-row">No description yet.</p>') +
+            '</div></section>' +
+            '<section class="research-entity__section" aria-labelledby="prks-position-args-h">' +
+            sectionHead('Arguments & Stances', { headingId: 'prks-position-args-h', count: argList.length }) +
+            argsHtml +
+            '</section>' +
+            '</div>';
         const viewGraph = container.querySelector('#prks-position-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
