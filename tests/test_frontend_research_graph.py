@@ -113,7 +113,8 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertNotIn("Biography, portrait, and external links are in the main column.", sidebar)
         self.assertIn("prks-btn--primary", sidebar)
         self.assertIn("Edit using template", sidebar)
-        self.assertIn("person-sidebar__danger", sidebar)
+        self.assertIn("person-sidebar__advanced", sidebar)
+        self.assertNotIn("Edit works", sidebar)
         self.assertIn("openPersonProfileEdit()", sidebar)
         self.assertIn("prks-person-view-graph", sidebar)
         detail = people.split("function renderPersonDetails", 1)[1]

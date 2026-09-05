@@ -104,6 +104,10 @@ Focus, keyboard behavior, reduced motion, and touch-target requirements are desi
 
 Desktop research applications benefit from discoverability. Keep primary and common actions visible. Overflow menus are for rare, dangerous, advanced, or contextual secondary operations—not for making the chrome look empty.
 
+### People and profiles
+
+People index rows prioritize identity, lifespan, short biography, roles, and Person Group classification over external-reference completeness. Person profiles present research content and library relationships before maintenance controls. Linked-file relationship editing belongs in the Linked files section; normal profile actions keep Edit profile and View in graph direct, while template and deletion actions remain secondary. Person Group relationships are canonical route anchors. Profile edit presentation may group fields for scanning, but Person persistence and template formats remain unchanged.
+
 ---
 
 ## Identity to preserve

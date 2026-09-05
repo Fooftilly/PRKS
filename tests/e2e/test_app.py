@@ -236,6 +236,14 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
 
 
 class PersonGraphFocusTests(_BrowserE2E):
+    def test_people_header_new_person_uses_existing_person_modal(self):
+        _server, page, _collector = self._start_app()
+        page.locator('#sidebar a.nav-link[href="#/people"]').click()
+        page.wait_for_function("() => location.hash === '#/people'")
+        page.locator(".prks-people-library__header .prks-btn", has_text="New Person").click()
+        page.locator("#person-modal:not(.hidden)").wait_for()
+        self.assertTrue(page.locator("#person-modal #person-lname").count() >= 1)
+
     def test_person_view_in_graph_includes_people_and_focus(self):
         server, page, _collector = self._start_app()
         person_id = server.ids["person"]
@@ -254,14 +262,18 @@ class PersonGraphFocusTests(_BrowserE2E):
             page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").count(),
             1,
         )
-        self.assertIn(
-            "Edit using template",
-            page.locator(".person-sidebar-summary").inner_text(),
-        )
         self.assertNotIn(
             "Biography, portrait, and external links are in the main column.",
             page.locator(".person-sidebar-summary").inner_text(),
         )
+        advanced_summary = page.locator(".person-sidebar__advanced > summary")
+        advanced_summary.focus()
+        advanced_summary.press("Enter")
+        page.locator(".person-sidebar__advanced", has_text="Edit using template").wait_for()
+        self.assertTrue(page.locator(".person-sidebar__advanced button", has_text="Delete person").is_disabled())
+        advanced_summary.press("Escape")
+        self.assertFalse(page.locator(".person-sidebar__advanced").evaluate("el => el.open"))
+        self.assertEqual(page.evaluate("() => document.activeElement.tagName"), "SUMMARY")
         page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
         page.wait_for_selector("#pd-first-name")
         page.locator(".person-panel-edit button", has_text="Cancel").click()
@@ -2297,14 +2309,14 @@ class TabContextHostRootTests(_BrowserE2E):
             page.locator(".prks-tab-root .person-profile").count(),
             1,
         )
-        page.locator(".person-sidebar-summary .prks-btn--secondary", has_text="Edit works").click()
+        page.locator(".person-profile__works-action", has_text="Edit relationships").click()
         page.wait_for_selector(".person-profile__work-card-wrap, .person-profile__role-block")
         self._assert_single_mounted_root(page, root_id)
         self.assertGreaterEqual(
             page.locator(".prks-tab-root .person-profile").count(),
             1,
         )
-        page.locator(".person-sidebar-summary .prks-btn--secondary", has_text="Done").click()
+        page.locator(".person-profile__works-action", has_text="Done").click()
         self._assert_single_mounted_root(page, root_id)
         page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
         page.wait_for_selector("#pd-about")
@@ -8102,4 +8114,3 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
             "() => document.getElementById('prks-settings-nav')"
             ".getAttribute('aria-orientation') === 'vertical'"
         )
-

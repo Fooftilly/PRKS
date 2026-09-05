@@ -401,7 +401,7 @@ function renderPersonExternalLinksList(person) {
     const lis = items
         .map(it => {
             if (it.href) {
-                return `<li><a href="${escapeHtmlPerson(it.href)}" target="_blank" rel="noopener noreferrer">${escapeHtmlPerson(it.label)}</a></li>`;
+                return `<li><a href="${escapeHtmlPerson(it.href)}" target="_blank" rel="noopener noreferrer"><span>${escapeHtmlPerson(it.label)}</span><span aria-hidden="true">↗</span></a></li>`;
             }
             return `<li>${escapeHtmlPerson(it.label)}</li>`;
         })
@@ -421,17 +421,6 @@ function truncatePersonPreviewText(text, maxLen) {
     return `${oneLine.slice(0, maxLen - 1).trim()}…`;
 }
 
-function personExternalRefsSummary(person) {
-    const bits = [];
-    if (safeHttpUrl(person.link_wikipedia)) bits.push('Wikipedia');
-    if (safeHttpUrl(person.link_stanford_encyclopedia)) bits.push('SEP');
-    if (safeHttpUrl(person.link_iep)) bits.push('IEP');
-    const otherLines = (person.links_other || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    const otherHttp = otherLines.filter(l => parsePersonOtherLinkLine(l) || safeHttpUrl(l)).length;
-    if (otherHttp) bits.push(otherHttp === 1 ? 'Other link' : `${otherHttp} other links`);
-    return bits.length ? bits.join(' · ') : '';
-}
-
 function personReferenceCount(person) {
     let n = 0;
     if (safeHttpUrl(person.link_wikipedia)) n += 1;
@@ -447,8 +436,8 @@ function personReferenceCount(person) {
 /** Metadata block for person list rows (no title). */
 function buildPersonListDetailsHtml(p, options = {}) {
     const showGroups = options.showGroups !== false;
+    const roleFilter = options.roleFilter || null;
     const aboutPreview = truncatePersonPreviewText(p.about || '', 180);
-    const refsSummary = personExternalRefsSummary(p);
 
     let body = '';
     if (aboutPreview) {
@@ -459,15 +448,17 @@ function buildPersonListDetailsHtml(p, options = {}) {
         const tags = p.groups
             .map(
                 (g) =>
-                    `<span class="tag" data-prks-route="#/people/groups/${escapeHtmlPerson(g.id)}">${escapeHtmlPerson(g.name)}</span>`
+                    `<a class="tag" href="#/people/groups/${encodeURIComponent(String(g.id || ''))}">${escapeHtmlPerson(g.name)}</a>`
             )
             .join(' ');
         metaBits.push(`<span class="prks-people-list__groups">${tags}</span>`);
     }
-    if (refsSummary) {
-        metaBits.push(
-            `<span class="prks-people-list__refs">${escapeHtmlPerson(refsSummary)}</span>`
-        );
+    const assignedRoles = Array.isArray(p.assigned_roles) ? p.assigned_roles : [];
+    const visibleRoles = roleFilter
+        ? assignedRoles.filter((role) => role !== roleFilter)
+        : assignedRoles;
+    if (visibleRoles.length) {
+        metaBits.push(`<span class="prks-people-list__roles">${visibleRoles.map(escapeHtmlPerson).join(' · ')}</span>`);
     }
     if (metaBits.length) {
         body += `<p class="meta-row prks-people-list__meta-line">${metaBits.join('')}</p>`;
@@ -494,7 +485,7 @@ function buildPersonListRowHtml(p, options = {}) {
     const removeHtml = removeButton
         ? `<button type="button" class="prks-people-list__remove" data-remove-member="${escapeHtmlPerson(p.id)}" aria-label="Remove from group" title="Remove from group">&times;</button>`
         : '';
-    const details = buildPersonListDetailsHtml(p, { showGroups });
+    const details = buildPersonListDetailsHtml(p, { showGroups, roleFilter: options.roleFilter });
     const detailsBlock = details
         ? `<div class="prks-people-list__details">${details}</div>`
         : '';
@@ -583,10 +574,10 @@ function prksPeopleListEmptyHtml(persons, filterQuery, roleFilter) {
     if (q) {
         return '<p class="prks-inline-message prks-people-list__empty">No people match your search.</p>';
     }
-    if (all.length > 0 && roleFilter && roleFiltered.length === 0) {
+    if (roleFilter && roleFiltered.length === 0) {
         return `<p class="prks-inline-message prks-people-list__empty">No people with the <strong>${escapeHtmlPerson(roleFilter)}</strong> role yet. Use <strong>Link Person to Work</strong> in the ribbon to assign roles.</p>`;
     }
-    return '<p class="prks-inline-message prks-people-list__empty">No people yet. Use <strong>New Person</strong> in the ribbon to add one.</p>';
+    return '<div class="prks-people-list__empty-state"><p class="prks-inline-message prks-people-list__empty">No people yet.</p><button type="button" class="prks-btn prks-btn--primary" onclick="openModal(\'person-modal\')">New Person</button></div>';
 }
 
 function prksPeopleListInnerHtml(persons, filterQuery, roleFilter) {
@@ -599,7 +590,7 @@ function prksPeopleListInnerHtml(persons, filterQuery, roleFilter) {
     if (!list.length) {
         return prksPeopleListEmptyHtml(all, filterQuery, roleFilter);
     }
-    return `<div class="prks-people-list" role="list">${list.map((p) => buildPersonListRowHtml(p)).join('')}</div>`;
+    return `<div class="prks-people-list" role="list">${list.map((p) => buildPersonListRowHtml(p, { roleFilter })).join('')}</div>`;
 }
 
 function prksRerenderPeopleListOnly() {
@@ -686,6 +677,7 @@ function renderPeopleList(persons, container, options = {}) {
         <div class="prks-people-library">
         <div class="prks-page-header page-header prks-people-library__header">
             <h2 class="prks-page-title">People${escapeHtmlPerson(titleExtra)}</h2>
+            <button type="button" class="prks-btn prks-btn--primary" onclick="openModal('person-modal')">New Person</button>
         </div>
         ${searchToolbar}
         ${listHost}
@@ -784,6 +776,17 @@ function prksTogglePersonWorksEdit() {
     }
 }
 
+function prksPersonAdvancedKeydown(event) {
+    if (!event || event.key !== 'Escape') return;
+    const details = event.currentTarget;
+    if (!details || !details.open) return;
+    event.preventDefault();
+    details.open = false;
+    const summary = details.querySelector('summary');
+    if (summary) summary.focus();
+}
+window.prksPersonAdvancedKeydown = prksPersonAdvancedKeydown;
+
 function prksUniquePersonWorks(person) {
     const works = Array.isArray(person && person.works) ? person.works : [];
     const byId = new Map();
@@ -816,20 +819,9 @@ function renderPersonProfileDetailsSidebarHtml(person) {
     const nWorks = prksUniquePersonWorks(person).length;
     const nGroups = Array.isArray(person.groups) ? person.groups.length : 0;
     const nRefs = personReferenceCount(person);
-    const _fctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    const editingWorks = !!( _fctx && _fctx.ui && _fctx.ui.personWorksEditing);
-    const worksEditBtn =
-        nWorks > 0 || editingWorks
-            ? `<button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" onclick="prksTogglePersonWorksEdit()">${
-                  editingWorks ? 'Done' : 'Edit works'
-              }</button>`
-            : '';
     const deleteBtn = nWorks === 0
-        ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__cta" onclick="deletePerson()">Delete person</button>`
-        : `<button type="button" class="prks-btn prks-btn--danger person-sidebar__cta" disabled title="Unlink all files first">Delete person</button>`;
-    const deleteHint = nWorks === 0
-        ? '<p class="meta-row">No linked files. Deletion allowed.</p>'
-        : '<p class="meta-row">Deletion blocked while linked files exist.</p>';
+        ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" onclick="deletePerson()">Delete person</button>`
+        : `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" disabled title="Unlink all files first">Delete person</button>`;
     return `
         <div class="doc-meta-card person-sidebar-summary">
             <p class="saved-view-detail__kicker">Profile</p>
@@ -839,13 +831,14 @@ function renderPersonProfileDetailsSidebarHtml(person) {
                 <li>${nRefs} reference${nRefs === 1 ? '' : 's'}</li>
             </ul>
             <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" onclick="openPersonProfileEdit()">Edit profile</button>
-            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" onclick="openPersonProfileTemplateModal()">Edit using template</button>
             <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
-            ${worksEditBtn ? `<p class="person-sidebar__section-label">File relationships</p>${worksEditBtn}` : ''}
-            <div class="person-sidebar__danger">
-            ${deleteBtn}
-            ${deleteHint}
-            </div>
+            <details class="person-sidebar__advanced" onkeydown="prksPersonAdvancedKeydown(event)">
+                <summary>More</summary>
+                <div class="person-sidebar__advanced-actions">
+                    <button type="button" class="prks-btn prks-btn--secondary person-sidebar__advanced-action" onclick="openPersonProfileTemplateModal()">Edit using template</button>
+                    ${deleteBtn}
+                </div>
+            </details>
             <p class="route-sidebar__action"><a href="#/people" class="route-sidebar__link">All people</a></p>
         </div>`;
 }
@@ -857,54 +850,58 @@ function renderPersonProfileEditFormHtml(person) {
         <div class="doc-meta-card person-panel-edit">
             <div class="card-heading-row card-heading-row--wrap">
                 <h3>Edit profile</h3>
-                <button type="button" onclick="closePersonProfileEdit()" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn">Cancel</button>
             </div>
             <div class="form-pane person-edit-form person-edit-form--panel">
-                <label for="pd-first-name">First name</label>
-                <input type="text" id="pd-first-name" value="${escapeHtmlPerson(person.first_name)}">
-                <label for="pd-last-name">Last name</label>
-                <input type="text" id="pd-last-name" value="${escapeHtmlPerson(person.last_name)}">
-                <label for="pd-aliases">Aliases</label>
-                <input type="text" id="pd-aliases" value="${escapeHtmlPerson(person.aliases)}">
-                <label for="pd-about">About / expertise</label>
-                <textarea id="pd-about" class="textarea-sm">${escapeHtmlPerson(person.about)}</textarea>
-                <div class="form-grid-2 form-grid-2--compact">
-                    <div>
-                        <label for="pd-birth-date">Birth date</label>
-                        <input type="text" id="pd-birth-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.birth_date || ''))}">
+                <section class="person-edit-section" aria-labelledby="person-edit-identity-heading">
+                    <h4 id="person-edit-identity-heading">Identity</h4>
+                    <label for="pd-first-name">First name</label>
+                    <input type="text" id="pd-first-name" value="${escapeHtmlPerson(person.first_name)}">
+                    <label for="pd-last-name">Last name</label>
+                    <input type="text" id="pd-last-name" value="${escapeHtmlPerson(person.last_name)}">
+                    <label for="pd-aliases">Aliases</label>
+                    <input type="text" id="pd-aliases" value="${escapeHtmlPerson(person.aliases)}">
+                </section>
+                <section class="person-edit-section" aria-labelledby="person-edit-biography-heading">
+                    <h4 id="person-edit-biography-heading">Biography</h4>
+                    <label for="pd-about">About / expertise</label>
+                    <textarea id="pd-about" class="textarea-sm">${escapeHtmlPerson(person.about)}</textarea>
+                </section>
+                <section class="person-edit-section" aria-labelledby="person-edit-dates-heading">
+                    <h4 id="person-edit-dates-heading">Dates</h4>
+                    <div class="form-grid-2 form-grid-2--compact">
+                        <div><label for="pd-birth-date">Birth date</label><input type="text" id="pd-birth-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.birth_date || ''))}"></div>
+                        <div><label for="pd-death-date">Date of death</label><input type="text" id="pd-death-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.death_date || ''))}"></div>
                     </div>
-                    <div>
-                        <label for="pd-death-date">Date of death</label>
-                        <input type="text" id="pd-death-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.death_date || ''))}">
-                    </div>
-                </div>
-                <label for="pd-image-url">Portrait image URL</label>
-                <input type="url" id="pd-image-url" value="${escapeHtmlPerson(person.image_url)}">
-                <label for="pd-link-wikipedia">Wikipedia</label>
-                <input type="url" id="pd-link-wikipedia" value="${escapeHtmlPerson(person.link_wikipedia)}">
-                <label for="pd-link-stanford">Stanford Encyclopedia of Philosophy</label>
-                <input type="url" id="pd-link-stanford" value="${escapeHtmlPerson(person.link_stanford_encyclopedia)}">
-                <label for="pd-link-iep">Internet Encyclopedia of Philosophy</label>
-                <input type="url" id="pd-link-iep" value="${escapeHtmlPerson(person.link_iep)}">
-                <label for="pd-links-other">Other links</label>
-                <textarea id="pd-links-other" placeholder="One URL per line, or [Title](https://...)" class="textarea-sm">${escapeHtmlPerson(person.links_other)}</textarea>
-                <fieldset class="person-groups-fieldset">
-                    <legend class="person-groups-fieldset__legend">Groups</legend>
-                    <p class="meta-row">Search for a group, pick from the list, or type a new name and <strong>Add</strong> to create a top-level group. Names are unique. <a href="#/people/groups">Browse groups</a>.</p>
-                    <div id="pd-group-chips" class="tag-cloud person-groups-fieldset__chips"></div>
-                    <label for="pd-group-search">Add group</label>
-                    <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
-                        <div class="tag-add-shell__field">
-                            ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
-                            <input type="text" id="pd-group-search" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add">
-                        </div>
-                        <input type="hidden" id="pd-group-pick-id" value="">
-                        <div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-                    </div>
-                    <button type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action" id="pd-group-add-btn">Add group</button>
-                </fieldset>
-                <button type="button" id="pd-save-btn" class="prks-btn prks-btn--primary person-groups-fieldset__action" onclick="savePersonProfile('${id}')">Save profile</button>
+                </section>
+                <section class="person-edit-section" aria-labelledby="person-edit-portrait-heading">
+                    <h4 id="person-edit-portrait-heading">Portrait</h4>
+                    <label for="pd-image-url">Portrait image URL</label>
+                    <input type="url" id="pd-image-url" value="${escapeHtmlPerson(person.image_url)}">
+                </section>
+                <section class="person-edit-section" aria-labelledby="person-edit-references-heading">
+                    <h4 id="person-edit-references-heading">References</h4>
+                    <label for="pd-link-wikipedia">Wikipedia</label>
+                    <input type="url" id="pd-link-wikipedia" value="${escapeHtmlPerson(person.link_wikipedia)}">
+                    <label for="pd-link-stanford">Stanford Encyclopedia of Philosophy</label>
+                    <input type="url" id="pd-link-stanford" value="${escapeHtmlPerson(person.link_stanford_encyclopedia)}">
+                    <label for="pd-link-iep">Internet Encyclopedia of Philosophy</label>
+                    <input type="url" id="pd-link-iep" value="${escapeHtmlPerson(person.link_iep)}">
+                    <label for="pd-links-other">Other links</label>
+                    <textarea id="pd-links-other" placeholder="One URL per line, or [Title](https://...)" class="textarea-sm">${escapeHtmlPerson(person.links_other)}</textarea>
+                </section>
+                <section class="person-edit-section" aria-labelledby="person-edit-groups-heading">
+                    <h4 id="person-edit-groups-heading">Groups</h4>
+                    <fieldset class="person-groups-fieldset">
+                        <legend class="sr-only">Groups</legend>
+                        <p class="meta-row">Search for a group, pick from the list, or type a new name and <strong>Add</strong> to create a top-level group. Names are unique. <a href="#/people/groups">Browse groups</a>.</p>
+                        <div id="pd-group-chips" class="tag-cloud person-groups-fieldset__chips"></div>
+                        <label for="pd-group-search">Add group</label>
+                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell"><div class="tag-add-shell__field">${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}<input type="text" id="pd-group-search" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add"></div><input type="hidden" id="pd-group-pick-id" value=""><div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div></div>
+                        <button type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action" id="pd-group-add-btn">Add group</button>
+                    </fieldset>
+                </section>
             </div>
+            <div class="form-actions prks-form-actions--split person-edit-footer"><button type="button" onclick="closePersonProfileEdit()" class="prks-btn prks-btn--secondary">Cancel</button><button type="button" id="pd-save-btn" class="prks-btn prks-btn--primary" onclick="savePersonProfile('${id}')">Save profile</button></div>
         </div>`;
 }
 
@@ -1050,7 +1047,7 @@ function renderPersonDetails(ctx, person, container) {
                     const wid = escapeHtmlPerson(w.id);
                     cards += `<div class="person-profile__work-card-wrap">${card}<button type="button" class="person-profile__card-unlink" aria-label="Remove link to this file" data-work-id="${wid}" data-person-id="${pid}" data-role-type="${rt}" data-order-index="${escapeHtmlPerson(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></div>`;
                 });
-                worksHtml += personRoleBlockHtml((role || 'Linked').toUpperCase(), worksList.length, cards);
+                worksHtml += personRoleBlockHtml(role || 'Linked', worksList.length, cards);
             }
         } else {
             const uniqueWorks = prksUniquePersonWorks(person);
@@ -1072,16 +1069,17 @@ function renderPersonDetails(ctx, person, container) {
                         .filter((x) => x && String(x.id) === workId)
                         .map((x) => (x.credit_name != null ? String(x.credit_name).trim() : ''))
                         .find(Boolean) || '';
+                    const roleContext = roleList.join(' · ');
                     const subtitle = credit
-                        ? `${credit} (${roleList.join(', ')})`
-                        : roleList.join(', ');
+                        ? `${roleContext}${roleContext ? ' · ' : ''}${credit}`
+                        : roleContext;
                     const card =
                         typeof prksWorkCardHtml === 'function'
                             ? prksWorkCardHtml(w, subtitle ? { subtitle: subtitle } : {})
                             : '';
                     cards += `<div class="person-profile__work-card-wrap">${card}</div>`;
                 });
-                worksHtml += personRoleBlockHtml((role || 'Linked').toUpperCase(), rows.length, cards);
+                worksHtml += personRoleBlockHtml(role || 'Linked', rows.length, cards);
             }
         }
     } else {
@@ -1101,14 +1099,14 @@ function renderPersonDetails(ctx, person, container) {
         : '';
     const aliasesRaw = (person.aliases || '').trim();
     const aliasesHtml = aliasesRaw
-        ? `<p class="meta-row person-profile__aliases"><span class="person-card-label">Also known as</span> ${escapeHtmlPerson(aliasesRaw)}</p>`
+        ? `<div class="person-profile__aliases"><span class="person-card-label">Also known as</span><span class="person-profile__alias-list">${aliasesRaw.split(',').map((alias) => alias.trim()).filter(Boolean).map((alias) => `<span class="person-profile__alias-tag">${escapeHtmlPerson(alias)}</span>`).join('')}</span></div>`
         : '';
     let groupsHtml = '';
     if (Array.isArray(person.groups) && person.groups.length > 0) {
         const tags = person.groups
             .map(
                 (g) =>
-                    `<span class="tag" data-prks-route="#/people/groups/${escapeHtmlPerson(g.id)}">${escapeHtmlPerson(g.name)}</span>`
+                    `<a class="tag" href="#/people/groups/${encodeURIComponent(String(g.id || ''))}">${escapeHtmlPerson(g.name)}</a>`
             )
             .join(' ');
         groupsHtml = `<p class="meta-row person-profile__groups">${tags}</p>`;
@@ -1141,6 +1139,7 @@ function renderPersonDetails(ctx, person, container) {
                     <div class="person-profile__works-head">
                     <h2 id="person-profile-works-heading" class="person-profile__works-title">Linked files</h2>
                     <span class="person-profile__works-count">${nWorks}</span>
+                    ${nWorks > 0 || worksEditing ? `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm person-profile__works-action" onclick="prksTogglePersonWorksEdit()">${worksEditing ? 'Done' : 'Edit relationships'}</button>` : ''}
                     </div>
                     ${worksHtml}
                 </section>
