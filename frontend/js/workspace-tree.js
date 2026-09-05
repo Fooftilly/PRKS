@@ -8,7 +8,8 @@
  * Main/Secondary ratio (that lives in workspace-tabs.js as `mainSplitRatio`).
  *
  * These helpers never touch DOM, TabContexts, history, or workspace state.
- * workspace-tabs.js is the only caller and owns when/why the tree changes.
+ * workspace-tabs.js owns when/why the tree changes. workspace-persistence.js
+ * may call makeLeaf/makeSplit when rehydrating a stored tree (fresh split IDs).
  * All mutation helpers are pure: they return a new root and never mutate the
  * node objects passed in (unrelated subtrees are returned by reference so
  * DOM/host reconciliation can key off `tabId`/`split.id`, not object identity).

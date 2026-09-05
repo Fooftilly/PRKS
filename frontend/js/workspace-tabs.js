@@ -10,7 +10,8 @@
     const MODE_STACKED = 'stacked';
     const MODE_TILED = 'tiled';
     const HOME_HASH = '#/folders';
-    /* Main region width / usable split width (usable excludes the separator track). Session-memory only. */
+    /* Main region width / usable split width (usable excludes the separator track).
+     * Canonical preference is persisted by workspace-persistence.js, not here. */
     const DEFAULT_MAIN_SPLIT_RATIO = 0.58;
     /* 1 Main + up to 3 Secondary leaves = 4 mounted TabContexts at once, at most. */
     const PRKS_MAX_VISIBLE_TABS = 4;
@@ -146,6 +147,15 @@
         const onMountContext = typeof deps.onMountContext === 'function' ? deps.onMountContext : null;
         const onParkContext = typeof deps.onParkContext === 'function' ? deps.onParkContext : null;
         const onDestroyContext = typeof deps.onDestroyContext === 'function' ? deps.onDestroyContext : null;
+        const loadSnapshot =
+            typeof deps.loadSnapshot === 'function'
+                ? deps.loadSnapshot
+                : function () {
+                      if (typeof root.prksLoadWorkspaceSnapshot === 'function') {
+                          return root.prksLoadWorkspaceSnapshot();
+                      }
+                      return null;
+                  };
 
         let seq = 0;
         let lastHandledHref = '';
@@ -294,6 +304,167 @@
             };
         }
 
+        function restoreTabRecord(record) {
+            const route = canonical(record && record.route);
+            let title = record && typeof record.title === 'string' ? record.title : '';
+            title = title.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+            if (!title) title = routeLoadingTitle(route);
+            let icon = record && typeof record.icon === 'string' ? record.icon : '';
+            if (!/^[a-z0-9-]{1,40}$/i.test(icon)) icon = routeTabIcon(route);
+            return {
+                id: String(record.id),
+                route: route,
+                title: title,
+                icon: icon || routeTabIcon(route),
+                history: [route],
+                historyIndex: 0,
+                titleRouteGen: null,
+            };
+        }
+
+        function adoptSeqFromTabs() {
+            let max = 0;
+            for (let i = 0; i < state.tabs.length; i++) {
+                const match = /^tab-(\d+)$/.exec(state.tabs[i].id);
+                if (!match) continue;
+                const n = Number(match[1]);
+                if (n > max) max = n;
+            }
+            seq = max;
+        }
+
+        function noteCanonicalChange() {
+            if (!state.mainTabId) return;
+            try {
+                if (typeof deps.persistNotify === 'function') {
+                    deps.persistNotify(snapshot());
+                    return;
+                }
+                if (typeof root.prksScheduleWorkspacePersistence === 'function') {
+                    root.prksScheduleWorkspacePersistence(snapshot());
+                }
+            } catch (_e) {}
+        }
+
+        function canvasLooksNarrow() {
+            if (typeof root.prksWorkspaceCanvasIsNarrow === 'function') {
+                return !!root.prksWorkspaceCanvasIsNarrow();
+            }
+            if (typeof document !== 'undefined' && document.querySelector) {
+                const canvas = document.querySelector('.prks-workspace-canvas');
+                if (canvas && canvas.clientWidth > 0) return canvas.clientWidth < 720;
+            }
+            if (typeof root.innerWidth === 'number' && root.innerWidth > 0) return root.innerWidth < 720;
+            return false;
+        }
+
+        function applyNarrowHint() {
+            if (!canvasLooksNarrow()) return;
+            narrowFallback = true;
+            state.focusedTabId = state.mainTabId;
+        }
+
+        function reconcileStartupUrl(hash) {
+            const current = canonical(hash);
+            const main = getMainTab();
+            if (!main || main.route === current) return;
+            let match = null;
+            for (let i = 0; i < state.tabs.length; i++) {
+                if (state.tabs[i].route === current) {
+                    match = state.tabs[i];
+                    break;
+                }
+            }
+            if (match && match.id !== main.id) {
+                if (root.containsTab(state.secondaryTree, match.id)) {
+                    const oldMain = state.mainTabId;
+                    state.mainTabId = match.id;
+                    state.secondaryTree = root.replaceTabId(state.secondaryTree, match.id, oldMain);
+                    if (state.secondaryTree) state.mode = MODE_TILED;
+                } else {
+                    state.mainTabId = match.id;
+                }
+                state.focusedTabId = state.mainTabId;
+                return;
+            }
+            main.history = [current];
+            main.historyIndex = 0;
+            applyTabRoute(main, current);
+        }
+
+        function tryRestore(hash) {
+            let loaded = null;
+            try {
+                loaded = loadSnapshot();
+            } catch (_e) {
+                loaded = null;
+            }
+            if (!loaded || !Array.isArray(loaded.tabs) || !loaded.tabs.length || !loaded.mainTabId) return false;
+            let tabs = null;
+            try {
+                tabs = loaded.tabs.map(restoreTabRecord);
+            } catch (_e) {
+                return false;
+            }
+            if (!tabs.length) return false;
+            let tree = null;
+            if (loaded.secondaryTree) {
+                if (typeof root.resetSplitIds === 'function') root.resetSplitIds();
+                try {
+                    tree =
+                        typeof root.prksRehydrateWorkspaceTree === 'function'
+                            ? root.prksRehydrateWorkspaceTree(loaded.secondaryTree)
+                            : null;
+                } catch (_e) {
+                    return false;
+                }
+                if (!tree) return false;
+                if (typeof root.validateTree === 'function') {
+                    const check = root.validateTree(tree);
+                    if (!check || !check.ok) return false;
+                }
+            }
+            state.tabs = tabs;
+            adoptSeqFromTabs();
+            state.mainTabId = loaded.mainTabId;
+            state.secondaryTree = tree;
+            state.mode = loaded.mode === MODE_TILED ? MODE_TILED : MODE_STACKED;
+            state.mainSplitRatio = clampUnitRatio(loaded.mainSplitRatio);
+            state.focusedTabId = state.mainTabId;
+            if (!getMainTab()) return false;
+            try {
+                reconcileStartupUrl(hash);
+            } catch (_e) {
+                return false;
+            }
+            return !!getMainTab();
+        }
+
+        function mountVisibleContexts() {
+            const main = getMainTab();
+            if (main) mountContext(main.id);
+            if (!visualTiled()) return;
+            const leaves = root.collectLeafTabIds(state.secondaryTree);
+            for (let i = 0; i < leaves.length; i++) {
+                if (leaves[i] !== state.mainTabId) mountContext(leaves[i]);
+            }
+        }
+
+        function renderRestoredSecondaries() {
+            if (!visualTiled()) return;
+            const leaves = root.collectLeafTabIds(state.secondaryTree);
+            for (let i = 0; i < leaves.length; i++) {
+                const tab = getTab(leaves[i]);
+                if (!tab) continue;
+                invokeRender({
+                    workspaceSwitch: true,
+                    tabId: tab.id,
+                    hash: tab.route,
+                    leaveApproved: true,
+                });
+            }
+        }
+
         function findTabByRoute(hash, options) {
             const route = canonical(hash);
             const opts = options || {};
@@ -334,7 +505,10 @@
         function setMainSplitRatio(ratio, options) {
             const opts = options || {};
             state.mainSplitRatio = clampUnitRatio(ratio);
-            if (opts.paint === false) return state.mainSplitRatio;
+            if (opts.paint === false) {
+                noteCanonicalChange();
+                return state.mainSplitRatio;
+            }
             paint();
             return state.mainSplitRatio;
         }
@@ -507,6 +681,7 @@
             if (typeof root.prksWorkspaceSyncTiles === 'function') {
                 root.prksWorkspaceSyncTiles(snapshot(), { visualMode: visualTiled() ? MODE_TILED : MODE_STACKED });
             }
+            noteCanonicalChange();
         }
 
         function paintFocus() {
@@ -520,20 +695,26 @@
         function bootstrap(initialHash) {
             const hash = canonical(initialHash != null ? initialHash : getHash());
             seq = 0;
-            root.resetSplitIds();
+            if (typeof root.resetSplitIds === 'function') root.resetSplitIds();
             lastHandledHref = '';
             lastRenderGen = 0;
+            narrowFallback = false;
             resetAllContexts();
-            const tab = makeTab(hash);
-            state.tabs = [tab];
-            state.secondaryTree = null;
-            state.mode = MODE_STACKED;
-            state.mainSplitRatio = DEFAULT_MAIN_SPLIT_RATIO;
-            setMain(tab.id);
+            if (!tryRestore(hash)) {
+                const tab = makeTab(hash);
+                state.tabs = [tab];
+                state.secondaryTree = null;
+                state.mode = MODE_STACKED;
+                state.mainSplitRatio = DEFAULT_MAIN_SPLIT_RATIO;
+                setMain(tab.id);
+            }
             paint();
-            mountContext(tab.id);
-            commitUrl(tab, 'replace');
+            applyNarrowHint();
+            mountVisibleContexts();
+            const main = getMainTab();
+            if (main) commitUrl(main, 'replace');
             paint();
+            renderRestoredSecondaries();
             return snapshot();
         }
 
@@ -1457,14 +1638,18 @@
             return lastRenderGen;
         }
 
-        /** Nested split ratios are node-local and memory-only, same discipline as the root
-         * mainSplitRatio. `options.paint === false` skips a full repaint (used by drag). */
+        /** Nested split ratios are node-local canonical preference, same discipline as the root
+         * mainSplitRatio. Persistence reads them from workspace state; this setter never
+         * touches storage. `options.paint === false` skips a full repaint (used by drag). */
         function setNestedSplitRatio(splitId, ratio, options) {
             const node = root.findNodeById(state.secondaryTree, splitId);
             if (!node) return null;
             state.secondaryTree = root.setSplitRatio(state.secondaryTree, splitId, ratio);
             const updated = root.findNodeById(state.secondaryTree, splitId);
-            if (options && options.paint === false) return updated ? updated.ratio : null;
+            if (options && options.paint === false) {
+                noteCanonicalChange();
+                return updated ? updated.ratio : null;
+            }
             paint();
             return updated ? updated.ratio : null;
         }

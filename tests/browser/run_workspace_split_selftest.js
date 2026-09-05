@@ -417,7 +417,8 @@ async function run() {
     reset.ws.resetMainSplitRatio({ paint: false });
     assertEq('resetMainSplitRatio restores default', reset.ws.snapshot().mainSplitRatio, 0.58);
 
-    /* No persistence: canonical ratio API must not touch storage. */
+    /* Canonical ratio API lives in workspace-tabs.js; localStorage stays in
+     * workspace-persistence.js only. */
     const src = require('fs').readFileSync(path.join(rootDir, 'frontend/js/workspace-tabs.js'), 'utf8');
     assert('workspace-tabs.js still has no localStorage', src.indexOf('localStorage') === -1);
     const splitSrc = require('fs').readFileSync(path.join(rootDir, 'frontend/js/workspace-split.js'), 'utf8');

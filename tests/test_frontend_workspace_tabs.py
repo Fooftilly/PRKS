@@ -20,6 +20,8 @@ _README = os.path.join(_PROJECT_DIR, "README.md")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tabs_selftest.js")
 _TREE = os.path.join(_FRONTEND, "js", "workspace-tree.js")
 _TREE_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tree_selftest.js")
+_PERSIST = os.path.join(_FRONTEND, "js", "workspace-persistence.js")
+_PERSIST_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_persistence_selftest.js")
 _DRAG = os.path.join(_FRONTEND, "js", "workspace-drag.js")
 _DRAG_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_drag_selftest.js")
 _SPLIT = os.path.join(_FRONTEND, "js", "workspace-split.js")
@@ -66,6 +68,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         ws_at = html.find('src="/js/workspace-tabs.js"')
         tc_at = html.find('src="/js/tab-context.js"')
         tree_at = html.find('src="/js/workspace-tree.js"')
+        persist_at = html.find('src="/js/workspace-persistence.js"')
         tiling_at = html.find('src="/js/workspace-tiling.js"')
         split_at = html.find('src="/js/workspace-split.js"')
         menu_at = html.find('src="/js/workspace-tab-menu.js"')
@@ -76,6 +79,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertNotEqual(nav_at, -1)
         self.assertNotEqual(ws_at, -1)
         self.assertNotEqual(tree_at, -1)
+        self.assertNotEqual(persist_at, -1)
         self.assertNotEqual(tiling_at, -1)
         self.assertNotEqual(split_at, -1)
         self.assertNotEqual(menu_at, -1)
@@ -89,6 +93,8 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         # up initialization.
         self.assertLess(nav_at, ws_at)
         self.assertLess(ws_at, tc_at)
+        self.assertLess(tree_at, persist_at)
+        self.assertLess(persist_at, ws_at)
         self.assertLess(tree_at, ws_at)
         self.assertLess(tc_at, tiling_at)
         self.assertLess(tiling_at, split_at)
@@ -104,6 +110,8 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(_SPLIT))
         self.assertTrue(os.path.isfile(_MENU))
         self.assertTrue(os.path.isfile(_DRAG))
+        self.assertTrue(os.path.isfile(_PERSIST))
+        self.assertTrue(os.path.isfile(_PERSIST_RUNNER))
         self.assertTrue(os.path.isfile(_RUNNER))
         self.assertTrue(os.path.isfile(_COORD))
 
@@ -257,6 +265,11 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("overflow", readme.lower())
         self.assertIn("Shift+F10", readme)
         self.assertIn("drafting", readme.lower())
+        self.assertIn("remembers your open tabs", readme.lower())
+        self.assertIn("workspace-persistence.js", agents)
+        self.assertIn("before first normal mount", agents.lower())
+        self.assertIn("Workspace logical state is persistent", design)
+        self.assertIn("workspace runtime state is ephemeral", design.lower())
 
     def test_node_selftest(self):
         node = shutil.which("node")
@@ -286,6 +299,49 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIsNotNone(node, "node is required for workspace tree tests")
         proc = subprocess.run(
             [node, _TREE_RUNNER],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("passed", proc.stdout)
+        self.assertIn(", 0 failed", proc.stdout)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
+    def test_persistence_module_and_selftest(self):
+        self.assertTrue(os.path.isfile(_PERSIST))
+        self.assertTrue(os.path.isfile(_PERSIST_RUNNER))
+        html = _read(_INDEX)
+        persist_at = html.find('src="/js/workspace-persistence.js"')
+        tree_at = html.find('src="/js/workspace-tree.js"')
+        ws_at = html.find('src="/js/workspace-tabs.js"')
+        self.assertNotEqual(persist_at, -1)
+        self.assertLess(tree_at, persist_at)
+        self.assertLess(persist_at, ws_at)
+        persist_src = _read(_PERSIST)
+        self.assertIn("prks.workspace.v1", persist_src)
+        self.assertIn("pagehide", persist_src)
+        self.assertIn("last-writer-wins", persist_src)
+        self.assertNotIn("new BroadcastChannel", persist_src)
+        for name in (
+            "workspace-tabs.js",
+            "workspace-tree.js",
+            "workspace-tiling.js",
+            "workspace-split.js",
+            "workspace-drag.js",
+            "workspace-tab-menu.js",
+            "tab-context.js",
+        ):
+            src = _read(os.path.join(_FRONTEND, "js", name))
+            self.assertNotIn("localStorage", src, name)
+            self.assertNotIn("sessionStorage", src, name)
+            self.assertNotIn("indexedDB", src, name)
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for workspace persistence tests")
+        proc = subprocess.run(
+            [node, _PERSIST_RUNNER],
             cwd=_PROJECT_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

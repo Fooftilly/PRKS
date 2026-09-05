@@ -588,7 +588,7 @@ Tiling:
 
 ### Main/Secondary divider
 
-The root split between Main and Secondary is workspace-owned, session-memory state: one normalized ratio (`mainSplitRatio`, default `0.58`, meaning Main width / usable split width, usable width excluding the separator track). It is not persisted; a full reload resets it to default. It follows workspace *roles*, not tab identity — Make Main, adding/removing Secondary panes, Hide/Show split, and the narrow responsive fallback all preserve the current ratio unchanged.
+The root split between Main and Secondary is workspace-owned canonical preference: one normalized ratio (`mainSplitRatio`, default `0.58`, meaning Main width / usable split width, usable width excluding the separator track). Workspace Persistence v1 stores that preferred ratio (and each nested split node's preferred ratio) in browser `localStorage`. Constrained/effective ratios applied by ResizeObserver are not stored. The preference follows workspace *roles*, not tab identity — Make Main, adding/removing Secondary panes, Hide/Show split, and the narrow responsive fallback all preserve the current ratio unchanged.
 
 Divider contract:
 
@@ -612,11 +612,11 @@ Every internal Secondary split node (`type: "split"`, `axis: "left-right" | "top
 - each split node's minimum sizes are centralized constants (`PRKS_NESTED_MIN_WIDTH_PX` / `PRKS_NESTED_MIN_HEIGHT_PX`) and are measured against that split's own container, never the window or workspace root; both children of a nested split share the same minimum (no Main/Secondary role distinction inside Secondary)
 - if a split's container becomes too small to honor both children's minimums, its ratio clamps safely to that split's own midpoint rather than producing a negative/overflowing pane — this is expected, container-local behavior, not an error
 - dragging or keyboard-resizing one split node never touches the root `mainSplitRatio` or any other split node's ratio; it never mounts/unmounts a TabContext, re-renders a route, or triggers a leave guard
-- nested ratios are memory-only, exactly like the root ratio; a full reload resets every split back to its default
+- nested ratios are canonical user preference, exactly like the root ratio; Workspace Persistence v1 stores the preferred value, not a temporarily constrained effective ratio
 
 ### Recursive Secondary tree
 
-`secondaryTree` is `null` (no Secondary), a bare `{ type: "leaf", tabId }` (exactly one Secondary tab — the common case), or a `{ type: "split", id, axis, ratio, first, second }` node whose `first`/`second` children are themselves leaves or splits. Split-node IDs are stable per-runtime keys (DOM reuse, resize ownership, focus, targeted mutation) — never array index, DOM position, or a child's tab ID. They are in-memory only; nothing about the tree is persisted across a reload yet.
+`secondaryTree` is `null` (no Secondary), a bare `{ type: "leaf", tabId }` (exactly one Secondary tab — the common case), or a `{ type: "split", id, axis, ratio, first, second }` node whose `first`/`second` children are themselves leaves or splits. Split-node IDs are stable per-runtime keys (DOM reuse, resize ownership, focus, targeted mutation) — never array index, DOM position, or a child's tab ID. They are in-memory only; Workspace Persistence v1 stores topology, axis, preferred ratio, and leaf tab IDs, then assigns fresh split-node IDs on restore.
 
 A recursive DOM renderer mounts exactly one stable host per visible leaf (keyed by `tabId`) and one split container + separator per split node (keyed by `split.id`), reconciling rather than rebuilding: an unrelated leaf's host and TabContext survive any sibling being split, closed, hidden, resized, or promoted to Main elsewhere in the tree. Removing a leaf normalizes the tree — a split node left with only one child is replaced by that child, repeated upward as needed — so the tree never carries a redundant single-child split node.
 
@@ -648,6 +648,39 @@ Visual states (all restrained, flat/square — no heavy shadows or cards beyond 
 - No drop-zone chrome of any kind exists outside an active, eligible drag.
 
 Lifecycle: one idempotent `cleanup()` tears down pointer capture, every document/window listener, the preview element, every overlay/marker, the autoscroll animation frame, source styling, and the body drag class — safe to call more than once. `cancel()` (exported as `prksWorkspaceCancelActiveDrag`) runs that same cleanup and leaves canonical state completely untouched; it fires on Escape, `pointercancel`, `lostpointercapture`, window blur, and is also called defensively (and harmlessly, when nothing is active) by `workspace-tiling.js` right before a real narrow/wide transition and right before pruning any stale tile that could contain the live drag source. A drag only ever begins after the pointer clears a small movement threshold (distinguishing it from a plain click), and click suppression is armed only for the click a completed `pointerup` gesture synthesizes — a cancelled drag never swallows the user's next intentional click.
+
+### Workspace persistence
+
+Workspace logical state is persistent; workspace runtime state is ephemeral.
+
+`frontend/js/workspace-persistence.js` is the only workspace module that may read or write `localStorage`. It serializes the existing workspace state machine; it is not part of that state machine. Other workspace modules (`workspace-tabs.js`, `workspace-tree.js`, `workspace-tiling.js`, `workspace-split.js`, `workspace-drag.js`, `tab-context.js`) stay storage-free and notify persistence after a successful canonical mutation. Writes are debounced (~200 ms) and flushed on `pagehide`. Pointer-move layout clamping must not write; user-committed canonical ratios may.
+
+Storage key: `prks.workspace.v1` (explicit schema `version: 1`). v1 is last-writer-wins on this browser profile. There is no `storage` event sync, BroadcastChannel, live multi-window merge, or server-side workspace copy.
+
+Persisted:
+
+- tab IDs and tab order
+- canonical tab routes
+- Main tab ID
+- logical Secondary tree (topology, axis, preferred nested ratio, leaf tab IDs)
+- preferred root `mainSplitRatio`
+- split shown/hidden (`mode` stacked vs tiled, with the tree preserved when hidden)
+- cached tab title and icon (display hints only)
+
+Not persisted:
+
+- TabContext / mounted status / DOM / route generation / AbortController / timers / requests
+- editor instances, dirty flags, draft buffers, Research Notes / private-note save state
+- PDF, graph, playlist, right-panel, and focused-entity runtime
+- pointer/drag state, ResizeObserver instances, effective constrained ratios, `narrowFallback`
+- contextual Back/Forward history (each restored tab starts as `history = [route]`, `historyIndex = 0`)
+- split-node runtime IDs (fresh IDs are assigned on rehydrate)
+
+Startup restores before the first normal workspace mount: read + validate the snapshot atomically, build logical workspace state, reconcile the current URL, then mount only currently visible leaves. Parked tabs and hidden Secondary leaves stay state-only and must not fetch. The current startup URL outranks a stale persisted Main route: keep a valid restored workspace where possible, but make Main represent the opened hash and never silently redirect back to the stored Main. `narrowFallback` is recomputed from the live viewport; a wide layout stored on a wide display remains logically intact when reopened narrow, and the preferred ratios return when the viewport is eligible again.
+
+A corrupt, unknown-version, or contradictory snapshot is discarded (the invalid `localStorage` value is removed) and PRKS bootstraps from the current URL. localStorage unavailability, quota errors, and serialize failures leave the running workspace intact and must not break navigation. Restored titles render through existing safe text paths (`textContent`); mounted routes refresh metadata normally.
+
+Workspace persistence is not an alternative store for Research Notes, private reminders, PDFs, or other feature data. Those keep their existing backend save paths.
 
 ### Chips, tags, and badges
 

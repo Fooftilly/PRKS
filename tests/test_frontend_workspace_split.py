@@ -44,7 +44,7 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
         self.assertIn("prksWorkspaceSetMainSplitRatio", src)
         self.assertIn("prksWorkspaceGetSplitRatio", src)
         self.assertIn("prksWorkspaceResetMainSplitRatio", src)
-        # No persistence anywhere near the ratio implementation.
+        # Ratio state lives in workspace-tabs.js; only workspace-persistence.js may touch storage.
         self.assertNotIn("localStorage", src)
         self.assertNotIn("sessionStorage", src)
         self.assertNotIn("indexedDB", src)

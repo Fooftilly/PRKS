@@ -1872,6 +1872,57 @@ def _workspace_ids(page):
     )
 
 
+def _flush_workspace(page):
+    page.evaluate(
+        """() => {
+            if (window.prksFlushWorkspacePersistence) window.prksFlushWorkspacePersistence();
+        }"""
+    )
+
+
+def _logical_workspace(page):
+    return page.evaluate(
+        """() => {
+            function strip(node) {
+                if (!node) return null;
+                if (node.type === 'leaf') return { type: 'leaf', tabId: node.tabId };
+                return {
+                    type: 'split',
+                    axis: node.axis,
+                    ratio: node.ratio,
+                    first: strip(node.first),
+                    second: strip(node.second),
+                };
+            }
+            const snap = window.prksWorkspaceSnapshot();
+            const debug = window.prksTabContextDebugSnapshot && window.prksTabContextDebugSnapshot();
+            const mountedIds = ((debug && debug.contexts) || [])
+                .filter(function (c) { return c.mounted; })
+                .map(function (c) { return c.tabId; })
+                .sort();
+            return {
+                tabIds: snap.tabs.map(function (t) { return t.id; }),
+                routes: snap.tabs.map(function (t) { return t.route; }),
+                mainTabId: snap.mainTabId,
+                mode: snap.mode,
+                mainSplitRatio: snap.mainSplitRatio,
+                tree: strip(snap.secondaryTree),
+                mountedCount: debug && debug.mountedCount,
+                mountedIds: mountedIds,
+                hash: location.hash,
+                visualTiled: !!(window.prksWorkspaceVisualTiled && window.prksWorkspaceVisualTiled()),
+            };
+        }"""
+    )
+
+
+def _reload_workspace(page):
+    _flush_workspace(page)
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_selector("#sidebar")
+    page.wait_for_function("() => window.__prksWorkspaceReady === true")
+
+
 def _open_work_work_split(page, server):
     """Work A Main, Work B Secondary, both PDFs ready. Returns (work_a, work_b, ids)."""
     work_a = server.ids["work_a"]
@@ -4910,6 +4961,271 @@ class MainSecondaryDividerTests(_BrowserE2E):
 
         self.assertEqual(len(requests), before, "divider drags must not fetch a Work route or reload a PDF")
         self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
+
+
+class WorkspacePersistenceTests(_BrowserE2E):
+    def test_recursive_workspace_survives_reload(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        page.evaluate("() => window.prksWorkspaceSetMainSplitRatio(0.7)")
+        inner_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.second.id")
+        page.evaluate("(id) => window.prksWorkspaceSetNestedSplitRatio(id, 0.65)", arg=inner_id)
+        first_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[0].id")
+        page.evaluate("(id) => window.prksWorkspaceReorderTab(id, null)", arg=first_id)
+        page.evaluate("(id) => window.prksWorkspaceMakeMain(id)", arg=tree["d_id"])
+        page.wait_for_function(
+            "(id) => window.prksWorkspaceSnapshot().mainTabId === id",
+            arg=tree["d_id"],
+        )
+        before = _logical_workspace(page)
+        self.assertEqual(before["mode"], "tiled")
+        self.assertEqual(before["mountedCount"], 4)
+        _reload_workspace(page)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 4")
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 4")
+        after = _logical_workspace(page)
+        self.assertEqual(after["tabIds"], before["tabIds"])
+        self.assertEqual(after["routes"], before["routes"])
+        self.assertEqual(after["mainTabId"], before["mainTabId"])
+        self.assertEqual(after["mode"], "tiled")
+        self.assertEqual(after["tree"], before["tree"])
+        self.assertAlmostEqual(after["mainSplitRatio"], before["mainSplitRatio"], places=5)
+        self.assertTrue(after["visualTiled"])
+        self.assertEqual(after["mountedCount"], 4)
+        self.assertEqual(sorted(after["mountedIds"]), sorted(before["mountedIds"]))
+        self.assertEqual(page.locator(".prks-tile").count(), 4)
+
+    def test_hidden_split_reload_does_not_fetch_secondaries(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+        before = _logical_workspace(page)
+        self.assertIsNotNone(before["tree"])
+        seen = []
+
+        def on_request(req):
+            if req.method == "GET":
+                seen.append(urlparse(req.url).path)
+
+        page.on("request", on_request)
+        _reload_workspace(page)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        page.wait_for_timeout(400)
+        after = _logical_workspace(page)
+        self.assertEqual(after["tree"], before["tree"])
+        self.assertEqual(after["mode"], "stacked")
+        self.assertEqual(after["mountedCount"], 1)
+        self.assertFalse(after["visualTiled"])
+        self.assertNotIn("/api/persons/" + tree["person"], seen)
+        self.assertNotIn("/api/positions/" + tree["position"], seen)
+        self.assertNotIn("/api/works/" + tree["work_b"], seen)
+        page.locator("#prks-workspace-tile-layout").click()
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 4")
+        shown = _logical_workspace(page)
+        self.assertEqual(shown["tree"], before["tree"])
+        self.assertEqual(shown["mode"], "tiled")
+        self.assertEqual(shown["mountedCount"], 4)
+
+    def test_narrow_reload_keeps_tree_and_preferred_ratios(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        page.evaluate("() => window.prksWorkspaceSetMainSplitRatio(0.72)")
+        inner_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.second.id")
+        page.evaluate("(id) => window.prksWorkspaceSetNestedSplitRatio(id, 0.63)", arg=inner_id)
+        before = _logical_workspace(page)
+        page.set_viewport_size({"width": 500, "height": 900})
+        seen = []
+
+        def on_request(req):
+            if req.method == "GET":
+                seen.append(urlparse(req.url).path)
+
+        page.on("request", on_request)
+        _reload_workspace(page)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().secondaryTree")
+        page.wait_for_timeout(400)
+        narrow = _logical_workspace(page)
+        self.assertEqual(narrow["tree"], before["tree"])
+        self.assertAlmostEqual(narrow["mainSplitRatio"], before["mainSplitRatio"], places=5)
+        self.assertEqual(narrow["mode"], "tiled")
+        self.assertFalse(narrow["visualTiled"])
+        self.assertEqual(narrow["mountedCount"], 1)
+        self.assertNotIn("/api/persons/" + tree["person"], seen)
+        self.assertNotIn("/api/positions/" + tree["position"], seen)
+        self.assertNotIn("/api/works/" + tree["work_b"], seen)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 4")
+        wide = _logical_workspace(page)
+        self.assertEqual(wide["tree"], before["tree"])
+        self.assertAlmostEqual(wide["mainSplitRatio"], before["mainSplitRatio"], places=5)
+        self.assertTrue(wide["visualTiled"])
+
+    def test_direct_link_outranks_persisted_main(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        before = _logical_workspace(page)
+        self.assertIn(tree["work_a"], before["hash"])
+        _flush_workspace(page)
+        page.goto(server.origin + "/#/people/" + tree["person"], wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        page.wait_for_function("() => window.__prksWorkspaceReady === true")
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        after = _logical_workspace(page)
+        self.assertIn(tree["person"], after["hash"])
+        self.assertNotIn(tree["work_a"], after["hash"])
+        main_route = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const tab = snap.tabs.find(function (t) { return t.id === snap.mainTabId; });
+                return tab ? tab.route : '';
+            }"""
+        )
+        self.assertIn(tree["person"], main_route)
+        self.assertIsNotNone(after["tree"])
+        self.assertEqual(len(after["tabIds"]), len(before["tabIds"]))
+
+    def test_corrupt_localStorage_falls_back_to_url(self):
+        server, page, _collector = self._start_app()
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        work_hash = page.evaluate("() => location.hash")
+        page.evaluate(
+            """() => {
+                localStorage.setItem('prks.workspace.v1', '{not-json');
+            }"""
+        )
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        page.wait_for_function("() => window.__prksWorkspaceReady === true")
+        page.wait_for_function("(h) => location.hash === h", arg=work_hash)
+        after = _logical_workspace(page)
+        self.assertEqual(len(after["tabIds"]), 1)
+        self.assertEqual(after["mainTabId"], after["tabIds"][0])
+        self.assertIsNone(after["tree"])
+        self.assertEqual(after["mountedCount"], 1)
+        self.assertEqual(page.locator(".prks-tile--secondary").count(), 0)
+        self.assertEqual(page.locator(".prks-workspace-tab").count(), 1)
+        page.locator("#prks-workspace-new-tab").wait_for()
+
+    def test_parked_tabs_do_not_fetch_on_reload(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false })""",
+            arg=work_b,
+        )
+        page.evaluate(
+            """(id) => window.prksNavigate('#/people/' + id, { target: 'new-tab', activate: false })""",
+            arg=person_id,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 3")
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+        seen = []
+
+        def on_request(req):
+            if req.method == "GET":
+                seen.append(urlparse(req.url).path)
+
+        page.on("request", on_request)
+        _reload_workspace(page)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 3")
+        page.wait_for_timeout(400)
+        after = _logical_workspace(page)
+        self.assertEqual(after["mountedCount"], 1)
+        self.assertNotIn("/api/works/" + work_b, seen)
+        self.assertNotIn("/api/persons/" + person_id, seen)
+        self.assertIn("/api/works/" + server.ids["work_a"], seen)
+
+    def test_new_tab_after_restore_gets_unique_id(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false })""",
+            arg=server.ids["work_b"],
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        before = _logical_workspace(page)
+        _reload_workspace(page)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 2")
+        restored_ids = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.map(function (t) { return t.id; })")
+        page.evaluate("() => window.prksWorkspaceOpenTab('#/folders', { activate: false })")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().tabs.length === 3")
+        after_ids = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.map(function (t) { return t.id; })")
+        self.assertEqual(after_ids[:2], restored_ids)
+        self.assertNotIn(after_ids[2], restored_ids)
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+        self.assertEqual(before["mainTabId"], page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"))
+
+    def test_research_notes_reload_uses_backend_not_workspace_snapshot(self):
+        server, page, _collector = self._start_app()
+        work_a = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector(".CodeMirror")
+        unique = "WS-PERSIST-NOTES-%s" % int(time.time() * 1000)
+        page.locator(".CodeMirror").click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text(unique)
+        page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
+        _flush_workspace(page)
+        stored = page.evaluate(
+            """() => {
+                const raw = localStorage.getItem('prks.workspace.v1');
+                return raw || '';
+            }"""
+        )
+        self.assertNotIn(unique, stored)
+        _reload_workspace(page)
+        page.wait_for_selector(".CodeMirror")
+        page.wait_for_function(
+            """(text) => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const wn = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                const ed = wn && wn.editor ? wn.editor : wn;
+                return !!(ed && ed.value && ed.value().indexOf(text) !== -1);
+            }""",
+            arg=unique,
+        )
+        persisted = page.evaluate(
+            """async (id) => (await (await fetch('/api/works/' + id)).json()).text_content""",
+            arg=work_a,
+        )
+        self.assertIn(unique, persisted or "")
+
+    def test_private_reminder_reload_uses_backend_not_workspace_snapshot(self):
+        server, page, _collector = self._start_app()
+        work_a = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        selector = "#prks-private-notes-work-" + work_a
+        page.locator(selector).wait_for()
+        unique = "WS-PERSIST-PRIVATE-%s" % int(time.time() * 1000)
+        page.locator(selector).fill(unique)
+        page.locator(selector).press("Tab")
+        page.locator("#prks-private-notes-status-work-" + work_a, has_text="Saved").wait_for(timeout=15000)
+        _flush_workspace(page)
+        stored = page.evaluate("() => localStorage.getItem('prks.workspace.v1') || ''")
+        self.assertNotIn(unique, stored)
+        _reload_workspace(page)
+        page.locator(selector).wait_for()
+        page.wait_for_function(
+            """(args) => {
+                const el = document.querySelector(args.selector);
+                return !!(el && el.value === args.text);
+            }""",
+            arg={"selector": selector, "text": unique},
+        )
 
 
 class WorkspaceDragDropTests(_BrowserE2E):

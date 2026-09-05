@@ -704,6 +704,17 @@
         bindSplitMenuLayer();
     }
 
+    function prksWorkspaceCanvasIsNarrow() {
+        const canvas =
+            typeof document !== 'undefined' && document.querySelector
+                ? document.querySelector('.prks-workspace-canvas')
+                : null;
+        const measured = canvas && canvas.clientWidth > 0 ? canvas.clientWidth : 0;
+        const width = measured || (typeof root.innerWidth === 'number' ? root.innerWidth : 0);
+        if (!(width > 0)) return false;
+        return width < NARROW_PX;
+    }
+
     function prksWorkspaceInitTiles() {
         ensureCanvas();
         bindFocusLayer();
@@ -719,6 +730,7 @@
         prksWorkspaceApplyFocus: prksWorkspaceApplyFocus,
         prksWorkspaceInitTiles: prksWorkspaceInitTiles,
         prksWorkspaceEnsureTileHost: ensureTile,
+        prksWorkspaceCanvasIsNarrow: prksWorkspaceCanvasIsNarrow,
     };
 
     Object.keys(api).forEach(function (k) {

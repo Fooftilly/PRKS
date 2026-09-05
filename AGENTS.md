@@ -33,7 +33,7 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/research_index.py` disposable derived note-reference index
 - `backend/research_graph.py` read-only Research Graph projection
 - `backend/performance.py` in-memory performance diagnostics
-- `frontend/` UI (`frontend/js/tab-context.js` per-tab runtime, `frontend/js/workspace-tabs.js` stacked workspace tabs)
+- `frontend/` UI (`frontend/js/tab-context.js` per-tab runtime, `frontend/js/workspace-tabs.js` stacked workspace tabs, `frontend/js/workspace-persistence.js` workspace localStorage)
 - `tests/` unittest
 
 New substantial behavior, in order:
@@ -205,16 +205,16 @@ Do not add route-level global runtime state.
 
 Tab switching must not create contextual Back origins.
 
-Workspace state is intentionally memory-only in v1.
+Workspace logical state is persistent; workspace runtime state is ephemeral. `frontend/js/workspace-persistence.js` owns all workspace `localStorage` behavior (schema, validation, debounce, restore, corrupt-snapshot cleanup). Do not write workspace storage from `workspace-tabs.js`, `workspace-tree.js`, `workspace-tiling.js`, `workspace-split.js`, `workspace-drag.js`, or `tab-context.js`. Never persist TabContext/runtime objects, editor drafts, effective constrained ratios, `narrowFallback`, or split-node runtime IDs. Restore happens before first normal mount. Parked restored tabs must not fetch. The current startup URL outranks a persisted Main route. Persistence failures must not break app startup.
 
 Root Main/Secondary width is workspace-owned: one normalized ratio (`mainSplitRatio`,
 default `0.58`) lives in workspace-tabs.js state, alongside `mainTabId` /
 `focusedTabId` / `secondaryTree`. Every internal Secondary split node owns its own
 local `ratio` (default `0.5`) inside its own tree node — never on either child tab,
 never inherited from the root ratio or from a sibling split. Routes must never
-store, read, or modify any of these ratios. All of them are intentionally
-memory-only until Workspace Persistence; do not write any of them to
-`localStorage`, `sessionStorage`, IndexedDB, or a backend setting.
+store, read, or modify any of these ratios. Canonical preferred ratios persist
+through `workspace-persistence.js` only; do not write them from feature code, and
+do not persist constrained/effective ratios.
 
 Main/Secondary ratio follows roles, not tab IDs. Make Main, adding/removing
 Secondary panes, Hide/Show split, and the narrow responsive fallback must never
