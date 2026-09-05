@@ -76,7 +76,12 @@ function prksFolderLibraryFilterFromStorage() {
 
 function prksFolderLibraryTreeInnerHtml(list, filterQuery) {
     if (!list || !list.length) {
-        return '<p class="prks-inline-message prks-folder-tree__empty">No folders yet. Use <strong>New folder</strong> to create one.</p>';
+        return (
+            '<div class="prks-folder-tree__empty-state">' +
+            '<p class="prks-inline-message prks-folder-tree__empty">No folders yet.</p>' +
+            '<button type="button" class="prks-btn prks-btn--primary prks-folder-tree__create-btn" data-prks-create-folder-query="">New folder</button>' +
+            '</div>'
+        );
     }
     return `<div class="prks-folder-tree" role="tree">${renderFolderTreeRoots(list, { filterQuery })}</div>`;
 }
@@ -540,6 +545,14 @@ function prksBindFolderLibraryFilesSearch(root) {
     prksSyncFolderLibrarySearchClear(input, clearBtn);
 }
 
+/** Concise scan-friendly date for Recently Added cards, e.g. "Sep 5, 2026" — no exact time. */
+function prksRecentlyAddedDateLabel(createdAt) {
+    if (!createdAt) return '';
+    const d = new Date(createdAt);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
     if (!paneEl) return;
     const st = window.__prksFolderDashboardState;
@@ -552,14 +565,18 @@ function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
     let html = '';
     if (list.length > 0) {
         list.forEach((w) => {
-            const dateStr = w.created_at ? new Date(w.created_at).toLocaleString() : '';
-            const subtitle = dateStr ? `Added: ${dateStr}` : '';
+            const dateLabel = prksRecentlyAddedDateLabel(w.created_at);
+            const subtitle = dateLabel ? `Added ${dateLabel}` : '';
             html += typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { subtitle }) : '';
         });
     } else if (q) {
         html = '<p class="prks-inline-message">No files match your search.</p>';
     } else {
-        html = '<p class="prks-inline-message">No files in the library yet.</p>';
+        html =
+            '<div class="prks-folder-tree__empty-state">' +
+            '<p class="prks-inline-message">No files in the library yet.</p>' +
+            '<button type="button" class="prks-btn prks-btn--primary prks-folder-tree__create-btn" onclick="openModal(\'work-modal\')">New File</button>' +
+            '</div>';
     }
     paneEl.innerHTML = html;
 }

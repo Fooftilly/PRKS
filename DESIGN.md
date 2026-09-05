@@ -486,6 +486,21 @@ Use a **list row** (`.prks-list-row`) when comparison/scanning density matters, 
 
 Both share surface, border, selection, hover, focus, and metadata hierarchy. Work cards, person cards, and folder tree rows are domain layouts that use this grammar—they are not a license for per-feature decoration.
 
+### Work-card metadata hierarchy
+
+`prksWorkCardHtml()` (`frontend/js/components/work-cards.js`) is the single shared Work-card renderer across Recent, Progress, Search, Person profiles, and the Folder Library. Do not fork it into per-context components; vary presentation through its `options` (`subtitle`, `thumbPage`, `hideDocTypeBadge`).
+
+Bibliographic identity precedes contextual metadata. The card reads, top to bottom:
+
+1. Title (`.card-title`), clamped to 2 lines; the full title stays in a `title` attribute, never truncated in data.
+2. `.work-card__meta` — stable bibliographic identity only: Author/Editor fallback credit line, then year.
+3. `.work-card__context` — route-specific, lower-emphasis context (added/opened date, search abstract excerpt, Person credit/role). This is what `options.subtitle` renders into; it is never concatenated into `.work-card__meta`.
+4. `.work-card__badges` — Progress status, document type, file size. Status/type stay at the bottom; do not promote them above the title.
+
+Thumbnails carry a source class (`work-card__thumb--pdf` or `work-card__thumb--video`) from already-known `source_kind`/`file_path` data — no extra request to determine it. PDF thumbnails get a neutral padded frame (`object-fit: contain`, page visually separated from the frame) so a bright page doesn't read as a full-bleed photo in dark mode; video thumbnails stay `object-fit: cover`, full-bleed. Empty/broken thumbnails fall back to a source-appropriate label ("PDF"/"VIDEO"), never a blanket "PDF". Thumbnail `alt` stays empty — the card title is the semantic identity, not the image.
+
+Work cards are navigation surfaces, not control panels: no per-card `…` menu, favorite, quick delete/edit, or status buttons. Clicking the card remains the one action; existing bulk-selection behavior is unaffected.
+
 ### Panels
 
 ```text
@@ -795,7 +810,9 @@ At narrow modal widths the vertical nav becomes a single-line horizontally scrol
 
 The shell is one visual system, not three.
 
-**Sidebar:** 250px desktop baseline, flat surface, 1px separator, compact navigation, uppercase section labels, Lucide icons. Selected, hover, disclosure, nested indentation, and section spacing are shared. Selected state uses `--surface-selected` and accent, not a unique sidebar palette.
+**Sidebar:** 250px desktop baseline, flat surface, 1px separator, compact navigation, Lucide icons. Selected, hover, disclosure, nested indentation, and section spacing are shared. Selected state uses `--surface-selected` and accent, not a unique sidebar palette. Uppercase section labels (`Library`, `Organize`) mark groups of independent links; a disclosure family (People, Research, Progress) does not get a redundant standalone heading on top of its own row — `nav-disclosure--section-break` gives it the same separator/spacing a heading would have.
+
+**Sidebar disclosure (People/Research/Progress):** tri-state per family — `unset` (no explicit choice), `expanded`, or `collapsed` — stored under `prks.nav.<family>Expanded` (`"1"`/`"0"`; missing key is `unset`). An explicit user choice always wins over the active route. Only while `unset` may entering a route inside that family (e.g. `#/people/role/Reviewer`) auto-expand it. Pressing the disclosure toggle always visibly flips the family — there is no "forced open" case that silently reopens it. A family whose active route it contains, but which is collapsed, still gets a restrained `nav-disclosure--contains-current` indicator (accent label/icon) distinct from the `.active`/`aria-current="page"` treatment reserved for the actual destination link. People keeps a real `#/people` link plus a separate small chevron toggle, since it has a real landing page; Research and Progress have no useful landing page, so their whole row is one native `<button>` (icon + label + chevron) — not a link, and not a `<span>` wearing a click handler.
 
 **Top ribbon:** Canonical global command bar. Controls use the same button primitives as elsewhere; “ribbon button” is not a separate semantic button system. Global search (`.prks-palette-launch`) remains visually prominent but restrained. Keyboard hint chips stay square (not pill).
 

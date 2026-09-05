@@ -107,7 +107,9 @@ function prksWorkCardCreditLine(w) {
 /**
  * Work card HTML for card-grid layouts.
  * @param {object} w
- * @param {object} options { subtitle?: string, thumbPage?: number } — subtitle = extra tail (abstract, last opened, …)
+ * @param {object} options { subtitle?: string, thumbPage?: number } — subtitle = contextual line
+ *   (abstract excerpt, added/opened date, Person credit) rendered below the bibliographic meta line,
+ *   not merged into it.
  */
 function prksWorkCardHtml(w, options = {}) {
     if (!w) return '';
@@ -135,37 +137,42 @@ function prksWorkCardHtml(w, options = {}) {
     const hasPdf = !!filePath && filePath.startsWith('/api/pdfs/');
     const inferredKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(w) : '';
     const thumbPage = options.thumbPage != null ? options.thumbPage : w.thumb_page;
-    const thumbSrc =
-        hasPdf
-            ? prksWorkThumbUrl(w.id, thumbPage)
-            : inferredKind === 'video' && w.thumb_url
-              ? String(w.thumb_url).trim()
-              : '';
+    const isVideoKind = !hasPdf && inferredKind === 'video';
+    const thumbKindClass = isVideoKind ? 'work-card__thumb--video' : 'work-card__thumb--pdf';
+    const thumbSrc = hasPdf
+        ? prksWorkThumbUrl(w.id, thumbPage)
+        : isVideoKind && w.thumb_url
+          ? String(w.thumb_url).trim()
+          : '';
 
     const thumbHtml = thumbSrc
-        ? `<div class="work-card__thumb"><img loading="lazy" alt="" src="${PRKS_WORK_THUMB_PLACEHOLDER}" data-prks-thumb-src="${prksWorkCardsEscapeHtml(
+        ? `<div class="work-card__thumb ${thumbKindClass}"><img loading="lazy" alt="" src="${PRKS_WORK_THUMB_PLACEHOLDER}" data-prks-thumb-src="${prksWorkCardsEscapeHtml(
               thumbSrc
           )}" onerror="this.closest('.work-card__thumb')?.classList.add('work-card__thumb--error'); this.remove();" /></div>`
-        : `<div class="work-card__thumb work-card__thumb--empty" aria-hidden="true"></div>`;
+        : `<div class="work-card__thumb work-card__thumb--empty ${thumbKindClass}" aria-hidden="true"></div>`;
 
     const fileSizeHtml = prksWorkFileSizeMbHtml(w);
 
+    // Bibliographic identity only — stable Author/Editor + year. Route-specific
+    // context (added/opened date, abstract excerpt, Person credit) is a
+    // separate, lower-emphasis line so it never competes with who-wrote-it/when.
     const metaChunks = [];
     const credit = prksWorkCardCreditLine(w);
     if (credit) metaChunks.push(credit);
     const yearPlain = prksWorkCardYearPlain(w);
     if (yearPlain) metaChunks.push(yearPlain);
-    if (subtitle) metaChunks.push(subtitle);
     const metaHtml = metaChunks.length
         ? `<div class="meta-row work-card__meta">${metaChunks.join(' · ')}</div>`
         : '';
+    const contextHtml = subtitle ? `<div class="work-card__context">${subtitle}</div>` : '';
 
     return `
         <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1">
             ${thumbHtml}
             <div class="work-card__body">
-                <div class="card-title">${title}</div>
+                <div class="card-title" title="${title}">${title}</div>
                 ${metaHtml}
+                ${contextHtml}
                 <div class="work-card__badges">
                     <div class="work-card__badges-left">
                         ${statusHtml}

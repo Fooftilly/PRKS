@@ -798,23 +798,28 @@
         progress: {
             listId: 'prks-nav-progress-children',
             prefKey: PRKS_NAV_PROGRESS_EXPANDED_KEY,
-            show: 'Show Progress shortcuts',
-            hide: 'Hide Progress shortcuts',
         },
         research: {
             listId: 'prks-nav-research-children',
             prefKey: PRKS_NAV_RESEARCH_EXPANDED_KEY,
-            show: 'Show Research shortcuts',
-            hide: 'Hide Research shortcuts',
         },
     };
 
+    /**
+     * Tri-state disclosure preference: 'unset' (no explicit choice yet),
+     * 'expanded', or 'collapsed'. Missing localStorage key stays 'unset' so
+     * route-family auto-expansion can still apply until the user picks a side.
+     */
     function prksReadNavExpandedPref(key) {
         try {
-            const raw = String(root.localStorage.getItem(key) || '').trim();
-            return raw === '1' || raw === 'true';
+            const raw = root.localStorage.getItem(key);
+            if (raw == null) return 'unset';
+            const trimmed = String(raw).trim();
+            if (trimmed === '1' || trimmed === 'true') return 'expanded';
+            if (trimmed === '0' || trimmed === 'false') return 'collapsed';
+            return 'unset';
         } catch (_e) {
-            return false;
+            return 'unset';
         }
     }
 
@@ -850,7 +855,27 @@
         );
     }
 
-    function prksSetDisclosureVisual(which, expanded) {
+    function prksNavFamilyForcesOpen(which, route) {
+        if (which === 'people') return prksPeopleRouteForcesOpen(route);
+        if (which === 'progress') return prksProgressRouteForcesOpen(route);
+        if (which === 'research') return prksResearchRouteForcesOpen(route);
+        return false;
+    }
+
+    /**
+     * Effective open/closed state for a family: an explicit user preference
+     * always wins; only when unset does the active route family decide.
+     */
+    function prksNavDisclosureExpanded(which, route) {
+        const spec = PRKS_NAV_DISCLOSURES[which];
+        if (!spec) return false;
+        const pref = prksReadNavExpandedPref(spec.prefKey);
+        if (pref === 'expanded') return true;
+        if (pref === 'collapsed') return false;
+        return prksNavFamilyForcesOpen(which, route);
+    }
+
+    function prksSetDisclosureVisual(which, expanded, containsCurrent) {
         if (typeof document === 'undefined' || !document.getElementById) return;
         const spec = PRKS_NAV_DISCLOSURES[which];
         if (!spec) return;
@@ -862,33 +887,28 @@
             document.querySelector && document.querySelector('[data-nav-disclosure="' + which + '"]');
         if (btn) {
             btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            btn.setAttribute('aria-label', expanded ? spec.hide : spec.show);
+            if (spec.show && spec.hide) {
+                btn.setAttribute('aria-label', expanded ? spec.hide : spec.show);
+            }
         }
         if (list) {
             list.hidden = !expanded;
             if (expanded) list.removeAttribute('hidden');
             else list.setAttribute('hidden', '');
         }
-        if (wrap) wrap.classList.toggle('nav-disclosure--open', !!expanded);
+        if (wrap) {
+            wrap.classList.toggle('nav-disclosure--open', !!expanded);
+            wrap.classList.toggle('nav-disclosure--contains-current', !!containsCurrent);
+        }
     }
 
     function prksSyncNavDisclosures(route) {
         if (typeof document === 'undefined') return;
-        const peopleForced = prksPeopleRouteForcesOpen(route);
-        const progressForced = prksProgressRouteForcesOpen(route);
-        const researchForced = prksResearchRouteForcesOpen(route);
-        prksSetDisclosureVisual(
-            'people',
-            peopleForced || prksReadNavExpandedPref(PRKS_NAV_PEOPLE_EXPANDED_KEY)
-        );
-        prksSetDisclosureVisual(
-            'progress',
-            progressForced || prksReadNavExpandedPref(PRKS_NAV_PROGRESS_EXPANDED_KEY)
-        );
-        prksSetDisclosureVisual(
-            'research',
-            researchForced || prksReadNavExpandedPref(PRKS_NAV_RESEARCH_EXPANDED_KEY)
-        );
+        Object.keys(PRKS_NAV_DISCLOSURES).forEach(function (which) {
+            const expanded = prksNavDisclosureExpanded(which, route);
+            const containsCurrent = prksNavFamilyForcesOpen(which, route);
+            prksSetDisclosureVisual(which, expanded, containsCurrent);
+        });
     }
 
     function prksInitNavDisclosures() {
@@ -904,20 +924,9 @@
                 const which = btn.getAttribute('data-nav-disclosure-toggle');
                 const spec = PRKS_NAV_DISCLOSURES[which];
                 if (!spec) return;
-                const key = spec.prefKey;
                 const route = prksParseRoute(root.location ? root.location.hash : '');
-                const forced =
-                    which === 'people'
-                        ? prksPeopleRouteForcesOpen(route)
-                        : which === 'progress'
-                          ? prksProgressRouteForcesOpen(route)
-                          : prksResearchRouteForcesOpen(route);
-                if (forced) {
-                    prksWriteNavExpandedPref(key, false);
-                    prksSyncNavDisclosures(route);
-                    return;
-                }
-                prksWriteNavExpandedPref(key, !prksReadNavExpandedPref(key));
+                const expandedNow = prksNavDisclosureExpanded(which, route);
+                prksWriteNavExpandedPref(spec.prefKey, !expandedNow);
                 prksSyncNavDisclosures(route);
             });
         }
@@ -1332,6 +1341,11 @@
         prksSyncSidebarActive: prksSyncSidebarActive,
         prksSyncNavDisclosures: prksSyncNavDisclosures,
         prksInitNavDisclosures: prksInitNavDisclosures,
+        prksReadNavExpandedPref: prksReadNavExpandedPref,
+        prksWriteNavExpandedPref: prksWriteNavExpandedPref,
+        prksNavDisclosureExpanded: prksNavDisclosureExpanded,
+        prksNavFamilyForcesOpen: prksNavFamilyForcesOpen,
+        PRKS_NAV_DISCLOSURES: PRKS_NAV_DISCLOSURES,
         prksCaptureCurrentRouteState: prksCaptureCurrentRouteState,
         prksRestoreRouteState: prksRestoreRouteState,
         prksRememberOrigin: prksRememberOrigin,

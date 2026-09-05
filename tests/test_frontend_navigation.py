@@ -69,6 +69,32 @@ class FrontendNavigationTests(unittest.TestCase):
         self.assertIn("PRKS_GROUP_LIBRARY_FILTER_KEY", groups)
         self.assertNotIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", _read(_NAV))
 
+    def test_sidebar_removes_duplicate_disclosure_headings(self):
+        html = _read(_INDEX)
+        self.assertNotIn('<li class="nav-section">People</li>', html)
+        self.assertNotIn('<li class="nav-section">Research</li>', html)
+        self.assertNotIn('<li class="nav-section">Progress</li>', html)
+        self.assertIn('<li class="nav-section">Library</li>', html)
+        self.assertIn('<li class="nav-section">Organize</li>', html)
+        self.assertIn('nav-disclosure--section-break', html)
+
+    def test_sidebar_research_progress_are_full_row_buttons(self):
+        html = _read(_INDEX)
+        # People keeps a real link plus a separate chevron toggle.
+        self.assertIn('data-nav-disclosure="people"', html)
+        self.assertIn('href="#/people" class="nav-link nav-disclosure__link"', html)
+        # Research/Progress have no useful landing page: the whole row is one button.
+        research_at = html.find('data-nav-disclosure="research"')
+        progress_at = html.find('data-nav-disclosure="progress"')
+        self.assertNotEqual(research_at, -1)
+        self.assertNotEqual(progress_at, -1)
+        research_block = html[research_at : research_at + 600]
+        progress_block = html[progress_at : progress_at + 900]
+        self.assertIn('nav-disclosure__toggle--full', research_block)
+        self.assertIn('nav-disclosure__toggle--full', progress_block)
+        self.assertNotIn('nav-disclosure__label', research_block)
+        self.assertNotIn('nav-disclosure__label', progress_block)
+
     def test_fixture_loads_production_navigation(self):
         html = _read(_FIXTURE)
         self.assertIn("/frontend/js/navigation.js", html)
