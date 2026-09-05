@@ -63,12 +63,43 @@
         return false;
     }
 
-    function argumentsEmptyDataHtml() {
+    /** A filtered Argument/Stance index (`?kind=argument`/`?kind=stance`) must describe the
+     * collection it actually loaded, not the whole research-network subsystem: an empty
+     * Stances route with real Arguments elsewhere is not "No Arguments or Stances yet." */
+    function argumentKindUi(kind) {
+        if (kind === 'argument') {
+            return { plural: 'Arguments', empty: 'No Arguments yet.', creationKinds: ['argument'] };
+        }
+        if (kind === 'stance') {
+            return { plural: 'Stances', empty: 'No Stances yet.', creationKinds: ['stance'] };
+        }
+        return {
+            plural: 'Arguments or Stances',
+            empty: 'No Arguments or Stances yet.',
+            creationKinds: ['argument', 'stance'],
+        };
+    }
+
+    function argumentsEmptyDataHtml(kindUi) {
+        const buttons = [];
+        if (kindUi.creationKinds.indexOf('argument') >= 0) {
+            buttons.push(
+                '<button type="button" class="prks-btn prks-btn--secondary" id="prks-argument-new-empty">New Argument</button>'
+            );
+        }
+        if (kindUi.creationKinds.indexOf('stance') >= 0) {
+            buttons.push(
+                '<button type="button" class="prks-btn prks-btn--secondary" id="prks-stance-new-empty">New Stance</button>'
+            );
+        }
         return (
             '<div class="prks-research-index__empty">' +
-            '<p class="meta-row">No Arguments or Stances yet.</p>' +
-            '<p><button type="button" class="prks-btn prks-btn--secondary" id="prks-argument-new-empty">New Argument</button> ' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-stance-new-empty">New Stance</button></p>' +
+            '<p class="meta-row">' +
+            esc(kindUi.empty) +
+            '</p>' +
+            '<p>' +
+            buttons.join(' ') +
+            '</p>' +
             '</div>'
         );
     }
@@ -109,13 +140,15 @@
             };
         }
 
+        const kindUi = argumentKindUi(kind);
+
         function renderRows(filtered, query) {
             const host = container.querySelector('#prks-argument-rows');
             if (!host) return;
             host.innerHTML = !filtered.length
                 ? query && typeof root.prksResearchIndexSearchEmptyHtml === 'function'
-                    ? root.prksResearchIndexSearchEmptyHtml('Arguments or Stances', query)
-                    : argumentsEmptyDataHtml()
+                    ? root.prksResearchIndexSearchEmptyHtml(kindUi.plural, query)
+                    : argumentsEmptyDataHtml(kindUi)
                 : filtered
                       .map(function (a) {
                           return argumentRowHtml(a, iconArg);

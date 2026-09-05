@@ -1096,6 +1096,138 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
             self.assertTrue(page.locator(sel).is_visible(), sel)
         self.assertTrue(page.locator("#prks-arg-delete").is_enabled())
 
+    def test_clear_search_survives_same_index_rerender(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        concept_id = page.evaluate(
+            """async () => {
+                const rows = await (await fetch('/api/concepts')).json();
+                return rows[0] && rows[0].id;
+            }"""
+        )
+        page.evaluate("() => window.prksNavigate('#/concepts')")
+        page.wait_for_function("() => location.hash === '#/concepts'")
+        total = page.evaluate(
+            "() => document.querySelectorAll('#prks-concept-rows .prks-research-row').length"
+        )
+
+        search = page.locator("#prks-concept-search")
+        search.fill("zzz-first-nonexistent")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-concept-rows .prks-research-row').length === 0"
+        )
+        page.locator("#prks-concept-rows [data-research-search-clear]").click()
+        page.wait_for_function(
+            "(n) => document.querySelectorAll('#prks-concept-rows .prks-research-row').length === n",
+            arg=total,
+        )
+
+        # Navigate away and back within the same TabContext: #/concepts rerenders into the
+        # same persistent ctx.root, replacing the input/apply() an earlier render's Clear
+        # listener may have closed over.
+        page.evaluate("(id) => window.prksNavigate('#/concepts/' + id)", arg=concept_id)
+        page.wait_for_function("() => location.hash.indexOf('#/concepts/') === 0")
+        page.evaluate("() => window.prksNavigate('#/concepts')")
+        page.wait_for_function("() => location.hash === '#/concepts'")
+
+        search2 = page.locator("#prks-concept-search")
+        search2.fill("zzz-second-nonexistent")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-concept-rows .prks-research-row').length === 0"
+        )
+        page.locator("#prks-concept-rows [data-research-search-clear]").click()
+
+        self.assertEqual(search2.input_value(), "")
+        page.wait_for_function(
+            "(n) => document.querySelectorAll('#prks-concept-rows .prks-research-row').length === n",
+            arg=total,
+        )
+        self.assertEqual(
+            page.evaluate("() => document.activeElement && document.activeElement.id"),
+            "prks-concept-search",
+        )
+
+    def test_clear_search_across_indexes_targets_current_input(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        sequence = [
+            ("#/concepts", "prks-concept-search", "prks-concept-rows"),
+            ("#/positions", "prks-position-search", "prks-position-rows"),
+            ("#/arguments", "prks-argument-search", "prks-argument-rows"),
+        ]
+        for hash_route, input_id, rows_host_id in sequence:
+            page.evaluate("(h) => window.prksNavigate(h)", arg=hash_route)
+            page.wait_for_function("(h) => location.hash === h", arg=hash_route)
+            page.locator("#" + rows_host_id + " .prks-research-row").first.wait_for()
+            total = page.evaluate(
+                "(id) => document.querySelectorAll('#' + id + ' .prks-research-row').length",
+                arg=rows_host_id,
+            )
+            search = page.locator("#" + input_id)
+            search.fill("zzz-nonexistent-query")
+            page.wait_for_function(
+                "(id) => document.querySelectorAll('#' + id + ' .prks-research-row').length === 0",
+                arg=rows_host_id,
+            )
+            page.locator("#" + rows_host_id + " [data-research-search-clear]").click()
+            self.assertEqual(search.input_value(), "", hash_route)
+            page.wait_for_function(
+                "(a) => document.querySelectorAll('#' + a.id + ' .prks-research-row').length === a.n",
+                arg={"id": rows_host_id, "n": total},
+            )
+            self.assertEqual(
+                page.evaluate("() => document.activeElement && document.activeElement.id"),
+                input_id,
+                hash_route,
+            )
+
+    def test_argument_filtered_true_empty_state_describes_active_kind(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
+        page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
+        page.locator("#prks-argument-rows").wait_for()
+        empty_text = page.locator("#prks-argument-rows").inner_text()
+        self.assertIn("No Stances yet.", empty_text)
+        self.assertNotIn("No Arguments or Stances yet.", empty_text)
+        self.assertEqual(page.locator("#prks-argument-rows #prks-stance-new-empty").count(), 1)
+        self.assertEqual(page.locator("#prks-argument-rows #prks-argument-new-empty").count(), 0)
+
+        page.evaluate("() => window.prksNavigate('#/arguments?kind=argument')")
+        page.wait_for_function("() => location.hash === '#/arguments?kind=argument'")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length > 0"
+        )
+
+    def test_argument_filtered_search_empty_is_kind_aware(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.evaluate(
+            """() => fetch('/api/arguments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'A real stance', kind: 'stance' }),
+            })"""
+        )
+        page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
+        page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
+        page.locator("#prks-argument-rows .prks-research-row").first.wait_for()
+        search = page.locator("#prks-argument-search")
+
+        search.fill("zzz-nonexistent")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 0"
+        )
+        empty_text = page.locator("#prks-argument-rows").inner_text()
+        self.assertIn("No Stances match", empty_text)
+        self.assertNotIn("No Arguments or Stances match", empty_text)
+
+        page.locator("#prks-argument-rows [data-research-search-clear]").click()
+        page.wait_for_function(
+            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 1"
+        )
+        self.assertEqual(page.evaluate("() => location.hash"), "#/arguments?kind=stance")
+        self.assertEqual(
+            page.evaluate("() => document.activeElement && document.activeElement.id"),
+            "prks-argument-search",
+        )
+
 
 class ResearchPickerTests(_BrowserE2E):
     def test_insert_concept_and_argument_pickers(self):

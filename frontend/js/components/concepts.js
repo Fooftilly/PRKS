@@ -49,6 +49,12 @@
             .toLowerCase();
     }
 
+    /** Clear Search is delegated once per route root, but that root is a persistent
+     * TabContext container that survives route changes and rerenders -- only its inner
+     * markup is replaced. A listener that closed over one render's `input`/`apply()` would
+     * keep firing against that historical render forever. Instead, each bind call replaces
+     * a single current-controller slot on the container; the delegated handler always reads
+     * that slot at click time and requires the stored input still be attached to the page. */
     function bindResearchIndexSearch(container, config) {
         const input = container && container.querySelector ? container.querySelector(config.inputSelector) : null;
         if (!input) return null;
@@ -62,14 +68,17 @@
             config.renderRows(filtered, q);
         }
         input.addEventListener('input', apply);
+        container.__prksResearchSearchController = { input: input, apply: apply };
         if (!container.__prksResearchSearchClearBound) {
             container.__prksResearchSearchClearBound = true;
             container.addEventListener('click', function (ev) {
                 const btn = ev.target.closest && ev.target.closest('[data-research-search-clear]');
                 if (!btn) return;
-                input.value = '';
-                input.focus();
-                apply();
+                const controller = container.__prksResearchSearchController;
+                if (!controller || !controller.input || !controller.input.isConnected) return;
+                controller.input.value = '';
+                controller.input.focus();
+                controller.apply();
             });
         }
         apply();

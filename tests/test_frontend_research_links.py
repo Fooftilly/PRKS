@@ -216,6 +216,43 @@ class FrontendResearchLinksTests(unittest.TestCase):
         # New response stays a prominent, always-visible primary action -- not moved aside.
         self.assertIn('id="prks-arg-response">New response', args)
 
+    def test_research_index_clear_search_uses_a_current_controller_slot(self):
+        concepts = _read(_CONCEPTS)
+        search_fn = concepts.split("function bindResearchIndexSearch", 1)[1].split(
+            "function researchIndexToolbarHtml", 1
+        )[0]
+        # The delegated Clear listener must read a replaceable "current controller" slot at
+        # click time, never close over one render's own `input`/`apply()` -- ctx.root is a
+        # persistent TabContext container that survives route changes and rerenders.
+        self.assertIn("__prksResearchSearchController", search_fn)
+        self.assertIn("controller.input.isConnected", search_fn)
+        self.assertIn("controller.input.value = ''", search_fn)
+        self.assertIn("controller.apply()", search_fn)
+        self.assertNotIn("input.value = '';\n                input.focus();\n                apply();", search_fn)
+        # Every bind call replaces the slot outright -- no per-route accumulation
+        # (conceptController / positionController / argumentController-style state).
+        self.assertIn(
+            "container.__prksResearchSearchController = { input: input, apply: apply };", search_fn
+        )
+        self.assertNotIn("conceptController", concepts)
+        self.assertNotIn("positionController", concepts)
+        self.assertNotIn("argumentController", concepts)
+
+    def test_argument_index_empty_states_are_kind_aware(self):
+        args = _read(_ARGS)
+        self.assertIn("function argumentKindUi", args)
+        kind_ui = args.split("function argumentKindUi", 1)[1].split("function argumentsEmptyDataHtml", 1)[0]
+        self.assertIn("No Arguments yet.", kind_ui)
+        self.assertIn("No Stances yet.", kind_ui)
+        self.assertIn("No Arguments or Stances yet.", kind_ui)
+        # True-empty and search-empty copy both key off the active canonical kind, not a
+        # hardcoded "Arguments or Stances" -- an empty Stances route must not claim the
+        # whole research-network subsystem is empty.
+        self.assertIn("argumentsEmptyDataHtml(kindUi)", args)
+        self.assertIn("root.prksResearchIndexSearchEmptyHtml(kindUi.plural, query)", args)
+        self.assertNotIn("argumentsEmptyDataHtml()", args)
+        self.assertNotIn("prksResearchIndexSearchEmptyHtml('Arguments or Stances', query)", args)
+
     def test_argument_editor_uses_form_pane_controls(self):
         args = _read(_ARGS)
         self.assertIn('class="prks-arg-form form-pane"', args)
