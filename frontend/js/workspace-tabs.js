@@ -880,10 +880,26 @@
 
         function applyCurrentNavigation(tab, route, replace) {
             const same = tab.route === route;
+            let routeStateCaptured = false;
+            if (!same && typeof root.prksCaptureCurrentRouteState === 'function' && typeof root.prksGetTabContext === 'function') {
+                const ctx = root.prksGetTabContext(tab.id);
+                const previousRoute = ctx && ctx.lastResolvedRoute;
+                if (ctx && previousRoute && previousRoute.canonicalHash !== route) {
+                    root.prksCaptureCurrentRouteState(previousRoute, ctx);
+                    routeStateCaptured = true;
+                }
+            }
             navigateTabHistory(tab, route, replace || same);
             if (tab.id === state.mainTabId) commitUrl(tab, replace || same ? 'replace' : 'push');
             paint();
-            return Promise.resolve(invokeRender({ workspaceSwitch: false, tabId: tab.id, hash: tab.route }));
+            return Promise.resolve(
+                invokeRender({
+                    workspaceSwitch: false,
+                    tabId: tab.id,
+                    hash: tab.route,
+                    routeStateCaptured: routeStateCaptured,
+                })
+            );
         }
 
         function navigate(hash, options) {
@@ -1404,6 +1420,16 @@
                 if (!getTab(target.id)) return false;
                 const prevId = state.mainTabId;
                 if (prevId && prevId !== target.id) parkContext(prevId);
+                /* A visually parked tab may still occupy a leaf in the preserved logical tree
+                 * (Hide split / narrow fallback). Popstate is still a role swap in that case:
+                 * put the old Main into the target's exact leaf before publishing the new Main.
+                 * Otherwise enforceInvariants() would remove the target leaf and destroy the
+                 * hidden layout. */
+                if (root.containsTab(state.secondaryTree, target.id)) {
+                    state.secondaryTree = prevId
+                        ? root.replaceTabId(state.secondaryTree, target.id, prevId)
+                        : root.normalizeTree(root.removeLeaf(state.secondaryTree, target.id));
+                }
                 applyWantToTab(target, parkedWant);
                 setMain(target.id);
                 mountContext(target.id);

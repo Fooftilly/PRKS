@@ -214,6 +214,12 @@ function renderPlaylistDetail(ctx, pl, container) {
         return;
     }
     if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', pl);
+    const generation = ctx && ctx.generation;
+    const ownsPlaylist = function () {
+        return typeof prksTabContextOwnsEntityRoute === 'function'
+            ? prksTabContextOwnsEntityRoute(ctx, generation, 'playlist', pl.id, 'playlist-detail')
+            : !!(ctx && ctx.isCurrent && ctx.isCurrent(generation));
+    };
     const items = Array.isArray(pl.items) ? pl.items : [];
     const editing = !!(ctx && ctx.ui && ctx.ui.playlistEditing);
     const ren =
@@ -260,7 +266,7 @@ function renderPlaylistDetail(ctx, pl, container) {
     }
 
     function applyFreshPlaylist(fresh) {
-        if (!fresh) return;
+        if (!fresh || !ownsPlaylist() || String(fresh.id) !== String(pl.id)) return;
         if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
         if (ctx) {
             ctx.routeSidebar = {
@@ -286,7 +292,9 @@ function renderPlaylistDetail(ctx, pl, container) {
         const nav = ev.target.closest && ev.target.closest('[data-pl-nav]');
         if (nav && !editing) {
             const wid = String(nav.getAttribute('data-pl-nav') || '').trim();
-            if (wid && typeof prksNavigate === 'function') prksNavigate('#/works/' + encodeURIComponent(wid));
+            if (wid && typeof prksNavigate === 'function') {
+                prksNavigate('#/works/' + encodeURIComponent(wid), { tabId: ctx && ctx.tabId });
+            }
             return;
         }
         if (!editing) return;
@@ -305,7 +313,7 @@ function renderPlaylistDetail(ctx, pl, container) {
             if (!wid) return;
             playlistRenameMap()[wid] = true;
             renderPlaylistDetail(ctx, pl, container);
-            const inp = document.getElementById('prks-pl-rename-input-' + wid);
+            const inp = container.querySelector('#prks-pl-rename-input-' + wid);
             if (inp) {
                 inp.focus();
                 try {
@@ -323,7 +331,7 @@ function renderPlaylistDetail(ctx, pl, container) {
         }
         if (renSave) {
             const wid = String(renSave.getAttribute('data-pl-rename-save') || '').trim();
-            const inp = document.getElementById('prks-pl-rename-input-' + wid);
+            const inp = container.querySelector('#prks-pl-rename-input-' + wid);
             const nextTitle = inp ? String(inp.value || '').trim() : '';
             if (!wid || !nextTitle) return;
             try {
@@ -334,10 +342,13 @@ function renderPlaylistDetail(ctx, pl, container) {
                 });
                 if (!res.ok) throw new Error('save failed');
                 delete playlistRenameMap()[wid];
-                const fresh = await fetchPlaylistDetails(pl.id);
+                if (!ownsPlaylist()) return;
+                const fresh = await fetchPlaylistDetails(pl.id, {
+                    signal: ctx && ctx.abortController && ctx.abortController.signal,
+                });
                 applyFreshPlaylist(fresh);
             } catch (_e) {
-                await prksAlertMessage('Could not rename video.', 'Error');
+                if (ownsPlaylist()) await prksAlertMessage('Could not rename video.', 'Error');
             }
             return;
         }
@@ -359,19 +370,25 @@ function renderPlaylistDetail(ctx, pl, container) {
             const wid = rm.getAttribute('data-pl-remove');
             try {
                 await removeWorkFromPlaylist(pl.id, wid);
-                const fresh = await fetchPlaylistDetails(pl.id);
+                if (!ownsPlaylist()) return;
+                const fresh = await fetchPlaylistDetails(pl.id, {
+                    signal: ctx && ctx.abortController && ctx.abortController.signal,
+                });
                 applyFreshPlaylist(fresh);
             } catch (_e) {
-                await prksAlertMessage('Could not remove item.', 'Error');
+                if (ownsPlaylist()) await prksAlertMessage('Could not remove item.', 'Error');
             }
             return;
         }
         try {
             await reorderPlaylist(pl.id, ids);
-            const fresh = await fetchPlaylistDetails(pl.id);
+            if (!ownsPlaylist()) return;
+            const fresh = await fetchPlaylistDetails(pl.id, {
+                signal: ctx && ctx.abortController && ctx.abortController.signal,
+            });
             applyFreshPlaylist(fresh);
         } catch (_e) {
-            await prksAlertMessage('Could not reorder playlist.', 'Error');
+            if (ownsPlaylist()) await prksAlertMessage('Could not reorder playlist.', 'Error');
         }
     };
 
@@ -426,10 +443,24 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     const wid = work && work.id ? String(work.id) : '';
     if (!wid) return;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    const editBtn = document.getElementById('prks-work-playlist-edit-btn');
-    const newBtn = document.getElementById('prks-work-playlist-new-btn');
-    const status = document.getElementById('prks-work-playlist-status');
-    const navHost = document.getElementById('prks-work-playlist-nav');
+    const generation = ctx && ctx.generation;
+    const panel = document.getElementById('panel-content');
+    const editBtn = panel && panel.querySelector('#prks-work-playlist-edit-btn');
+    const newBtn = panel && panel.querySelector('#prks-work-playlist-new-btn');
+    const status = panel && panel.querySelector('#prks-work-playlist-status');
+    const navHost = panel && panel.querySelector('#prks-work-playlist-nav');
+    const ownsPanel = function (node) {
+        const ownsWork =
+            typeof prksTabContextOwnsEntityRoute === 'function'
+                ? prksTabContextOwnsEntityRoute(ctx, generation, 'work', wid, 'work')
+                : !!(ctx && ctx.isCurrent && ctx.isCurrent(generation));
+        return !!(
+            ownsWork &&
+            typeof prksRightPanelOwnedBy === 'function' &&
+            prksRightPanelOwnedBy(ctx, node || panel)
+        );
+    };
+    if (!ownsPanel(panel)) return;
     if (editBtn && editBtn.dataset.bound !== '1') {
         editBtn.dataset.bound = '1';
         editBtn.onclick = () => {
@@ -447,7 +478,10 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
         const pid = work && work.playlist_id ? String(work.playlist_id) : '';
         if (pid && typeof fetchPlaylistDetails === 'function') {
             try {
-                const pl = await fetchPlaylistDetails(pid);
+                const pl = await fetchPlaylistDetails(pid, {
+                    signal: ctx && ctx.abortController && ctx.abortController.signal,
+                });
+                if (!ownsPanel(navHost)) return;
                 const items = pl && Array.isArray(pl.items) ? pl.items : [];
                 const idx = items.findIndex((x) => String(x.id) === wid);
                 const prev = idx > 0 ? items[idx - 1] : null;
@@ -472,26 +506,26 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                         <div class="prks-playlist-pos">${posLabel}</div>
                     </div>
                 `;
-                const prevBtn = document.getElementById('prks-work-playlist-prev-btn');
-                const nextBtn = document.getElementById('prks-work-playlist-next-btn');
+                const prevBtn = navHost.querySelector('#prks-work-playlist-prev-btn');
+                const nextBtn = navHost.querySelector('#prks-work-playlist-next-btn');
                 if (prevBtn && prev) {
                     prevBtn.onclick = () => {
                         if (typeof prksNavigate === 'function') {
-                            prksNavigate('#/works/' + encodeURIComponent(prev.id));
+                            prksNavigate('#/works/' + encodeURIComponent(prev.id), { tabId: ctx.tabId });
                         }
                     };
                 }
                 if (nextBtn && next) {
                     nextBtn.onclick = () => {
                         if (typeof prksNavigate === 'function') {
-                            prksNavigate('#/works/' + encodeURIComponent(next.id));
+                            prksNavigate('#/works/' + encodeURIComponent(next.id), { tabId: ctx.tabId });
                         }
                     };
                 }
                 if (typeof prksRefreshIcons === 'function') prksRefreshIcons(navHost);
             } catch (_e) {
                 // If playlist fetch fails, skip nav silently.
-                navHost.innerHTML = '';
+                if (ownsPanel(navHost)) navHost.innerHTML = '';
             }
         }
     }
@@ -500,15 +534,15 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     const editing = !!(ctx && ctx.ui && ctx.ui.workPlaylistEditing);
     if (!editing) return;
 
-    const input = document.getElementById('prks-work-playlist-search');
-    const hidden = document.getElementById('prks-work-playlist-id');
-    const results = document.getElementById('prks-work-playlist-results');
-    const setBtn = document.getElementById('prks-work-playlist-set-btn');
-    const clearBtn = document.getElementById('prks-work-playlist-clear-btn');
+    const input = panel.querySelector('#prks-work-playlist-search');
+    const hidden = panel.querySelector('#prks-work-playlist-id');
+    const results = panel.querySelector('#prks-work-playlist-results');
+    const setBtn = panel.querySelector('#prks-work-playlist-set-btn');
+    const clearBtn = panel.querySelector('#prks-work-playlist-clear-btn');
     if (!input || !hidden || !results || !setBtn || !clearBtn || !newBtn) return;
 
-    const playlists = await fetchPlaylists();
-    if (typeof prksApplyOwnedWorkEntity === 'function' && !prksApplyOwnedWorkEntity(ctx, wid)) return;
+    const playlists = await fetchPlaylists({ signal: ctx && ctx.abortController && ctx.abortController.signal });
+    if (!ownsPanel(panel)) return;
     const rows = Array.isArray(playlists) ? playlists : [];
 
     // Pre-fill current playlist title in the input if present.
@@ -558,11 +592,14 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
         if (!pid) return;
         try {
             await addWorkToPlaylist(pid, wid);
+            if (!ownsPanel(status)) return;
             if (status) status.textContent = 'Playlist set.';
             // Refresh current work so the UI shows the selected playlist title consistently.
             if (typeof fetchWorkDetails === 'function') {
-                const _pw = await fetchWorkDetails(wid);
-                if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _pw)) {
+                const _pw = await fetchWorkDetails(wid, {
+                    signal: ctx && ctx.abortController && ctx.abortController.signal,
+                });
+                if (ownsPanel(panel) && typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _pw)) {
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');
@@ -570,7 +607,7 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                 }
             }
         } catch (_e) {
-            if (status) status.textContent = 'Could not set playlist.';
+            if (status && ownsPanel(status)) status.textContent = 'Could not set playlist.';
         }
     };
 
@@ -584,12 +621,15 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
         }
         try {
             await removeWorkFromPlaylist(currentPid, wid);
+            if (!ownsPanel(panel)) return;
             input.value = '';
             hidden.value = '';
             if (status) status.textContent = 'Removed from playlist.';
             if (typeof fetchWorkDetails === 'function') {
-                const _rmw = await fetchWorkDetails(wid);
-                if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _rmw)) {
+                const _rmw = await fetchWorkDetails(wid, {
+                    signal: ctx && ctx.abortController && ctx.abortController.signal,
+                });
+                if (ownsPanel(panel) && typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _rmw)) {
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');
@@ -597,7 +637,7 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                 }
             }
         } catch (_e) {
-            if (status) status.textContent = 'Could not remove.';
+            if (status && ownsPanel(status)) status.textContent = 'Could not remove.';
         }
     };
 
@@ -625,4 +665,3 @@ window.prksRefreshPlaylistDetailMain = prksRefreshPlaylistDetailMain;
 window.prksClearPlaylistRenameState = prksClearPlaylistRenameState;
 window.renderPlaylistAttachControlsHtml = renderPlaylistAttachControlsHtml;
 window.mountPlaylistAttachControls = mountPlaylistAttachControls;
-

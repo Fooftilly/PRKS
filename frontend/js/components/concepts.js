@@ -154,6 +154,19 @@
     function renderConceptDetail(ctx, concept, container) {
         if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('concept', concept);
         const c = concept || {};
+        const generation = ctx && ctx.generation;
+        const ownsConcept = function () {
+            return typeof root.prksTabContextOwnsEntityRoute === 'function'
+                ? root.prksTabContextOwnsEntityRoute(ctx, generation, 'concept', c.id, 'concept-detail')
+                : !!(ctx && ctx.isCurrent && ctx.isCurrent(generation));
+        };
+        const refreshConcept = function () {
+            if (!ownsConcept() || typeof root.prksNavigate !== 'function') return;
+            root.prksNavigate('#/concepts/' + encodeURIComponent(c.id), {
+                replace: true,
+                tabId: ctx.tabId,
+            });
+        };
         const aliases = (c.aliases || []).map(function (a) {
             return '<li>' + esc(a) + '</li>';
         }).join('') || '<li class="meta-row">None</li>';
@@ -227,14 +240,14 @@
                     typeof root.prksGraphFocusHash === 'function'
                         ? root.prksGraphFocusHash('concept', c.id)
                         : '#/graph?focus=' + encodeURIComponent('concept:' + c.id);
-                if (typeof root.prksNavigate === 'function') root.prksNavigate(hash);
+                if (typeof root.prksNavigate === 'function') root.prksNavigate(hash, { tabId: ctx && ctx.tabId });
             });
         }
         container.querySelector('#prks-concept-rename').addEventListener('click', function () {
-            void renameConcept(c);
+            void renameConcept(ctx, generation, c);
         });
         container.querySelector('#prks-concept-delete').addEventListener('click', function () {
-            void deleteConcept(c);
+            void deleteConcept(ctx, generation, c);
         });
         container.querySelector('#prks-concept-edit-def').addEventListener('click', function () {
             void (async function () {
@@ -246,10 +259,9 @@
                     okLabel: 'Save',
                 });
                 if (next == null) return;
+                if (!ownsConcept()) return;
                 await root.updateConcept(c.id, { description: next });
-                if (typeof root.prksNavigate === 'function') {
-                    root.prksNavigate(root.location.hash, { replace: true });
-                }
+                refreshConcept();
             })();
         });
         container.querySelector('#prks-concept-edit-aliases').addEventListener('click', function () {
@@ -262,11 +274,10 @@
                     okLabel: 'Save',
                 });
                 if (next == null) return;
+                if (!ownsConcept()) return;
                 const aliases = next.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean);
                 await root.replaceConceptAliases(c.id, aliases);
-                if (typeof root.prksNavigate === 'function') {
-                    root.prksNavigate(root.location.hash, { replace: true });
-                }
+                refreshConcept();
             })();
         });
         container.querySelector('#prks-concept-edit-parents').addEventListener('click', function () {
@@ -278,34 +289,44 @@
                     okLabel: 'Save',
                 });
                 if (next == null) return;
+                if (!ownsConcept()) return;
                 const ids = next.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
                 await root.replaceConceptParents(c.id, ids);
-                if (typeof root.prksNavigate === 'function') {
-                    root.prksNavigate(root.location.hash, { replace: true });
-                }
+                refreshConcept();
             })();
         });
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
     }
 
-    async function renameConcept(c) {
+    async function renameConcept(ctx, generation, c) {
         const next = await promptText({
             title: 'Rename Concept',
             defaultValue: c.name || '',
             okLabel: 'Save',
         });
         if (next == null || !String(next).trim()) return;
+        if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
         try {
             await root.updateConcept(c.id, { name: String(next).trim() });
-            if (typeof root.prksNavigate === 'function') root.prksNavigate(root.location.hash, { replace: true });
+            if (
+                typeof root.prksTabContextOwnsEntityRoute === 'function' &&
+                root.prksTabContextOwnsEntityRoute(ctx, generation, 'concept', c.id, 'concept-detail') &&
+                typeof root.prksNavigate === 'function'
+            ) {
+                root.prksNavigate('#/concepts/' + encodeURIComponent(c.id), {
+                    replace: true,
+                    tabId: ctx.tabId,
+                });
+            }
         } catch (err) {
+            if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
             if (typeof root.prksAlertDialog === 'function') {
                 await root.prksAlertDialog({ title: 'Could not rename', message: (err && err.message) || '' });
             }
         }
     }
 
-    async function deleteConcept(c) {
+    async function deleteConcept(ctx, generation, c) {
         const ok =
             typeof root.prksConfirmDestructive === 'function'
                 ? await root.prksConfirmDestructive({
@@ -315,10 +336,18 @@
                   })
                 : true;
         if (!ok) return;
+        if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
         try {
             await root.deleteConcept(c.id);
-            if (typeof root.prksNavigate === 'function') root.prksNavigate('#/concepts', { replace: true });
+            if (
+                typeof root.prksTabContextOwnsEntityRoute === 'function' &&
+                root.prksTabContextOwnsEntityRoute(ctx, generation, 'concept', c.id, 'concept-detail') &&
+                typeof root.prksNavigate === 'function'
+            ) {
+                root.prksNavigate('#/concepts', { replace: true, tabId: ctx.tabId });
+            }
         } catch (err) {
+            if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
             const msg =
                 err && err.code === 'concept_in_use'
                     ? 'This Concept is still referenced in research notes. Remove or replace those references before deleting it.'

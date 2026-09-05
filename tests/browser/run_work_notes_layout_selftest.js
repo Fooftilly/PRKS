@@ -35,16 +35,33 @@ function assertEq(name, got, want) {
 
 function makeWorkspace(id) {
     const styleVars = {};
+    const handleListeners = Object.create(null);
+    const handleClasses = new Set();
+    let captured = null;
     const handle = {
+        offsetHeight: 11,
+        offsetWidth: 16,
         setAttribute: function () {},
-        addEventListener: function () {},
-        classList: { add: function () {}, remove: function () {} },
+        addEventListener: function (type, fn) { (handleListeners[type] || (handleListeners[type] = [])).push(fn); },
+        removeEventListener: function (type, fn) {
+            handleListeners[type] = (handleListeners[type] || []).filter(function (x) { return x !== fn; });
+        },
+        dispatch: function (type, ev) { (handleListeners[type] || []).slice().forEach(function (fn) { fn(ev || {}); }); },
+        setPointerCapture: function (id) { captured = id; },
+        hasPointerCapture: function (id) { return captured === id; },
+        releasePointerCapture: function (id) { if (captured === id) captured = null; },
+        classList: {
+            add: function (c) { handleClasses.add(c); },
+            remove: function (c) { handleClasses.delete(c); },
+            contains: function (c) { return handleClasses.has(c); },
+        },
         querySelector: function () {
             return null;
         },
     };
     const ws = {
         workId: id,
+        clientWidth: 800,
         classList: {
             contains: function () {
                 return false;
@@ -72,7 +89,9 @@ function makeWorkspace(id) {
         getBoundingClientRect: function () {
             return { width: 800, height: 600, top: 0, bottom: 600 };
         },
+        closest: function () { return ws; },
         _vars: styleVars,
+        _handle: handle,
     };
     return ws;
 }
@@ -122,6 +141,7 @@ ctxB.setResource('workNotes', {
     },
 });
 
+const documentListeners = Object.create(null);
 const sandbox = {
     window: {},
     document: {
@@ -136,7 +156,11 @@ const sandbox = {
         querySelectorAll: function () {
             return [];
         },
-        addEventListener: function () {},
+        addEventListener: function (type, fn) { (documentListeners[type] || (documentListeners[type] = [])).push(fn); },
+        removeEventListener: function (type, fn) {
+            documentListeners[type] = (documentListeners[type] || []).filter(function (x) { return x !== fn; });
+        },
+        dispatch: function (type, ev) { (documentListeners[type] || []).slice().forEach(function (fn) { fn(ev || {}); }); },
         createElement: function () {
             return { style: {}, setAttribute: function () {}, classList: { add: function () {}, remove: function () {}, contains: function () { return false; } } };
         },
@@ -145,6 +169,7 @@ const sandbox = {
     requestAnimationFrame: function (fn) {
         fn();
     },
+    addEventListener: function () {},
     console: console,
     setTimeout: setTimeout,
     clearTimeout: clearTimeout,
@@ -161,7 +186,12 @@ const sandbox = {
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
-vm.runInNewContext(worksSrc + '\nthis.prksReapplyWorkNotesSplitLayout = prksReapplyWorkNotesSplitLayout;', sandbox);
+vm.runInNewContext(
+    worksSrc +
+        '\nthis.prksReapplyWorkNotesSplitLayout = prksReapplyWorkNotesSplitLayout;' +
+        '\nthis.setupWorkNotesSplitResize = setupWorkNotesSplitResize;',
+    sandbox
+);
 
 sandbox.prksReapplyWorkNotesSplitLayout(ctxA);
 assert('A workspace height set', !!wsA._vars['--work-notes-height']);
@@ -279,21 +309,49 @@ async function runSaveGenerationRace() {
     const tokenA = dup.latestSaveToken;
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
     const tokenB = dup.latestSaveToken;
-    assert('same-generation A token != B token', tokenA !== tokenB);
-    assertEq('same-generation B is newest', dup.latestSaveToken, tokenB);
-    assertEq('same-generation two PATCHes', pending.length, 6);
-    pending[4]({ ok: false });
+    assertEq('same-generation duplicate reuses token', tokenA, tokenB);
+    assertEq('same-generation token stays newest', dup.latestSaveToken, tokenB);
+    assertEq('same-generation sends one PATCH', pending.length, 5);
+    pending[4]({ ok: true });
     await tick();
-    assertEq('same-generation A does not settle B', dup.settledSaveToken, 0);
-    assertEq('same-generation still pending', dup.latestSaveToken > dup.settledSaveToken, true);
-    assertEq('same-generation A failure hidden', dup.saveError, false);
-    assertEq('same-generation A cannot mark saved', statusEl.innerText === 'All changes saved', false);
-    pending[5]({ ok: true });
-    await tick();
-    assertEq('same-generation B settled', dup.settledSaveToken, tokenB);
+    assertEq('same-generation request settled', dup.settledSaveToken, tokenB);
     assertEq('same-generation idle pending', dup.latestSaveToken > dup.settledSaveToken, false);
     assertEq('same-generation idle drafting', dup.drafting, false);
-    assertEq('same-generation B success status', statusEl.innerText, 'All changes saved');
+    assertEq('same-generation success status', statusEl.innerText, 'All changes saved');
+    assertEq('committed transient draft overlays stale overlapping GET', sandbox.prksResearchNotesTextForWork('W-save', 'OLD'), 'same');
+    assertEq('matching server response observes committed transient text', sandbox.prksResearchNotesTextForWork('W-save', 'same'), 'same');
+    assertEq('observed committed draft no longer masks later server text', sandbox.prksResearchNotesTextForWork('W-save', 'SERVER-NEXT'), 'SERVER-NEXT');
+
+    sandbox.prksResetResearchDraftsForTest();
+    let newestText = 'older';
+    const newerDraft = {
+        workId: 'W-newer-draft',
+        editor: { value: function () { return newestText; } },
+        editGeneration: 0,
+        saveSequence: 0,
+        latestSaveToken: 0,
+        latestSaveEditGeneration: 0,
+        settledSaveToken: 0,
+        drafting: false,
+        saveError: false,
+        pendingSave: false,
+    };
+    ctxS.setEntity('work', { id: 'W-newer-draft' });
+    ctxS.setResource('workNotes', newerDraft);
+    sandbox.prksWorkNotesMarkEdit(newerDraft, 'W-newer-draft', newestText);
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-newer-draft');
+    newestText = 'newest';
+    sandbox.prksWorkNotesMarkEdit(newerDraft, 'W-newer-draft', newestText);
+    pending[5]({ ok: false });
+    await tick();
+    assertEq('failed older save keeps newer unsent edit drafting', newerDraft.drafting, true);
+    assertEq('failed older save does not mark newer edit error', newerDraft.saveError, false);
+    assertEq('failed older save leaves drafting status', statusEl.innerText, 'Drafting...');
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-newer-draft');
+    pending[6]({ ok: true });
+    await tick();
+    assertEq('newer edit settles after older failure', newerDraft.drafting, false);
+    assertEq('newer edit success clears error', newerDraft.saveError, false);
 }
 
 function runDebounceBookkeeping() {
@@ -356,10 +414,42 @@ function runDebounceBookkeeping() {
     assertEq('flush after fire does not PATCH again', patches, 1);
 }
 
+function runHorizontalSplitterCleanup() {
+    const ctx = prksEnsureTabContext('notes-pointer');
+    const ws = makeWorkspace('W-pointer');
+    ctx.root = makeRoot(ws);
+    ctx.mounted = true;
+    ctx.query = function (sel) { return ctx.root.querySelector(sel); };
+    sandbox.setupWorkNotesSplitResize(ctx, 'W-pointer');
+    const down = {
+        button: 0,
+        pointerId: 41,
+        clientX: 0,
+        clientY: 100,
+        preventDefault: function () {},
+        stopPropagation: function () {},
+    };
+    ws._handle.dispatch('pointerdown', down);
+    assertEq('horizontal pointer drag adds document move listener', (documentListeners.pointermove || []).length, 1);
+    assert('horizontal pointer drag class set', ws._handle.classList.contains('dragging'));
+    sandbox.document.dispatch('pointercancel', { pointerId: 41 });
+    assertEq('pointercancel removes document move listener', (documentListeners.pointermove || []).length, 0);
+    assert('pointercancel clears dragging class', !ws._handle.classList.contains('dragging'));
+
+    ws._handle.dispatch('pointerdown', Object.assign({}, down, { pointerId: 42 }));
+    assertEq('second pointer drag armed', (documentListeners.pointermove || []).length, 1);
+    ctx.unmount('park');
+    assertEq('TabContext teardown removes active pointer listener', (documentListeners.pointermove || []).length, 0);
+    assert('TabContext teardown clears dragging class', !ws._handle.classList.contains('dragging'));
+    sandbox.document.dispatch('pointermove', { clientY: 1, preventDefault: function () {} });
+    assertEq('post-unmount pointer move cannot alter detached height', ws._vars['--work-notes-height'], '320px');
+}
+
 (async function () {
     try {
         await runSaveGenerationRace();
         runDebounceBookkeeping();
+        runHorizontalSplitterCleanup();
     } catch (err) {
         console.error(err);
         process.exit(1);

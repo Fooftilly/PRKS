@@ -504,6 +504,15 @@
         return true;
     }
 
+    function prksTabContextOwnsEntityRoute(ctx, generation, entityType, expectedId, routeNames) {
+        if (!ctx || typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
+        const live = typeof ctx.getEntity === 'function' ? ctx.getEntity(entityType) : null;
+        if (!live || String(live.id) !== String(expectedId)) return false;
+        const route = ctx.lastResolvedRoute || ctx.route;
+        const names = Array.isArray(routeNames) ? routeNames : [routeNames];
+        return !!(route && names.indexOf(route.name) >= 0);
+    }
+
     function prksFocusedResource(name) {
         const ctx = prksGetFocusedTabContext();
         return ctx ? ctx.getResource(String(name)) : undefined;
@@ -568,6 +577,7 @@
         prksTabContextIsFocused: prksTabContextIsFocused,
         prksSetFocusedEntity: prksSetFocusedEntity,
         prksApplyOwnedWorkEntity: prksApplyOwnedWorkEntity,
+        prksTabContextOwnsEntityRoute: prksTabContextOwnsEntityRoute,
         prksFocusedRouteGeneration: prksFocusedRouteGeneration,
         prksFocusedRouteIsCurrent: prksFocusedRouteIsCurrent,
         prksFocusedResource: prksFocusedResource,

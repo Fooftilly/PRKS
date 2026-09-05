@@ -385,11 +385,9 @@
      * Called by workspace-tiling.js's canvas ResizeObserver. Recomputes bounds and reclamps
      * for rendering; no remount.
      *
-     * `options.commit` (default true) controls whether the clamped value is written back to
-     * the canonical `mainSplitRatio`. Callers must pass `{ commit: false }` while a physical
-     * narrow-fallback transition is in flight or already narrow: the DOM/ARIA still reflect a
-     * geometrically safe value, but the user's preferred ratio is not overwritten just because
-     * the Secondary happens to be temporarily hidden or a leave guard is being evaluated.
+     * `options.commit` controls whether the clamped value is written back to canonical
+     * `mainSplitRatio`. Passive ResizeObserver callers pass `{ commit: false }`; only direct
+     * user divider input commits a new preference.
      */
     function prksWorkspaceReapplySplitRatio(canvas, options) {
         if (!canvas) return;

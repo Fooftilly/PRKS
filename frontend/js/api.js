@@ -65,13 +65,16 @@ function prksApiErrorSource(context) {
     return PRKS_API_ERROR_SOURCES[key] || 'api';
 }
 
-function prksSetApiError(context, message, requestId = '') {
-    window.__prksLastApiError = {
+const __prksApiErrorsByOwner = new WeakMap();
+
+function prksSetApiError(context, message, requestId = '', owner) {
+    if (!owner || (typeof owner !== 'object' && typeof owner !== 'function')) return;
+    __prksApiErrorsByOwner.set(owner, {
         context: String(context || 'request'),
         message: String(message || 'Request failed'),
         requestId: String(requestId || ''),
         at: Date.now(),
-    };
+    });
 }
 
 function prksReportApiClientError(context, requestId = '') {
@@ -82,9 +85,10 @@ function prksReportApiClientError(context, requestId = '') {
     });
 }
 
-function prksConsumeApiError() {
-    const payload = window.__prksLastApiError || null;
-    window.__prksLastApiError = null;
+function prksConsumeApiError(owner) {
+    if (!owner || (typeof owner !== 'object' && typeof owner !== 'function')) return null;
+    const payload = __prksApiErrorsByOwner.get(owner) || null;
+    __prksApiErrorsByOwner.delete(owner);
     return payload;
 }
 
@@ -164,6 +168,11 @@ function prksApiSignal(options) {
     return options && options.signal ? options.signal : undefined;
 }
 
+function prksApiErrorOwner(options) {
+    const owner = options && (options.errorOwner || options.signal);
+    return owner && (typeof owner === 'object' || typeof owner === 'function') ? owner : null;
+}
+
 function prksCatalogReadPolicy() {
     const ms = typeof PRKS_REQUEST_BURST_FRESH_MS === 'number' ? PRKS_REQUEST_BURST_FRESH_MS : 1500;
     return { freshForMs: ms };
@@ -174,10 +183,10 @@ function prksAbortFallback(error) {
 }
 
 /** Parse JSON body when response is OK; otherwise return fallback (same shape callers expect). */
-async function prksParseJsonResponse(res, fallback, context = 'request') {
+async function prksParseJsonResponse(res, fallback, context = 'request', owner) {
     const requestId = (res && res.headers && res.headers.get('X-Request-ID')) || '';
     if (!res.ok) {
-        prksSetApiError(context, `Request failed (${res.status})`, requestId);
+        prksSetApiError(context, `Request failed (${res.status})`, requestId, owner);
         prksReportClientError({
             kind: 'api_http_error',
             source: prksApiErrorSource(context),
@@ -189,7 +198,7 @@ async function prksParseJsonResponse(res, fallback, context = 'request') {
     try {
         return await res.json();
     } catch (e) {
-        prksSetApiError(context, 'Received invalid server response.', requestId);
+        prksSetApiError(context, 'Received invalid server response.', requestId, owner);
         prksReportClientError({
             kind: 'api_parse_error',
             error_name: e && e.name ? String(e.name) : 'Error',
@@ -201,117 +210,127 @@ async function prksParseJsonResponse(res, fallback, context = 'request') {
 }
 
 async function fetchWorks(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/works', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'works');
+        const data = await prksParseJsonResponse(res, [], 'works', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('works', 'Could not load files.');
+        prksSetApiError('works', 'Could not load files.', '', errorOwner);
         prksReportApiClientError('works');
         return [];
     }
 }
 async function fetchFolders(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/folders', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'folders');
+        const data = await prksParseJsonResponse(res, [], 'folders', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('folders', 'Could not load folders.');
+        prksSetApiError('folders', 'Could not load folders.', '', errorOwner);
         prksReportApiClientError('folders');
         return [];
     }
 }
 async function fetchFolderDetails(id, options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/folders/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        return await prksParseJsonResponse(res, null, 'folder-details');
+        return await prksParseJsonResponse(res, null, 'folder-details', errorOwner);
     } catch (e) {
         if (prksAbortFallback(e)) return null;
-        prksSetApiError('folder-details', 'Could not load folder details.');
+        prksSetApiError('folder-details', 'Could not load folder details.', '', errorOwner);
         prksReportApiClientError('folder-details');
         return null;
     }
 }
 async function fetchPersons(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/persons', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'persons');
+        const data = await prksParseJsonResponse(res, [], 'persons', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('persons', 'Could not load people.');
+        prksSetApiError('persons', 'Could not load people.', '', errorOwner);
         prksReportApiClientError('persons');
         return [];
     }
 }
 async function fetchWorkDetails(id, options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/works/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        return await prksParseJsonResponse(res, null, 'work-details');
+        return await prksParseJsonResponse(res, null, 'work-details', errorOwner);
     } catch (e) {
         if (prksAbortFallback(e)) return null;
-        prksSetApiError('work-details', 'Could not load file details.');
+        prksSetApiError('work-details', 'Could not load file details.', '', errorOwner);
         prksReportApiClientError('work-details');
         return null;
     }
 }
 async function fetchPersonDetails(id, options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/persons/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        return await prksParseJsonResponse(res, null, 'person-details');
+        return await prksParseJsonResponse(res, null, 'person-details', errorOwner);
     } catch (e) {
         if (prksAbortFallback(e)) return null;
-        prksSetApiError('person-details', 'Could not load person details.');
+        prksSetApiError('person-details', 'Could not load person details.', '', errorOwner);
         prksReportApiClientError('person-details');
         return null;
     }
 }
 async function fetchPersonGroups(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/person-groups', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'person-groups');
+        const data = await prksParseJsonResponse(res, [], 'person-groups', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('person-groups', 'Could not load groups.');
+        prksSetApiError('person-groups', 'Could not load groups.', '', errorOwner);
         prksReportApiClientError('person-groups');
         return [];
     }
 }
 async function fetchPersonGroupDetails(id, options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/person-groups/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
-        return await prksParseJsonResponse(res, null, 'person-group-details');
+        return await prksParseJsonResponse(res, null, 'person-group-details', errorOwner);
     } catch (e) {
         if (prksAbortFallback(e)) return null;
-        prksSetApiError('person-group-details', 'Could not load group details.');
+        prksSetApiError('person-group-details', 'Could not load group details.', '', errorOwner);
         prksReportApiClientError('person-group-details');
         return null;
     }
 }
 async function fetchRecent(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/recent', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'recent');
+        const data = await prksParseJsonResponse(res, [], 'recent', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('recent', 'Could not load recent files.');
+        prksSetApiError('recent', 'Could not load recent files.', '', errorOwner);
         prksReportApiClientError('recent');
         return [];
     }
 }
 async function fetchRecentlyAdded(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/recently-added', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'recently-added');
+        const data = await prksParseJsonResponse(res, [], 'recently-added', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('recently-added', 'Could not load recently added files.');
+        prksSetApiError('recently-added', 'Could not load recently added files.', '', errorOwner);
         prksReportApiClientError('recently-added');
         return [];
     }
@@ -322,6 +341,7 @@ async function fetchSearch(query, tagName, options = {}) {
         options.publisher != null ? String(options.publisher).trim() : '';
     const any = options.any != null ? String(options.any).trim() : '';
     const signal = prksApiSignal(options);
+    const errorOwner = prksApiErrorOwner(options);
     if (tagName) {
         try {
             const params = new URLSearchParams();
@@ -332,11 +352,11 @@ async function fetchSearch(query, tagName, options = {}) {
                 params.set('any', '1');
             }
             const res = await prksRequest('/api/search?' + params.toString(), { signal: signal });
-            const data = await prksParseJsonResponse(res, [], 'search');
+            const data = await prksParseJsonResponse(res, [], 'search', errorOwner);
             return Array.isArray(data) ? data : [];
         } catch (e) {
             if (prksAbortFallback(e)) return [];
-            prksSetApiError('search', 'Search request failed.');
+            prksSetApiError('search', 'Search request failed.', '', errorOwner);
             prksReportApiClientError('search');
             return [];
         }
@@ -353,29 +373,31 @@ async function fetchSearch(query, tagName, options = {}) {
         }
         const url = '/api/search?' + params.toString();
         const res = await prksRequest(url, { signal: signal });
-        const data = await prksParseJsonResponse(res, [], 'search');
+        const data = await prksParseJsonResponse(res, [], 'search', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('search', 'Search request failed.');
+        prksSetApiError('search', 'Search request failed.', '', errorOwner);
         prksReportApiClientError('search');
         return [];
     }
 }
 async function fetchPublishersInUse(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/publishers?used=1', { signal: prksApiSignal(options) });
-        const data = await prksParseJsonResponse(res, [], 'publishers');
+        const data = await prksParseJsonResponse(res, [], 'publishers', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('publishers', 'Could not load publishers.');
+        prksSetApiError('publishers', 'Could not load publishers.', '', errorOwner);
         prksReportApiClientError('publishers');
         return [];
     }
 }
 
 async function fetchTags(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     const params = new URLSearchParams();
     if (options.used) {
         params.set('used', '1');
@@ -383,17 +405,18 @@ async function fetchTags(options = {}) {
     const q = params.toString() ? '?' + params.toString() : '';
     try {
         const res = await prksRequest('/api/tags' + q, { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'tags');
+        const data = await prksParseJsonResponse(res, [], 'tags', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('tags', 'Could not load tags.');
+        prksSetApiError('tags', 'Could not load tags.', '', errorOwner);
         prksReportApiClientError('tags');
         return [];
     }
 }
 
 async function fetchProcessingFiles(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     const params = new URLSearchParams();
     if (options && options.rescan) {
         params.set('rescan', '1');
@@ -404,11 +427,11 @@ async function fetchProcessingFiles(options = {}) {
         : {};
     try {
         const res = await prksRequest('/api/processing-files' + q, { signal: prksApiSignal(options) }, policy);
-        const data = await prksParseJsonResponse(res, [], 'processing-files');
+        const data = await prksParseJsonResponse(res, [], 'processing-files', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (_e) {
         if (prksAbortFallback(_e)) return [];
-        prksSetApiError('processing-files', 'Could not load files for processing.');
+        prksSetApiError('processing-files', 'Could not load files for processing.', '', errorOwner);
         prksReportApiClientError('processing-files');
         return [];
     }
@@ -680,27 +703,29 @@ async function bulkUpdateWorks(payload) {
 }
 
 async function fetchSavedViews(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/saved-views', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'saved-views');
+        const data = await prksParseJsonResponse(res, [], 'saved-views', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('saved-views', 'Could not load Saved Views.');
+        prksSetApiError('saved-views', 'Could not load Saved Views.', '', errorOwner);
         prksReportApiClientError('saved-views');
         return [];
     }
 }
 
 async function fetchSavedView(id, options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
         if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'saved-views');
+        const data = await prksParseJsonResponse(res, null, 'saved-views', errorOwner);
         return data && data.id ? data : null;
     } catch (e) {
         if (prksAbortFallback(e)) return null;
-        prksSetApiError('saved-views', 'Could not load Saved View.');
+        prksSetApiError('saved-views', 'Could not load Saved View.', '', errorOwner);
         prksReportApiClientError('saved-views');
         return null;
     }
@@ -755,27 +780,29 @@ async function prksResearchJson(res, fallbackMessage, source) {
 }
 
 async function fetchConcepts(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/concepts', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'concepts.fetch');
+        const data = await prksParseJsonResponse(res, [], 'concepts.fetch', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('concepts', 'Could not load Concepts.');
+        prksSetApiError('concepts', 'Could not load Concepts.', '', errorOwner);
         prksReportApiClientError('concepts.fetch');
         return [];
     }
 }
 
 async function fetchConcept(id, options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/concepts/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
         if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'concepts.fetch');
+        const data = await prksParseJsonResponse(res, null, 'concepts.fetch', errorOwner);
         return data && data.id ? data : null;
     } catch (e) {
         if (prksAbortFallback(e)) return null;
-        prksSetApiError('concepts', 'Could not load Concept.');
+        prksSetApiError('concepts', 'Could not load Concept.', '', errorOwner);
         prksReportApiClientError('concepts.fetch');
         return null;
     }
@@ -823,27 +850,29 @@ async function putConceptAliases(id, aliases) {
 }
 
 async function fetchPositions(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/positions', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'positions.fetch');
+        const data = await prksParseJsonResponse(res, [], 'positions.fetch', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('positions', 'Could not load Positions.');
+        prksSetApiError('positions', 'Could not load Positions.', '', errorOwner);
         prksReportApiClientError('positions.fetch');
         return [];
     }
 }
 
 async function fetchPosition(id, options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/positions/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
         if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'positions.fetch');
+        const data = await prksParseJsonResponse(res, null, 'positions.fetch', errorOwner);
         return data && data.id ? data : null;
     } catch (e) {
         if (prksAbortFallback(e)) return null;
-        prksSetApiError('positions', 'Could not load Position.');
+        prksSetApiError('positions', 'Could not load Position.', '', errorOwner);
         prksReportApiClientError('positions.fetch');
         return null;
     }
@@ -873,37 +902,40 @@ async function deletePosition(id) {
 }
 
 async function fetchArguments(kind, options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const q = kind ? '?kind=' + encodeURIComponent(kind) : '';
         const res = await prksRequest('/api/arguments' + q, { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'arguments.fetch');
+        const data = await prksParseJsonResponse(res, [], 'arguments.fetch', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
-        prksSetApiError('arguments', 'Could not load Arguments.');
+        prksSetApiError('arguments', 'Could not load Arguments.', '', errorOwner);
         prksReportApiClientError('arguments.fetch');
         return [];
     }
 }
 
 async function fetchArgument(id, options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/arguments/' + encodeURIComponent(id), { signal: prksApiSignal(options) });
         if (res.status === 404) return null;
-        const data = await prksParseJsonResponse(res, null, 'arguments.fetch');
+        const data = await prksParseJsonResponse(res, null, 'arguments.fetch', errorOwner);
         return data && data.id ? data : null;
     } catch (e) {
         if (prksAbortFallback(e)) return null;
-        prksSetApiError('arguments', 'Could not load Argument.');
+        prksSetApiError('arguments', 'Could not load Argument.', '', errorOwner);
         prksReportApiClientError('arguments.fetch');
         return null;
     }
 }
 
 async function fetchArgumentVerdicts(options = {}) {
+    const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/argument-verdicts', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
-        const data = await prksParseJsonResponse(res, [], 'arguments.fetch');
+        const data = await prksParseJsonResponse(res, [], 'arguments.fetch', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
         if (prksAbortFallback(e)) return [];
@@ -956,6 +988,7 @@ window.bulkUpdateWorks = bulkUpdateWorks;
 async function fetchResearchGraph(opts) {
     const people = !!(opts && opts.people);
     const url = people ? '/api/research-graph?people=1' : '/api/research-graph';
+    const errorOwner = prksApiErrorOwner(opts);
     try {
         const res = await prksRequest(url, { signal: prksApiSignal(opts) });
         if (res.status === 413) {
@@ -969,7 +1002,7 @@ async function fetchResearchGraph(opts) {
             err.edge_count = data && data.edge_count;
             throw err;
         }
-        const data = await prksParseJsonResponse(res, null, 'research-graph.fetch');
+        const data = await prksParseJsonResponse(res, null, 'research-graph.fetch', errorOwner);
         if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
             throw new Error('Could not load Research Graph.');
         }
@@ -977,7 +1010,7 @@ async function fetchResearchGraph(opts) {
     } catch (e) {
         if (prksAbortFallback(e)) throw e;
         if (e && e.code === 'graph_too_large') throw e;
-        prksSetApiError('research-graph', 'Could not load Research Graph.');
+        prksSetApiError('research-graph', 'Could not load Research Graph.', '', errorOwner);
         prksReportApiClientError('research-graph.fetch');
         throw e;
     }

@@ -2,6 +2,8 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
+const vm = require('vm');
 
 const rootDir = path.resolve(__dirname, '../..');
 const api = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
@@ -920,6 +922,41 @@ async function testWorkHintStalePublication() {
     );
 }
 
+async function testApiWarningOwnership() {
+    const apiSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/api.js'), 'utf8');
+    let nextStatus = 200;
+    const sandbox = {
+        window: null,
+        globalThis: null,
+        console: console,
+        URL: URL,
+        URLSearchParams: URLSearchParams,
+        Response: Response,
+        Map: Map,
+        WeakMap: WeakMap,
+        Date: Date,
+        setTimeout: setTimeout,
+        clearTimeout: clearTimeout,
+        fetch: function () { return Promise.resolve(jsonResponse({ ok: true })); },
+        prksRequest: function () { return Promise.resolve(jsonResponse({}, nextStatus)); },
+        prksIsAbortError: function () { return false; },
+    };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(apiSrc, sandbox);
+    await flush();
+    const ownerA = {};
+    const ownerB = {};
+    nextStatus = 500;
+    await sandbox.fetchFolders({ signal: ownerA });
+    nextStatus = 200;
+    await sandbox.fetchFolders({ signal: ownerB });
+    record('successful B cannot consume A warning', sandbox.prksConsumeApiError(ownerB) === null, '');
+    const warningA = sandbox.prksConsumeApiError(ownerA);
+    record('failed A consumes its own warning', !!(warningA && warningA.context === 'folders'), JSON.stringify(warningA));
+    record('A warning consumed once', sandbox.prksConsumeApiError(ownerA) === null, '');
+}
+
 async function main() {
     record('exports createPrksRequestCoordinator', typeof createPrksRequestCoordinator === 'function', '');
     record('does not monkeypatch fetch', typeof fetch === 'function', '');
@@ -934,6 +971,7 @@ async function main() {
     await testCoalesce();
     await testDiagnosticsPrivacyAndReset();
     await testWorkHintStalePublication();
+    await testApiWarningOwnership();
     console.log(passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);
 }

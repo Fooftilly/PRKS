@@ -951,20 +951,25 @@
         prksSyncNavDisclosures(route);
     }
 
-    function prksRouteScrollElement() {
+    function prksRouteScrollElement(ctx) {
         if (typeof document === 'undefined' || !document.querySelector) return null;
-        const inner = document.querySelector(
+        const scope = ctx && ctx.root && typeof ctx.root.querySelector === 'function' ? ctx.root : document;
+        const inner = scope.querySelector(
             '.prks-folder-library__pane:not(.is-hidden) .prks-folder-library__scroll, ' +
                 '.prks-people-library__scroll:not(.prks-people-library__scroll--embedded), ' +
                 '.prks-group-library__scroll'
         );
         if (inner) return inner;
+        if (ctx && ctx.root && typeof ctx.root.closest === 'function') {
+            const tileBody = ctx.root.closest('.prks-tile__body');
+            if (tileBody) return tileBody;
+        }
         return document.getElementById('main-content');
     }
 
     function prksCaptureCurrentRouteState(prevRoute, ctx) {
         if (!prevRoute || !prksIsRecognizedRoute(prevRoute)) return;
-        const el = prksRouteScrollElement();
+        const el = prksRouteScrollElement(ctx);
         const scrollTop = el && Number.isFinite(el.scrollTop) ? el.scrollTop : 0;
         const key = prevRoute.canonicalHash;
         if (ctx && ctx.navigation && ctx.navigation.routeStates && typeof ctx.navigation.routeStates.set === 'function') {
@@ -986,22 +991,21 @@
         let saved = null;
         if (ctx && ctx.navigation && ctx.navigation.routeStates && typeof ctx.navigation.routeStates.get === 'function') {
             saved = ctx.navigation.routeStates.get(key);
-        }
-        if (!saved) {
+        } else {
             const store = prksReadStore();
             saved = store.states[key];
         }
         if (!saved || typeof saved !== 'object') return null;
         const top = Number(saved.scrollTop);
         if (!Number.isFinite(top) || top < 0) return null;
-        const el = prksRouteScrollElement();
+        const el = prksRouteScrollElement(ctx);
         if (!el) return null;
         el.scrollTop = top;
         if (typeof root.requestAnimationFrame === 'function') {
             root.requestAnimationFrame(function () {
                 if (ctx && typeof ctx.isCurrent === 'function' && typeof generation === 'number' && !ctx.isCurrent(generation)) return;
                 if (ctx && ctx.lastResolvedRoute && ctx.lastResolvedRoute.canonicalHash !== route.canonicalHash) return;
-                const again = prksRouteScrollElement();
+                const again = prksRouteScrollElement(ctx);
                 if (again) again.scrollTop = top;
             });
         }
@@ -1052,7 +1056,7 @@
         const key = route.canonicalHash;
         if (ctx && ctx.navigation && ctx.navigation.origins && typeof ctx.navigation.origins.get === 'function') {
             const rec = ctx.navigation.origins.get(key);
-            if (rec && typeof rec === 'object') return prksValidateOriginRecord(rec);
+            return rec && typeof rec === 'object' ? prksValidateOriginRecord(rec) : null;
         }
         const store = prksReadStore();
         return prksValidateOriginRecord(store.origins[key]);
@@ -1254,7 +1258,7 @@
         root.location.hash = target;
     }
 
-    function prksRenderRouteError(contentDiv) {
+    function prksRenderRouteError(contentDiv, ctx, failedHash, generation) {
         if (!contentDiv) return;
         contentDiv.innerHTML =
             '<div class="prks-page-header page-header"><h2 class="prks-page-title">Could not load this view</h2></div>' +
@@ -1264,7 +1268,17 @@
         const btn = contentDiv.querySelector('#prks-route-retry');
         if (btn) {
             btn.onclick = function () {
-                prksNavigate(prksCurrentLocationHash(), { replace: true });
+                if (
+                    ctx &&
+                    typeof ctx.isCurrent === 'function' &&
+                    typeof generation === 'number' &&
+                    !ctx.isCurrent(generation)
+                ) {
+                    return;
+                }
+                const retryHash = failedHash || (ctx && ctx.route && (ctx.route.canonicalHash || ctx.route.hash));
+                if (!retryHash) return;
+                prksNavigate(retryHash, { replace: true, tabId: ctx && ctx.tabId });
             };
         }
     }

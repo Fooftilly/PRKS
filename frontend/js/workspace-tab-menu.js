@@ -95,6 +95,17 @@
     }
 
     function setActiveItem(index) {
+        if (menuEl && typeof menuEl.querySelectorAll === 'function') {
+            const all = Array.prototype.slice.call(menuEl.querySelectorAll('[role="menuitem"]'));
+            menuItems = all.filter(function (btn) {
+                const enabled = !btn.disabled && btn.getAttribute('aria-disabled') !== 'true';
+                if (!enabled) {
+                    btn.tabIndex = -1;
+                    btn.classList.remove('is-active');
+                }
+                return enabled;
+            });
+        }
         if (!menuItems.length) return;
         let i = index;
         if (i < 0) i = menuItems.length - 1;
@@ -200,7 +211,7 @@
             runAction(spec.action);
         });
         host.appendChild(btn);
-        menuItems.push(btn);
+        if (!btn.disabled) menuItems.push(btn);
         return btn;
     }
 

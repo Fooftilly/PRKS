@@ -29,6 +29,93 @@ function prksBuildWikiAutocompleteWorkList(works) {
 }
 
 const PRKS_WIKI_HINT_MAX = 50;
+const PRKS_RESEARCH_DRAFT_MAX_COMMITTED = 64;
+const prksWorkResearchDrafts = new Map();
+
+function prksResearchDraftEntry(workId, text) {
+    const id = String(workId || '');
+    if (!id) return null;
+    let entry = prksWorkResearchDrafts.get(id);
+    if (!entry) {
+        entry = {
+            workId: id,
+            text: String(text == null ? '' : text),
+            editGeneration: 0,
+            saveSequence: 0,
+            latestSaveToken: 0,
+            latestSaveEditGeneration: 0,
+            settledSaveToken: 0,
+            state: 'committed',
+            saveError: false,
+            promise: null,
+            updatedAt: Date.now(),
+        };
+        prksWorkResearchDrafts.set(id, entry);
+    }
+    return entry;
+}
+
+function prksPruneResearchDrafts() {
+    const committed = Array.from(prksWorkResearchDrafts.values())
+        .filter((entry) => entry.state === 'committed' && !entry.promise)
+        .sort((a, b) => a.updatedAt - b.updatedAt);
+    while (committed.length > PRKS_RESEARCH_DRAFT_MAX_COMMITTED) {
+        const old = committed.shift();
+        if (old) prksWorkResearchDrafts.delete(old.workId);
+    }
+}
+
+function prksResearchNotesTextForWork(workId, serverText) {
+    const id = String(workId || '');
+    const server = String(serverText == null ? '' : serverText);
+    const entry = id ? prksWorkResearchDrafts.get(id) : null;
+    if (!entry) return server;
+    if (entry.state === 'committed' && !entry.promise && entry.text === server) {
+        prksWorkResearchDrafts.delete(id);
+        return server;
+    }
+    return entry.text;
+}
+
+function prksSyncResearchNotesState(notes, entry) {
+    if (!notes || !entry) return;
+    notes.editGeneration = entry.editGeneration;
+    notes.saveSequence = entry.saveSequence;
+    notes.latestSaveToken = entry.latestSaveToken;
+    notes.latestSaveEditGeneration = entry.latestSaveEditGeneration;
+    notes.settledSaveToken = entry.settledSaveToken;
+    notes.pendingSave = entry.latestSaveToken > entry.settledSaveToken;
+    notes.drafting = entry.state === 'drafting';
+    notes.saveError = entry.state === 'error';
+}
+
+function prksSyncMountedResearchDraft(workId, entry) {
+    if (!entry || typeof prksForEachMountedTabContext !== 'function') return;
+    prksForEachMountedTabContext(function (ctx) {
+        const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+        if (!work || String(work.id) !== String(workId)) return;
+        const notes = ctx.getResource ? ctx.getResource('workNotes') : null;
+        prksSyncResearchNotesState(notes, entry);
+        const status = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+        if (status) {
+            status.innerText = entry.state === 'error'
+                ? 'Error saving changes'
+                : entry.state === 'saving'
+                  ? 'Saving...'
+                  : entry.state === 'drafting'
+                    ? 'Drafting...'
+                    : 'All changes saved';
+        }
+        if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
+            window.prksWorkspaceRefreshTabStatus(ctx.tabId);
+        }
+    });
+}
+
+window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
+window.prksResetResearchDraftsForTest = function () {
+    prksWorkResearchDrafts.clear();
+};
 
 /** EasyMDE does not set window.CodeMirror; show-hint registers on the CDN global. Copy hint APIs onto the editor's bundled CodeMirror constructor. */
 function prksEnsureEasyMDECodeMirrorHints(cm) {
@@ -627,23 +714,39 @@ function prksOpenArgumentPicker(cm, work) {
     });
 }
 
-async function deleteWork(w_id) {
+async function deleteWork(w_id, ownerCtx) {
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const generation = ctx && ctx.generation;
     const confirmed = await prksConfirmDestructive({
         title: 'Delete file?',
         message: 'Are you sure you want to delete this file?',
         confirmLabel: 'Delete file',
     });
     if (!confirmed) return;
+    if (
+        typeof prksTabContextOwnsEntityRoute === 'function' &&
+        !prksTabContextOwnsEntityRoute(ctx, generation, 'work', w_id, 'work')
+    ) return;
     try {
         const res = await prksRequest('/api/works/' + encodeURIComponent(w_id), { method: 'DELETE' });
         if (!res.ok) {
-            await prksAlertMessage('Error deleting file!', 'Error');
+            if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
+                await prksAlertMessage('Error deleting file!', 'Error');
+            }
             return;
         }
         window.__prksRecentlyAddedDirty = true;
-        if (typeof prksNavigate === 'function') prksNavigate('#/folders');
+        if (
+            typeof prksTabContextOwnsEntityRoute === 'function' &&
+            prksTabContextOwnsEntityRoute(ctx, generation, 'work', w_id, 'work') &&
+            typeof prksNavigate === 'function'
+        ) {
+            prksNavigate('#/folders', { replace: true, tabId: ctx.tabId });
+        }
     } catch (_e) {
-        await prksAlertMessage('Error deleting file!', 'Error');
+        if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
+            await prksAlertMessage('Error deleting file!', 'Error');
+        }
     }
 }
 
@@ -662,6 +765,7 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">File not found.</p>';
         return;
     }
+    work.text_content = prksResearchNotesTextForWork(work.id, work.text_content);
     let pdfModule = null;
     const inferredKind =
         typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
@@ -788,7 +892,10 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         pdfModule.initPdfViewerForWork(ctx, work);
     }
 
-    setTimeout(async () => {
+    const setupTimer = setTimeout(async () => {
+        if (ctx && ctx.timers && ctx.timers.get('workDeferredSetup') === setupTimer) {
+            ctx.clearTimer('workDeferredSetup');
+        }
         if (!isCurrent()) return;
         const wsEarly = container.querySelector('.work-workspace');
         if (wsEarly) {
@@ -840,6 +947,7 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         setupWorkNotesSplitResize(ctx, work.id);
         setupWorkNotesCollapseToggle(ctx, work.id);
     }, 200);
+    if (ctx && typeof ctx.setTimer === 'function') ctx.setTimer('workDeferredSetup', setupTimer);
 
     prksRequest(
         '/api/works/' + encodeURIComponent(work.id) + '/related_folders',
@@ -1040,7 +1148,9 @@ function initEasyMDE(ctx, work) {
         },
     });
 
+    const transient = prksWorkResearchDrafts.get(String(work.id));
     const workNotes = {
+        workId: String(work.id),
         editor: easyMDE,
         hints: {
             wikiTitleMap: titleLowerToId,
@@ -1064,6 +1174,7 @@ function initEasyMDE(ctx, work) {
             } catch (_e) {}
         },
     };
+    if (transient) prksSyncResearchNotesState(workNotes, transient);
     if (ctx && typeof ctx.setResource === 'function') {
         ctx.setResource('workNotes', workNotes, function () {
             workNotes.destroy();
@@ -1096,7 +1207,7 @@ function initEasyMDE(ctx, work) {
     const notesChangeHandler = () => {
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
-        prksWorkNotesMarkEdit(workNotes);
+        prksWorkNotesMarkEdit(workNotes, work.id, easyMDE.value());
         if (ctx && ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
             window.prksWorkspaceRefreshTabStatus(ctx.tabId);
         }
@@ -1106,10 +1217,20 @@ function initEasyMDE(ctx, work) {
     easyMDE.__notesChangeHandler = notesChangeHandler;
 }
 
-function prksWorkNotesMarkEdit(notes) {
+function prksWorkNotesMarkEdit(notes, workId, text) {
     if (!notes) return 0;
     notes.editGeneration = (Number(notes.editGeneration) || 0) + 1;
     notes.drafting = true;
+    const id = String(workId || notes.workId || '');
+    if (id) {
+        const entry = prksResearchDraftEntry(id, text);
+        entry.text = String(text == null ? '' : text);
+        entry.editGeneration = Math.max(entry.editGeneration + 1, notes.editGeneration);
+        entry.state = 'drafting';
+        entry.saveError = false;
+        entry.updatedAt = Date.now();
+        prksSyncResearchNotesState(notes, entry);
+    }
     return notes.editGeneration;
 }
 
@@ -1163,13 +1284,37 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     if (editor && typeof editor.value === 'function') {
         content = editor.value();
     }
+    const existingTransient = id ? prksWorkResearchDrafts.get(String(id)) : null;
+    if (
+        existingTransient &&
+        existingTransient.promise &&
+        existingTransient.text === content &&
+        existingTransient.latestSaveEditGeneration === existingTransient.editGeneration &&
+        existingTransient.latestSaveEditGeneration === (Number(notes && notes.editGeneration) || 0)
+    ) {
+        return existingTransient.promise;
+    }
     const statusEl = owner && owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
     const token = prksWorkNotesBeginSave(notes);
+    const transient = id ? prksResearchDraftEntry(id, content) : null;
+    let transientToken = 0;
+    if (transient) {
+        transient.text = content;
+        transient.editGeneration = Math.max(transient.editGeneration, Number(notes && notes.editGeneration) || 0);
+        transient.saveSequence += 1;
+        transientToken = transient.saveSequence;
+        transient.latestSaveToken = transientToken;
+        transient.latestSaveEditGeneration = transient.editGeneration;
+        transient.state = 'saving';
+        transient.saveError = false;
+        transient.updatedAt = Date.now();
+        prksSyncResearchNotesState(notes, transient);
+    }
     if (statusEl) statusEl.innerText = 'Saving...';
     if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
         window.prksWorkspaceRefreshTabStatus(owner.tabId);
     }
-    void prksRequest(
+    const savePromise = prksRequest(
         '/api/works/' + encodeURIComponent(id),
         {
             method: 'PATCH',
@@ -1179,19 +1324,60 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         {
             coalesceKey: 'work-research-notes:' + id,
         }
-    )
+    );
+    if (transient) transient.promise = savePromise;
+    void savePromise
         .then(function (res) {
-            const applied = prksWorkNotesSettleSave(notes, token, !!(res && res.ok));
-            if (!applied) return undefined;
-            if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
-                window.prksWorkspaceRefreshTabStatus(owner.tabId);
+            const ok = !!(res && res.ok);
+            const localApplied = prksWorkNotesSettleSave(notes, token, ok);
+            let transientApplied = false;
+            if (transient && transientToken === transient.latestSaveToken) {
+                const hasNewerDraft = transient.editGeneration > transient.latestSaveEditGeneration;
+                transient.settledSaveToken = transientToken;
+                transient.promise = null;
+                transient.saveError = !ok && !hasNewerDraft;
+                transient.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
+                transient.updatedAt = Date.now();
+                transientApplied = true;
+                prksSyncResearchNotesState(notes, transient);
+                prksSyncMountedResearchDraft(id, transient);
+                prksPruneResearchDrafts();
             }
-            if (statusEl) statusEl.innerText = res.ok ? 'All changes saved' : 'Error saving changes';
-            if (res.ok && typeof fetchWorkDetails === 'function') {
-                return fetchWorkDetails(id).then(function (latest) {
-                    if (latest && latest.research_refs && owner && owner.getEntity) {
-                        const live = owner.getEntity('work');
-                        if (live && live.id === id) live.research_refs = latest.research_refs;
+            if (!localApplied && !transientApplied) return undefined;
+            if (statusEl && owner && owner.mounted) {
+                statusEl.innerText =
+                    transientApplied && transient.state === 'drafting'
+                        ? 'Drafting...'
+                        : ok
+                          ? 'All changes saved'
+                          : 'Error saving changes';
+            }
+            if (ok && typeof fetchWorkDetails === 'function') {
+                let liveOwner = null;
+                if (typeof prksForEachMountedTabContext === 'function') {
+                    prksForEachMountedTabContext(function (candidate) {
+                        if (liveOwner) return;
+                        const liveWork = candidate.getEntity ? candidate.getEntity('work') : null;
+                        if (liveWork && String(liveWork.id) === String(id)) liveOwner = candidate;
+                    });
+                }
+                if (!liveOwner) return undefined;
+                const generation = liveOwner.generation;
+                const signal = liveOwner.abortController && liveOwner.abortController.signal;
+                return fetchWorkDetails(id, { signal: signal }).then(function (latest) {
+                    if (!liveOwner.isCurrent(generation)) return;
+                    const live = liveOwner.getEntity ? liveOwner.getEntity('work') : null;
+                    if (!live || String(live.id) !== String(id)) return;
+                    if (latest && latest.research_refs) live.research_refs = latest.research_refs;
+                    const currentDraft = prksWorkResearchDrafts.get(String(id));
+                    if (
+                        currentDraft &&
+                        currentDraft.state === 'committed' &&
+                        !currentDraft.promise &&
+                        latest &&
+                        String(latest.text_content == null ? '' : latest.text_content) === currentDraft.text
+                    ) {
+                        prksWorkResearchDrafts.delete(String(id));
                     }
                 });
             }
@@ -1199,12 +1385,27 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
         })
         .catch(function () {
             const applied = prksWorkNotesSettleSave(notes, token, false);
-            if (!applied) return;
-            if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
-                window.prksWorkspaceRefreshTabStatus(owner.tabId);
+            let transientApplied = false;
+            if (transient && transientToken === transient.latestSaveToken) {
+                const hasNewerDraft = transient.editGeneration > transient.latestSaveEditGeneration;
+                transient.settledSaveToken = transientToken;
+                transient.promise = null;
+                transient.saveError = !hasNewerDraft;
+                transient.state = hasNewerDraft ? 'drafting' : 'error';
+                transient.updatedAt = Date.now();
+                transientApplied = true;
+                prksSyncResearchNotesState(notes, transient);
+                prksSyncMountedResearchDraft(id, transient);
             }
-            if (statusEl) statusEl.innerText = 'Error saving changes';
+            if (!applied && !transientApplied) return;
+            if (statusEl && owner && owner.mounted) {
+                statusEl.innerText =
+                    transientApplied && transient.state === 'drafting'
+                        ? 'Drafting...'
+                        : 'Error saving changes';
+            }
         });
+    return savePromise;
 }
 
 function prksFlushPendingWorkResearchNotes(ctx) {
@@ -1358,88 +1559,64 @@ function setupWorkNotesSplitResize(ctx, workId) {
         e.preventDefault();
         e.stopPropagation();
         const side = ws.classList.contains('work-workspace--side');
-        if (side) {
-            let dragging = true;
-            const startX = e.clientX;
-            const startNw = notesPane.getBoundingClientRect().width;
-            handle.classList.add('dragging');
-            try {
-                handle.setPointerCapture(e.pointerId);
-            } catch (_err) {}
+        let dragging = true;
+        const pointerId = e.pointerId;
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const startNw = notesPane.getBoundingClientRect().width;
+        const startNh = notesPane.getBoundingClientRect().height;
+        let unregisterCleanup = function () {};
+        handle.classList.add('dragging');
+        try {
+            handle.setPointerCapture(pointerId);
+        } catch (_err) {}
 
-            function endDrag(ev) {
-                if (!dragging) return;
-                dragging = false;
-                handle.classList.remove('dragging');
-                document.removeEventListener('pointermove', onMove, true);
-                document.removeEventListener('pointerup', endDrag, true);
-                document.removeEventListener('pointercancel', endDrag, true);
-                handle.removeEventListener('lostpointercapture', onLost);
-                if (ev && typeof ev.pointerId === 'number') {
-                    try {
-                        handle.releasePointerCapture(ev.pointerId);
-                    } catch (_err2) {}
-                }
-                const raw = ws.style.getPropertyValue('--work-notes-width').trim();
-                const w = parseInt(raw, 10);
-                if (!Number.isNaN(w)) localStorage.setItem(storageKeyW, String(w));
-                refreshNotesEditor();
-            }
-
-            function onMove(ev) {
-                if (!dragging) return;
-                ev.preventDefault();
+        function onMove(ev) {
+            if (!dragging) return;
+            ev.preventDefault();
+            if (side) {
                 const delta = ev.clientX - startX;
                 const next = prksClampWorkNotesSideWidth(ws, handle, startNw - delta);
                 ws.style.setProperty('--work-notes-width', next + 'px');
-                refreshNotesEditor();
-            }
-
-            function onLost() {
-                endDrag({});
-            }
-
-            handle.addEventListener('lostpointercapture', onLost);
-            document.addEventListener('pointermove', onMove, true);
-            document.addEventListener('pointerup', endDrag, true);
-            document.addEventListener('pointercancel', endDrag, true);
-        } else {
-            let dragging = true;
-            const startY = e.clientY;
-            const startNh = notesPane.getBoundingClientRect().height;
-            handle.classList.add('dragging');
-            try {
-                handle.setPointerCapture(e.pointerId);
-            } catch (_err) {}
-
-            function onMove(ev) {
-                if (!dragging) return;
+            } else {
                 const delta = ev.clientY - startY;
                 const next = prksClampWorkNotesHeight(ws, handle, startNh - delta);
                 ws.style.setProperty('--work-notes-height', next + 'px');
-                refreshNotesEditor();
             }
+            refreshNotesEditor();
+        }
 
-            function onUp(ev) {
-                if (!dragging) return;
-                dragging = false;
-                handle.classList.remove('dragging');
-                document.removeEventListener('pointermove', onMove);
-                document.removeEventListener('pointerup', onUp);
-                if (ev.pointerId !== undefined) {
-                    try {
-                        handle.releasePointerCapture(ev.pointerId);
-                    } catch (_err2) {}
+        function endDrag() {
+            if (!dragging) return;
+            dragging = false;
+            unregisterCleanup();
+            handle.classList.remove('dragging');
+            document.removeEventListener('pointermove', onMove, true);
+            document.removeEventListener('pointerup', endDrag, true);
+            document.removeEventListener('pointercancel', endDrag, true);
+            handle.removeEventListener('lostpointercapture', endDrag);
+            try {
+                if (handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
+                    handle.releasePointerCapture(pointerId);
                 }
+            } catch (_err2) {}
+            if (side) {
+                const raw = ws.style.getPropertyValue('--work-notes-width').trim();
+                const w = parseInt(raw, 10);
+                if (!Number.isNaN(w)) localStorage.setItem(storageKeyW, String(w));
+            } else {
                 const raw = ws.style.getPropertyValue('--work-notes-height').trim();
                 const h = parseInt(raw, 10);
                 if (!Number.isNaN(h)) localStorage.setItem(storageKeyH, String(h));
-                refreshNotesEditor();
             }
-
-            document.addEventListener('pointermove', onMove);
-            document.addEventListener('pointerup', onUp);
+            refreshNotesEditor();
         }
+
+        if (ctx && typeof ctx.registerCleanup === 'function') unregisterCleanup = ctx.registerCleanup(endDrag);
+        handle.addEventListener('lostpointercapture', endDrag);
+        document.addEventListener('pointermove', onMove, true);
+        document.addEventListener('pointerup', endDrag, true);
+        document.addEventListener('pointercancel', endDrag, true);
     });
 
     handle.addEventListener('keydown', (e) => {
@@ -1581,7 +1758,7 @@ function setupWorkNotesCollapseToggle(ctx, workId) {
     btn.addEventListener('click', () => setCollapsed(!ws.classList.contains('work-workspace--notes-collapsed')));
 }
 
-let copyBibTeXResetTimer = null;
+const copyBibTeXResetTimers = new WeakMap();
 
 async function prksCopyBibTeXToClipboard(text) {
     const s = text == null ? '' : String(text);
@@ -1627,9 +1804,10 @@ async function copyBibTeX(workId, btn) {
             delete btn.dataset.copyBibtexStyle;
         }
     };
-    if (copyBibTeXResetTimer) {
-        clearTimeout(copyBibTeXResetTimer);
-        copyBibTeXResetTimer = null;
+    const previousTimer = copyBibTeXResetTimers.get(btn);
+    if (previousTimer) {
+        clearTimeout(previousTimer);
+        copyBibTeXResetTimers.delete(btn);
         restore();
     }
     try {
@@ -1643,10 +1821,11 @@ async function copyBibTeX(workId, btn) {
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
         btn.style.color = '#16a34a';
         btn.style.borderColor = '#16a34a';
-        copyBibTeXResetTimer = setTimeout(() => {
+        const resetTimer = setTimeout(() => {
             restore();
-            copyBibTeXResetTimer = null;
+            copyBibTeXResetTimers.delete(btn);
         }, 2500);
+        copyBibTeXResetTimers.set(btn, resetTimer);
     } catch (e) {
         snapshotIfNeeded();
         btn.innerHTML =
@@ -1654,15 +1833,16 @@ async function copyBibTeX(workId, btn) {
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
         btn.style.color = '#ef4444';
         btn.style.borderColor = '#ef4444';
-        copyBibTeXResetTimer = setTimeout(() => {
+        const resetTimer = setTimeout(() => {
             restore();
-            copyBibTeXResetTimer = null;
+            copyBibTeXResetTimers.delete(btn);
         }, 2500);
+        copyBibTeXResetTimers.set(btn, resetTimer);
     }
 }
 
 /** Wire Copy BibTeX / Delete File in #panel-content (right column Details tab). */
-function initWorkDetailRightPanelActions(work) {
+function initWorkDetailRightPanelActions(work, ownerCtx) {
     const panel = document.getElementById('panel-content');
     if (!panel || !work || !work.id) return;
     const copyBtn = panel.querySelector('.copy-bibtex-btn');
@@ -1671,6 +1851,6 @@ function initWorkDetailRightPanelActions(work) {
     }
     const delBtn = panel.querySelector('.delete-work-btn');
     if (delBtn) {
-        delBtn.addEventListener('click', () => void deleteWork(work.id));
+        delBtn.addEventListener('click', () => void deleteWork(work.id, ownerCtx));
     }
 }

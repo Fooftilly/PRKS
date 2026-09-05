@@ -470,7 +470,9 @@ class TestClientErrorReportingOwnership(unittest.TestCase):
             src = fh.read()
 
         set_err = _js_function(src, "prksSetApiError")
-        self.assertIn("__prksLastApiError", set_err)
+        self.assertIn("__prksApiErrorsByOwner.set(owner", set_err)
+        self.assertIn("if (!owner", set_err)
+        self.assertNotIn("__prksLastApiError", src)
         self.assertNotIn("prksReportClientError", set_err)
         self.assertNotIn("api_client_error", set_err)
 

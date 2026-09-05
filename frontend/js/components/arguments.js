@@ -362,10 +362,18 @@
     }
 
     function bindArgumentRead(ctx, a, container, graphHash) {
+        const generation = ctx && ctx.generation;
+        const ownsArgument = function () {
+            return typeof root.prksTabContextOwnsEntityRoute === 'function'
+                ? root.prksTabContextOwnsEntityRoute(ctx, generation, 'argument', a.id, 'argument-detail')
+                : !!(ctx && ctx.isCurrent && ctx.isCurrent(generation));
+        };
         const viewGraph = container.querySelector('#prks-arg-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
-                if (typeof root.prksNavigate === 'function') root.prksNavigate(graphHash());
+                if (typeof root.prksNavigate === 'function') {
+                    root.prksNavigate(graphHash(), { tabId: ctx && ctx.tabId });
+                }
             });
         }
         const edit = container.querySelector('#prks-arg-edit');
@@ -386,8 +394,8 @@
                         kind: 'argument',
                         targets: [{ type: 'argument', id: a.id, verdict_id: 'opposes' }],
                     });
-                    if (created && created.id && typeof root.prksNavigate === 'function') {
-                        root.prksNavigate('#/arguments/' + encodeURIComponent(created.id));
+                    if (created && created.id && ownsArgument() && typeof root.prksNavigate === 'function') {
+                        root.prksNavigate('#/arguments/' + encodeURIComponent(created.id), { tabId: ctx.tabId });
                     }
                 })();
             });
@@ -395,7 +403,7 @@
         const del = container.querySelector('#prks-arg-delete');
         if (del) {
             del.addEventListener('click', function () {
-                void deleteArgument(a);
+                void deleteArgument(ctx, generation, a);
             });
         }
     }
@@ -569,6 +577,7 @@
     }
 
     async function saveArgumentForm(ctx, id, container) {
+        const generation = ctx && ctx.generation;
         const nameEl = container.querySelector('#prks-arg-name');
         const kindEl = container.querySelector('#prks-arg-kind');
         const textEl = container.querySelector('#prks-arg-text');
@@ -593,11 +602,20 @@
             });
             await root.putArgumentTargets(id, targets);
             await root.putArgumentSources(id, sources);
-            if (ctx && ctx.ui) ctx.ui.argumentEditing = false;
-            if (typeof root.prksNavigate === 'function') {
-                root.prksNavigate(root.location.hash, { replace: true });
+            if (
+                typeof root.prksTabContextOwnsEntityRoute === 'function' &&
+                root.prksTabContextOwnsEntityRoute(ctx, generation, 'argument', id, 'argument-detail')
+            ) {
+                if (ctx.ui) ctx.ui.argumentEditing = false;
+                if (typeof root.prksNavigate === 'function') {
+                    root.prksNavigate('#/arguments/' + encodeURIComponent(id), {
+                        replace: true,
+                        tabId: ctx.tabId,
+                    });
+                }
             }
         } catch (err) {
+            if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
             if (typeof root.prksAlertDialog === 'function') {
                 await root.prksAlertDialog({
                     title: 'Could not save',
@@ -607,7 +625,7 @@
         }
     }
 
-    async function deleteArgument(a) {
+    async function deleteArgument(ctx, generation, a) {
         const ok =
             typeof root.prksConfirmDestructive === 'function'
                 ? await root.prksConfirmDestructive({
@@ -617,10 +635,18 @@
                   })
                 : true;
         if (!ok) return;
+        if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
         try {
             await root.deleteArgument(a.id);
-            if (typeof root.prksNavigate === 'function') root.prksNavigate('#/arguments', { replace: true });
+            if (
+                typeof root.prksTabContextOwnsEntityRoute === 'function' &&
+                root.prksTabContextOwnsEntityRoute(ctx, generation, 'argument', a.id, 'argument-detail') &&
+                typeof root.prksNavigate === 'function'
+            ) {
+                root.prksNavigate('#/arguments', { replace: true, tabId: ctx.tabId });
+            }
         } catch (err) {
+            if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
             if (typeof root.prksAlertDialog === 'function') {
                 await root.prksAlertDialog({
                     title: 'Cannot delete',

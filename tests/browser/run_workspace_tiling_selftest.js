@@ -122,6 +122,7 @@ function el(tag) {
     pageContent.appendChild(canvas);
 
     const fallbackCalls = [];
+    const ratioReapplyCalls = [];
     let rejectNextNarrow = false;
 
     const sandbox = {
@@ -154,6 +155,9 @@ function el(tag) {
                 return Promise.resolve(false);
             }
             return Promise.resolve(true);
+        },
+        prksWorkspaceReapplySplitRatio: function (_canvas, options) {
+            ratioReapplyCalls.push(options || {});
         },
         prksWorkspaceSnapshot: function () {
             return {
@@ -189,6 +193,7 @@ function el(tag) {
     await tick();
     assertEq('narrow transition evaluated', fallbackCalls.length, afterInit + 1);
     assertEq('narrow transition asked true', fallbackCalls[fallbackCalls.length - 1], true);
+    assertEq('passive narrow geometry never commits preferred root ratio', ratioReapplyCalls[ratioReapplyCalls.length - 1].commit, false);
 
     observers[0].cb();
     await tick();
@@ -201,6 +206,7 @@ function el(tag) {
     await tick();
     assertEq('widen evaluates again', fallbackCalls.length, afterInit + 2);
     assertEq('widen asked false', fallbackCalls[fallbackCalls.length - 1], false);
+    assertEq('passive wide geometry never commits preferred root ratio', ratioReapplyCalls[ratioReapplyCalls.length - 1].commit, false);
 
     canvas.clientWidth = 400;
     observers[0].cb();

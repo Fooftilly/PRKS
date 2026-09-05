@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import time
 import unittest
@@ -942,6 +943,197 @@ def _open_recent_work_card(page, title):
 
 
 class WorkspaceTabsTests(_BrowserE2E):
+    def test_research_notes_park_remount_prefers_unsettled_complete_draft(self):
+        server, page, _collector = self._start_app()
+        work_a = server.ids["work_a"]
+        work_b = server.ids["work_b"]
+        held = []
+
+        def hold_notes_patch(route):
+            req = route.request
+            path = urlparse(req.url).path
+            body = req.post_data or ""
+            if req.method == "PATCH" and path == "/api/works/" + work_a and "text_content" in body:
+                held.append(route)
+                return
+            route.fallback()
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.wait_for_selector(".CodeMirror")
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: false })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
+        new_text = "PARK-REMOUNT-NEW-%s" % int(time.time() * 1000)
+        page.route("**/api/works/*", hold_notes_patch)
+        try:
+            page.evaluate(
+                """(text) => {
+                    const ctx = window.prksGetFocusedTabContext();
+                    const notes = ctx.getResource('workNotes');
+                    notes.editor.value(text);
+                }""",
+                arg=new_text,
+            )
+            page.locator('[data-prks-role="editor-status"]', has_text="Drafting").wait_for()
+            page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Research Notes PATCH was not intercepted")
+            page.wait_for_function("id => location.hash.indexOf('/works/' + id) !== -1", arg=work_b)
+            page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+            page.wait_for_function("id => location.hash.indexOf('/works/' + id) !== -1", arg=work_a)
+            page.wait_for_selector(".CodeMirror")
+            page.wait_for_function(
+                """(text) => {
+                    const ctx = window.prksGetFocusedTabContext();
+                    const notes = ctx && ctx.getResource('workNotes');
+                    return !!(notes && notes.editor && notes.editor.value() === text);
+                }""",
+                arg=new_text,
+            )
+            _continue_held_routes(held)
+            page.wait_for_timeout(300)
+            self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), new_text)
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/*", hold_notes_patch)
+            except Exception:
+                pass
+
+        final_text = new_text + "!"
+        page.evaluate("(text) => %s.value(text)" % _FOCUSED_WORK_NOTES, arg=final_text)
+        page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
+        persisted = page.evaluate(
+            """async (id) => (await (await fetch('/api/works/' + id)).json()).text_content""",
+            arg=work_a,
+        )
+        self.assertEqual(persisted, final_text)
+
+    def test_private_reminder_hide_show_prefers_unsettled_complete_draft(self):
+        server, page, _collector = self._start_app()
+        work_a = server.ids["work_a"]
+        work_b = server.ids["work_b"]
+        held = []
+
+        def hold_private_patch(route):
+            req = route.request
+            path = urlparse(req.url).path
+            body = req.post_data or ""
+            if req.method == "PATCH" and path == "/api/works/" + work_a and "private_notes" in body:
+                held.append(route)
+                return
+            route.fallback()
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate("(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })", arg=work_b)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        ids = page.evaluate(
+            """() => ({
+                a: window.prksWorkspaceSnapshot().mainTabId,
+                b: window.prksWorkspaceSnapshot().secondaryTree.tabId
+            })"""
+        )
+        page.evaluate("id => window.prksWorkspaceMakeMain(id)", arg=ids["b"])
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["a"])
+        selector = "#prks-private-notes-work-" + work_a
+        page.locator(selector).wait_for()
+        new_text = "PRIVATE-PARK-NEW-%s" % int(time.time() * 1000)
+        page.route("**/api/works/*", hold_private_patch)
+        try:
+            page.locator(selector).fill(new_text)
+            page.evaluate("id => window.prksWorkspaceHideLeaf(id)", arg=ids["a"])
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Private reminder PATCH was not intercepted")
+            page.evaluate("id => window.prksWorkspaceTileTab(id)", arg=ids["a"])
+            page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+            page.locator(selector).wait_for()
+            page.wait_for_function(
+                """(args) => {
+                    const el = document.querySelector(args.selector);
+                    return !!(el && el.value === args.text);
+                }""",
+                arg={"selector": selector, "text": new_text},
+            )
+            _continue_held_routes(held)
+            page.wait_for_timeout(300)
+            self.assertEqual(page.locator(selector).input_value(), new_text)
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/*", hold_private_patch)
+            except Exception:
+                pass
+
+        final_text = new_text + "!"
+        page.locator(selector).fill(final_text)
+        page.locator(selector).press("Tab")
+        page.locator("#prks-private-notes-status-work-" + work_a, has_text="Saved").wait_for(timeout=15000)
+        persisted = page.evaluate(
+            """async (id) => (await (await fetch('/api/works/' + id)).json()).private_notes""",
+            arg=work_a,
+        )
+        self.assertEqual(persisted, final_text)
+
+    def test_delayed_secondary_concept_mutation_refreshes_owner_not_main(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_a = server.ids["work_a"]
+        concept_id = page.evaluate(
+            """async () => {
+                const rows = await (await fetch('/api/concepts')).json();
+                const hit = rows.find(row => row.name === 'Culture');
+                return hit && hit.id;
+            }"""
+        )
+        self.assertTrue(concept_id)
+        held = []
+
+        def hold_concept_patch(route):
+            req = route.request
+            if req.method == "PATCH" and urlparse(req.url).path == "/api/concepts/" + concept_id:
+                held.append(route)
+                return
+            route.fallback()
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate("id => window.prksNavigate('#/concepts/' + id, { target: 'tile' })", arg=concept_id)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.locator(".prks-tile--secondary #prks-concept-edit-def").click()
+        page.locator("#prks-modal-confirm .prks-modal-prompt__input").fill("OWNER-SAFE-DEFINITION")
+        page.route("**/api/concepts/*", hold_concept_patch)
+        try:
+            page.locator("#prks-modal-confirm-ok").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Concept PATCH was not intercepted")
+            main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+            page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=main_id)
+            main_hash = page.evaluate("() => location.hash")
+            self.assertIn(work_a, main_hash)
+            _continue_held_routes(held)
+            page.wait_for_function(
+                """() => {
+                    const tile = document.querySelector('.prks-tile--secondary');
+                    return !!(tile && tile.innerText.indexOf('OWNER-SAFE-DEFINITION') !== -1);
+                }"""
+            )
+            snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+            self.assertEqual(snap["mainTabId"], main_id)
+            self.assertEqual(snap["focusedTabId"], main_id)
+            self.assertEqual(page.evaluate("() => location.hash"), main_hash)
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/concepts/*", hold_concept_patch)
+            except Exception:
+                pass
+
     def test_ctrl_click_opens_background_work_without_fetch_or_browser_page(self):
         server, page, _collector = self._start_app()
         work_id = server.ids["work_a"]
@@ -1338,6 +1530,52 @@ class TabContextHostRootTests(_BrowserE2E):
             page.locator(".prks-tab-root .prks-playlist-detail").count(),
             1,
         )
+
+    def test_delayed_playlist_save_cannot_repaint_newer_same_tab_route(self):
+        _server, page, _collector = self._start_app()
+        page.evaluate("() => window.prksNavigate('#/playlists')")
+        page.wait_for_function("() => location.hash === '#/playlists'")
+        playlist_id = page.evaluate("() => createPlaylist('E2E Stale Playlist', 'Before')")
+        page.evaluate(
+            "id => window.prksNavigate('#/playlists/' + encodeURIComponent(id))",
+            arg=playlist_id,
+        )
+        page.wait_for_selector(".prks-playlist-detail")
+        page.locator("#prks-playlist-edit-btn").click()
+        page.wait_for_selector("#prks-playlist-edit-save")
+        held = []
+
+        def hold_playlist_patch(route):
+            req = route.request
+            if req.method == "PATCH" and urlparse(req.url).path == "/api/playlists/" + playlist_id:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/playlists/*", hold_playlist_patch)
+        try:
+            page.fill("#prks-playlist-edit-desc", "Delayed stale response")
+            page.locator("#prks-playlist-edit-save").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Playlist PATCH was not intercepted")
+            page.evaluate("() => window.prksNavigate('#/folders')")
+            page.wait_for_function("() => location.hash === '#/folders'")
+            page.wait_for_selector(".prks-folder-library")
+            root_id = _tab_root_id(page)
+            _continue_held_routes(held)
+            page.wait_for_timeout(500)
+            self.assertEqual(page.evaluate("() => location.hash"), "#/folders")
+            self.assertEqual(_tab_root_id(page), root_id)
+            self.assertEqual(page.locator(".prks-folder-library").count(), 1)
+            self.assertEqual(page.locator(".prks-playlist-detail").count(), 0)
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/playlists/*", hold_playlist_patch)
+            except Exception:
+                pass
 
     def test_folder_create_refresh_stays_in_tab_root(self):
         _server, page, _collector = self._start_app()
@@ -1861,6 +2099,465 @@ def _assert_no_drag_residue(test, page, msg=""):
 
 
 class WorkspaceTilingTests(_BrowserE2E):
+    def test_deep_focus_survives_async_sibling_title_resolution(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=tree["c_id"])
+        before = page.evaluate(
+            """() => ({
+                focused: window.prksWorkspaceSnapshot().focusedTabId,
+                hash: location.hash,
+                panel: document.getElementById('panel-content').innerText
+            })"""
+        )
+        page.evaluate(
+            """(args) => setTimeout(function () {
+                window.prksWorkspaceSetResolvedTitleForTab(args.tab, '#/people/' + args.person, 'ASYNC-SIBLING-TITLE');
+            }, 50)""",
+            arg={"tab": tree["b_id"], "person": tree["person"]},
+        )
+        page.wait_for_function(
+            """id => {
+                const tab = Array.from(document.querySelectorAll('.prks-workspace-tab'))
+                    .find(el => el.getAttribute('data-tab-id') === id);
+                const title = tab && tab.querySelector('.prks-workspace-tab__title');
+                return !!(title && title.textContent.indexOf('ASYNC-SIBLING-TITLE') !== -1);
+            }""",
+            arg=tree["b_id"],
+        )
+        after = page.evaluate(
+            """() => ({
+                focused: window.prksWorkspaceSnapshot().focusedTabId,
+                hash: location.hash,
+                panel: document.getElementById('panel-content').innerText
+            })"""
+        )
+        self.assertEqual(after, before)
+
+    def test_make_main_while_sibling_work_save_completes(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_a, work_b, ids = _open_work_work_split(page, server)
+        held = []
+
+        def hold_notes_patch(route):
+            req = route.request
+            if (
+                req.method == "PATCH"
+                and urlparse(req.url).path == "/api/works/" + work_a
+                and "text_content" in (req.post_data or "")
+            ):
+                held.append(route)
+                return
+            route.fallback()
+
+        note = "SAVE-DURING-MAKE-MAIN-%s" % int(time.time() * 1000)
+        page.evaluate(
+            """(id) => {
+                const ctx = window.prksGetTabContext(id);
+                window.__prksSaveRoleSwap = { ctx: ctx, notes: ctx.getResource('workNotes') };
+            }""",
+            arg=ids["mainTabId"],
+        )
+        page.route("**/api/works/*", hold_notes_patch)
+        try:
+            page.evaluate(
+                """(args) => {
+                    const ctx = window.prksGetTabContext(args.id);
+                    ctx.getResource('workNotes').editor.value(args.note);
+                    window.prksFlushPendingWorkResearchNotes(ctx);
+                }""",
+                arg={"id": ids["mainTabId"], "note": note},
+            )
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Work save was not intercepted")
+            page.evaluate("id => window.prksWorkspaceMakeMain(id)", arg=ids["secondaryTabId"])
+            self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"), ids["secondaryTabId"])
+            _continue_held_routes(held)
+            page.wait_for_function(
+                """(args) => {
+                    const ctx = window.prksGetTabContext(args.id);
+                    const notes = ctx && ctx.getResource('workNotes');
+                    return !!(notes && notes.editor.value() === args.note && !notes.pendingSave);
+                }""",
+                arg={"id": ids["mainTabId"], "note": note},
+            )
+            same = page.evaluate(
+                """(id) => {
+                    const saved = window.__prksSaveRoleSwap;
+                    const ctx = window.prksGetTabContext(id);
+                    return ctx === saved.ctx && ctx.getResource('workNotes') === saved.notes;
+                }""",
+                arg=ids["mainTabId"],
+            )
+            self.assertTrue(same)
+            self.assertIn(work_b, page.evaluate("() => location.hash"))
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/*", hold_notes_patch)
+            except Exception:
+                pass
+
+    def test_close_main_does_not_interrupt_surviving_sibling_pdf_persistence(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        tree = _build_three_leaf_tree(page, server)
+        held = []
+
+        page.wait_for_function(
+            """(id) => {
+                const ctx = window.prksGetTabContext(id);
+                const pdf = ctx && ctx.getResource('pdf');
+                return !!(pdf && typeof pdf._flushAnnotationsImpl === 'function');
+            }""",
+            arg=tree["d_id"],
+            timeout=20000,
+        )
+
+        def hold_pdf_save(route):
+            req = route.request
+            if req.method == "POST" and urlparse(req.url).path == "/api/works/" + tree["work_b"] + "/pdf":
+                held.append(route)
+                return
+            route.fallback()
+
+        page.evaluate(
+            """(id) => {
+                const ctx = window.prksGetTabContext(id);
+                window.__prksSurvivingPdf = { ctx: ctx, pdf: ctx.getResource('pdf') };
+            }""",
+            arg=tree["d_id"],
+        )
+        page.route("**/api/works/**", hold_pdf_save)
+        try:
+            page.evaluate(
+                """(id) => {
+                    const pdf = window.prksGetTabContext(id).getResource('pdf');
+                    pdf.viewer.saveCopy = async function () {
+                        return new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]).buffer;
+                    };
+                    window.__prksSurvivingPdfPromise = pdf.flushAnnotations();
+                }""",
+                arg=tree["d_id"],
+            )
+            deadline = time.time() + 12
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Sibling PDF persistence did not start")
+            closed = page.evaluate("id => window.prksWorkspaceCloseTab(id)", arg=tree["main_id"])
+            self.assertTrue(closed)
+            self.assertTrue(
+                page.evaluate(
+                    """(id) => {
+                        const saved = window.__prksSurvivingPdf;
+                        const ctx = window.prksGetTabContext(id);
+                        return ctx === saved.ctx && ctx.getResource('pdf') === saved.pdf;
+                    }""",
+                    arg=tree["d_id"],
+                )
+            )
+            _continue_held_routes(held)
+            page.wait_for_function(
+                """(id) => {
+                    const ctx = window.prksGetTabContext(id);
+                    const pdf = ctx && ctx.getResource('pdf');
+                    return !!(pdf && pdf.syncState && !pdf.syncState.inFlight);
+                }""",
+                arg=tree["d_id"],
+                timeout=20000,
+            )
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/**", hold_pdf_save)
+            except Exception:
+                pass
+
+    def test_delayed_playlist_neighbors_cannot_replace_other_focused_panel(self):
+        server, page, _collector = self._start_app()
+        work_a, work_b, ids = _open_work_work_split(page, server)
+        held = []
+
+        def hold_playlist_get(route):
+            req = route.request
+            if req.method == "GET" and urlparse(req.url).path == "/api/playlists/deferred-playlist":
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/playlists/*", hold_playlist_get)
+        try:
+            page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
+            page.wait_for_function(
+                "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+                arg=ids["mainTabId"],
+            )
+            page.evaluate(
+                """(args) => {
+                    const ctx = window.prksGetTabContext(args.tabId);
+                    const work = Object.assign({}, ctx.getEntity('work'), {
+                        playlist_id: 'deferred-playlist',
+                        playlist_title: 'Deferred playlist',
+                        source_kind: 'video',
+                        source_url: 'https://example.com/video'
+                    });
+                    ctx.setEntity('work', work);
+                    updatePanelContent('details');
+                    window.__prksDelayedPlaylistPanel = mountPlaylistAttachControls(work, ctx);
+                }""",
+                arg={"tabId": ids["mainTabId"]},
+            )
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(
+                held,
+                "Playlist neighbor GET was not intercepted: "
+                + repr(
+                    page.evaluate(
+                        """(id) => {
+                            const ctx = window.prksGetTabContext(id);
+                            const panel = document.getElementById('panel-content');
+                            return {
+                                entity: ctx && ctx.getEntity('work'),
+                                route: ctx && (ctx.lastResolvedRoute || ctx.route),
+                                owner: panel && panel.dataset.prksOwnerTabId,
+                                hasNav: !!(panel && panel.querySelector('#prks-work-playlist-nav')),
+                                owned: !!(ctx && window.prksRightPanelOwnedBy(ctx, panel))
+                            };
+                        }""",
+                        arg=ids["mainTabId"],
+                    )
+                ),
+            )
+            page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["secondaryTabId"])
+            page.wait_for_function(
+                "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+                arg=ids["secondaryTabId"],
+            )
+            before = page.evaluate(
+                """() => ({
+                    owner: document.getElementById('panel-content').dataset.prksOwnerTabId,
+                    text: document.getElementById('panel-content').innerText
+                })"""
+            )
+            held.pop(0).fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "id": "deferred-playlist",
+                        "items": [{"id": work_a}, {"id": work_b}],
+                    }
+                ),
+            )
+            page.wait_for_timeout(400)
+            after = page.evaluate(
+                """() => ({
+                    owner: document.getElementById('panel-content').dataset.prksOwnerTabId,
+                    text: document.getElementById('panel-content').innerText
+                })"""
+            )
+            self.assertEqual(after, before)
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/playlists/*", hold_playlist_get)
+            except Exception:
+                pass
+
+    def test_delayed_pdf_close_cannot_clear_other_focused_annotation_editor(self):
+        server, page, _collector = self._start_app()
+        _work_a, _work_b, ids = _open_work_work_split(page, server)
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["secondaryTabId"])
+        page.wait_for_function(
+            "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+            arg=ids["secondaryTabId"],
+        )
+        page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
+        page.wait_for_selector("#pdf-annotation-editor", state="attached")
+        before = page.evaluate(
+            """(ids) => {
+                const a = window.prksGetTabContext(ids.a);
+                const b = window.prksGetTabContext(ids.b);
+                a.getResource('pdf').annotationEditorState = { annId: 'A-delayed' };
+                b.getResource('pdf').annotationEditorState = { annId: 'B-current' };
+                const wrap = document.getElementById('pdf-annotation-editor');
+                const text = document.getElementById('pdf-annotation-editor-text');
+                wrap.classList.remove('hidden');
+                text.value = 'B CURRENT EDITOR';
+                setTimeout(() => window.closePdfAnnotationEditor(a), 50);
+                return {
+                    owner: document.getElementById('panel-content').dataset.prksOwnerTabId,
+                    text: text.value,
+                    hidden: wrap.classList.contains('hidden')
+                };
+            }""",
+            arg={"a": ids["mainTabId"], "b": ids["secondaryTabId"]},
+        )
+        page.wait_for_timeout(150)
+        after = page.evaluate(
+            """(ids) => {
+                const a = window.prksGetTabContext(ids.a);
+                const b = window.prksGetTabContext(ids.b);
+                const wrap = document.getElementById('pdf-annotation-editor');
+                const text = document.getElementById('pdf-annotation-editor-text');
+                return {
+                    owner: document.getElementById('panel-content').dataset.prksOwnerTabId,
+                    text: text.value,
+                    hidden: wrap.classList.contains('hidden'),
+                    aCleared: a.getResource('pdf').annotationEditorState === null,
+                    bId: b.getResource('pdf').annotationEditorState.annId
+                };
+            }""",
+            arg={"a": ids["mainTabId"], "b": ids["secondaryTabId"]},
+        )
+        self.assertEqual(after["owner"], before["owner"])
+        self.assertEqual(after["text"], before["text"])
+        self.assertEqual(after["hidden"], before["hidden"])
+        self.assertTrue(after["aCleared"])
+        self.assertEqual(after["bId"], "B-current")
+
+    def test_secondary_retry_retries_failed_owner_route_only(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_a = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        concept_id = page.evaluate(
+            "name => fetchConcepts().then(items => items.find(item => item.name === name).id)",
+            arg=server.ids["concept_a"],
+        )
+        main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        page.evaluate(
+            """() => {
+                window.__prksOriginalRenderConceptDetail = window.renderConceptDetail;
+                window.renderConceptDetail = function () { throw new Error('forced secondary render failure'); };
+            }"""
+        )
+        try:
+            page.evaluate(
+                "id => window.prksNavigate('#/concepts/' + id, { target: 'tile' })",
+                arg=concept_id,
+            )
+            page.wait_for_function(
+                """() => {
+                    const snap = window.prksWorkspaceSnapshot();
+                    const id = snap && snap.secondaryTree && snap.secondaryTree.tabId;
+                    const ctx = id && window.prksGetTabContext(id);
+                    return !!(ctx && ctx.query('#prks-route-retry'));
+                }"""
+            )
+            secondary_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+            page.evaluate(
+                """(id) => {
+                    window.renderConceptDetail = window.__prksOriginalRenderConceptDetail;
+                    window.prksGetTabContext(id).query('#prks-route-retry').click();
+                }""",
+                arg=secondary_id,
+            )
+            page.wait_for_function(
+                """(id) => {
+                    const ctx = window.prksGetTabContext(id);
+                    return !!(ctx && ctx.query('#prks-concept-edit-def'));
+                }""",
+                arg=secondary_id,
+            )
+            snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+            self.assertEqual(snap["mainTabId"], main_id)
+            self.assertEqual(snap["secondaryTree"]["tabId"], secondary_id)
+            self.assertIn(work_a, page.evaluate("() => location.hash"))
+            self.assertIn(concept_id, page.evaluate("id => window.prksGetTabContext(id).route.hash", arg=secondary_id))
+        finally:
+            page.evaluate(
+                """() => {
+                    if (window.__prksOriginalRenderConceptDetail) {
+                        window.renderConceptDetail = window.__prksOriginalRenderConceptDetail;
+                    }
+                }"""
+            )
+
+    def test_secondary_contextual_back_restores_its_tile_scroll_only(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        person_id = server.ids["person"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        concept_id = page.evaluate(
+            "name => fetchConcepts().then(items => items.find(item => item.name === name).id)",
+            arg=server.ids["concept_a"],
+        )
+        page.evaluate("id => window.prksNavigate('#/people/' + id, { target: 'tile' })", arg=person_id)
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const id = snap && snap.secondaryTree && snap.secondaryTree.tabId;
+                const ctx = id && window.prksGetTabContext(id);
+                return !!(ctx && ctx.query('.person-profile'));
+            }"""
+        )
+        ids = _workspace_ids(page)
+        page.wait_for_timeout(600)
+        positions = page.evaluate(
+            """(ids) => {
+                const main = window.prksGetTabContext(ids.main);
+                const secondary = window.prksGetTabContext(ids.secondary);
+                main.root.style.minHeight = '4000px';
+                secondary.root.style.minHeight = '5000px';
+                const localSelector = '.prks-folder-library__pane:not(.is-hidden) .prks-folder-library__scroll, .prks-people-library__scroll:not(.prks-people-library__scroll--embedded), .prks-group-library__scroll';
+                const style = document.createElement('style');
+                const rootSelector = '#' + CSS.escape(secondary.root.id);
+                style.textContent = rootSelector + ' .prks-people-library__scroll::after,' +
+                    rootSelector + ' .prks-group-library__scroll::after,' +
+                    rootSelector + ' .prks-folder-library__scroll::after' +
+                    "{content:'';display:block;height:5000px}";
+                document.head.appendChild(style);
+                const mainScroll = main.root.closest('.prks-tile__body');
+                const secondaryScroll = secondary.root.querySelector(localSelector) || secondary.root.closest('.prks-tile__body');
+                mainScroll.scrollTop = 41;
+                secondaryScroll.scrollTop = 333;
+                const result = { main: mainScroll.scrollTop, secondary: secondaryScroll.scrollTop, local: secondaryScroll !== secondary.root.closest('.prks-tile__body') };
+                window.prksNavigate('#/concepts/' + ids.concept, { tabId: ids.secondary });
+                return result;
+            }""",
+            arg={"main": ids["mainTabId"], "secondary": ids["secondaryTabId"], "concept": concept_id},
+        )
+        self.assertGreater(positions["secondary"], 250)
+        page.wait_for_function(
+            """(id) => {
+                const ctx = window.prksGetTabContext(id);
+                return !!(ctx && ctx.query('#prks-concept-edit-def') && ctx.query('.prks-nav-back'));
+            }""",
+            arg=ids["secondaryTabId"],
+        )
+        page.evaluate(
+            "id => window.prksGetTabContext(id).query('.prks-nav-back').click()",
+            arg=ids["secondaryTabId"],
+        )
+        page.wait_for_function(
+            "id => !!window.prksGetTabContext(id).query('.person-profile')",
+            arg=ids["secondaryTabId"],
+        )
+        page.wait_for_timeout(500)
+        after = page.evaluate(
+            """(ids) => ({
+                main: window.prksGetTabContext(ids.main).root.closest('.prks-tile__body').scrollTop,
+                secondary: (() => {
+                    const ctx = window.prksGetTabContext(ids.secondary);
+                    const local = ctx.root.querySelector('.prks-folder-library__pane:not(.is-hidden) .prks-folder-library__scroll, .prks-people-library__scroll:not(.prks-people-library__scroll--embedded), .prks-group-library__scroll');
+                    return (local || ctx.root.closest('.prks-tile__body')).scrollTop;
+                })(),
+                hash: location.hash,
+                states: Array.from(window.prksGetTabContext(ids.secondary).navigation.routeStates.entries()),
+                scrollHeight: window.prksGetTabContext(ids.secondary).root.closest('.prks-tile__body').scrollHeight,
+                clientHeight: window.prksGetTabContext(ids.secondary).root.closest('.prks-tile__body').clientHeight
+            })""",
+            arg={"main": ids["mainTabId"], "secondary": ids["secondaryTabId"]},
+        )
+        self.assertEqual(after["main"], positions["main"])
+        self.assertGreater(after["secondary"], 250, repr(after))
+        self.assertIn(server.ids["work_a"], after["hash"])
+
     def test_work_work_runtimes_focus_notes_make_main(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
@@ -4965,7 +5662,16 @@ class WorkspaceDragDropTests(_BrowserE2E):
         page.wait_for_selector("#prks-workspace-menu:not([hidden])")
         right_item = page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text="Move tab right")
         self.assertTrue(right_item.get_attribute("aria-disabled") == "true" or right_item.is_disabled())
-        page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text="Move tab left").click()
+        page.keyboard.press("End")
+        focused = page.evaluate(
+            """() => ({
+                text: document.activeElement && document.activeElement.textContent,
+                disabled: !!(document.activeElement && document.activeElement.disabled)
+            })"""
+        )
+        self.assertFalse(focused["disabled"])
+        self.assertIn("Move tab left", focused["text"] or "")
+        page.keyboard.press("Enter")
         page.wait_for_function(
             "(ids) => window.prksWorkspaceSnapshot().tabs.map(t => t.id).join(',') === ids",
             arg=",".join([b_id, a_id]),
@@ -4978,5 +5684,3 @@ class WorkspaceDragDropTests(_BrowserE2E):
         labels = page.locator("#prks-workspace-menu .prks-workspace-menu__item").all_text_contents()
         self.assertTrue(any("split view" in t for t in labels), labels)
         page.keyboard.press("Escape")
-
-

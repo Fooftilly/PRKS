@@ -792,6 +792,31 @@ async function run() {
     assertEq('fwd no destroy', popTile.life.destroy.length, destroyBeforeBack);
     assertEq('fwd no remount', popTile.life.mount.length, mountBeforeBack);
 
+    const hiddenPop = makeHarness({ hash: '#/works/WA' });
+    await hiddenPop.ws.navigate('#/works/WB', { target: 'tile' });
+    const hiddenA = hiddenPop.ws.snapshot().mainTabId;
+    const hiddenB = hiddenPop.ws.snapshot().secondaryTree.tabId;
+    await hiddenPop.ws.splitLeaf(hiddenB, 'top-bottom', { hash: '#/works/WC' });
+    const hiddenC = hiddenPop.ws.snapshot().secondaryTree.second.tabId;
+    await hiddenPop.ws.splitLeaf(hiddenC, 'left-right', { hash: '#/works/WD' });
+    const hiddenD = hiddenPop.ws.snapshot().secondaryTree.second.second.tabId;
+    const originalHiddenTree = jsonClone(hiddenPop.ws.snapshot().secondaryTree);
+    hiddenPop.hist.pushState(hiddenPop.hist.getState(), hiddenPop.hist.getHref());
+    hiddenPop.ws.makeMain(hiddenD);
+    await hiddenPop.ws.setMode('stacked');
+    assertEq('hidden pop prep only main mounted', hiddenPop.mountedCount(), 1);
+    assert('hidden pop history back exists', hiddenPop.hist.back() === true);
+    const hiddenBackOk = await hiddenPop.ws.handlePopState(hiddenPop.hist.getState());
+    assert('hidden deep pop accepted', hiddenBackOk === true);
+    const hiddenBack = hiddenPop.ws.snapshot();
+    assertEq('hidden deep pop restores A main', hiddenBack.mainTabId, hiddenA);
+    assertEq('hidden deep pop keeps mode stacked', hiddenBack.mode, 'stacked');
+    assertEq('hidden deep pop swaps D into exact A leaf', JSON.stringify(hiddenBack.secondaryTree), JSON.stringify(originalHiddenTree));
+    assertEq('hidden deep pop keeps B', hiddenBack.secondaryTree.first.tabId, hiddenB);
+    assertEq('hidden deep pop keeps C', hiddenBack.secondaryTree.second.first.tabId, hiddenC);
+    assertEq('hidden deep pop keeps D', hiddenBack.secondaryTree.second.second.tabId, hiddenD);
+    assertEq('hidden deep pop mounts only A', hiddenPop.mountedCount(), 1);
+
     const popDenyA = makeHarness({ hash: '#/works/WA' });
     await popDenyA.ws.navigate('#/people/PA');
     await popDenyA.ws.navigate('#/works/WB', { target: 'tile' });

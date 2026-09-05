@@ -18,7 +18,18 @@
         return '<p>' + esc(text || '') + '</p>';
     }
 
-    function renderPositionsIndex(items, container) {
+    function renderPositionsIndex(ctx, items, container) {
+        if (arguments.length < 3) {
+            container = items;
+            items = ctx;
+            ctx = null;
+        }
+        const generation = ctx && ctx.generation;
+        const ownsIndex = function () {
+            if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return false;
+            const route = ctx.lastResolvedRoute || ctx.route;
+            return !!(route && route.name === 'positions');
+        };
         const list = Array.isArray(items) ? items : [];
         const icon = typeof root.prksIcon === 'function' ? root.prksIcon('flag', { size: 'sm' }) : '';
         const rowHtml =
@@ -65,9 +76,12 @@
                         okLabel: 'Create',
                     });
                     if (!name || !String(name).trim()) return;
+                    if (ctx && !ownsIndex()) return;
                     const created = await root.createPosition({ name: String(name).trim() });
-                    if (created && created.id && typeof root.prksNavigate === 'function') {
-                        root.prksNavigate('#/positions/' + encodeURIComponent(created.id));
+                    if (created && created.id && (!ctx || ownsIndex()) && typeof root.prksNavigate === 'function') {
+                        root.prksNavigate('#/positions/' + encodeURIComponent(created.id), {
+                            tabId: ctx && ctx.tabId,
+                        });
                     }
                 })();
             });
@@ -116,7 +130,9 @@
                     typeof root.prksGraphFocusHash === 'function'
                         ? root.prksGraphFocusHash('position', p.id)
                         : '#/graph?focus=' + encodeURIComponent('position:' + p.id);
-                if (typeof root.prksNavigate === 'function') root.prksNavigate(hash);
+                if (typeof root.prksNavigate === 'function') {
+                    root.prksNavigate(hash, { tabId: ctx && ctx.tabId });
+                }
             });
         }
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);

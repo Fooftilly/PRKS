@@ -2061,17 +2061,48 @@ function prksOwnerTabIsFocused(ctx) {
     return !!(focused && focused.tabId === ctx.tabId);
 }
 
+function prksRightPanelOwnedBy(ctx, node) {
+    if (!ctx || ctx.destroyed || !ctx.mounted || !prksOwnerTabIsFocused(ctx)) return false;
+    const panel = document.getElementById('panel-content');
+    if (!panel) return false;
+    if (node && node !== panel && !panel.contains(node)) return false;
+    const ownerTabId = panel.dataset.prksOwnerTabId || '';
+    const ownerGeneration = panel.dataset.prksOwnerGeneration || '';
+    return (
+        (!ownerTabId || ownerTabId === String(ctx.tabId)) &&
+        (!ownerGeneration || ownerGeneration === String(ctx.generation))
+    );
+}
+
+function prksMarkRightPanelOwner(ctx) {
+    const panel = document.getElementById('panel-content');
+    if (!panel || !ctx) return panel;
+    panel.dataset.prksOwnerTabId = String(ctx.tabId);
+    panel.dataset.prksOwnerGeneration = String(ctx.generation);
+    return panel;
+}
+
+function prksPrepareRightPanelReplace(ctx) {
+    if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('privateNotesEditor')) {
+        if (typeof prksFlushPendingPrivateNotes === 'function') prksFlushPendingPrivateNotes(ctx);
+        ctx.clearResource('privateNotesEditor');
+    }
+    return prksMarkRightPanelOwner(ctx);
+}
+
+window.prksRightPanelOwnedBy = prksRightPanelOwnedBy;
+
 function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     if (!prksOwnerTabIsFocused(ctx) || !work) return false;
     const live = ctx.getEntity && ctx.getEntity('work');
     if (!live || String(live.id) !== String(work.id)) return false;
     const tab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
     if (tab !== 'details') return false;
-    const panel = document.getElementById('panel-content');
+    const panel = prksPrepareRightPanelReplace(ctx);
     if (!panel || typeof prksWorkRightPanelStackHtml !== 'function') return false;
     panel.innerHTML = prksWorkRightPanelStackHtml(work, false, ctx);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
-    if (typeof initPrksPrivateNotesEditor === 'function') initPrksPrivateNotesEditor('work', work.id);
+    if (typeof initPrksPrivateNotesEditor === 'function') initPrksPrivateNotesEditor('work', work.id, ctx);
     if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id);
     if (typeof mountPlaylistAttachControls === 'function') {
         void mountPlaylistAttachControls(work, ctx);
@@ -2080,13 +2111,13 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
         void mountFolderAttachControlsForWork(work, ctx);
     }
     if (typeof initWorkDetailRightPanelActions === 'function') {
-        initWorkDetailRightPanelActions(work);
+        initWorkDetailRightPanelActions(work, ctx);
     }
     return true;
 }
 
 function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
-    const text = initialText == null ? '' : String(initialText);
+    const text = prksPrivateNotesTextForEntity(entityType, entityId, initialText);
     const hintKey = entityType === 'work' ? 'notes-private-file' : 'notes-private-folder';
     const hintBtn = prksHintBtnHtml(hintKey, 'About reminders', 'prks-private-notes-card__hint-btn');
     return `
@@ -2105,63 +2136,206 @@ function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
         </div>`;
 }
 
-function initPrksPrivateNotesEditor(entityType, entityId) {
+const PRKS_PRIVATE_DRAFT_MAX_COMMITTED = 64;
+const prksPrivateNoteDrafts = new Map();
+
+function prksPrivateNoteKey(entityType, entityId) {
+    return String(entityType || '') + ':' + String(entityId == null ? '' : entityId);
+}
+
+function prksPrivateNoteDraft(entityType, entityId, text) {
+    const key = prksPrivateNoteKey(entityType, entityId);
+    let entry = prksPrivateNoteDrafts.get(key);
+    if (!entry) {
+        entry = {
+            key: key,
+            entityType: String(entityType),
+            entityId: String(entityId),
+            draftText: String(text == null ? '' : text),
+            editGeneration: 0,
+            saveSequence: 0,
+            latestSaveToken: 0,
+            latestSaveEditGeneration: 0,
+            settledSaveToken: 0,
+            state: 'committed',
+            saveError: false,
+            promise: null,
+            updatedAt: Date.now(),
+        };
+        prksPrivateNoteDrafts.set(key, entry);
+    }
+    return entry;
+}
+
+function prksPrunePrivateNoteDrafts() {
+    const committed = Array.from(prksPrivateNoteDrafts.values())
+        .filter((entry) => entry.state === 'committed' && !entry.promise)
+        .sort((a, b) => a.updatedAt - b.updatedAt);
+    while (committed.length > PRKS_PRIVATE_DRAFT_MAX_COMMITTED) {
+        const old = committed.shift();
+        if (old) prksPrivateNoteDrafts.delete(old.key);
+    }
+}
+
+function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
+    const key = prksPrivateNoteKey(entityType, entityId);
+    const server = String(serverText == null ? '' : serverText);
+    const entry = prksPrivateNoteDrafts.get(key);
+    if (!entry) return server;
+    if (entry.state === 'committed' && !entry.promise && entry.draftText === server) {
+        prksPrivateNoteDrafts.delete(key);
+        return server;
+    }
+    return entry.draftText;
+}
+
+function prksPrivateNotesOwnerCurrent(editor) {
+    if (!editor || !editor.ctx || !editor.ctx.isCurrent(editor.generation)) return false;
+    const live = editor.ctx.getEntity ? editor.ctx.getEntity(editor.entityType) : null;
+    return !!(live && String(live.id) === editor.entityId);
+}
+
+function prksPrivateNotesSetStatus(editor, text) {
+    if (!editor || !editor.statusEl || !prksRightPanelOwnedBy(editor.ctx, editor.statusEl)) return;
+    editor.statusEl.textContent = text;
+}
+
+function prksEnqueuePrivateNotesSave(editor) {
+    if (!editor) return null;
+    const entry = prksPrivateNoteDraft(editor.entityType, editor.entityId, editor.textarea.value);
+    const content = String(entry.draftText);
+    editor.dirty = false;
+    entry.saveSequence += 1;
+    const token = entry.saveSequence;
+    entry.latestSaveToken = token;
+    entry.latestSaveEditGeneration = entry.editGeneration;
+    entry.state = 'saving';
+    entry.saveError = false;
+    entry.updatedAt = Date.now();
+    prksPrivateNotesSetStatus(editor, 'Saving…');
+    const url = editor.entityType === 'work' ? `/api/works/${editor.entityId}` : `/api/folders/${editor.entityId}`;
+    const promise = prksRequest(
+        url,
+        {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ private_notes: content }),
+        },
+        { coalesceKey: 'private-notes:' + editor.key }
+    );
+    entry.promise = promise;
+    void promise
+        .then(function (res) {
+            if (token !== entry.latestSaveToken) return;
+            const ok = !!(res && res.ok);
+            const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
+            entry.settledSaveToken = token;
+            entry.promise = null;
+            entry.saveError = !ok && !hasNewerDraft;
+            entry.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
+            entry.updatedAt = Date.now();
+            prksPrunePrivateNoteDrafts();
+            if (!prksPrivateNotesOwnerCurrent(editor)) return;
+            const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
+            if (liveEditor !== editor) return;
+            if (hasNewerDraft) {
+                prksPrivateNotesSetStatus(editor, 'Drafting…');
+                return;
+            }
+            if (!ok) {
+                prksPrivateNotesSetStatus(editor, 'Could not save');
+                return;
+            }
+            const live = editor.ctx.getEntity(editor.entityType);
+            if (live) live.private_notes = content;
+            prksPrivateNotesSetStatus(editor, 'Saved');
+            const timer = window.setTimeout(function () {
+                if (editor.ctx && editor.ctx.timers && editor.ctx.timers.get('privateNotesStatus') === timer) {
+                    editor.ctx.clearTimer('privateNotesStatus');
+                }
+                if (editor.statusEl && editor.statusEl.textContent === 'Saved') editor.statusEl.textContent = '';
+            }, 1800);
+            editor.ctx.setTimer('privateNotesStatus', timer);
+        })
+        .catch(function () {
+            if (token !== entry.latestSaveToken) return;
+            const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
+            entry.settledSaveToken = token;
+            entry.promise = null;
+            entry.saveError = !hasNewerDraft;
+            entry.state = hasNewerDraft ? 'drafting' : 'error';
+            entry.updatedAt = Date.now();
+            if (prksPrivateNotesOwnerCurrent(editor)) {
+                prksPrivateNotesSetStatus(editor, hasNewerDraft ? 'Drafting…' : 'Could not save');
+            }
+        });
+    return promise;
+}
+
+function prksFlushPendingPrivateNotes(ctx) {
+    if (!ctx || typeof ctx.getResource !== 'function') return;
+    const editor = ctx.getResource('privateNotesEditor');
+    if (!editor || !editor.dirty) return;
+    ctx.clearTimer(editor.timerKey);
+    prksEnqueuePrivateNotesSave(editor);
+}
+
+function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
     const idSuffix = `${entityType}-${entityId}`;
-    const ta = document.getElementById(`prks-private-notes-${idSuffix}`);
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (!ctx || !prksRightPanelOwnedBy(ctx)) return;
+    const panel = document.getElementById('panel-content');
+    const ta = panel && panel.querySelector(`#prks-private-notes-${idSuffix}`);
     if (!ta || ta.dataset.prksNotesBound === '1') return;
     ta.dataset.prksNotesBound = '1';
-    const statusEl = document.getElementById(`prks-private-notes-status-${idSuffix}`);
-    let debounceTimer;
-
-    const persist = async () => {
-        const url = entityType === 'work' ? `/api/works/${entityId}` : `/api/folders/${entityId}`;
-        try {
-            const res = await prksRequest(
-                url,
-                {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ private_notes: ta.value }),
-                },
-                {
-                    coalesceKey:
-                        entityType === 'work'
-                            ? 'private-notes:work:' + entityId
-                            : 'private-notes:folder:' + entityId,
-                }
-            );
-            if (!res.ok) throw new Error('save failed');
-            if (statusEl) {
-                statusEl.textContent = 'Saved';
-                window.setTimeout(() => {
-                    if (statusEl.textContent === 'Saved') statusEl.textContent = '';
-                }, 1800);
-            }
-            const _feW = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
-            if (entityType === 'work' && _feW && _feW.id === entityId) {
-                _feW.private_notes = ta.value;
-            }
-            const _feF = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('folder') : null;
-            if (entityType === 'folder' && _feF && _feF.id === entityId) {
-                _feF.private_notes = ta.value;
-            }
-        } catch (e) {
-            console.error(e);
-            if (statusEl) statusEl.textContent = 'Could not save';
-        }
+    const statusEl = panel.querySelector(`#prks-private-notes-status-${idSuffix}`);
+    const entry = prksPrivateNoteDrafts.get(prksPrivateNoteKey(entityType, entityId));
+    if (entry) ta.value = entry.draftText;
+    const editor = {
+        key: prksPrivateNoteKey(entityType, entityId),
+        entityType: String(entityType),
+        entityId: String(entityId),
+        ctx: ctx,
+        generation: ctx.generation,
+        textarea: ta,
+        statusEl: statusEl,
+        timerKey: 'privateNotesDebounce:' + prksPrivateNoteKey(entityType, entityId),
+        dirty: !!(entry && entry.state === 'drafting'),
     };
-
-    const schedule = () => {
-        window.clearTimeout(debounceTimer);
-        debounceTimer = window.setTimeout(persist, 850);
+    const schedule = function () {
+        const draft = prksPrivateNoteDraft(entityType, entityId, ta.value);
+        draft.draftText = ta.value;
+        draft.editGeneration += 1;
+        draft.state = 'drafting';
+        draft.saveError = false;
+        draft.updatedAt = Date.now();
+        editor.dirty = true;
+        prksPrivateNotesSetStatus(editor, 'Drafting…');
+        const timer = window.setTimeout(function () {
+            if (ctx.timers && ctx.timers.get(editor.timerKey) === timer) ctx.clearTimer(editor.timerKey);
+            if (editor.dirty) prksEnqueuePrivateNotesSave(editor);
+        }, 850);
+        ctx.setTimer(editor.timerKey, timer);
     };
-
+    const blur = function () {
+        if (!editor.dirty) return;
+        ctx.clearTimer(editor.timerKey);
+        prksEnqueuePrivateNotesSave(editor);
+    };
     ta.addEventListener('input', schedule);
-    ta.addEventListener('blur', () => {
-        window.clearTimeout(debounceTimer);
-        void persist();
+    ta.addEventListener('blur', blur);
+    ctx.setResource('privateNotesEditor', editor, function () {
+        ctx.clearTimer(editor.timerKey);
+        ta.removeEventListener('input', schedule);
+        ta.removeEventListener('blur', blur);
     });
 }
+
+window.prksFlushPendingPrivateNotes = prksFlushPendingPrivateNotes;
+window.prksPrivateNotesTextForEntity = prksPrivateNotesTextForEntity;
+window.prksResetPrivateNoteDraftsForTest = function () {
+    prksPrivateNoteDrafts.clear();
+};
 
 function prksWorkPanelActionsHtml() {
     return (
@@ -2211,6 +2385,16 @@ function updatePanelContent(tabId) {
     if (!panel) return;
 
     const focusedCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const previousOwnerId = panel.dataset.prksOwnerTabId || '';
+    if (previousOwnerId && (!focusedCtx || previousOwnerId !== String(focusedCtx.tabId))) {
+        const previousOwner =
+            typeof prksGetTabContext === 'function' ? prksGetTabContext(previousOwnerId) : null;
+        if (previousOwner) {
+            if (typeof prksFlushPendingPrivateNotes === 'function') prksFlushPendingPrivateNotes(previousOwner);
+            if (typeof previousOwner.clearResource === 'function') previousOwner.clearResource('privateNotesEditor');
+        }
+    }
+    prksPrepareRightPanelReplace(focusedCtx);
     const focusedRoute = focusedCtx && (focusedCtx.lastResolvedRoute || focusedCtx.route);
     const focusedHash =
         (focusedRoute && (focusedRoute.hash || focusedRoute.canonicalHash)) || (window.location.hash || '');
@@ -2228,7 +2412,7 @@ function updatePanelContent(tabId) {
     if (_cw) {
         if (tabId === 'details') {
             panel.innerHTML = prksWorkRightPanelStackHtml(_cw, false, focusedCtx);
-            initPrksPrivateNotesEditor('work', _cw.id);
+            initPrksPrivateNotesEditor('work', _cw.id, focusedCtx);
             if (typeof mountPlaylistAttachControls === 'function') {
                 void mountPlaylistAttachControls(_cw, focusedCtx);
             }
@@ -2237,7 +2421,7 @@ function updatePanelContent(tabId) {
             }
             initWorkTagCombobox(_cw.id);
             if (typeof initWorkDetailRightPanelActions === 'function') {
-                initWorkDetailRightPanelActions(_cw);
+                initWorkDetailRightPanelActions(_cw, focusedCtx);
             }
         } else if (tabId === 'annotations') {
             panel.innerHTML = renderWorkAnnotationsTab(_cw);
@@ -2267,7 +2451,7 @@ function updatePanelContent(tabId) {
     } else if (_cf) {
         if (tabId === 'details') {
             panel.innerHTML = prksFolderRightPanelStackHtml(_cf);
-            initPrksPrivateNotesEditor('folder', _cf.id);
+            initPrksPrivateNotesEditor('folder', _cf.id, focusedCtx);
             initFolderTagCombobox(_cf.id);
             if (typeof mountFolderHierarchyControls === 'function') {
                 void mountFolderHierarchyControls(_cf);
@@ -2427,8 +2611,19 @@ function renderPlaylistEditSidebarHtml(pl) {
 async function mountPlaylistEditSidebar(pl, ownerCtx) {
     if (!pl || !pl.id) return;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    prksBindAutosizeTextareas(document.getElementById('panel-content'));
-    const editBtn = document.getElementById('prks-playlist-edit-btn');
+    const generation = ctx && ctx.generation;
+    const panel = document.getElementById('panel-content');
+    const ownsPlaylistPanel = function (node) {
+        return !!(
+            typeof prksTabContextOwnsEntityRoute === 'function' &&
+            prksTabContextOwnsEntityRoute(ctx, generation, 'playlist', pl.id, 'playlist-detail') &&
+            typeof prksRightPanelOwnedBy === 'function' &&
+            prksRightPanelOwnedBy(ctx, node || panel)
+        );
+    };
+    if (!panel || !ownsPlaylistPanel(panel)) return;
+    prksBindAutosizeTextareas(panel);
+    const editBtn = panel.querySelector('#prks-playlist-edit-btn');
     if (editBtn && editBtn.dataset.bound !== '1') {
         editBtn.dataset.bound = '1';
         editBtn.onclick = () => {
@@ -2445,17 +2640,17 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
         if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
     };
 
-    document.getElementById('prks-playlist-edit-close')?.addEventListener('click', close);
-    document.getElementById('prks-playlist-edit-cancel')?.addEventListener('click', close);
+    panel.querySelector('#prks-playlist-edit-close')?.addEventListener('click', close);
+    panel.querySelector('#prks-playlist-edit-cancel')?.addEventListener('click', close);
 
-    const saveBtn = document.getElementById('prks-playlist-edit-save');
-    const statusEl = document.getElementById('prks-playlist-edit-status');
+    const saveBtn = panel.querySelector('#prks-playlist-edit-save');
+    const statusEl = panel.querySelector('#prks-playlist-edit-status');
     if (saveBtn && saveBtn.dataset.bound !== '1') {
         saveBtn.dataset.bound = '1';
         saveBtn.onclick = async () => {
-            const title = String(document.getElementById('prks-playlist-edit-title')?.value || '').trim();
-            const description = String(document.getElementById('prks-playlist-edit-desc')?.value || '').trim();
-            const originalUrl = String(document.getElementById('prks-playlist-edit-original-url')?.value || '').trim();
+            const title = String(panel.querySelector('#prks-playlist-edit-title')?.value || '').trim();
+            const description = String(panel.querySelector('#prks-playlist-edit-desc')?.value || '').trim();
+            const originalUrl = String(panel.querySelector('#prks-playlist-edit-original-url')?.value || '').trim();
             if (!title) {
                 if (statusEl) statusEl.textContent = 'Title is required.';
                 return;
@@ -2467,7 +2662,14 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
                     body: JSON.stringify({ title, description, original_url: originalUrl }),
                 });
                 if (!res.ok) throw new Error('save failed');
-                const fresh = typeof fetchPlaylistDetails === 'function' ? await fetchPlaylistDetails(pl.id) : null;
+                if (!ownsPlaylistPanel(panel)) return;
+                const fresh =
+                    typeof fetchPlaylistDetails === 'function'
+                        ? await fetchPlaylistDetails(pl.id, {
+                              signal: ctx && ctx.abortController && ctx.abortController.signal,
+                          })
+                        : null;
+                if (!ownsPlaylistPanel(panel)) return;
                 if (fresh) {
                     if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
                     if (ctx) ctx.routeSidebar = { playlistTitle: fresh.title || 'Playlist', itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0 };
@@ -2477,18 +2679,22 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
                 updatePanelContent('details');
                 if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
             } catch (_e) {
-                if (statusEl) statusEl.textContent = 'Could not save.';
+                if (statusEl && ownsPlaylistPanel(statusEl)) statusEl.textContent = 'Could not save.';
             }
         };
     }
 
-    const input = document.getElementById('prks-playlist-add-search');
-    const results = document.getElementById('prks-playlist-add-results');
-    const addStatus = document.getElementById('prks-playlist-add-status');
+    const input = panel.querySelector('#prks-playlist-add-search');
+    const results = panel.querySelector('#prks-playlist-add-results');
+    const addStatus = panel.querySelector('#prks-playlist-add-status');
     if (!input || !results) return;
 
     const present = new Set((Array.isArray(pl.items) ? pl.items : []).map((w) => String(w.id || '')).filter(Boolean));
-    const works = typeof fetchWorks === 'function' ? await fetchWorks() : [];
+    const works =
+        typeof fetchWorks === 'function'
+            ? await fetchWorks({ signal: ctx && ctx.abortController && ctx.abortController.signal })
+            : [];
+    if (!ownsPlaylistPanel(panel)) return;
     const isVideo = (w) => {
         if (!w) return false;
         return typeof prksInferWorkSourceKind === 'function' && prksInferWorkSourceKind(w) === 'video';
@@ -2530,10 +2736,15 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
                     try {
                         if (typeof addWorkToPlaylist !== 'function') throw new Error('no api');
                         await addWorkToPlaylist(pl.id, w.id);
+                        if (!ownsPlaylistPanel(addStatus)) return;
                         if (addStatus) addStatus.textContent = 'Added.';
                         const fresh =
-                            typeof fetchPlaylistDetails === 'function' ? await fetchPlaylistDetails(pl.id) : null;
-                        if (fresh) {
+                            typeof fetchPlaylistDetails === 'function'
+                                ? await fetchPlaylistDetails(pl.id, {
+                                      signal: ctx && ctx.abortController && ctx.abortController.signal,
+                                  })
+                                : null;
+                        if (fresh && ownsPlaylistPanel(panel)) {
                             if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
                             if (ctx) ctx.routeSidebar = {
                                 playlistTitle: fresh.title || 'Playlist',
@@ -2546,7 +2757,7 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
                             updatePanelContent('details');
                         }
                     } catch (_e) {
-                        if (addStatus) addStatus.textContent = 'Could not add.';
+                        if (addStatus && ownsPlaylistPanel(addStatus)) addStatus.textContent = 'Could not add.';
                     }
                 };
                 row.appendChild(btn);
@@ -2570,10 +2781,10 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
     if (!ownerCtx || !prksOwnerTabIsFocused(ownerCtx)) return;
     const _cw = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
     if (_cw) {
-        const panel = document.getElementById('panel-content');
+        const panel = prksPrepareRightPanelReplace(ownerCtx);
         if (panel) {
             panel.innerHTML = prksWorkRightPanelStackHtml(_cw, isEditing, ownerCtx);
-            initPrksPrivateNotesEditor('work', _cw.id);
+            initPrksPrivateNotesEditor('work', _cw.id, ownerCtx);
             if (!isEditing) initWorkTagCombobox(_cw.id);
             if (typeof mountPlaylistAttachControls === 'function') {
                 void mountPlaylistAttachControls(_cw, ownerCtx);
@@ -2582,7 +2793,7 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
                 void mountFolderAttachControlsForWork(_cw, ownerCtx);
             }
             if (typeof initWorkDetailRightPanelActions === 'function') {
-                initWorkDetailRightPanelActions(_cw);
+                initWorkDetailRightPanelActions(_cw, ownerCtx);
             }
             if (isEditing) {
                 prksBindSegmentedHidden('meta-status');
@@ -2604,6 +2815,14 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
 
 async function submitWorkMetaEdit(workId) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const generation = ownerCtx && ownerCtx.generation;
+    const ownsWork = function () {
+        return !!(
+            typeof prksTabContextOwnsEntityRoute === 'function' &&
+            prksTabContextOwnsEntityRoute(ownerCtx, generation, 'work', workId, 'work')
+        );
+    };
+    if (!ownsWork()) return;
     const metaDoc = document.getElementById('meta-doc-type');
     const v = (id) => {
         const el = document.getElementById(id);
@@ -2674,7 +2893,11 @@ async function submitWorkMetaEdit(workId) {
             const errData = await saveRes.json().catch(() => ({}));
             throw new Error(errData.error || `Server error ${saveRes.status}`);
         }
-        const _saved = await fetchWorkDetails(workId);
+        if (!ownsWork()) return;
+        const _saved = await fetchWorkDetails(workId, {
+            signal: ownerCtx && ownerCtx.abortController && ownerCtx.abortController.signal,
+        });
+        if (!ownsWork()) return;
         const applied =
             typeof prksApplyOwnedWorkEntity === 'function'
                 ? prksApplyOwnedWorkEntity(ownerCtx, workId, _saved)
@@ -2703,6 +2926,7 @@ async function submitWorkMetaEdit(workId) {
         }
         toggleWorkMetaEditForContext(ownerCtx, false);
     } catch (err) {
+        if (!ownsWork()) return;
         console.error("Failed to save metadata", err);
         if (saveBtn) {
             saveBtn.innerText = "Save Changes";
@@ -3246,10 +3470,10 @@ async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx) {
             renderFolderDetails(ctx, _tf, ctx.root);
         }
         if (!prksOwnerTabIsFocused(ctx)) return;
-        const panel = document.getElementById('panel-content');
+        const panel = prksPrepareRightPanelReplace(ctx);
         if (panel && ((ctx.ui && ctx.ui.rightPanelTab) || 'details') === 'details' && _tf && _tf.id === entityId) {
             panel.innerHTML = prksFolderRightPanelStackHtml(_tf);
-            initPrksPrivateNotesEditor('folder', entityId);
+            initPrksPrivateNotesEditor('folder', entityId, ctx);
             initFolderTagCombobox(entityId);
             if (typeof mountFolderLibraryAttachControls === 'function') {
                 void mountFolderLibraryAttachControls(_tf);
@@ -4874,5 +5098,3 @@ function handleUploadFile(file) {
         true
     );
 })();
-
-

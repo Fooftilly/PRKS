@@ -719,6 +719,7 @@ function closePersonProfileEdit() {
 
 async function deletePerson() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const generation = ctx && ctx.generation;
     const p = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
     const personId = p && p.id ? String(p.id) : '';
     if (!personId) return;
@@ -733,21 +734,33 @@ async function deletePerson() {
         confirmLabel: 'Delete person',
     });
     if (!confirmed) return;
+    if (
+        typeof prksTabContextOwnsEntityRoute === 'function' &&
+        !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
+    ) return;
     try {
         const res = await prksRequest(`/api/persons/${encodeURIComponent(personId)}`, { method: 'DELETE' });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
-            await prksAlertMessage(body.error || 'Could not delete person.', 'Could not delete');
+            if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
+                await prksAlertMessage(body.error || 'Could not delete person.', 'Could not delete');
+            }
             return;
         }
+        if (
+            typeof prksTabContextOwnsEntityRoute === 'function' &&
+            !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
+        ) return;
         if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', null);
         if (ctx && ctx.ui) {
             ctx.ui.personDetailEditing = false;
             ctx.ui.personWorksEditing = false;
         }
-        if (typeof prksNavigate === 'function') prksNavigate('#/people');
+        if (typeof prksNavigate === 'function') prksNavigate('#/people', { replace: true, tabId: ctx.tabId });
     } catch (_e) {
-        await prksAlertMessage('Could not delete person.', 'Error');
+        if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
+            await prksAlertMessage('Could not delete person.', 'Error');
+        }
     }
 }
 
@@ -897,6 +910,7 @@ function renderPersonProfileEditFormHtml(person) {
 
 async function savePersonProfile(personId) {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const generation = ctx && ctx.generation;
     const root = ctx && ctx.root;
     const birthIso = parsePersonBirthDeathField(document.getElementById('pd-birth-date').value);
     if (birthIso === null) {
@@ -948,10 +962,21 @@ async function savePersonProfile(personId) {
         });
         const patchBody = await res.json().catch(() => ({}));
         if (!res.ok) {
-            await prksAlertMessage(patchBody.error || 'Could not save profile.', 'Could not save');
+            if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
+                await prksAlertMessage(patchBody.error || 'Could not save profile.', 'Could not save');
+            }
             return;
         }
-        const person = await fetchPersonDetails(personId);
+        if (
+            typeof prksTabContextOwnsEntityRoute === 'function' &&
+            !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
+        ) return;
+        const signal = ctx && ctx.abortController && ctx.abortController.signal;
+        const person = await fetchPersonDetails(personId, { signal: signal });
+        if (
+            typeof prksTabContextOwnsEntityRoute === 'function' &&
+            !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
+        ) return;
         if (ctx && ctx.ui) ctx.ui.personDetailEditing = false;
         if (person) {
             if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
@@ -969,7 +994,9 @@ async function savePersonProfile(personId) {
         }
     } catch (e) {
         console.error(e);
-        await prksAlertMessage('Could not save profile.', 'Error');
+        if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
+            await prksAlertMessage('Could not save profile.', 'Error');
+        }
     } finally {
         if (btn) {
             btn.disabled = false;

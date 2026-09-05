@@ -194,9 +194,6 @@
             if (typeof document !== 'undefined' && document.getElementById) {
                 const main = document.getElementById('main-content');
                 if (main && typeof root.prksCaptureCurrentRouteState === 'function') {
-                    main.scrollTop = 420;
-                    root.prksCaptureCurrentRouteState(sv);
-                    main.scrollTop = 0;
                     const ctx = {
                         tabId: 'selftest',
                         navigation: { routeStates: new Map(), origins: new Map() },
@@ -204,6 +201,9 @@
                             return g === 7;
                         },
                     };
+                    main.scrollTop = 420;
+                    root.prksCaptureCurrentRouteState(sv, ctx);
+                    main.scrollTop = 0;
                     root.prksRestoreRouteState(ctx, sv, 7);
                     assertEq('saved view scroll restored', main.scrollTop, 420);
                 }
@@ -214,16 +214,38 @@
             const ext = root.prksValidateOriginRecord({ hash: 'https://example.com/', label: 'x' });
             assertEq('reject external origin', ext, null);
 
+            if (typeof root.prksRenderRouteError === 'function') {
+                const retryBtn = {};
+                const errorHost = {
+                    innerHTML: '',
+                    removeAttribute: function () {},
+                    querySelector: function (sel) { return sel === '#prks-route-retry' ? retryBtn : null; },
+                };
+                const retryCtx = {
+                    tabId: 'secondary-retry',
+                    isCurrent: function (generation) { return generation === 9; },
+                    route: parse('#/concepts/C-OLD'),
+                };
+                let retryCall = null;
+                root.__prksWorkspaceReady = true;
+                root.prksWorkspaceNavigate = function (hash, options) {
+                    retryCall = { hash: hash, options: options };
+                };
+                root.prksRenderRouteError(errorHost, retryCtx, '#/concepts/C-FAILED', 9);
+                retryBtn.onclick();
+                assertEq('route Retry uses failed owner hash', retryCall && retryCall.hash, '#/concepts/C-FAILED');
+                assertEq('route Retry uses failed owner tab', retryCall && retryCall.options.tabId, 'secondary-retry');
+                assertEq('route Retry is replace', retryCall && retryCall.options.replace, true);
+                delete root.prksWorkspaceNavigate;
+                delete root.__prksWorkspaceReady;
+            }
+
             if (typeof root.prksCaptureCurrentRouteState === 'function') {
                 const a = parse('#/search?q=A');
                 const b = parse('#/search?q=B');
                 if (typeof document !== 'undefined' && document.getElementById) {
                     const main = document.getElementById('main-content');
                     if (main) {
-                        main.scrollTop = 300;
-                        root.prksCaptureCurrentRouteState(a);
-                        main.scrollTop = 800;
-                        root.prksCaptureCurrentRouteState(b);
                         const ctx = {
                             tabId: 'selftest',
                             navigation: { routeStates: new Map(), origins: new Map() },
@@ -232,6 +254,10 @@
                                 return g === ctx.generation;
                             },
                         };
+                        main.scrollTop = 300;
+                        root.prksCaptureCurrentRouteState(a, ctx);
+                        main.scrollTop = 800;
+                        root.prksCaptureCurrentRouteState(b, ctx);
                         root.prksRestoreRouteState(ctx, a, 1);
                         assertEq('search A scroll restored', main.scrollTop, 300);
                         root.prksRestoreRouteState(ctx, b, 1);
@@ -240,6 +266,32 @@
                         ctx.generation = 2;
                         root.prksRestoreRouteState(ctx, a, 1);
                         assertEq('stale scroll ignored', main.scrollTop, 0);
+
+                        const localA = { scrollTop: 111 };
+                        const localB = { scrollTop: 777 };
+                        function tileCtx(id, local) {
+                            return {
+                                tabId: id,
+                                navigation: { routeStates: new Map(), origins: new Map() },
+                                generation: 1,
+                                isCurrent: function (g) { return g === 1; },
+                                root: {
+                                    querySelector: function () { return null; },
+                                    closest: function (sel) { return sel === '.prks-tile__body' ? local : null; },
+                                },
+                            };
+                        }
+                        const ctxA = tileCtx('tile-a', localA);
+                        const ctxB = tileCtx('tile-b', localB);
+                        root.prksCaptureCurrentRouteState(a, ctxA);
+                        root.prksCaptureCurrentRouteState(a, ctxB);
+                        localA.scrollTop = 0;
+                        localB.scrollTop = 0;
+                        root.prksRestoreRouteState(ctxA, a, 1);
+                        assertEq('tile A restores own scroller', localA.scrollTop, 111);
+                        assertEq('tile A restore leaves B scroller', localB.scrollTop, 0);
+                        root.prksRestoreRouteState(ctxB, a, 1);
+                        assertEq('tile B restores own scroller', localB.scrollTop, 777);
                     }
                 }
             }
