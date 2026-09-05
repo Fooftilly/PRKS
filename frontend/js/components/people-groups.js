@@ -743,9 +743,23 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
 async function mountPersonGroupAddMemberControls(g, ownerCtx) {
     const input = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-search') : null;
     if (!input) return;
+    const generation = ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined;
 
     allPersons = await fetchPersons();
-    if (ownerCtx && ownerCtx.isCurrent && !ownerCtx.isCurrent(ownerCtx.generation)) return;
+    const liveGroup = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('personGroup') : null;
+    const liveInput = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-search') : null;
+    if (
+        !ownerCtx ||
+        (typeof generation === 'number' && typeof ownerCtx.isCurrent === 'function' && !ownerCtx.isCurrent(generation)) ||
+        !ownerCtx.ui ||
+        !ownerCtx.ui.personGroupMembersEditing ||
+        !liveGroup ||
+        String(liveGroup.id) !== String(g.id) ||
+        !liveInput ||
+        liveInput !== input
+    ) {
+        return;
+    }
     const memberIds = new Set((g.members || []).map((m) => String(m.id)));
     initSearchableCombobox('group-add-member-search', 'group-add-member-results', 'group-add-member-id', 'person', {
         excludePersonIds: memberIds,

@@ -5,6 +5,7 @@ import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _GROUPS = os.path.join(_ROOT, "frontend", "js", "components", "people-groups.js")
+_APP = os.path.join(_ROOT, "frontend", "js", "app.js")
 _TAB_CONTEXT = os.path.join(_ROOT, "frontend", "js", "tab-context.js")
 _UI = os.path.join(_ROOT, "frontend", "js", "ui.js")
 
@@ -59,6 +60,28 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
         self.assertIn("is-group-members-editing", src)
         self.assertNotIn("renderPersonGroupAddMemberPanelHtml()", ui)
         self.assertNotIn("mountPersonGroupAddMemberControls(g)", ui)
+
+    def test_same_group_refresh_keeps_members_mode_but_other_groups_reset(self):
+        app = _read(_APP)
+        self.assertIn("const previousPersonGroup = ctx.getEntity && ctx.getEntity('personGroup');", app)
+        self.assertIn("const previousPersonGroupId", app)
+        self.assertIn("const previousPersonGroupMembersEditing", app)
+        self.assertIn("const preserveMembersEditing =", app)
+        self.assertIn("previousPersonGroupId === String(group.id)", app)
+        self.assertIn("ctx.ui.personGroupMembersEditing = preserveMembersEditing;", app)
+        self.assertIn("ctx.ui.personGroupEditing = false;", app)
+
+    def test_member_picker_async_mount_checks_original_owner_state(self):
+        src = _read(_GROUPS)
+        mount = src.split("async function mountPersonGroupAddMemberControls", 1)[1].split(
+            "function renderPersonGroupAddMemberPanelHtml", 1
+        )[0]
+        self.assertIn("const generation =", mount)
+        self.assertLess(mount.index("const generation ="), mount.index("await fetchPersons()"))
+        self.assertIn("ownerCtx.isCurrent(generation)", mount)
+        self.assertIn("ownerCtx.ui.personGroupMembersEditing", mount)
+        self.assertIn("ownerCtx.getEntity('personGroup')", mount)
+        self.assertIn("liveInput !== input", mount)
 
     def test_metadata_form_keeps_typed_parent_and_separate_delete(self):
         src = _read(_GROUPS)

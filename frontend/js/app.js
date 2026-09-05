@@ -1585,6 +1585,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const contentDiv = ctx.root;
     if (!contentDiv) return;
 
+    const previousPersonGroup = ctx.getEntity && ctx.getEntity('personGroup');
+    const previousPersonGroupId = previousPersonGroup ? String(previousPersonGroup.id) : '';
+    const previousPersonGroupMembersEditing = !!(ctx.ui && ctx.ui.personGroupMembersEditing);
     const generation = ctx.beginRoute(route);
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
@@ -1696,9 +1699,13 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         '<div class="prks-page-header page-header"><h2 class="prks-page-title">Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
                     titleOpts = { notFound: true, notFoundTitle: 'Group not found' };
                 } else {
+                    const preserveMembersEditing =
+                        previousPersonGroupId &&
+                        previousPersonGroupId === String(group.id) &&
+                        previousPersonGroupMembersEditing;
                     ctx.setEntity('personGroup', group);
                     ctx.ui.personGroupEditing = false;
-                    ctx.ui.personGroupMembersEditing = false;
+                    ctx.ui.personGroupMembersEditing = preserveMembersEditing;
                     publishSidebar({
                         groupName: group.name,
                         memberCount: Array.isArray(group.members) ? group.members.length : 0,
