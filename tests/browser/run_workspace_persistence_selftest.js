@@ -431,6 +431,49 @@ async function run() {
     assertEq('show split nested C preserved', hiddenDeep.ws.snapshot().secondaryTree.second.first.tabId, 'tab-3');
     assertEq('show split nested D preserved', hiddenDeep.ws.snapshot().secondaryTree.second.second.tabId, 'tab-4');
 
+    const foldersHiddenSnap = {
+        version: 1,
+        tabs: [
+            { id: 'tab-1', route: '#/folders', title: 'Folders', icon: 'folder' },
+            { id: 'tab-2', route: '#/works/WA', title: 'Work A', icon: 'book' },
+            { id: 'tab-3', route: '#/people/PA', title: 'Adorno', icon: 'user' },
+        ],
+        mainTabId: 'tab-1',
+        secondaryTree: {
+            type: 'split',
+            axis: 'left-right',
+            ratio: 0.5,
+            first: { type: 'leaf', tabId: 'tab-2' },
+            second: { type: 'leaf', tabId: 'tab-3' },
+        },
+        mode: 'stacked',
+        mainSplitRatio: 0.58,
+    };
+    assert('folders hidden snap validates', !!persist.prksValidateWorkspaceSnapshot(foldersHiddenSnap));
+    const foldersDeep = makeHarness({
+        hash: '#/people/PA',
+        loadSnapshot: function () {
+            return persist.prksValidateWorkspaceSnapshot(foldersHiddenSnap);
+        },
+    });
+    const foldersDeepSnap = foldersDeep.ws.snapshot();
+    assertEq('folders hidden deep-link Main is Person', foldersDeepSnap.mainTabId, 'tab-3');
+    assertEq('folders hidden deep-link stays stacked', foldersDeepSnap.mode, 'stacked');
+    assertEq('folders hidden deep-link mounts only Main', foldersDeep.mountedCount(), 1);
+    assert('folders hidden deep-link Folders remains', foldersDeepSnap.tabs.some(function (t) { return t.id === 'tab-1' && t.route === '#/folders'; }));
+    assert('folders hidden deep-link Folders not in tree', tree.collectLeafTabIds(foldersDeepSnap.secondaryTree).indexOf('tab-1') === -1);
+    assertEq('folders hidden deep-link remaining leaf', foldersDeepSnap.secondaryTree && foldersDeepSnap.secondaryTree.tabId, 'tab-2');
+    assert('folders hidden deep-link Person not in tree', tree.collectLeafTabIds(foldersDeepSnap.secondaryTree).indexOf('tab-3') === -1);
+    assert('folders hidden deep-link Work parked', !foldersDeep.isMounted('tab-2'));
+    assertEq('folders hidden deep-link no secondary render', foldersDeep.renders.length, 0);
+    const foldersDeepStored = persist.prksSerializeWorkspaceSnapshot(foldersDeepSnap);
+    assert('folders hidden deep-link persistable', !!persist.prksValidateWorkspaceSnapshot(foldersDeepStored));
+    await foldersDeep.ws.setMode('tiled');
+    assertEq('folders hidden deep-link show split', foldersDeep.ws.snapshot().mode, 'tiled');
+    assertEq('folders hidden deep-link show split leaf', foldersDeep.ws.snapshot().secondaryTree.tabId, 'tab-2');
+    assert('folders hidden deep-link show split mounts Work', foldersDeep.isMounted('tab-2'));
+    assert('folders hidden deep-link show split Folders unmounted', !foldersDeep.isMounted('tab-1'));
+
     const staleMain = validSnapshot();
     staleMain.tabs[0].route = '#/works/WA';
     const noMatch = makeHarness({

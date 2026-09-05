@@ -6,6 +6,7 @@ const path = require('path');
 const rootDir = path.resolve(__dirname, '../..');
 const nav = require(path.join(rootDir, 'frontend/js/navigation.js'));
 const tree = require(path.join(rootDir, 'frontend/js/workspace-tree.js'));
+const persist = require(path.join(rootDir, 'frontend/js/workspace-persistence.js'));
 const wsApi = require(path.join(rootDir, 'frontend/js/workspace-tabs.js'));
 
 const { createPrksWorkspaceTabs, prksWorkspaceNavigationIntent } = wsApi;
@@ -30,6 +31,30 @@ function assert(name, ok, detail) {
 
 function jsonClone(v) {
     return JSON.parse(JSON.stringify(v));
+}
+
+function assertPersistable(name, snap) {
+    const serialized = persist.prksSerializeWorkspaceSnapshot(snap);
+    const valid = serialized && persist.prksValidateWorkspaceSnapshot(JSON.parse(JSON.stringify(serialized)));
+    assert(name, !!valid);
+}
+
+function assertSecondaryLeavesTileable(name, snap) {
+    const ids = tree.collectLeafTabIds(snap.secondaryTree);
+    let ok = true;
+    for (let i = 0; i < ids.length; i++) {
+        const tab = snap.tabs.find(function (t) { return t.id === ids[i]; });
+        if (!tab || tab.id === snap.mainTabId || !nav.prksRouteSupportsTile(tab.route)) {
+            ok = false;
+            break;
+        }
+    }
+    assert(name, ok);
+}
+
+function uniqueTabIds(snap) {
+    const ids = snap.tabs.map(function (t) { return t.id; });
+    return new Set(ids).size === ids.length;
 }
 
 function makeHistory(initialHash) {
@@ -531,6 +556,8 @@ async function run() {
     assertEq('makeMain no push', tile.hist.stats().pushes, pushesFocus);
     assert('makeMain replaced', tile.hist.stats().replaces > replacesFocus);
     assertEq('makeMain no render', tile.renders.length, rendersFocus);
+    assertPersistable('makeMain exact swap persistable', snapSwap);
+    assertSecondaryLeavesTileable('makeMain exact swap leaves tileable', snapSwap);
 
     const hrefAfterSwap = tile.hist.getHash();
     await tile.ws.navigate('#/people/PB', { target: 'current', tabId: snapSwap.secondaryTree.tabId });
@@ -695,6 +722,8 @@ async function run() {
     assertEq('close main stacked', snapCloseMain.mode, 'stacked');
     assertEq('close main url B', closeMainWs.hist.getHash(), '#/works/WB');
     assertEq('close main focused B', snapCloseMain.focusedTabId, promoteB);
+    assertPersistable('close main persistable', snapCloseMain);
+    assertSecondaryLeavesTileable('close main leaves tileable', snapCloseMain);
 
     const unsup = makeHarness({ hash: '#/works/WA' });
     await unsup.ws.navigate('#/people/P1', { target: 'tile' });
@@ -725,6 +754,75 @@ async function run() {
     assertEq('unsupported deny fingerprint', fingerprint(unsupDeny), denyBefore);
     assertEq('unsupported deny one leave', unsupDeny.canLeaveCalls(), denyLeave0 + 1);
     assertEq('unsupported deny leave B', unsupDeny.lastLeaveTabId(), denyB);
+
+    const foldersZero = makeHarness({ hash: '#/folders' });
+    const foldersZeroMain = foldersZero.ws.snapshot().mainTabId;
+    await foldersZero.ws.navigate('#/works/WA', { target: 'tile' });
+    const workZero = foldersZero.ws.snapshot().secondaryTree.tabId;
+    const foldersZeroOk = foldersZero.ws.makeMain(workZero);
+    assert('untileable Make Main zero ok', foldersZeroOk === true);
+    const snapZero = foldersZero.ws.snapshot();
+    assertEq('untileable zero Main is Work', snapZero.mainTabId, workZero);
+    assertEq('untileable zero tree null', snapZero.secondaryTree, null);
+    assertEq('untileable zero stacked', snapZero.mode, 'stacked');
+    assert('untileable zero Folders remains', snapZero.tabs.some(function (t) { return t.id === foldersZeroMain && t.route === '#/folders'; }));
+    assert('untileable zero Folders not destroyed', uniqueTabIds(snapZero) && snapZero.tabs.length === 2);
+    assertEq('untileable zero Folders parked', foldersZero.isMounted(foldersZeroMain), false);
+    assert('untileable zero Work mounted', foldersZero.isMounted(workZero));
+    assertPersistable('untileable zero persistable', snapZero);
+    assertSecondaryLeavesTileable('untileable zero leaves tileable', snapZero);
+
+    const foldersSwap = makeHarness({ hash: '#/folders' });
+    const foldersId = foldersSwap.ws.snapshot().mainTabId;
+    await foldersSwap.ws.navigate('#/works/WA', { target: 'tile' });
+    const workAId = foldersSwap.ws.snapshot().secondaryTree.tabId;
+    await foldersSwap.ws.splitLeaf(workAId, 'top-bottom', { hash: '#/people/PA' });
+    const personId = foldersSwap.ws.snapshot().secondaryTree.second.tabId;
+    await foldersSwap.ws.splitLeaf(personId, 'left-right', { hash: '#/concepts/C1' });
+    const conceptId = foldersSwap.ws.snapshot().secondaryTree.second.second.tabId;
+    const nestedRatio = foldersSwap.ws.snapshot().secondaryTree.ratio;
+    const nestedAxis = foldersSwap.ws.snapshot().secondaryTree.axis;
+    const foldersRecurseOk = foldersSwap.ws.makeMain(personId);
+    assert('untileable recursive Make Main ok', foldersRecurseOk === true);
+    const snapRecurse = foldersSwap.ws.snapshot();
+    assertEq('untileable recursive Main is Person', snapRecurse.mainTabId, personId);
+    assert('untileable recursive Folders parked', snapRecurse.tabs.some(function (t) { return t.id === foldersId && t.route === '#/folders'; }));
+    assert('untileable recursive Folders not in tree', tree.collectLeafTabIds(snapRecurse.secondaryTree).indexOf(foldersId) === -1);
+    assert('untileable recursive Person not in tree', tree.collectLeafTabIds(snapRecurse.secondaryTree).indexOf(personId) === -1);
+    assertEq('untileable recursive collapsed first', snapRecurse.secondaryTree.first.tabId, workAId);
+    assertEq('untileable recursive collapsed second', snapRecurse.secondaryTree.second.tabId, conceptId);
+    assertEq('untileable recursive outer axis', snapRecurse.secondaryTree.axis, nestedAxis);
+    assertEq('untileable recursive outer ratio', snapRecurse.secondaryTree.ratio, nestedRatio);
+    assertEq('untileable recursive still tiled', snapRecurse.mode, 'tiled');
+    assert('untileable recursive unique ids', uniqueTabIds(snapRecurse));
+    assertPersistable('untileable recursive persistable', snapRecurse);
+    assertSecondaryLeavesTileable('untileable recursive leaves tileable', snapRecurse);
+
+    const foldersHide = makeHarness({ hash: '#/folders' });
+    const foldersHideMain = foldersHide.ws.snapshot().mainTabId;
+    await foldersHide.ws.navigate('#/works/WA', { target: 'tile' });
+    const hideWork = foldersHide.ws.snapshot().secondaryTree.tabId;
+    await foldersHide.ws.splitLeaf(hideWork, 'left-right', { hash: '#/people/PA' });
+    const hidePerson = foldersHide.ws.snapshot().secondaryTree.second.tabId;
+    await foldersHide.ws.setMode('stacked');
+    foldersHide.hist.setLocation('#/works/WA');
+    const hidePopOk = await foldersHide.ws.handlePopState({
+        prksWorkspace: { v: 1, tabId: hideWork, route: '#/works/WA', historyIndex: 0 },
+    });
+    assert('untileable hidden popstate ok', hidePopOk === true);
+    const snapHidePop = foldersHide.ws.snapshot();
+    assertEq('untileable hidden popstate Main is Work', snapHidePop.mainTabId, hideWork);
+    assertEq('untileable hidden popstate stays stacked', snapHidePop.mode, 'stacked');
+    assert('untileable hidden popstate Folders parked', snapHidePop.tabs.some(function (t) { return t.id === foldersHideMain && t.route === '#/folders'; }));
+    assert('untileable hidden popstate Folders not in tree', tree.collectLeafTabIds(snapHidePop.secondaryTree).indexOf(foldersHideMain) === -1);
+    assertEq('untileable hidden popstate remaining leaf', snapHidePop.secondaryTree && snapHidePop.secondaryTree.tabId, hidePerson);
+    assertEq('untileable hidden popstate mounts Main only', foldersHide.mountedCount(), 1);
+    assertPersistable('untileable hidden popstate persistable', snapHidePop);
+    assertSecondaryLeavesTileable('untileable hidden popstate leaves tileable', snapHidePop);
+    await foldersHide.ws.setMode('tiled');
+    assertEq('untileable hidden popstate show split', foldersHide.ws.snapshot().mode, 'tiled');
+    assertEq('untileable hidden popstate show split leaf', foldersHide.ws.snapshot().secondaryTree.tabId, hidePerson);
+    assert('untileable hidden popstate show split mounts Person', foldersHide.isMounted(hidePerson));
 
     const titleSwap = makeHarness({ hash: '#/works/WA' });
     await titleSwap.ws.navigate('#/works/WB', { target: 'tile' });
@@ -816,6 +914,8 @@ async function run() {
     assertEq('hidden deep pop keeps C', hiddenBack.secondaryTree.second.first.tabId, hiddenC);
     assertEq('hidden deep pop keeps D', hiddenBack.secondaryTree.second.second.tabId, hiddenD);
     assertEq('hidden deep pop mounts only A', hiddenPop.mountedCount(), 1);
+    assertPersistable('hidden deep pop persistable', hiddenBack);
+    assertSecondaryLeavesTileable('hidden deep pop leaves tileable', hiddenBack);
 
     const popDenyA = makeHarness({ hash: '#/works/WA' });
     await popDenyA.ws.navigate('#/people/PA');
@@ -1076,6 +1176,8 @@ async function run() {
         assert('deep make main B still mounted', h.isMounted(B));
         assert('deep make main C still mounted', h.isMounted(C));
         assert('deep make main D still mounted', h.isMounted(D));
+        assertPersistable('deep make main persistable', snap);
+        assertSecondaryLeavesTileable('deep make main leaves tileable', snap);
 
         /* Close-collapse: close C -> nested split collapses to a bare A leaf. */
         await h.ws.closeTab(C);

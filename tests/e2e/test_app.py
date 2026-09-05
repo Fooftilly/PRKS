@@ -1933,6 +1933,16 @@ def _open_workspace_at_hash(page, origin, hash_route):
     page.wait_for_function("() => window.__prksWorkspaceReady === true")
 
 
+def _workspace_persistable(page):
+    return page.evaluate(
+        """() => {
+            const snap = window.prksWorkspaceSnapshot();
+            const serialized = window.prksSerializeWorkspaceSnapshot && window.prksSerializeWorkspaceSnapshot(snap);
+            return !!(serialized && window.prksValidateWorkspaceSnapshot(serialized));
+        }"""
+    )
+
+
 def _open_work_work_split(page, server):
     """Work A Main, Work B Secondary, both PDFs ready. Returns (work_a, work_b, ids)."""
     work_a = server.ids["work_a"]
@@ -5093,6 +5103,129 @@ class WorkspacePersistenceTests(_BrowserE2E):
         self.assertEqual(shown["mainTabId"], after["mainTabId"])
         self.assertEqual(shown["tree"]["first"]["tabId"], hidden["mainTabId"])
         self.assertEqual(shown["tree"]["second"], hidden["tree"]["second"])
+
+    def test_untileable_main_make_main_keeps_folders_parked(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.wait_for_function("() => location.hash === '#/folders'")
+        folders_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        work_a = server.ids["work_a"]
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_a,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 2")
+        work_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.evaluate("(id) => window.prksWorkspaceMakeMain(id)", arg=work_id)
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
+        after = _logical_workspace(page)
+        self.assertEqual(after["mainTabId"], work_id)
+        self.assertIn(folders_id, after["tabIds"])
+        self.assertIsNone(after["tree"])
+        self.assertEqual(after["mode"], "stacked")
+        self.assertEqual(after["mountedCount"], 1)
+        self.assertEqual(len(set(after["tabIds"])), len(after["tabIds"]))
+        self.assertTrue(_workspace_persistable(page))
+
+    def test_untileable_main_hidden_startup_promotes_without_demotion(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.wait_for_function("() => location.hash === '#/folders'")
+        folders_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        work_a = server.ids["work_a"]
+        person_id = server.ids["person"]
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_a,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().secondaryTree")
+        work_tab = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.evaluate(
+            """(a) => window.prksWorkspaceSplitLeaf(a.target, 'left-right', { hash: '#/people/' + a.person })""",
+            arg={"target": work_tab, "person": person_id},
+        )
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+        person_tab = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.second.tabId")
+        page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 1)
+        _flush_workspace(page)
+        seen = []
+
+        def on_request(req):
+            if req.method == "GET":
+                seen.append(urlparse(req.url).path)
+
+        page.on("request", on_request)
+        _open_workspace_at_hash(page, server.origin, "#/people/" + person_id)
+        page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
+        page.wait_for_timeout(400)
+        after = _logical_workspace(page)
+        self.assertEqual(after["mainTabId"], person_tab)
+        self.assertEqual(after["mode"], "stacked")
+        self.assertFalse(after["visualTiled"])
+        self.assertEqual(after["mountedCount"], 1)
+        self.assertIn(folders_id, after["tabIds"])
+        self.assertIsNotNone(after["tree"])
+        self.assertEqual(after["tree"]["tabId"], work_tab)
+        self.assertTrue(_workspace_persistable(page))
+        self.assertNotIn("/api/works/" + work_a, seen)
+        page.locator("#prks-workspace-tile-layout").click()
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 2")
+        shown = _logical_workspace(page)
+        self.assertEqual(shown["mode"], "tiled")
+        self.assertEqual(shown["tree"]["tabId"], work_tab)
+        self.assertIn(work_tab, shown["mountedIds"])
+        self.assertNotIn(folders_id, shown["mountedIds"])
+
+    def test_untileable_main_hidden_popstate_promotes_without_demotion(self):
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.wait_for_function("() => location.hash === '#/folders'")
+        folders_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        work_a = server.ids["work_a"]
+        person_id = server.ids["person"]
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_a,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().secondaryTree")
+        work_tab = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.evaluate(
+            """(a) => window.prksWorkspaceSplitLeaf(a.target, 'left-right', { hash: '#/people/' + a.person })""",
+            arg={"target": work_tab, "person": person_id},
+        )
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 3")
+        person_tab = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.second.tabId")
+        page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'stacked'")
+        page.evaluate(
+            """(a) => {
+                const state = {
+                    prksWorkspace: { v: 1, tabId: a.tabId, route: a.route, historyIndex: 0 },
+                };
+                history.replaceState(state, '', location.pathname + a.route);
+                window.dispatchEvent(new PopStateEvent('popstate', { state: state }));
+            }""",
+            arg={"tabId": work_tab, "route": "#/works/" + work_a},
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mainTabId === %s" % json.dumps(work_tab))
+        after = _logical_workspace(page)
+        self.assertEqual(after["mainTabId"], work_tab)
+        self.assertEqual(after["mode"], "stacked")
+        self.assertFalse(after["visualTiled"])
+        self.assertIn(folders_id, after["tabIds"])
+        self.assertEqual(after["tree"]["tabId"], person_tab)
+        self.assertEqual(after["mountedCount"], 1)
+        self.assertTrue(_workspace_persistable(page))
+        page.locator("#prks-workspace-tile-layout").click()
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        shown = _logical_workspace(page)
+        self.assertEqual(shown["tree"]["tabId"], person_tab)
+        self.assertIn(person_tab, shown["mountedIds"])
+        self.assertNotIn(folders_id, shown["mountedIds"])
 
     def test_narrow_reload_keeps_tree_and_preferred_ratios(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)

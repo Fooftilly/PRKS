@@ -388,9 +388,7 @@
             }
             if (match && match.id !== main.id) {
                 if (root.containsTab(state.secondaryTree, match.id)) {
-                    const oldMain = state.mainTabId;
-                    state.mainTabId = match.id;
-                    state.secondaryTree = root.replaceTabId(state.secondaryTree, match.id, oldMain);
+                    if (!promoteSecondaryToMain(match.id)) return;
                 } else {
                     state.mainTabId = match.id;
                 }
@@ -772,13 +770,15 @@
         }
 
         /**
-         * In-place role swap: promotes `newMainId` (any Secondary leaf, at any tree depth) to
-         * Main, and puts the old Main into the promoted leaf's exact former tree position.
-         * This never rebuilds the tree, moves the leaf to the root, or reorders siblings --
-         * `replaceTabId` only renames that one leaf node, so runtimes for every other leaf
-         * (and the promoted/demoted ones) are untouched.
+         * Promote a Secondary leaf to Main. Demotion into `secondaryTree` is allowed only when
+         * the old Main route itself supports tiling: then this is an exact leaf role swap
+         * (`replaceTabId` at the target's former position). Otherwise the promoted leaf is
+         * removed and the tree is normalized; the old Main stays an ordinary parked tab.
+         * Does not force tiled mode (hidden/stacked stays hidden). Collapses to stacked when
+         * no Secondary leaves remain. Parks the old Main when it is not demoted into the tree.
+         * Does not mount or paint.
          */
-        function swapVisibleRoles(newMainId) {
+        function promoteSecondaryToMain(newMainId) {
             const tab = getTab(newMainId);
             if (!tab) return false;
             if (tab.id === state.mainTabId) {
@@ -786,11 +786,16 @@
                 return true;
             }
             if (!root.containsTab(state.secondaryTree, tab.id)) return false;
-            const oldMain = state.mainTabId;
+            const oldMain = getMainTab();
+            if (oldMain && routeSupportsTile(oldMain.route)) {
+                state.secondaryTree = root.replaceTabId(state.secondaryTree, tab.id, oldMain.id);
+            } else {
+                state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, tab.id));
+                if (oldMain && oldMain.id !== tab.id) parkContext(oldMain.id);
+            }
             state.mainTabId = tab.id;
-            state.secondaryTree = root.replaceTabId(state.secondaryTree, tab.id, oldMain);
-            state.mode = MODE_TILED;
             state.focusedTabId = tab.id;
+            if (!state.secondaryTree) state.mode = MODE_STACKED;
             return true;
         }
 
@@ -803,7 +808,7 @@
                 refreshFocusedPanel();
                 return true;
             }
-            if (!swapVisibleRoles(tab.id)) return false;
+            if (!promoteSecondaryToMain(tab.id)) return false;
             commitUrl(tab, 'replace');
             paintAndRestore(tab.id);
             publishShell(tab.id);
@@ -1156,9 +1161,10 @@
                 const prevId = state.mainTabId;
                 if (prevId && prevId !== tabId) parkContext(prevId);
                 if (root.containsTab(state.secondaryTree, tabId)) {
-                    state.secondaryTree = prevId ? root.replaceTabId(state.secondaryTree, tabId, prevId) : null;
+                    if (!promoteSecondaryToMain(tabId)) return false;
+                } else {
+                    setMain(tabId);
                 }
-                setMain(tabId);
                 mountContext(tabId);
                 commitUrl(tab, 'replace');
                 paint();
@@ -1545,7 +1551,7 @@
                         return false;
                     }
                     applyWantToTab(target, want);
-                    if (!swapVisibleRoles(target.id)) {
+                    if (!promoteSecondaryToMain(target.id)) {
                         restoreMainUrl();
                         return false;
                     }
@@ -1612,17 +1618,18 @@
                 const prevId = state.mainTabId;
                 if (prevId && prevId !== target.id) parkContext(prevId);
                 /* A visually parked tab may still occupy a leaf in the preserved logical tree
-                 * (Hide split / narrow fallback). Popstate is still a role swap in that case:
-                 * put the old Main into the target's exact leaf before publishing the new Main.
-                 * Otherwise enforceInvariants() would remove the target leaf and destroy the
-                 * hidden layout. */
+                 * (Hide split / narrow fallback). Promotion uses the same eligibility rule as
+                 * Make Main / startup: demote into that leaf only when the old Main is
+                 * tileable; otherwise remove the leaf and keep the old Main parked. */
                 if (root.containsTab(state.secondaryTree, target.id)) {
-                    state.secondaryTree = prevId
-                        ? root.replaceTabId(state.secondaryTree, target.id, prevId)
-                        : root.normalizeTree(root.removeLeaf(state.secondaryTree, target.id));
+                    if (!promoteSecondaryToMain(target.id)) {
+                        restoreMainUrl();
+                        return false;
+                    }
+                } else {
+                    setMain(target.id);
                 }
                 applyWantToTab(target, parkedWant);
-                setMain(target.id);
                 mountContext(target.id);
                 markHandled();
                 paint();
