@@ -12,6 +12,8 @@ const worksSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/components/work
 const {
     prksEnsureTabContext,
     prksDestroyAllTabContexts,
+    prksForEachLiveTabContext,
+    prksForEachMountedTabContext,
 } = tc;
 
 let passed = 0;
@@ -183,6 +185,8 @@ const sandbox = {
     prksFocusedResource: function () {
         throw new Error('must not use focused resource fallback');
     },
+    prksForEachLiveTabContext: prksForEachLiveTabContext,
+    prksForEachMountedTabContext: prksForEachMountedTabContext,
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
@@ -354,6 +358,143 @@ async function runSaveGenerationRace() {
     assertEq('newer edit success clears error', newerDraft.saveError, false);
 }
 
+/* Regression: a Research Notes save started while a PDF Work is mounted must finish
+ * coherently after the Work becomes warm-suspended (tab switched away before the PATCH
+ * resolves). Warm suspension must not pause or orphan the in-flight save. */
+async function runWarmSaveSettlement() {
+    const pending = [];
+    sandbox.prksRequest = function () {
+        return new Promise(function (resolve) {
+            pending.push(resolve);
+        });
+    };
+    let fetchCalls = 0;
+    sandbox.fetchWorkDetails = function () {
+        fetchCalls += 1;
+        return Promise.resolve({ text_content: 'warm note', research_refs: ['concept:warm-ref'] });
+    };
+    sandbox.prksWorkspaceRefreshTabStatus = function () {};
+    sandbox.window.prksWorkspaceRefreshTabStatus = sandbox.prksWorkspaceRefreshTabStatus;
+
+    const ctxWarm = prksEnsureTabContext('warm-notes-a');
+    ctxWarm.mounted = true;
+    ctxWarm.suspended = false;
+    ctxWarm.tabId = 'warm-notes-a';
+    const statusEl = { innerText: '' };
+    ctxWarm.query = function () {
+        return statusEl;
+    };
+    ctxWarm.setEntity('work', { id: 'W-warm-a', research_refs: [] });
+    const notes = {
+        editor: {
+            value: function () {
+                return 'warm note';
+            },
+        },
+        editGeneration: 0,
+        saveSequence: 0,
+        latestSaveToken: 0,
+        latestSaveEditGeneration: 0,
+        settledSaveToken: 0,
+        drafting: false,
+        saveError: false,
+        pendingSave: false,
+    };
+    ctxWarm.setResource('workNotes', notes);
+
+    sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-a', 'warm note');
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxWarm, 'W-warm-a');
+    assertEq('warm-save PATCH issued while mounted', pending.length, 1);
+    assertEq('warm-save status shows Saving while mounted', statusEl.innerText, 'Saving...');
+
+    /* Switch to another Work: A becomes warm-suspended before the PATCH resolves. */
+    ctxWarm.mounted = false;
+    ctxWarm.suspended = true;
+
+    pending[0]({ ok: true });
+    await tick();
+    await tick();
+
+    assert('A remains suspended after warm settle', ctxWarm.suspended);
+    assertEq('A is not remounted by save settlement', ctxWarm.mounted, false);
+    assertEq('workNotes resource settles while warm', notes.settledSaveToken, notes.latestSaveToken);
+    assertEq('warm preserved status settles to saved', statusEl.innerText, 'All changes saved');
+    assertEq('post-save Work refresh still runs while warm', fetchCalls, 1);
+    const liveWork = ctxWarm.getEntity('work');
+    assertEq(
+        'research_refs refresh while warm',
+        JSON.stringify(liveWork.research_refs),
+        JSON.stringify(['concept:warm-ref'])
+    );
+
+    /* Resume A: same DOM root reused, status already correct, no rerender needed. */
+    ctxWarm.mounted = true;
+    ctxWarm.suspended = false;
+    assertEq('resumed status remains saved (no stale Saving...)', statusEl.innerText, 'All changes saved');
+}
+
+/* Regression: a Research Notes save that fails while its Work is warm-suspended must
+ * settle the preserved editor status to an error state, and resuming the Work must not
+ * revert that to a stale "Saving..." status. */
+async function runWarmSaveErrorSettlement() {
+    const pending = [];
+    sandbox.prksRequest = function () {
+        return new Promise(function (_resolve, reject) {
+            pending.push(reject);
+        });
+    };
+    sandbox.fetchWorkDetails = function () {
+        return Promise.resolve(null);
+    };
+    sandbox.prksWorkspaceRefreshTabStatus = function () {};
+    sandbox.window.prksWorkspaceRefreshTabStatus = sandbox.prksWorkspaceRefreshTabStatus;
+
+    const ctxWarmErr = prksEnsureTabContext('warm-notes-err');
+    ctxWarmErr.mounted = true;
+    ctxWarmErr.suspended = false;
+    ctxWarmErr.tabId = 'warm-notes-err';
+    const statusEl = { innerText: '' };
+    ctxWarmErr.query = function () {
+        return statusEl;
+    };
+    ctxWarmErr.setEntity('work', { id: 'W-warm-err', research_refs: [] });
+    const notes = {
+        editor: {
+            value: function () {
+                return 'warm error note';
+            },
+        },
+        editGeneration: 0,
+        saveSequence: 0,
+        latestSaveToken: 0,
+        latestSaveEditGeneration: 0,
+        settledSaveToken: 0,
+        drafting: false,
+        saveError: false,
+        pendingSave: false,
+    };
+    ctxWarmErr.setResource('workNotes', notes);
+
+    sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-err', 'warm error note');
+    sandbox.prksEnqueueWorkResearchNotesSave(ctxWarmErr, 'W-warm-err');
+    assertEq('warm-error PATCH issued', pending.length, 1);
+
+    ctxWarmErr.mounted = false;
+    ctxWarmErr.suspended = true;
+
+    pending[0](new Error('network down'));
+    await tick();
+    await tick();
+
+    assert('warm error context remains suspended', ctxWarmErr.suspended);
+    assertEq('warm error marks workNotes.saveError', notes.saveError, true);
+    assertEq('warm error preserved status text', statusEl.innerText, 'Error saving changes');
+
+    ctxWarmErr.mounted = true;
+    ctxWarmErr.suspended = false;
+    assertEq('resumed error status does not revert to Saving...', statusEl.innerText, 'Error saving changes');
+}
+
 function runDebounceBookkeeping() {
     const fakeTimers = [];
     let nextTid = 1000;
@@ -448,6 +589,8 @@ function runHorizontalSplitterCleanup() {
 (async function () {
     try {
         await runSaveGenerationRace();
+        await runWarmSaveSettlement();
+        await runWarmSaveErrorSettlement();
         runDebounceBookkeeping();
         runHorizontalSplitterCleanup();
     } catch (err) {

@@ -1895,7 +1895,7 @@
     function tabStatusKind(tabId) {
         if (!tabId || typeof root.prksGetTabContext !== 'function') return '';
         const ctx = root.prksGetTabContext(tabId);
-        if (!ctx || !ctx.mounted) return '';
+        if (!ctx || ctx.destroyed || (!ctx.mounted && !ctx.suspended)) return '';
         const notes = ctx.getResource ? ctx.getResource('workNotes') : null;
         const pdf = ctx.getResource ? ctx.getResource('pdf') : null;
         const pdfErr = !!(pdf && pdf.syncState && pdf.syncState.lastError);

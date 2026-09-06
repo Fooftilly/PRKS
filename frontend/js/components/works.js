@@ -89,9 +89,9 @@ function prksSyncResearchNotesState(notes, entry) {
     notes.saveError = entry.state === 'error';
 }
 
-function prksSyncMountedResearchDraft(workId, entry) {
-    if (!entry || typeof prksForEachMountedTabContext !== 'function') return;
-    prksForEachMountedTabContext(function (ctx) {
+function prksSyncLiveResearchDraft(workId, entry) {
+    if (!entry || typeof prksForEachLiveTabContext !== 'function') return;
+    prksForEachLiveTabContext(function (ctx) {
         const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
         if (!work || String(work.id) !== String(workId)) return;
         const notes = ctx.getResource ? ctx.getResource('workNotes') : null;
@@ -1340,11 +1340,12 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 transient.updatedAt = Date.now();
                 transientApplied = true;
                 prksSyncResearchNotesState(notes, transient);
-                prksSyncMountedResearchDraft(id, transient);
+                prksSyncLiveResearchDraft(id, transient);
                 prksPruneResearchDrafts();
             }
             if (!localApplied && !transientApplied) return undefined;
-            if (statusEl && owner && owner.mounted) {
+            const ownerLive = owner && typeof owner.isCurrent === 'function' && owner.isCurrent();
+            if (statusEl && ownerLive) {
                 statusEl.innerText =
                     transientApplied && transient.state === 'drafting'
                         ? 'Drafting...'
@@ -1354,8 +1355,8 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
             }
             if (ok && typeof fetchWorkDetails === 'function') {
                 let liveOwner = null;
-                if (typeof prksForEachMountedTabContext === 'function') {
-                    prksForEachMountedTabContext(function (candidate) {
+                if (typeof prksForEachLiveTabContext === 'function') {
+                    prksForEachLiveTabContext(function (candidate) {
                         if (liveOwner) return;
                         const liveWork = candidate.getEntity ? candidate.getEntity('work') : null;
                         if (liveWork && String(liveWork.id) === String(id)) liveOwner = candidate;
@@ -1395,10 +1396,11 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 transient.updatedAt = Date.now();
                 transientApplied = true;
                 prksSyncResearchNotesState(notes, transient);
-                prksSyncMountedResearchDraft(id, transient);
+                prksSyncLiveResearchDraft(id, transient);
             }
             if (!applied && !transientApplied) return;
-            if (statusEl && owner && owner.mounted) {
+            const ownerLive = owner && typeof owner.isCurrent === 'function' && owner.isCurrent();
+            if (statusEl && ownerLive) {
                 statusEl.innerText =
                     transientApplied && transient.state === 'drafting'
                         ? 'Drafting...'

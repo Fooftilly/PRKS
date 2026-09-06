@@ -18,6 +18,9 @@ _DESIGN = os.path.join(_PROJECT_DIR, "DESIGN.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
 _README = os.path.join(_PROJECT_DIR, "README.md")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tabs_selftest.js")
+_TAB_STATUS_WARM_RUNNER = os.path.join(
+    _PROJECT_DIR, "tests", "browser", "run_workspace_tab_status_warm_selftest.js"
+)
 _TREE = os.path.join(_FRONTEND, "js", "workspace-tree.js")
 _TREE_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tree_selftest.js")
 _PERSIST = os.path.join(_FRONTEND, "js", "workspace-persistence.js")
@@ -314,6 +317,25 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIsNotNone(node, "node is required for workspace tab tests")
         proc = subprocess.run(
             [node, _RUNNER],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("passed", proc.stdout)
+        self.assertIn(", 0 failed", proc.stdout)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
+    def test_tab_status_recognizes_warm_suspended_contexts(self):
+        """Warm-suspended tabs (mounted=false, suspended=true) must keep showing
+        saving/error status; cold-parked and destroyed contexts must not."""
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for workspace tab tests")
+        self.assertTrue(os.path.isfile(_TAB_STATUS_WARM_RUNNER))
+        proc = subprocess.run(
+            [node, _TAB_STATUS_WARM_RUNNER],
             cwd=_PROJECT_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
