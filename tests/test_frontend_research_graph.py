@@ -161,18 +161,18 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("background-image", graph)
         self.assertIn("background-clip", graph)
         self.assertIn("shape: 'ellipse'", graph)
-        self.assertIn("doc-meta-card", graph)
+        # The inspector is plain right-panel content, not a card-inside-panel: no
+        # doc-meta-card wrapper around it any more (the host element already carries
+        # right-panel-stack -- see ui.js assertions below).
+        self.assertNotIn("doc-meta-card", graph)
         self.assertIn("renderGraphInspector", graph)
         self.assertNotIn('prks-panel__header">Inspector', graph)
-        self.assertNotIn(
-            '<div class="doc-meta-card"><p class="person-sidebar__section-label"',
-            graph,
-        )
         ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
         self.assertIn("case 'research-graph':", ui)
         self.assertIn("return 'graph'", ui)
         self.assertIn("isResearchGraphHash", ui)
         self.assertIn('id="prks-graph-inspector"', ui)
+        self.assertIn('class="right-panel-stack research-graph__inspector"', ui)
 
     def test_compact_toolbar_and_disclosure_panels(self):
         graph = _read(_GRAPH)
@@ -205,7 +205,10 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("hasSelection", graph)
         self.assertIn("prksResearchGraphHasInspectorSelection", graph)
         self.assertIn("data-graph-clear-selection", graph)
-        self.assertIn("Clear graph selection", graph)
+        # A visible "Clear selection" ghost/text action, distinct from the right panel's
+        # own Close control -- not an ambiguous second X (see completion criteria).
+        self.assertIn("Clear selection", graph)
+        self.assertIn("prks-btn--ghost", graph)
         # Status messages live in a dedicated graph-local region, not the inspector.
         self.assertIn('data-prks-role="graph-status"', graph)
         self.assertIn("renderStatusMessage", graph)

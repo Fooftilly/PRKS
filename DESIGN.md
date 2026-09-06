@@ -561,12 +561,12 @@ Stacked: one main/visible tab (`mainTabId == focusedTabId`). Non-PDF and cold-pa
 
 Tiled: Main occupies the left master column; the Secondary region holds the recursive tree of one or more Secondary leaves. `focusedTabId` may differ from `mainTabId` and may identify any visible leaf, at any tree depth. The right details panel follows the focused tile. Browser URL, document title, sidebar, and History stay with Main, no matter how deep the focused Secondary leaf is nested.
 
-Tiled pane headers are intentionally restrained. Secondary: drag grip, route/entity icon, title, **Pane actions** (`…`), Close. Main: icon and title only — no grip, Split, Make main, or Close. Main is identified by a persistent structural marker (`.prks-tile--main`, a narrow accent edge) plus an accessible “Main pane: …” label, not a textual badge. Focus (`.prks-tile--focused`) is a separate, temporary header/surface highlight. When Main is also focused, both treatments combine without stacking heavy outlines.
+Tiled pane headers are intentionally restrained. Secondary: drag grip, route/entity icon, title, **Pane actions** (`…`), Close. Main: icon and title only — no grip, Split, Make main, or Close. Main is identified by a persistent structural marker (`.prks-tile--main`) plus an accessible “Main pane: …” label, not a textual badge or a colored accent edge. Focus (`.prks-tile--focused`) is communicated purely by a header/surface highlight (`.prks-tile--focused .prks-tile-header`), never a pane-accent stripe, glow, or border — the focused pane's header is the one and only focus signal. When Main is also focused, both treatments combine without stacking heavy outlines.
 
 | State | Visual |
 | --- | --- |
 | Main tab | Strongest selected indication (accent border/background) |
-| Tiled Main pane | Persistent narrow accent edge; accessible Main label |
+| Tiled Main pane | Structural marker + accessible Main label; no accent edge |
 | Tiled secondary tab | Visible as a tile, not visually equal to main |
 | Focused secondary tile | Subtle header highlight; does not imply promotion to main |
 | Parked / open tab | Normal tab-strip state; tile-capable parked tabs show a quiet Split action |
@@ -603,6 +603,8 @@ Split control: **Split** (no leaf), **Show split** (tree exists but is parked/hi
 Tile chrome exists only in tiled mode. Headers keep a stable height. Loading and errors stay inside the route root; the tile shell/header is not torn down. The Work Notes divider (`.work-split-handle`) keeps its nested-content grip and sizing behavior; hover, drag, and keyboard-focus strength match the workspace splitter’s idle-thin / obvious-when-interacting language.
 
 Work notes side-by-side layout follows that Work’s tile/container width, not a global viewport class that would restyle the other tile.
+
+In the dense tiled desktop shell (and on mobile), the right Details/Annotations panel is a dismissible, fixed-position overlay (`position: fixed`, slides via `transform`), not a layout participant — opening or closing it never changes pane widths, split ratios, or workspace canvas width. It closes via Escape, the Details ribbon toggle, or an explicit Close (`×`, labeled "Close details") in its own header, all routed through the one canonical `prksToggleRightPanelOverlay()` path. Closing the panel is purely a visibility change: it must not clear a Graph node/edge selection or any other owning route's state — reopening the panel restores whatever it was already showing.
 
 Tiling:
 
@@ -1067,6 +1069,8 @@ EmbedPDF owns: rendering, selection, annotation mechanics.
 PRKS owns: page chrome, filters, legend, canvas frame, and the right-panel selection inspector.
 
 Cytoscape owns: layout, hit-testing, and in-canvas node/edge drawing. Style/config for those live in `research-graph.js`, not a parallel CSS theme.
+
+The selection inspector is plain right-panel content — it uses the same contextual-sidebar language as every other route's right panel (`right-panel-stack`, a small kicker label, a title, quiet metadata, a primary action, then relationship sections built from `person-sidebar__section-label` and `prks-list-row`/`prks-research-row` rows). It is not wrapped in a `doc-meta-card`; the right panel itself is already the container. The inspector's own "Clear selection" (a quiet ghost/text action) only clears the Graph's node/edge selection — it is distinct from the right panel's Close, which only hides the panel.
 
 Do not modify their behavior during visual normalization. Do not try to make them disappear into generic HTML styling.
 

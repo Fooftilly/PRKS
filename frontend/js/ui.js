@@ -896,6 +896,7 @@ function prksToggleRightPanelOverlay(forceOpen) {
 function initMobileShell() {
     const navBtn = document.getElementById('prks-mobile-nav-btn');
     const detBtn = document.getElementById('prks-mobile-details-btn');
+    const closeBtn = document.getElementById('prks-right-panel-close');
     const overlayBackdrop = document.getElementById('prks-overlay-backdrop');
     const expandBtn = document.getElementById('prks-sidebar-expand-btn');
     const collapseBtn = document.getElementById('prks-sidebar-collapse-btn');
@@ -909,6 +910,13 @@ function initMobileShell() {
     if (detBtn && detBtn.dataset.bound !== '1') {
         detBtn.dataset.bound = '1';
         detBtn.addEventListener('click', () => prksToggleRightPanelOverlay());
+    }
+    if (closeBtn && closeBtn.dataset.bound !== '1') {
+        closeBtn.dataset.bound = '1';
+        closeBtn.addEventListener('click', () => {
+            prksToggleRightPanelOverlay(false);
+            if (detBtn && typeof detBtn.focus === 'function') detBtn.focus();
+        });
     }
     if (expandBtn && expandBtn.dataset.bound !== '1') {
         expandBtn.dataset.bound = '1';

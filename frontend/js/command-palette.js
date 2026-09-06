@@ -894,15 +894,18 @@
         return out;
     }
 
-    function executeTileSelection(row, hash) {
+    function executeTileSelection(row, hash, splitPlacement) {
         const tabId = row && row.workspaceTabId ? row.workspaceTabId : null;
-        const placement = state.splitPlacement;
+        const placement = splitPlacement || null;
         if (placement && placement.targetLeafTabId && typeof root.prksWorkspaceSplitLeaf === 'function') {
             /* Explicit Split right/down from a specific focused Secondary leaf: reuse the
              * existing tab if the row already resolves to one (parked or otherwise), else
              * create a new one from `hash`. Never duplicates a tab. */
             if (tabId) {
-                void root.prksWorkspaceSplitLeaf(placement.targetLeafTabId, placement.axis, { tabId: tabId });
+                void root.prksWorkspaceSplitLeaf(placement.targetLeafTabId, placement.axis, {
+                    tabId: tabId,
+                    placement: placement.placement,
+                });
                 return;
             }
             if (typeof root.prksWorkspaceFindTabByRoute === 'function') {
@@ -911,11 +914,17 @@
                     excludeVisibleSecondary: true,
                 });
                 if (existing && existing.id) {
-                    void root.prksWorkspaceSplitLeaf(placement.targetLeafTabId, placement.axis, { tabId: existing.id });
+                    void root.prksWorkspaceSplitLeaf(placement.targetLeafTabId, placement.axis, {
+                        tabId: existing.id,
+                        placement: placement.placement,
+                    });
                     return;
                 }
             }
-            void root.prksWorkspaceSplitLeaf(placement.targetLeafTabId, placement.axis, { hash: hash });
+            void root.prksWorkspaceSplitLeaf(placement.targetLeafTabId, placement.axis, {
+                hash: hash,
+                placement: placement.placement,
+            });
             return;
         }
         if (tabId && typeof root.prksWorkspaceTileTab === 'function') {
@@ -1182,9 +1191,12 @@
             else if (tileMode) target = 'tile';
             else if (newTabMode) target = 'new-tab';
             const activate = newTabMode && !background && target === 'new-tab';
+            /* Snapshot transient palette operation state before closePalette() clears it
+             * (splitPlacement is ephemeral session state -- see openPalette). */
+            const splitPlacement = state.splitPlacement;
             closePalette({ restoreFocus: false });
             if (target === 'tile') {
-                executeTileSelection(row, hash);
+                executeTileSelection(row, hash, splitPlacement);
                 return;
             }
             if (typeof root.prksNavigate === 'function') {
@@ -1718,6 +1730,9 @@
         },
         prksCommandPaletteNavigationTarget: function () {
             return state.navigationTarget;
+        },
+        prksCommandPaletteSplitPlacement: function () {
+            return state.splitPlacement;
         },
         prksCommandPaletteGetResults: function () {
             return state.results.slice();

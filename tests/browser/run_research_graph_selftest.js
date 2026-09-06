@@ -471,7 +471,7 @@ function makeGraphHost() {
     );
     assert(
         rows,
-        'person inspector renders close control',
+        'person inspector renders clear-selection control',
         String(personHost._inspector.innerHTML).indexOf('data-graph-clear-selection') >= 0
     );
     g.clearGraphSelection();

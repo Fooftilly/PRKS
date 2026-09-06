@@ -1053,6 +1053,52 @@ Promise.resolve()
                 assert('split open-tab uses tileTab', tileCalls[0] === 'tab-2');
                 assert('split open-tab no navigate', navCalls.length === 0);
 
+                /* Split Down/Right lifecycle bug regression: the pane menu's explicit
+                 * splitPlacement must be snapshotted by executeRow() BEFORE closePalette()
+                 * clears state.splitPlacement, and executeTileSelection must receive that
+                 * snapshot rather than re-reading (now-null) transient state. See AGENTS.md's
+                 * command-palette operation-state invariant. */
+                root.prksCloseCommandPalette();
+                const splitLeafCalls = [];
+                root.prksWorkspaceSplitLeaf = function (targetTabId, axis, opts) {
+                    splitLeafCalls.push({ targetTabId: targetTabId, axis: axis, opts: opts });
+                    return Promise.resolve(true);
+                };
+                root.prksOpenCommandPalette({
+                    navigationTarget: 'tile',
+                    splitPlacement: { targetLeafTabId: 'tab-9', axis: 'top-bottom', placement: 'second' },
+                });
+                const capturedBeforeClose = root.prksCommandPaletteSplitPlacement();
+                assert('splitPlacement present while palette open', !!capturedBeforeClose);
+                assertEq('captured target leaf', capturedBeforeClose.targetLeafTabId, 'tab-9');
+                assertEq('captured axis', capturedBeforeClose.axis, 'top-bottom');
+                assertEq('captured placement', capturedBeforeClose.placement, 'second');
+
+                const splitRowsForDown = root.prksCommandPaletteGetResults();
+                const idxSplitB = splitRowsForDown.findIndex(function (r) { return r.workspaceTabId === 'tab-2'; });
+                for (let i = 0; i < idxSplitB; i++) root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+                root.prksCommandPaletteHandleKey(keyEvent('Enter'));
+
+                assertEq('splitPlacement cleared once palette closes', root.prksCommandPaletteSplitPlacement(), null);
+                assertEq('one split-leaf call', splitLeafCalls.length, 1);
+                assertEq('split-leaf received the captured target', splitLeafCalls[0].targetTabId, 'tab-9');
+                assertEq('split-leaf received the captured axis', splitLeafCalls[0].axis, 'top-bottom');
+                assertEq('split-leaf received the captured placement', splitLeafCalls[0].opts.placement, 'second');
+                assertEq('split-leaf reused the selected open tab', splitLeafCalls[0].opts.tabId, 'tab-2');
+
+                /* Ordinary Tile (no explicit splitPlacement) must be unaffected: it still goes
+                 * through prksWorkspaceTileTab, not prksWorkspaceSplitLeaf. */
+                tileCalls.length = 0;
+                splitLeafCalls.length = 0;
+                root.prksOpenCommandPalette({ navigationTarget: 'tile' });
+                assertEq('ordinary tile has no splitPlacement', root.prksCommandPaletteSplitPlacement(), null);
+                const ordinaryRows = root.prksCommandPaletteGetResults();
+                const idxOrdinaryB = ordinaryRows.findIndex(function (r) { return r.workspaceTabId === 'tab-2'; });
+                for (let i = 0; i < idxOrdinaryB; i++) root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+                root.prksCommandPaletteHandleKey(keyEvent('Enter'));
+                assertEq('ordinary tile still uses tileTab', tileCalls[0], 'tab-2');
+                assertEq('ordinary tile does not call split-leaf', splitLeafCalls.length, 0);
+
                 const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'command-palette.js'), 'utf8');
                 assert('no eval', src.indexOf('eval(') < 0);
                 assert('no new Function', src.indexOf('new Function') < 0);

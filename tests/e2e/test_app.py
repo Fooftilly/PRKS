@@ -630,6 +630,46 @@ class ResearchGraphChromeTests(_BrowserE2E):
             "() => document.getElementById('app-container').classList.contains('app-container--hide-right-panel')"
         )
 
+    def test_graph_inspector_structure_uses_right_panel_primitives(self):
+        """Graph inspector content must read as a normal PRKS contextual sidebar -- kicker,
+        title, quiet metadata, primary action, relationship sections, real clickable list
+        rows -- not a card-inside-panel. No doc-meta-card wrapper around the main inspector."""
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_id = server.ids["work_a"]
+        self._open_graph(page)
+        work_node = "work:" + work_id
+        page.evaluate("(wid) => { window.selectGraphNode(wid, { center: false }); }", arg=work_node)
+        page.locator("#prks-graph-inspector-title").wait_for()
+
+        inspector = page.locator("#prks-graph-inspector")
+        self.assertEqual(inspector.locator(".doc-meta-card").count(), 0)
+        # .saved-view-detail__kicker is text-transform: uppercase -- check the raw DOM text.
+        self.assertEqual(
+            inspector.locator(".saved-view-detail__kicker").evaluate("el => el.textContent"), "Work"
+        )
+        self.assertEqual(inspector.locator("#prks-graph-inspector-title").inner_text(), WORK_A_TITLE)
+        self.assertIn("Research connections", inspector.inner_text())
+
+        open_btn = inspector.locator("#prks-graph-open")
+        self.assertTrue(open_btn.is_visible())
+        self.assertIn("Open Work", open_btn.inner_text())
+
+        section_labels = inspector.locator(".person-sidebar__section-label").all_text_contents()
+        self.assertIn("Mentioned concepts", section_labels)
+        concept_rows = inspector.locator(".research-graph__neighbor")
+        self.assertGreaterEqual(concept_rows.count(), 1)
+        self.assertTrue(any("Culture" in t or "Philosophy" in t for t in concept_rows.all_text_contents()))
+
+        # Related-node rows stay real, clickable controls (graph selection), not static text.
+        first_row = concept_rows.first
+        self.assertEqual(first_row.evaluate("el => el.tagName"), "BUTTON")
+        first_row.click()
+        page.wait_for_function("() => window.getSelectedGraphNodeId().indexOf('concept:') === 0")
+
+        # The panel's own Close is distinct from the Graph's Clear selection -- no ambiguous
+        # second X on the inspector itself any more.
+        self.assertEqual(inspector.locator("[data-graph-clear-selection]").inner_text().strip(), "Clear selection")
+
     def test_filters_and_legend_disclosure_are_mutually_exclusive(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         self._open_graph(page)
@@ -959,6 +999,52 @@ class ResearchGraphSplitWorkspaceTests(_BrowserE2E):
         self.assertTrue(same_cy)
         self.assertEqual(len(seen_graph_requests), 1)
         self.assertEqual(page.evaluate("() => location.hash"), "#/graph")
+
+    def test_close_details_preserves_graph_selection_clear_selection_removes_it(self):
+        """The right panel's own Close (X) hides the tiled overlay but must not clear the
+        Graph's selection -- those are separate concerns. Only the inspector's own
+        'Clear selection' action clears the underlying graph selection."""
+        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
+        work_a = server.ids["work_a"]
+        page.evaluate("() => window.prksNavigate('#/graph')")
+        page.wait_for_function("() => location.hash === '#/graph' || location.hash.indexOf('#/graph?') === 0")
+        page.wait_for_function(_GRAPH_HAS_NODES)
+        graph_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        node_id = page.evaluate(
+            """(tid) => {
+                const ctx = window.prksGetTabContext(tid);
+                const cy = ctx.getResource('researchGraph').debug().cy;
+                return cy.nodes()[0].id();
+            }""",
+            arg=graph_id,
+        )
+
+        # Split Work A into Secondary so the app becomes tiled -- only tiled/mobile shows
+        # the right panel's own Close control.
+        page.evaluate("(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })", arg=work_a)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=graph_id)
+        page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=graph_id)
+
+        page.evaluate("(nid) => { window.selectGraphNode(nid, { center: false }); }", arg=node_id)
+        page.locator("#prks-graph-inspector-title").wait_for()
+
+        page.locator("#prks-mobile-details-btn").click()
+        page.wait_for_function("() => document.body.classList.contains('prks-right-panel-open')")
+        self.assertTrue(page.locator("#right-panel").is_visible())
+
+        page.locator("#prks-right-panel-close").click()
+        page.wait_for_function("() => !document.body.classList.contains('prks-right-panel-open')")
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), node_id)
+
+        # Reopening Details restores the same selected node's inspector.
+        page.locator("#prks-mobile-details-btn").click()
+        page.wait_for_function("() => document.body.classList.contains('prks-right-panel-open')")
+        page.locator("#prks-graph-inspector-title").wait_for()
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), node_id)
+
+        page.locator("[data-graph-clear-selection]").click()
+        self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), "")
 
 
 class ResearchIndexAndDetailPolishTests(_BrowserE2E):
@@ -3624,6 +3710,54 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.locator("#prks-sidebar-collapse-btn").click()
         self.assertFalse(page.evaluate("() => document.body.classList.contains('prks-sidebar-open')"))
 
+    def test_details_overlay_close_button_preserves_pane_geometry(self):
+        """The tiled Details overlay needs a discoverable Close control (an explicit X),
+        in addition to the pre-existing Escape and Details-toggle paths. Opening/closing it
+        must not move or resize the workspace panes -- it is a fixed-position overlay, not a
+        layout participant."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _work_a, _work_b, ids = _open_work_work_split(page, server)
+        page.wait_for_function("() => document.getElementById('app-container').classList.contains('app-container--tiled')")
+
+        boxes_before = {
+            "main": _tile_box(page, ids["mainTabId"]),
+            "secondary": _tile_box(page, ids["secondaryTabId"]),
+        }
+
+        details_btn = page.locator("#prks-mobile-details-btn")
+        details_btn.click()
+        page.wait_for_function("() => document.body.classList.contains('prks-right-panel-open')")
+        close_btn = page.locator("#prks-right-panel-close")
+        self.assertTrue(close_btn.is_visible())
+        self.assertEqual(close_btn.get_attribute("aria-label"), "Close details")
+
+        boxes_open = {
+            "main": _tile_box(page, ids["mainTabId"]),
+            "secondary": _tile_box(page, ids["secondaryTabId"]),
+        }
+        for key in ("main", "secondary"):
+            for prop in ("x", "y", "width", "height"):
+                self.assertAlmostEqual(boxes_open[key][prop], boxes_before[key][prop], delta=0.5)
+
+        close_btn.click()
+        page.wait_for_function("() => !document.body.classList.contains('prks-right-panel-open')")
+        self.assertTrue(page.locator(".prks-tile--main").is_visible())
+        self.assertTrue(page.locator(".prks-tile--secondary").is_visible())
+        boxes_after_close = {
+            "main": _tile_box(page, ids["mainTabId"]),
+            "secondary": _tile_box(page, ids["secondaryTabId"]),
+        }
+        for key in ("main", "secondary"):
+            for prop in ("x", "y", "width", "height"):
+                self.assertAlmostEqual(boxes_after_close[key][prop], boxes_before[key][prop], delta=0.5)
+
+        # Reopen via the ribbon toggle, then close via Escape: the older paths still work.
+        details_btn.click()
+        page.wait_for_function("() => document.body.classList.contains('prks-right-panel-open')")
+        page.keyboard.press("Escape")
+        page.wait_for_function("() => !document.body.classList.contains('prks-right-panel-open')")
+
     def test_delayed_person_save_updates_owner_without_replacing_other_focused_panel(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
@@ -6196,6 +6330,114 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertTrue(any("Make main" in t for t in strip_labels))
         self.assertTrue(any("Split right" in t for t in strip_labels))
         page.keyboard.press("Escape")
+
+    def _split_via_pane_menu(self, page, target_id, label, entity_display_name):
+        """Drives the real workflow: pane menu -> 'Split right'/'Split down' -> command
+        palette -> pick an entity. Returns the new leaf's tab id. Exercises the exact
+        pane-menu -> command-palette -> selection path a user takes, never calling
+        prksWorkspaceSplitLeaf directly, so it catches the closePalette()-clears-
+        splitPlacement lifecycle bug (fixed in command-palette.js's executeRow/
+        executeTileSelection)."""
+        before_ids = set(page.evaluate("() => window.prksWorkspaceSnapshot().tabs.map(t => t.id)"))
+        _open_pane_actions(page, target_id)
+        _click_workspace_menu(page, label)
+        page.wait_for_selector("#prks-command-palette:not([hidden])")
+        self.assertIn("Open in split view", page.locator("#prks-command-palette-title").text_content())
+        page.locator("#prks-command-palette-input").fill(entity_display_name)
+        row_label = page.locator(
+            ".prks-command-palette__option-label",
+            has_text=re.compile("^" + re.escape(entity_display_name) + "$"),
+        )
+        row_label.wait_for()
+        page.locator(".prks-command-palette__option").filter(has=row_label).click()
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.secondaryTree && snap.secondaryTree.type === 'split';
+            }"""
+        )
+        after_ids = set(page.evaluate("() => window.prksWorkspaceSnapshot().tabs.map(t => t.id)"))
+        new_ids = after_ids - before_ids
+        self.assertEqual(len(new_ids), 1)
+        return new_ids.pop()
+
+    def test_pane_menu_split_down_creates_vertical_split_with_correct_geometry(self):
+        """Real-UI regression for the Split Down lifecycle bug: the pane menu's explicit
+        split request must survive command-palette selection and actually land as a
+        top-bottom split beneath the pane that initiated it -- not the ordinary left-right
+        Tile placement the bug silently fell back to."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        _wait_pdf_tab(page, b_id)
+
+        new_id = self._split_via_pane_menu(page, b_id, "Split down", PERSON_DISPLAY)
+
+        tree = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+        self.assertEqual(tree["axis"], "top-bottom")
+        self.assertEqual(tree["first"]["tabId"], b_id)
+        self.assertEqual(tree["second"]["tabId"], new_id)
+        # Split Down targets the leaf whose menu initiated it -- Main is untouched.
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"), main_id)
+        self.assertEqual(page.locator(".prks-tile").count(), 3)
+
+        target_box = _tile_box(page, b_id)
+        new_box = _tile_box(page, new_id)
+        self.assertIsNotNone(target_box)
+        self.assertIsNotNone(new_box)
+        self.assertGreater(new_box["y"], target_box["y"])
+        self.assertLess(abs(new_box["x"] - target_box["x"]), 4)
+        self.assertLess(abs(new_box["width"] - target_box["width"]), 4)
+        overlap = min(target_box["x"] + target_box["width"], new_box["x"] + new_box["width"]) - max(
+            target_box["x"], new_box["x"]
+        )
+        self.assertGreater(overlap, min(target_box["width"], new_box["width"]) * 0.8)
+
+    def test_pane_menu_split_right_creates_horizontal_split_with_correct_geometry(self):
+        """Paired regression with Split Down: Split Right from the same pane menu must
+        produce a left-right split beside the initiating pane, so Split Right and Split
+        Down are provably different outcomes through the real UI."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        _wait_pdf_tab(page, b_id)
+
+        new_id = self._split_via_pane_menu(page, b_id, "Split right", PERSON_DISPLAY)
+
+        tree = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+        self.assertEqual(tree["axis"], "left-right")
+        self.assertEqual(tree["first"]["tabId"], b_id)
+        self.assertEqual(tree["second"]["tabId"], new_id)
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"), main_id)
+        self.assertEqual(page.locator(".prks-tile").count(), 3)
+
+        target_box = _tile_box(page, b_id)
+        new_box = _tile_box(page, new_id)
+        self.assertIsNotNone(target_box)
+        self.assertIsNotNone(new_box)
+        self.assertGreater(new_box["x"], target_box["x"])
+        self.assertLess(abs(new_box["y"] - target_box["y"]), 4)
+        self.assertLess(abs(new_box["height"] - target_box["height"]), 4)
+        overlap = min(target_box["y"] + target_box["height"], new_box["y"] + new_box["height"]) - max(
+            target_box["y"], new_box["y"]
+        )
+        self.assertGreater(overlap, min(target_box["height"], new_box["height"]) * 0.8)
 
     def test_main_and_focus_survive_make_main_from_pane_menu(self):
         server, page, _collector = self._start_app()

@@ -159,6 +159,11 @@ typing/editing or while another modal owns focus.
 
 Palette queries are ephemeral UI state and must not be persisted or logged.
 
+Any command that depends on transient command-palette operation state (e.g.
+`state.splitPlacement`, set by a pane menu's explicit Split right/down request)
+must snapshot that state before calling `closePalette()`, because closing the
+palette clears it. Read the snapshot afterward, never the live state.
+
 ## Workspace navigation
 
 Internal PRKS navigation uses prksNavigate.

@@ -1222,10 +1222,6 @@ body.prks-resizing-split--horizontal * {
     box-shadow: none;
 }
 
-.prks-workspace-canvas--tiled .prks-tile--main {
-    box-shadow: inset 3px 0 0 var(--accent);
-}
-
 .prks-workspace-canvas--tiled .prks-tile--focused .prks-tile-header {
     background: var(--surface-selected);
 }
@@ -5215,6 +5211,26 @@ a.tag {
 
 body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     transform: translateX(0);
+}
+
+/* Discoverable Close for the dismissible overlay panel (tiled desktop / mobile drawer).
+   Escape and the Details ribbon toggle still work; this is an extra, more visible path.
+   Hidden in the normal permanently-docked single-pane desktop layout, where the panel
+   isn't dismissible and prksToggleRightPanelOverlay() is a no-op. */
+.prks-right-panel-close {
+    display: none;
+    position: absolute;
+    top: var(--space-sm);
+    right: var(--space-sm);
+    z-index: 1;
+}
+
+#app-container.app-container--tiled #right-panel .prks-right-panel-close {
+    display: inline-flex;
+}
+
+#app-container.app-container--tiled #right-panel .tabs {
+    padding-right: calc(var(--control-height-md) + var(--space-md));
 }
 
 #app-container.app-container--tiled #prks-mobile-nav-btn,
@@ -9451,7 +9467,7 @@ button.prks-research-row {
     margin: 0;
 }
 
-.research-graph__inspector-close {
+.research-graph__clear-selection {
     flex: 0 0 auto;
 }
 
@@ -9463,7 +9479,7 @@ button.prks-research-row {
     margin-top: 0;
 }
 
-.research-graph__inspector .prks-btn {
+.research-graph__inspector-actions .prks-btn {
     width: 100%;
     box-sizing: border-box;
     text-align: center;
@@ -9996,6 +10012,14 @@ button.prks-research-row {
         transform: translateX(0);
     }
 
+    #right-panel .prks-right-panel-close {
+        display: inline-flex;
+    }
+
+    #right-panel .tabs {
+        padding-right: calc(var(--control-height-md) + var(--space-md));
+    }
+
     /* When overlays are open, prevent background interaction/scroll. */
     body.prks-overlay-open #main-content {
         overflow: hidden;
@@ -10130,6 +10154,14 @@ html.prks-force-mobile #right-panel {
 
 html.prks-force-mobile body.prks-right-panel-open #right-panel {
     transform: translateX(0);
+}
+
+html.prks-force-mobile #right-panel .prks-right-panel-close {
+    display: inline-flex;
+}
+
+html.prks-force-mobile #right-panel .tabs {
+    padding-right: calc(var(--control-height-md) + var(--space-md));
 }
 
 html.prks-force-mobile body.prks-overlay-open #main-content {

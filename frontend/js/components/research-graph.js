@@ -637,14 +637,14 @@
             '<p class="saved-view-detail__kicker">' +
             esc(kicker) +
             '</p>' +
-            '<button type="button" class="prks-icon-btn close-btn research-graph__inspector-close" data-graph-clear-selection aria-label="Clear graph selection">&times;</button>' +
+            '<button type="button" class="prks-btn prks-btn--ghost prks-btn--sm research-graph__clear-selection" data-graph-clear-selection>Clear selection</button>' +
             '</div>'
         );
     }
 
     function inspectorNeighborHtml(item) {
         return (
-            '<button type="button" class="prks-list-row research-graph__neighbor" data-graph-node="' +
+            '<button type="button" class="prks-list-row prks-research-row research-graph__neighbor" data-graph-node="' +
             esc(item.id) +
             '"><span class="prks-research-row__body"><span class="prks-research-row__title">' +
             esc(item.label) +
@@ -972,7 +972,6 @@
             let html = '';
             if (edgeModel) {
                 html +=
-                    '<div class="doc-meta-card">' +
                     inspectorHeadHtml(edgeModel.kicker) +
                     '<p class="card-title" id="prks-graph-inspector-title">' +
                     esc(edgeModel.relation) +
@@ -1003,7 +1002,7 @@
                         esc(edgeModel.openTargetLabel) +
                         '</button>';
                 }
-                html += '</div></div>';
+                html += '</div>';
                 paintInspector(html);
                 return edgeModel;
             }
@@ -1012,7 +1011,6 @@
                 return model;
             }
             html +=
-                '<div class="doc-meta-card">' +
                 inspectorHeadHtml(model.typeLabel) +
                 '<p class="card-title" id="prks-graph-inspector-title">' +
                 esc(model.label) +
@@ -1033,7 +1031,6 @@
                 }
                 html += '</div>';
             }
-            html += '</div>';
             paintInspector(html);
             return model;
         }
