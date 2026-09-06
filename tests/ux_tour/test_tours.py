@@ -289,13 +289,13 @@ class WorkspaceTourTest(_UXTour):
             )
 
             tour.step("Activate Work A from the tab strip")
-            page.locator('.prks-workspace-tab[data-tab-id="%s"]' % work_a_id).click()
+            page.locator('.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__activate' % work_a_id).click()
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().mainTabId === id", arg=work_a_id)
             tour.step("Activate Work B from the tab strip")
-            page.locator('.prks-workspace-tab[data-tab-id="%s"]' % work_b_id).click()
+            page.locator('.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__activate' % work_b_id).click()
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().mainTabId === id", arg=work_b_id)
             tour.step("Activate Work A again")
-            page.locator('.prks-workspace-tab[data-tab-id="%s"]' % work_a_id).click()
+            page.locator('.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__activate' % work_a_id).click()
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().mainTabId === id", arg=work_a_id)
 
             tour.step("Tile Work B beside Work A")
@@ -428,12 +428,17 @@ class WorkspaceTourTest(_UXTour):
                 [r for r in page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")
                  if "/api/works/" in r]
             )
+            # Both panes are already visible (Main + a Secondary tile): per the workspace's own
+            # contract, clicking a *visible* Secondary's tab-strip entry only focuses it in place
+            # (it does not promote it to Main -- that only applies to a parked tab, or via the
+            # pane menu's explicit "Make main"). Returning between the two PDF tabs here means
+            # switching focus back and forth between the already-visible panes.
             page.locator('.prks-tile[data-prks-tab-id="%s"]' % other_pdf_id).click(position={"x": 20, "y": 60})
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=other_pdf_id)
-            page.locator('.prks-workspace-tab[data-tab-id="%s"]' % other_pdf_id).click()
-            page.wait_for_function("(id) => window.prksWorkspaceSnapshot().mainTabId === id", arg=other_pdf_id)
-            page.locator('.prks-workspace-tab[data-tab-id="%s"]' % main_id_now).click()
-            page.wait_for_function("(id) => window.prksWorkspaceSnapshot().mainTabId === id", arg=main_id_now)
+            page.locator('.prks-tile[data-prks-tab-id="%s"]' % main_id_now).click(position={"x": 20, "y": 60})
+            page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=main_id_now)
+            page.locator('.prks-tile[data-prks-tab-id="%s"]' % other_pdf_id).click(position={"x": 20, "y": 60})
+            page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=other_pdf_id)
             tour.checkpoint(page, "warm-pdf-return")
             work_fetch_after = len(
                 [r for r in page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")

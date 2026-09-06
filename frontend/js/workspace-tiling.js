@@ -438,7 +438,6 @@
     function prksWorkspaceSyncTiles(snap, options) {
         const canvas = ensureCanvas();
         if (!canvas) return;
-        const beforeParents = snapshotTileParents(canvas);
         const opts = options || {};
         const visualTiled = opts.visualMode === 'tiled';
         canvas.classList.toggle('prks-workspace-canvas--tiled', visualTiled);
@@ -491,20 +490,7 @@
             root.prksWorkspaceSyncSplitSeparator(canvas, visualTiled, snap);
         }
 
-        armClickFallback(beforeParents, canvas);
-    }
-
-    /** Snapshot of every currently-mounted tile's parent, keyed by tab id -- taken before a paint
-     * reconciles the tree, so the paint can tell which surviving tiles it actually moved to a new
-     * parent (e.g. an existing Secondary leaf nested into a brand-new split container) versus
-     * left alone. */
-    function snapshotTileParents(canvas) {
-        const map = Object.create(null);
-        const tiles = collectAll(canvas, isTileHost);
-        for (let i = 0; i < tiles.length; i++) {
-            map[tiles[i].getAttribute('data-prks-tab-id')] = tiles[i].parentNode;
-        }
-        return map;
+        armClickFallback(canvas);
     }
 
     /** Stricter than isAnyTile: only the tile host itself, never a same-tabId descendant such as
@@ -514,41 +500,54 @@
         return !!(node.getAttribute && node.getAttribute('data-prks-tab-id') && node.className && node.className.indexOf('prks-tile') !== -1);
     }
 
-    /** Chromium leaves stale hit-test state on an existing element that gets reparented (moved to
-     * a different parent node, e.g. an existing Secondary leaf nested into a brand-new split
-     * container by renderTreeNode/insertBefore above): mousedown/pointerup keep targeting it
-     * correctly, but the browser silently never synthesizes the follow-up `click` -- so the
-     * tile's own header buttons (pane menu, close) go dead on the very next real click after a
-     * Split, while a brand-new tile (never reparented) is unaffected.
+    /** Chromium leaves stale hit-test state on a tile that a paint moves or recreates -- an
+     * existing Secondary leaf nested into a brand-new split container by
+     * renderTreeNode/insertBefore, or a tile pruned by Hide Split and rebuilt from scratch by
+     * Show Split: mousedown/pointerup keep targeting the tile's buttons correctly, but the
+     * browser silently never synthesizes the follow-up `click` -- so the tile's own header
+     * buttons (pane menu, close) go dead on the next real click. Reparenting the exact same
+     * element is not the only trigger (a freshly rebuilt tile, with no prior DOM identity to have
+     * been "reparented" from, exhibits it too), so this is armed unconditionally on every tile on
+     * every paint rather than only on tiles a before/after DOM comparison flags as moved -- that
+     * comparison under-detects the rebuilt-from-scratch case. The staleness has also been
+     * observed to persist, or resurface, across further unrelated interaction elsewhere in the
+     * workspace (e.g. focusing a sibling pane) -- it is not reliably cleared by exactly one
+     * pointer interaction with the affected tile, and not necessarily one that lands on the
+     * button itself (a click that lands on the tile but misses every button still consumes a
+     * real hit-test pass without telling us whether the underlying staleness actually cleared).
      *
      * This does not try to pre-emptively "fix" that browser-internal state (extensive testing
      * found no way to do that both reliably and safely: every timing that reliably clears it --
      * a chain of requestIdleCallback passes, confirmed necessary and confirmed sufficient in
      * isolation -- takes long enough that it can land in the middle of a *different*, unrelated
      * click happening elsewhere in the workspace and silently break that click instead, via this
-     * same mechanism). Instead it treats the symptom directly and safely: arm a one-shot
-     * `pointerup` listener on the reparented tile, and if the real `click` this browser owes that
-     * gesture hasn't shown up by the very next tick, dispatch it by calling `.click()` on the
-     * pressed button ourselves. `.click()` synthesizes a proper click through the normal DOM path
-     * (bubbles, real target, real listeners) without depending on the browser's native hit-test
-     * pipeline at all, so it fires regardless of that pipeline's stale state. Scoped to a single
-     * real gesture on the affected tile, so it can never touch, delay, or interfere with anything
-     * else happening in the workspace. */
-    function armClickFallback(beforeParents, canvas) {
-        if (!beforeParents) return;
+     * same mechanism). Instead it treats the symptom directly and safely: arm a `pointerup`
+     * listener on every tile that stays live for the tile's whole lifetime (rather than
+     * self-disarming after the first pointerup, regardless of whether that first one actually
+     * needed it), and on every pointerup whose target is inside a button, verify within the very
+     * next tick that the real `click` this browser owes that gesture actually showed up; if it
+     * didn't, dispatch it by calling `.click()` on the pressed button ourselves. `.click()`
+     * synthesizes a proper click through the normal DOM path (bubbles, real target, real
+     * listeners) without depending on the browser's native hit-test pipeline at all, so it fires
+     * regardless of that pipeline's stale state. Scoped to gestures that land on a button inside
+     * the tile, so it can never touch, delay, or interfere with anything else happening in the
+     * workspace; a button whose native click already works incurs no double-fire, since the
+     * synthesized click is skipped whenever the real one already landed. Arming unconditionally
+     * on a tile that never has the problem (e.g. Main, which has no pane-menu/Close buttons in
+     * its header) is likewise inert -- there is no button for the listener to ever act on. */
+    function armClickFallback(canvas) {
         const tiles = collectAll(canvas, isTileHost);
         for (let i = 0; i < tiles.length; i++) {
             const tile = tiles[i];
-            const before = beforeParents[tile.getAttribute('data-prks-tab-id')];
-            if (before === undefined || before === tile.parentNode) continue;
             if (typeof tile.addEventListener !== 'function') continue;
+            /* Idempotent: addEventListener with the same (type, listener, capture) triple is a
+             * no-op if already attached, so calling this again on every paint is safe and never
+             * creates duplicate listeners. */
             tile.addEventListener('pointerup', onReparentedTilePointerUp, true);
         }
     }
 
     function onReparentedTilePointerUp(ev) {
-        const tile = ev.currentTarget;
-        tile.removeEventListener('pointerup', onReparentedTilePointerUp, true);
         const target = ev.target && typeof ev.target.closest === 'function' ? ev.target.closest('button') : null;
         if (!target || typeof target.click !== 'function') return;
         let clicked = false;
