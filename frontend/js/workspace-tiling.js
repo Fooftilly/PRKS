@@ -438,6 +438,7 @@
     function prksWorkspaceSyncTiles(snap, options) {
         const canvas = ensureCanvas();
         if (!canvas) return;
+        const beforeParents = snapshotTileParents(canvas);
         const opts = options || {};
         const visualTiled = opts.visualMode === 'tiled';
         canvas.classList.toggle('prks-workspace-canvas--tiled', visualTiled);
@@ -489,6 +490,77 @@
         if (typeof root.prksWorkspaceSyncSplitSeparator === 'function') {
             root.prksWorkspaceSyncSplitSeparator(canvas, visualTiled, snap);
         }
+
+        armClickFallback(beforeParents, canvas);
+    }
+
+    /** Snapshot of every currently-mounted tile's parent, keyed by tab id -- taken before a paint
+     * reconciles the tree, so the paint can tell which surviving tiles it actually moved to a new
+     * parent (e.g. an existing Secondary leaf nested into a brand-new split container) versus
+     * left alone. */
+    function snapshotTileParents(canvas) {
+        const map = Object.create(null);
+        const tiles = collectAll(canvas, isTileHost);
+        for (let i = 0; i < tiles.length; i++) {
+            map[tiles[i].getAttribute('data-prks-tab-id')] = tiles[i].parentNode;
+        }
+        return map;
+    }
+
+    /** Stricter than isAnyTile: only the tile host itself, never a same-tabId descendant such as
+     * tab-context.js's `.prks-tab-root` mount point (which also carries `data-prks-tab-id`, for
+     * its own unrelated purposes, and gets reshuffled by ordinary in-tab rendering). */
+    function isTileHost(node) {
+        return !!(node.getAttribute && node.getAttribute('data-prks-tab-id') && node.className && node.className.indexOf('prks-tile') !== -1);
+    }
+
+    /** Chromium leaves stale hit-test state on an existing element that gets reparented (moved to
+     * a different parent node, e.g. an existing Secondary leaf nested into a brand-new split
+     * container by renderTreeNode/insertBefore above): mousedown/pointerup keep targeting it
+     * correctly, but the browser silently never synthesizes the follow-up `click` -- so the
+     * tile's own header buttons (pane menu, close) go dead on the very next real click after a
+     * Split, while a brand-new tile (never reparented) is unaffected.
+     *
+     * This does not try to pre-emptively "fix" that browser-internal state (extensive testing
+     * found no way to do that both reliably and safely: every timing that reliably clears it --
+     * a chain of requestIdleCallback passes, confirmed necessary and confirmed sufficient in
+     * isolation -- takes long enough that it can land in the middle of a *different*, unrelated
+     * click happening elsewhere in the workspace and silently break that click instead, via this
+     * same mechanism). Instead it treats the symptom directly and safely: arm a one-shot
+     * `pointerup` listener on the reparented tile, and if the real `click` this browser owes that
+     * gesture hasn't shown up by the very next tick, dispatch it by calling `.click()` on the
+     * pressed button ourselves. `.click()` synthesizes a proper click through the normal DOM path
+     * (bubbles, real target, real listeners) without depending on the browser's native hit-test
+     * pipeline at all, so it fires regardless of that pipeline's stale state. Scoped to a single
+     * real gesture on the affected tile, so it can never touch, delay, or interfere with anything
+     * else happening in the workspace. */
+    function armClickFallback(beforeParents, canvas) {
+        if (!beforeParents) return;
+        const tiles = collectAll(canvas, isTileHost);
+        for (let i = 0; i < tiles.length; i++) {
+            const tile = tiles[i];
+            const before = beforeParents[tile.getAttribute('data-prks-tab-id')];
+            if (before === undefined || before === tile.parentNode) continue;
+            if (typeof tile.addEventListener !== 'function') continue;
+            tile.addEventListener('pointerup', onReparentedTilePointerUp, true);
+        }
+    }
+
+    function onReparentedTilePointerUp(ev) {
+        const tile = ev.currentTarget;
+        tile.removeEventListener('pointerup', onReparentedTilePointerUp, true);
+        const target = ev.target && typeof ev.target.closest === 'function' ? ev.target.closest('button') : null;
+        if (!target || typeof target.click !== 'function') return;
+        let clicked = false;
+        const onClick = function () {
+            clicked = true;
+        };
+        target.addEventListener('click', onClick, true);
+        root.setTimeout(function () {
+            target.removeEventListener('click', onClick, true);
+            const d = doc();
+            if (!clicked && d && d.contains(target)) target.click();
+        }, 0);
     }
 
     function tabIdFromEvent(ev) {

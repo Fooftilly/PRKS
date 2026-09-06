@@ -6439,6 +6439,52 @@ class WorkspaceTilingTests(_BrowserE2E):
         )
         self.assertGreater(overlap, min(target_box["height"], new_box["height"]) * 0.8)
 
+    def test_pane_menu_reopens_after_split_reparents_the_initiating_tile(self):
+        """Real-UI regression: after a Secondary leaf's pane menu drives a Split (pane menu
+        -> command palette -> pick an entity), that same leaf's tile gets nested into a
+        freshly created split container -- reparented in the DOM even though its TabContext
+        never remounts. Chromium leaves stale hit-test state on a reparented element: the
+        pane-menu button's next real click stops producing a `click` event at all, so
+        '#prks-workspace-menu' never reopens (Playwright reports the click as delivered
+        without error). Exercises the exact real-UI path a user takes -- a genuine
+        page.locator(...).click() on the button, never window.prksWorkspaceOpenTabMenu(...)
+        directly -- so it actually catches the browser-level regression, not just an app-level
+        state bug."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        _wait_pdf_tab(page, b_id)
+
+        self._split_via_pane_menu(page, b_id, "Split right", PERSON_DISPLAY)
+        tree = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+        self.assertEqual(tree["type"], "split")
+        self.assertEqual(tree["first"]["tabId"], b_id)
+
+        # The real regression: a genuine click on the SAME tile's pane-menu button, now that
+        # it has been reparented into the new split container.
+        _open_pane_actions(page, b_id)
+        self.assertTrue(page.locator("#prks-workspace-menu").is_visible())
+        labels = page.locator("#prks-workspace-menu .prks-workspace-menu__item").all_text_contents()
+        self.assertTrue(any("Split right" in t for t in labels))
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#prks-workspace-menu[hidden]", state="attached")
+
+        # The close button is the other header control on the same reparented tile -- also
+        # dead under the original bug, per the report's own isolation steps.
+        close_btn = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__close' % b_id)
+        close_btn.click(timeout=5000)
+        page.wait_for_function(
+            "(bId) => !window.prksWorkspaceSnapshot().tabs.some((t) => t.id === bId)",
+            arg=b_id,
+        )
+
     def test_main_and_focus_survive_make_main_from_pane_menu(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})

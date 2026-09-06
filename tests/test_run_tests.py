@@ -83,6 +83,8 @@ class TestRunTests(unittest.TestCase):
         self.assertEqual(parse_mode(["-e2e"]), "e2e")
         self.assertEqual(parse_mode(["--all"]), "all")
         self.assertEqual(parse_mode(["-all"]), "all")
+        self.assertEqual(parse_mode(["--ux-tour"]), "ux-tour")
+        self.assertEqual(parse_mode(["-ux-tour"]), "ux-tour")
 
     def test_help_documents_e2e_flags(self):
         py = shutil.which("python3") or shutil.which("python") or sys.executable

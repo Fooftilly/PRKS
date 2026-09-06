@@ -304,7 +304,7 @@ class PageCollector:
 class AppServer:
     """One PRKS subprocess + temp storage. Seed before start()."""
 
-    def __init__(self, seed_fn=None):
+    def __init__(self, seed_fn=None, extra_env=None):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="prks-e2e-")
         self.storage_root = self._tmpdir.name
         self.port = find_free_port()
@@ -316,6 +316,10 @@ class AppServer:
         self._stdout = None
         self._stderr = None
         self._seed_fn = seed_fn
+        # Optional subprocess env overrides (e.g. HTTPS_PROXY to deny a specific
+        # best-effort outbound call deterministically). Never used to change how the
+        # app talks to its own storage/port.
+        self._extra_env = dict(extra_env or {})
 
     def start(self):
         if self._seed_fn is not None:
@@ -327,6 +331,7 @@ class AppServer:
         env["PRKS_LOG_FILE"] = os.path.join(self.storage_root, "prks-errors.log")
         env["PYTHONUNBUFFERED"] = "1"
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(apply_playwright_browser_env())
+        env.update(self._extra_env)
         self._stdout = open(self._stdout_path, "w", encoding="utf-8")
         self._stderr = open(self._stderr_path, "w", encoding="utf-8")
         self.proc = subprocess.Popen(

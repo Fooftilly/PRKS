@@ -353,9 +353,36 @@ Then open the printed origin’s `/tests/browser/design_system.html?theme=light`
 python run_tests.py          # unit/API/structural/Node (no Chromium)
 python run_tests.py --e2e    # real Chromium + real PRKS server
 python run_tests.py --all    # unit suite, then E2E
+python run_tests.py --ux-tour                    # UX interaction tour (see below)
+PRKS_UX_RECORD=1 python run_tests.py --ux-tour   # record every scenario for review
 ```
 
-`-e2e` and `-all` are the same flags. Unflagged `python run_tests.py` discovers tests under `tests/` and does not launch Chromium. It always forces `PRKS_TESTING=1` and `PRKS_STORAGE` to the repo’s `data_testing/` directory and clears `PRKS_FOR_PROCESSING_DIR` and `PRKS_LOG_FILE`. That is stricter than `python prks_app.py --testing`, which may honor an explicit safe `PRKS_STORAGE`. Neither path uses `./data` or container `/data`.
+`-e2e`, `-all`, and `-ux-tour` are the same flags. Unflagged `python run_tests.py` discovers tests under `tests/` and does not launch Chromium. It always forces `PRKS_TESTING=1` and `PRKS_STORAGE` to the repo’s `data_testing/` directory and clears `PRKS_FOR_PROCESSING_DIR` and `PRKS_LOG_FILE`. That is stricter than `python prks_app.py --testing`, which may honor an explicit safe `PRKS_STORAGE`. Neither path uses `./data` or container `/data`. `--ux-tour` is a separate, explicitly opt-in suite: it never runs as part of the default, `--e2e`, or `--all` modes.
+
+### UX Interaction Tour
+
+`tests/ux_tour/` is a deliberately human-oriented, artifact-producing scenario suite -- longer than E2E, one recording per workflow (Workspace, Work/PDF, Library/Creation, Research/Graph, People/Groups, Organization/Progress, Settings, and shell navigation). It complements the fast E2E suite; it does not replace it. See `tests/ux_tour/COVERAGE.md` for what each tour covers and where everything else is exercised instead.
+
+```bash
+python run_tests.py --ux-tour
+```
+
+runs every tour against fresh isolated PRKS storage (same `tests.e2e.harness.AppServer` isolation as E2E) and produces one run directory per invocation:
+
+```
+artifacts/ux-tour/<run-id>/
+├── manifest.json
+├── REPORT.md
+└── <scenario>/            # video.webm, trace.zip, checkpoints/, events.jsonl, server.log, browser-events.json
+```
+
+By default only a **failed** scenario keeps its heavy artifacts (video/trace/screenshots); a passing scenario's directory is deleted after its manifest entry is recorded. Set `PRKS_UX_RECORD=1` to keep everything and produce one upload-friendly archive:
+
+```bash
+PRKS_UX_RECORD=1 python run_tests.py --ux-tour
+```
+
+prints where the run directory and the `prks-ux-tour-<run-id>.zip` archive were written. `artifacts/ux-tour/` is gitignored -- these recordings are never committed.
 
 ### Browser tests
 

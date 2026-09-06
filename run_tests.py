@@ -14,12 +14,13 @@ def apply_isolated_test_env(project_dir: str) -> None:
 
 
 def parse_mode(argv=None):
-    """Return 'unit', 'e2e', or 'all'. Default is unit (no Chromium)."""
+    """Return 'unit', 'e2e', 'all', or 'ux-tour'. Default is unit (no Chromium)."""
     parser = argparse.ArgumentParser(
         prog="run_tests.py",
         description=(
             "PRKS test runner. Default is the Python/API/structural/Node suite. "
-            "Use --e2e for real Chromium against a real PRKS server, or --all for both."
+            "Use --e2e for real Chromium against a real PRKS server, --all for both, "
+            "or --ux-tour for the opt-in, artifact-producing UX Interaction Tour."
         ),
     )
     group = parser.add_mutually_exclusive_group()
@@ -35,11 +36,24 @@ def parse_mode(argv=None):
         action="store_true",
         help="Run the unit suite, then E2E",
     )
+    group.add_argument(
+        "--ux-tour",
+        "-ux-tour",
+        action="store_true",
+        help=(
+            "Run the UX Interaction Tour only (isolated temp storage; never data/). "
+            "Not included in the default, --e2e, or --all runs -- it is a separate, "
+            "opt-in, artifact-producing review suite. Set PRKS_UX_RECORD=1 to retain "
+            "every scenario's video/trace/screenshots and produce a review ZIP."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.e2e:
         return "e2e"
     if args.all:
         return "all"
+    if args.ux_tour:
+        return "ux-tour"
     return "unit"
 
 
@@ -60,12 +74,21 @@ def run_e2e_tests(project_dir: str) -> int:
     return subprocess.call([python_for_subprocess(), script], cwd=project_dir)
 
 
+def run_ux_tour(project_dir: str) -> int:
+    from tests.e2e.harness import python_for_subprocess
+
+    script = os.path.join(project_dir, "tests", "ux_tour", "run.py")
+    return subprocess.call([python_for_subprocess(), script], cwd=project_dir)
+
+
 def main(argv=None) -> int:
     project_dir = os.path.dirname(os.path.abspath(__file__))
     if project_dir not in sys.path:
         sys.path.insert(0, project_dir)
 
     mode = parse_mode(sys.argv[1:] if argv is None else argv)
+    if mode == "ux-tour":
+        return run_ux_tour(project_dir)
     unit_rc = 0
     if mode in ("unit", "all"):
         unit_rc = run_unit_tests(project_dir)

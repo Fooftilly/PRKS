@@ -3,6 +3,9 @@
 /data_testing/
 /data_screenshots/
 
+# --- UX Interaction Tour artifacts (generated; never committed) ---
+/artifacts/ux-tour/
+
 # --- Python bytecode / caches ---
 __pycache__/
 *.py[cod]
