@@ -206,8 +206,8 @@ function prksExtractWorkIdFromHash(h) {
 }
 
 function prksFlushPdfLastPageToStorage(workId) {
-    if (typeof prksForEachMountedTabContext !== 'function') return;
-    prksForEachMountedTabContext(function (ctx) {
+    if (typeof prksForEachLiveTabContext !== 'function') return;
+    prksForEachLiveTabContext(function (ctx) {
         const pdf = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('pdf') : null;
         if (!pdf) return;
         if (workId && pdf.workId && String(pdf.workId) !== String(workId)) return;
@@ -235,8 +235,8 @@ function initPrksPdfLastPageVisibilityFlush() {
     if (window.__prksPdfVisibilityFlushBound) return;
     window.__prksPdfVisibilityFlushBound = true;
     const flush = () => {
-        if (typeof prksForEachMountedTabContext !== 'function') return;
-        prksForEachMountedTabContext(function (ctx) {
+        if (typeof prksForEachLiveTabContext !== 'function') return;
+        prksForEachLiveTabContext(function (ctx) {
             const pdf = ctx && typeof ctx.getResource === 'function' ? ctx.getResource('pdf') : null;
             if (pdf && typeof pdf.flushLastPage === 'function') pdf.flushLastPage();
         });

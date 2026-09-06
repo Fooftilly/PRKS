@@ -16,6 +16,8 @@ const {
     prksWarmParkTabContext,
     prksResumeWarmTabContext,
     prksUnmountTabContext,
+    prksForEachMountedTabContext,
+    prksForEachLiveTabContext,
     prksTabContextDebugSnapshot,
     prksContextFromElement,
 } = tc;
@@ -106,6 +108,27 @@ prksDestroyTabContext('warm-2');
 assertEq('closing parked warm PDF destroys once', warmDisposeCounts[2], 1);
 prksDestroyAllTabContexts();
 assertEq('warm cache empty after teardown', prksTabContextDebugSnapshot().warmParkedCount, 0);
+
+const iteratorParking = makeHost();
+const iteratorA = prksEnsureTabContext('iterator-a');
+const iteratorB = prksEnsureTabContext('iterator-b');
+const iteratorC = prksEnsureTabContext('iterator-c');
+const iteratorD = prksEnsureTabContext('iterator-d');
+iteratorA.mount(makeHost());
+iteratorB.mount(makeHost());
+iteratorB.setResource('pdf', {}, function () {});
+assert('iterator B warm-suspends', prksWarmParkTabContext(iteratorB.tabId, iteratorParking));
+iteratorC.mount(makeHost());
+iteratorC.unmount('cold-park');
+iteratorD.mount(makeHost());
+iteratorD.destroy();
+const mountedIteratorIds = [];
+const liveIteratorIds = [];
+prksForEachMountedTabContext(function (ctx) { mountedIteratorIds.push(ctx.tabId); });
+prksForEachLiveTabContext(function (ctx) { liveIteratorIds.push(ctx.tabId); });
+assertEq('mounted iterator sees visible A only', mountedIteratorIds.join(','), 'iterator-a');
+assertEq('live iterator sees visible A and warm B', liveIteratorIds.join(','), 'iterator-a,iterator-b');
+prksDestroyAllTabContexts();
 
 const a = createPrksTabContext('tab-1');
 const b = createPrksTabContext('tab-2');

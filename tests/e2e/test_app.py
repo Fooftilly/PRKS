@@ -2520,6 +2520,30 @@ class WorkspaceTabsTests(_BrowserE2E):
                 arg=tab_a,
             )
         )
+        flush_counts = page.evaluate(
+            """() => {
+                const warmPdf = window.__prksWarmPdfProbe.pdf;
+                const originalWarmFlush = warmPdf.flushLastPage;
+                let warm = 0;
+                let cold = 0;
+                warmPdf.flushLastPage = function () {
+                    warm += 1;
+                    return originalWarmFlush.call(warmPdf);
+                };
+                const coldCtx = window.prksEnsureTabContext('e2e-cold-last-page');
+                coldCtx.mount(document.createElement('div'));
+                coldCtx.setResource('pdf', {
+                    flushLastPage: function () { cold += 1; },
+                });
+                window.prksUnmountTabContext(coldCtx.tabId, 'cold-park');
+                window.prksFlushPdfLastPageToStorage();
+                window.dispatchEvent(new Event('pagehide'));
+                warmPdf.flushLastPage = originalWarmFlush;
+                window.prksDestroyTabContext(coldCtx.tabId);
+                return { warm: warm, cold: cold };
+            }"""
+        )
+        self.assertEqual(flush_counts, {"warm": 2, "cold": 0})
 
         page.evaluate("async (id) => await window.prksWorkspaceActivateTab(id)", arg=tab_a)
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
@@ -3489,6 +3513,55 @@ def _assert_no_drag_residue(test, page, msg=""):
 
 
 class WorkspaceTilingTests(_BrowserE2E):
+    def test_dense_rail_disclosures_open_navigation_overlay(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+        page.wait_for_function("() => document.getElementById('app-container').classList.contains('app-container--tiled')")
+
+        research = page.locator('[data-nav-disclosure-toggle="research"]')
+        research_children = page.locator("#prks-nav-research-children")
+        page.evaluate(
+            """() => {
+                const key = window.PRKS_NAV_DISCLOSURES.research.prefKey;
+                window.prksWriteNavExpandedPref(key, true);
+                window.prksSyncNavDisclosures(window.prksParseRoute(location.hash));
+            }"""
+        )
+        before_width = page.locator("#main-content").evaluate("el => el.getBoundingClientRect().width")
+        self.assertAlmostEqual(page.locator("#sidebar").evaluate("el => el.getBoundingClientRect().width"), 54, delta=1)
+        self.assertFalse(research_children.is_visible())
+
+        research.click()
+        page.wait_for_function("() => document.body.classList.contains('prks-sidebar-open')")
+        self.assertEqual(research.get_attribute("aria-expanded"), "true")
+        self.assertTrue(research_children.is_visible())
+        self.assertTrue(page.locator("#prks-overlay-backdrop").is_visible())
+        self.assertAlmostEqual(
+            page.locator("#main-content").evaluate("el => el.getBoundingClientRect().width"),
+            before_width,
+            delta=0.1,
+        )
+
+        research_children.locator('a[href="#/concepts"]').click()
+        page.wait_for_function("() => location.hash === '#/concepts'")
+        page.wait_for_function("() => !document.body.classList.contains('prks-sidebar-open')")
+
+        progress = page.locator('[data-nav-disclosure-toggle="progress"]')
+        progress_children = page.locator("#prks-nav-progress-children")
+        page.evaluate(
+            """() => {
+                const key = window.PRKS_NAV_DISCLOSURES.progress.prefKey;
+                window.prksWriteNavExpandedPref(key, false);
+                window.prksSyncNavDisclosures(window.prksParseRoute(location.hash));
+            }"""
+        )
+        self.assertFalse(progress_children.is_visible())
+        progress.click()
+        page.wait_for_function("() => document.body.classList.contains('prks-sidebar-open')")
+        self.assertEqual(progress.get_attribute("aria-expanded"), "true")
+        self.assertTrue(progress_children.is_visible())
+
     def test_dense_shell_overlays_do_not_resize_tiled_workspace(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})

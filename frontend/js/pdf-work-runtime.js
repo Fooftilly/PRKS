@@ -237,8 +237,8 @@
             return !!(pdf && typeof pdf.hasPendingSync === 'function' && pdf.hasPendingSync());
         }
         let pending = false;
-        if (typeof root.prksForEachMountedTabContext === 'function') {
-            root.prksForEachMountedTabContext(function (c) {
+        if (typeof root.prksForEachLiveTabContext === 'function') {
+            root.prksForEachLiveTabContext(function (c) {
                 const pdf = c && typeof c.getResource === 'function' ? c.getResource('pdf') : null;
                 if (pdf && typeof pdf.hasPendingSync === 'function' && pdf.hasPendingSync()) {
                     pending = true;

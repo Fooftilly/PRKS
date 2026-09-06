@@ -104,7 +104,7 @@ function makeDisclosureFixture(which, listId, includeLink) {
             'aria-expanded': 'false',
             'aria-controls': listId,
         },
-        'nav-disclosure__toggle'
+        includeLink ? 'nav-disclosure__toggle' : 'nav-disclosure__toggle nav-disclosure__toggle--full'
     );
     btn.dataset.bound = undefined;
     const list = makeDisclosureEl({ id: listId }, 'nav-disclosure__children');
@@ -142,13 +142,17 @@ function installDom() {
     const disclosures = { people: people, research: research, progress: progress };
 
     const main = { id: 'main-content', scrollTop: 0 };
+    const app = makeDisclosureEl({ id: 'app-container' }, '');
+    const body = makeDisclosureEl({}, '');
     const all = links.slice();
     const toggleButtons = [people.btn, research.btn, progress.btn];
 
     global.document = {
         title: 'PRKS - Personal Research Knowledge System',
+        body: body,
         getElementById: function (id) {
             if (id === 'main-content') return main;
+            if (id === 'app-container') return app;
             for (const which of Object.keys(disclosures)) {
                 if (disclosures[which].list.attrs.id === id) return disclosures[which].list;
             }
@@ -171,7 +175,7 @@ function installDom() {
             return [];
         },
     };
-    return { main: main, links: links, disclosures: disclosures };
+    return { main: main, app: app, body: body, links: links, disclosures: disclosures };
 }
 
 global.sessionStorage = new MemoryStorage();

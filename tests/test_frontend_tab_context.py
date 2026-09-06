@@ -83,6 +83,7 @@ class TestTabContextResourceAPI(unittest.TestCase):
             "prksApplyOwnedWorkEntity",
             "prksWarmParkTabContext",
             "prksResumeWarmTabContext",
+            "prksForEachLiveTabContext",
         ):
             self.assertIn(name, src, f"{name} not found in tab-context.js")
 
@@ -92,6 +93,18 @@ class TestTabContextResourceAPI(unittest.TestCase):
             html = fh.read()
         self.assertIn('id="prks-tab-warm-parking"', html)
         self.assertIn('hidden aria-hidden="true"', html)
+
+    def test_live_iterator_used_only_for_live_pdf_safety_work(self):
+        app_path = os.path.join(FRONTEND_JS, "app.js")
+        runtime_path = os.path.join(FRONTEND_JS, "pdf-work-runtime.js")
+        with open(app_path, encoding="utf-8") as fh:
+            app = fh.read()
+        with open(runtime_path, encoding="utf-8") as fh:
+            runtime = fh.read()
+        self.assertIn("prksForEachLiveTabContext", runtime)
+        self.assertIn("function prksFlushPdfLastPageToStorage", app)
+        self.assertGreaterEqual(app.count("prksForEachLiveTabContext"), 4)
+        self.assertIn("prksForEachMountedTabContext", app)
 
 
 class TestResearchGraphNoSingletonFallback(unittest.TestCase):

@@ -926,6 +926,28 @@
                 const spec = PRKS_NAV_DISCLOSURES[which];
                 if (!spec) return;
                 const route = prksParseRoute(root.location ? root.location.hash : '');
+                const app = document.getElementById && document.getElementById('app-container');
+                const body = document.body;
+                const opensRailNavigation = !!(
+                    btn.classList &&
+                    btn.classList.contains('nav-disclosure__toggle--full') &&
+                    app &&
+                    app.classList &&
+                    app.classList.contains('app-container--tiled') &&
+                    body &&
+                    body.classList &&
+                    !body.classList.contains('prks-sidebar-open')
+                );
+                if (opensRailNavigation) {
+                    if (typeof root.prksToggleSidebarDrawer === 'function') {
+                        root.prksToggleSidebarDrawer(true);
+                    } else if (typeof root.prksOpenSidebarDrawer === 'function') {
+                        root.prksOpenSidebarDrawer();
+                    }
+                    prksWriteNavExpandedPref(spec.prefKey, true);
+                    prksSyncNavDisclosures(route);
+                    return;
+                }
                 const expandedNow = prksNavDisclosureExpanded(which, route);
                 prksWriteNavExpandedPref(spec.prefKey, !expandedNow);
                 prksSyncNavDisclosures(route);

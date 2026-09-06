@@ -10,7 +10,9 @@ const pdfRt = require(path.join(rootDir, 'frontend/js/pdf-work-runtime.js'));
 const {
     prksEnsureTabContext,
     prksDestroyAllTabContexts,
-    prksForEachMountedTabContext,
+    prksForEachLiveTabContext,
+    prksWarmParkTabContext,
+    prksUnmountTabContext,
 } = tc;
 const { createWorkPdfRuntime, prksHasPendingWorkAnnotationSync, createPdfAnnotationPersistenceWorker, prksPdfPersistenceStillLive, prksInstallPdfAnnotationPersistenceIfCurrent } = pdfRt;
 
@@ -51,6 +53,17 @@ function makeHost() {
     };
 }
 
+prksDestroyAllTabContexts();
+
+const pendingWarm = prksEnsureTabContext('pending-warm');
+pendingWarm.mount(makeHost());
+pendingWarm.setResource('pdf', {
+    hasPendingSync: function () { return true; },
+});
+assert('pending PDF warm-suspends', prksWarmParkTabContext(pendingWarm.tabId, makeHost()));
+assertEq('global pending check sees warm PDF', prksHasPendingWorkAnnotationSync(), true);
+prksUnmountTabContext(pendingWarm.tabId, 'cold-park');
+assertEq('global pending check ignores cold PDF', prksHasPendingWorkAnnotationSync(), false);
 prksDestroyAllTabContexts();
 
 const ctxA = prksEnsureTabContext('pdf-a');
@@ -127,17 +140,17 @@ assertEq('flush B annotations untouched', flushAnnB, 0);
 
 assertEq('pending A', prksHasPendingWorkAnnotationSync(ctxA), false);
 assertEq('pending B', prksHasPendingWorkAnnotationSync(ctxB), true);
-assertEq('pending any mounted', prksHasPendingWorkAnnotationSync(), true);
+assertEq('pending any live', prksHasPendingWorkAnnotationSync(), true);
 
 let visited = 0;
-prksForEachMountedTabContext(function (ctx) {
+prksForEachLiveTabContext(function (ctx) {
     const pdf = ctx.getResource('pdf');
     if (pdf && typeof pdf.flushLastPage === 'function') {
         pdf.flushLastPage();
         visited += 1;
     }
 });
-assertEq('visibility flush visits both', visited, 2);
+assertEq('live flush visits both mounted PDFs', visited, 2);
 assertEq('flush last A', flushPageA, 1);
 assertEq('flush last B', flushPageB, 1);
 

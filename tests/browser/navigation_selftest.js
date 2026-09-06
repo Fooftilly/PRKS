@@ -554,6 +554,35 @@
                     root.localStorage.removeItem(key);
                 } catch (_e) {}
             });
+
+            const app = document.getElementById('app-container');
+            const body = document.body;
+            const previousDrawerToggle = root.prksToggleSidebarDrawer;
+            let drawerOpenCalls = 0;
+            root.prksToggleSidebarDrawer = function (forceOpen) {
+                if (forceOpen !== true) return;
+                drawerOpenCalls += 1;
+                body.classList.add('prks-sidebar-open');
+            };
+            app.classList.add('app-container--tiled');
+            ['research', 'progress'].forEach(function (which) {
+                const key = root.PRKS_NAV_DISCLOSURES[which].prefKey;
+                const list = document.getElementById(root.PRKS_NAV_DISCLOSURES[which].listId);
+                const toggle = document.querySelector('[data-nav-disclosure-toggle="' + which + '"]');
+                body.classList.remove('prks-sidebar-open');
+                root.prksWriteNavExpandedPref(key, true);
+                root.prksSyncNavDisclosures(parse('#/folders'));
+                const callsBefore = drawerOpenCalls;
+                toggle.click();
+                assert(which + ' rail activation opens navigation', body.classList.contains('prks-sidebar-open'));
+                assertEq(which + ' rail opens drawer once', drawerOpenCalls, callsBefore + 1);
+                assertEq(which + ' rail keeps expanded preference', root.prksReadNavExpandedPref(key), 'expanded');
+                assertEq(which + ' rail leaves aria-expanded true', toggle.getAttribute('aria-expanded'), 'true');
+                assertEq(which + ' rail exposes child list', list.hidden, false);
+            });
+            app.classList.remove('app-container--tiled');
+            body.classList.remove('prks-sidebar-open');
+            root.prksToggleSidebarDrawer = previousDrawerToggle;
         }
 
         if (typeof root.prksContextualBackHtml === 'function') {

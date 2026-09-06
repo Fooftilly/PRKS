@@ -537,6 +537,14 @@
         });
     }
 
+    function prksForEachLiveTabContext(fn) {
+        if (typeof fn !== 'function') return;
+        contexts.forEach(function (ctx) {
+            if (ctx.destroyed || (!ctx.mounted && !ctx.suspended)) return;
+            fn(ctx);
+        });
+    }
+
     function prksTabContextHost() {
         if (typeof document === 'undefined') return null;
         return document.getElementById('page-content');
@@ -665,6 +673,7 @@
         prksDestroyTabContext: prksDestroyTabContext,
         prksDestroyAllTabContexts: prksDestroyAllTabContexts,
         prksForEachMountedTabContext: prksForEachMountedTabContext,
+        prksForEachLiveTabContext: prksForEachLiveTabContext,
         prksTabContextHost: prksTabContextHost,
         prksTabContextDebugSnapshot: prksTabContextDebugSnapshot,
         prksFocusedEntity: prksFocusedEntity,
