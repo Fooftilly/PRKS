@@ -26,6 +26,8 @@ _DRAG = os.path.join(_FRONTEND, "js", "workspace-drag.js")
 _DRAG_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_drag_selftest.js")
 _SPLIT = os.path.join(_FRONTEND, "js", "workspace-split.js")
 _MENU = os.path.join(_FRONTEND, "js", "workspace-tab-menu.js")
+_UI = os.path.join(_FRONTEND, "js", "ui.js")
+_CSS = os.path.join(_FRONTEND, "css", "style.css")
 
 _HASH_ASSIGN_RE = re.compile(r"(?:window\.)?location\.hash\s*=(?!=)")
 _OPEN_BLANK_RE = re.compile(r"""window\.open\s*\([^)]*['_"]_blank['_"]""")
@@ -129,6 +131,36 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("prks-workspace-tab__activate", src)
         self.assertIn("prks-workspace-tab__close", src)
         self.assertIn('role="tab"', src)
+
+    def test_dense_tiled_shell_contract(self):
+        html = _read(_INDEX)
+        css = _read(_CSS)
+        ui = _read(_UI)
+        tiling = _read(_TILING)
+
+        self.assertIn('id="prks-sidebar-collapse-btn"', html)
+        self.assertIn('id="prks-mobile-details-btn"', html)
+        self.assertIn("app-container--tiled", css)
+        self.assertIn("flex: 0 0 54px", css)
+        self.assertIn("margin-right: -196px", css)
+        self.assertIn("position: fixed", css[css.find("#app-container.app-container--tiled #right-panel") :])
+        self.assertIn("prksSyncDenseWorkspaceShell(visualTiled)", tiling)
+        self.assertIn("prksIsTiledWorkspace", ui)
+        self.assertIn("prksOpenSidebarDrawer", ui)
+        self.assertIn("prksOpenRightPanelOverlay", ui)
+
+        # Desktop tiled Details stays non-modal: only small-screen path gets backdrop state.
+        right_open = ui[ui.find("function prksOpenRightPanelOverlay") : ui.find("function prksToggleSidebarDrawer")]
+        self.assertIn("if (prksIsSmallScreen())", right_open)
+        self.assertIn("prksSetOverlayBackdropVisible(false)", right_open)
+
+        for selector in (
+            '.prks-workspace-tab.is-main,\n.prks-workspace-tab[aria-current="page"]',
+            ".prks-workspace-tab.is-tiled",
+            ".prks-workspace-tab.is-tiled.is-focused",
+        ):
+            block = css.split(selector + " {", 1)[1].split("}", 1)[0]
+            self.assertNotIn("box-shadow", block, selector)
 
     def test_tiled_v1_state_contract(self):
         src = _read(_WS)

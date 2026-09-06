@@ -442,6 +442,9 @@
         const visualTiled = opts.visualMode === 'tiled';
         canvas.classList.toggle('prks-workspace-canvas--tiled', visualTiled);
         canvas.classList.toggle('prks-workspace-canvas--stacked', !visualTiled);
+        if (typeof root.prksSyncDenseWorkspaceShell === 'function') {
+            root.prksSyncDenseWorkspaceShell(visualTiled);
+        }
 
         const mainTile = ensureTile(canvas, snap.mainTabId);
         applyTileClasses(mainTile, snap, snap.mainTabId, visualTiled);

@@ -819,6 +819,33 @@ function prksSyncMobileToggleButtons() {
     if (detBtn) detBtn.setAttribute('aria-expanded', rpOpen ? 'true' : 'false');
 }
 
+function prksIsTiledWorkspace() {
+    const app = document.getElementById('app-container');
+    return !!(app && app.classList.contains('app-container--tiled'));
+}
+
+function prksPrepareSidebarRailTooltips() {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    const controls = sidebar.querySelectorAll(
+        '.nav-menu > li > .nav-link, .nav-menu > li > .nav-disclosure__row > .nav-link, .nav-menu > li > .nav-disclosure__row > .nav-disclosure__toggle--full'
+    );
+    for (let i = 0; i < controls.length; i++) {
+        const label = controls[i].querySelector('.nav-link__label');
+        if (label && label.textContent) controls[i].title = label.textContent.trim();
+    }
+}
+
+function prksSyncDenseWorkspaceShell(tiled) {
+    const app = document.getElementById('app-container');
+    if (!app) return;
+    const wasTiled = app.classList.contains('app-container--tiled');
+    const dense = !!tiled && !prksIsSmallScreen();
+    app.classList.toggle('app-container--tiled', dense);
+    if (wasTiled && !dense) prksCloseOverlays();
+    prksSyncMobileToggleButtons();
+}
+
 function prksCloseOverlays() {
     if (typeof window.prksCloseTagsAliasModal === 'function') {
         window.prksCloseTagsAliasModal();
@@ -838,14 +865,20 @@ function prksOpenSidebarDrawer() {
 function prksOpenRightPanelOverlay() {
     const app = document.getElementById('app-container');
     if (app && app.classList.contains('app-container--hide-right-panel')) return;
-    document.body.classList.add('prks-right-panel-open', 'prks-overlay-open');
+    document.body.classList.add('prks-right-panel-open');
     document.body.classList.remove('prks-sidebar-open');
-    prksSetOverlayBackdropVisible(true);
+    if (prksIsSmallScreen()) {
+        document.body.classList.add('prks-overlay-open');
+        prksSetOverlayBackdropVisible(true);
+    } else {
+        document.body.classList.remove('prks-overlay-open');
+        prksSetOverlayBackdropVisible(false);
+    }
     prksSyncMobileToggleButtons();
 }
 
 function prksToggleSidebarDrawer(forceOpen) {
-    if (!prksIsSmallScreen()) return;
+    if (!prksIsSmallScreen() && !prksIsTiledWorkspace()) return;
     const open = document.body.classList.contains('prks-sidebar-open');
     const want = forceOpen === undefined ? !open : !!forceOpen;
     if (want) prksOpenSidebarDrawer();
@@ -853,7 +886,7 @@ function prksToggleSidebarDrawer(forceOpen) {
 }
 
 function prksToggleRightPanelOverlay(forceOpen) {
-    if (!prksIsSmallScreen()) return;
+    if (!prksIsSmallScreen() && !prksIsTiledWorkspace()) return;
     const open = document.body.classList.contains('prks-right-panel-open');
     const want = forceOpen === undefined ? !open : !!forceOpen;
     if (want) prksOpenRightPanelOverlay();
@@ -864,6 +897,10 @@ function initMobileShell() {
     const navBtn = document.getElementById('prks-mobile-nav-btn');
     const detBtn = document.getElementById('prks-mobile-details-btn');
     const overlayBackdrop = document.getElementById('prks-overlay-backdrop');
+    const expandBtn = document.getElementById('prks-sidebar-expand-btn');
+    const collapseBtn = document.getElementById('prks-sidebar-collapse-btn');
+
+    prksPrepareSidebarRailTooltips();
 
     if (navBtn && navBtn.dataset.bound !== '1') {
         navBtn.dataset.bound = '1';
@@ -872,6 +909,14 @@ function initMobileShell() {
     if (detBtn && detBtn.dataset.bound !== '1') {
         detBtn.dataset.bound = '1';
         detBtn.addEventListener('click', () => prksToggleRightPanelOverlay());
+    }
+    if (expandBtn && expandBtn.dataset.bound !== '1') {
+        expandBtn.dataset.bound = '1';
+        expandBtn.addEventListener('click', () => prksToggleSidebarDrawer(true));
+    }
+    if (collapseBtn && collapseBtn.dataset.bound !== '1') {
+        collapseBtn.dataset.bound = '1';
+        collapseBtn.addEventListener('click', () => prksToggleSidebarDrawer(false));
     }
     if (overlayBackdrop && overlayBackdrop.dataset.bound !== '1') {
         overlayBackdrop.dataset.bound = '1';
@@ -902,6 +947,9 @@ function initMobileShell() {
         window.addEventListener('resize', () => {
             if (!prksIsSmallScreen()) {
                 prksCloseOverlays();
+            }
+            if (typeof window.prksWorkspaceVisualTiled === 'function') {
+                prksSyncDenseWorkspaceShell(window.prksWorkspaceVisualTiled());
             }
         });
     }

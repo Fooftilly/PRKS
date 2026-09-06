@@ -852,7 +852,6 @@ body {
     background: var(--surface-selected);
     color: var(--text-primary);
     font-weight: var(--weight-semibold);
-    box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .prks-workspace-tab.is-parked {
@@ -866,7 +865,6 @@ body {
 
 .prks-workspace-tab.is-tiled {
     color: var(--text-primary);
-    box-shadow: inset 0 -2px 0 var(--border-strong);
 }
 
 .prks-workspace-tab.is-focused:not(.is-main) {
@@ -875,7 +873,6 @@ body {
 
 .prks-workspace-tab.is-tiled.is-focused {
     background: var(--surface);
-    box-shadow: inset 0 -2px 0 var(--focus-ring);
 }
 
 .prks-workspace-menu {
@@ -1990,6 +1987,135 @@ body.prks-workspace-dragging * {
     flex-direction: column;
     padding: var(--space-md) var(--space-sm);
     transition: var(--transition);
+}
+
+.sidebar-header__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+}
+
+#prks-sidebar-expand-btn,
+#prks-sidebar-collapse-btn {
+    display: none;
+}
+
+#app-container.app-container--tiled #prks-sidebar-expand-btn {
+    display: inline-flex;
+}
+
+/* Multi-pane shell: reserve only an icon rail. Expanded navigation keeps same
+   54px flex footprint and paints over workspace instead of reflowing it. */
+#app-container.app-container--tiled #sidebar {
+    position: relative;
+    z-index: 1050;
+    flex: 0 0 54px;
+    width: 54px;
+    min-width: 54px;
+    padding: var(--space-sm);
+    overflow: visible;
+}
+
+#app-container.app-container--tiled #sidebar .sidebar-header {
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+#app-container.app-container--tiled #sidebar .sidebar-brand > div,
+#app-container.app-container--tiled #sidebar .nav-section,
+#app-container.app-container--tiled #sidebar .nav-link__label,
+#app-container.app-container--tiled #sidebar .nav-disclosure__toggle:not(.nav-disclosure__toggle--full),
+#app-container.app-container--tiled #sidebar .nav-disclosure__chevron,
+#app-container.app-container--tiled #sidebar .nav-disclosure__children {
+    display: none !important;
+}
+
+#app-container.app-container--tiled #sidebar .sidebar-header__actions {
+    flex-direction: column;
+}
+
+#app-container.app-container--tiled #sidebar .nav-menu {
+    width: 38px;
+    padding-right: 0;
+    overflow-x: hidden;
+}
+
+#app-container.app-container--tiled #sidebar .nav-menu > li.nav-disclosure--section-break,
+#app-container.app-container--tiled #sidebar .nav-menu > li.sidebar-nav-section-break,
+#app-container.app-container--tiled #sidebar .nav-menu > li.nav-section:not(:first-child) {
+    margin-top: var(--space-sm);
+    padding-top: var(--space-sm);
+}
+
+#app-container.app-container--tiled #sidebar .nav-link,
+#app-container.app-container--tiled #sidebar .nav-disclosure__toggle--full {
+    justify-content: center;
+    width: 38px;
+    height: 36px;
+    padding: 0;
+    gap: 0;
+}
+
+#app-container.app-container--tiled #sidebar .nav-disclosure__row {
+    display: block;
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar {
+    flex-basis: 250px;
+    width: 250px;
+    min-width: 250px;
+    margin-right: -196px;
+    padding: var(--space-md) var(--space-sm);
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--border);
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .sidebar-header {
+    flex-direction: row;
+    align-items: flex-start;
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .sidebar-brand > div,
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-link__label,
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclosure__toggle:not(.nav-disclosure__toggle--full),
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclosure__chevron {
+    display: initial !important;
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .sidebar-header__actions {
+    flex-direction: row;
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #prks-sidebar-collapse-btn {
+    display: inline-flex;
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #prks-sidebar-expand-btn {
+    display: none;
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-menu {
+    width: auto;
+    padding-right: 4px;
+    overflow-x: hidden;
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-link,
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclosure__toggle--full {
+    justify-content: flex-start;
+    width: auto;
+    height: auto;
+    padding: 7px var(--space-md);
+    gap: var(--space-sm);
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclosure__row {
+    display: flex;
+}
+
+body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclosure__children:not([hidden]) {
+    display: block !important;
 }
 
 .sidebar-header {
@@ -5070,6 +5196,32 @@ a.tag {
     min-height: 0;
     position: relative;
     z-index: var(--z-panel);
+}
+
+/* Tiled Details is contextual, non-modal overlay. Fixed positioning removes it
+   from shell sizing, so open/close cannot resize PDF panes or alter split ratios. */
+#app-container.app-container--tiled #right-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 40vw);
+    max-width: 92vw;
+    transform: translateX(105%);
+    transition: transform 0.22s ease;
+    z-index: 1050;
+    border-left: 1px solid var(--border);
+}
+
+body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
+    transform: translateX(0);
+}
+
+#app-container.app-container--tiled #prks-mobile-nav-btn,
+#app-container.app-container--tiled #prks-mobile-details-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 /* Scrollbars in the right column — same look as sidebar .nav-menu (thin, muted thumb) */

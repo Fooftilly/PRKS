@@ -37,7 +37,11 @@
                         <p class="sidebar-caption-sm">Knowledge System</p>
                     </div>
                 </a>
-                <button onclick="openModal('settings-modal')" class="prks-icon-btn prks-icon-btn--ghost settings-btn" title="Settings" aria-label="Settings"><span class="ribbon-btn__icon"><i data-lucide="settings" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
+                <div class="sidebar-header__actions">
+                    <button type="button" id="prks-sidebar-expand-btn" class="prks-icon-btn prks-icon-btn--ghost" title="Expand navigation" aria-label="Expand navigation"><span class="ribbon-btn__icon"><i data-lucide="panel-left-open" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
+                    <button type="button" id="prks-sidebar-collapse-btn" class="prks-icon-btn prks-icon-btn--ghost" title="Collapse navigation" aria-label="Collapse navigation"><span class="ribbon-btn__icon"><i data-lucide="panel-left-close" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
+                    <button onclick="openModal('settings-modal')" class="prks-icon-btn prks-icon-btn--ghost settings-btn" title="Settings" aria-label="Settings"><span class="ribbon-btn__icon"><i data-lucide="settings" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
+                </div>
             </div>
 
             <ul class="nav-menu">

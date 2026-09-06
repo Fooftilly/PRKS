@@ -305,6 +305,12 @@ function initForceMobileSetting() {
                     prksSyncMobileToggleButtons();
                 }
                 if (
+                    typeof prksSyncDenseWorkspaceShell === 'function' &&
+                    typeof prksWorkspaceVisualTiled === 'function'
+                ) {
+                    prksSyncDenseWorkspaceShell(prksWorkspaceVisualTiled());
+                }
+                if (
                     !on &&
                     window.matchMedia &&
                     !window.matchMedia('(max-width: 900px)').matches &&
