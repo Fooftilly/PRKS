@@ -46,7 +46,7 @@ Chromium, fast, precise); **selftest** = a Node browser selftest under
 | Work/PDF | Edit metadata, cancel a dirty edit (confirm modal) | work-pdf | E2E |
 | Work/PDF | Edit metadata and save | work-pdf | E2E |
 | Work/PDF | Manage relationships (link/unlink Person) | work-pdf | E2E |
-| Work/PDF | Manage tags | work-pdf | E2E |
+| Work/PDF | Manage tags (add/remove existing Tag) | work-pdf | E2E |
 | Work/PDF | Annotations tab visit | work-pdf | E2E (create/select/delete annotation via real click-drag) |
 | Work/PDF | PDF page navigation / zoom controls | — | E2E (`PdfPersistenceTests`) |
 | Work/PDF | Copy annotation link | — | E2E |

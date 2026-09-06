@@ -22,6 +22,7 @@ from tests.e2e.harness import (
     open_app_page,
     require_chromium,
 )
+from tests.ux_tour.fixtures import TAG_NAMES, seed_ux_tour_library
 
 NOTES = """# E2E Research Note
 
@@ -356,6 +357,42 @@ class PersonGraphFocusTests(_BrowserE2E):
 
 
 class WorkDetailsPolishTests(_BrowserE2E):
+    def test_manage_tags_add_remove_existing_tag_stays_active_until_done(self):
+        _server, page, _collector = self._start_app(seed_fn=seed_ux_tour_library)
+        _open_work_from_home(page, WORK_A_TITLE)
+
+        gamma = TAG_NAMES[2]
+        page.locator("#panel-content button", has_text="Manage tags").click()
+        page.locator("#work-tag-search").wait_for()
+        self.assertEqual(
+            page.locator("#work-tags-list .work-tag-chip", has_text=gamma).count(),
+            0,
+        )
+
+        page.locator("#work-tag-search").fill(gamma)
+        gamma_result = page.locator(
+            "#work-tag-search-results .result-item",
+            has_text=re.compile("^" + re.escape(gamma) + "$"),
+        )
+        gamma_result.wait_for(state="visible")
+        gamma_result.click()
+
+        gamma_chip = page.locator("#work-tags-list .work-tag-chip").filter(has_text=gamma)
+        gamma_chip.wait_for()
+        page.locator("#work-tag-search").wait_for()
+        done = page.locator("#panel-content button", has_text=re.compile("^Done$"))
+        done.wait_for()
+
+        gamma_chip.locator(".work-tag-remove").click()
+        gamma_chip.wait_for(state="detached")
+        page.locator("#work-tag-search").wait_for()
+        done = page.locator("#panel-content button", has_text=re.compile("^Done$"))
+        done.wait_for()
+        done.click()
+
+        self.assertEqual(page.locator("#work-tag-search").count(), 0)
+        page.locator("#panel-content button", has_text="Manage tags").wait_for()
+
     def test_metadata_draft_isolated_to_its_work_context(self):
         server, page, _collector = self._start_app()
         _open_work_from_home(page, WORK_A_TITLE)

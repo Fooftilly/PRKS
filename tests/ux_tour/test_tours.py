@@ -602,17 +602,86 @@ class WorkPdfTourTest(_UXTour):
             page.locator("#inline-save-metadata-btn").click()
             page.locator("#panel-content .card-title", has_text="Saved UX Tour Title").wait_for()
 
-            tour.step("Manage relationships")
+            tour.step("Link and unlink Second UX Author")
             page.locator("#panel-content button", has_text="Manage relationships").click()
-            page.locator("#panel-content .work-link-person-btn", has_text="Link person").wait_for()
-            tour.checkpoint(page, "relationships")
-            page.locator("#panel-content button", has_text="Done").first.click()
+            page.locator(
+                "#panel-content .work-link-person-btn",
+                has_text="Link person",
+            ).click()
+            page.wait_for_selector("#role-modal:not(.hidden)")
+            page.wait_for_function(
+                "() => typeof document.getElementById('role-person-search').oninput === 'function'"
+            )
+            page.locator("#role-person-search").fill(PERSON2_DISPLAY)
+            person_result = page.locator(
+                "#role-person-results .result-item--person-pick"
+            ).filter(
+                has=page.locator(
+                    ".result-item__primary",
+                    has_text=re.compile("^" + re.escape(PERSON2_DISPLAY) + "$"),
+                )
+            )
+            person_result.wait_for(state="visible")
+            person_result.click()
+            self.assertTrue(page.locator("#role-person-id").input_value().strip())
+            page.locator(
+                '#role-role-seg-mount .prks-segmented__btn[data-value="Editor"]'
+            ).click()
+            page.locator("#save-role-btn").click()
+            page.locator("#role-modal").wait_for(state="hidden")
 
-            tour.step("Manage tags")
+            linked_person = page.locator(".work-linked-persons__chip").filter(
+                has_text=PERSON2_DISPLAY
+            )
+            linked_person.wait_for()
+            linked_person.locator(".work-linked-persons__unlink").wait_for()
+            page.locator("#panel-content .work-link-person-btn", has_text="Link person").wait_for()
+            relationship_done = page.locator(
+                "#panel-content button", has_text=re.compile("^Done$")
+            )
+            relationship_done.wait_for()
+            tour.checkpoint(page, "relationship-linked")
+
+            linked_person.locator(".work-linked-persons__unlink").click()
+            page.wait_for_selector("#prks-modal-confirm:not(.hidden)")
+            remove_link = page.locator("#prks-modal-confirm-ok", has_text="Remove")
+            remove_link.wait_for()
+            remove_link.click()
+            linked_person.wait_for(state="detached")
+            relationship_done = page.locator(
+                "#panel-content button", has_text=re.compile("^Done$")
+            )
+            relationship_done.wait_for()
+            relationship_done.click()
+
+            tour.step("Add and remove UX Tag Gamma")
             page.locator("#panel-content button", has_text="Manage tags").click()
             page.locator("#work-tag-search").wait_for()
-            tour.checkpoint(page, "tags")
-            page.locator("#panel-content button", has_text="Done").last.click()
+            gamma = TAG_NAMES[2]
+            self.assertEqual(
+                page.locator("#work-tags-list .work-tag-chip", has_text=gamma).count(),
+                0,
+            )
+            page.locator("#work-tag-search").fill(gamma)
+            gamma_result = page.locator(
+                "#work-tag-search-results .result-item",
+                has_text=re.compile("^" + re.escape(gamma) + "$"),
+            )
+            gamma_result.wait_for(state="visible")
+            gamma_result.click()
+            gamma_chip = page.locator("#work-tags-list .work-tag-chip").filter(has_text=gamma)
+            gamma_chip.wait_for()
+            page.locator("#work-tag-search").wait_for()
+            tag_done = page.locator("#panel-content button", has_text=re.compile("^Done$"))
+            tag_done.wait_for()
+            tour.checkpoint(page, "tag-added")
+
+            gamma_chip.locator(".work-tag-remove").click()
+            gamma_chip.wait_for(state="detached")
+            page.locator("#work-tag-search").wait_for()
+            tag_done = page.locator("#panel-content button", has_text=re.compile("^Done$"))
+            tag_done.wait_for()
+            tag_done.click()
 
             tour.step("Open Annotations tab")
             _open_annotations_tab(page)
