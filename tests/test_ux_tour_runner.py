@@ -161,5 +161,121 @@ class TestUxRecordEnvParsing(unittest.TestCase):
         self.assertIn("PRKS_UX_RECORD", proc.stdout)
 
 
+class _FakePage:
+    """Minimal stand-in for a Playwright Page: only the surface PageCollector.__init__
+    touches (page.on(...) / page.route(...)), so TourCollector can be constructed and
+    exercised without a real browser."""
+
+    def on(self, *_args, **_kwargs):
+        pass
+
+    def route(self, *_args, **_kwargs):
+        pass
+
+
+class _FakeRequest:
+    def __init__(self, method):
+        self.method = method
+
+
+class _FakeResponse:
+    def __init__(self, url, status, method="GET"):
+        self.url = url
+        self.status = status
+        self.request = _FakeRequest(method)
+
+
+class TestTourCollectorHttpStatusClassification(unittest.TestCase):
+    """TourCollector._on_response() must classify 4xx and 5xx disjointly: a 5xx must never
+    also land in http_4xx (it would otherwise satisfy an unrelated expect_status() 4xx
+    exemption and hide a real server error)."""
+
+    def _collector(self):
+        from tests.ux_tour.harness import TourCollector
+
+        return TourCollector(_FakePage(), "http://127.0.0.1:1")
+
+    def test_404_recorded_as_4xx_only(self):
+        c = self._collector()
+        c._on_response(_FakeResponse("http://127.0.0.1:1/api/x", 404))
+        self.assertEqual(c.http_4xx, ["GET /api/x -> 404"])
+        self.assertEqual(c.http_5xx, [])
+
+    def test_500_recorded_as_5xx_only(self):
+        c = self._collector()
+        c._on_response(_FakeResponse("http://127.0.0.1:1/api/x", 500))
+        self.assertEqual(c.http_5xx, ["GET /api/x -> 500"])
+        self.assertEqual(c.http_4xx, [])
+
+    def test_expected_404_recorded_as_neither(self):
+        c = self._collector()
+        c.expect_status("/api/x")
+        c._on_response(_FakeResponse("http://127.0.0.1:1/api/x", 404))
+        self.assertEqual(c.http_4xx, [])
+        self.assertEqual(c.http_5xx, [])
+        c.assert_clean()  # must not raise: no unexpected 4xx, no 5xx at all
+
+    def test_expected_path_returning_500_still_fails_as_5xx(self):
+        """An expect_status() 4xx exemption must never hide a 5xx on that same path."""
+        c = self._collector()
+        c.expect_status("/api/x")
+        c._on_response(_FakeResponse("http://127.0.0.1:1/api/x", 500))
+        self.assertEqual(c.http_5xx, ["GET /api/x -> 500"])
+        self.assertEqual(c.http_4xx, [])
+        with self.assertRaises(AssertionError):
+            c.assert_clean()
+
+
+class TestManifestRetentionTruthfulness(unittest.TestCase):
+    """A passing scenario's directory is deleted in default (non-recording) mode -- the
+    manifest entry must say so rather than pointing at files that no longer exist."""
+
+    def _entry(self):
+        return {
+            "name": "example",
+            "status": "PASS",
+            "checkpoints": ["01-a.png", "02-b.png"],
+            "video": "video.webm",
+            "trace": "trace.zip",
+        }
+
+    def test_non_retained_entry_nulls_paths_and_says_so(self):
+        from tests.ux_tour.harness import apply_retention
+
+        entry = self._entry()
+        apply_retention(entry, retained=False)
+        self.assertEqual(entry["artifacts_retained"], False)
+        self.assertIsNone(entry["video"])
+        self.assertIsNone(entry["trace"])
+        self.assertEqual(entry["checkpoints"], [])
+
+    def test_retained_entry_keeps_real_paths(self):
+        from tests.ux_tour.harness import apply_retention
+
+        entry = self._entry()
+        apply_retention(entry, retained=True)
+        self.assertEqual(entry["artifacts_retained"], True)
+        self.assertEqual(entry["video"], "video.webm")
+        self.assertEqual(entry["trace"], "trace.zip")
+        self.assertEqual(entry["checkpoints"], ["01-a.png", "02-b.png"])
+
+    def test_report_md_pass_line_unaffected_by_retention_fields(self):
+        """build_report_md's compact PASS output must stay unchanged regardless of
+        artifacts_retained/video/trace/checkpoints -- it never reads those fields for a
+        passing scenario."""
+        from tests.ux_tour.harness import apply_retention, build_report_md
+
+        retained = {"name": "a", "status": "PASS", "duration": 1.0, **self._entry()}
+        not_retained = dict(retained)
+        apply_retention(not_retained, retained=False)
+        manifest_retained = {"scenarios": [retained], "commit": "abc", "viewport": {"width": 1, "height": 1}}
+        manifest_not_retained = {
+            "scenarios": [not_retained],
+            "commit": "abc",
+            "viewport": {"width": 1, "height": 1},
+        }
+        self.assertEqual(build_report_md(manifest_retained), build_report_md(manifest_not_retained))
+
+
 if __name__ == "__main__":
     unittest.main()

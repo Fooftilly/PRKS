@@ -105,7 +105,7 @@ class TourCollector(PageCollector):
     def _on_response(self, res):
         super()._on_response(res)
         status = res.status
-        if status < 400:
+        if not (400 <= status < 500):
             return
         parsed = urlparse(res.url)
         path = parsed.path or ""
@@ -249,6 +249,20 @@ class TourArtifacts:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
+def apply_retention(entry: dict, *, retained: bool) -> None:
+    """Mutates a scenario's manifest entry in place so it never claims artifacts are
+    available when `open_tour_page` has actually deleted them (a passing scenario in
+    default, non-recording mode). `retained=False` nulls out video/trace and clears
+    checkpoint filenames so the manifest can't point at files that no longer exist;
+    REPORT.md's compact PASS line never reads any of these fields, so this has no
+    effect on it."""
+    entry["artifacts_retained"] = bool(retained)
+    if not retained:
+        entry["video"] = None
+        entry["trace"] = None
+        entry["checkpoints"] = []
+
+
 @contextlib.contextmanager
 def open_tour_page(
     browser, run_dir: Path, name: str, *, seed_fn, record_all: bool, results: list, extra_env: dict | None = None
@@ -323,8 +337,10 @@ def open_tour_page(
         tour.write_server_log(server_log)
         entry = tour.finalize(status, error_count)
         results.append(entry)
-        if status == "PASS" and not record_all:
+        retain = not (status == "PASS" and not record_all)
+        if not retain:
             tour.cleanup()
+        apply_retention(entry, retained=retain)
 
 
 def build_manifest(run_id: str, results: list, *, record_all: bool) -> dict:

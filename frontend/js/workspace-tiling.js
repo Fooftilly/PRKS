@@ -500,6 +500,17 @@
         return !!(node.getAttribute && node.getAttribute('data-prks-tab-id') && node.className && node.className.indexOf('prks-tile') !== -1);
     }
 
+    const CLICK_FALLBACK_SELECTOR = '.prks-tile-header__menu, .prks-tile-header__close';
+    const CLICK_FALLBACK_THRESHOLD_PX = 6;
+    /* At most one candidate live at a time -- a complete click-like gesture (pointerdown ->
+     * pointerup on the same header button, same pointerId, released close to where it started)
+     * tracked from pointerdown so the fallback below can tell a genuine click apart from a drag
+     * whose pointerup happens to land over a button. Deliberately pointerdown/pointerup/
+     * pointercancel only -- this module is DOM/layout only (see file banner); it never tracks
+     * an in-progress pointer path (that belongs to workspace-drag.js), it only ever compares
+     * a gesture's start and end points. */
+    let clickFallbackCandidate = null;
+
     /** Chromium leaves stale hit-test state on a tile that a paint moves or recreates -- an
      * existing Secondary leaf nested into a brand-new split container by
      * renderTreeNode/insertBefore, or a tile pruned by Hide Split and rebuilt from scratch by
@@ -509,32 +520,28 @@
      * element is not the only trigger (a freshly rebuilt tile, with no prior DOM identity to have
      * been "reparented" from, exhibits it too), so this is armed unconditionally on every tile on
      * every paint rather than only on tiles a before/after DOM comparison flags as moved -- that
-     * comparison under-detects the rebuilt-from-scratch case. The staleness has also been
-     * observed to persist, or resurface, across further unrelated interaction elsewhere in the
-     * workspace (e.g. focusing a sibling pane) -- it is not reliably cleared by exactly one
-     * pointer interaction with the affected tile, and not necessarily one that lands on the
-     * button itself (a click that lands on the tile but misses every button still consumes a
-     * real hit-test pass without telling us whether the underlying staleness actually cleared).
+     * comparison under-detects the rebuilt-from-scratch case.
      *
      * This does not try to pre-emptively "fix" that browser-internal state (extensive testing
-     * found no way to do that both reliably and safely: every timing that reliably clears it --
-     * a chain of requestIdleCallback passes, confirmed necessary and confirmed sufficient in
-     * isolation -- takes long enough that it can land in the middle of a *different*, unrelated
-     * click happening elsewhere in the workspace and silently break that click instead, via this
-     * same mechanism). Instead it treats the symptom directly and safely: arm a `pointerup`
-     * listener on every tile that stays live for the tile's whole lifetime (rather than
-     * self-disarming after the first pointerup, regardless of whether that first one actually
-     * needed it), and on every pointerup whose target is inside a button, verify within the very
+     * found no way to do that both reliably and safely). Instead it treats the symptom directly
+     * and safely: only a genuine, complete click-like gesture on ONE of the two supported header
+     * buttons (pane menu, close) ever arms the fallback -- tracked from pointerdown (button,
+     * pointerId, start position), cleared on pointercancel, and only actually dispatched from
+     * pointerup once that same candidate is confirmed intact (same pointerId, same button,
+     * release point still within the click threshold of where it started, button still connected
+     * and enabled). This deliberately does NOT arm on an arbitrary button inside the tile, and
+     * deliberately does NOT arm when the gesture started elsewhere (e.g. the
+     * `.prks-tile-header__grip` drag handle) -- a pane drag that happens to release over Close or
+     * Pane actions therefore can never trigger this fallback, since its pointerdown target was
+     * never one of these two buttons in the first place (workspace-drag.js only ever arms a drag
+     * from the grip or the tab strip, never from these header buttons, so a gesture that starts
+     * on one of them is never hijacked into a drag either). On pointerup, verify within the very
      * next tick that the real `click` this browser owes that gesture actually showed up; if it
      * didn't, dispatch it by calling `.click()` on the pressed button ourselves. `.click()`
-     * synthesizes a proper click through the normal DOM path (bubbles, real target, real
-     * listeners) without depending on the browser's native hit-test pipeline at all, so it fires
-     * regardless of that pipeline's stale state. Scoped to gestures that land on a button inside
-     * the tile, so it can never touch, delay, or interfere with anything else happening in the
-     * workspace; a button whose native click already works incurs no double-fire, since the
-     * synthesized click is skipped whenever the real one already landed. Arming unconditionally
-     * on a tile that never has the problem (e.g. Main, which has no pane-menu/Close buttons in
-     * its header) is likewise inert -- there is no button for the listener to ever act on. */
+     * synthesizes a proper click through the normal DOM path without depending on the browser's
+     * native hit-test pipeline at all, so it fires regardless of that pipeline's stale state. A
+     * button whose native click already works incurs no double-fire, since the synthesized click
+     * is skipped whenever the real one already landed. */
     function armClickFallback(canvas) {
         const tiles = collectAll(canvas, isTileHost);
         for (let i = 0; i < tiles.length; i++) {
@@ -543,13 +550,41 @@
             /* Idempotent: addEventListener with the same (type, listener, capture) triple is a
              * no-op if already attached, so calling this again on every paint is safe and never
              * creates duplicate listeners. */
+            tile.addEventListener('pointerdown', onReparentedTilePointerDown, true);
             tile.addEventListener('pointerup', onReparentedTilePointerUp, true);
+            tile.addEventListener('pointercancel', onReparentedTilePointerCancel, true);
         }
     }
 
+    function onReparentedTilePointerDown(ev) {
+        if (ev.button !== 0 || (typeof ev.isPrimary === 'boolean' && !ev.isPrimary)) return;
+        const target =
+            ev.target && typeof ev.target.closest === 'function' ? ev.target.closest(CLICK_FALLBACK_SELECTOR) : null;
+        if (!target || target.disabled) return;
+        clickFallbackCandidate = {
+            pointerId: ev.pointerId,
+            button: target,
+            startX: ev.clientX,
+            startY: ev.clientY,
+        };
+    }
+
+    function onReparentedTilePointerCancel(ev) {
+        const candidate = clickFallbackCandidate;
+        if (!candidate || ev.pointerId !== candidate.pointerId) return;
+        clickFallbackCandidate = null;
+    }
+
     function onReparentedTilePointerUp(ev) {
-        const target = ev.target && typeof ev.target.closest === 'function' ? ev.target.closest('button') : null;
-        if (!target || typeof target.click !== 'function') return;
+        const candidate = clickFallbackCandidate;
+        if (!candidate || ev.pointerId !== candidate.pointerId) return;
+        clickFallbackCandidate = null;
+        const dx = ev.clientX - candidate.startX;
+        const dy = ev.clientY - candidate.startY;
+        if (Math.hypot(dx, dy) > CLICK_FALLBACK_THRESHOLD_PX) return;
+        const target = candidate.button;
+        const d = doc();
+        if (!target || typeof target.click !== 'function' || target.disabled || !d || !d.contains(target)) return;
         let clicked = false;
         const onClick = function () {
             clicked = true;
@@ -557,8 +592,7 @@
         target.addEventListener('click', onClick, true);
         root.setTimeout(function () {
             target.removeEventListener('click', onClick, true);
-            const d = doc();
-            if (!clicked && d && d.contains(target)) target.click();
+            if (!clicked && d.contains(target) && !target.disabled) target.click();
         }, 0);
     }
 

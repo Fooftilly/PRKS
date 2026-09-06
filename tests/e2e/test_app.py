@@ -71,6 +71,39 @@ _GRAPH_DESTROYED = """() => {
 }"""
 
 
+def _click_graph_node(page, node_id):
+    """Selects a Cytoscape graph node through a real mouse click -- never
+    `window.selectGraphNode(...)` as a substitute for the interaction. Internal
+    instrumentation (`prksGetResearchGraphDebug()`) only calculates WHERE to click (the
+    node's live rendered position, translated into page coordinates via the Cytoscape
+    container's bounding box); if a prior interaction (e.g. Graph Find, or selecting a
+    different node) left the current viewport panned/zoomed such that this node isn't
+    actually visible, it's brought into view first -- the Cytoscape equivalent of a DOM
+    `scroll_into_view_if_needed()`, not a substitute for the click itself. The click is a
+    real `page.mouse.click(...)`, and selection is then confirmed via the same debug hook
+    other tests already use."""
+    point = page.evaluate(
+        """(nodeId) => {
+            const debug = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();
+            const cy = debug && debug.cy;
+            const node = cy && cy.getElementById(nodeId);
+            if (!node || !node.length) return null;
+            const rect = cy.container().getBoundingClientRect();
+            let p = node.renderedPosition();
+            if (p.x < 0 || p.y < 0 || p.x > rect.width || p.y > rect.height) {
+                cy.center(node);
+                p = node.renderedPosition();
+            }
+            return { x: rect.left + p.x, y: rect.top + p.y };
+        }""",
+        arg=node_id,
+    )
+    if point is None:
+        raise AssertionError("graph node %r not found in the live Cytoscape instance" % node_id)
+    page.mouse.click(point["x"], point["y"])
+    page.wait_for_function("(id) => window.getSelectedGraphNodeId() === id", arg=node_id)
+
+
 def _expand_research(page):
     toggle = page.locator('[data-nav-disclosure-toggle="research"]')
     if toggle.get_attribute("aria-expanded") != "true":
@@ -6478,6 +6511,68 @@ class WorkspaceTilingTests(_BrowserE2E):
 
         # The close button is the other header control on the same reparented tile -- also
         # dead under the original bug, per the report's own isolation steps.
+        close_btn = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__close' % b_id)
+        close_btn.click(timeout=5000)
+        page.wait_for_function(
+            "(bId) => !window.prksWorkspaceSnapshot().tabs.some((t) => t.id === bId)",
+            arg=b_id,
+        )
+
+    def test_pane_drag_release_over_header_button_does_not_trigger_it(self):
+        """Regression for workspace-tiling.js's reparented-click fallback (armClickFallback):
+        it must require a complete click-like gesture on the SAME header button from
+        pointerdown, so it can never fire for a genuine pane drag (started on
+        `.prks-tile-header__grip`, never on the button) whose pointerup happens to land over
+        Pane actions or Close. A pane drag releasing over its own header (self-drop) is an
+        invalid spatial target under workspace-drag.js's own contract, so the drag itself must
+        just cancel -- not close the pane, and not open the pane menu."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        _wait_pdf_tab(page, b_id)
+
+        # Reparent b_id's tile into a freshly created nested split container, exactly like the
+        # Chromium regression above -- the fallback this test protects only matters once a tile
+        # has actually been reparented.
+        self._split_via_pane_menu(page, b_id, "Split right", PERSON_DISPLAY)
+        tree = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+        self.assertEqual(tree["first"]["tabId"], b_id)
+
+        close_box = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__close' % b_id).bounding_box()
+        menu_box = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__menu' % b_id).bounding_box()
+        self.assertIsNotNone(close_box)
+        self.assertIsNotNone(menu_box)
+
+        for label, target_box in (("close", close_box), ("menu", menu_box)):
+            grip_box = _grip_box(page, b_id)
+            self.assertIsNotNone(grip_box, msg=label)
+            _pointer_drag(page, _center(grip_box), _center(target_box))
+            page.wait_for_function("() => !document.body.classList.contains('prks-workspace-dragging')")
+            _assert_no_drag_residue(self, page, msg="after drag release over " + label)
+            self.assertTrue(
+                page.evaluate(
+                    "(id) => window.prksWorkspaceSnapshot().tabs.some((t) => t.id === id)", arg=b_id
+                ),
+                msg="pane closed merely by a drag release over " + label,
+            )
+            self.assertFalse(
+                page.locator("#prks-workspace-menu").is_visible(),
+                msg="pane menu opened merely by a drag release over " + label,
+            )
+
+        # An ordinary genuine click on the same reparented buttons must still work.
+        _open_pane_actions(page, b_id)
+        self.assertTrue(page.locator("#prks-workspace-menu").is_visible())
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#prks-workspace-menu[hidden]", state="attached")
+
         close_btn = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__close' % b_id)
         close_btn.click(timeout=5000)
         page.wait_for_function(

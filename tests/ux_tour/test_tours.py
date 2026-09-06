@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 from tests.e2e.fixtures import MINIMAL_PDF, PERSON_DISPLAY, WORK_A_TITLE, WORK_B_TITLE
 from tests.e2e.harness import require_chromium
 from tests.e2e.test_app import (
+    _click_graph_node,
     _click_workspace_menu,
     _diagnostics_requests,
     _drag_divider,
@@ -276,8 +277,14 @@ class WorkspaceTourTest(_UXTour):
             _open_work_from_home(page, WORK_A_TITLE)
             _wait_pdf_viewer(page)
             work_a_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+            page.evaluate(
+                """(id) => {
+                    window.__prksTourRt = { a: window.prksGetTabContext(id).getResource('pdf') };
+                }""",
+                arg=work_a_id,
+            )
 
-            tour.step("Open Work B as a tab")
+            tour.step("Open Work B as a new Main tab")
             page.locator("#prks-workspace-new-tab").click()
             page.wait_for_selector("#prks-command-palette:not([hidden])")
             _palette_pick(page, WORK_B_TITLE)
@@ -287,16 +294,74 @@ class WorkspaceTourTest(_UXTour):
                 """(aId) => window.prksWorkspaceSnapshot().tabs.find(t => t.id !== aId).id""",
                 arg=work_a_id,
             )
+            page.wait_for_function("(id) => window.prksWorkspaceSnapshot().mainTabId === id", arg=work_b_id)
+
+            tour.step("Confirm Work A warm-suspends rather than cold-unmounts")
+            a_after_b_main = page.evaluate(
+                """(id) => {
+                    const ctx = window.prksGetTabContext(id);
+                    return { mounted: !!ctx.mounted, suspended: !!ctx.suspended };
+                }""",
+                arg=work_a_id,
+            )
+            self.assertEqual(a_after_b_main, {"mounted": False, "suspended": True})
+            page.evaluate(
+                """(id) => {
+                    window.__prksTourRt.b = window.prksGetTabContext(id).getResource('pdf');
+                }""",
+                arg=work_b_id,
+            )
+
+            def _work_fetch_count():
+                return len(
+                    [
+                        r
+                        for r in page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")
+                        if "/api/works/" in r
+                    ]
+                )
+
+            fetch_count_baseline = _work_fetch_count()
+
+            def _assert_warm_resume(suspended_id):
+                """Internal-JS assertion only (per the Tour's real-action-vs-instrumentation
+                contract): the tab-strip click that triggered this transition was a real UI
+                action; this just confirms the resulting state was a warm suspend/resume
+                (same TabContext, same PDF resource object, no repeat Work/PDF fetch) rather
+                than a cold unmount/remount."""
+                state = page.evaluate(
+                    """(id) => {
+                        const ctx = window.prksGetTabContext(id);
+                        return { mounted: !!ctx.mounted, suspended: !!ctx.suspended };
+                    }""",
+                    arg=suspended_id,
+                )
+                self.assertEqual(state, {"mounted": False, "suspended": True})
+                same_runtimes = page.evaluate(
+                    """(ids) => {
+                        const rt = window.__prksTourRt;
+                        const a = window.prksGetTabContext(ids.a).getResource('pdf');
+                        const b = window.prksGetTabContext(ids.b).getResource('pdf');
+                        return !!rt.a && !!rt.b && a === rt.a && b === rt.b;
+                    }""",
+                    arg={"a": work_a_id, "b": work_b_id},
+                )
+                self.assertTrue(same_runtimes)
+                self.assertEqual(_work_fetch_count(), fetch_count_baseline)
 
             tour.step("Activate Work A from the tab strip")
             page.locator('.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__activate' % work_a_id).click()
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().mainTabId === id", arg=work_a_id)
+            _assert_warm_resume(work_b_id)
             tour.step("Activate Work B from the tab strip")
             page.locator('.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__activate' % work_b_id).click()
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().mainTabId === id", arg=work_b_id)
+            _assert_warm_resume(work_a_id)
             tour.step("Activate Work A again")
             page.locator('.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__activate' % work_a_id).click()
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().mainTabId === id", arg=work_a_id)
+            _assert_warm_resume(work_b_id)
+            tour.checkpoint(page, "warm-pdf-return")
 
             tour.step("Tile Work B beside Work A")
             page.locator('.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__split' % work_b_id).click()
@@ -409,15 +474,19 @@ class WorkspaceTourTest(_UXTour):
             page.wait_for_function("() => document.querySelectorAll('.prks-tile').length === 3")
             self.assertFalse(page.locator('.prks-tile[data-prks-tab-id="%s"]' % person_id).count())
 
-            tour.step("Return between PDF tabs (warm return)")
+            tour.step("Focus between visible PDF panes")
             main_id_now = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
             other_pdf_id = work_a_id if main_id_now != work_a_id else work_c_id
-            # Stash the live PDF-runtime references in-page (they aren't JSON-serializable);
-            # identity is then checked in-browser, returning a plain boolean to Python --
-            # the established pattern this repo's own E2E divider/runtime tests use.
+            # Distinct invariant from the earlier mounted<->warm-suspended transitions above:
+            # both these panes are already visible tiles (Main + a Secondary), so per the
+            # workspace's own contract, clicking a *visible* pane only focuses it in place (it
+            # does not promote it to Main, and does not remount it -- that only applies to a
+            # parked tab, or via the pane menu's explicit "Make main"). Stash the live
+            # PDF-runtime references in-page (they aren't JSON-serializable); identity is then
+            # checked in-browser, returning a plain boolean/dict to Python.
             page.evaluate(
                 """(ids) => {
-                    window.__prksTourRt = {
+                    window.__prksTourVisibleRt = {
                         main: window.prksGetTabContext(ids.main).getResource('pdf'),
                         other: window.prksGetTabContext(ids.other).getResource('pdf'),
                     };
@@ -428,33 +497,36 @@ class WorkspaceTourTest(_UXTour):
                 [r for r in page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")
                  if "/api/works/" in r]
             )
-            # Both panes are already visible (Main + a Secondary tile): per the workspace's own
-            # contract, clicking a *visible* Secondary's tab-strip entry only focuses it in place
-            # (it does not promote it to Main -- that only applies to a parked tab, or via the
-            # pane menu's explicit "Make main"). Returning between the two PDF tabs here means
-            # switching focus back and forth between the already-visible panes.
             page.locator('.prks-tile[data-prks-tab-id="%s"]' % other_pdf_id).click(position={"x": 20, "y": 60})
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=other_pdf_id)
             page.locator('.prks-tile[data-prks-tab-id="%s"]' % main_id_now).click(position={"x": 20, "y": 60})
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=main_id_now)
             page.locator('.prks-tile[data-prks-tab-id="%s"]' % other_pdf_id).click(position={"x": 20, "y": 60})
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=other_pdf_id)
-            tour.checkpoint(page, "warm-pdf-return")
+            tour.checkpoint(page, "visible-pdf-focus")
             work_fetch_after = len(
                 [r for r in page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")
                  if "/api/works/" in r]
             )
             self.assertEqual(work_fetch_before, work_fetch_after)
-            same_runtimes = page.evaluate(
+            both_states = page.evaluate(
                 """(ids) => {
-                    const rt = window.__prksTourRt;
-                    const main = window.prksGetTabContext(ids.main).getResource('pdf');
-                    const other = window.prksGetTabContext(ids.other).getResource('pdf');
-                    return !!rt.main && !!rt.other && main === rt.main && other === rt.other;
+                    const rt = window.__prksTourVisibleRt;
+                    const main = window.prksGetTabContext(ids.main);
+                    const other = window.prksGetTabContext(ids.other);
+                    return {
+                        mainMounted: !!main.mounted,
+                        otherMounted: !!other.mounted,
+                        sameMainRt: !!rt.main && main.getResource('pdf') === rt.main,
+                        sameOtherRt: !!rt.other && other.getResource('pdf') === rt.other,
+                    };
                 }""",
                 arg={"main": main_id_now, "other": other_pdf_id},
             )
-            self.assertTrue(same_runtimes)
+            self.assertTrue(both_states["mainMounted"])
+            self.assertTrue(both_states["otherMounted"])
+            self.assertTrue(both_states["sameMainRt"])
+            self.assertTrue(both_states["sameOtherRt"])
 
 
 class WorkPdfTourTest(_UXTour):
@@ -516,7 +588,7 @@ class WorkPdfTourTest(_UXTour):
             page.locator("h2", has_text=CONCEPT_PARENT_NAME).wait_for()
 
             tour.step("Return to the Work")
-            page.evaluate("() => history.back()")
+            page.go_back()
             page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
             page.wait_for_selector(".CodeMirror")
 
@@ -726,7 +798,7 @@ class ResearchGraphTourTest(_UXTour):
                 }"""
             )
             self.assertIsNotNone(work_node_id)
-            page.evaluate("(id) => { window.selectGraphNode(id, { center: true }); }", arg=work_node_id)
+            _click_graph_node(page, work_node_id)
             page.locator("#prks-graph-inspector-title").wait_for()
             tour.checkpoint(page, "graph-work-inspector")
             self.assertEqual(page.locator("#prks-graph-inspector .doc-meta-card").count(), 0)
@@ -757,7 +829,7 @@ class ResearchGraphTourTest(_UXTour):
                 tour.checkpoint(page, "graph-edge-inspector")
 
             tour.step("Open the selected Work")
-            page.evaluate("(id) => { window.selectGraphNode(id, { center: false }); }", arg=work_node_id)
+            _click_graph_node(page, work_node_id)
             page.locator("#prks-graph-open").wait_for()
             page.locator("#prks-graph-open").click()
             page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
@@ -770,7 +842,7 @@ class ResearchGraphTourTest(_UXTour):
                 "() => { const d = window.prksGetResearchGraphDebug && window.prksGetResearchGraphDebug();"
                 " return !!(d && d.cy && d.cy.nodes().length > 0); }"
             )
-            page.evaluate("(id) => { window.selectGraphNode(id, { center: false }); }", arg=work_node_id)
+            _click_graph_node(page, work_node_id)
             page.locator("#prks-graph-inspector-title").wait_for()
             self.assertTrue(page.locator("[data-graph-clear-selection]").is_visible())
             tour.checkpoint(page, "graph-details-closed")

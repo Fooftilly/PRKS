@@ -35,7 +35,8 @@ Chromium, fast, precise); **selftest** = a Node browser selftest under
 | Workspace | Make Main from the pane menu | workspace | E2E |
 | Workspace | Hide split / Show split (tree preserved) | workspace | E2E |
 | Workspace | Close a Secondary pane | workspace | E2E |
-| Workspace | Warm PDF return (same runtime, no refetch) | workspace | E2E |
+| Workspace | Warm PDF return (parked tab warm-suspends/resumes: same TabContext, same PDF resource, no refetch) | workspace | E2E |
+| Workspace | Focus among visible tiled PDFs (no remount, no reload) | workspace | E2E |
 | Workspace | Pane drag/drop (reorder, move, park) | — | E2E |
 | Workspace | Workspace persistence across reload | — | E2E |
 | Work/PDF | Open a managed PDF Work | work-pdf | E2E |
