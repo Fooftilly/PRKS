@@ -195,6 +195,13 @@
             return out;
         };
 
+        runtime.resize = function () {
+            if (runtime._destroyed) return;
+            if (runtime.viewer && typeof runtime.viewer.resize === 'function') {
+                runtime.viewer.resize();
+            }
+        };
+
         runtime.destroy = function () {
             if (runtime._destroyed) return;
             runtime._destroyed = true;

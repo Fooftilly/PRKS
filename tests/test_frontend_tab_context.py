@@ -81,8 +81,17 @@ class TestTabContextResourceAPI(unittest.TestCase):
             "prksFocusedRouteSidebar",
             "prksTabContextIsFocused",
             "prksApplyOwnedWorkEntity",
+            "prksWarmParkTabContext",
+            "prksResumeWarmTabContext",
         ):
             self.assertIn(name, src, f"{name} not found in tab-context.js")
+
+    def test_warm_pdf_parking_host_exists(self):
+        index_path = os.path.join(ROOT, "frontend", "index.html")
+        with open(index_path, encoding="utf-8") as fh:
+            html = fh.read()
+        self.assertIn('id="prks-tab-warm-parking"', html)
+        self.assertIn('hidden aria-hidden="true"', html)
 
 
 class TestResearchGraphNoSingletonFallback(unittest.TestCase):

@@ -197,7 +197,14 @@ User-facing menu copy is Split view / Split right / Split down / Make main / Hid
 
 Secondary tiled headers keep grip, icon, title, a **Pane actions** control, and Close. Infrequent pane actions (Make main, Split right/down, Hide from split, move) must open the existing `prksWorkspaceOpenTabMenu` from `workspace-tab-menu.js` — do not add a second tile-header action list or Split dropdown in `workspace-tiling.js`.
 
-Parked tabs must perform no API requests and own no live DOM/resources.
+Parked tabs use two lifecycles. Cold-parked tabs perform no API requests and own no live
+DOM/resources. Ordinary global-tab
+switching may warm-suspend an actual PDF Work (`ctx.getResource('pdf')`) by reparenting its
+existing root into `#prks-tab-warm-parking`; warm resume reparents that same root and requests
+only a container resize, never a route render, Work/PDF fetch, viewer init, fit, reload, or
+layout. Warm parking is a three-context LRU. Eviction, Close, batch close, application teardown,
+Hide split / Hide from split, and narrow fallback cold-unmount and destroy normally. Non-PDF
+routes always cold-park. Warm-cache state is runtime-only and never persisted.
 
 Stacked mode mounts one TabContext (Main). Tiled mounts Main plus every visible Secondary leaf in the tree, up to the visible-pane cap. Do not introduce a fifth mounted context.
 

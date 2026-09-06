@@ -137,8 +137,9 @@ function makeHarness(opts) {
     const hist = makeHistory(opts.hash || '#/folders');
     const renders = [];
     const published = [];
-    const life = { mount: [], park: [], destroy: [] };
+    const life = { mount: [], park: [], destroy: [], warmPark: [], warmResume: [] };
     const mounted = Object.create(null);
+    const warm = Object.create(null);
     let canLeave = true;
     let canLeaveCalls = 0;
     let lastLeaveTabId = null;
@@ -179,7 +180,23 @@ function makeHarness(opts) {
         onDestroyContext: function (tabId) {
             life.destroy.push(tabId);
             delete mounted[tabId];
+            delete warm[tabId];
         },
+        warmParkContext: opts.enableWarm
+            ? function (tabId) {
+                  life.warmPark.push(tabId);
+                  warm[tabId] = true;
+                  return true;
+              }
+            : undefined,
+        resumeWarmContext: opts.enableWarm
+            ? function (tabId) {
+                  if (!warm[tabId]) return false;
+                  delete warm[tabId];
+                  life.warmResume.push(tabId);
+                  return true;
+              }
+            : undefined,
         onChange: function () {
             if (typeof opts.onChange === 'function') opts.onChange();
         },
@@ -509,6 +526,21 @@ async function run() {
     assert('tile rejects graph', nav.prksRouteSupportsTile('#/graph') === false);
 
     {
+        const warm = makeHarness({ hash: '#/works/WA', enableWarm: true });
+        const tabA = warm.ws.snapshot().mainTabId;
+        const tabB = await warm.ws.openTab('#/works/WB', { activate: false });
+        const rendersBeforeB = warm.renders.length;
+        await warm.ws.activateTab(tabB.id);
+        assertEq('cold B activation renders once', warm.renders.length, rendersBeforeB + 1);
+        assertEq('ordinary switch warm-parks A', warm.life.warmPark[warm.life.warmPark.length - 1], tabA);
+        const rendersBeforeResume = warm.renders.length;
+        await warm.ws.activateTab(tabA);
+        assertEq('A warm-resumed', warm.life.warmResume[warm.life.warmResume.length - 1], tabA);
+        assertEq('warm resume performs no route render', warm.renders.length, rendersBeforeResume);
+        assertEq('warm resume makes A Main', warm.ws.snapshot().mainTabId, tabA);
+    }
+
+    {
     const tile = makeHarness({ hash: '#/works/WA' });
     const hrefA = tile.hist.getHash();
     const mainA = tile.ws.snapshot().mainTabId;
@@ -541,6 +573,8 @@ async function run() {
     tile.ws.focusTab(secId);
     assertEq('focus secondary again', tile.ws.snapshot().focusedTabId, secId);
     assertEq('url still A after secondary focus', tile.hist.getHash(), hrefA);
+    assertEq('visible pane focus never mounts', tile.life.mount.length, 2);
+    assertEq('visible pane focus never parks', tile.life.park.length, 0);
 
     const rendersFocus = tile.renders.length;
     const pushesFocus = tile.hist.stats().pushes;

@@ -1492,7 +1492,16 @@ def _wait_pdf_viewer(page):
     )
 
 
+def _open_details_drawer_if_tiled(page):
+    tiled = page.evaluate("() => !!document.querySelector('.app-container--tiled')")
+    open_ = page.evaluate("() => document.body.classList.contains('prks-right-panel-open')")
+    if tiled and not open_:
+        page.locator("#prks-mobile-details-btn").click()
+        page.wait_for_function("() => document.body.classList.contains('prks-right-panel-open')")
+
+
 def _open_annotations_tab(page):
+    _open_details_drawer_if_tiled(page)
     page.locator(".tab-btn[data-target='annotations']").click()
     page.wait_for_selector("#annotation-fallback-list")
 
@@ -2315,7 +2324,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash === '#/folders'")
         self.assertEqual(page.locator(".work-detail").count(), 0)
-        self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 0)
+        self.assertEqual(page.locator('.prks-tile--main [data-prks-role="pdf-viewer"]').count(), 0)
 
     def test_middle_click_opens_background_person(self):
         server, page, _collector = self._start_app()
@@ -2462,20 +2471,72 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
         self.assertEqual(len(patches), after_save)
 
-    def test_pdf_unmounts_when_parked_and_remounts(self):
+    def test_pdf_work_warm_parks_and_resumes_without_reload(self):
         server, page, _collector = self._start_app()
+        work_id = server.ids["work_a"]
         person_id = server.ids["person"]
+        requests = []
+
+        def on_request(req):
+            path = urlparse(req.url).path
+            if req.method == "GET" and path in (
+                "/api/works/" + work_id,
+                "/api/pdfs/" + server.ids["pdf_name"],
+            ):
+                requests.append(path)
+
+        page.on("request", on_request)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
+        tab_a = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        page.evaluate(
+            """(id) => {
+                const ctx = window.prksGetTabContext(id);
+                window.__prksWarmPdfProbe = {
+                    ctx: ctx,
+                    root: ctx.root,
+                    pdf: ctx.getResource('pdf'),
+                    viewer: ctx.getResource('pdf').viewer,
+                };
+            }""",
+            arg=tab_a,
+        )
+        initial_requests = list(requests)
         page.evaluate(
             """(pid) => window.prksNavigate('#/people/' + pid, { target: 'new-tab', activate: true })""",
             arg=person_id,
         )
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
-        self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 0)
-        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+        self.assertEqual(page.locator('.prks-tile--main [data-prks-role="pdf-viewer"]').count(), 0)
+        self.assertEqual(page.locator('#prks-tab-warm-parking [data-prks-role="pdf-viewer"]').count(), 1)
+        self.assertTrue(
+            page.evaluate(
+                """(id) => {
+                    const ctx = window.prksGetTabContext(id);
+                    const p = window.__prksWarmPdfProbe;
+                    return ctx === p.ctx && ctx.suspended && ctx.root === p.root &&
+                        ctx.getResource('pdf') === p.pdf && p.pdf.viewer === p.viewer;
+                }""",
+                arg=tab_a,
+            )
+        )
+
+        page.evaluate("async (id) => await window.prksWorkspaceActivateTab(id)", arg=tab_a)
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
-        _wait_pdf_viewer(page)
+        self.assertEqual(page.locator(".prks-route-loading").count(), 0)
+        self.assertTrue(page.locator('.prks-tile--main [data-prks-role="pdf-viewer"] .prks-pdf-page').first.is_visible())
+        self.assertTrue(
+            page.evaluate(
+                """(id) => {
+                    const ctx = window.prksGetTabContext(id);
+                    const p = window.__prksWarmPdfProbe;
+                    return ctx === p.ctx && ctx.mounted && !ctx.suspended && ctx.root === p.root &&
+                        ctx.getResource('pdf') === p.pdf && p.pdf.viewer === p.viewer;
+                }""",
+                arg=tab_a,
+            )
+        )
+        self.assertEqual(requests, initial_requests)
 
     def test_tab_switch_does_not_rewrite_contextual_back(self):
         server, page, _collector = self._start_app()
@@ -3428,6 +3489,68 @@ def _assert_no_drag_residue(test, page, msg=""):
 
 
 class WorkspaceTilingTests(_BrowserE2E):
+    def test_dense_shell_overlays_do_not_resize_tiled_workspace(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _work_a, _work_b, ids = _open_work_work_split(page, server)
+        page.wait_for_function("() => document.getElementById('app-container').classList.contains('app-container--tiled')")
+
+        before = page.evaluate(
+            """() => {
+                const main = document.getElementById('main-content').getBoundingClientRect();
+                const canvas = document.querySelector('.prks-workspace-canvas').getBoundingClientRect();
+                return {
+                    sidebar: document.getElementById('sidebar').getBoundingClientRect().width,
+                    mainWidth: main.width,
+                    canvasWidth: canvas.width,
+                };
+            }"""
+        )
+        self.assertAlmostEqual(before["sidebar"], 54, delta=1)
+        details = page.locator("#prks-mobile-details-btn")
+        self.assertTrue(details.is_visible())
+        details.click()
+        page.wait_for_function("() => document.body.classList.contains('prks-right-panel-open')")
+        opened = page.evaluate(
+            """() => ({
+                mainWidth: document.getElementById('main-content').getBoundingClientRect().width,
+                canvasWidth: document.querySelector('.prks-workspace-canvas').getBoundingClientRect().width,
+                modalState: document.body.classList.contains('prks-overlay-open'),
+                backdrop: !document.getElementById('prks-overlay-backdrop').classList.contains('hidden'),
+                rightPosition: getComputedStyle(document.getElementById('right-panel')).position,
+            })"""
+        )
+        self.assertAlmostEqual(opened["mainWidth"], before["mainWidth"], delta=0.1)
+        self.assertAlmostEqual(opened["canvasWidth"], before["canvasWidth"], delta=0.1)
+        self.assertFalse(opened["modalState"])
+        self.assertFalse(opened["backdrop"])
+        self.assertEqual(opened["rightPosition"], "fixed")
+
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["secondaryTabId"])
+        page.wait_for_function(
+            "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+            arg=ids["secondaryTabId"],
+        )
+        self.assertTrue(page.evaluate("() => document.body.classList.contains('prks-right-panel-open')"))
+        self.assertAlmostEqual(
+            page.evaluate("() => document.querySelector('.prks-workspace-canvas').getBoundingClientRect().width"),
+            before["canvasWidth"],
+            delta=0.1,
+        )
+
+        page.keyboard.press("Escape")
+        self.assertFalse(page.evaluate("() => document.body.classList.contains('prks-right-panel-open')"))
+        page.locator("#prks-sidebar-expand-btn").click()
+        page.wait_for_function("() => document.body.classList.contains('prks-sidebar-open')")
+        self.assertAlmostEqual(
+            page.evaluate("() => document.getElementById('main-content').getBoundingClientRect().width"),
+            before["mainWidth"],
+            delta=0.1,
+        )
+        self.assertTrue(page.evaluate("() => !document.getElementById('prks-overlay-backdrop').classList.contains('hidden')"))
+        page.locator("#prks-sidebar-collapse-btn").click()
+        self.assertFalse(page.evaluate("() => document.body.classList.contains('prks-sidebar-open')"))
+
     def test_delayed_person_save_updates_owner_without_replacing_other_focused_panel(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
@@ -3445,6 +3568,7 @@ class WorkspaceTilingTests(_BrowserE2E):
         saved_about = "PERSON-CROSS-FOCUS-%s" % int(time.time() * 1000)
         page.route("**/api/persons/*", hold_person_patch)
         try:
+            _open_details_drawer_if_tiled(page)
             page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
             page.wait_for_selector("#pd-about")
             page.fill("#pd-about", saved_about)
@@ -3564,6 +3688,7 @@ class WorkspaceTilingTests(_BrowserE2E):
 
         page.on("request", on_request)
 
+        _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Manage relationships").click()
         page.locator("#panel-content .work-link-person-btn", has_text="Link person").click()
         page.wait_for_selector("#role-modal:not(.hidden)")
@@ -3684,6 +3809,7 @@ class WorkspaceTilingTests(_BrowserE2E):
         saved_about = "PERSON-FOCUSED-SAVE-%s" % int(time.time() * 1000)
         page.route("**/api/persons/*", hold_person_patch)
         try:
+            _open_details_drawer_if_tiled(page)
             page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
             page.wait_for_selector("#pd-about")
             page.fill("#pd-about", saved_about)
@@ -4002,7 +4128,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
             arg=ids["secondaryTabId"],
         )
-        page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
+        _open_annotations_tab(page)
         page.wait_for_selector("#pdf-annotation-editor", state="attached")
         before = page.evaluate(
             """(ids) => {
@@ -4241,8 +4367,7 @@ class WorkspaceTilingTests(_BrowserE2E):
 
         page.locator(".prks-tile--main").click(position={"x": 24, "y": 80})
         page.wait_for_function("() => window.prksWorkspaceSnapshot().focusedTabId === window.prksWorkspaceSnapshot().mainTabId")
-        page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-        page.wait_for_selector("#annotation-fallback-list")
+        _open_annotations_tab(page)
         self.assertIn(work_a, page.evaluate("() => location.hash"))
         page.locator(".prks-tile--secondary").click(position={"x": 24, "y": 80})
         page.wait_for_function(
@@ -4250,6 +4375,7 @@ class WorkspaceTilingTests(_BrowserE2E):
         )
         self.assertIn(work_a, page.evaluate("() => location.hash"))
         self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 2)
+        page.keyboard.press("Escape")
 
         unique_a = "TILE-NOTE-A-%s" % int(time.time() * 1000)
         unique_b = "TILE-NOTE-B-%s" % int(time.time() * 1000)

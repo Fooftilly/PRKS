@@ -147,6 +147,8 @@
         const onMountContext = typeof deps.onMountContext === 'function' ? deps.onMountContext : null;
         const onParkContext = typeof deps.onParkContext === 'function' ? deps.onParkContext : null;
         const onDestroyContext = typeof deps.onDestroyContext === 'function' ? deps.onDestroyContext : null;
+        const warmParkContextFn = typeof deps.warmParkContext === 'function' ? deps.warmParkContext : null;
+        const resumeWarmContextFn = typeof deps.resumeWarmContext === 'function' ? deps.resumeWarmContext : null;
         const loadSnapshot =
             typeof deps.loadSnapshot === 'function'
                 ? deps.loadSnapshot
@@ -543,13 +545,30 @@
             markHandled();
         }
 
-        function parkContext(tabId) {
+        function coldParkContext(tabId) {
             if (!tabId || !contextMounted(tabId)) return;
             if (typeof root.prksUnmountTabContext === 'function') {
                 root.prksUnmountTabContext(tabId, 'park');
             }
             delete mountedSet[tabId];
             if (onParkContext) onParkContext(tabId);
+        }
+
+        function warmParkContext(tabId) {
+            if (!tabId || !contextMounted(tabId)) return false;
+            let warmed = false;
+            if (warmParkContextFn) {
+                warmed = !!warmParkContextFn(tabId);
+            } else if (typeof root.prksWarmParkTabContext === 'function') {
+                warmed = !!root.prksWarmParkTabContext(tabId);
+            }
+            if (!warmed) {
+                coldParkContext(tabId);
+                return false;
+            }
+            delete mountedSet[tabId];
+            if (onParkContext) onParkContext(tabId);
+            return true;
         }
 
         function hostForTab(tabId) {
@@ -563,13 +582,25 @@
         }
 
         function mountContext(tabId) {
-            if (!tabId || contextMounted(tabId)) return;
+            if (!tabId || contextMounted(tabId)) return false;
+            const host = hostForTab(tabId);
+            let resumed = false;
+            if (resumeWarmContextFn) {
+                resumed = !!resumeWarmContextFn(tabId, host);
+            } else if (typeof root.prksResumeWarmTabContext === 'function') {
+                resumed = !!root.prksResumeWarmTabContext(tabId, host);
+            }
+            if (resumed) {
+                mountedSet[tabId] = true;
+                if (onMountContext) onMountContext(tabId);
+                return true;
+            }
             if (typeof root.prksMountTabContext === 'function') {
-                const host = hostForTab(tabId);
                 if (host) root.prksMountTabContext(tabId, host);
             }
             mountedSet[tabId] = true;
             if (onMountContext) onMountContext(tabId);
+            return false;
         }
 
         function destroyContext(tabId) {
@@ -756,7 +787,7 @@
                 const prevId = state.mainTabId;
                 const tab = makeTab(route);
                 state.tabs.push(tab);
-                if (prevId && prevId !== tab.id) parkContext(prevId);
+                if (prevId && prevId !== tab.id) warmParkContext(prevId);
                 setMain(tab.id);
                 mountContext(tab.id);
                 commitUrl(tab, 'replace');
@@ -791,7 +822,7 @@
                 state.secondaryTree = root.replaceTabId(state.secondaryTree, tab.id, oldMain.id);
             } else {
                 state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, tab.id));
-                if (oldMain && oldMain.id !== tab.id) parkContext(oldMain.id);
+                if (oldMain && oldMain.id !== tab.id) coldParkContext(oldMain.id);
             }
             state.mainTabId = tab.id;
             state.focusedTabId = tab.id;
@@ -837,8 +868,13 @@
             }
             state.focusedTabId = tab.id;
             paintAndRestore(tab.id);
-            mountContext(tab.id);
+            const resumed = mountContext(tab.id);
             announce(tab.title, 'split');
+            if (resumed) {
+                publishShell(tab.id);
+                refreshFocusedPanel();
+                return Promise.resolve(copyTab(tab));
+            }
             return Promise.resolve(
                 invokeRender({
                     workspaceSwitch: true,
@@ -971,7 +1007,7 @@
                 if (!ok) return false;
                 if (!root.containsTab(state.secondaryTree, tabId)) return false;
                 const sibling = root.findSiblingLeafTabId(state.secondaryTree, tabId);
-                if (contextMounted(tabId)) parkContext(tabId);
+                if (contextMounted(tabId)) coldParkContext(tabId);
                 state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, tabId));
                 if (!state.secondaryTree) state.mode = MODE_STACKED;
                 if (state.focusedTabId === tabId) {
@@ -1001,7 +1037,12 @@
                 state.focusedTabId = tab.id;
                 paintAndRestore(tab.id);
                 if (!contextMounted(tab.id)) {
-                    mountContext(tab.id);
+                    const resumed = mountContext(tab.id);
+                    if (resumed) {
+                        publishShell(tab.id);
+                        refreshFocusedPanel();
+                        return Promise.resolve(copyTab(tab));
+                    }
                     return Promise.resolve(
                         invokeRender({
                             workspaceSwitch: true,
@@ -1159,15 +1200,20 @@
                 if (!ok) return false;
                 if (!getTab(tabId)) return false;
                 const prevId = state.mainTabId;
-                if (prevId && prevId !== tabId) parkContext(prevId);
+                if (prevId && prevId !== tabId) warmParkContext(prevId);
                 if (root.containsTab(state.secondaryTree, tabId)) {
                     if (!promoteSecondaryToMain(tabId)) return false;
                 } else {
                     setMain(tabId);
                 }
-                mountContext(tabId);
+                const resumed = mountContext(tabId);
                 commitUrl(tab, 'replace');
                 paint();
+                if (resumed) {
+                    publishShell(tab.id);
+                    refreshFocusedPanel();
+                    return true;
+                }
                 return Promise.resolve(
                     invokeRender({
                         workspaceSwitch: !opts.fromPopstate,
@@ -1256,10 +1302,10 @@
                     });
                 }
                 setMain(successor.id);
-                if (!wasMountedSuccessor) mountContext(successor.id);
+                const resumedSuccessor = !wasMountedSuccessor && mountContext(successor.id);
                 commitUrl(successor, 'replace');
                 paintAndRestore(successor.id);
-                if (wasMountedSuccessor) {
+                if (wasMountedSuccessor || resumedSuccessor) {
                     publishShell(successor.id);
                     refreshFocusedPanel();
                     return true;
@@ -1338,10 +1384,10 @@
                 }
                 if (closingMain) {
                     setMain(keepId);
-                    if (!keepWasMounted) mountContext(keepId);
+                    const resumedKeep = !keepWasMounted && mountContext(keepId);
                     commitUrl(keep, 'replace');
                     paintAndRestore(keepId);
-                    if (keepWasMounted && (keepWasLeaf || keepId === state.mainTabId)) {
+                    if ((keepWasMounted || resumedKeep) && (keepWasLeaf || keepId === state.mainTabId)) {
                         publishShell(keepId);
                         refreshFocusedPanel();
                         return true;
@@ -1386,9 +1432,12 @@
                 return !contextMounted(id);
             });
             if (!toMount.length) return Promise.resolve(true);
-            toMount.forEach(mountContext);
+            const toRender = [];
+            toMount.forEach(function (id) {
+                if (!mountContext(id)) toRender.push(id);
+            });
             return Promise.all(
-                toMount.map(function (id) {
+                toRender.map(function (id) {
                     const tab = getTab(id);
                     return Promise.resolve(
                         invokeRender({
@@ -1421,7 +1470,7 @@
             const mountedLeaves = visualTiled() ? leaves.filter(contextMounted) : [];
             return preflightLeaves(mountedLeaves, homeHash).then(function (ok) {
                 if (!ok) return false;
-                mountedLeaves.forEach(parkContext);
+                mountedLeaves.forEach(coldParkContext);
                 state.mode = MODE_STACKED;
                 state.focusedTabId = state.mainTabId;
                 paintAndRestore(state.mainTabId);
@@ -1449,7 +1498,7 @@
                     if (!ok) return false;
                     const stillLeaves = root.collectLeafTabIds(state.secondaryTree);
                     if (stillLeaves.join(',') !== leaves.join(',')) return false;
-                    mountedLeaves.forEach(parkContext);
+                    mountedLeaves.forEach(coldParkContext);
                     narrowFallback = true;
                     state.focusedTabId = state.mainTabId;
                     paintAndRestore(state.mainTabId);
@@ -1616,7 +1665,7 @@
                 }
                 if (!getTab(target.id)) return false;
                 const prevId = state.mainTabId;
-                if (prevId && prevId !== target.id) parkContext(prevId);
+                if (prevId && prevId !== target.id) warmParkContext(prevId);
                 /* A visually parked tab may still occupy a leaf in the preserved logical tree
                  * (Hide split / narrow fallback). Promotion uses the same eligibility rule as
                  * Make Main / startup: demote into that leaf only when the old Main is
@@ -1630,9 +1679,14 @@
                     setMain(target.id);
                 }
                 applyWantToTab(target, parkedWant);
-                mountContext(target.id);
+                const resumed = mountContext(target.id);
                 markHandled();
                 paint();
+                if (resumed) {
+                    publishShell(target.id);
+                    refreshFocusedPanel();
+                    return true;
+                }
                 return Promise.resolve(
                     invokeRender({
                         workspaceSwitch: false,

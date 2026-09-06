@@ -530,7 +530,7 @@ These are different concepts. Mixing them will break the later workspace project
 .prks-tab.is-active
 ```
 
-**Workspace tabs (stacked + tiled v1)** represent independently navigable PRKS pages. Parked tabs are state only. Reserved names:
+**Workspace tabs (stacked + tiled v1)** represent independently navigable PRKS pages. Cold-parked tabs are state only; ordinary tab switching may keep a bounded warm-suspended PDF runtime. Reserved names:
 
 ```text
 .prks-workspace-tabs
@@ -557,7 +557,7 @@ A focused Secondary tile keeps Close directly on the header. Infrequent pane act
 
 Workspace tabs should feel like application/document tabs, not browser chrome pasted into the page.
 
-Stacked: one main/visible tab (`mainTabId == focusedTabId`). Parked tabs are unmounted. Main tile chrome is visually transparent.
+Stacked: one main/visible tab (`mainTabId == focusedTabId`). Non-PDF and cold-parked tabs are unmounted. Up to three PDFs displaced by ordinary tab switching may remain warm-suspended in the hidden parking host. Main tile chrome is visually transparent.
 
 Tiled: Main occupies the left master column; the Secondary region holds the recursive tree of one or more Secondary leaves. `focusedTabId` may differ from `mainTabId` and may identify any visible leaf, at any tree depth. The right details panel follows the focused tile. Browser URL, document title, sidebar, and History stay with Main, no matter how deep the focused Secondary leaf is nested.
 
@@ -589,6 +589,8 @@ Split right / Split down open the same split picker used by the global Split but
 Generic "Open in split view" (parked tab strip/context menu, `target:'tile'` navigation, Alt-click) is additive: it never evicts an existing Secondary pane. There is no user-facing "Replace split pane" operation. Default placement: no Secondary tree yet → the new tab becomes the bare Secondary leaf; exactly one Secondary leaf B → split B right with the new tab (B stays first, new tab second/focused); a recursive tree with a focused Secondary leaf B → split B right with the new tab. A recursive tree with no focused Secondary leaf is ambiguous and the system never guesses an arbitrary leaf deep in the tree — this generic entry point fails closed (no new logical tab, no tree mutation, no mount, no paint, no leave check) and announces that an explicit Split right/down from a specific focused leaf is required. The same pane-cap check applies: at 4 visible panes, generic split placement fails closed with the cap explanation instead of silently falling back to opening a parked tab. Ordinary New Tab is a distinct operation, unaffected by the cap or by split-placement ambiguity — it always creates a parked tab.
 
 Close: parked closes that tab; a Secondary leaf's close removes it and normalizes the tree (redundant split nodes collapse; if it was the last leaf, the whole Secondary region disappears and the view returns to stacked) — it never touches Main or any other leaf's runtime; Main close promotes the first surviving Secondary leaf (in deterministic tree order) or, absent one, the right neighbor, then left, then Home. Promoting a Secondary leaf into Main's position removes only that one leaf from the tree and normalizes it; every other surviving Secondary leaf keeps its tree position, mounted state, and runtime untouched. Never flash Home while a successor exists. Leave guards apply before any close or hide; a rejected leave changes nothing (no partial tree/DOM mutation).
+
+Ordinary global-tab switching warm-suspends an eligible PDF Work by moving its existing TabContext root into `#prks-tab-warm-parking`. Resume moves that same root into its visible tile, preserves viewer/editor state, requests a container resize only, and performs no route render or Work/PDF fetch. The warm cache uses deterministic LRU eviction with at most three parked PDF contexts. Explicit hide, narrow fallback, close/batch close, and teardown remain cold lifecycle operations; non-PDF pages never enter the warm cache. Warm state is ephemeral and is not workspace persistence.
 
 Hide from split (local, per-leaf) removes that one leaf from the tree and normalizes it, but keeps its logical tab open and parked — distinct from Close (which destroys the tab) and from the global Hide split (which parks every visible leaf at once but keeps the entire tree intact, restorable via Show split).
 
@@ -700,7 +702,7 @@ Not persisted:
 - contextual Back/Forward history (each restored tab starts as `history = [route]`, `historyIndex = 0`)
 - split-node runtime IDs (fresh IDs are assigned on rehydrate)
 
-Startup restores before the first normal workspace mount: read + validate the snapshot atomically, build logical workspace state, reconcile the current URL, then mount only currently visible leaves. Parked tabs and hidden Secondary leaves stay state-only and must not fetch. The current startup URL outranks a stale persisted Main route: keep a valid restored workspace where possible, but make Main represent the opened hash and never silently redirect back to the stored Main. `narrowFallback` is recomputed from the live viewport; a wide layout stored on a wide display remains logically intact when reopened narrow, and the preferred ratios return when the viewport is eligible again.
+Startup restores before the first normal workspace mount: read + validate the snapshot atomically, build logical workspace state, reconcile the current URL, then mount only currently visible leaves. Restored parked tabs and hidden Secondary leaves stay state-only and must not fetch; warm runtime state is never restored. The current startup URL outranks a stale persisted Main route: keep a valid restored workspace where possible, but make Main represent the opened hash and never silently redirect back to the stored Main. `narrowFallback` is recomputed from the live viewport; a wide layout stored on a wide display remains logically intact when reopened narrow, and the preferred ratios return when the viewport is eligible again.
 
 A corrupt, unknown-version, or contradictory snapshot is discarded (the invalid `localStorage` value is removed) and PRKS bootstraps from the current URL. localStorage unavailability, quota errors, and serialize failures leave the running workspace intact and must not break navigation. Restored titles render through existing safe text paths (`textContent`); mounted routes refresh metadata normally.
 

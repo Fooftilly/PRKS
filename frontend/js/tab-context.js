@@ -1,11 +1,35 @@
 /**
- * Per-workspace-tab runtime. Parked contexts are inert: no DOM, network,
- * AbortController, timers, or live resources. Canonical library data is not cached.
+ * Per-workspace-tab runtime. Cold-parked contexts are inert. Up to three PDF
+ * contexts may instead be warm-suspended with their DOM/runtime preserved.
  */
 (function (root) {
     'use strict';
 
     const contexts = new Map();
+    const warmPdfLru = [];
+    const PRKS_MAX_WARM_PDF_CONTEXTS = 3;
+
+    function removeWarmLru(tabId) {
+        const id = String(tabId);
+        const idx = warmPdfLru.indexOf(id);
+        if (idx !== -1) warmPdfLru.splice(idx, 1);
+    }
+
+    function warmParkingHost() {
+        if (typeof document === 'undefined') return null;
+        return document.getElementById('prks-tab-warm-parking');
+    }
+
+    function moveRoot(rootEl, host) {
+        if (!rootEl || !host || typeof host.appendChild !== 'function') return false;
+        if (rootEl.parentNode && rootEl.parentNode !== host && typeof rootEl.parentNode.removeChild === 'function') {
+            try {
+                rootEl.parentNode.removeChild(rootEl);
+            } catch (_e) {}
+        }
+        if (rootEl.parentNode !== host) host.appendChild(rootEl);
+        return true;
+    }
 
     function sanitizeTabId(tabId) {
         const raw = String(tabId == null ? 'tab' : tabId);
@@ -128,6 +152,7 @@
         const ctx = {
             tabId: id,
             mounted: false,
+            suspended: false,
             destroyed: false,
             host: null,
             root: null,
@@ -175,7 +200,7 @@
         };
 
         ctx.isCurrent = function (generation) {
-            if (ctx.destroyed || !ctx.mounted) return false;
+            if (ctx.destroyed || (!ctx.mounted && !ctx.suspended)) return false;
             if (typeof generation !== 'number') return true;
             return generation === ctx.generation;
         };
@@ -294,6 +319,10 @@
 
         ctx.mount = function (host) {
             if (ctx.destroyed) return ctx;
+            if (ctx.suspended && ctx.root) {
+                ctx.resume(host);
+                return ctx;
+            }
             if (ctx.mounted && ctx.root && ctx.host === host) return ctx;
             if (ctx.mounted) ctx.unmount('remount');
             ctx.host = host || null;
@@ -302,14 +331,36 @@
                 host.appendChild(ctx.root);
             }
             ctx.mounted = true;
+            ctx.suspended = false;
             if (!ctx.abortController) ctx.abortController = createAbort();
             return ctx;
         };
 
+        ctx.suspend = function (host) {
+            if (ctx.destroyed || !ctx.mounted || !ctx.root) return false;
+            if (!moveRoot(ctx.root, host)) return false;
+            ctx.host = host;
+            ctx.mounted = false;
+            ctx.suspended = true;
+            return true;
+        };
+
+        ctx.resume = function (host) {
+            if (ctx.destroyed || !ctx.suspended || !ctx.root) return false;
+            if (!moveRoot(ctx.root, host)) return false;
+            removeWarmLru(id);
+            ctx.host = host;
+            ctx.suspended = false;
+            ctx.mounted = true;
+            return true;
+        };
+
         ctx.unmount = function (_reason) {
-            if (ctx.destroyed || !ctx.mounted) {
+            removeWarmLru(id);
+            if (ctx.destroyed || (!ctx.mounted && !ctx.suspended)) {
                 teardownRuntime();
                 ctx.mounted = false;
+                ctx.suspended = false;
                 ctx.root = null;
                 ctx.host = null;
                 return ctx;
@@ -329,11 +380,13 @@
             ctx.root = null;
             ctx.host = null;
             ctx.mounted = false;
+            ctx.suspended = false;
             return ctx;
         };
 
         ctx.destroy = function () {
             if (ctx.destroyed) return ctx;
+            removeWarmLru(id);
             ctx.unmount('destroy');
             ctx.navigation.routeStates.clear();
             ctx.navigation.origins.clear();
@@ -345,6 +398,7 @@
             return {
                 tabId: id,
                 mounted: !!ctx.mounted,
+                suspended: !!ctx.suspended,
                 generation: ctx.generation,
                 hasAbortController: !!ctx.abortController,
                 resourceNames: Array.from(ctx.resources.keys()).sort(),
@@ -421,14 +475,46 @@
         return ctx.mount(host);
     }
 
+    function prksWarmParkTabContext(tabId, host) {
+        const ctx = prksGetTabContext(tabId);
+        const parking = host || warmParkingHost();
+        if (!ctx || !ctx.mounted || !parking || !ctx.getResource('pdf')) return false;
+        if (!ctx.suspend(parking)) return false;
+        removeWarmLru(tabId);
+        warmPdfLru.push(String(tabId));
+        while (warmPdfLru.length > PRKS_MAX_WARM_PDF_CONTEXTS) {
+            const evictId = warmPdfLru.shift();
+            const evicted = prksGetTabContext(evictId);
+            if (evicted && evicted.suspended) evicted.unmount('warm-evict');
+        }
+        return true;
+    }
+
+    function prksResumeWarmTabContext(tabId, host) {
+        const ctx = prksGetTabContext(tabId);
+        if (!ctx || !ctx.suspended || !host) return null;
+        if (!ctx.resume(host)) return null;
+        removeWarmLru(tabId);
+        const notifyResize = function () {
+            if (ctx.destroyed || !ctx.mounted) return;
+            const pdf = ctx.getResource('pdf');
+            if (pdf && typeof pdf.resize === 'function') pdf.resize();
+        };
+        if (typeof root.requestAnimationFrame === 'function') root.requestAnimationFrame(notifyResize);
+        else notifyResize();
+        return ctx;
+    }
+
     function prksUnmountTabContext(tabId, reason) {
         const ctx = prksGetTabContext(tabId);
         if (!ctx) return null;
+        removeWarmLru(tabId);
         ctx.unmount(reason);
         return ctx;
     }
 
     function prksDestroyTabContext(tabId) {
+        removeWarmLru(tabId);
         const ctx = prksGetTabContext(tabId);
         if (!ctx) {
             contexts.delete(String(tabId));
@@ -468,7 +554,7 @@
         list.sort(function (a, b) {
             return String(a.tabId).localeCompare(String(b.tabId));
         });
-        return { mountedCount: mountedCount, contexts: list };
+        return { mountedCount: mountedCount, warmParkedCount: warmPdfLru.length, contexts: list };
     }
 
     function prksFocusedRouteRecord() {
@@ -573,6 +659,8 @@
         prksIsMainTabContext: prksIsMainTabContext,
         prksContextFromElement: prksContextFromElement,
         prksMountTabContext: prksMountTabContext,
+        prksWarmParkTabContext: prksWarmParkTabContext,
+        prksResumeWarmTabContext: prksResumeWarmTabContext,
         prksUnmountTabContext: prksUnmountTabContext,
         prksDestroyTabContext: prksDestroyTabContext,
         prksDestroyAllTabContexts: prksDestroyAllTabContexts,

@@ -13,6 +13,8 @@ const {
     prksDestroyTabContext,
     prksDestroyAllTabContexts,
     prksMountTabContext,
+    prksWarmParkTabContext,
+    prksResumeWarmTabContext,
     prksUnmountTabContext,
     prksTabContextDebugSnapshot,
     prksContextFromElement,
@@ -64,6 +66,46 @@ function makeHost() {
 }
 
 prksDestroyAllTabContexts();
+
+const warmParking = makeHost();
+const warmVisible = makeHost();
+const warmContexts = [];
+const warmRoots = [];
+const warmRuntimes = [];
+const warmDisposeCounts = [0, 0, 0, 0];
+const warmResizeCounts = [0, 0, 0, 0];
+for (let i = 0; i < 4; i++) {
+    const ctx = prksEnsureTabContext('warm-' + i);
+    ctx.mount(makeHost());
+    ctx.beginRoute({ name: 'work', hash: '#/works/W' + i });
+    const runtime = {
+        resize: function () { warmResizeCounts[i] += 1; },
+    };
+    ctx.setResource('pdf', runtime, function () { warmDisposeCounts[i] += 1; });
+    warmContexts.push(ctx);
+    warmRoots.push(ctx.root);
+    warmRuntimes.push(runtime);
+    assert('warm park ' + i, prksWarmParkTabContext(ctx.tabId, warmParking));
+}
+assertEq('warm LRU bounded at three', prksTabContextDebugSnapshot().warmParkedCount, 3);
+assert('oldest warm context evicted', warmContexts[0].suspended === false && warmContexts[0].root === null);
+assertEq('oldest runtime destroyed once', warmDisposeCounts[0], 1);
+assert('three newest stay suspended', warmContexts.slice(1).every(function (ctx) { return ctx.suspended; }));
+
+const resumedRoot = warmContexts[1].root;
+const resumedRuntime = warmContexts[1].getResource('pdf');
+assert('warm resume succeeds', prksResumeWarmTabContext('warm-1', warmVisible) === warmContexts[1]);
+assert('warm resume preserves context', prksGetTabContext('warm-1') === warmContexts[1]);
+assert('warm resume preserves root', warmContexts[1].root === resumedRoot && resumedRoot === warmRoots[1]);
+assert('warm resume preserves PDF runtime', warmContexts[1].getResource('pdf') === resumedRuntime && resumedRuntime === warmRuntimes[1]);
+assertEq('warm resume requests resize once', warmResizeCounts[1], 1);
+assertEq('warm resume does not dispose runtime', warmDisposeCounts[1], 0);
+prksDestroyTabContext('warm-1');
+assertEq('closing resumed warm PDF destroys once', warmDisposeCounts[1], 1);
+prksDestroyTabContext('warm-2');
+assertEq('closing parked warm PDF destroys once', warmDisposeCounts[2], 1);
+prksDestroyAllTabContexts();
+assertEq('warm cache empty after teardown', prksTabContextDebugSnapshot().warmParkedCount, 0);
 
 const a = createPrksTabContext('tab-1');
 const b = createPrksTabContext('tab-2');
