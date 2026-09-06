@@ -41,6 +41,7 @@ function makeButton(initialHtml) {
         _attrs: {},
         setAttribute(name, val) { this._attrs[name] = val; },
         getAttribute(name) { return this._attrs[name]; },
+        removeAttribute(name) { delete this._attrs[name]; },
         get innerHTML() { return state.html; },
         set innerHTML(v) { state.html = v; },
         // Plain-text buttons: textContent and innerHTML reflect the same
@@ -68,7 +69,10 @@ class ButtonBusyHelperTests(unittest.TestCase):
             if (btn.innerHTML !== 'Saving…') throw new Error('expected busy label, got ' + btn.innerHTML);
             context.prksSetButtonBusy(btn, false);
             if (btn.disabled !== false) throw new Error('expected re-enabled after busy(false)');
-            if (btn.getAttribute('aria-busy') !== 'false') throw new Error('expected aria-busy=false');
+            // No aria-busy attribute existed before busy(true) was ever called,
+            // so exact-state restoration means the attribute is absent again,
+            // not set to the literal string 'false'.
+            if (btn.getAttribute('aria-busy') !== undefined) throw new Error('expected aria-busy attribute removed, got ' + btn.getAttribute('aria-busy'));
             if (btn.innerHTML !== 'Save') throw new Error('expected idle label restored, got ' + btn.innerHTML);
             """
         )
@@ -119,6 +123,46 @@ class ButtonBusyHelperTests(unittest.TestCase):
             context.prksSetButtonBusy(btn, false);
             if (btn.disabled !== false) throw new Error('expected disabled=false');
             if (btn.innerHTML !== 'Save') throw new Error('content should be untouched');
+            """
+        )
+
+    def test_busy_false_cannot_enable_a_control_it_did_not_disable(self):
+        # A different subsystem disabled this button (e.g. the action is
+        # unavailable for another reason). The busy helper never created that
+        # busy state, so busy(false) must be a true no-op: it must not enable
+        # the control or touch its contents.
+        _run_busy_case(
+            r"""
+            const btn = makeButton('Save');
+            btn.disabled = true;
+            context.prksSetButtonBusy(btn, false);
+            if (btn.disabled !== true) throw new Error('busy(false) enabled a control it did not disable');
+            if (btn.innerHTML !== 'Save') throw new Error('busy(false) altered content it did not own');
+            if (btn.getAttribute('aria-busy') !== undefined) throw new Error('busy(false) set aria-busy it did not own');
+            """
+        )
+
+    def test_aria_busy_absent_before_is_absent_after(self):
+        _run_busy_case(
+            r"""
+            const btn = makeButton('Save');
+            if (btn.getAttribute('aria-busy') !== undefined) throw new Error('test setup: expected no initial aria-busy');
+            context.prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
+            if (btn.getAttribute('aria-busy') !== 'true') throw new Error('expected aria-busy=true while busy');
+            context.prksSetButtonBusy(btn, false);
+            if (btn.getAttribute('aria-busy') !== undefined) throw new Error('expected aria-busy attribute removed, got ' + btn.getAttribute('aria-busy'));
+            """
+        )
+
+    def test_aria_busy_false_before_is_restored_exactly(self):
+        _run_busy_case(
+            r"""
+            const btn = makeButton('Save');
+            btn.setAttribute('aria-busy', 'false');
+            context.prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
+            if (btn.getAttribute('aria-busy') !== 'true') throw new Error('expected aria-busy=true while busy');
+            context.prksSetButtonBusy(btn, false);
+            if (btn.getAttribute('aria-busy') !== 'false') throw new Error('expected aria-busy=\"false\" restored exactly, got ' + btn.getAttribute('aria-busy'));
             """
         )
 

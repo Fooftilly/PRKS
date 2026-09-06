@@ -2974,6 +2974,10 @@ class TabContextHostRootTests(_BrowserE2E):
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
             self.assertTrue(held, "Person Group PATCH was not intercepted")
+            save_btn = page.locator("#gd-save-btn")
+            self.assertTrue(save_btn.is_disabled())
+            self.assertEqual(save_btn.get_attribute("aria-busy"), "true")
+            self.assertEqual(save_btn.inner_text(), "Saving…")
             page.evaluate("() => window.prksNavigate('#/folders', { target: 'new-tab', activate: true })")
             page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
             page.wait_for_function("() => location.hash === '#/folders'")
@@ -2984,6 +2988,75 @@ class TabContextHostRootTests(_BrowserE2E):
             _continue_held_routes(held)
             try:
                 page.unroute("**/api/person-groups/*", hold_group_patch)
+            except Exception:
+                pass
+
+    def test_group_metadata_save_failure_restores_button_for_retry(self):
+        _server, page, collector = self._start_app()
+        page.evaluate("() => window.prksNavigate('#/people/groups')")
+        page.wait_for_function("() => location.hash === '#/people/groups'")
+        page.wait_for_selector(".prks-group-library")
+        page.evaluate("() => openModal('group-modal')")
+        page.wait_for_selector("#group-name")
+        page.fill("#group-name", "E2E Retry Group")
+        page.locator("#save-group-btn").click()
+        page.wait_for_function("() => location.hash.indexOf('#/people/groups/') === 0")
+        page.locator("#panel-content button", has_text="Edit group").click()
+        page.wait_for_selector("#gd-save-btn")
+
+        group_id = page.evaluate("() => location.hash.split('/')[3]")
+        held = []
+        fail_next = {"value": True}
+
+        def hold_then_fail_once(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "PATCH" and path == "/api/person-groups/" + group_id and fail_next["value"]:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/person-groups/*", hold_then_fail_once)
+        try:
+            self.assertIsNone(page.locator("#gd-save-btn").get_attribute("aria-busy"))
+            save_btn = page.locator("#gd-save-btn")
+            save_btn.click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Person Group PATCH was not intercepted")
+
+            # Busy state must actually be visible while the request is pending --
+            # not just absent-both-before-and-after by coincidence.
+            self.assertTrue(save_btn.is_disabled())
+            self.assertEqual(save_btn.get_attribute("aria-busy"), "true")
+            self.assertEqual(save_btn.inner_text(), "Saving…")
+
+            fail_next["value"] = False
+            held.pop().fulfill(status=500, content_type="application/json", body='{"error": "stub failure"}')
+            page.wait_for_selector("#prks-modal-confirm:not(.hidden)")
+            self.assertIn("stub failure", page.locator("#prks-modal-confirm-desc").inner_text())
+            page.locator("#prks-modal-confirm-ok").click()
+            page.wait_for_selector("#prks-modal-confirm", state="hidden")
+            # The stub 500 was deliberate -- don't fail teardown's assert_clean on it.
+            collector.http_5xx.clear()
+            collector.console_errors.clear()
+
+            # Failure must restore the button for a retry -- no permanently
+            # stuck "Saving…" / disabled / aria-busy state. #gd-save-btn's
+            # static markup carries no aria-busy attribute, so exact-state
+            # restoration means the attribute is absent again, not "false".
+            self.assertFalse(save_btn.is_disabled())
+            self.assertIsNone(save_btn.get_attribute("aria-busy"))
+            self.assertEqual(save_btn.inner_text(), "Save changes")
+
+            save_btn.click()
+            page.wait_for_selector("#gd-save-btn", state="hidden")
+            page.locator("#panel-content button", has_text="Edit group").wait_for()
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/person-groups/*", hold_then_fail_once)
             except Exception:
                 pass
 
@@ -3380,6 +3453,10 @@ class WorkspaceTilingTests(_BrowserE2E):
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
             self.assertTrue(held, "Person PATCH was not intercepted")
+            save_btn = page.locator("#pd-save-btn")
+            self.assertTrue(save_btn.is_disabled())
+            self.assertEqual(save_btn.get_attribute("aria-busy"), "true")
+            self.assertEqual(save_btn.inner_text(), "Saving…")
 
             page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
             page.wait_for_function(

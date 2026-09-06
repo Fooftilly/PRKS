@@ -948,9 +948,8 @@ async function savePersonProfile(personId) {
         return;
     }
     const btn = document.getElementById('pd-save-btn');
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Saving…';
+    if (btn && typeof prksSetButtonBusy === 'function') {
+        prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
     }
     try {
         const res = await prksRequest(`/api/persons/${personId}`, {
@@ -1000,9 +999,8 @@ async function savePersonProfile(personId) {
             await prksAlertMessage('Could not save profile.', 'Error');
         }
     } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.textContent = 'Save profile';
+        if (btn && typeof prksSetButtonBusy === 'function') {
+            prksSetButtonBusy(btn, false);
         }
     }
 }

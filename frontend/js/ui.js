@@ -334,35 +334,39 @@ const _prksButtonBusySnapshots = new WeakMap();
  * Shared busy-button helper: disable, set aria-busy, swap in a busy label, and
  * later restore the exact original contents. Safe to call repeatedly with the
  * same busy state -- only the first busy(true) snapshots the idle contents.
+ * busy(false) without an owning snapshot is a true no-op: the helper must
+ * never enable, re-content, or otherwise touch a control whose busy state it
+ * did not itself create.
  * @param {HTMLElement|null|undefined} button
  * @param {boolean} busy
  * @param {{busyLabel?: string}} [options]
  */
 function prksSetButtonBusy(button, busy, options = {}) {
     if (!button) return;
-    const on = !!busy;
-    if (on) {
+    if (busy) {
         if (!_prksButtonBusySnapshots.has(button)) {
             _prksButtonBusySnapshots.set(button, {
                 html: button.innerHTML,
                 disabled: !!button.disabled,
+                ariaBusy: button.getAttribute('aria-busy'),
             });
         }
         button.disabled = true;
         button.setAttribute('aria-busy', 'true');
         if (options.busyLabel != null) button.textContent = String(options.busyLabel);
-    } else {
-        const snap = _prksButtonBusySnapshots.get(button);
-        button.setAttribute('aria-busy', 'false');
-        if (snap) {
-            button.innerHTML = snap.html;
-            button.disabled = snap.disabled;
-            _prksButtonBusySnapshots.delete(button);
-        } else {
-            button.disabled = false;
-        }
-        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(button);
+        return;
     }
+    const snap = _prksButtonBusySnapshots.get(button);
+    if (!snap) return;
+    button.innerHTML = snap.html;
+    button.disabled = snap.disabled;
+    if (snap.ariaBusy == null) {
+        button.removeAttribute('aria-busy');
+    } else {
+        button.setAttribute('aria-busy', snap.ariaBusy);
+    }
+    _prksButtonBusySnapshots.delete(button);
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(button);
 }
 
 const PRKS_BUTTON_LABEL_FLASH_MS = 1500;

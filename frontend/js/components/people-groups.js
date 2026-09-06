@@ -641,7 +641,7 @@ async function mountPersonGroupEditPanel(g) {
                 await prksAlertMessage('Name is required.', 'Validation');
                 return;
             }
-            btn.disabled = true;
+            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
             try {
                 const res = await prksRequest(`/api/person-groups/${encodeURIComponent(g.id)}`, {
                     method: 'PATCH',
@@ -666,7 +666,7 @@ async function mountPersonGroupEditPanel(g) {
                 console.error(e);
                 await prksAlertMessage('Could not save group.', 'Error');
             } finally {
-                btn.disabled = false;
+                if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
             }
         };
     }
