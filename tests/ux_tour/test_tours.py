@@ -312,16 +312,14 @@ class WorkspaceTourTest(_UXTour):
                 arg=work_b_id,
             )
 
-            def _work_fetch_count():
-                return len(
-                    [
-                        r
-                        for r in page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")
-                        if "/api/works/" in r
-                    ]
-                )
+            def _work_or_pdf_fetch_count():
+                """Both GET families a warm resume must never repeat: the Work JSON itself
+                (`/api/works/`) and its PDF bytes (`/api/pdfs/`, the same route the precise
+                E2E suite already asserts against for PDF persistence)."""
+                names = page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")
+                return len([r for r in names if "/api/works/" in r or "/api/pdfs/" in r])
 
-            fetch_count_baseline = _work_fetch_count()
+            fetch_count_baseline = _work_or_pdf_fetch_count()
 
             def _assert_warm_resume(suspended_id):
                 """Internal-JS assertion only (per the Tour's real-action-vs-instrumentation
@@ -347,7 +345,7 @@ class WorkspaceTourTest(_UXTour):
                     arg={"a": work_a_id, "b": work_b_id},
                 )
                 self.assertTrue(same_runtimes)
-                self.assertEqual(_work_fetch_count(), fetch_count_baseline)
+                self.assertEqual(_work_or_pdf_fetch_count(), fetch_count_baseline)
 
             tour.step("Activate Work A from the tab strip")
             page.locator('.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__activate' % work_a_id).click()
@@ -493,10 +491,7 @@ class WorkspaceTourTest(_UXTour):
                 }""",
                 arg={"main": main_id_now, "other": other_pdf_id},
             )
-            work_fetch_before = len(
-                [r for r in page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")
-                 if "/api/works/" in r]
-            )
+            work_fetch_before = _work_or_pdf_fetch_count()
             page.locator('.prks-tile[data-prks-tab-id="%s"]' % other_pdf_id).click(position={"x": 20, "y": 60})
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=other_pdf_id)
             page.locator('.prks-tile[data-prks-tab-id="%s"]' % main_id_now).click(position={"x": 20, "y": 60})
@@ -504,11 +499,7 @@ class WorkspaceTourTest(_UXTour):
             page.locator('.prks-tile[data-prks-tab-id="%s"]' % other_pdf_id).click(position={"x": 20, "y": 60})
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=other_pdf_id)
             tour.checkpoint(page, "visible-pdf-focus")
-            work_fetch_after = len(
-                [r for r in page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")
-                 if "/api/works/" in r]
-            )
-            self.assertEqual(work_fetch_before, work_fetch_after)
+            self.assertEqual(_work_or_pdf_fetch_count(), work_fetch_before)
             both_states = page.evaluate(
                 """(ids) => {
                     const rt = window.__prksTourVisibleRt;
@@ -835,7 +826,7 @@ class ResearchGraphTourTest(_UXTour):
             page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
             page.wait_for_selector(".CodeMirror")
 
-            tour.step("Return to Graph and close/reopen Details")
+            tour.step("Return to Graph and select the Work again")
             page.locator('#sidebar a.nav-link[href="#/graph"]').click()
             page.wait_for_function("() => location.hash.indexOf('#/graph') === 0")
             page.wait_for_function(
@@ -845,7 +836,7 @@ class ResearchGraphTourTest(_UXTour):
             _click_graph_node(page, work_node_id)
             page.locator("#prks-graph-inspector-title").wait_for()
             self.assertTrue(page.locator("[data-graph-clear-selection]").is_visible())
-            tour.checkpoint(page, "graph-details-closed")
+            tour.checkpoint(page, "graph-work-reselected")
 
             tour.step("Fit and Reset layout")
             page.locator('[data-prks-role="graph-fit"]').click()

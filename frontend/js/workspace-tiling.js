@@ -489,26 +489,29 @@
         if (typeof root.prksWorkspaceSyncSplitSeparator === 'function') {
             root.prksWorkspaceSyncSplitSeparator(canvas, visualTiled, snap);
         }
-
-        armClickFallback(canvas);
-    }
-
-    /** Stricter than isAnyTile: only the tile host itself, never a same-tabId descendant such as
-     * tab-context.js's `.prks-tab-root` mount point (which also carries `data-prks-tab-id`, for
-     * its own unrelated purposes, and gets reshuffled by ordinary in-tab rendering). */
-    function isTileHost(node) {
-        return !!(node.getAttribute && node.getAttribute('data-prks-tab-id') && node.className && node.className.indexOf('prks-tile') !== -1);
     }
 
     const CLICK_FALLBACK_SELECTOR = '.prks-tile-header__menu, .prks-tile-header__close';
     const CLICK_FALLBACK_THRESHOLD_PX = 6;
     /* At most one candidate live at a time -- a complete click-like gesture (pointerdown ->
-     * pointerup on the same header button, same pointerId, released close to where it started)
-     * tracked from pointerdown so the fallback below can tell a genuine click apart from a drag
-     * whose pointerup happens to land over a button. Deliberately pointerdown/pointerup/
-     * pointercancel only -- this module is DOM/layout only (see file banner); it never tracks
-     * an in-progress pointer path (that belongs to workspace-drag.js), it only ever compares
-     * a gesture's start and end points. */
+     * pointerup on the SAME header button, same pointerId, released within a small click
+     * threshold of where it started) tracked from pointerdown so the fallback below can tell a
+     * genuine click apart from a drag whose pointerup happens to land over a button. Bound once
+     * at the document level, never scoped to (or re-attached per) any one tile, precisely so
+     * reparenting/rebuilding a tile can never affect whether this fires -- the button element
+     * itself, not its tile ancestor, is all that's ever tracked. pointerup/pointercancel are only
+     * ever listened for while a candidate is actually armed, and are removed the instant it
+     * resolves one way or the other, so a release outside every tile (which would otherwise never
+     * reach a tile-scoped listener) still reliably clears it -- no stale candidate can survive to
+     * be accidentally consumed by a later, unrelated pointer gesture that happens to reuse the
+     * same pointerId (as a mouse's pointerId typically does across separate clicks/drags).
+     * onClickFallbackPointerDown also unconditionally drops any leftover candidate before
+     * possibly arming a new one, as a second, independent guard against the same thing. Does not
+     * use setPointerCapture(): that can itself change native click-targeting semantics, which is
+     * exactly what this fallback must never interfere with. Deliberately pointerdown/pointerup/
+     * pointercancel only -- this module is DOM/layout only (see file banner); it never tracks an
+     * in-progress pointer path (that belongs to workspace-drag.js), it only ever compares a
+     * gesture's start and end points. */
     let clickFallbackCandidate = null;
 
     /** Chromium leaves stale hit-test state on a tile that a paint moves or recreates -- an
@@ -518,45 +521,44 @@
      * browser silently never synthesizes the follow-up `click` -- so the tile's own header
      * buttons (pane menu, close) go dead on the next real click. Reparenting the exact same
      * element is not the only trigger (a freshly rebuilt tile, with no prior DOM identity to have
-     * been "reparented" from, exhibits it too), so this is armed unconditionally on every tile on
-     * every paint rather than only on tiles a before/after DOM comparison flags as moved -- that
-     * comparison under-detects the rebuilt-from-scratch case.
+     * been "reparented" from, exhibits it too).
      *
      * This does not try to pre-emptively "fix" that browser-internal state (extensive testing
      * found no way to do that both reliably and safely). Instead it treats the symptom directly
      * and safely: only a genuine, complete click-like gesture on ONE of the two supported header
      * buttons (pane menu, close) ever arms the fallback -- tracked from pointerdown (button,
      * pointerId, start position), cleared on pointercancel, and only actually dispatched from
-     * pointerup once that same candidate is confirmed intact (same pointerId, same button,
-     * release point still within the click threshold of where it started, button still connected
-     * and enabled). This deliberately does NOT arm on an arbitrary button inside the tile, and
-     * deliberately does NOT arm when the gesture started elsewhere (e.g. the
-     * `.prks-tile-header__grip` drag handle) -- a pane drag that happens to release over Close or
-     * Pane actions therefore can never trigger this fallback, since its pointerdown target was
-     * never one of these two buttons in the first place (workspace-drag.js only ever arms a drag
-     * from the grip or the tab strip, never from these header buttons, so a gesture that starts
-     * on one of them is never hijacked into a drag either). On pointerup, verify within the very
-     * next tick that the real `click` this browser owes that gesture actually showed up; if it
-     * didn't, dispatch it by calling `.click()` on the pressed button ourselves. `.click()`
-     * synthesizes a proper click through the normal DOM path without depending on the browser's
-     * native hit-test pipeline at all, so it fires regardless of that pipeline's stale state. A
-     * button whose native click already works incurs no double-fire, since the synthesized click
-     * is skipped whenever the real one already landed. */
-    function armClickFallback(canvas) {
-        const tiles = collectAll(canvas, isTileHost);
-        for (let i = 0; i < tiles.length; i++) {
-            const tile = tiles[i];
-            if (typeof tile.addEventListener !== 'function') continue;
-            /* Idempotent: addEventListener with the same (type, listener, capture) triple is a
-             * no-op if already attached, so calling this again on every paint is safe and never
-             * creates duplicate listeners. */
-            tile.addEventListener('pointerdown', onReparentedTilePointerDown, true);
-            tile.addEventListener('pointerup', onReparentedTilePointerUp, true);
-            tile.addEventListener('pointercancel', onReparentedTilePointerCancel, true);
-        }
+     * pointerup once that same candidate is confirmed intact: same pointerId, the release point
+     * is still over that SAME button (not just anywhere within the click threshold -- a pointer
+     * that lifts a few px outside the button it went down on is not a click on that button, even
+     * if it stayed close by), and that button is still connected and enabled. This deliberately
+     * does NOT arm on an arbitrary button inside a tile, and deliberately does NOT arm when the
+     * gesture started elsewhere (e.g. the `.prks-tile-header__grip` drag handle) -- a pane drag
+     * that happens to release over Close or Pane actions therefore can never trigger this
+     * fallback, since its pointerdown target was never one of these two buttons in the first
+     * place (workspace-drag.js only ever arms a drag from the grip or the tab strip, never from
+     * these header buttons, so a gesture that starts on one of them is never hijacked into a drag
+     * either). On pointerup, verify within the very next tick that the real `click` this browser
+     * owes that gesture actually showed up; if it didn't, dispatch it by calling `.click()` on the
+     * pressed button ourselves. `.click()` synthesizes a proper click through the normal DOM path
+     * without depending on the browser's native hit-test pipeline at all, so it fires regardless
+     * of that pipeline's stale state. A button whose native click already works incurs no
+     * double-fire, since the synthesized click is skipped whenever the real one already landed. */
+    function clearClickFallbackCandidate() {
+        if (!clickFallbackCandidate) return;
+        clickFallbackCandidate = null;
+        const d = doc();
+        if (!d) return;
+        d.removeEventListener('pointerup', onClickFallbackPointerUp, true);
+        d.removeEventListener('pointercancel', onClickFallbackPointerCancel, true);
     }
 
-    function onReparentedTilePointerDown(ev) {
+    function onClickFallbackPointerDown(ev) {
+        /* A pointerdown always starts a fresh gesture for this pointerId -- any previous
+         * candidate is necessarily left over from an already-finished gesture, so drop it
+         * unconditionally before possibly arming a new one (belt-and-suspenders alongside the
+         * pointerup/pointercancel-while-armed tracking above). */
+        clearClickFallbackCandidate();
         if (ev.button !== 0 || (typeof ev.isPrimary === 'boolean' && !ev.isPrimary)) return;
         const target =
             ev.target && typeof ev.target.closest === 'function' ? ev.target.closest(CLICK_FALLBACK_SELECTOR) : null;
@@ -567,18 +569,25 @@
             startX: ev.clientX,
             startY: ev.clientY,
         };
+        const d = doc();
+        if (!d) return;
+        d.addEventListener('pointerup', onClickFallbackPointerUp, true);
+        d.addEventListener('pointercancel', onClickFallbackPointerCancel, true);
     }
 
-    function onReparentedTilePointerCancel(ev) {
+    function onClickFallbackPointerCancel(ev) {
         const candidate = clickFallbackCandidate;
         if (!candidate || ev.pointerId !== candidate.pointerId) return;
-        clickFallbackCandidate = null;
+        clearClickFallbackCandidate();
     }
 
-    function onReparentedTilePointerUp(ev) {
+    function onClickFallbackPointerUp(ev) {
         const candidate = clickFallbackCandidate;
         if (!candidate || ev.pointerId !== candidate.pointerId) return;
-        clickFallbackCandidate = null;
+        clearClickFallbackCandidate();
+        const releasedButton =
+            ev.target && typeof ev.target.closest === 'function' ? ev.target.closest(CLICK_FALLBACK_SELECTOR) : null;
+        if (releasedButton !== candidate.button) return;
         const dx = ev.clientX - candidate.startX;
         const dy = ev.clientY - candidate.startY;
         if (Math.hypot(dx, dy) > CLICK_FALLBACK_THRESHOLD_PX) return;
@@ -682,6 +691,7 @@
         if (!d || bound) return;
         bound = true;
         d.addEventListener('pointerdown', onPointerDownCapture, true);
+        d.addEventListener('pointerdown', onClickFallbackPointerDown, true);
         d.addEventListener('focusin', onFocusIn);
     }
 

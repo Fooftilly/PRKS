@@ -31,7 +31,7 @@ Chromium, fast, precise); **selftest** = a Node browser selftest under
 | Workspace | Resize a nested split | workspace | E2E |
 | Workspace | Focus a specific pane (click-to-focus) | workspace | E2E |
 | Workspace | Open/close tiled Details overlay; pane geometry unchanged | workspace | E2E |
-| Workspace | Details overlay Close (×) control | — | E2E |
+| Workspace | Details overlay Close (×) control | workspace | E2E |
 | Workspace | Make Main from the pane menu | workspace | E2E |
 | Workspace | Hide split / Show split (tree preserved) | workspace | E2E |
 | Workspace | Close a Secondary pane | workspace | E2E |

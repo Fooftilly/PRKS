@@ -6580,6 +6580,143 @@ class WorkspaceTilingTests(_BrowserE2E):
             arg=b_id,
         )
 
+    def _reparented_secondary_leaf(self, page, server):
+        """Shared setup for the click-fallback lifecycle regressions below: Work A Main, Work
+        B tiled Secondary, then Split Right on B so its tile is reparented into a freshly
+        created split container. Returns b_id."""
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        b_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        _wait_pdf_tab(page, b_id)
+        self._split_via_pane_menu(page, b_id, "Split right", PERSON_DISPLAY)
+        tree = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree")
+        self.assertEqual(tree["first"]["tabId"], b_id)
+        return b_id
+
+    def test_close_pointerup_outside_button_does_not_close_pane(self):
+        """Regression: the click-fallback candidate armed on Close's pointerdown must be
+        dropped if the matching pointerup releases off the button itself, even when that
+        release point is still within the small click-distance threshold of where the
+        gesture started -- a distance-only check would have wrongly accepted this as a
+        click. A later, genuine click on the same button must still close the pane exactly
+        once (not zero times, not twice)."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        b_id = self._reparented_secondary_leaf(page, server)
+
+        close_box = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__close' % b_id).bounding_box()
+        self.assertIsNotNone(close_box)
+        start_x = close_box["x"] + 2
+        start_y = close_box["y"] + close_box["height"] / 2
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        # ~4px move -- comfortably inside the click-distance threshold -- but far enough to
+        # land just outside the button's own rect at release.
+        page.mouse.move(start_x - 4, start_y, steps=1)
+        page.mouse.up()
+        self.assertTrue(
+            page.evaluate("(id) => window.prksWorkspaceSnapshot().tabs.some((t) => t.id === id)", arg=b_id),
+            msg="pane closed by a pointerup that released outside the Close button",
+        )
+
+        page.evaluate(
+            """(id) => {
+                const btn = document.querySelector(
+                    '.prks-tile[data-prks-tab-id="' + id + '"] .prks-tile-header__close'
+                );
+                window.__prksCloseClicks = 0;
+                btn.addEventListener('click', () => { window.__prksCloseClicks += 1; });
+            }""",
+            arg=b_id,
+        )
+        page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__close' % b_id).click(timeout=5000)
+        page.wait_for_function(
+            "(bId) => !window.prksWorkspaceSnapshot().tabs.some((t) => t.id === bId)",
+            arg=b_id,
+        )
+        self.assertEqual(page.evaluate("() => window.__prksCloseClicks"), 1)
+
+    def test_pane_menu_pointerup_outside_button_does_not_open_menu(self):
+        """Same lifecycle contract as the Close regression above, for Pane actions: a
+        pointerup that releases just outside the button (but still within the click-distance
+        threshold of pointerdown) must not open the menu. A later, genuine click on the same
+        button must still open it exactly once."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        b_id = self._reparented_secondary_leaf(page, server)
+
+        menu_box = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__menu' % b_id).bounding_box()
+        self.assertIsNotNone(menu_box)
+        start_x = menu_box["x"] + 2
+        start_y = menu_box["y"] + menu_box["height"] / 2
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        page.mouse.move(start_x - 4, start_y, steps=1)
+        page.mouse.up()
+        self.assertFalse(
+            page.locator("#prks-workspace-menu").is_visible(),
+            msg="pane menu opened by a pointerup that released outside the button",
+        )
+
+        page.evaluate(
+            """(id) => {
+                const btn = document.querySelector(
+                    '.prks-tile[data-prks-tab-id="' + id + '"] .prks-tile-header__menu'
+                );
+                window.__prksMenuClicks = 0;
+                btn.addEventListener('click', () => { window.__prksMenuClicks += 1; });
+            }""",
+            arg=b_id,
+        )
+        _open_pane_actions(page, b_id)
+        self.assertTrue(page.locator("#prks-workspace-menu").is_visible())
+        self.assertEqual(page.evaluate("() => window.__prksMenuClicks"), 1)
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#prks-workspace-menu[hidden]", state="attached")
+
+    def test_stale_click_candidate_does_not_survive_into_later_drag(self):
+        """Regression for the pointerId-reuse lifecycle gap: a pointerdown on Pane actions
+        whose pointerup releases outside every tile entirely (so a tile-scoped listener would
+        never observe it) must not leave a stale click-fallback candidate behind for a later,
+        completely unrelated gesture -- e.g. a genuine grip drag released over Close -- to
+        accidentally consume, given that a mouse's pointerId is typically reused across
+        separate gestures."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        b_id = self._reparented_secondary_leaf(page, server)
+
+        menu_box = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__menu' % b_id).bounding_box()
+        self.assertIsNotNone(menu_box)
+        mx, my = _center(menu_box)
+        page.mouse.move(mx, my)
+        page.mouse.down()
+        # Release far outside every tile -- over the nav sidebar -- so a tile-scoped listener
+        # (the design this replaces) would never have seen this pointerup at all.
+        page.mouse.move(20, 20, steps=5)
+        page.mouse.up()
+        self.assertFalse(page.locator("#prks-workspace-menu").is_visible())
+
+        # A later, unrelated gesture reusing the same mouse pointerId: a genuine grip drag
+        # released over Close. Under the bug this protects against, the stale Pane-actions
+        # candidate above could be consumed here instead, synthesizing a Close click
+        # regardless of what button the drag actually released over.
+        grip_box = _grip_box(page, b_id)
+        close_box = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__close' % b_id).bounding_box()
+        self.assertIsNotNone(grip_box)
+        self.assertIsNotNone(close_box)
+        _pointer_drag(page, _center(grip_box), _center(close_box))
+        page.wait_for_function("() => !document.body.classList.contains('prks-workspace-dragging')")
+        _assert_no_drag_residue(self, page)
+        self.assertTrue(
+            page.evaluate("(id) => window.prksWorkspaceSnapshot().tabs.some((t) => t.id === id)", arg=b_id),
+            msg="pane closed by a stale click-fallback candidate consumed by a later drag",
+        )
+
     def test_main_and_focus_survive_make_main_from_pane_menu(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})

@@ -164,11 +164,18 @@ class TourArtifacts:
         return entry["step"]
 
     def checkpoint(self, page, name: str) -> str:
-        """Numbered checkpoint screenshot. Use at stable, meaningful states only."""
+        """Numbered checkpoint screenshot. Use at stable, meaningful states only.
+
+        `animations="disabled"` makes Playwright finish any running finite CSS
+        transition/animation before capturing, so a checkpoint always shows the settled end
+        state (e.g. a drawer fully open, not mid-slide) rather than whatever frame happened
+        to be on screen the instant this was called -- the video already covers the motion
+        itself. Failure screenshots (`record_failure`) deliberately do NOT use this: they
+        must show the exact instantaneous state at the moment of failure."""
         idx = len(self._checkpoint_names) + 1
         fname = "%02d-%s.png" % (idx, name)
         try:
-            page.screenshot(path=str(self.checkpoints_dir / fname))
+            page.screenshot(path=str(self.checkpoints_dir / fname), animations="disabled")
         except Exception as exc:  # noqa: BLE001 -- artifact capture must not hide real errors
             self.step("[checkpoint capture failed] %s: %s" % (name, exc))
             return fname
