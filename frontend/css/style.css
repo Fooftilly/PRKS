@@ -1939,6 +1939,54 @@ body.prks-workspace-dragging * {
     color: var(--text-secondary);
 }
 
+/* Offline / PWA operational status -- calm, never destructive red (see AGENTS.md
+ * "Offline / PWA"). Shell-level connectivity pill + per-route cached-data banner. */
+.prks-connectivity-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: 4px var(--space-sm);
+    margin-right: var(--space-xs);
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-round);
+    background: var(--warning-soft);
+    color: var(--text-warning);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium, 500);
+    white-space: nowrap;
+}
+
+.prks-connectivity-indicator.hidden,
+.prks-connectivity-indicator[hidden] {
+    display: none;
+}
+
+.prks-connectivity-indicator__icon {
+    display: inline-flex;
+    align-items: center;
+}
+
+.prks-connectivity-indicator--reconnecting {
+    opacity: 0.85;
+}
+
+.prks-offline-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: 6px var(--space-sm);
+    margin-bottom: var(--space-sm);
+    border: 1px solid var(--warning);
+    background: var(--warning-soft);
+    color: var(--text-warning);
+    font-size: var(--text-xs);
+}
+
+.prks-offline-banner__icon {
+    display: inline-flex;
+    align-items: center;
+}
+
 /* 10 Dialogs / overlays — structural language; existing .modal rules remain the implementation */
 .prks-dialog {
     position: relative;

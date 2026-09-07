@@ -234,6 +234,35 @@ Each visible tab has a TabContext. Route state, page DOM (`ctx.root` / `ctx.quer
 async generation, and live resources (PDF viewer, notes editor, graph) live
 there. Stacked mode mounts one context. Split view mounts Main plus every visible Secondary pane (up to 4 panes total).
 
+## Offline / PWA (read-only)
+
+PRKS can be installed as a Progressive Web App and stays useful for a while when the PRKS server becomes temporarily unreachable. This is **read-only** support: Phase 1 has no offline mutation queue.
+
+What works offline:
+
+- The app shell itself launches (after at least one earlier online visit, so the service worker has actually cached the JS/CSS it needs — the very first-ever visit still needs the server).
+- Previously opened Work, Person, Concept, Position, Argument, and Playlist detail pages reopen from an on-device cache.
+- A previously fully opened PDF reopens and renders from cache, including page scrolling (the service worker slices the cached whole file for the viewer's normal range requests).
+- Navigating between cached records, including via the command palette and links inside research notes, works exactly like online navigation (`prksNavigate`) — there is no separate offline router.
+- A shell-level connectivity pill appears ("Offline" / "Reconnecting…") using calm, non-destructive styling. A cached page also shows its own concise marker, e.g. *Offline · cached 18:42*. Cached data is never presented as if it were current.
+
+What stays read-only or unavailable offline:
+
+- Every canonical mutation (Save on Work/Person/Concept/Position/Argument metadata, deletes, relationship changes, bulk actions, playlist changes) is blocked client-side with **"This change requires a connection to PRKS."** Nothing is silently discarded, faked as saved, or written only to the on-device cache.
+- Research notes and private notes render their last-cached text but the editor becomes explicitly read-only ("Offline — notes are read-only"); they are not queued for later sync in this phase.
+- A record you never opened while online is not available offline: you see "This item is not available offline." rather than a false "not found."
+- Search/browse offline is limited to records already cached on this device — there is no offline full-text search.
+
+What is cached on the device, and how to clear it:
+
+- The service worker caches the app shell and static JS/CSS/icons/PDF-viewer runtime (Cache Storage), plus complete managed PDFs you have actually opened (keyed by the server's own file identity, e.g. ETag/Content-Length, so a replaced PDF is not served stale once you are back online).
+- The app additionally keeps a small IndexedDB (`prks-offline-v1`) of the specific records above, each stamped with when it was cached.
+- All of this is a **disposable client-side cache**, never another source of truth. The PRKS server's SQLite database and managed files remain canonical; deleting this browser storage never touches them.
+- **Settings → Offline storage** shows cache availability, an approximate on-device size, and **Clear offline cache**, which only clears this browser's cache (never the server, database, or PDFs) and asks for a normal confirmation first.
+- If the browser's IndexedDB is unavailable, blocked, or corrupted, PRKS keeps working online exactly as before — that only turns off the offline cache, never the live app.
+
+When the server becomes reachable again, PRKS quietly moves from "Offline" to "Reconnecting…" to "Online," and only the page you are currently looking at is refreshed with the current server version (other open tabs refresh normally the next time you visit them — there is no request storm on reconnect).
+
 ## Research network
 
 Concepts, Positions, and Arguments/Stances are persistent research records. They are not Work metadata.
@@ -428,7 +457,10 @@ python tests/browser/pointer_capture.py
 | `backend/research_index.py` | Disposable derived note-reference index. |
 | `backend/db_schema.sql` | Complete latest schema for fresh databases. |
 | `frontend/` | Static SPA (HTML, CSS, JS), PWA assets. |
-| `frontend/js/request-coordinator.js` | Client request coordinator for ordinary same-origin `/api` traffic. |
+| `frontend/js/request-coordinator.js` | Client request coordinator for ordinary same-origin `/api` traffic. Memory-only; not offline support. |
+| `frontend/js/offline-store.js` | Disposable IndexedDB client cache (entities/lists/metadata). No DOM, no routing, no connectivity policy. |
+| `frontend/js/offline-runtime.js` | Online/offline/reconnecting state, read-through cache policy, mutation guard. No canonical persistence of its own. |
+| `frontend/sw.js` | Service worker: app-shell/static-asset availability plus a focused managed-PDF cache. Never queues API mutations. |
 | `data/` | Default production database and files (gitignored as appropriate). |
 | `data_testing/` | Test fixtures and isolated DB/PDFs for automated tests. |
 | `tests/` | `unittest` modules. |

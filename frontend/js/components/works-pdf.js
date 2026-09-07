@@ -1399,6 +1399,14 @@ export function initPdfViewerForWork(ctx, work) {
             (String(work.file_path || '').includes('?') ? '&' : '?') +
             'prksv=' +
             Date.now();
+        // Prime the service worker's whole-file PDF cache in the background (AGENTS.md
+        // "PDF offline support"). The viewer itself loads progressively via Range
+        // requests, which never populate that cache -- this plain GET is what lets a
+        // previously opened PDF reopen offline. Best-effort only; never blocks or
+        // affects the live viewer either way.
+        if (typeof prksRequest === 'function' && work.file_path) {
+            void prksRequest(String(work.file_path), {}, { priority: 'background' }).catch(function () {});
+        }
         const author =
             typeof getPrksAnnotationAuthor === 'function' ? getPrksAnnotationAuthor() : 'You';
         const typeMeta =

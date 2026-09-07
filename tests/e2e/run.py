@@ -46,7 +46,12 @@ def main() -> int:
     apply_e2e_playwright_env()
 
     loader = unittest.TestLoader()
-    suite = loader.loadTestsFromName("tests.e2e.test_app")
+    suite = unittest.TestSuite(
+        [
+            loader.loadTestsFromName("tests.e2e.test_app"),
+            loader.loadTestsFromName("tests.e2e.test_offline"),
+        ]
+    )
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     pointer = _run_pointer_capture()

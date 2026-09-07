@@ -431,10 +431,10 @@ class FixtureServer:
             self.proc = None
 
 
-def open_app_page(browser, origin: str):
+def open_app_page(browser, origin: str, service_workers: str = "block"):
     context = browser.new_context(
         viewport={"width": 1400, "height": 900},
-        service_workers="block",
+        service_workers=service_workers,
     )
     page = context.new_page()
     collector = PageCollector(page, origin)

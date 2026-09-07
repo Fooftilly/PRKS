@@ -715,6 +715,7 @@ function prksOpenArgumentPicker(cm, work) {
 }
 
 async function deleteWork(w_id, ownerCtx) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const generation = ctx && ctx.generation;
     const confirmed = await prksConfirmDestructive({
@@ -1275,6 +1276,14 @@ window.prksScheduleWorkResearchNotesSave = prksScheduleWorkResearchNotesSave;
 
 function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') {
+        // No offline mutation outbox in Phase 1: leave the draft local (still visible/typed,
+        // never silently discarded) rather than attempt a network PATCH that would only fail.
+        // The connectivity subscriber below re-enqueues this once the app is back online.
+        const statusEl = owner && owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
+        if (statusEl) statusEl.innerText = 'Offline — notes are read-only';
+        return undefined;
+    }
     const _cwSave = owner && owner.getEntity ? owner.getEntity('work') : null;
     const id = workId || (_cwSave && _cwSave.id);
     if (!id) return;
@@ -1423,6 +1432,50 @@ function prksFlushPendingWorkResearchNotes(ctx) {
 
 window.prksEnqueueWorkResearchNotesSave = prksEnqueueWorkResearchNotesSave;
 window.prksFlushPendingWorkResearchNotes = prksFlushPendingWorkResearchNotes;
+
+/**
+ * Research Notes stay explicitly read-only while offline (AGENTS.md "Research
+ * Notes and private notes" -- no offline outbox yet, autosave must not let a
+ * user type for minutes only to discover nothing persisted). Reconnecting
+ * quietly re-enqueues any draft that was held back while offline.
+ */
+function prksApplyOfflineNotesReadOnly(ctx, offline) {
+    const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+    const cm = notes && notes.editor && notes.editor.codemirror;
+    if (!cm) return;
+    cm.setOption('readOnly', !!offline);
+    const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+    if (!statusEl) return;
+    if (offline) {
+        statusEl.innerText = 'Offline — notes are read-only';
+    } else if (notes.drafting) {
+        statusEl.innerText = 'Drafting...';
+    } else if (notes.pendingSave) {
+        statusEl.innerText = 'Saving...';
+    } else if (notes.saveError) {
+        statusEl.innerText = 'Error saving changes';
+    } else {
+        statusEl.innerText = 'All changes saved';
+    }
+}
+
+if (typeof prksOfflineRuntimeSubscribe === 'function') {
+    prksOfflineRuntimeSubscribe(function (state) {
+        if (typeof prksForEachLiveTabContext !== 'function') return;
+        const offline = state !== 'online';
+        prksForEachLiveTabContext(function (ctx) {
+            prksApplyOfflineNotesReadOnly(ctx, offline);
+        });
+        if (!offline) {
+            prksForEachLiveTabContext(function (ctx) {
+                const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                if (notes && notes.drafting) {
+                    void prksEnqueueWorkResearchNotesSave(ctx, notes.workId);
+                }
+            });
+        }
+    });
+}
 
 function prksDestroyWorkNotesEditor(ctx) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);

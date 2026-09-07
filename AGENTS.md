@@ -34,6 +34,9 @@ Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB,
 - `backend/research_graph.py` read-only Research Graph projection
 - `backend/performance.py` in-memory performance diagnostics
 - `frontend/` UI (`frontend/js/tab-context.js` per-tab runtime, `frontend/js/workspace-tabs.js` stacked workspace tabs, `frontend/js/workspace-persistence.js` workspace localStorage, `frontend/js/ribbon-create.js` unified New File split button)
+- `frontend/js/offline-store.js` disposable IndexedDB client cache (see "Offline / PWA")
+- `frontend/js/offline-runtime.js` online/offline state, read-through/mutation-guard policy (see "Offline / PWA")
+- `frontend/sw.js` app-shell/static + managed-PDF service worker (see "Offline / PWA")
 - `tests/` unittest
 
 New File UI must use the canonical Work creation path (`#work-modal` / `POST /api/works`) rather than duplicate creation APIs.
@@ -453,6 +456,64 @@ contain private URL, query, body, Work ID, search text, or coalesce-key content.
 Persistent cache, IndexedDB, outbox, and offline synchronization do not belong in
 `frontend/js/request-coordinator.js`. The burst catalog cache is memory-only and
 short-lived. It is not offline support.
+
+## Offline / PWA
+
+Phase 1 is read-only offline support. There is no offline mutation outbox, sync
+conflict resolution, background sync, or editable offline Research
+Notes/annotations in this phase — those are later-phase work.
+
+The PRKS server (SQLite + managed files) remains the sole source of truth.
+`frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`
+(Cache Storage) are a disposable client-side cache, never another canonical
+database, sync authority, backup, or conflict resolver. Deleting either must
+never affect server data, and a corrupt/incompatible offline schema may be
+discarded and recreated — canonical `prks_data.db` must never receive that
+treatment.
+
+Responsibilities stay separated:
+
+- `offline-store.js`: IndexedDB persistence only (`entities`, `lists`,
+  `metadata` object stores). No DOM, no routing, no connectivity policy. Every
+  public method resolves (never rejects/throws) and degrades to a safe
+  unavailable result if IndexedDB is missing, blocked, corrupt, or over quota.
+- `offline-runtime.js`: online/offline/reconnecting state (`navigator.onLine`
+  is an early hint only — reachability comes from real PRKS request
+  success/failure), the read-through/mutation-guard policy, and operational UI
+  state. Holds no canonical domain data itself; delegates all persistence to
+  `offline-store.js`.
+- `sw.js`: app-shell/static-asset availability plus a focused whole-file
+  managed-PDF cache. Never generically caches `/api/...` JSON and never queues
+  API mutations. Eligibility rules (same-origin GET only, no Range response
+  cached as a whole file, no 4xx/5xx/redirected/cross-origin) live in small
+  pure functions so they can be tested without a real
+  `ServiceWorkerGlobalScope` (`tests/browser/run_sw_selftest.js`).
+
+Do not let IndexedDB values enter the request coordinator's memory cache as if
+they were fresh server responses, and do not turn `api.js` fetchers themselves
+into persistent-caching functions — an offline-capable route goes through
+`prksOfflineReadEntity`/`readList` (online success → render + async cache write
+that never fails the online read; network/server-unreachable failure → offline
+store lookup). A real HTTP domain response (404/400/etc.) is never treated as
+an offline condition and never falls back to cache.
+
+Cached values always carry explicit provenance (`source: 'server' | 'cache' |
+'unavailable'`, plus `cachedAt`) — never hidden, never presented as current.
+
+Canonical mutations (metadata Save, deletes, relationship changes, bulk
+actions) must call `prksOfflineGuardMutation()` first and stop when it returns
+`true`. Never discard a submitted change, fake success, write it only to
+IndexedDB, or queue it. Research notes and private notes follow the same rule
+via explicit read-only editor state while offline, not autosave-through-cache.
+
+Offline cache contents are private research data: never log cached entity
+bodies, note text, titles, search text, or PDF contents. Diagnostics
+(`prksOfflineDiagnostics()`, Settings → Offline storage) may expose only
+aggregate counts/approximate bytes/availability/last-sync timestamp.
+
+Reconnect refreshes only the focused, previously cache-served route — never
+every mounted tile at once (no request storm), and reconnect never performs
+writes (no outbox exists yet).
 
 ## Interaction feedback
 

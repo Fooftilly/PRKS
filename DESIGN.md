@@ -740,13 +740,13 @@ Application operational states:
 | error | used | danger + icon + text |
 | empty | used | compact `.prks-state--empty` |
 | warning | used | warning + text |
-| offline | reserved | calm, not destructive; icon + “Offline” |
-| stale | reserved | visible but calm; cached data remains readable |
+| offline | used | calm, not destructive; icon + “Offline” (`.prks-connectivity-indicator`) |
+| stale | used | visible but calm; cached data remains readable (`.prks-offline-banner`, “Offline · cached 18:42”) |
 | queued | reserved | not styled like error; “N changes queued” |
 | syncing | reserved | “Checking…” / “Syncing…” |
 | conflict | reserved | warning/danger with icon + “Conflict” |
 
-Only implement operational states that exist today. Reserve the PWA states here so the offline project does not create a separate visual system.
+Only implement operational states that exist today. Offline/PWA Phase 1 (read-only) implemented `offline` and `stale`; `queued`/`syncing`/`conflict` stay reserved until an offline mutation outbox exists in a later phase, so that project does not create a separate visual system in the meantime.
 
 Rules:
 
@@ -1148,6 +1148,6 @@ This document is updated in the same change that introduces a new primitive. The
 Upcoming work that must not invent a parallel visual system:
 
 - tiling / window-manager behavior
-- PWA offline / stale / queued / syncing / conflict UI
+- PWA queued / syncing / conflict UI (offline mutation outbox, a later phase; offline/stale shipped in Offline/PWA Phase 1 using the contract above)
 
 Those features are out of scope for the design-system migration. Their visual contracts are already specified above.

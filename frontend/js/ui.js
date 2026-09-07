@@ -2432,6 +2432,11 @@ function prksPrivateNotesSetStatus(editor, text) {
 
 function prksEnqueuePrivateNotesSave(editor) {
     if (!editor) return null;
+    if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') {
+        // No offline mutation outbox in Phase 1: keep the typed draft local only.
+        prksPrivateNotesSetStatus(editor, 'Offline — notes are read-only');
+        return null;
+    }
     const entry = prksPrivateNoteDraft(editor.entityType, editor.entityId, editor.textarea.value);
     const content = String(entry.draftText);
     editor.dirty = false;
@@ -2508,6 +2513,26 @@ function prksFlushPendingPrivateNotes(ctx) {
     if (!editor || !editor.dirty) return;
     ctx.clearTimer(editor.timerKey);
     prksEnqueuePrivateNotesSave(editor);
+}
+
+/** Private notes stay explicitly read-only while offline -- same Phase 1 rule as Research Notes. */
+if (typeof prksOfflineRuntimeSubscribe === 'function') {
+    prksOfflineRuntimeSubscribe(function (state) {
+        if (typeof prksForEachLiveTabContext !== 'function') return;
+        const offline = state !== 'online';
+        prksForEachLiveTabContext(function (ctx) {
+            const editor = ctx && ctx.getResource ? ctx.getResource('privateNotesEditor') : null;
+            if (!editor || !editor.textarea) return;
+            editor.textarea.readOnly = offline;
+            if (offline) {
+                prksPrivateNotesSetStatus(editor, 'Offline — notes are read-only');
+            } else if (editor.dirty) {
+                prksEnqueuePrivateNotesSave(editor);
+            } else {
+                prksPrivateNotesSetStatus(editor, '');
+            }
+        });
+    });
 }
 
 function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
@@ -3230,6 +3255,7 @@ async function submitWorkMetaEdit(workId) {
     };
     // The save originated from the shared panel -- require full panel ownership here.
     if (!ownsWorkPanel()) return;
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     prksCaptureWorkMetaDraft(ownerCtx);
     const draft = ownerCtx && ownerCtx.ui && ownerCtx.ui.workMetaDraftWorkId === String(workId)
         ? ownerCtx.ui.workMetaDraft : null;

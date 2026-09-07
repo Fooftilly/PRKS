@@ -118,6 +118,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initPrksPdfTextReindexAction();
     initPrksExistingPdfLinearizeAction();
     initPrksPerformanceDiagnostics();
+    initPrksOfflineCacheSettings();
+    initPrksConnectivityIndicator();
     initPrksSettingsCategoryNav();
     initPrksPdfRememberPageSetting();
     initPrksPdfLastPageVisibilityFlush();
@@ -1301,6 +1303,7 @@ function prksActivateSettingsCategory(categoryId, options) {
     if (resolved === 'diagnostics' && !__prksSettingsDiagnosticsLoaded) {
         __prksSettingsDiagnosticsLoaded = true;
         void prksLoadPerformanceDiagnostics();
+        void prksLoadOfflineCacheStatus();
     }
 }
 window.prksActivateSettingsCategory = prksActivateSettingsCategory;
@@ -1393,6 +1396,167 @@ function initSidebarBrandHome() {
         if (st) st.filterQuery = '';
         handleRoute();
     });
+}
+
+/**
+ * Route-critical read models go through the offline-capable wrapper instead
+ * of the plain api.js fetcher: a real domain response (404/etc.) still
+ * renders "not found" exactly like before, but a genuine network/server-
+ * unreachable failure falls back to the offline store instead of silently
+ * becoming "not found" too. See AGENTS.md "Offline / PWA".
+ */
+async function prksOfflineDetailFetch(kind, id, path, signal) {
+    if (typeof prksOfflineReadEntity !== 'function') {
+        return { value: null, source: 'unavailable', cachedAt: null };
+    }
+    try {
+        return await prksOfflineReadEntity(kind, id, path, { signal: signal });
+    } catch (err) {
+        if (typeof prksIsAbortError === 'function' && prksIsAbortError(err)) throw err;
+        return { value: null, source: 'server', cachedAt: null };
+    }
+}
+
+function prksOfflineProvenanceBannerHtml(offlineResult) {
+    if (!offlineResult || offlineResult.source !== 'cache') return '';
+    const at =
+        typeof prksOfflineFormatCachedAt === 'function' ? prksOfflineFormatCachedAt(offlineResult.cachedAt) : '';
+    return (
+        '<div class="prks-offline-banner" data-prks-role="offline-provenance-banner">' +
+        '<span class="prks-offline-banner__icon" aria-hidden="true">' +
+        (typeof prksIcon === 'function' ? prksIcon('wifi-off', { size: 'sm' }) : '') +
+        '</span>' +
+        '<span>Offline' +
+        (at ? ' · cached ' + prksEscapeHtmlLite(at) : '') +
+        '</span>' +
+        '</div>'
+    );
+}
+
+/** Prepends the cached-provenance banner into an already-rendered detail page. Online/not-found renders are untouched. */
+function prksOfflinePrependBanner(container, offlineResult) {
+    if (!container || !offlineResult || offlineResult.source !== 'cache') return;
+    const html = prksOfflineProvenanceBannerHtml(offlineResult);
+    if (!html) return;
+    container.insertAdjacentHTML('afterbegin', html);
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+}
+
+function prksOfflineRenderUnavailable(container, label) {
+    if (!container) return;
+    container.innerHTML =
+        '<div class="prks-page-header page-header"><h2 class="prks-page-title">' +
+        prksEscapeHtmlLite(label || 'Not available offline') +
+        '</h2></div>' +
+        '<p class="prks-inline-message" data-prks-role="offline-unavailable">This item is not available offline.</p>';
+}
+
+/** After reconnecting, quietly refresh only a focused, cache-served route -- never an in-progress edit. */
+function prksOfflineMaybeRefreshFocusedRoute() {
+    if (typeof prksGetFocusedTabContext !== 'function' || typeof prksRenderTabRoute !== 'function') return;
+    const ctx = prksGetFocusedTabContext();
+    if (!ctx || !ctx.root || ctx.destroyed || !ctx.lastResolvedRoute) return;
+    if (ctx.ui && (ctx.ui.workDetailsMode === 'metadata' || ctx.ui.personDetailEditing || ctx.ui.argumentEditing)) return;
+    const banner = ctx.root.querySelector('[data-prks-role="offline-provenance-banner"], [data-prks-role="offline-unavailable"]');
+    if (!banner) return;
+    void prksRenderTabRoute(ctx, ctx.lastResolvedRoute.canonicalHash, { leaveApproved: true });
+}
+
+let __prksOfflinePrevState = 'online';
+
+function prksRenderConnectivityIndicator(state) {
+    const el = document.getElementById('prks-connectivity-indicator');
+    const label = document.getElementById('prks-connectivity-indicator-label');
+    if (!el) return;
+    const online = state !== 'offline' && state !== 'reconnecting';
+    el.hidden = online;
+    el.classList.toggle('hidden', online);
+    el.classList.toggle('prks-connectivity-indicator--reconnecting', state === 'reconnecting');
+    if (label) label.textContent = state === 'reconnecting' ? 'Reconnecting…' : 'Offline';
+}
+
+function initPrksConnectivityIndicator() {
+    if (typeof prksOfflineRuntimeInit === 'function') prksOfflineRuntimeInit();
+    const initial = typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : 'online';
+    __prksOfflinePrevState = initial;
+    prksRenderConnectivityIndicator(initial);
+    if (typeof prksOfflineRuntimeSubscribe === 'function') {
+        prksOfflineRuntimeSubscribe(function (state) {
+            prksRenderConnectivityIndicator(state);
+            if (state === 'online' && __prksOfflinePrevState !== 'online') {
+                prksOfflineMaybeRefreshFocusedRoute();
+            }
+            __prksOfflinePrevState = state;
+        });
+    }
+}
+
+function prksFormatBytesApprox(n) {
+    const num = Number(n) || 0;
+    if (num < 1024) return num + ' B';
+    if (num < 1024 * 1024) return Math.round(num / 1024) + ' KB';
+    return (num / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+async function prksLoadOfflineCacheStatus() {
+    const summaryEl = document.getElementById('prks-offline-cache-summary');
+    try {
+        if (typeof prksOfflineDiagnostics !== 'function') throw new Error('Offline cache unavailable.');
+        const diag = await prksOfflineDiagnostics();
+        if (!summaryEl) return;
+        if (!diag.available) {
+            summaryEl.textContent = 'Offline cache is unavailable in this browser. PRKS still works normally online.';
+            return;
+        }
+        summaryEl.textContent =
+            'Cached items: ' +
+            String((diag.entityCount || 0) + (diag.listCount || 0)) +
+            '. Cached PDFs: ' +
+            String(diag.pdfCount || 0) +
+            '. Approx. size: ' +
+            (diag.approxBytes != null ? prksFormatBytesApprox(diag.approxBytes) : '—') +
+            '.';
+    } catch (e) {
+        if (summaryEl) summaryEl.textContent = (e && e.message) || 'Could not load offline cache status.';
+    }
+}
+window.prksLoadOfflineCacheStatus = prksLoadOfflineCacheStatus;
+
+function initPrksOfflineCacheSettings() {
+    const refreshBtn = document.getElementById('prks-offline-cache-refresh-btn');
+    const clearBtn = document.getElementById('prks-offline-cache-clear-btn');
+    if (refreshBtn && refreshBtn.dataset.bound !== '1') {
+        refreshBtn.dataset.bound = '1';
+        refreshBtn.addEventListener('click', () => {
+            void prksLoadOfflineCacheStatus();
+        });
+    }
+    if (clearBtn && clearBtn.dataset.bound !== '1') {
+        clearBtn.dataset.bound = '1';
+        clearBtn.addEventListener('click', async () => {
+            const statusEl = document.getElementById('prks-offline-cache-status');
+            const confirmed =
+                typeof prksConfirmDestructive === 'function'
+                    ? await prksConfirmDestructive({
+                          title: 'Clear offline cache?',
+                          message:
+                              'This removes pages and PDFs cached on this device for offline use. It never changes anything stored on the PRKS server.',
+                          confirmLabel: 'Clear offline cache',
+                      })
+                    : window.confirm('Clear offline cache stored on this device?');
+            if (!confirmed) return;
+            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(clearBtn, true, { busyLabel: 'Clearing…' });
+            try {
+                if (typeof prksOfflineClearCache === 'function') await prksOfflineClearCache();
+                if (statusEl) statusEl.textContent = 'Offline cache cleared.';
+                await prksLoadOfflineCacheStatus();
+            } catch (_e) {
+                if (statusEl) statusEl.textContent = 'Could not clear offline cache.';
+            } finally {
+                if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(clearBtn, false);
+            }
+        });
+    }
 }
 
 function initRouter() {
@@ -1695,9 +1859,20 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'playlist-detail': {
                 const plId = route.params.playlistId;
-                if (typeof fetchPlaylistDetails === 'function' && typeof renderPlaylistDetail === 'function') {
-                    const pl = await fetchPlaylistDetails(plId, { signal: routeSignal });
+                if (typeof renderPlaylistDetail === 'function') {
+                    const offlinePl = await prksOfflineDetailFetch(
+                        'playlist',
+                        plId,
+                        '/api/playlists/' + encodeURIComponent(plId),
+                        routeSignal
+                    );
                     if (stale()) return;
+                    const pl = offlinePl.value;
+                    if (!pl && offlinePl.source === 'unavailable') {
+                        prksOfflineRenderUnavailable(contentDiv, 'Playlist not available offline');
+                        titleOpts = { notFound: true, notFoundTitle: 'Playlist not available offline' };
+                        break;
+                    }
                     ctx.setEntity('playlist', pl);
                     ctx.ui.playlistEditing = false;
                     ctx.ui.playlistRename = {};
@@ -1710,6 +1885,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                             : { playlistTitle: 'Playlist', itemCount: 0 }
                     );
                     renderPlaylistDetail(ctx, pl, contentDiv);
+                    prksOfflinePrependBanner(contentDiv, offlinePl);
                     titleOpts = pl
                         ? { entityTitle: pl.title || 'Playlist' }
                         : { notFound: true, notFoundTitle: 'Playlist not found' };
@@ -1895,10 +2071,23 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'work': {
-                const work = await fetchWorkDetails(route.params.workId, { signal: routeSignal });
+                const workId = route.params.workId;
+                const offlineWork = await prksOfflineDetailFetch(
+                    'work',
+                    workId,
+                    '/api/works/' + encodeURIComponent(workId),
+                    routeSignal
+                );
                 if (stale()) return;
+                const work = offlineWork.value;
+                if (!work && offlineWork.source === 'unavailable') {
+                    prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'File not available offline' };
+                    break;
+                }
                 await renderWorkDetails(ctx, work, { generation: generation, signal: routeSignal });
                 if (stale()) return;
+                prksOfflinePrependBanner(contentDiv, offlineWork);
                 titleOpts = work
                     ? { entityTitle: String(work.title || '').trim() || 'File' }
                     : { notFound: true, notFoundTitle: 'File not found' };
@@ -1912,15 +2101,26 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'concept-detail': {
-                const item = typeof fetchConcept === 'function' ? await fetchConcept(route.params.conceptId, { signal: routeSignal }) : null;
+                const conceptId = route.params.conceptId;
+                const offlineConcept = await prksOfflineDetailFetch(
+                    'concept',
+                    conceptId,
+                    '/api/concepts/' + encodeURIComponent(conceptId),
+                    routeSignal
+                );
                 if (stale()) return;
-                if (!item) {
+                const item = offlineConcept.value;
+                if (!item && offlineConcept.source === 'unavailable') {
+                    prksOfflineRenderUnavailable(contentDiv, 'Concept not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Concept not available offline' };
+                } else if (!item) {
                     if (typeof renderConceptNotFound === 'function') renderConceptNotFound(contentDiv);
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concept not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Concept not found' };
                 } else {
                     ctx.setEntity('concept', item);
                     if (typeof renderConceptDetail === 'function') renderConceptDetail(ctx, item, contentDiv);
+                    prksOfflinePrependBanner(contentDiv, offlineConcept);
                     titleOpts = { entityTitle: item.name || 'Concept' };
                 }
                 break;
@@ -1933,15 +2133,26 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'position-detail': {
-                const item = typeof fetchPosition === 'function' ? await fetchPosition(route.params.positionId, { signal: routeSignal }) : null;
+                const positionId = route.params.positionId;
+                const offlinePosition = await prksOfflineDetailFetch(
+                    'position',
+                    positionId,
+                    '/api/positions/' + encodeURIComponent(positionId),
+                    routeSignal
+                );
                 if (stale()) return;
-                if (!item) {
+                const item = offlinePosition.value;
+                if (!item && offlinePosition.source === 'unavailable') {
+                    prksOfflineRenderUnavailable(contentDiv, 'Position not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Position not available offline' };
+                } else if (!item) {
                     if (typeof renderPositionNotFound === 'function') renderPositionNotFound(contentDiv);
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Position not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Position not found' };
                 } else {
                     ctx.setEntity('position', item);
                     if (typeof renderPositionDetail === 'function') renderPositionDetail(ctx, item, contentDiv);
+                    prksOfflinePrependBanner(contentDiv, offlinePosition);
                     titleOpts = { entityTitle: item.name || 'Position' };
                 }
                 break;
@@ -1955,9 +2166,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'argument-detail': {
-                const item = typeof fetchArgument === 'function' ? await fetchArgument(route.params.argumentId, { signal: routeSignal }) : null;
+                const argumentId = route.params.argumentId;
+                const offlineArgument = await prksOfflineDetailFetch(
+                    'argument',
+                    argumentId,
+                    '/api/arguments/' + encodeURIComponent(argumentId),
+                    routeSignal
+                );
                 if (stale()) return;
-                if (!item) {
+                const item = offlineArgument.value;
+                if (!item && offlineArgument.source === 'unavailable') {
+                    prksOfflineRenderUnavailable(contentDiv, 'Argument not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Argument not available offline' };
+                } else if (!item) {
                     if (typeof renderArgumentNotFound === 'function') renderArgumentNotFound(contentDiv);
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Argument not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Argument not found' };
@@ -1965,6 +2186,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     ctx.setEntity('argument', item);
                     ctx.ui.argumentEditing = false;
                     if (typeof renderArgumentDetail === 'function') renderArgumentDetail(ctx, item, contentDiv);
+                    prksOfflinePrependBanner(contentDiv, offlineArgument);
                     titleOpts = { entityTitle: item.name || 'Argument' };
                 }
                 break;
@@ -1985,8 +2207,20 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'person': {
-                const person = await fetchPersonDetails(route.params.personId, { signal: routeSignal });
+                const personId = route.params.personId;
+                const offlinePerson = await prksOfflineDetailFetch(
+                    'person',
+                    personId,
+                    '/api/persons/' + encodeURIComponent(personId),
+                    routeSignal
+                );
                 if (stale()) return;
+                const person = offlinePerson.value;
+                if (!person && offlinePerson.source === 'unavailable') {
+                    prksOfflineRenderUnavailable(contentDiv, 'Person not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Person not available offline' };
+                    break;
+                }
                 publishSidebar(
                     person
                         ? {
@@ -2008,6 +2242,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 ctx.ui.personProfileDraft = null;
                 ctx.ui.personWorksEditing = false;
                 renderPersonDetails(ctx, person, contentDiv);
+                prksOfflinePrependBanner(contentDiv, offlinePerson);
                 if (person) {
                     const nm =
                         typeof personDisplayName === 'function'

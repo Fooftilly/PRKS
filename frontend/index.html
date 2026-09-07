@@ -177,6 +177,16 @@
                     </div>
                 </div>
                 <div class="top-ribbon__right">
+                    <div
+                        id="prks-connectivity-indicator"
+                        class="prks-connectivity-indicator hidden"
+                        role="status"
+                        aria-live="polite"
+                        hidden
+                    >
+                        <span class="prks-connectivity-indicator__icon" aria-hidden="true"><i data-lucide="wifi-off" class="prks-icon prks-icon--sm"></i></span>
+                        <span class="prks-connectivity-indicator__label" id="prks-connectivity-indicator-label">Offline</span>
+                    </div>
                     <button
                         type="button"
                         id="prks-mobile-details-btn"
@@ -485,6 +495,16 @@
                             <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-copy-btn">Copy report</button>
                         </div>
                         <p class="prks-settings-hint" id="prks-perf-status" aria-live="polite"></p>
+                    </section>
+                    <section class="prks-settings-section prks-settings-section--sep" aria-labelledby="prks-settings-offline-heading">
+                        <h5 id="prks-settings-offline-heading" class="prks-settings-section__title">Offline cache <span class="prks-settings-scope">This device</span></h5>
+                        <p class="prks-settings-hint">Read-only convenience copies of previously opened files and PDFs, kept on this device only. PRKS's own database and files are never affected by anything here.</p>
+                        <p class="prks-settings-hint" id="prks-offline-cache-summary" aria-live="polite">Loading offline cache status…</p>
+                        <div class="prks-backup-restore-row">
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-offline-cache-refresh-btn">Refresh</button>
+                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-offline-cache-clear-btn">Clear offline cache</button>
+                        </div>
+                        <p class="prks-settings-hint" id="prks-offline-cache-status" aria-live="polite"></p>
                     </section>
                 </section>
 
@@ -1046,6 +1066,8 @@
     <script src="/js/workspace-drag.js"></script>
     <script src="/js/pdf-work-runtime.js"></script>
     <script src="/js/request-coordinator.js"></script>
+    <script src="/js/offline-store.js"></script>
+    <script src="/js/offline-runtime.js"></script>
     <script src="/js/api.js"></script>
     <script src="/js/doc-types.js"></script>
     <script src="/js/ui.js"></script>
