@@ -18,6 +18,8 @@ _MIGRATED_GLOBALS_RE = re.compile(
     r"|ConceptHintList|ArgumentHintList))"
 )
 
+_PERSON_EDIT_GLOBAL_RE = re.compile(r"__prksPersonEditSelectedGroups")
+
 
 def _scan_frontend_js(pattern):
     """Return list of (relpath, lineno, line) for every match in frontend/js/."""
@@ -63,6 +65,29 @@ class TestMigratedGlobalsAbsent(unittest.TestCase):
             self.fail(
                 f"{len(hits)} migrated-global reference(s) found:\n{lines}"
             )
+
+    def test_no_person_editor_group_global(self):
+        hits = _scan_frontend_js(_PERSON_EDIT_GLOBAL_RE)
+        if hits:
+            lines = "\n".join(f"  {r}:{n}: {l}" for r, n, l in hits[:20])
+            self.fail(f"{len(hits)} Person-editor global reference(s) found:\n{lines}")
+
+    def test_person_profile_draft_is_runtime_only_and_reset(self):
+        tc_path = os.path.join(FRONTEND_JS, "tab-context.js")
+        with open(tc_path, encoding="utf-8") as fh:
+            src = fh.read()
+        empty_ui = src.split("function emptyUi()", 1)[1].split("function resetEditUi", 1)[0]
+        reset_ui = src.split("function resetEditUi(ui)", 1)[1].split("function safeCall", 1)[0]
+        self.assertIn("personProfileDraft: null", empty_ui)
+        self.assertIn("ui.personProfileDraft = null", reset_ui)
+        persistence_path = os.path.join(FRONTEND_JS, "workspace-persistence.js")
+        with open(persistence_path, encoding="utf-8") as fh:
+            self.assertNotIn("personProfileDraft", fh.read())
+        app_path = os.path.join(FRONTEND_JS, "app.js")
+        with open(app_path, encoding="utf-8") as fh:
+            app = fh.read()
+        person_route = app.split("case 'person':", 1)[1].split("default:", 1)[0]
+        self.assertIn("ctx.ui.personProfileDraft = null", person_route)
 
 
 class TestTabContextResourceAPI(unittest.TestCase):

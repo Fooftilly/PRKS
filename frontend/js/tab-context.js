@@ -41,6 +41,7 @@
         return {
             rightPanelTab: 'details',
             personDetailEditing: false,
+            personProfileDraft: null,
             personWorksEditing: false,
             personGroupEditing: false,
             personGroupMembersEditing: false,
@@ -59,6 +60,7 @@
 
     function resetEditUi(ui) {
         ui.personDetailEditing = false;
+        ui.personProfileDraft = null;
         ui.personWorksEditing = false;
         ui.personGroupEditing = false;
         ui.personGroupMembersEditing = false;

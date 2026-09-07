@@ -17,7 +17,7 @@ class FrontendPeopleTests(unittest.TestCase):
     def test_people_creation_uses_canonical_modal_from_header_and_true_empty(self):
         src = _read(_PEOPLE)
         library = src.split("function renderPeopleList", 1)[1].split(
-            "async function openPersonProfileEdit", 1
+            "function prksPersonDraftFromEntity", 1
         )[0]
         empty = src.split("function prksPeopleListEmptyHtml", 1)[1].split(
             "function prksPeopleListInnerHtml", 1
@@ -53,7 +53,7 @@ class FrontendPeopleTests(unittest.TestCase):
             "function prksBindPeopleLibrarySearch", 1
         )[0]
         render = src.split("function renderPeopleList", 1)[1].split(
-            "async function openPersonProfileEdit", 1
+            "function prksPersonDraftFromEntity", 1
         )[0]
         empty = src.split("function prksPeopleListEmptyHtml", 1)[1].split(
             "function prksPeopleListInnerHtml", 1
@@ -109,6 +109,32 @@ class FrontendPeopleTests(unittest.TestCase):
         self.assertIn("person-edit-footer", form)
         self.assertIn('id="pd-save-btn"', form)
         self.assertNotIn("person-groups-fieldset__action\" onclick=\"savePersonProfile", form)
+
+    def test_profile_editor_is_tab_context_draft_owned(self):
+        src = _read(_PEOPLE)
+        groups = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "components", "people-groups.js"))
+        self.assertIn("function prksEnsurePersonProfileDraft(ctx, person)", src)
+        self.assertIn("function prksMountPersonProfileEditor(ctx, person)", src)
+        self.assertIn('data-person-edit-id="${id}"', src)
+        self.assertIn("renderPersonProfileEditFormHtml(person, draft)", src)
+        self.assertIn("prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation)", src)
+        for field in (
+            "first_name",
+            "last_name",
+            "aliases",
+            "about",
+            "birth_date",
+            "death_date",
+            "image_url",
+            "link_wikipedia",
+            "link_stanford_encyclopedia",
+            "link_iep",
+            "links_other",
+        ):
+            self.assertIn(field, src)
+        self.assertIn("group_ids: (Array.isArray(draft.groups) ? draft.groups : [])", src)
+        self.assertNotIn("prksGetPersonEditGroupIdsFromDom", src + groups)
+        self.assertIn("prksMountPersonProfileGroupPicker(ctx, person, editor)", groups)
 
 
 if __name__ == "__main__":

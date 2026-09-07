@@ -156,6 +156,19 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
         self.assertIn("<summary>Advanced</summary>", form)
         self.assertIn("Delete group", form)
 
+    def test_profile_group_picker_keeps_async_work_on_original_editor(self):
+        src = _read(_GROUPS)
+        mount = src.split("async function prksMountPersonProfileGroupPicker", 1)[1]
+        self.assertIn("const generation = ctx.generation", mount)
+        self.assertIn("const draft =", mount)
+        self.assertIn("editor.querySelector('#pd-group-chips')", mount)
+        self.assertLess(mount.index("const chips ="), mount.index("await prksEnsureAllGroupsCache()"))
+        self.assertIn("if (!originalEditorCurrent()) return", mount)
+        self.assertIn("draft.groups =", mount)
+        self.assertIn("logicalSessionCurrent()", mount)
+        self.assertNotIn("document.getElementById('pd-group-chips')", mount)
+        self.assertIn("function prksGetPersonProfileDraftGroupIds(ctx, personId)", src)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -690,25 +690,131 @@ function renderPeopleList(persons, container, options = {}) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
-async function openPersonProfileEdit() {
+function prksPersonDraftFromEntity(person) {
+    const value = (key) => String(person && person[key] != null ? person[key] : '');
+    return {
+        personId: value('id'),
+        first_name: value('first_name'),
+        last_name: value('last_name'),
+        aliases: value('aliases'),
+        about: value('about'),
+        birth_date: personDateToDisplayFormat(value('birth_date')),
+        death_date: personDateToDisplayFormat(value('death_date')),
+        image_url: value('image_url'),
+        link_wikipedia: value('link_wikipedia'),
+        link_stanford_encyclopedia: value('link_stanford_encyclopedia'),
+        link_iep: value('link_iep'),
+        links_other: value('links_other'),
+        groups: (Array.isArray(person && person.groups) ? person.groups : []).map((group) => ({
+            id: group.id,
+            name: String(group.name == null ? '' : group.name),
+        })),
+    };
+}
+
+function prksEnsurePersonProfileDraft(ctx, person) {
+    if (!ctx || !ctx.ui || !person || person.id == null) return null;
+    const personId = String(person.id);
+    const draft = ctx.ui.personProfileDraft;
+    if (!draft || String(draft.personId) !== personId) {
+        ctx.ui.personProfileDraft = prksPersonDraftFromEntity(person);
+    }
+    return ctx.ui.personProfileDraft;
+}
+
+function prksPersonProfileEditSessionCurrent(ctx, generation, personId, draft) {
+    if (!ctx || !ctx.ui || !ctx.ui.personDetailEditing) return false;
+    if (!draft || ctx.ui.personProfileDraft !== draft || String(draft.personId) !== String(personId)) return false;
+    if (typeof prksTabContextOwnsEntityRoute === 'function') {
+        return prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person');
+    }
+    const person = ctx.getEntity && ctx.getEntity('person');
+    return !!(
+        person &&
+        String(person.id) === String(personId) &&
+        ctx.isCurrent &&
+        ctx.isCurrent(generation)
+    );
+}
+
+function prksPersonProfileEditorCurrent(ctx, generation, personId, draft, editor) {
+    if (!prksPersonProfileEditSessionCurrent(ctx, generation, personId, draft) || !editor) return false;
+    if (editor.isConnected === false || String(editor.getAttribute('data-person-edit-id') || '') !== String(personId)) {
+        return false;
+    }
+    const panel = document.getElementById('panel-content');
+    if (!panel || typeof prksRightPanelOwnedBy !== 'function' || !prksRightPanelOwnedBy(ctx, editor)) return false;
+    return panel.querySelector('.person-panel-edit') === editor;
+}
+
+const PRKS_PERSON_DRAFT_FIELDS = {
+    'pd-first-name': 'first_name',
+    'pd-last-name': 'last_name',
+    'pd-aliases': 'aliases',
+    'pd-about': 'about',
+    'pd-birth-date': 'birth_date',
+    'pd-death-date': 'death_date',
+    'pd-image-url': 'image_url',
+    'pd-link-wikipedia': 'link_wikipedia',
+    'pd-link-stanford': 'link_stanford_encyclopedia',
+    'pd-link-iep': 'link_iep',
+    'pd-links-other': 'links_other',
+};
+
+function prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation) {
+    const draft = ctx && ctx.ui && ctx.ui.personProfileDraft;
+    if (!prksPersonProfileEditorCurrent(ctx, generation, personId, draft, editor)) return false;
+    Object.entries(PRKS_PERSON_DRAFT_FIELDS).forEach(([id, key]) => {
+        const field = editor.querySelector('#' + id);
+        if (field) draft[key] = field.value;
+    });
+    return true;
+}
+
+async function prksMountPersonProfileEditor(ctx, person) {
+    if (!ctx || !person || person.id == null) return;
+    const generation = ctx.generation;
+    const personId = String(person.id);
+    const draft = prksEnsurePersonProfileDraft(ctx, person);
+    if (!prksPersonProfileEditSessionCurrent(ctx, generation, personId, draft)) return;
+    const panel = document.getElementById('panel-content');
+    if (!panel || typeof prksRightPanelOwnedBy !== 'function' || !prksRightPanelOwnedBy(ctx, panel)) return;
+    const editor = panel.querySelector('.person-panel-edit');
+    if (!prksPersonProfileEditorCurrent(ctx, generation, personId, draft, editor)) return;
+    const sync = () => prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation);
+    editor.addEventListener('input', sync);
+    editor.addEventListener('change', sync);
+    if (typeof prksMountPersonProfileGroupPicker === 'function') {
+        await prksMountPersonProfileGroupPicker(ctx, person, editor);
+    }
+}
+
+function openPersonProfileEdit() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const person = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
+    if (!ctx || !ctx.ui || !person) return;
     if (ctx && ctx.ui) {
         ctx.ui.personWorksEditing = false;
         ctx.ui.personDetailEditing = true;
     }
+    prksEnsurePersonProfileDraft(ctx, person);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
-    const _cpEdit = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
-    if (typeof prksMountPersonProfileGroupPicker === 'function' && _cpEdit) {
-        await prksMountPersonProfileGroupPicker(_cpEdit);
-    }
 }
 
 function closePersonProfileEdit() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    if (ctx && ctx.ui) ctx.ui.personDetailEditing = false;
-    window.__prksPersonEditSelectedGroups = null;
+    if (ctx && ctx.ui) {
+        ctx.ui.personDetailEditing = false;
+        ctx.ui.personProfileDraft = null;
+    }
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
+
+window.prksEnsurePersonProfileDraft = prksEnsurePersonProfileDraft;
+window.prksPersonProfileEditSessionCurrent = prksPersonProfileEditSessionCurrent;
+window.prksPersonProfileEditorCurrent = prksPersonProfileEditorCurrent;
+window.prksSyncPersonProfileDraftFromEditor = prksSyncPersonProfileDraftFromEditor;
+window.prksMountPersonProfileEditor = prksMountPersonProfileEditor;
 
 async function deletePerson() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
@@ -844,11 +950,12 @@ function renderPersonProfileDetailsSidebarHtml(person) {
         </div>`;
 }
 
-function renderPersonProfileEditFormHtml(person) {
+function renderPersonProfileEditFormHtml(person, draft) {
     if (!person) return '';
     const id = escapeHtmlPerson(person.id);
+    const state = draft && String(draft.personId) === String(person.id) ? draft : prksPersonDraftFromEntity(person);
     return `
-        <div class="doc-meta-card person-panel-edit">
+        <div class="doc-meta-card person-panel-edit" data-person-edit-id="${id}">
             <div class="card-heading-row card-heading-row--wrap">
                 <h3>Edit profile</h3>
             </div>
@@ -856,39 +963,39 @@ function renderPersonProfileEditFormHtml(person) {
                 <section class="person-edit-section" aria-labelledby="person-edit-identity-heading">
                     <h4 id="person-edit-identity-heading">Identity</h4>
                     <label for="pd-first-name">First name</label>
-                    <input type="text" id="pd-first-name" value="${escapeHtmlPerson(person.first_name)}">
+                    <input type="text" id="pd-first-name" value="${escapeHtmlPerson(state.first_name)}">
                     <label for="pd-last-name">Last name</label>
-                    <input type="text" id="pd-last-name" value="${escapeHtmlPerson(person.last_name)}">
+                    <input type="text" id="pd-last-name" value="${escapeHtmlPerson(state.last_name)}">
                     <label for="pd-aliases">Aliases</label>
-                    <input type="text" id="pd-aliases" value="${escapeHtmlPerson(person.aliases)}">
+                    <input type="text" id="pd-aliases" value="${escapeHtmlPerson(state.aliases)}">
                 </section>
                 <section class="person-edit-section" aria-labelledby="person-edit-biography-heading">
                     <h4 id="person-edit-biography-heading">Biography</h4>
                     <label for="pd-about">About / expertise</label>
-                    <textarea id="pd-about" class="textarea-sm">${escapeHtmlPerson(person.about)}</textarea>
+                    <textarea id="pd-about" class="textarea-sm">${escapeHtmlPerson(state.about)}</textarea>
                 </section>
                 <section class="person-edit-section" aria-labelledby="person-edit-dates-heading">
                     <h4 id="person-edit-dates-heading">Dates</h4>
                     <div class="form-grid-2 form-grid-2--compact">
-                        <div><label for="pd-birth-date">Birth date</label><input type="text" id="pd-birth-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.birth_date || ''))}"></div>
-                        <div><label for="pd-death-date">Date of death</label><input type="text" id="pd-death-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(personDateToDisplayFormat(person.death_date || ''))}"></div>
+                        <div><label for="pd-birth-date">Birth date</label><input type="text" id="pd-birth-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(state.birth_date)}"></div>
+                        <div><label for="pd-death-date">Date of death</label><input type="text" id="pd-death-date" placeholder="dd/mm/yyyy or yyyy" autocomplete="off" value="${escapeHtmlPerson(state.death_date)}"></div>
                     </div>
                 </section>
                 <section class="person-edit-section" aria-labelledby="person-edit-portrait-heading">
                     <h4 id="person-edit-portrait-heading">Portrait</h4>
                     <label for="pd-image-url">Portrait image URL</label>
-                    <input type="url" id="pd-image-url" value="${escapeHtmlPerson(person.image_url)}">
+                    <input type="url" id="pd-image-url" value="${escapeHtmlPerson(state.image_url)}">
                 </section>
                 <section class="person-edit-section" aria-labelledby="person-edit-references-heading">
                     <h4 id="person-edit-references-heading">References</h4>
                     <label for="pd-link-wikipedia">Wikipedia</label>
-                    <input type="url" id="pd-link-wikipedia" value="${escapeHtmlPerson(person.link_wikipedia)}">
+                    <input type="url" id="pd-link-wikipedia" value="${escapeHtmlPerson(state.link_wikipedia)}">
                     <label for="pd-link-stanford">Stanford Encyclopedia of Philosophy</label>
-                    <input type="url" id="pd-link-stanford" value="${escapeHtmlPerson(person.link_stanford_encyclopedia)}">
+                    <input type="url" id="pd-link-stanford" value="${escapeHtmlPerson(state.link_stanford_encyclopedia)}">
                     <label for="pd-link-iep">Internet Encyclopedia of Philosophy</label>
-                    <input type="url" id="pd-link-iep" value="${escapeHtmlPerson(person.link_iep)}">
+                    <input type="url" id="pd-link-iep" value="${escapeHtmlPerson(state.link_iep)}">
                     <label for="pd-links-other">Other links</label>
-                    <textarea id="pd-links-other" placeholder="One URL per line, or [Title](https://...)" class="textarea-sm">${escapeHtmlPerson(person.links_other)}</textarea>
+                    <textarea id="pd-links-other" placeholder="One URL per line, or [Title](https://...)" class="textarea-sm">${escapeHtmlPerson(state.links_other)}</textarea>
                 </section>
                 <section class="person-edit-section" aria-labelledby="person-edit-groups-heading">
                     <h4 id="person-edit-groups-heading">Groups</h4>
@@ -910,44 +1017,45 @@ async function savePersonProfile(personId) {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const generation = ctx && ctx.generation;
     const root = ctx && ctx.root;
-    const birthIso = parsePersonBirthDeathField(document.getElementById('pd-birth-date').value);
+    if (
+        typeof prksTabContextOwnsEntityRoute !== 'function' ||
+        !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
+    ) return;
+    const panel = document.getElementById('panel-content');
+    if (!panel || typeof prksRightPanelOwnedBy !== 'function' || !prksRightPanelOwnedBy(ctx, panel)) return;
+    const editor = panel.querySelector('.person-panel-edit');
+    const draft = ctx && ctx.ui && ctx.ui.personProfileDraft;
+    if (!draft || String(draft.personId) !== String(personId)) return;
+    if (!prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation)) return;
+    const birthIso = parsePersonBirthDeathField(draft.birth_date);
     if (birthIso === null) {
         await prksAlertMessage(`Birth:\n${PERSON_DATE_HELP}`, 'Validation');
         return;
     }
-    const deathIso = parsePersonBirthDeathField(document.getElementById('pd-death-date').value);
+    const deathIso = parsePersonBirthDeathField(draft.death_date);
     if (deathIso === null) {
         await prksAlertMessage(`Date of death:\n${PERSON_DATE_HELP}`, 'Validation');
         return;
     }
-    let group_ids =
-        typeof prksGetPersonEditGroupIdsFromDom === 'function' ? prksGetPersonEditGroupIdsFromDom() : undefined;
-    if (group_ids === undefined) {
-        const _cpSave = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
-        group_ids = (_cpSave && _cpSave.groups
-            ? _cpSave.groups
-            : []
-        ).map((g) => g.id);
-    }
     const payload = {
-        first_name: document.getElementById('pd-first-name').value,
-        last_name: document.getElementById('pd-last-name').value,
-        aliases: document.getElementById('pd-aliases').value,
-        about: document.getElementById('pd-about').value,
-        image_url: document.getElementById('pd-image-url').value,
-        link_wikipedia: document.getElementById('pd-link-wikipedia').value,
-        link_stanford_encyclopedia: document.getElementById('pd-link-stanford').value,
-        link_iep: document.getElementById('pd-link-iep').value,
-        links_other: document.getElementById('pd-links-other').value,
+        first_name: draft.first_name,
+        last_name: draft.last_name,
+        aliases: draft.aliases,
+        about: draft.about,
+        image_url: draft.image_url,
+        link_wikipedia: draft.link_wikipedia,
+        link_stanford_encyclopedia: draft.link_stanford_encyclopedia,
+        link_iep: draft.link_iep,
+        links_other: draft.links_other,
         birth_date: birthIso,
         death_date: deathIso,
-        group_ids
+        group_ids: (Array.isArray(draft.groups) ? draft.groups : []).map((group) => group.id)
     };
     if (!payload.last_name.trim()) {
         await prksAlertMessage('Last name is required.', 'Validation');
         return;
     }
-    const btn = document.getElementById('pd-save-btn');
+    const btn = panel.querySelector('#pd-save-btn');
     if (btn && typeof prksSetButtonBusy === 'function') {
         prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
     }
@@ -959,7 +1067,11 @@ async function savePersonProfile(personId) {
         });
         const patchBody = await res.json().catch(() => ({}));
         if (!res.ok) {
-            if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
+            if (
+                prksPersonProfileEditSessionCurrent(ctx, generation, personId, draft) &&
+                typeof prksRightPanelOwnedBy === 'function' &&
+                prksRightPanelOwnedBy(ctx)
+            ) {
                 await prksAlertMessage(patchBody.error || 'Could not save profile.', 'Could not save');
             }
             return;
@@ -974,7 +1086,7 @@ async function savePersonProfile(personId) {
             typeof prksTabContextOwnsEntityRoute === 'function' &&
             !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
         ) return;
-        if (ctx && ctx.ui) ctx.ui.personDetailEditing = false;
+        if (!person) throw new Error('Person refresh failed');
         if (person) {
             if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
             if (ctx) ctx.routeSidebar = {
@@ -982,6 +1094,10 @@ async function savePersonProfile(personId) {
                     typeof personDisplayName === 'function' ? personDisplayName(person) || 'Person' : 'Person',
                 linkedWorks: prksUniquePersonWorks(person).length
             };
+        }
+        if (ctx && ctx.ui && ctx.ui.personProfileDraft === draft) {
+            ctx.ui.personDetailEditing = false;
+            ctx.ui.personProfileDraft = null;
         }
         if (person && root && ctx && ctx.mounted) {
             renderPersonDetails(ctx, person, root);
@@ -993,9 +1109,12 @@ async function savePersonProfile(personId) {
         ) {
             updatePanelContent('details');
         }
-    } catch (e) {
-        console.error(e);
-        if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
+    } catch (_e) {
+        if (
+            prksPersonProfileEditSessionCurrent(ctx, generation, personId, draft) &&
+            typeof prksRightPanelOwnedBy === 'function' &&
+            prksRightPanelOwnedBy(ctx)
+        ) {
             await prksAlertMessage('Could not save profile.', 'Error');
         }
     } finally {

@@ -15,6 +15,7 @@ from tests.e2e.fixtures import (
     WORK_B_TITLE,
     seed_graph_context_library,
     seed_library,
+    seed_person_profile_draft_library,
 )
 from tests.e2e.harness import (
     AppServer,
@@ -354,6 +355,353 @@ class PersonGraphFocusTests(_BrowserE2E):
         page.wait_for_function(_GRAPH_DESTROYED)
         page.wait_for_selector(".prks-folder-library, #page-content")
         self.assertNotIn("graph", page.evaluate("() => location.hash"))
+
+
+def _open_two_person_split(page, server):
+    page.set_viewport_size({"width": 1600, "height": 900})
+    page.evaluate("id => window.prksNavigate('#/people/' + id)", arg=server.ids["person_a"])
+    page.wait_for_function(
+        "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id",
+        arg=server.ids["person_a"],
+    )
+    page.evaluate(
+        "id => window.prksNavigate('#/people/' + id, { target: 'tile' })",
+        arg=server.ids["person_b"],
+    )
+    page.wait_for_function(
+        """() => {
+            const snap = window.prksWorkspaceSnapshot();
+            return !!(snap && snap.mode === 'tiled' && snap.secondaryTree?.type === 'leaf');
+        }"""
+    )
+    snap = page.evaluate("() => window.prksWorkspaceSnapshot()")
+    return snap["mainTabId"], snap["secondaryTree"]["tabId"]
+
+
+def _focus_workspace_tab(page, tab_id):
+    page.locator(
+        '.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__activate' % tab_id
+    ).click()
+    page.wait_for_function(
+        "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+        arg=tab_id,
+    )
+    _open_details_drawer_if_tiled(page)
+
+
+def _open_focused_person_editor(page, person_id):
+    page.locator("#panel-content button", has_text="Edit profile").click()
+    page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_id).wait_for()
+    page.wait_for_function(
+        "() => typeof document.querySelector('#pd-group-add-btn')?.onclick === 'function'"
+    )
+
+
+def _add_person_group_through_editor(page, name):
+    page.locator("#pd-group-search").fill(name)
+    result = page.locator("#pd-group-results .result-item", has_text=re.compile("^" + re.escape(name) + "$"))
+    result.wait_for(state="visible")
+    result.click()
+    page.locator("#pd-group-add-btn").click()
+    page.locator("#pd-group-chips .pd-group-chip", has_text=name).wait_for()
+
+
+def _person_group_chip_names(page):
+    return set(
+        page.locator("#pd-group-chips .pd-group-chip").evaluate_all(
+            "els => els.map(el => (el.firstChild?.textContent || '').trim())"
+        )
+    )
+
+
+class PersonProfileDraftOwnershipTests(_BrowserE2E):
+    def test_focus_round_trip_and_cross_person_groups_use_independent_drafts(self):
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        person_b = server.ids["person_b"]
+        tab_a, tab_b = _open_two_person_split(page, server)
+
+        _focus_workspace_tab(page, tab_a)
+        _open_focused_person_editor(page, person_a)
+        values = {
+            "#pd-first-name": "Ada Unsaved",
+            "#pd-last-name": "Alpha Draft",
+            "#pd-aliases": "A. Alpha, Exact Draft",
+            "#pd-about": "Unsaved biography A",
+            "#pd-birth-date": "12/03/1972",
+            "#pd-death-date": "1972",
+            "#pd-image-url": "https://example.com/a.jpg",
+            "#pd-link-wikipedia": "https://example.com/a-wiki",
+            "#pd-link-stanford": "https://example.com/a-stanford",
+            "#pd-link-iep": "https://example.com/a-iep",
+            "#pd-links-other": "[A](https://example.com/a)",
+        }
+        for selector, value in values.items():
+            page.locator(selector).fill(value)
+        page.locator("#pd-group-chips .pd-group-chip", has_text="Group Alpha").locator(
+            ".pd-group-chip-remove"
+        ).click()
+        self.assertEqual(_person_group_chip_names(page), set())
+        _add_person_group_through_editor(page, "Group Gamma")
+        _add_person_group_through_editor(page, "Group Alpha")
+
+        _focus_workspace_tab(page, tab_b)
+        _open_focused_person_editor(page, person_b)
+        _add_person_group_through_editor(page, "Group Delta")
+
+        _focus_workspace_tab(page, tab_a)
+        page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_a).wait_for()
+        for selector, value in values.items():
+            self.assertEqual(page.locator(selector).input_value(), value)
+        self.assertEqual(_person_group_chip_names(page), {"Group Alpha", "Group Gamma"})
+        # Avoid profile-image proxy noise after proving unsaved URL survived reconstruction.
+        page.locator("#pd-image-url").fill("")
+        page.locator("#pd-save-btn").click()
+        page.wait_for_function(
+            """id => {
+                const ctx = window.prksGetTabContext(id);
+                return !!(ctx && !ctx.ui.personDetailEditing && ctx.ui.personProfileDraft === null);
+            }""",
+            arg=tab_a,
+        )
+        saved = page.evaluate(
+            """async ids => {
+                const a = await (await fetch('/api/persons/' + ids.a)).json();
+                const b = await (await fetch('/api/persons/' + ids.b)).json();
+                return { a, b };
+            }""",
+            arg={"a": person_a, "b": person_b},
+        )
+        self.assertEqual({g["name"] for g in saved["a"]["groups"]}, {"Group Alpha", "Group Gamma"})
+        self.assertEqual({g["name"] for g in saved["b"]["groups"]}, {"Group Beta"})
+
+        _focus_workspace_tab(page, tab_b)
+        self.assertEqual(_person_group_chip_names(page), {"Group Beta", "Group Delta"})
+        page.locator(".person-panel-edit button", has_text="Cancel").click()
+        self.assertFalse(page.evaluate("id => window.prksGetTabContext(id).ui.personDetailEditing", arg=tab_b))
+        self.assertIsNone(page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft", arg=tab_b))
+        _open_focused_person_editor(page, person_b)
+        self.assertEqual(_person_group_chip_names(page), {"Group Beta"})
+
+    def test_delayed_group_mount_cannot_bind_or_mutate_other_person_editor(self):
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        person_b = server.ids["person_b"]
+        tab_a, tab_b = _open_two_person_split(page, server)
+        page.evaluate(
+            """() => {
+                window.__prksOriginalFetchPersonGroups = window.fetchPersonGroups;
+                window.__prksHeldPersonGroupsCalls = 0;
+                window.fetchPersonGroups = function () {
+                    window.__prksHeldPersonGroupsCalls += 1;
+                    if (window.__prksHeldPersonGroupsCalls !== 1) {
+                        return window.__prksOriginalFetchPersonGroups();
+                    }
+                    return new Promise(resolve => { window.__prksReleaseHeldPersonGroups = resolve; });
+                };
+            }"""
+        )
+        try:
+            _focus_workspace_tab(page, tab_a)
+            page.locator("#panel-content button", has_text="Edit profile").click()
+            page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_a).wait_for()
+            page.wait_for_function("() => typeof window.__prksReleaseHeldPersonGroups === 'function'")
+
+            _focus_workspace_tab(page, tab_b)
+            _open_focused_person_editor(page, person_b)
+            self.assertEqual(_person_group_chip_names(page), {"Group Beta"})
+            page.evaluate("() => window.__prksReleaseHeldPersonGroups(window.allGroups || [])")
+            page.wait_for_timeout(300)
+            self.assertEqual(page.locator(".person-panel-edit").get_attribute("data-person-edit-id"), person_b)
+            self.assertEqual(
+                page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft.personId", arg=tab_b),
+                person_b,
+            )
+            page.locator("#pd-group-search").fill("Group Gamma")
+            page.locator("#pd-group-results .result-item", has_text="Group Gamma").wait_for(state="visible")
+
+            _focus_workspace_tab(page, tab_a)
+            page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_a).wait_for()
+            page.wait_for_function(
+                "() => typeof document.querySelector('#pd-group-add-btn')?.onclick === 'function'"
+            )
+            self.assertEqual(_person_group_chip_names(page), {"Group Alpha"})
+        finally:
+            page.evaluate(
+                """() => {
+                    if (window.__prksReleaseHeldPersonGroups) {
+                        window.__prksReleaseHeldPersonGroups(window.allGroups || []);
+                    }
+                    if (window.__prksOriginalFetchPersonGroups) {
+                        window.fetchPersonGroups = window.__prksOriginalFetchPersonGroups;
+                    }
+                    delete window.__prksReleaseHeldPersonGroups;
+                    delete window.__prksOriginalFetchPersonGroups;
+                    delete window.__prksHeldPersonGroupsCalls;
+                }"""
+            )
+
+    def test_successful_background_save_settles_owner_without_touching_focused_person(self):
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        person_b = server.ids["person_b"]
+        tab_a, tab_b = _open_two_person_split(page, server)
+        held = []
+
+        def hold_a_patch(route):
+            req = route.request
+            if req.method == "PATCH" and urlparse(req.url).path == "/api/persons/" + person_a:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/persons/*", hold_a_patch)
+        try:
+            _focus_workspace_tab(page, tab_a)
+            _open_focused_person_editor(page, person_a)
+            page.locator("#pd-first-name").fill("Ada Background Saved")
+            page.locator("#pd-save-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "A PATCH was not intercepted")
+            _focus_workspace_tab(page, tab_b)
+            page.locator(".person-sidebar-summary").wait_for()
+            held.pop().continue_()
+            page.wait_for_function(
+                """id => {
+                    const ctx = window.prksGetTabContext(id);
+                    const p = ctx && ctx.getEntity('person');
+                    return !!(p && p.first_name === 'Ada Background Saved' &&
+                        !ctx.ui.personDetailEditing && ctx.ui.personProfileDraft === null);
+                }""",
+                arg=tab_a,
+            )
+            self.assertEqual(page.locator("#panel-content").get_attribute("data-prks-owner-tab-id"), tab_b)
+            self.assertTrue(page.locator(".person-sidebar-summary").count() >= 1)
+            self.assertEqual(page.locator(".person-panel-edit").count(), 0)
+            _focus_workspace_tab(page, tab_a)
+            page.locator(".person-sidebar-summary").wait_for()
+            self.assertEqual(page.locator(".person-panel-edit").count(), 0)
+            heading = page.evaluate(
+                "id => window.prksGetTabContext(id).root.querySelector('.prks-page-title').innerText",
+                arg=tab_a,
+            )
+            self.assertIn("Ada Background Saved", heading)
+        finally:
+            _continue_held_routes(held)
+            page.unroute("**/api/persons/*", hold_a_patch)
+
+    def test_delayed_new_group_updates_only_live_originating_draft(self):
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        person_b = server.ids["person_b"]
+        tab_a, tab_b = _open_two_person_split(page, server)
+        held = []
+
+        def hold_group_create(route):
+            req = route.request
+            if req.method == "POST" and urlparse(req.url).path == "/api/person-groups":
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/person-groups", hold_group_create)
+        try:
+            _focus_workspace_tab(page, tab_a)
+            _open_focused_person_editor(page, person_a)
+            page.locator("#pd-group-search").fill("Group Async A")
+            page.locator("#pd-group-add-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "new-Group POST was not intercepted")
+
+            _focus_workspace_tab(page, tab_b)
+            _open_focused_person_editor(page, person_b)
+            held.pop(0).continue_()
+            page.wait_for_function(
+                """args => window.prksGetTabContext(args.tab).ui.personProfileDraft.groups
+                    .some(group => group.name === args.name)""",
+                arg={"tab": tab_a, "name": "Group Async A"},
+            )
+            self.assertEqual(_person_group_chip_names(page), {"Group Beta"})
+            self.assertEqual(
+                page.evaluate(
+                    "id => window.prksGetTabContext(id).ui.personProfileDraft.groups.map(group => group.name)",
+                    arg=tab_b,
+                ),
+                ["Group Beta"],
+            )
+            _focus_workspace_tab(page, tab_a)
+            page.locator("#pd-group-chips .pd-group-chip", has_text="Group Async A").wait_for()
+
+            page.locator("#pd-group-search").fill("Group Async Discarded")
+            page.locator("#pd-group-add-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "second new-Group POST was not intercepted")
+            page.locator(".person-panel-edit button", has_text="Cancel").click()
+            self.assertIsNone(page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft", arg=tab_a))
+            held.pop(0).continue_()
+            page.wait_for_timeout(400)
+            self.assertIsNone(page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft", arg=tab_a))
+            self.assertFalse(page.evaluate("id => window.prksGetTabContext(id).ui.personDetailEditing", arg=tab_a))
+        finally:
+            _continue_held_routes(held)
+            page.unroute("**/api/person-groups", hold_group_create)
+
+    def test_failed_save_keeps_draft_and_retry_clears_it(self):
+        server, page, collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        tab_a, _tab_b = _open_two_person_split(page, server)
+        failed = []
+
+        def fail_once(route):
+            req = route.request
+            if req.method == "PATCH" and urlparse(req.url).path == "/api/persons/" + person_a and not failed:
+                failed.append(True)
+                route.fulfill(status=400, content_type="application/json", body='{"error":"forced test failure"}')
+                return
+            route.fallback()
+
+        page.route("**/api/persons/*", fail_once)
+        try:
+            _focus_workspace_tab(page, tab_a)
+            _open_focused_person_editor(page, person_a)
+            page.locator("#pd-about").fill("Draft survives failed save")
+            _add_person_group_through_editor(page, "Group Gamma")
+            page.locator("#pd-save-btn").click()
+            page.locator("#prks-modal-confirm:not(.hidden)", has_text="forced test failure").wait_for()
+            self.assertTrue(page.evaluate("id => window.prksGetTabContext(id).ui.personDetailEditing", arg=tab_a))
+            self.assertEqual(
+                page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft.about", arg=tab_a),
+                "Draft survives failed save",
+            )
+            page.locator("#prks-modal-confirm-ok").click()
+            page.wait_for_function("() => !document.querySelector('#pd-save-btn').disabled")
+            self.assertEqual(page.locator("#pd-about").input_value(), "Draft survives failed save")
+            self.assertEqual(_person_group_chip_names(page), {"Group Alpha", "Group Gamma"})
+            page.locator("#pd-save-btn").click()
+            page.wait_for_function(
+                """id => {
+                    const ctx = window.prksGetTabContext(id);
+                    return !ctx.ui.personDetailEditing && ctx.ui.personProfileDraft === null;
+                }""",
+                arg=tab_a,
+            )
+            saved = page.evaluate(
+                "async id => await (await fetch('/api/persons/' + id)).json()",
+                arg=person_a,
+            )
+            self.assertEqual(saved["about"], "Draft survives failed save")
+            self.assertEqual({g["name"] for g in saved["groups"]}, {"Group Alpha", "Group Gamma"})
+            collector.console_errors[:] = [
+                error for error in collector.console_errors if "400 (Bad Request)" not in error
+            ]
+        finally:
+            page.unroute("**/api/persons/*", fail_once)
 
 
 class WorkDetailsPolishTests(_BrowserE2E):

@@ -108,6 +108,8 @@ Desktop research applications benefit from discoverability. Keep primary and com
 
 People index rows prioritize identity, lifespan, short biography, roles, and Person Group classification over external-reference completeness. Person profiles present research content and library relationships before maintenance controls. Linked-file relationship editing belongs in the Linked files section; normal profile actions keep Edit profile and View in graph direct, while template and deletion actions remain secondary. Person Group relationships are canonical route anchors. Profile edit presentation may group fields for scanning, but Person persistence and template formats remain unchanged.
 
+Person profile editing survives global right-panel ownership changes while its Person TabContext remains live. Its draft and selected Groups belong only to that TabContext; another Person context can never read or mutate them.
+
 Person Groups are classification entities. Group detail presents description, hierarchy, and membership as primary content. Metadata editing and membership management are separate modes; add/remove membership belongs in Members, while the normal right panel remains summary plus actions. A filtered Group tree is automatically expanded for hierarchy context and exposes no misleading collapse controls. Group-library live runtime belongs to its rendered root, never a `window` singleton.
 
 ---

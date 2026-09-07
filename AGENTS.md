@@ -280,6 +280,10 @@ a route-scoped `window` singleton. `personGroupEditing` and
 `personGroupMembersEditing` are mutually exclusive TabContext UI modes: metadata
 editing owns the right panel; membership management owns the Members section.
 
+Person profile edit state, including selected Person Groups, belongs to the Person's
+TabContext. Never store Person-editor selections or drafts in a window-global
+singleton. Right-panel reconstruction must render from the owning TabContext draft.
+
 Stacked mode: one mounted context. Tiled mode: Main + every visible Secondary leaf (up to the visible-pane cap), each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
 is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
 

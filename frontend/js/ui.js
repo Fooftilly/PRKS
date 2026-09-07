@@ -2686,14 +2686,21 @@ function updatePanelContent(tabId) {
     } else if (_cp && (routeName === 'person' || isPersonDetailHash(focusedHash))) {
         if (tabId === 'details') {
             let topHtml;
-            if (focusedCtx && focusedCtx.ui && focusedCtx.ui.personDetailEditing && typeof renderPersonProfileEditFormHtml === 'function') {
-                topHtml = renderPersonProfileEditFormHtml(_cp);
+            const editing = !!(focusedCtx && focusedCtx.ui && focusedCtx.ui.personDetailEditing);
+            if (editing && typeof renderPersonProfileEditFormHtml === 'function') {
+                const draft = typeof prksEnsurePersonProfileDraft === 'function'
+                    ? prksEnsurePersonProfileDraft(focusedCtx, _cp)
+                    : null;
+                topHtml = renderPersonProfileEditFormHtml(_cp, draft);
             } else if (typeof renderPersonProfileDetailsSidebarHtml === 'function') {
                 topHtml = renderPersonProfileDetailsSidebarHtml(_cp);
             } else {
                 topHtml = '<p class="meta-row">Person panel unavailable.</p>';
             }
             panel.innerHTML = '<div class="right-panel-stack">' + topHtml + '</div>';
+            if (editing && typeof prksMountPersonProfileEditor === 'function') {
+                void prksMountPersonProfileEditor(focusedCtx, _cp);
+            }
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';
         }

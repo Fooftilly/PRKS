@@ -1947,6 +1947,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 );
                 ctx.setEntity('person', person);
                 ctx.ui.personDetailEditing = false;
+                ctx.ui.personProfileDraft = null;
                 ctx.ui.personWorksEditing = false;
                 renderPersonDetails(ctx, person, contentDiv);
                 if (person) {

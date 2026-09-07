@@ -36,16 +36,15 @@ async function prksEnsureAllGroupsCache() {
  * Searchable group picker: sets hidden id when user picks a row; clears hidden when typing.
  * excludedIds: Set of group ids not shown (e.g. self + descendants when editing).
  */
-function prksBindGroupSearchCombobox(inputId, resultsId, hiddenId, excludedIds) {
-    const input = document.getElementById(inputId);
-    const results = document.getElementById(resultsId);
-    const hidden = document.getElementById(hiddenId);
+function prksBindGroupSearchComboboxElements(input, results, hidden, excludedIds, isLive) {
     if (!input || !results || !hidden) return;
+    const stillLive = typeof isLive === 'function' ? isLive : () => true;
 
     const excluded =
         excludedIds instanceof Set ? excludedIds : new Set(Array.isArray(excludedIds) ? excludedIds : []);
 
     function renderList() {
+        if (!stillLive()) return;
         const list = window.allGroups || [];
         const byId = new Map(list.map((x) => [x.id, x]));
         const val = (input.value || '').toLowerCase().trim();
@@ -64,6 +63,7 @@ function prksBindGroupSearchCombobox(inputId, resultsId, hiddenId, excludedIds) 
                 div.className = 'result-item';
                 div.textContent = prksGroupRowLabel(g, list);
                 div.onmousedown = (e) => {
+                    if (!stillLive()) return;
                     e.preventDefault();
                     hidden.value = g.id;
                     input.value = prksGroupRowLabel(g, list);
@@ -80,15 +80,31 @@ function prksBindGroupSearchCombobox(inputId, resultsId, hiddenId, excludedIds) 
     }
 
     input.onfocus = () => {
-        void prksEnsureAllGroupsCache().then(renderList);
+        void prksEnsureAllGroupsCache().then(() => {
+            if (stillLive()) renderList();
+        });
     };
     input.oninput = () => {
+        if (!stillLive()) return;
         hidden.value = '';
-        void prksEnsureAllGroupsCache().then(renderList);
+        void prksEnsureAllGroupsCache().then(() => {
+            if (stillLive()) renderList();
+        });
     };
     input.onblur = () => {
-        setTimeout(() => prksHideInlineComboboxResults(results), 200);
+        setTimeout(() => {
+            if (stillLive()) prksHideInlineComboboxResults(results);
+        }, 200);
     };
+}
+
+function prksBindGroupSearchCombobox(inputId, resultsId, hiddenId, excludedIds) {
+    prksBindGroupSearchComboboxElements(
+        document.getElementById(inputId),
+        document.getElementById(resultsId),
+        document.getElementById(hiddenId),
+        excludedIds
+    );
 }
 
 /** New group modal: load cache, clear fields, bind parent search. */
@@ -913,48 +929,100 @@ function prksRenderPersonGroupChips(container, groups) {
         .join(' ');
 }
 
-async function prksMountPersonProfileGroupPicker(person) {
-    window.__prksPersonEditSelectedGroups = null;
-    const chips = document.getElementById('pd-group-chips');
-    const search = document.getElementById('pd-group-search');
-    const results = document.getElementById('pd-group-results');
-    const hidden = document.getElementById('pd-group-pick-id');
-    const addBtn = document.getElementById('pd-group-add-btn');
-    if (!chips || !search || !results || !hidden || !addBtn || !person) return;
+function prksGetPersonProfileDraftGroupIds(ctx, personId) {
+    const draft = ctx && ctx.ui && ctx.ui.personProfileDraft;
+    if (!draft || String(draft.personId) !== String(personId)) return undefined;
+    return (Array.isArray(draft.groups) ? draft.groups : []).map((group) => group.id);
+}
 
-    window.__prksPersonEditSelectedGroups = new Map();
+async function prksMountPersonProfileGroupPicker(ctx, person, editor) {
+    if (!ctx || !person || !editor || person.id == null) return;
+    const generation = ctx.generation;
+    const personId = String(person.id);
+    const draft = typeof prksEnsurePersonProfileDraft === 'function'
+        ? prksEnsurePersonProfileDraft(ctx, person)
+        : ctx.ui && ctx.ui.personProfileDraft;
+    const chips = editor.querySelector('#pd-group-chips');
+    const search = editor.querySelector('#pd-group-search');
+    const results = editor.querySelector('#pd-group-results');
+    const hidden = editor.querySelector('#pd-group-pick-id');
+    const addBtn = editor.querySelector('#pd-group-add-btn');
+    if (!chips || !search || !results || !hidden || !addBtn || !draft) return;
+
+    const logicalSessionCurrent = () =>
+        typeof prksPersonProfileEditSessionCurrent === 'function' &&
+        prksPersonProfileEditSessionCurrent(ctx, generation, personId, draft);
+    const originalEditorCurrent = () => {
+        if (
+            typeof prksPersonProfileEditorCurrent !== 'function' ||
+            !prksPersonProfileEditorCurrent(ctx, generation, personId, draft, editor)
+        ) return false;
+        return (
+            editor.querySelector('#pd-group-chips') === chips &&
+            editor.querySelector('#pd-group-search') === search &&
+            editor.querySelector('#pd-group-results') === results &&
+            editor.querySelector('#pd-group-pick-id') === hidden &&
+            editor.querySelector('#pd-group-add-btn') === addBtn
+        );
+    };
+    const selectedFromDraft = () => new Map(
+        (Array.isArray(draft.groups) ? draft.groups : []).map((group) => [String(group.id), group])
+    );
+    const replaceDraftGroups = (selected) => {
+        if (!logicalSessionCurrent()) return false;
+        draft.groups = [...selected.values()].map((group) => ({ id: group.id, name: String(group.name || '') }));
+        return true;
+    };
+    const renderOwnedDraftGroups = () => {
+        if (!logicalSessionCurrent()) return;
+        const panel = document.getElementById('panel-content');
+        if (!panel || typeof prksRightPanelOwnedBy !== 'function' || !prksRightPanelOwnedBy(ctx, panel)) return;
+        const currentEditor = panel.querySelector('.person-panel-edit');
+        if (!currentEditor || String(currentEditor.getAttribute('data-person-edit-id') || '') !== personId) return;
+        const currentChips = currentEditor.querySelector('#pd-group-chips');
+        if (currentChips) prksRenderPersonGroupChips(currentChips, draft.groups);
+    };
+
+    prksRenderPersonGroupChips(chips, draft.groups);
     await prksEnsureAllGroupsCache();
-    prksBindGroupSearchCombobox('pd-group-search', 'pd-group-results', 'pd-group-pick-id', new Set());
-
-    const selected = window.__prksPersonEditSelectedGroups;
-    (person.groups || []).forEach((g) => selected.set(g.id, { id: g.id, name: g.name }));
-    prksRenderPersonGroupChips(chips, [...selected.values()]);
+    if (!originalEditorCurrent()) return;
+    prksBindGroupSearchComboboxElements(search, results, hidden, new Set(), originalEditorCurrent);
+    prksRenderPersonGroupChips(chips, draft.groups);
 
     chips.onclick = (ev) => {
+        if (!originalEditorCurrent()) return;
         const rm = ev.target.closest('.pd-group-chip-remove');
         if (!rm) return;
         ev.preventDefault();
-        const id = rm.getAttribute('data-group-id');
+        const id = String(rm.getAttribute('data-group-id') || '');
+        const selected = selectedFromDraft();
         selected.delete(id);
-        prksRenderPersonGroupChips(chips, [...selected.values()]);
+        if (replaceDraftGroups(selected)) prksRenderPersonGroupChips(chips, draft.groups);
     };
 
-    async function addGroupId(gid, nameHint) {
-        if (!gid || selected.has(gid)) return;
-        let meta = (window.allGroups || []).find((x) => x.id === gid);
+    function addGroupId(gid, nameHint) {
+        if (!logicalSessionCurrent() || !gid) return;
+        const selected = selectedFromDraft();
+        const key = String(gid);
+        if (selected.has(key)) return;
+        let meta = (window.allGroups || []).find((x) => String(x.id) === key);
         if (!meta) meta = { id: gid, name: nameHint || gid };
-        selected.set(gid, { id: gid, name: meta.name });
-        prksRenderPersonGroupChips(chips, [...selected.values()]);
-        search.value = '';
-        hidden.value = '';
+        selected.set(key, { id: meta.id, name: meta.name });
+        if (!replaceDraftGroups(selected)) return;
+        renderOwnedDraftGroups();
+        if (originalEditorCurrent()) {
+            search.value = '';
+            hidden.value = '';
+        }
     }
 
     addBtn.onclick = async () => {
+        if (!originalEditorCurrent()) return;
         const hid = hidden.value.trim();
         const typed = search.value.trim();
         if (hid) {
-            const g = (window.allGroups || []).find((x) => x.id === hid);
-            await addGroupId(hid, g ? g.name : '');
+            const g = (window.allGroups || []).find((x) => String(x.id) === hid);
+            addGroupId(hid, g ? g.name : '');
             return;
         }
         if (!typed) {
@@ -963,7 +1031,7 @@ async function prksMountPersonProfileGroupPicker(person) {
         }
         const existing = prksPersonEditFindGroupByNameInsensitive(typed, window.allGroups);
         if (existing) {
-            await addGroupId(existing.id, existing.name);
+            addGroupId(existing.id, existing.name);
             return;
         }
         try {
@@ -972,36 +1040,34 @@ async function prksMountPersonProfileGroupPicker(person) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: typed, description: '' })
             });
+            if (!logicalSessionCurrent()) return;
             const data = await res.json().catch(() => ({}));
+            if (!logicalSessionCurrent()) return;
             if (!res.ok) {
                 if (data.error && String(data.error).includes('already exists')) {
                     await prksEnsureAllGroupsCache();
+                    if (!logicalSessionCurrent()) return;
                     const again = prksPersonEditFindGroupByNameInsensitive(typed, window.allGroups);
                     if (again) {
-                        await addGroupId(again.id, again.name);
+                        addGroupId(again.id, again.name);
                         return;
                     }
                 }
-                await prksAlertMessage(data.error || 'Could not create group.', 'Could not save');
+                if (typeof prksRightPanelOwnedBy === 'function' && prksRightPanelOwnedBy(ctx)) {
+                    await prksAlertMessage(data.error || 'Could not create group.', 'Could not save');
+                }
                 return;
             }
             await prksEnsureAllGroupsCache();
-            await addGroupId(data.id, typed);
-        } catch (e) {
-            console.error(e);
-            await prksAlertMessage('Could not create group.', 'Error');
+            if (!logicalSessionCurrent()) return;
+            addGroupId(data.id, typed);
+        } catch (_e) {
+            if (logicalSessionCurrent() && typeof prksRightPanelOwnedBy === 'function' && prksRightPanelOwnedBy(ctx)) {
+                await prksAlertMessage('Could not create group.', 'Error');
+            }
         }
     };
-
-    window.__prksPersonEditSelectedGroups = selected;
 }
 
 window.prksMountPersonProfileGroupPicker = prksMountPersonProfileGroupPicker;
-
-function prksGetPersonEditGroupIdsFromDom() {
-    const m = window.__prksPersonEditSelectedGroups;
-    if (m instanceof Map) return [...m.keys()];
-    return undefined;
-}
-
-window.prksGetPersonEditGroupIdsFromDom = prksGetPersonEditGroupIdsFromDom;
+window.prksGetPersonProfileDraftGroupIds = prksGetPersonProfileDraftGroupIds;

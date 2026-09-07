@@ -72,6 +72,44 @@ def seed_library(storage_root: str) -> dict:
     }
 
 
+def seed_person_profile_draft_library(storage_root: str) -> dict:
+    """Two independently editable Persons and four deterministic Groups."""
+    ids = seed_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    person_a = db.add_person(
+        first_name="Ada",
+        last_name="Alpha",
+        aliases="A. Alpha",
+        about="Saved biography A",
+        birth_date="1972-03-12",
+    )
+    person_b = db.add_person(
+        first_name="Bea",
+        last_name="Beta",
+        aliases="B. Beta",
+        about="Saved biography B",
+        birth_date="1980",
+    )
+    group_alpha = db.add_person_group("Group Alpha")
+    group_beta = db.add_person_group("Group Beta")
+    group_gamma = db.add_person_group("Group Gamma")
+    group_delta = db.add_person_group("Group Delta")
+    db.add_person_to_group(person_a, group_alpha)
+    db.add_person_to_group(person_b, group_beta)
+    ids.update(
+        {
+            "person_a": person_a,
+            "person_b": person_b,
+            "group_alpha": group_alpha,
+            "group_beta": group_beta,
+            "group_gamma": group_gamma,
+            "group_delta": group_delta,
+        }
+    )
+    return ids
+
+
 GRAPH_CONCEPT_A = "Culture"
 GRAPH_CONCEPT_B = "Philosophy"
 GRAPH_UNRELATED_POSITION = "Unrelated Position"
