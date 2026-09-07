@@ -393,7 +393,9 @@ async function run() {
     assertEq('show split preserves ratio', h.ws.snapshot().mainSplitRatio, 0.65);
 
     const secId = h.ws.snapshot().secondaryTree.tabId;
-    h.ws.makeMain(secId);
+    const madeMain = await h.ws.makeMain(secId);
+    assert('Make Main resolves true', madeMain === true);
+    assertEq('Make Main promotes secId to Main', h.ws.snapshot().mainTabId, secId);
     assertEq('Make Main preserves ratio', h.ws.snapshot().mainSplitRatio, 0.65);
 
     await h.ws.tileTab(await h.ws

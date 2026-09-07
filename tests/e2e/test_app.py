@@ -3861,6 +3861,144 @@ class TabContextHostRootTests(_BrowserE2E):
         page.wait_for_selector(".work-detail")
         self.assertGreaterEqual(page.locator(".work-detail").count(), 1)
 
+    def test_work_meta_save_settles_unfocused_owner_without_touching_new_panel_owner(self):
+        """The pure-focus race (no navigation/park involved): Work A is Main, Work B a visible
+        tiled Secondary. A enters metadata edit and Save is clicked while A is still focused
+        (and so still owns #panel-content) -- then, purely by refocusing B (never navigating or
+        parking A), B becomes the panel owner before A's PATCH resolves. Completion must still
+        settle A's own entity/runtime/tile-local DOM, must NEVER touch B's now-owned panel, and
+        must leave A's editor fully closed (no stale draft/dirty prompt) when A is refocused."""
+        server, page, _collector = self._start_app()
+        work_a = server.ids["work_a"]
+        work_b = server.ids["work_b"]
+        held = []
+
+        def hold_patch(route):
+            req = route.request
+            if req.method == "PATCH" and urlparse(req.url).path == "/api/works/" + work_a:
+                held.append(route)
+                return
+            route.fallback()
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+
+        page.evaluate("(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })", arg=work_b)
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return !!(
+                    snap && snap.mode === 'tiled' &&
+                    snap.secondaryTree && snap.secondaryTree.type === 'leaf' &&
+                    snap.focusedTabId === snap.secondaryTree.tabId
+                );
+            }"""
+        )
+        work_b_tab_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+
+        # Refocus A (still Main) before entering metadata edit -- A must own the panel to do so.
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=main_id)
+        page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=main_id)
+        # Tiled mode makes the shared right panel a dismissible overlay -- open it for real.
+        page.locator("#prks-mobile-details-btn").click()
+        page.wait_for_function("() => document.body.classList.contains('prks-right-panel-open')")
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").wait_for()
+        page.fill("#meta-title", "Saved While Unfocused")
+
+        page.route("**/api/works/*", hold_patch)
+        try:
+            page.locator("#inline-save-metadata-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "Work A metadata PATCH was not intercepted")
+
+            # Focus B by pure focus switch -- no navigate/park/close touches A at all.
+            page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=work_b_tab_id)
+            page.wait_for_function(
+                "(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=work_b_tab_id
+            )
+            self.assertEqual(
+                page.evaluate("() => document.getElementById('panel-content').dataset.prksOwnerTabId"),
+                work_b_tab_id,
+            )
+            before = page.evaluate(
+                """(id) => {
+                    const ctx = window.prksGetTabContext(id);
+                    const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+                    const panel = document.getElementById('panel-content');
+                    return { title: work && work.title, panel: panel ? panel.innerHTML : '' };
+                }""",
+                arg=work_b_tab_id,
+            )
+            self.assertEqual(before["title"], WORK_B_TITLE)
+
+            _continue_held_routes(held)
+            page.wait_for_function(
+                "(id) => { const w = window.prksGetTabContext(id).getEntity('work'); return w && w.title === 'Saved While Unfocused'; }",
+                arg=main_id,
+            )
+            page.wait_for_timeout(200)
+
+            # B's panel/entity are completely untouched by A's background completion.
+            after = page.evaluate(
+                """(id) => {
+                    const ctx = window.prksGetTabContext(id);
+                    const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+                    const panel = document.getElementById('panel-content');
+                    return {
+                        title: work && work.title,
+                        panel: panel ? panel.innerHTML : '',
+                        ownerTabId: panel ? panel.dataset.prksOwnerTabId : '',
+                    };
+                }""",
+                arg=work_b_tab_id,
+            )
+            self.assertEqual(after["title"], WORK_B_TITLE)
+            self.assertEqual(after["panel"], before["panel"])
+            self.assertEqual(after["ownerTabId"], work_b_tab_id)
+
+            # A's own ctx/runtime settled correctly even while unfocused.
+            state_a = page.evaluate(
+                """(id) => {
+                    const ctx = window.prksGetTabContext(id);
+                    const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+                    return {
+                        routeHash: ctx && ctx.route ? ctx.route.hash : null,
+                        destroyed: !!(ctx && ctx.destroyed),
+                        title: work && work.title,
+                        workDetailsMode: ctx && ctx.ui ? ctx.ui.workDetailsMode : null,
+                        workMetaDraft: ctx && ctx.ui ? ctx.ui.workMetaDraft : null,
+                        workMetaDraftWorkId: ctx && ctx.ui ? ctx.ui.workMetaDraftWorkId : null,
+                    };
+                }""",
+                arg=main_id,
+            )
+            self.assertFalse(state_a["destroyed"])
+            self.assertEqual(state_a["routeHash"], "#/works/" + work_a)
+            self.assertEqual(state_a["title"], "Saved While Unfocused")
+            self.assertEqual(state_a["workDetailsMode"], "view")
+            self.assertIsNone(state_a["workMetaDraft"])
+            self.assertIsNone(state_a["workMetaDraftWorkId"])
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/*", hold_patch)
+            except Exception:
+                pass
+
+        # Refocusing A must show the saved title with the editor closed -- no stale draft.
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=main_id)
+        page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=main_id)
+        page.locator("#panel-content .card-title", has_text="Saved While Unfocused").wait_for()
+        self.assertEqual(page.locator("#meta-title").count(), 0)
+
+        # No stale dirty draft/discard prompt: navigating A's own Main away must not confirm.
+        page.evaluate("() => { void window.prksNavigate('#/folders'); }")
+        page.wait_for_function("() => location.hash === '#/folders'")
+        self.assertEqual(page.locator("#prks-modal-confirm:not(.hidden)").count(), 0)
+
     def test_non_focused_work_render_does_not_steal_right_panel(self):
         server, page, _collector = self._start_app()
         work_b = server.ids["work_b"]

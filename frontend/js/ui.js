@@ -3175,26 +3175,61 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
     }
 }
 
+/**
+ * A successful Work metadata save must settle the OWNING TabContext's own edit-mode/draft
+ * runtime (workDetailsMode / workMetaDraft / workMetaDraftWorkId) even when that context is
+ * no longer focused and no longer owns the shared #panel-content -- those are ctx-local
+ * runtime fields, not shared-panel DOM, so leaving them stuck at 'metadata' with a stale draft
+ * would resurface a discarded editor (and a false dirty-draft prompt) the next time this tab
+ * is refocused. Re-rendering the shared panel itself is a completely separate,
+ * ownership-gated concern that must only happen while this ctx still genuinely owns
+ * #panel-content right now -- otherwise a currently-focused tab B's right-panel UI must not be
+ * touched at all. toggleWorkMetaEditForContext() itself refuses an unfocused ctx, which is
+ * exactly why settlement (a ctx-local concern) cannot be routed through it unconditionally.
+ */
+function prksSettleWorkMetaEditAfterSave(ownerCtx, panel) {
+    if (!ownerCtx || ownerCtx.destroyed || !ownerCtx.ui) return;
+    ownerCtx.ui.workDetailsMode = 'view';
+    ownerCtx.ui.workMetaDraft = null;
+    ownerCtx.ui.workMetaDraftWorkId = null;
+    if (typeof prksRightPanelOwnedBy === 'function' && prksRightPanelOwnedBy(ownerCtx, panel)) {
+        toggleWorkMetaEditForContext(ownerCtx, false);
+    }
+}
+
 async function submitWorkMetaEdit(workId) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const generation = ownerCtx && ownerCtx.generation;
     /* The Work metadata editor lives in the shared #panel-content, not beneath ownerCtx.root,
-     * so every lookup that refers to it must be panel-local and ownership-checked -- the same
-     * pattern prksCaptureWorkMetaDraft() already uses -- never ownerCtx.query(). Including the
-     * panel-ownership check in ownsWork() also closes the ownership race: if focus moves to a
-     * different Work (or tab) while this PATCH is pending, prksRightPanelOwnedBy(ownerCtx, ...)
-     * goes false even though ownerCtx's own route/generation/entity are unchanged, so a stale
-     * completion cannot mutate the new owner's editor/button. */
+     * so every lookup that refers to it must be panel-local -- the same pattern
+     * prksCaptureWorkMetaDraft() already uses -- never ownerCtx.query().
+     *
+     * Two distinct ownership predicates are needed, not one:
+     *   ownsWorkContext() -- this ctx/generation still legitimately owns the Work entity/route,
+     *     regardless of focus or the shared panel. True even while another tile owns the panel.
+     *   ownsWorkPanel() -- ownsWorkContext() AND this ctx currently owns #panel-content (which
+     *     implies focused). Only true while this tab's metadata UI is the one on screen.
+     * The save itself originates from the shared panel, so the initial boundary and any DOM
+     * feedback that mutates the shared panel require ownsWorkPanel(). Once the PATCH is in
+     * flight, background completion must still update the owning ctx's own entity/runtime/
+     * tile-local DOM via ownsWorkContext() alone -- it must NOT require panel ownership, and it
+     * must NEVER touch #panel-content if a different tab now owns it. */
     const panel = document.getElementById('panel-content');
-    const ownsWork = function () {
+    const ownsWorkContext = function () {
         return !!(
             typeof prksTabContextOwnsEntityRoute === 'function' &&
-            prksTabContextOwnsEntityRoute(ownerCtx, generation, 'work', workId, 'work') &&
+            prksTabContextOwnsEntityRoute(ownerCtx, generation, 'work', workId, 'work')
+        );
+    };
+    const ownsWorkPanel = function () {
+        return (
+            ownsWorkContext() &&
             typeof prksRightPanelOwnedBy === 'function' &&
             prksRightPanelOwnedBy(ownerCtx, panel)
         );
     };
-    if (!ownsWork()) return;
+    // The save originated from the shared panel -- require full panel ownership here.
+    if (!ownsWorkPanel()) return;
     prksCaptureWorkMetaDraft(ownerCtx);
     const draft = ownerCtx && ownerCtx.ui && ownerCtx.ui.workMetaDraftWorkId === String(workId)
         ? ownerCtx.ui.workMetaDraft : null;
@@ -3205,6 +3240,8 @@ async function submitWorkMetaEdit(workId) {
             ? prksParsePublishedDateInput(metaDateRaw)
             : metaDateRaw;
     if (metaDateRaw && !metaDateIso) {
+        // Invalid-date feedback mutates the shared panel -- still gated on ownsWorkPanel().
+        if (!ownsWorkPanel()) return;
         const dateEl = panel ? panel.querySelector('#meta-date') : null;
         const errorEl = panel ? panel.querySelector('#meta-date-error') : null;
         if (dateEl) {
@@ -3251,16 +3288,21 @@ async function submitWorkMetaEdit(workId) {
             const errData = await saveRes.json().catch(() => ({}));
             throw new Error(errData.error || `Server error ${saveRes.status}`);
         }
-        if (!ownsWork()) return;
+        // From here on, background completion must proceed as long as this ctx still owns the
+        // Work/route -- NOT gated on panel ownership. Another tile may already own the shared
+        // panel by the time this PATCH resolves.
+        if (!ownsWorkContext()) return;
         const _saved = await fetchWorkDetails(workId, {
             signal: ownerCtx && ownerCtx.abortController && ownerCtx.abortController.signal,
         });
-        if (!ownsWork()) return;
+        if (!ownsWorkContext()) return;
         const applied =
             typeof prksApplyOwnedWorkEntity === 'function'
                 ? prksApplyOwnedWorkEntity(ownerCtx, workId, _saved)
                 : false;
         if (!applied) return;
+        // Tile-local DOM beneath ownerCtx.root (page header, PDF toolbar) -- not shared-panel
+        // DOM -- so it is updated unconditionally, even while another tab owns the panel.
         const headerTitle = ownerCtx && ownerCtx.query ? ownerCtx.query('.page-header--work-title') : null;
         if (headerTitle && _saved) headerTitle.innerText = _saved.title;
         const typeSlot =
@@ -3282,15 +3324,21 @@ async function submitWorkMetaEdit(workId) {
             if (meta.color) toolbarType.style.background = meta.color;
             if (meta.border) toolbarType.style.borderColor = meta.border;
         }
-        toggleWorkMetaEditForContext(ownerCtx, false);
+        // Settle this ctx's own edit-mode/draft runtime unconditionally; only re-render the
+        // shared panel if this ctx still owns it right now (never touches a different owner's).
+        prksSettleWorkMetaEditAfterSave(ownerCtx, panel);
     } catch (err) {
-        if (!ownsWork()) return;
+        /* A failed save must NOT settle the draft/edit mode (it must survive for retry) and
+         * must not touch another tab's panel -- ownsWorkContext() alone is enough here since
+         * nothing below mutates the shared panel, only logs. */
+        if (!ownsWorkContext()) return;
         console.error("Failed to save metadata", err);
     } finally {
-        /* Only restore the button if this context/editor still owns the shared panel -- a
-         * stale completion (focus moved to a different Work while this PATCH was pending) must
-         * not touch the new owner's button. */
-        if (saveBtn && typeof prksSetButtonBusy === 'function' && ownsWork()) {
+        /* Only restore the captured button if the same panel/editor still owns it -- a stale
+         * completion (focus moved to a different Work while this PATCH was pending) must not
+         * touch the new owner's button, and panel.contains(saveBtn) guards against mutating a
+         * detached old button after a panel rerender (e.g. the success settlement above). */
+        if (saveBtn && typeof prksSetButtonBusy === 'function' && ownsWorkPanel() && panel && panel.contains(saveBtn)) {
             prksSetButtonBusy(saveBtn, false);
         }
     }
