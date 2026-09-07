@@ -362,7 +362,21 @@
         }
         if (!snapshot) return;
         const valid = prksValidateWorkspaceSnapshot(snapshot);
-        if (!valid) return;
+        if (!valid) {
+            /* The live in-memory workspace reached a state persistence cannot represent (e.g. a
+             * tab parked on an unknown route via the router's "Section In Development"
+             * fallback). A previously-written good snapshot must never be left behind looking
+             * authoritative for a workspace that no longer exists in memory, so invalidate it
+             * rather than silently keeping it. This never touches the running app's in-memory
+             * workspace; persistence resumes normally the next time a persistable snapshot is
+             * scheduled (it is not globally disabled). */
+            try {
+                store.removeItem(STORAGE_KEY);
+            } catch (_e) {}
+            lastWritten = '';
+            warnPersist('live_rejected');
+            return;
+        }
         let text = '';
         try {
             text = JSON.stringify(valid);

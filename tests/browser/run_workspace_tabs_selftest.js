@@ -144,6 +144,8 @@ function makeHarness(opts) {
     let canLeaveCalls = 0;
     let lastLeaveTabId = null;
     let lastLeaveHash = null;
+    let canLeaveFn = null;
+    const leaveCallLog = [];
     let titleGenOk = null;
     const ws = createPrksWorkspaceTabs({
         parseRoute: nav.prksParseRoute,
@@ -156,6 +158,8 @@ function makeHarness(opts) {
             canLeaveCalls += 1;
             lastLeaveTabId = tabId || null;
             lastLeaveHash = nextHash || null;
+            leaveCallLog.push({ tabId: lastLeaveTabId, hash: lastLeaveHash });
+            if (canLeaveFn) return canLeaveFn(tabId, nextHash);
             return canLeave;
         },
         isRouteGenCurrent: function (g) {
@@ -216,9 +220,16 @@ function makeHarness(opts) {
         },
         setCanLeave: function (v) {
             canLeave = v;
+            canLeaveFn = null;
+        },
+        setCanLeaveFn: function (fn) {
+            canLeaveFn = fn;
         },
         canLeaveCalls: function () {
             return canLeaveCalls;
+        },
+        leaveCallLog: function () {
+            return leaveCallLog.slice();
         },
         setTitleGen: function (g) {
             titleGenOk = g;
@@ -605,7 +616,7 @@ async function run() {
     const replacesFocus = tile.hist.stats().replaces;
     const mainBeforeSwap = tile.ws.snapshot().mainTabId;
     const secBeforeSwap = tile.ws.snapshot().secondaryTree.tabId;
-    const swapOk = tile.ws.makeMain(secBeforeSwap);
+    const swapOk = await tile.ws.makeMain(secBeforeSwap);
     assert('makeMain ok', swapOk === true);
     const snapSwap = tile.ws.snapshot();
     assertEq('makeMain new main', snapSwap.mainTabId, secBeforeSwap);
@@ -818,7 +829,7 @@ async function run() {
     const foldersZeroMain = foldersZero.ws.snapshot().mainTabId;
     await foldersZero.ws.navigate('#/works/WA', { target: 'tile' });
     const workZero = foldersZero.ws.snapshot().secondaryTree.tabId;
-    const foldersZeroOk = foldersZero.ws.makeMain(workZero);
+    const foldersZeroOk = await foldersZero.ws.makeMain(workZero);
     assert('untileable Make Main zero ok', foldersZeroOk === true);
     const snapZero = foldersZero.ws.snapshot();
     assertEq('untileable zero Main is Work', snapZero.mainTabId, workZero);
@@ -841,7 +852,7 @@ async function run() {
     const conceptId = foldersSwap.ws.snapshot().secondaryTree.second.second.tabId;
     const nestedRatio = foldersSwap.ws.snapshot().secondaryTree.ratio;
     const nestedAxis = foldersSwap.ws.snapshot().secondaryTree.axis;
-    const foldersRecurseOk = foldersSwap.ws.makeMain(personId);
+    const foldersRecurseOk = await foldersSwap.ws.makeMain(personId);
     assert('untileable recursive Make Main ok', foldersRecurseOk === true);
     const snapRecurse = foldersSwap.ws.snapshot();
     assertEq('untileable recursive Main is Person', snapRecurse.mainTabId, personId);
@@ -856,6 +867,67 @@ async function run() {
     assert('untileable recursive unique ids', uniqueTabIds(snapRecurse));
     assertPersistable('untileable recursive persistable', snapRecurse);
     assertSecondaryLeavesTileable('untileable recursive leaves tileable', snapRecurse);
+
+    /* ---- Make Main leave guard (old Main cold-park preflight) ---- */
+    {
+        /* Case 1: Main is untileable (Folder), Secondary is a Work. canLeave(oldMain) => false.
+         * Make Main must be a complete, atomic no-op: no promotion, no cold-park, no URL/tree
+         * mutation, and the rejected leave must have been checked against the OLD MAIN, not
+         * the promoted target. */
+        const c1 = makeHarness({ hash: '#/folders' });
+        const c1Main = c1.ws.snapshot().mainTabId;
+        await c1.ws.navigate('#/works/WA', { target: 'tile' });
+        const c1Work = c1.ws.snapshot().secondaryTree.tabId;
+        c1.setCanLeave(false);
+        const c1Fp = fingerprint(c1);
+        const c1MountBefore = c1.mountedCount();
+        const c1ParkBefore = c1.life.park.length;
+        const c1Result = await c1.ws.makeMain(c1Work);
+        assertEq('leave guard case1 rejected', c1Result, false);
+        assertEq('leave guard case1 fingerprint unchanged', fingerprint(c1), c1Fp);
+        assertEq('leave guard case1 mounted unchanged', c1.mountedCount(), c1MountBefore);
+        assertEq('leave guard case1 no cold-park', c1.life.park.length, c1ParkBefore);
+        assertEq('leave guard case1 leave checked old Main', c1.lastLeaveTabId(), c1Main);
+        assertEq('leave guard case1 leave used old Main own route', c1.lastLeaveHash(), '#/folders');
+        assertEq('leave guard case1 main still Folder', c1.ws.snapshot().mainTabId, c1Main);
+        assert('leave guard case1 Work still secondary', c1.ws.snapshot().secondaryTree && c1.ws.snapshot().secondaryTree.tabId === c1Work);
+
+        /* Case 2: same setup, canLeave(oldMain) => true. Old Main leave preflight happened,
+         * Work becomes Main, Folder cold-parks exactly once, topology matches the existing
+         * untileable Make Main expectation (foldersZero above). */
+        const c2 = makeHarness({ hash: '#/folders' });
+        const c2Main = c2.ws.snapshot().mainTabId;
+        await c2.ws.navigate('#/works/WA', { target: 'tile' });
+        const c2Work = c2.ws.snapshot().secondaryTree.tabId;
+        const c2ParkBefore = c2.life.park.length;
+        const c2LeaveBefore = c2.canLeaveCalls();
+        const c2Result = await c2.ws.makeMain(c2Work);
+        assert('leave guard case2 accepted', c2Result === true);
+        assertEq('leave guard case2 leave checked', c2.canLeaveCalls(), c2LeaveBefore + 1);
+        assertEq('leave guard case2 leave was old Main', c2.lastLeaveTabId(), c2Main);
+        const c2Snap = c2.ws.snapshot();
+        assertEq('leave guard case2 main is Work', c2Snap.mainTabId, c2Work);
+        assertEq('leave guard case2 tree collapsed', c2Snap.secondaryTree, null);
+        assertEq('leave guard case2 stacked', c2Snap.mode, 'stacked');
+        assertEq('leave guard case2 Folder cold-parked once', c2.life.park.length, c2ParkBefore + 1);
+        assertEq('leave guard case2 Folder cold-parked is old Main', c2.life.park[c2.life.park.length - 1], c2Main);
+        assert('leave guard case2 Folder remains open (parked, not destroyed)', c2Snap.tabs.some(function (t) { return t.id === c2Main && t.route === '#/folders'; }));
+
+        /* Case 3: old Main IS tile-capable -- exact role swap. No destructive old-Main leave
+         * preflight occurs merely for the role swap (canLeaveCalls unchanged). */
+        const c3 = makeHarness({ hash: '#/works/WA' });
+        const c3Main = c3.ws.snapshot().mainTabId;
+        await c3.ws.navigate('#/works/WB', { target: 'tile' });
+        const c3Work = c3.ws.snapshot().secondaryTree.tabId;
+        const c3LeaveBefore = c3.canLeaveCalls();
+        const c3Result = await c3.ws.makeMain(c3Work);
+        assert('leave guard case3 accepted', c3Result === true);
+        assertEq('leave guard case3 no leave check', c3.canLeaveCalls(), c3LeaveBefore);
+        const c3Snap = c3.ws.snapshot();
+        assertEq('leave guard case3 main is Work B', c3Snap.mainTabId, c3Work);
+        assertEq('leave guard case3 old main demoted into exact leaf', c3Snap.secondaryTree.tabId, c3Main);
+        assertEq('leave guard case3 no cold-park', c3.life.park.length, 0);
+    }
 
     const foldersHide = makeHarness({ hash: '#/folders' });
     const foldersHideMain = foldersHide.ws.snapshot().mainTabId;
@@ -891,7 +963,7 @@ async function run() {
     titleSwap.ws.setResolvedTitleForTab(titleA, '#/works/WA', 'Work A Title');
     const pub0 = titleSwap.published.length;
     const titleRenders = titleSwap.renders.length;
-    titleSwap.ws.makeMain(titleB);
+    await titleSwap.ws.makeMain(titleB);
     assert('makeMain published title', titleSwap.published.length > pub0);
     assertEq(
         'makeMain shell title',
@@ -915,7 +987,7 @@ async function run() {
     const popA = popTile.ws.snapshot().mainTabId;
     const popB = popTile.ws.snapshot().secondaryTree.tabId;
     popTile.hist.pushState(popTile.hist.getState(), popTile.hist.getHref());
-    popTile.ws.makeMain(popB);
+    await popTile.ws.makeMain(popB);
     assertEq('pop prep B main', popTile.ws.snapshot().mainTabId, popB);
     const parkBeforeBack = popTile.life.park.length;
     const destroyBeforeBack = popTile.life.destroy.length;
@@ -959,7 +1031,7 @@ async function run() {
     const hiddenD = hiddenPop.ws.snapshot().secondaryTree.second.second.tabId;
     const originalHiddenTree = jsonClone(hiddenPop.ws.snapshot().secondaryTree);
     hiddenPop.hist.pushState(hiddenPop.hist.getState(), hiddenPop.hist.getHref());
-    hiddenPop.ws.makeMain(hiddenD);
+    await hiddenPop.ws.makeMain(hiddenD);
     await hiddenPop.ws.setMode('stacked');
     assertEq('hidden pop prep only main mounted', hiddenPop.mountedCount(), 1);
     assert('hidden pop history back exists', hiddenPop.hist.back() === true);
@@ -981,7 +1053,7 @@ async function run() {
     await popDenyA.ws.navigate('#/works/WB', { target: 'tile' });
     const denyPopB = popDenyA.ws.snapshot().secondaryTree.tabId;
     const denyPopA = popDenyA.ws.snapshot().mainTabId;
-    popDenyA.ws.makeMain(denyPopB);
+    await popDenyA.ws.makeMain(denyPopB);
     popDenyA.setCanLeave(false);
     const denyFp = fingerprint(popDenyA);
     assert('deny hist back', popDenyA.hist.back() === true);
@@ -993,6 +1065,69 @@ async function run() {
     assertEq('pop deny url restored', popDenyA.hist.getHash(), '#/works/WB');
     void denyFp;
     assertEq('pop deny leave A', popDenyA.lastLeaveTabId(), denyPopA);
+
+    /* ---- Popstate promotion: visible-Secondary target + untileable old Main ---- */
+    {
+        /* Reject old Main's leave: popstate canceled, state/tree/URL unchanged. The target's
+         * own route is not changing here, so only the old-Main cold-park preflight is in play. */
+        const pp1 = makeHarness({ hash: '#/folders' });
+        const pp1Main = pp1.ws.snapshot().mainTabId;
+        await pp1.ws.navigate('#/works/WA', { target: 'tile' });
+        const pp1Work = pp1.ws.snapshot().secondaryTree.tabId;
+        pp1.setCanLeave(false);
+        /* restoreMainUrl() legitimately re-asserts the current URL via replaceState on
+         * rejection, so compare workspace state (not the full fingerprint, which also counts
+         * history replaces) to confirm nothing else moved. */
+        const pp1SnapBefore = JSON.stringify(pp1.ws.snapshot());
+        const popState1 = { prksWorkspace: { v: 1, tabId: pp1Work, route: '#/works/WA', historyIndex: 0 } };
+        const pp1Result = await pp1.ws.handlePopState(popState1);
+        assertEq('popstate promotion reject result', pp1Result, false);
+        assertEq('popstate promotion reject state unchanged', JSON.stringify(pp1.ws.snapshot()), pp1SnapBefore);
+        assertEq('popstate promotion reject leave checked old Main', pp1.lastLeaveTabId(), pp1Main);
+        assertEq('popstate promotion reject leave used old Main own route', pp1.lastLeaveHash(), '#/folders');
+        assertEq('popstate promotion reject main unchanged', pp1.ws.snapshot().mainTabId, pp1Main);
+
+        /* Approve: promotion succeeds, Folder cold-parks, Work becomes Main. */
+        const pp2 = makeHarness({ hash: '#/folders' });
+        const pp2Main = pp2.ws.snapshot().mainTabId;
+        await pp2.ws.navigate('#/works/WA', { target: 'tile' });
+        const pp2Work = pp2.ws.snapshot().secondaryTree.tabId;
+        const popState2 = { prksWorkspace: { v: 1, tabId: pp2Work, route: '#/works/WA', historyIndex: 0 } };
+        const pp2Result = await pp2.ws.handlePopState(popState2);
+        assert('popstate promotion approve result', pp2Result === true);
+        const pp2Snap = pp2.ws.snapshot();
+        assertEq('popstate promotion approve main is Work', pp2Snap.mainTabId, pp2Work);
+        assertEq('popstate promotion approve tree collapsed', pp2Snap.secondaryTree, null);
+        assert('popstate promotion approve Folder parked', pp2.life.park.indexOf(pp2Main) !== -1);
+
+        /* Both required preflights (target route-change AND old-Main cold-park) must complete
+         * before ANY mutation. Reject the SECOND preflight (old Main) after the FIRST (target's
+         * own route change) already succeeded, and assert nothing was mutated at all: not the
+         * target's route/history, not the tree, not Main. */
+        const pp3 = makeHarness({ hash: '#/folders' });
+        const pp3Main = pp3.ws.snapshot().mainTabId;
+        await pp3.ws.navigate('#/works/WA', { target: 'tile' });
+        const pp3Work = pp3.ws.snapshot().secondaryTree.tabId;
+        /* Give the Secondary leaf a second history entry so a popstate targeting index 0
+         * actually changes its route (back navigation within that tab's own history). */
+        await pp3.ws.navigate('#/works/WA2', { target: 'current', tabId: pp3Work });
+        pp3.setCanLeaveFn(function (tabId) {
+            /* The target's own route-change preflight succeeds; the old Main's cold-park
+             * preflight is rejected. */
+            return tabId !== pp3Main;
+        });
+        const pp3SnapBefore = JSON.stringify(pp3.ws.snapshot());
+        const pp3LogBefore = pp3.leaveCallLog().length;
+        const popState3 = { prksWorkspace: { v: 1, tabId: pp3Work, route: '#/works/WA', historyIndex: 0 } };
+        const pp3Result = await pp3.ws.handlePopState(popState3);
+        assertEq('popstate promotion combined reject result', pp3Result, false);
+        assertEq('popstate promotion combined reject state unchanged', JSON.stringify(pp3.ws.snapshot()), pp3SnapBefore);
+        const pp3Log = pp3.leaveCallLog().slice(pp3LogBefore);
+        assert('popstate promotion combined reject checked target first', pp3Log.length >= 1 && pp3Log[0].tabId === pp3Work);
+        assert('popstate promotion combined reject checked old Main second', pp3Log.length >= 2 && pp3Log[1].tabId === pp3Main);
+        assertEq('popstate promotion combined reject target route unchanged', pp3.ws.snapshot().tabs.find(function (t) { return t.id === pp3Work; }).route, '#/works/WA2');
+        assertEq('popstate promotion combined reject main unchanged', pp3.ws.snapshot().mainTabId, pp3Main);
+    }
 
     const n0 = makeHarness({ hash: '#/works/WA' });
     await n0.ws.setNarrowFallback(true);
@@ -1220,7 +1355,7 @@ async function run() {
 
         /* Deep Make Main: promote D (deepest leaf) to Main; old Main A takes D's exact spot. */
         await h.ws.focusTab(D);
-        const okMakeMain = h.ws.makeMain(D);
+        const okMakeMain = await h.ws.makeMain(D);
         assert('deep make main ok', okMakeMain === true);
         snap = h.ws.snapshot();
         assertEq('deep make main new main', snap.mainTabId, D);

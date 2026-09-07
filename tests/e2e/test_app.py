@@ -1012,6 +1012,97 @@ class WorkDetailsPolishTests(_BrowserE2E):
         page.locator("#prks-modal-confirm-ok").click()
         page.locator("#panel-content .card-title", has_text=WORK_A_TITLE).wait_for()
 
+    def test_metadata_invalid_date_blocks_save_and_marks_field(self):
+        """submitWorkMetaEdit() must query the shared #panel-content for #meta-date /
+        #meta-date-error, not ctx.query() (which is scoped beneath ctx.root and would never
+        find them). An invalid date must mark the field, populate the error, focus it, and
+        issue zero PATCH."""
+        server, page, _collector = self._start_app()
+        work_a = server.ids["work_a"]
+        patches = []
+
+        def count_patch(route):
+            req = route.request
+            if req.method == "PATCH" and urlparse(req.url).path == "/api/works/" + work_a:
+                patches.append(req.url)
+            route.fallback()
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-date").wait_for()
+        page.fill("#meta-date", "31/02/2020")
+        page.route("**/api/works/*", count_patch)
+        try:
+            page.locator("#inline-save-metadata-btn").click()
+            page.wait_for_function(
+                "() => document.getElementById('meta-date').getAttribute('aria-invalid') === 'true'"
+            )
+            self.assertEqual(page.locator("#meta-date-error").inner_text(), "Use dd/mm/yyyy.")
+            self.assertEqual(
+                page.evaluate("() => document.activeElement && document.activeElement.id"),
+                "meta-date",
+            )
+            page.wait_for_timeout(200)
+            self.assertEqual(patches, [])
+        finally:
+            try:
+                page.unroute("**/api/works/*", count_patch)
+            except Exception:
+                pass
+
+    def test_metadata_save_busy_state_blocks_duplicate_submit(self):
+        """Save Changes must go aria-busy/disabled with a visible "Saving..." label while its
+        PATCH is pending -- and stay that way (no second PATCH) if clicked again -- then
+        restore once the request completes."""
+        server, page, _collector = self._start_app()
+        work_a = server.ids["work_a"]
+        held = []
+
+        def hold_patch(route):
+            req = route.request
+            if req.method == "PATCH" and urlparse(req.url).path == "/api/works/" + work_a:
+                held.append(route)
+                return
+            route.fallback()
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").wait_for()
+        page.fill("#meta-title", "Busy Save Title")
+        page.route("**/api/works/*", hold_patch)
+        try:
+            page.locator("#inline-save-metadata-btn").click()
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "metadata PATCH was not intercepted")
+            page.wait_for_function(
+                "() => document.getElementById('inline-save-metadata-btn').getAttribute('aria-busy') === 'true'"
+            )
+            self.assertTrue(
+                page.evaluate("() => document.getElementById('inline-save-metadata-btn').disabled")
+            )
+            self.assertEqual(page.locator("#inline-save-metadata-btn").inner_text(), "Saving…")
+            # A disabled button never dispatches a click to its handler -- forcing the pointer
+            # event through Playwright still must not produce a second PATCH.
+            page.locator("#inline-save-metadata-btn").click(force=True)
+            page.wait_for_timeout(200)
+            self.assertEqual(len(held), 1)
+            _continue_held_routes(held)
+            page.wait_for_function(
+                """() => {
+                    const b = document.getElementById('inline-save-metadata-btn');
+                    return !b || b.getAttribute('aria-busy') !== 'true';
+                }"""
+            )
+            page.locator("#panel-content .card-title", has_text="Busy Save Title").wait_for()
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/*", hold_patch)
+            except Exception:
+                pass
+
 
 class PeopleSearchEmptyRoleTests(_BrowserE2E):
     def test_retained_query_does_not_hide_empty_role_explanation(self):
@@ -1678,6 +1769,72 @@ class ResearchGraphSplitWorkspaceTests(_BrowserE2E):
 
         page.locator("[data-graph-clear-selection]").click()
         self.assertEqual(page.evaluate("() => window.getSelectedGraphNodeId()"), "")
+
+
+class RightPanelNavigationOwnershipTests(_BrowserE2E):
+    def test_panel_link_click_navigates_originating_panel_owner_not_main(self):
+        """ownerTabIdFromEvent() must read the shared #panel-content's recorded owner
+        (panel.dataset.prksOwnerTabId) for a click that originates inside it -- never Main,
+        the focused tab, or location.hash. Main = a Concept, Secondary = Work A (focused, so
+        it owns the panel); clicking the Author link in the panel must navigate the Secondary
+        Work tab itself to the Person, leaving Main's Concept route untouched."""
+        server, page, _collector = self._start_app(seed_fn=seed_library)
+        work_a = server.ids["work_a"]
+        person_id = server.ids["person"]
+
+        # Main: the Concept auto-created from Work A's own seeded note markup.
+        concepts = page.evaluate("async () => (await (await fetch('/api/concepts')).json())")
+        concept = next(c for c in concepts if c["name"] == "E2E Fixture Concept")
+        concept_id = concept["id"]
+        page.evaluate("(id) => { void window.prksNavigate('#/concepts/' + id); }", arg=concept_id)
+        page.wait_for_function("(h) => location.hash === h", arg="#/concepts/" + concept_id)
+        main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+
+        # Secondary: Work A, tiled and focused -- it takes ownership of the shared panel.
+        page.evaluate("(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })", arg=work_a)
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return !!(
+                    snap && snap.mode === 'tiled' &&
+                    snap.secondaryTree && snap.secondaryTree.type === 'leaf' &&
+                    snap.focusedTabId === snap.secondaryTree.tabId
+                );
+            }"""
+        )
+        work_tab_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+
+        # Tiled mode makes the shared right panel a dismissible overlay (off-screen until
+        # opened) rather than a permanently docked column; open it through its real control.
+        page.locator("#prks-mobile-details-btn").click()
+        page.wait_for_function("() => document.body.classList.contains('prks-right-panel-open')")
+
+        author_link = page.locator("#panel-content .work-linked-persons__chip-link")
+        author_link.wait_for()
+        self.assertEqual(
+            page.evaluate("() => document.getElementById('panel-content').dataset.prksOwnerTabId"),
+            work_tab_id,
+        )
+        self.assertEqual(author_link.get_attribute("href"), "#/people/" + person_id)
+
+        author_link.click()
+
+        page.wait_for_function(
+            """(a) => {
+                const snap = window.prksWorkspaceSnapshot();
+                const tab = snap && snap.tabs.find((t) => t.id === a.tabId);
+                return !!(tab && tab.route === '#/people/' + a.personId);
+            }""",
+            arg={"tabId": work_tab_id, "personId": person_id},
+        )
+        # Main's own route (and tab ID) never changed.
+        self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"), main_id)
+        self.assertEqual(page.evaluate("() => location.hash"), "#/concepts/" + concept_id)
+        main_route = page.evaluate(
+            "(id) => window.prksWorkspaceSnapshot().tabs.find((t) => t.id === id).route",
+            arg=main_id,
+        )
+        self.assertEqual(main_route, "#/concepts/" + concept_id)
 
 
 class ResearchIndexAndDetailPolishTests(_BrowserE2E):

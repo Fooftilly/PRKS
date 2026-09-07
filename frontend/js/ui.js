@@ -3051,6 +3051,7 @@ function prksBindWorkMetaDraftEditor(ownerCtx, work) {
     if (!ownerCtx || !ownerCtx.ui || ownerCtx.ui.workDetailsMode !== 'metadata') return;
     const panel = document.getElementById('panel-content');
     if (!prksRightPanelOwnedBy(ownerCtx, panel)) return;
+    const editorRoot = panel.querySelector('.work-meta-editor');
     const capture = () => prksCaptureWorkMetaDraft(ownerCtx);
     panel.querySelectorAll('.work-meta-editor input, .work-meta-editor textarea').forEach((el) => {
         el.addEventListener('input', capture);
@@ -3066,7 +3067,14 @@ function prksBindWorkMetaDraftEditor(ownerCtx, work) {
         date.addEventListener('input', clearDateError);
         date.addEventListener('change', clearDateError);
     }
-    panel.addEventListener('click', () => window.setTimeout(capture, 0));
+    /* Bind the capture-on-click listener to the ephemeral editor root itself, not the
+     * persistent #panel-content. Repeated editor mount/cancel/render cycles replace
+     * panel.innerHTML, which discards editorRoot and its listeners along with it; a listener
+     * on #panel-content itself would instead accumulate one per cycle and retain old
+     * TabContexts via its closure indefinitely. */
+    if (editorRoot) {
+        editorRoot.addEventListener('click', () => window.setTimeout(capture, 0));
+    }
 }
 
 function prksMountWorkMetaEditor(ownerCtx, work) {
@@ -3170,10 +3178,20 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
 async function submitWorkMetaEdit(workId) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const generation = ownerCtx && ownerCtx.generation;
+    /* The Work metadata editor lives in the shared #panel-content, not beneath ownerCtx.root,
+     * so every lookup that refers to it must be panel-local and ownership-checked -- the same
+     * pattern prksCaptureWorkMetaDraft() already uses -- never ownerCtx.query(). Including the
+     * panel-ownership check in ownsWork() also closes the ownership race: if focus moves to a
+     * different Work (or tab) while this PATCH is pending, prksRightPanelOwnedBy(ownerCtx, ...)
+     * goes false even though ownerCtx's own route/generation/entity are unchanged, so a stale
+     * completion cannot mutate the new owner's editor/button. */
+    const panel = document.getElementById('panel-content');
     const ownsWork = function () {
         return !!(
             typeof prksTabContextOwnsEntityRoute === 'function' &&
-            prksTabContextOwnsEntityRoute(ownerCtx, generation, 'work', workId, 'work')
+            prksTabContextOwnsEntityRoute(ownerCtx, generation, 'work', workId, 'work') &&
+            typeof prksRightPanelOwnedBy === 'function' &&
+            prksRightPanelOwnedBy(ownerCtx, panel)
         );
     };
     if (!ownsWork()) return;
@@ -3187,8 +3205,8 @@ async function submitWorkMetaEdit(workId) {
             ? prksParsePublishedDateInput(metaDateRaw)
             : metaDateRaw;
     if (metaDateRaw && !metaDateIso) {
-        const dateEl = ownerCtx && ownerCtx.query ? ownerCtx.query('#meta-date') : null;
-        const errorEl = ownerCtx && ownerCtx.query ? ownerCtx.query('#meta-date-error') : null;
+        const dateEl = panel ? panel.querySelector('#meta-date') : null;
+        const errorEl = panel ? panel.querySelector('#meta-date-error') : null;
         if (dateEl) {
             dateEl.setAttribute('aria-invalid', 'true');
             dateEl.focus();
@@ -3218,7 +3236,7 @@ async function submitWorkMetaEdit(workId) {
     if (draft.source_url != null) payload.source_url = String(draft.source_url || '').trim();
     
     // Disable save button to prevent double submission
-    const saveBtn = ownerCtx && ownerCtx.query ? ownerCtx.query('#inline-save-metadata-btn') : null;
+    const saveBtn = panel ? panel.querySelector('#inline-save-metadata-btn') : null;
     if (saveBtn && typeof prksSetButtonBusy === 'function') {
         prksSetButtonBusy(saveBtn, true, { busyLabel: 'Saving…' });
     }
@@ -3269,7 +3287,10 @@ async function submitWorkMetaEdit(workId) {
         if (!ownsWork()) return;
         console.error("Failed to save metadata", err);
     } finally {
-        if (saveBtn && typeof prksSetButtonBusy === 'function') {
+        /* Only restore the button if this context/editor still owns the shared panel -- a
+         * stale completion (focus moved to a different Work while this PATCH was pending) must
+         * not touch the new owner's button. */
+        if (saveBtn && typeof prksSetButtonBusy === 'function' && ownsWork()) {
             prksSetButtonBusy(saveBtn, false);
         }
     }

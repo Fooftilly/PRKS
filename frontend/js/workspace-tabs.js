@@ -830,21 +830,50 @@
             return true;
         }
 
+        /**
+         * Promise<boolean> preflight shared by every path that promotes a Secondary leaf to
+         * Main (explicit Make Main, a Secondary navigating to a non-tile route, and a visible
+         * Secondary's popstate promotion): explicit Make Main / Make Main-shaped promotion
+         * paths. `promoteSecondaryToMain()` itself stays a synchronous, unchecked state
+         * mutation primitive; this is the operation wrapped around it. When the old Main
+         * supports tiling it is demoted in place (a role swap) and never leaves, so no leave
+         * prompt is needed. When it does not, promotion would cold-park/unmount it, so it must
+         * pass `awaitLeave()` before anything is mutated. The nextHash passed is the old Main's
+         * OWN current route (not the incoming target's route): it is being parked, not
+         * navigated, so this lets autosave flushes / owned-draft guards run without a false
+         * "route change" read.
+         */
+        function preflightMainPromotion(targetId) {
+            const oldMain = getMainTab();
+            if (!oldMain || oldMain.id === targetId) return Promise.resolve(true);
+            if (routeSupportsTile(oldMain.route)) return Promise.resolve(true);
+            return awaitLeave(oldMain.id, oldMain.route);
+        }
+
+        /**
+         * Promise<boolean> orchestration for the explicit Make Main command: preflight, then
+         * (only if approved) promote/commit/paint. A rejected preflight is an atomic no-op --
+         * no tree/tab/URL/mount mutation at all.
+         */
         function makeMain(tabId) {
             const tab = getTab(tabId);
-            if (!tab) return false;
+            if (!tab) return Promise.resolve(false);
             if (tab.id === state.mainTabId) {
                 state.focusedTabId = tab.id;
                 paintAndRestore(tab.id);
                 refreshFocusedPanel();
-                return true;
+                return Promise.resolve(true);
             }
-            if (!promoteSecondaryToMain(tab.id)) return false;
-            commitUrl(tab, 'replace');
-            paintAndRestore(tab.id);
-            publishShell(tab.id);
-            refreshFocusedPanel();
-            return true;
+            return preflightMainPromotion(tab.id).then(function (ok) {
+                if (!ok) return false;
+                if (!getTab(tab.id) || !root.containsTab(state.secondaryTree, tab.id)) return false;
+                if (!promoteSecondaryToMain(tab.id)) return false;
+                commitUrl(tab, 'replace');
+                paintAndRestore(tab.id);
+                publishShell(tab.id);
+                refreshFocusedPanel();
+                return true;
+            });
         }
 
         function focusTab(tabId) {
@@ -1165,11 +1194,22 @@
                 return awaitLeave(leavingId, route).then(function (ok) {
                     if (!ok) return false;
                     if (!getTab(leavingId) || !root.containsTab(state.secondaryTree, leavingId)) return false;
-                    if (!makeMain(leavingId)) return false;
-                    announce('', 'promote');
-                    const promoted = getMainTab();
-                    if (!promoted || promoted.id !== leavingId) return false;
-                    return applyCurrentNavigation(promoted, route, replace);
+                    /* This Secondary is becoming Main because its own route no longer supports
+                     * tiling. That promotion may also cold-park the OLD Main (if IT doesn't
+                     * support tiling either) -- preflight that too, before any mutation, via
+                     * the same helper explicit Make Main uses. Calling promoteSecondaryToMain()
+                     * directly (rather than makeMain()) avoids a redundant commit/paint here:
+                     * applyCurrentNavigation() below performs the one commit/paint for the
+                     * promoted tab's new route. */
+                    return preflightMainPromotion(leavingId).then(function (mainOk) {
+                        if (!mainOk) return false;
+                        if (!getTab(leavingId) || !root.containsTab(state.secondaryTree, leavingId)) return false;
+                        if (!promoteSecondaryToMain(leavingId)) return false;
+                        announce('', 'promote');
+                        const promoted = getMainTab();
+                        if (!promoted || promoted.id !== leavingId) return false;
+                        return applyCurrentNavigation(promoted, route, replace);
+                    });
                 });
             }
             return awaitLeave(tab.id, route).then(function (ok) {
@@ -1589,8 +1629,8 @@
             if (isVisibleSecondaryTarget) {
                 const want = historyWant(target, raw, locHash);
                 const routeChanging = target.route !== want.route;
-                const preflight = routeChanging ? awaitLeave(target.id, want.route) : Promise.resolve(true);
-                return preflight.then(function (ok) {
+                const targetPreflight = routeChanging ? awaitLeave(target.id, want.route) : Promise.resolve(true);
+                return targetPreflight.then(function (ok) {
                     if (!ok) {
                         restoreMainUrl();
                         return false;
@@ -1599,28 +1639,41 @@
                         restoreMainUrl();
                         return false;
                     }
-                    applyWantToTab(target, want);
-                    if (!promoteSecondaryToMain(target.id)) {
-                        restoreMainUrl();
-                        return false;
-                    }
-                    markHandled();
-                    paint();
-                    if (routeChanging) {
-                        return Promise.resolve(
-                            invokeRender({
-                                workspaceSwitch: false,
-                                fromPopstate: true,
-                                tabId: target.id,
-                                hash: target.route,
-                            })
-                        ).then(function () {
-                            return true;
-                        });
-                    }
-                    publishShell(target.id);
-                    refreshFocusedPanel();
-                    return true;
+                    /* Promoting this visible Secondary to Main may also cold-park the OLD Main
+                     * (if it doesn't support tiling). Both preflights must succeed BEFORE any
+                     * mutation -- no state change happens between them. */
+                    return preflightMainPromotion(target.id).then(function (mainOk) {
+                        if (!mainOk) {
+                            restoreMainUrl();
+                            return false;
+                        }
+                        if (!getTab(target.id) || !root.containsTab(state.secondaryTree, target.id)) {
+                            restoreMainUrl();
+                            return false;
+                        }
+                        applyWantToTab(target, want);
+                        if (!promoteSecondaryToMain(target.id)) {
+                            restoreMainUrl();
+                            return false;
+                        }
+                        markHandled();
+                        paint();
+                        if (routeChanging) {
+                            return Promise.resolve(
+                                invokeRender({
+                                    workspaceSwitch: false,
+                                    fromPopstate: true,
+                                    tabId: target.id,
+                                    hash: target.route,
+                                })
+                            ).then(function () {
+                                return true;
+                            });
+                        }
+                        publishShell(target.id);
+                        refreshFocusedPanel();
+                        return true;
+                    });
                 });
             }
 
@@ -2348,7 +2401,25 @@
         if (e.target.closest) {
             const tile = e.target.closest('.prks-tile[data-prks-tab-id]');
             if (tile) return tile.getAttribute('data-prks-tab-id');
+            /* The shared right panel (#panel-content) lives outside every tile's DOM, so
+             * neither lookup above ever matches a click that originates inside it. It already
+             * records its own owner (panel.dataset.prksOwnerTabId); use that recorded owner
+             * instead of falling through to Main or the focused tab, which would misattribute
+             * a Secondary-owned panel link's navigation to whichever tab happens to be Main. */
+            const panel = e.target.closest('#panel-content');
+            if (panel) {
+                const ownerTabId = panel.dataset ? panel.dataset.prksOwnerTabId : '';
+                if (
+                    ownerTabId &&
+                    typeof root.prksGetTabContext === 'function' &&
+                    root.prksGetTabContext(ownerTabId)
+                ) {
+                    return ownerTabId;
+                }
+            }
         }
+        /* Main fallback remains only for genuinely shell-global links/elements that have no
+         * TabContext or right-panel owner at all. */
         return production ? production.getMainTabId() : null;
     }
 
@@ -2609,8 +2680,13 @@
     }
 
     function prksWorkspaceMakeMain(tabId) {
-        if (!production) return false;
-        return production.makeMain(tabId);
+        if (!production) return Promise.resolve(false);
+        /* makeMain() may reject the promotion asynchronously (a leave preflight). Callers
+         * (e.g. workspace-tab-menu.js) intentionally discard the returned promise with `void`;
+         * make sure it can never surface as an unhandled rejection. */
+        return Promise.resolve(production.makeMain(tabId)).catch(function () {
+            return false;
+        });
     }
 
     function prksWorkspaceTileTab(tabId) {

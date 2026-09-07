@@ -206,6 +206,35 @@ function makeHarness(opts) {
     };
 }
 
+/**
+ * Unlike makeHarness() above (which spies on persistNotify), this harness omits
+ * persistNotify entirely so workspace-tabs.js's noteCanonicalChange() falls through to the
+ * real global scheduler (root.prksScheduleWorkspacePersistence /
+ * root.prksFlushWorkspacePersistence from workspace-persistence.js, attached to the same
+ * Node `global` both modules use as `root`). This exercises the real writeSnapshot() path
+ * end to end, including its own validation/rejection behavior against the real MemoryStorage.
+ */
+function makeRealPersistHarness(opts) {
+    opts = opts || {};
+    const hist = makeHistory(opts.hash || '#/folders');
+    const ws = createPrksWorkspaceTabs({
+        parseRoute: nav.prksParseRoute,
+        routeLoadingTitle: nav.prksRouteLoadingTitle,
+        routeTabIcon: nav.prksRouteTabIcon,
+        homeHash: '#/folders',
+        historyAdapter: hist,
+        supportsTile: nav.prksRouteSupportsTile,
+        loadSnapshot: opts.loadSnapshot,
+        canLeave: opts.canLeave || function () { return true; },
+        renderRoute: function () {},
+        onChange: function () {},
+        announce: function () {},
+        publishMainShell: function () {},
+    });
+    ws.bootstrap(opts.hash || '#/folders');
+    return { ws: ws, hist: hist };
+}
+
 function validSnapshot() {
     return {
         version: 1,
@@ -694,6 +723,68 @@ async function run() {
         if (prevSyncFn) global.prksWorkspaceSyncTiles = prevSyncFn;
         else delete global.prksWorkspaceSyncTiles;
     }
+
+    /* ---- Real writer: live unknown-route persistence must never freeze on a stale snapshot ----
+     * Exercises the actual workspace-persistence.js writer end to end (no persistNotify spy):
+     * bootstrap/navigate schedule through the real global scheduler, and
+     * prksFlushWorkspacePersistence() drives the real writeSnapshot(). */
+    persist.prksClearWorkspaceSnapshot();
+    store.writes = 0;
+    {
+        const real = makeRealPersistHarness({ hash: '#/works/WA' });
+
+        /* A: save a good/known-route workspace, verify it lands in storage. */
+        await real.ws.navigate('#/people/PA');
+        persist.prksFlushWorkspacePersistence();
+        assert('real writer: A good snapshot stored', store.getItem(KEY) != null);
+        const storedGood = JSON.parse(store.getItem(KEY));
+        assertEq(
+            'real writer: A good snapshot route',
+            storedGood.tabs.find(function (t) { return t.id === storedGood.mainTabId; }).route,
+            '#/people/PA'
+        );
+
+        /* B: the live Main legitimately reaches an unknown route (the router's "Section In
+         * Development" fallback), then mutates + flushes. The previous good snapshot must
+         * NOT be left behind looking like it still describes the current workspace. */
+        await real.ws.navigate('#/this-route-does-not-exist');
+        assertEq(
+            'real writer: B in-memory route really is unknown',
+            real.ws.snapshot().tabs.find(function (t) { return t.id === real.ws.snapshot().mainTabId; }).route,
+            '#/this-route-does-not-exist'
+        );
+        persist.prksFlushWorkspacePersistence();
+        assertEq('real writer: B live unknown route invalidates the stale snapshot', store.getItem(KEY), null);
+
+        /* C: returning to a known/persistable route and flushing again must succeed -- B must
+         * not have globally disabled persistence. */
+        await real.ws.navigate('#/works/WC');
+        persist.prksFlushWorkspacePersistence();
+        const storedAgain = store.getItem(KEY);
+        assert('real writer: C persists again after returning to a known route', storedAgain != null);
+        const parsedAgain = JSON.parse(storedAgain);
+        assertEq(
+            'real writer: C fresh snapshot route',
+            parsedAgain.tabs.find(function (t) { return t.id === parsedAgain.mainTabId; }).route,
+            '#/works/WC'
+        );
+    }
+    persist.prksClearWorkspaceSnapshot();
+
+    /* D: read-time rejection of an unknown/corrupt persisted route stays intact -- a stored
+     * snapshot whose Main route is unknown must be rejected and discarded on load, exactly
+     * like the corrupt-JSON / wrong-version cases above. */
+    store.writes = 0;
+    store.store[KEY] = JSON.stringify({
+        version: 1,
+        tabs: [{ id: 'tab-1', route: '#/this-route-does-not-exist' }],
+        mainTabId: 'tab-1',
+        secondaryTree: null,
+        mode: 'stacked',
+        mainSplitRatio: 0.58,
+    });
+    assert('read-time unknown route load null', persist.prksLoadWorkspaceSnapshot() == null);
+    assert('read-time unknown route cleared', store.getItem(KEY) == null);
 
     const srcFiles = [
         'workspace-tabs.js',
