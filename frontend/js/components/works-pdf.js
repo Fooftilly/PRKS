@@ -558,6 +558,7 @@ window.openPdfAnnotationEditorById = async function (ctxOrId, maybeId) {
 };
 
 window.deletePdfAnnotationFromEditor = async function () {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const owner = prksPdfOwnerOrFocused();
     const pdf = prksPdfRuntime(owner);
     const st = pdf && pdf.annotationEditorState;
@@ -580,6 +581,7 @@ window.deletePdfAnnotationFromEditor = async function () {
 };
 
 window.savePdfAnnotationComment = async function () {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const owner = prksPdfOwnerOrFocused();
     const pdf = prksPdfRuntime(owner);
     const st = pdf && pdf.annotationEditorState;
@@ -844,6 +846,7 @@ ${commentHtml}
             return;
         }
         if (e.target && e.target.closest && e.target.closest('.annotation-row__delete')) {
+            if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
             const cache = pdf && pdf.annotationCache;
             const rowItem = cache && Array.isArray(cache.items) ? cache.items[idx] : null;
             const annId = rowItem && (rowItem.id || rowItem.uuid || rowItem.annotationId || rowItem._id);
@@ -1359,6 +1362,72 @@ function prksDestroyWorkPdfViewer(ctx) {
     if (owner && typeof owner.clearResource === 'function') owner.clearResource('pdf');
 }
 
+/**
+ * PRKS is offline (or still reconnecting) whenever the runtime is not
+ * confirmed reachable. A Work PDF viewer created/rebuilt in that state uses
+ * the viewer's own `mode: 'preview'` interaction boundary (render/scroll/
+ * zoom/navigate only) instead of `'work'` -- highlight/underline/delete/
+ * comment/save are all gated by that same mode inside the vendor viewer, and
+ * annotation-sync persistence is never installed for a preview-mode viewer.
+ * See AGENTS.md "Offline / PWA".
+ */
+function prksPdfDesiredMode() {
+    return typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online' ? 'preview' : 'work';
+}
+
+function prksCurrentPdfPageNumber(runtime) {
+    const sess = runtime && runtime.pageSession;
+    const p = sess && sess.pageNumber != null ? Number(sess.pageNumber) : NaN;
+    return Number.isFinite(p) && p >= 1 ? p : 1;
+}
+
+/** Builds + awaits one viewer instance for a Work PDF; installs annotation persistence only in 'work' mode. */
+async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, mode) {
+    const generation = ctx.generation;
+    const stale = function () {
+        return typeof ctx.isCurrent === 'function' ? !ctx.isCurrent(generation) : !ctx.mounted;
+    };
+    const src =
+        String(work.file_path || '') +
+        (String(work.file_path || '').includes('?') ? '&' : '?') +
+        'prksv=' +
+        Date.now();
+    const author = typeof getPrksAnnotationAuthor === 'function' ? getPrksAnnotationAuthor() : 'You';
+    const typeMeta = typeof prksDocTypeMeta === 'function' ? prksDocTypeMeta(work.doc_type) : null;
+    const viewer = await createPrksPdfViewer({
+        target: targetNode,
+        src,
+        mode: mode,
+        annotationAuthor: author,
+        documentTitle: work.title || 'Document',
+        documentTypeLabel: typeMeta && typeMeta.label ? typeMeta.label : '',
+        documentTypeColor: typeMeta && typeMeta.color ? typeMeta.color : undefined,
+        documentTypeBorder: typeMeta && typeMeta.border ? typeMeta.border : undefined,
+        initialPage: initialPage,
+        onPageChange: (info) => runtime.lastPage && runtime.lastPage.onPageChange(info),
+        onAnnotationCommentRequest: (info) => {
+            if (mode !== 'work' || !info || !info.annotationId) return;
+            if (typeof window.openPdfAnnotationEditorById === 'function') {
+                void window.openPdfAnnotationEditorById(ctx, info.annotationId);
+            }
+        },
+        onError: (err) => console.error('PDF viewer failed', err),
+    });
+    if (stale() || (ctx.getResource ? ctx.getResource('pdf') !== runtime : false)) {
+        if (viewer && typeof viewer.destroy === 'function') {
+            try { viewer.destroy(); } catch (_e) {}
+        }
+        return null;
+    }
+    if (runtime.lastPage && typeof runtime.lastPage.setViewer === 'function') runtime.lastPage.setViewer(viewer);
+    runtime.viewer = viewer;
+    runtime.mode = mode;
+    if (mode === 'work') {
+        void setupAnnotationPersistence(ctx, runtime, work.id);
+    }
+    return viewer;
+}
+
 export function initPdfViewerForWork(ctx, work) {
     if (!work || !work.file_path || !ctx) return;
     const _pdfGen = ctx.generation;
@@ -1391,14 +1460,10 @@ export function initPdfViewerForWork(ctx, work) {
                   };
         const lastPage = createPdfLastPageController(work, runtime);
         runtime.lastPage = lastPage;
+        runtime.work = work;
         ctx.setResource('pdf', runtime, function () {
             runtime.destroy();
         });
-        const src =
-            String(work.file_path || '') +
-            (String(work.file_path || '').includes('?') ? '&' : '?') +
-            'prksv=' +
-            Date.now();
         // Prime the service worker's whole-file PDF cache in the background (AGENTS.md
         // "PDF offline support"). The viewer itself loads progressively via Range
         // requests, which never populate that cache -- this plain GET is what lets a
@@ -1407,43 +1472,67 @@ export function initPdfViewerForWork(ctx, work) {
         if (typeof prksRequest === 'function' && work.file_path) {
             void prksRequest(String(work.file_path), {}, { priority: 'background' }).catch(function () {});
         }
-        const author =
-            typeof getPrksAnnotationAuthor === 'function' ? getPrksAnnotationAuthor() : 'You';
-        const typeMeta =
-            typeof prksDocTypeMeta === 'function' ? prksDocTypeMeta(work.doc_type) : null;
-        createPrksPdfViewer({
-            target: targetNode,
-            src,
-            mode: 'work',
-            annotationAuthor: author,
-            documentTitle: work.title || 'Document',
-            documentTypeLabel: typeMeta && typeMeta.label ? typeMeta.label : '',
-            documentTypeColor: typeMeta && typeMeta.color ? typeMeta.color : undefined,
-            documentTypeBorder: typeMeta && typeMeta.border ? typeMeta.border : undefined,
-            initialPage: lastPage.initialPage,
-            onPageChange: (info) => lastPage.onPageChange(info),
-            onAnnotationCommentRequest: (info) => {
-                if (!info || !info.annotationId) return;
-                if (typeof window.openPdfAnnotationEditorById === 'function') {
-                    void window.openPdfAnnotationEditorById(ctx, info.annotationId);
-                }
-            },
-            onError: (err) => console.error('PDF viewer failed', err),
-        })
-            .then((viewer) => {
-                if (_pdfStale() || ctx.getResource('pdf') !== runtime) {
-                    if (viewer && typeof viewer.destroy === 'function') {
-                        try { viewer.destroy(); } catch (_e) {}
-                    }
-                    return;
-                }
-                lastPage.setViewer(viewer);
-                runtime.viewer = viewer;
-                void setupAnnotationPersistence(ctx, runtime, work.id);
-            })
-            .catch((err) => {
-                console.error('Failed to load PDF viewer', err);
-            });
+        void prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, prksPdfDesiredMode()).catch((err) => {
+            console.error('Failed to load PDF viewer', err);
+        });
     }, 100);
     if (ctx && typeof ctx.setTimer === 'function') ctx.setTimer('pdfDeferredSetup', setupTimer);
+}
+
+/**
+ * Handle connectivity changing while a Work PDF viewer is already mounted.
+ * The vendor viewer's interaction mode is fixed at construction time (it has
+ * no live setMode), so the smallest correct mechanism is rebuilding the
+ * viewer in the newly-desired mode at the same page -- never leaving
+ * annotation tools usable merely because the viewer was created while
+ * online, and never leaving a stale 'work' annotation-sync worker running
+ * once the connection actually drops.
+ */
+function prksRebuildPdfViewerForModeChange(ctx, runtime, desiredMode) {
+    if (!ctx || !runtime || runtime._destroyed || runtime.rebuilding) return;
+    const targetNode = ctx.query ? ctx.query('[data-prks-role="pdf-viewer"]') : null;
+    const work = runtime.work;
+    if (!targetNode || !work) return;
+    runtime.rebuilding = true;
+    const oldViewer = runtime.viewer;
+    const page = prksCurrentPdfPageNumber(runtime);
+    // Stop the annotation-sync worker before tearing down its viewer -- it
+    // must never keep syncing (or retry-scheduling) against a destroyed
+    // instance, and going offline must stop it immediately.
+    if (runtime.annotationPersistence && typeof runtime.annotationPersistence.destroy === 'function') {
+        try {
+            runtime.annotationPersistence.destroy();
+        } catch (_e) {}
+    }
+    runtime.annotationPersistence = null;
+    runtime.viewer = null;
+    Promise.resolve()
+        .then(() => {
+            if (oldViewer && typeof oldViewer.destroy === 'function') {
+                try {
+                    oldViewer.destroy();
+                } catch (_e) {}
+            }
+            if (runtime._destroyed || (ctx.getResource ? ctx.getResource('pdf') !== runtime : false)) return null;
+            targetNode.innerHTML = '';
+            return prksMountPdfViewer(ctx, work, runtime, targetNode, page, desiredMode);
+        })
+        .catch((err) => {
+            console.error('PDF viewer mode rebuild failed', err);
+        })
+        .finally(() => {
+            runtime.rebuilding = false;
+        });
+}
+
+if (typeof prksOfflineRuntimeSubscribe === 'function') {
+    prksOfflineRuntimeSubscribe(function (state) {
+        if (typeof prksForEachLiveTabContext !== 'function') return;
+        const desiredMode = state === 'online' ? 'work' : 'preview';
+        prksForEachLiveTabContext(function (ctx) {
+            const runtime = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+            if (!runtime || !runtime.viewer || runtime.mode === desiredMode) return;
+            prksRebuildPdfViewerForModeChange(ctx, runtime, desiredMode);
+        });
+    });
 }

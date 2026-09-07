@@ -1399,22 +1399,21 @@ function initSidebarBrandHome() {
 }
 
 /**
- * Route-critical read models go through the offline-capable wrapper instead
- * of the plain api.js fetcher: a real domain response (404/etc.) still
- * renders "not found" exactly like before, but a genuine network/server-
- * unreachable failure falls back to the offline store instead of silently
- * becoming "not found" too. See AGENTS.md "Offline / PWA".
+ * Route-critical read models (Work only, Phase 1) go through the
+ * offline-capable wrapper instead of the plain api.js fetcher: a genuine
+ * network/server-unreachable failure falls back to the offline store
+ * instead of silently becoming "not found", while a real HTTP domain
+ * response keeps its normal meaning -- a 404 still renders "not found"
+ * exactly like before, and every other domain failure (400/403/409/500,
+ * invalid JSON) propagates to the caller so the route's usual error
+ * handling (prksRenderRouteError) takes over instead of a wrong "not
+ * found" page. See AGENTS.md "Offline / PWA".
  */
 async function prksOfflineDetailFetch(kind, id, path, signal) {
     if (typeof prksOfflineReadEntity !== 'function') {
         return { value: null, source: 'unavailable', cachedAt: null };
     }
-    try {
-        return await prksOfflineReadEntity(kind, id, path, { signal: signal });
-    } catch (err) {
-        if (typeof prksIsAbortError === 'function' && prksIsAbortError(err)) throw err;
-        return { value: null, source: 'server', cachedAt: null };
-    }
+    return await prksOfflineReadEntity(kind, id, path, { signal: signal });
 }
 
 function prksOfflineProvenanceBannerHtml(offlineResult) {
@@ -1859,20 +1858,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'playlist-detail': {
                 const plId = route.params.playlistId;
-                if (typeof renderPlaylistDetail === 'function') {
-                    const offlinePl = await prksOfflineDetailFetch(
-                        'playlist',
-                        plId,
-                        '/api/playlists/' + encodeURIComponent(plId),
-                        routeSignal
-                    );
+                if (typeof fetchPlaylistDetails === 'function' && typeof renderPlaylistDetail === 'function') {
+                    const pl = await fetchPlaylistDetails(plId, { signal: routeSignal });
                     if (stale()) return;
-                    const pl = offlinePl.value;
-                    if (!pl && offlinePl.source === 'unavailable') {
-                        prksOfflineRenderUnavailable(contentDiv, 'Playlist not available offline');
-                        titleOpts = { notFound: true, notFoundTitle: 'Playlist not available offline' };
-                        break;
-                    }
                     ctx.setEntity('playlist', pl);
                     ctx.ui.playlistEditing = false;
                     ctx.ui.playlistRename = {};
@@ -1885,7 +1873,6 @@ async function prksRenderTabRoute(ctx, hash, options) {
                             : { playlistTitle: 'Playlist', itemCount: 0 }
                     );
                     renderPlaylistDetail(ctx, pl, contentDiv);
-                    prksOfflinePrependBanner(contentDiv, offlinePl);
                     titleOpts = pl
                         ? { entityTitle: pl.title || 'Playlist' }
                         : { notFound: true, notFoundTitle: 'Playlist not found' };
@@ -2101,26 +2088,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'concept-detail': {
-                const conceptId = route.params.conceptId;
-                const offlineConcept = await prksOfflineDetailFetch(
-                    'concept',
-                    conceptId,
-                    '/api/concepts/' + encodeURIComponent(conceptId),
-                    routeSignal
-                );
+                const item = typeof fetchConcept === 'function' ? await fetchConcept(route.params.conceptId, { signal: routeSignal }) : null;
                 if (stale()) return;
-                const item = offlineConcept.value;
-                if (!item && offlineConcept.source === 'unavailable') {
-                    prksOfflineRenderUnavailable(contentDiv, 'Concept not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Concept not available offline' };
-                } else if (!item) {
+                if (!item) {
                     if (typeof renderConceptNotFound === 'function') renderConceptNotFound(contentDiv);
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concept not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Concept not found' };
                 } else {
                     ctx.setEntity('concept', item);
                     if (typeof renderConceptDetail === 'function') renderConceptDetail(ctx, item, contentDiv);
-                    prksOfflinePrependBanner(contentDiv, offlineConcept);
                     titleOpts = { entityTitle: item.name || 'Concept' };
                 }
                 break;
@@ -2133,26 +2109,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'position-detail': {
-                const positionId = route.params.positionId;
-                const offlinePosition = await prksOfflineDetailFetch(
-                    'position',
-                    positionId,
-                    '/api/positions/' + encodeURIComponent(positionId),
-                    routeSignal
-                );
+                const item = typeof fetchPosition === 'function' ? await fetchPosition(route.params.positionId, { signal: routeSignal }) : null;
                 if (stale()) return;
-                const item = offlinePosition.value;
-                if (!item && offlinePosition.source === 'unavailable') {
-                    prksOfflineRenderUnavailable(contentDiv, 'Position not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Position not available offline' };
-                } else if (!item) {
+                if (!item) {
                     if (typeof renderPositionNotFound === 'function') renderPositionNotFound(contentDiv);
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Position not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Position not found' };
                 } else {
                     ctx.setEntity('position', item);
                     if (typeof renderPositionDetail === 'function') renderPositionDetail(ctx, item, contentDiv);
-                    prksOfflinePrependBanner(contentDiv, offlinePosition);
                     titleOpts = { entityTitle: item.name || 'Position' };
                 }
                 break;
@@ -2166,19 +2131,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'argument-detail': {
-                const argumentId = route.params.argumentId;
-                const offlineArgument = await prksOfflineDetailFetch(
-                    'argument',
-                    argumentId,
-                    '/api/arguments/' + encodeURIComponent(argumentId),
-                    routeSignal
-                );
+                const item = typeof fetchArgument === 'function' ? await fetchArgument(route.params.argumentId, { signal: routeSignal }) : null;
                 if (stale()) return;
-                const item = offlineArgument.value;
-                if (!item && offlineArgument.source === 'unavailable') {
-                    prksOfflineRenderUnavailable(contentDiv, 'Argument not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Argument not available offline' };
-                } else if (!item) {
+                if (!item) {
                     if (typeof renderArgumentNotFound === 'function') renderArgumentNotFound(contentDiv);
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Argument not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Argument not found' };
@@ -2186,7 +2141,6 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     ctx.setEntity('argument', item);
                     ctx.ui.argumentEditing = false;
                     if (typeof renderArgumentDetail === 'function') renderArgumentDetail(ctx, item, contentDiv);
-                    prksOfflinePrependBanner(contentDiv, offlineArgument);
                     titleOpts = { entityTitle: item.name || 'Argument' };
                 }
                 break;
@@ -2207,20 +2161,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'person': {
-                const personId = route.params.personId;
-                const offlinePerson = await prksOfflineDetailFetch(
-                    'person',
-                    personId,
-                    '/api/persons/' + encodeURIComponent(personId),
-                    routeSignal
-                );
+                const person = await fetchPersonDetails(route.params.personId, { signal: routeSignal });
                 if (stale()) return;
-                const person = offlinePerson.value;
-                if (!person && offlinePerson.source === 'unavailable') {
-                    prksOfflineRenderUnavailable(contentDiv, 'Person not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Person not available offline' };
-                    break;
-                }
                 publishSidebar(
                     person
                         ? {
@@ -2242,7 +2184,6 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 ctx.ui.personProfileDraft = null;
                 ctx.ui.personWorksEditing = false;
                 renderPersonDetails(ctx, person, contentDiv);
-                prksOfflinePrependBanner(contentDiv, offlinePerson);
                 if (person) {
                     const nm =
                         typeof personDisplayName === 'function'
@@ -2732,6 +2673,7 @@ function initForms() {
 
     if (folderBtn) {
         folderBtn.onclick = async () => {
+            if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
             const ownerCtx =
                 typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
             if (folderBtn.disabled) return;
@@ -2798,6 +2740,7 @@ function initForms() {
     const playlistBtn = document.getElementById('save-playlist-btn');
     if (playlistBtn) {
         playlistBtn.onclick = async () => {
+            if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
             const titleEl = document.getElementById('playlist-title');
             const descEl = document.getElementById('playlist-description');
             const errEl = document.getElementById('playlist-error');
@@ -2976,6 +2919,7 @@ function initForms() {
 
     const saveRoleBtn = document.getElementById('save-role-btn');
     saveRoleBtn.onclick = async () => {
+        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
         const person_id = document.getElementById('role-person-id').value;
         const work_id = document.getElementById('role-work-id').value;

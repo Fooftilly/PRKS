@@ -997,6 +997,7 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
             c.onmousedown = (ev) => {
                 ev.preventDefault();
                 void (async () => {
+                    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
                     try {
                         if (typeof createFolder !== 'function') return;
                         const newId = await createFolder(rawQ, '');
@@ -1061,6 +1062,7 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 
     setBtn.onclick = async () => {
+        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         const pid = String(hidden.value || '').trim();
         if (!pid) return;
         try {
@@ -1083,6 +1085,7 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     };
 
     clearBtn.onclick = async () => {
+        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         try {
             if (typeof patchWorkFolder !== 'function') return;
             await patchWorkFolder(wid, null);

@@ -1181,6 +1181,12 @@ function initEasyMDE(ctx, work) {
             workNotes.destroy();
         });
     }
+    // Immediately reflect the current offline state -- an editor created
+    // AFTER the runtime already left 'online' must never wait for a future
+    // prksOfflineRuntimeSubscribe callback to become read-only.
+    if (typeof prksOfflineRuntimeState === 'function') {
+        prksApplyOfflineNotesReadOnly(ctx, prksOfflineRuntimeState() !== 'online');
+    }
     prksAttachWikiLinkAutocomplete(easyMDE.codemirror, ctx);
     const toolbarHost = ctx && ctx.query ? ctx.query('.work-notes-editor-wrap .editor-toolbar') : null;
     prksPaintEasyMDEToolbarIcons(toolbarHost);
@@ -1206,6 +1212,10 @@ function initEasyMDE(ctx, work) {
     }
 
     const notesChangeHandler = () => {
+        // CodeMirror's readOnly option blocks ordinary user edits, but this is a
+        // defensive belt-and-suspenders check: offline must never enter drafting
+        // state or arm a save debounce, no matter how the change event fired.
+        if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') return;
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
         prksWorkNotesMarkEdit(workNotes, work.id, easyMDE.value());

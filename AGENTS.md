@@ -459,9 +459,16 @@ short-lived. It is not offline support.
 
 ## Offline / PWA
 
-Phase 1 is read-only offline support. There is no offline mutation outbox, sync
-conflict resolution, background sync, or editable offline Research
-Notes/annotations in this phase — those are later-phase work.
+Phase 1 is read-only offline support, and this first slice is Work-only: the
+offline detail cache, provenance banner, and mutation guard cover Work detail
+pages and their PDFs only. Person, Concept, Position, Argument, and Playlist
+routes are not wrapped in the offline read-through path and must keep their
+ordinary online-only fetch/error behavior until their own mutation surfaces
+are explicitly hardened for offline use — do not add `prksOfflineDetailFetch`/
+`prksOfflineGuardMutation` calls to those routes as an incidental part of
+unrelated Work-page work. There is no offline mutation outbox, sync conflict
+resolution, background sync, or editable offline Research Notes/annotations in
+this phase — those are later-phase work.
 
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`
@@ -477,17 +484,44 @@ Responsibilities stay separated:
   `metadata` object stores). No DOM, no routing, no connectivity policy. Every
   public method resolves (never rejects/throws) and degrades to a safe
   unavailable result if IndexedDB is missing, blocked, corrupt, or over quota.
-- `offline-runtime.js`: online/offline/reconnecting state (`navigator.onLine`
-  is an early hint only — reachability comes from real PRKS request
-  success/failure), the read-through/mutation-guard policy, and operational UI
-  state. Holds no canonical domain data itself; delegates all persistence to
-  `offline-store.js`.
+- `offline-runtime.js`: online/offline/reconnecting state, the
+  read-through/mutation-guard policy, and operational UI state. Holds no
+  canonical domain data itself; delegates all persistence to `offline-store.js`.
 - `sw.js`: app-shell/static-asset availability plus a focused whole-file
-  managed-PDF cache. Never generically caches `/api/...` JSON and never queues
-  API mutations. Eligibility rules (same-origin GET only, no Range response
-  cached as a whole file, no 4xx/5xx/redirected/cross-origin) live in small
-  pure functions so they can be tested without a real
-  `ServiceWorkerGlobalScope` (`tests/browser/run_sw_selftest.js`).
+  managed-PDF cache. Every core same-origin CSS/JS/font/icon file the ordinary
+  shell needs to boot is precached eagerly on install from an explicit
+  manifest (`STATIC_PRECACHE_PATHS`/`SHELL_PRECACHE_PATHS`), not cached
+  as-you-go — the shell must launch offline after a single earlier install,
+  with no second online page load required to warm the cache. A regression
+  test (`tests/test_frontend_service_worker.py`) compares that manifest
+  against `index.html`'s actual `<script>`/`<link>`/`<img>` dependencies so
+  the two cannot silently drift; the heavy PDF-viewer bundle is deliberately
+  excluded from eager precache and stays cache-on-first-PDF-use, since it is
+  not needed to launch the shell itself. `sw.js` never generically caches
+  `/api/...` JSON and never queues API mutations. Eligibility rules
+  (same-origin GET only, no Range response cached as a whole file, no
+  4xx/5xx/redirected/cross-origin) live in small pure functions so they can be
+  tested without a real `ServiceWorkerGlobalScope`
+  (`tests/browser/run_sw_selftest.js`).
+
+Connectivity reflects real PRKS server reachability, not `navigator.onLine`
+and not application-level health. `navigator.onLine`/the browser's
+`online`/`offline` events are early hints only: either one moves straight to
+`reconnecting` and kicks off a real probe rather than being trusted directly.
+The probe itself treats *any* resolved HTTP response — 2xx, 4xx, or 5xx — as
+"PRKS answered" (→ online); only a rejected request with no transport response
+at all means the server is unreachable (→ offline, with bounded/backoff
+retry). A domain-level error (e.g. a 500) must never flip the shell into
+"Offline." The runtime begins a real probe immediately on `init()`, so a
+runtime that starts up while PRKS is already unreachable reaches `offline` on
+its own, without needing a failed Work request first.
+
+An offline-capable read must distinguish a 404 (normal "not found," server is
+reachable) from every other domain/parse failure (400/403/409/500, invalid
+JSON — must propagate to the caller's normal error handling, never become a
+cached fallback or a false "not found") from an actual transport/network
+failure (the only case that falls back to the offline store, or reports
+`unavailable` with no cache).
 
 Do not let IndexedDB values enter the request coordinator's memory cache as if
 they were fresh server responses, and do not turn `api.js` fetchers themselves
@@ -500,11 +534,28 @@ an offline condition and never falls back to cache.
 Cached values always carry explicit provenance (`source: 'server' | 'cache' |
 'unavailable'`, plus `cachedAt`) — never hidden, never presented as current.
 
-Canonical mutations (metadata Save, deletes, relationship changes, bulk
-actions) must call `prksOfflineGuardMutation()` first and stop when it returns
-`true`. Never discard a submitted change, fake success, write it only to
-IndexedDB, or queue it. Research notes and private notes follow the same rule
-via explicit read-only editor state while offline, not autosave-through-cache.
+Every canonical Work mutation (metadata Save, delete, role/person links,
+folder/playlist/tag attach-or-remove, PDF annotation create/edit/delete) must
+call `prksOfflineGuardMutation()` first and stop when it returns `true`. Never
+discard a submitted change, fake success, write it only to IndexedDB, or queue
+it. Research notes and private notes follow the same rule via explicit
+read-only editor state while offline, not autosave-through-cache — and that
+read-only state must apply the moment the editor is constructed (read
+`prksOfflineRuntimeState()` directly at init), never only via a later
+`prksOfflineRuntimeSubscribe()` callback, so an editor built after the runtime
+already left `online` is never briefly editable.
+
+A previously cached PDF reopened while not online mounts the vendor viewer in
+its own `mode: 'preview'` (render/scroll/zoom/navigate only — no
+highlight/underline/delete/comment/save, and no annotation-sync persistence
+worker installed), chosen via `prksPdfDesiredMode()` at mount time — never
+`mode: 'work'` hardcoded and then locked down after the fact. Because that
+mode is fixed at construction time in the vendor viewer, connectivity changing
+while a Work PDF viewer is already mounted rebuilds it in place (tearing down
+any running annotation-sync worker first, then the old viewer, then
+remounting at the same page) rather than trying to flip an interaction mode
+live — going offline must stop annotation tools immediately, not merely
+disable them.
 
 Offline cache contents are private research data: never log cached entity
 bodies, note text, titles, search text, or PDF contents. Diagnostics

@@ -120,7 +120,13 @@
             Promise.resolve(p)
                 .then(function (res) {
                     probeInFlight = false;
-                    if (res && res.ok) {
+                    // Connectivity reflects PRKS server reachability, not
+                    // application-level health: the request resolving with
+                    // *any* real HTTP response (2xx, 4xx, or 5xx) means the
+                    // PRKS process answered. Only a rejected request (no
+                    // transport response at all) means the server is
+                    // unreachable.
+                    if (res) {
                         probeAttempt = 0;
                         setState(STATE_ONLINE);
                     } else {
@@ -154,10 +160,13 @@
         function bindEarlyHints() {
             if (bound || !win || typeof win.addEventListener !== 'function') return;
             bound = true;
-            win.addEventListener('online', function () {
-                /* navigator.onLine is a hint only -- confirm with a real request. */
-                if (state !== STATE_ONLINE) runProbe();
-            });
+            /* navigator.onLine / the browser's online+offline events are hints
+             * only, never authoritative -- either one moves straight into
+             * reconnecting and kicks off a real probe rather than trusting
+             * the browser's own guess (runProbe() itself sets reconnecting
+             * before the request settles). */
+            win.addEventListener('online', runProbe);
+            win.addEventListener('offline', runProbe);
         }
 
         async function fetchJsonStrict(path, opts) {
@@ -177,6 +186,7 @@
             } catch (_e) {
                 const err = new Error('Received invalid server response.');
                 err.isPrksDomainError = true;
+                err.status = res.status;
                 throw err;
             }
         }
@@ -191,7 +201,10 @@
          * Reads one entity through the normal online path; on a real
          * network/server-unreachable failure, falls back to the offline
          * store. A real HTTP domain response (404/400/etc.) is never
-         * treated as an offline condition.
+         * treated as an offline condition: a 404 resolves to the caller's
+         * normal not-found result, and every other domain/parse failure
+         * (400/403/409/500, invalid JSON) propagates to the caller instead
+         * of masquerading as "not found" or a cached/offline fallback.
          */
         async function readThroughEntity(kind, id, path, opts) {
             const options2 = opts && typeof opts === 'object' ? opts : {};
@@ -203,6 +216,9 @@
                 if (kindOfError === 'abort') throw err;
                 if (kindOfError === 'domain') {
                     noteRequestSuccess();
+                    if (err.status === 404) {
+                        return { value: null, source: 'server', cachedAt: null };
+                    }
                     throw err;
                 }
                 noteRequestFailure();
@@ -236,6 +252,9 @@
                 if (kindOfError === 'abort') throw err;
                 if (kindOfError === 'domain') {
                     noteRequestSuccess();
+                    if (err.status === 404) {
+                        return { value: null, source: 'server', cachedAt: null };
+                    }
                     throw err;
                 }
                 noteRequestFailure();
@@ -332,6 +351,11 @@
 
         function init() {
             bindEarlyHints();
+            // Begin a real reachability probe immediately: a runtime that
+            // starts up while the PRKS server is unreachable must reach
+            // STATE_OFFLINE on its own, without needing a failed Work
+            // request first.
+            runProbe();
         }
 
         return {

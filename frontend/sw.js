@@ -20,19 +20,91 @@
     const CURRENT_CACHES = [SHELL_CACHE, STATIC_CACHE, PDF_CACHE];
     const RETIRE_PREFIXES = ['prks-shell-', 'prks-static-'];
 
-    // Minimal explicit shell entry points. Everything else needed to render the
-    // SPA (core JS/CSS/vendor runtime, including the PDF viewer + pdfium.wasm)
-    // is picked up by the static-path cache-as-you-go rule below the first time
-    // it is actually requested by a page that loaded successfully -- a fixed,
-    // hand-maintained manifest of every bundle file would go stale quietly.
-    const SHELL_PRECACHE_PATHS = [
-        '/',
-        '/index.html',
+    // Navigation-fallback entry points only. handleNavigation() falls back to
+    // these from SHELL_CACHE; everything else the shell needs (CSS/JS/font)
+    // is precached into STATIC_CACHE below so handleStatic()'s own
+    // STATIC_CACHE fallback actually finds it -- precaching into the wrong
+    // cache bucket would silently defeat offline launch.
+    const SHELL_PRECACHE_PATHS = ['/', '/index.html'];
+
+    // Explicit static-shell asset manifest: every same-origin CSS/JS/font file
+    // the ordinary PRKS shell needs to boot and render Work-only offline
+    // support, precached eagerly on install so the shell launches offline
+    // without depending on a page having already loaded once under an
+    // active, controlling service worker (see
+    // tests/test_frontend_service_worker.py's ShellManifestMatchesIndexHtml
+    // tests, which fail this file's own build if index.html gains a
+    // <script src> / <link href> that is not listed here).
+    //
+    // Deliberately excluded: the PDF-viewer-specific bundle
+    // (`/vendor/prks-pdf-viewer/*`, including pdfium.wasm) is not needed to
+    // launch the ordinary shell -- `pdf-viewer-runtime.js` only `import()`s it
+    // lazily the first time a PDF viewer is actually created. It stays
+    // cache-on-first-PDF-use via the static-path rule below.
+    const STATIC_PRECACHE_PATHS = [
         '/manifest.webmanifest',
         '/favicon.svg',
         '/logo.svg',
         '/icons/icon-192.png',
         '/icons/icon-512.png',
+        // <link rel="stylesheet"> / font
+        '/vendor/inter/inter.css',
+        '/vendor/inter/InterVariable.woff2',
+        '/css/style.css',
+        '/vendor/easymde/easymde.min.css',
+        '/vendor/codemirror/show-hint.css',
+        // <script src> in index.html, in source order
+        '/vendor/codemirror/codemirror.js',
+        '/vendor/codemirror/show-hint.js',
+        '/vendor/easymde/easymde.min.js',
+        '/vendor/dompurify/purify.min.js',
+        '/js/markdown-sanitize.js',
+        '/vendor/lucide/lucide.min.js',
+        '/js/icons.js',
+        '/js/date-format.js',
+        '/js/navigation.js',
+        '/js/workspace-tree.js',
+        '/js/workspace-persistence.js',
+        '/js/workspace-tabs.js',
+        '/js/tab-context.js',
+        '/js/workspace-tiling.js',
+        '/js/workspace-split.js',
+        '/js/workspace-tab-menu.js',
+        '/js/workspace-drag.js',
+        '/js/pdf-work-runtime.js',
+        '/js/request-coordinator.js',
+        '/js/offline-store.js',
+        '/js/offline-runtime.js',
+        '/js/api.js',
+        '/js/doc-types.js',
+        '/js/ui.js',
+        '/js/ribbon-create.js',
+        '/js/components/work-cards.js',
+        '/js/components/folders.js',
+        '/js/research-links.js',
+        '/js/components/works.js',
+        '/js/components/concepts.js',
+        '/js/components/positions.js',
+        '/js/components/arguments.js',
+        '/vendor/cytoscape/cytoscape.min.js',
+        '/js/components/research-graph.js',
+        '/js/components/works-pdf.js',
+        // Statically import()ed by works-pdf.js -- needed to boot that module,
+        // not the lazy heavy PDF-viewer bundle it in turn loads on demand.
+        '/js/pdf-viewer-runtime.js',
+        '/js/components/playlists.js',
+        '/js/components/people.js',
+        '/js/components/people-groups.js',
+        '/js/components/search.js',
+        '/js/components/publishers.js',
+        '/js/components/tags.js',
+        '/js/components/types.js',
+        '/js/components/progress.js',
+        '/js/components/processing-files.js',
+        '/js/work-selection.js',
+        '/js/saved-views.js',
+        '/js/command-palette.js',
+        '/js/app.js',
     ];
 
     const STATIC_PATH_PREFIXES = ['/js/', '/vendor/', '/css/', '/icons/'];
@@ -249,15 +321,26 @@
             scope.skipWaiting();
             if (!scope.caches || typeof event.waitUntil !== 'function') return;
             event.waitUntil(
-                scope.caches.open(SHELL_CACHE).then(function (cache) {
-                    return Promise.all(
-                        SHELL_PRECACHE_PATHS.map(function (path) {
-                            return cache.add(path).catch(function () {
-                                /* Best-effort precache: one missing asset must not block install. */
-                            });
-                        })
-                    );
-                })
+                Promise.all([
+                    scope.caches.open(SHELL_CACHE).then(function (cache) {
+                        return Promise.all(
+                            SHELL_PRECACHE_PATHS.map(function (path) {
+                                return cache.add(path).catch(function () {
+                                    /* Best-effort precache: one missing asset must not block install. */
+                                });
+                            })
+                        );
+                    }),
+                    scope.caches.open(STATIC_CACHE).then(function (cache) {
+                        return Promise.all(
+                            STATIC_PRECACHE_PATHS.map(function (path) {
+                                return cache.add(path).catch(function () {
+                                    /* Best-effort precache: one missing asset must not block install. */
+                                });
+                            })
+                        );
+                    }),
+                ])
             );
         });
 
@@ -322,6 +405,7 @@
         PRKS_SW_STATIC_CACHE: STATIC_CACHE,
         PRKS_SW_PDF_CACHE: PDF_CACHE,
         PRKS_SW_SHELL_PRECACHE_PATHS: SHELL_PRECACHE_PATHS,
+        PRKS_SW_STATIC_PRECACHE_PATHS: STATIC_PRECACHE_PATHS,
     };
 
     Object.keys(api).forEach(function (k) {

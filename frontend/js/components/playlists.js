@@ -588,6 +588,7 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 
     setBtn.onclick = async () => {
+        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         const pid = String(hidden.value || '').trim();
         if (!pid) return;
         try {
@@ -612,6 +613,7 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     };
 
     clearBtn.onclick = async () => {
+        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         const currentPid = work && work.playlist_id ? String(work.playlist_id) : '';
         if (!currentPid) {
             input.value = '';

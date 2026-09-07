@@ -1419,6 +1419,7 @@ async function prksPatchRoleCreditName(workId, personId, roleType, orderIndex, c
 }
 
 async function prksEditRoleCreditOnWork(btn) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
@@ -1482,6 +1483,7 @@ function prksSplitTypedPersonName(name) {
 
 /** Create a person from the Link Person to Work modal and select them for linking. */
 async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const trimmed = String(typedName || '').trim();
     if (!trimmed) {
         await prksAlertMessage('Type a name in the Person field first.', 'Validation');
@@ -1569,6 +1571,7 @@ async function initWorkMetaRoleLinker(workId) {
 }
 
 async function addRoleToWorkFromMetaEditor(workId) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const personHidden = document.getElementById('meta-role-person-id');
     const personSearch = document.getElementById('meta-role-person-search');
@@ -2558,6 +2561,10 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
         dirty: !!(entry && entry.state === 'drafting'),
     };
     const schedule = function () {
+        // The textarea's readOnly flag blocks ordinary user typing, but this is
+        // a defensive belt-and-suspenders check: offline must never enter
+        // drafting state or arm a save debounce, no matter how input fired.
+        if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') return;
         const draft = prksPrivateNoteDraft(entityType, entityId, ta.value);
         draft.draftText = ta.value;
         draft.editGeneration += 1;
@@ -2584,6 +2591,13 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
         ta.removeEventListener('input', schedule);
         ta.removeEventListener('blur', blur);
     });
+    // Immediately reflect the current offline state -- an editor constructed
+    // AFTER the runtime already left 'online' must never wait for a future
+    // prksOfflineRuntimeSubscribe callback to become read-only.
+    if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') {
+        ta.readOnly = true;
+        prksPrivateNotesSetStatus(editor, 'Offline — notes are read-only');
+    }
 }
 
 window.prksFlushPendingPrivateNotes = prksFlushPendingPrivateNotes;
@@ -3427,6 +3441,7 @@ function buildWorkLinkedPersonsHtml(work, options = {}) {
 }
 
 async function prksRemoveWorkRoleLink(btn) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
@@ -3940,6 +3955,7 @@ function prksWorkTagOwnerLive(ownerCtx, generation, workId, input) {
 }
 
 async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, triggerInput) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const owner = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const generation = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
     if (triggerInput) {
@@ -4001,6 +4017,7 @@ function prksTagComboboxLabel(tag, valLower) {
 }
 
 async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInput) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const trimmed = (name || '').trim();
     if (!trimmed) return;
     if (triggerInput) {
@@ -4351,6 +4368,7 @@ async function mountFolderLibraryAttachControls(folder) {
 }
 
 async function prksRemoveWorkTag(workId, tagId, btn) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
         await prksRequest(

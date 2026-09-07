@@ -182,10 +182,12 @@ class TestLatePdfInitProtection(unittest.TestCase):
         )
         with open(pdf_path, encoding="utf-8") as fh:
             src = fh.read()
-        self.assertIn("_pdfStale()", src, "late-init stale guard missing")
+        # The stale/late-init guard now lives in the shared prksMountPdfViewer
+        # helper (used for both initial mount and online/offline mode
+        # rebuilds), not inlined directly in initPdfViewerForWork.
         self.assertIn("ctx.getResource('pdf') !== runtime", src)
         stale_block = re.search(
-            r"if\s*\(_pdfStale\(\)\s*\|\|\s*ctx\.getResource\('pdf'\)\s*!==\s*runtime\)\s*\{(.*?)return;",
+            r"if\s*\(stale\(\)\s*\|\|\s*\(ctx\.getResource\s*\?\s*ctx\.getResource\('pdf'\)\s*!==\s*runtime\s*:\s*false\)\)\s*\{(.*?)return null;",
             src,
             re.S,
         )

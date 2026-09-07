@@ -145,9 +145,10 @@ async function run() {
         assert('a probe was scheduled after going offline', timers.pendingCount() === 1);
         assertEq('first probe backoff is the shortest interval', timers.pendingDelays(), [3000]);
 
-        // First probe attempt fails -> stays offline, reschedules with a longer backoff.
+        // First probe attempt fails (a real transport/fetch rejection, not just a
+        // non-2xx HTTP response) -> stays offline, reschedules with a longer backoff.
         requestQueue.push(function () {
-            return Promise.resolve(domainErrorResponse(0));
+            return Promise.reject(new Error('still unreachable'));
         });
         timers.flushAll();
         await Promise.resolve();
@@ -190,6 +191,121 @@ async function run() {
         runtime.noteRequestSuccess();
         assertEq('online again after an unrelated successful request', runtime.getState(), mod.PRKS_OFFLINE_STATE_ONLINE);
         assertEq('pending probe cleared by noteRequestSuccess', timers.pendingCount(), 0);
+    }
+
+    /* ---- runProbe reachability: an HTTP response of ANY status (even 4xx/5xx) means the server is reachable ---- */
+    {
+        const timers = makeFakeTimers();
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.resolve(domainErrorResponse(500));
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.noteRequestFailure(); // force offline + schedule a probe
+        assertEq('forced offline before the probe runs', runtime.getState(), mod.PRKS_OFFLINE_STATE_OFFLINE);
+        timers.flushAll();
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq(
+            'a resolved HTTP 500 probe response means the PRKS process is reachable -> online',
+            runtime.getState(),
+            mod.PRKS_OFFLINE_STATE_ONLINE
+        );
+    }
+
+    /* ---- runProbe reachability: only a rejected fetch (no transport response) means unreachable ---- */
+    {
+        const timers = makeFakeTimers();
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('getaddrinfo ENOTFOUND'));
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime._runProbe();
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a rejected fetch (no HTTP response at all) means unreachable -> offline', runtime.getState(), mod.PRKS_OFFLINE_STATE_OFFLINE);
+    }
+
+    /* ---- init(): begins a real probe immediately, so an unreachable server is detected without any prior request ---- */
+    {
+        const timers = makeFakeTimers();
+        let requestCount = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requestCount += 1;
+                return Promise.reject(new Error('unreachable at startup'));
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        assertEq('state defaults to online before init', runtime.getState(), mod.PRKS_OFFLINE_STATE_ONLINE);
+        runtime.init();
+        assertEq('init() immediately moves to reconnecting while the startup probe is in flight', runtime.getState(), mod.PRKS_OFFLINE_STATE_RECONNECTING);
+        await Promise.resolve();
+        await Promise.resolve();
+        assert('init() actually issued a real probe request', requestCount === 1);
+        assertEq('unreachable-at-startup resolves to offline without any Work navigation first', runtime.getState(), mod.PRKS_OFFLINE_STATE_OFFLINE);
+    }
+
+    /* ---- init(): browser online AND offline hints both trigger reconnecting + a real probe, not just 'online' ---- */
+    {
+        const timers = makeFakeTimers();
+        const listeners = {};
+        const fakeWindow = {
+            addEventListener: function (name, fn) {
+                listeners[name] = listeners[name] || [];
+                listeners[name].push(fn);
+            },
+        };
+        let requestCount = 0;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                requestCount += 1;
+                return Promise.resolve(okJsonResponse({}));
+            },
+            store: makeFakeStore(),
+            setTimeout: timers.setTimeout,
+            clearTimeout: timers.clearTimeout,
+            window: fakeWindow,
+            caches: null,
+            navigator: null,
+        });
+        runtime.init();
+        await Promise.resolve();
+        await Promise.resolve();
+        assert('online listener registered', Array.isArray(listeners.online) && listeners.online.length === 1);
+        assert('offline listener registered', Array.isArray(listeners.offline) && listeners.offline.length === 1);
+        requestCount = 0;
+        listeners.offline.forEach(function (fn) {
+            fn();
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        assert('the browser offline hint triggers a real probe (not just navigator.onLine trust)', requestCount === 1);
+        requestCount = 0;
+        listeners.online.forEach(function (fn) {
+            fn();
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        assert('the browser online hint also triggers a real probe rather than flipping state directly', requestCount === 1);
     }
 
     /* ---- readThroughEntity: online success renders server value + writes cache, never fails the read on cache-write failure ---- */
@@ -256,7 +372,7 @@ async function run() {
         assertEq('unavailable result carries no value', result.value, null);
     }
 
-    /* ---- readThroughEntity: a real domain error (404) is never treated as offline / never falls back to cache ---- */
+    /* ---- readThroughEntity: a 404 is a normal not-found result from a reachable server, never a cache fallback ---- */
     {
         const store = makeFakeStore();
         await store.putEntity('work', 'W-3', { id: 'W-3', title: 'Stale cached copy' }, '');
@@ -271,14 +387,69 @@ async function run() {
             caches: null,
             navigator: null,
         });
+        const result = await runtime.readThroughEntity('work', 'W-3', '/api/works/W-3');
+        assertEq('a 404 domain response resolves to a null server value (not-found), not a throw', result, {
+            value: null,
+            source: 'server',
+            cachedAt: null,
+        });
+        assertEq('a 404 domain response keeps state online (server is reachable)', runtime.getState(), mod.PRKS_OFFLINE_STATE_ONLINE);
+    }
+
+    /* ---- readThroughEntity: a non-404 domain error (e.g. 500) propagates -- must never masquerade as "not found" ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('work', 'W-4', { id: 'W-4', title: 'Stale cached copy' }, '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.resolve(domainErrorResponse(500));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
         let threw = null;
         try {
-            await runtime.readThroughEntity('work', 'W-3', '/api/works/W-3');
+            await runtime.readThroughEntity('work', 'W-4', '/api/works/W-4');
         } catch (e) {
             threw = e;
         }
-        assert('a 404 domain response throws rather than silently falling back', !!threw);
-        assertEq('a 404 domain response keeps state online (server is reachable)', runtime.getState(), mod.PRKS_OFFLINE_STATE_ONLINE);
+        assert('a 500 domain response throws rather than silently becoming not-found', !!threw);
+        assertEq('a 500 response does not carry the cached fallback value', threw && threw.isPrksDomainError, true);
+        assertEq('a 500 domain response keeps state online (server is reachable, just erroring)', runtime.getState(), mod.PRKS_OFFLINE_STATE_ONLINE);
+    }
+
+    /* ---- readThroughEntity: an invalid-JSON response propagates too, never a fake not-found/cache fallback ---- */
+    {
+        const store = makeFakeStore();
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: async function () {
+                        throw new SyntaxError('Unexpected end of JSON input');
+                    },
+                });
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        let threw = null;
+        try {
+            await runtime.readThroughEntity('work', 'W-5', '/api/works/W-5');
+        } catch (e) {
+            threw = e;
+        }
+        assert('invalid JSON throws rather than becoming not-found/cached', !!threw);
+        assertEq('invalid JSON keeps state online (server responded, body was just bad)', runtime.getState(), mod.PRKS_OFFLINE_STATE_ONLINE);
     }
 
     /* ---- readThroughList mirrors the same entity policy for named list snapshots ---- */

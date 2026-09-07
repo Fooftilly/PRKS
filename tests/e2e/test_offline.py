@@ -12,7 +12,12 @@ import unittest
 
 from tests.e2e.fixtures import WORK_A_TITLE, WORK_B_TITLE, seed_library
 from tests.e2e.harness import AppServer, PageCollector, open_app_page, require_chromium
-from tests.e2e.test_app import _open_details_drawer_if_tiled, _open_work_from_home, _wait_pdf_viewer
+from tests.e2e.test_app import (
+    _FOCUSED_WORK_NOTES,
+    _open_details_drawer_if_tiled,
+    _open_work_from_home,
+    _wait_pdf_viewer,
+)
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -51,21 +56,6 @@ def _wait_sw_active(page):
     page.wait_for_function(
         "() => !!(navigator.serviceWorker && navigator.serviceWorker.controller)"
     )
-
-
-def _prime_static_cache(page):
-    """A page's OWN first load is never controlled by the Service Worker it just
-    registered (clients.claim() only takes over already-open clients; it does not
-    retroactively route that same load's already-issued JS/CSS fetches through the
-    fetch handler). sw.js deliberately caches static assets "as you go" rather than
-    from a hand-maintained manifest (see sw.js), so the static cache stays empty
-    until a *second*, now-controlled, online load actually re-requests those files.
-    This mirrors real PWA usage (install once online, reopen at least once more) and
-    is what actually populates prks-static-v1 before any offline scenario below."""
-    _wait_sw_active(page)
-    page.reload(wait_until="domcontentloaded")
-    page.wait_for_selector("#sidebar")
-    page.wait_for_selector(".prks-folder-library")
 
 
 def _wait_entity_cached(page, kind, entity_id, timeout=15000):
@@ -112,7 +102,7 @@ class OfflineFoundationTests(unittest.TestCase):
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
 
-        _prime_static_cache(page)
+        _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
         self.assertEqual(_connectivity_state(page), "online")
@@ -136,7 +126,7 @@ class OfflineFoundationTests(unittest.TestCase):
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
 
-        _prime_static_cache(page)
+        _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
 
@@ -159,7 +149,7 @@ class OfflineFoundationTests(unittest.TestCase):
         work_a = server.ids["work_a"]
         pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
 
-        _prime_static_cache(page)
+        _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
         _wait_pdf_whole_file_cached(page, pdf_path)
@@ -186,7 +176,7 @@ class OfflineFoundationTests(unittest.TestCase):
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
 
-        _prime_static_cache(page)
+        _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
 
@@ -237,7 +227,7 @@ class OfflineFoundationTests(unittest.TestCase):
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
 
-        _prime_static_cache(page)
+        _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
 
@@ -288,6 +278,126 @@ class OfflineFoundationTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
         self.assertEqual(_connectivity_state(page), "online")
+
+    def test_research_notes_are_read_only_immediately_when_offline(self):
+        """Scenario 7: reopening a cached Work directly offline must never leave
+        the Research Notes editor briefly editable while waiting for a later
+        connectivity-subscriber callback -- it starts read-only immediately."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        page.wait_for_selector(".CodeMirror")
+        original_text = page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        self.assertIn(work_a, page.evaluate("() => location.hash"))
+        page.wait_for_selector(".CodeMirror")
+
+        self.assertTrue(
+            page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                    const cm = notes && notes.editor && notes.editor.codemirror;
+                    return !!(cm && cm.getOption('readOnly'));
+                }"""
+            )
+        )
+        page.locator(
+            '[data-prks-role="editor-status"]', has_text="Offline — notes are read-only"
+        ).wait_for()
+
+        page.locator(".CodeMirror").click()
+        page.keyboard.type("SHOULD-NOT-APPEAR")
+        page.wait_for_timeout(200)
+        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+
+    def test_private_notes_are_read_only_immediately_when_offline(self):
+        """Scenario 8: same read-only-on-init guarantee for the Private Notes
+        textarea -- offline from the start, never a moment of editability."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+        selector = "#prks-private-notes-work-" + work_a
+        status_selector = "#prks-private-notes-status-work-" + work_a
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        page.locator(selector).wait_for()
+        original_value = page.locator(selector).input_value()
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        self.assertIn(work_a, page.evaluate("() => location.hash"))
+        page.locator(selector).wait_for()
+
+        self.assertTrue(page.evaluate("(sel) => document.querySelector(sel).readOnly", selector))
+        page.locator(status_selector, has_text="Offline — notes are read-only").wait_for()
+
+        page.locator(selector).click()
+        page.keyboard.type("SHOULD-NOT-APPEAR")
+        page.wait_for_timeout(200)
+        self.assertEqual(page.locator(selector).input_value(), original_value)
+
+    def test_cached_pdf_reopened_offline_has_no_annotation_tools(self):
+        """Scenario 9: a previously-cached PDF reopened offline mounts the vendor
+        viewer in its read-only 'preview' mode -- the markup toolbar
+        (Highlight/Underline/Undo/Redo) is entirely absent from the DOM and no
+        annotation-sync persistence worker is installed, never merely disabled
+        client-side tooling that could race a real mutation through."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_whole_file_cached(page, pdf_path)
+        # Sanity check: online, the markup toolbar is present.
+        page.locator(
+            '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
+        ).wait_for()
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        self.assertIn(work_a, page.evaluate("() => location.hash"))
+        _wait_pdf_viewer(page)
+
+        self.assertEqual(
+            page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+                    return pdf ? pdf.mode : null;
+                }"""
+            ),
+            "preview",
+        )
+        self.assertEqual(
+            page.locator(
+                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
+            ).count(),
+            0,
+        )
+        self.assertEqual(
+            page.locator(
+                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Underline"]'
+            ).count(),
+            0,
+        )
+        self.assertIsNone(
+            page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+                    return pdf ? (pdf.annotationPersistence || null) : null;
+                }"""
+            )
+        )
 
 
 if __name__ == "__main__":
