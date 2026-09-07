@@ -480,7 +480,13 @@
     function prksWarmParkTabContext(tabId, host) {
         const ctx = prksGetTabContext(tabId);
         const parking = host || warmParkingHost();
-        if (!ctx || !ctx.mounted || !parking || !ctx.getResource('pdf')) return false;
+        if (
+            !ctx ||
+            !ctx.mounted ||
+            !parking ||
+            !ctx.getResource('pdf') ||
+            (ctx.ui && ctx.ui.workDetailsMode === 'metadata')
+        ) return false;
         if (!ctx.suspend(parking)) return false;
         removeWarmLru(tabId);
         warmPdfLru.push(String(tabId));

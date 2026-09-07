@@ -82,12 +82,19 @@ class TestMigratedGlobalsAbsent(unittest.TestCase):
         self.assertIn("ui.personProfileDraft = null", reset_ui)
         persistence_path = os.path.join(FRONTEND_JS, "workspace-persistence.js")
         with open(persistence_path, encoding="utf-8") as fh:
-            self.assertNotIn("personProfileDraft", fh.read())
+            persistence = fh.read()
+            self.assertNotIn("personProfileDraft", persistence)
+            self.assertNotIn("workMetaDraft", persistence)
         app_path = os.path.join(FRONTEND_JS, "app.js")
         with open(app_path, encoding="utf-8") as fh:
             app = fh.read()
         person_route = app.split("case 'person':", 1)[1].split("default:", 1)[0]
         self.assertIn("ctx.ui.personProfileDraft = null", person_route)
+
+    def test_dirty_edit_state_has_no_window_singleton(self):
+        forbidden = re.compile(r"window\.(?:__prks)?(?:Person|Work).*Dirty", re.I)
+        hits = _scan_frontend_js(forbidden)
+        self.assertEqual(hits, [], hits)
 
 
 class TestTabContextResourceAPI(unittest.TestCase):
@@ -118,6 +125,15 @@ class TestTabContextResourceAPI(unittest.TestCase):
             html = fh.read()
         self.assertIn('id="prks-tab-warm-parking"', html)
         self.assertIn('hidden aria-hidden="true"', html)
+
+    def test_work_metadata_editor_is_never_warm_parked(self):
+        tc_path = os.path.join(FRONTEND_JS, "tab-context.js")
+        with open(tc_path, encoding="utf-8") as fh:
+            src = fh.read()
+        warm = src.split("function prksWarmParkTabContext(tabId, host)", 1)[1].split(
+            "function prksResumeWarmTabContext", 1
+        )[0]
+        self.assertIn("ctx.ui.workDetailsMode === 'metadata'", warm)
 
     def test_live_iterator_used_only_for_live_pdf_safety_work(self):
         app_path = os.path.join(FRONTEND_JS, "app.js")

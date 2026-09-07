@@ -387,6 +387,30 @@ async function run() {
     assertEq('leave cancel href', leave.hist.getHref(), hrefLeave);
     assertEq('leave cancel no render', leave.renders.length, rendersLeave);
 
+    const asyncLeave = makeHarness({ hash: '#/people/PA' });
+    let resolveAsyncLeave = null;
+    asyncLeave.setCanLeave(new Promise(function (resolve) { resolveAsyncLeave = resolve; }));
+    const asyncLeaveBefore = fingerprint(asyncLeave);
+    const asyncNavigation = asyncLeave.ws.navigate('#/people/PB');
+    await Promise.resolve();
+    assertEq('async leave keeps state while pending', fingerprint(asyncLeave), asyncLeaveBefore);
+    resolveAsyncLeave(false);
+    const asyncRejected = await asyncNavigation;
+    assertEq('async leave rejected result', asyncRejected, false);
+    assertEq('async leave rejected state unchanged', fingerprint(asyncLeave), asyncLeaveBefore);
+
+    let acceptAsyncLeave = null;
+    asyncLeave.setCanLeave(new Promise(function (resolve) { acceptAsyncLeave = resolve; }));
+    const rendersBeforeAsyncAccept = asyncLeave.renders.length;
+    const acceptedNavigation = asyncLeave.ws.navigate('#/people/PB');
+    await Promise.resolve();
+    assertEq('async leave does not render before acceptance', asyncLeave.renders.length, rendersBeforeAsyncAccept);
+    acceptAsyncLeave(true);
+    const asyncAccepted = await acceptedNavigation;
+    assert('async leave accepted result', asyncAccepted !== false);
+    assertEq('async leave renders after acceptance', asyncLeave.renders.length, rendersBeforeAsyncAccept + 1);
+    assertEq('async leave applies route after acceptance', asyncLeave.ws.snapshot().tabs[0].route, '#/people/PB');
+
     const deniedNew = makeHarness({ hash: '#/works/WA' });
     deniedNew.setCanLeave(false);
     const deniedSnap = jsonClone(deniedNew.ws.snapshot());

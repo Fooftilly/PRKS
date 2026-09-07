@@ -427,6 +427,17 @@ function prksConfirmDestructive(options) {
     });
 }
 
+function prksConfirmUnsavedRouteLeave(options) {
+    const o = options && typeof options === 'object' ? options : {};
+    return prksConfirmDialog({
+        title: o.title ?? 'Discard unsaved changes?',
+        message: o.message ?? 'Your unsaved changes will be discarded.',
+        confirmLabel: 'Discard changes',
+        cancelLabel: 'Keep editing',
+        danger: true,
+    });
+}
+
 function prksBindModalConfirmOnce() {
     const root = document.getElementById('prks-modal-confirm');
     if (!root || root.dataset.bound === '1') return;
@@ -1083,6 +1094,7 @@ window.prksIsDuplicateRoleLinkError = prksIsDuplicateRoleLinkError;
 window.prksNotifyRoleLinkFailure = prksNotifyRoleLinkFailure;
 window.prksAlertMessage = prksAlertMessage;
 window.prksConfirmDestructive = prksConfirmDestructive;
+window.prksConfirmUnsavedRouteLeave = prksConfirmUnsavedRouteLeave;
 window.prksPromptTextDialog = prksPromptTextDialog;
 window.prksSetButtonBusy = prksSetButtonBusy;
 window.prksFlashButtonLabel = prksFlashButtonLabel;

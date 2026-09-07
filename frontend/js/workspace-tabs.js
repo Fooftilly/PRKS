@@ -1810,6 +1810,7 @@
 
     let production = null;
     let productionReady = false;
+    let pendingHistoryNavigation = null;
     let tabFocusIndex = 0;
     const priorNavigate = root.prksNavigate;
 
@@ -2459,16 +2460,30 @@
         root.__prksWorkspaceHistoryBound = true;
         root.addEventListener('popstate', function (ev) {
             if (!production) return;
-            void production.handlePopState(ev && ev.state);
+            const pending = Promise.resolve(production.handlePopState(ev && ev.state)).catch(function () {
+                return false;
+            });
+            pendingHistoryNavigation = pending;
+            void pending.then(function () {
+                if (pendingHistoryNavigation === pending) pendingHistoryNavigation = null;
+            });
         });
         root.addEventListener('hashchange', function () {
-            if (!production) {
-                if (typeof root.handleRoute === 'function') void root.handleRoute();
+            const finishHashChange = function () {
+                if (!production) {
+                    if (typeof root.handleRoute === 'function') void root.handleRoute();
+                    return;
+                }
+                if (production.handleHashChange()) return;
+                if (typeof root.handleRoute === 'function') void root.handleRoute({ fromWorkspace: false });
+                production.markHandled();
+            };
+            const pending = pendingHistoryNavigation;
+            if (pending) {
+                void pending.then(finishHashChange);
                 return;
             }
-            if (production.handleHashChange()) return;
-            if (typeof root.handleRoute === 'function') void root.handleRoute({ fromWorkspace: false });
-            production.markHandled();
+            finishHashChange();
         });
     }
 

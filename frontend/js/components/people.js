@@ -712,6 +712,43 @@ function prksPersonDraftFromEntity(person) {
     };
 }
 
+function prksPersonProfileDraftIsDirty(ctx, person) {
+    if (!ctx || !ctx.ui || !person || person.id == null) return false;
+    const draft = ctx.ui.personProfileDraft;
+    if (!draft || String(draft.personId) !== String(person.id)) return false;
+    const original = prksPersonDraftFromEntity(person);
+    const scalarFields = [
+        'first_name',
+        'last_name',
+        'aliases',
+        'about',
+        'birth_date',
+        'death_date',
+        'image_url',
+        'link_wikipedia',
+        'link_stanford_encyclopedia',
+        'link_iep',
+        'links_other',
+    ];
+    if (scalarFields.some((key) => String(draft[key] == null ? '' : draft[key]) !== original[key])) {
+        return true;
+    }
+    const groupIdSet = (groups) =>
+        Array.from(
+            new Set(
+                (Array.isArray(groups) ? groups : [])
+                    .filter((group) => group && group.id != null)
+                    .map((group) => String(group.id))
+            )
+        ).sort();
+    const draftGroupIds = groupIdSet(draft.groups);
+    const originalGroupIds = groupIdSet(original.groups);
+    return (
+        draftGroupIds.length !== originalGroupIds.length ||
+        draftGroupIds.some((id, index) => id !== originalGroupIds[index])
+    );
+}
+
 function prksEnsurePersonProfileDraft(ctx, person) {
     if (!ctx || !ctx.ui || !person || person.id == null) return null;
     const personId = String(person.id);
@@ -811,6 +848,7 @@ function closePersonProfileEdit() {
 }
 
 window.prksEnsurePersonProfileDraft = prksEnsurePersonProfileDraft;
+window.prksPersonProfileDraftIsDirty = prksPersonProfileDraftIsDirty;
 window.prksPersonProfileEditSessionCurrent = prksPersonProfileEditSessionCurrent;
 window.prksPersonProfileEditorCurrent = prksPersonProfileEditorCurrent;
 window.prksSyncPersonProfileDraftFromEditor = prksSyncPersonProfileDraftFromEditor;

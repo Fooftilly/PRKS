@@ -207,7 +207,9 @@ DOM/resources. Ordinary global-tab
 switching may warm-suspend an actual PDF Work (`ctx.getResource('pdf')`) by reparenting its
 existing root into `#prks-tab-warm-parking`; warm resume reparents that same root and requests
 only a container resize, never a route render, Work/PDF fetch, viewer init, fit, reload, or
-layout. Warm parking is a three-context LRU. Eviction, Close, batch close, application teardown,
+layout. A Work with active metadata editing is never warm-parked: after leave approval it
+cold-unmounts so normal TabContext teardown discards the draft. Warm parking is a three-context
+LRU. Eviction, Close, batch close, application teardown,
 Hide split / Hide from split, and narrow fallback cold-unmount and destroy normally. Non-PDF
 routes always cold-park. Warm-cache state is runtime-only and never persisted.
 
@@ -283,6 +285,14 @@ editing owns the right panel; membership management owns the Members section.
 Person profile edit state, including selected Person Groups, belongs to the Person's
 TabContext. Never store Person-editor selections or drafts in a window-global
 singleton. Right-panel reconstruction must render from the owning TabContext draft.
+
+Person profile and Work metadata drafts are TabContext-owned runtime state. Never
+persist them through workspace persistence. Merely focusing another mounted pane is
+non-destructive and must not prompt. Any operation that will replace a route, unmount,
+park, or destroy a context with a dirty editable draft must preflight through
+`prksCanLeaveTabContext`; rejection is an atomic no-op that preserves route, tab order,
+tree topology, focus, draft, and editor DOM. Batch operations preflight all affected
+mounted contexts before mutating any of them.
 
 Stacked mode: one mounted context. Tiled mode: Main + every visible Secondary leaf (up to the visible-pane cap), each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
 is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
@@ -446,13 +456,10 @@ Do not replace the synchronous pending-annotation-sync navigation guard
 (`prksCanLeaveTabContext` and the mirrored check inside `prksRenderTabRoute`,
 both in `frontend/js/app.js`) with `prksConfirmDialog`/`prksConfirmDestructive`
 without redesigning the navigation contract. It must stay a native
-`window.confirm`: every `workspace-tabs.js` call path that reaches it
-(`awaitLeave` and the raw `hashchange` listener) is written assuming the
-guard blocks the main thread until the user answers, so no other navigation,
-tab action, or drag can interleave mid-decision. An async modal yields control
-back to the event loop while the dialog is open, which those call paths do not
-handle. This is an intentional, permanent exception to the app-wide "avoid
-native dialogs" rule — not a gap to close in a later polish pass.
+`window.confirm`; this synchronous PDF safety decision must complete before any
+async editable-draft confirmation begins. This is the sole native-confirm exception.
+Person profile and Work metadata dirty-draft leave guards use the styled async
+confirmation and are awaited by workspace `awaitLeave()` before mutation.
 
 Every other confirmation, including both PDF annotation-delete entry points
 (the annotation editor's Delete button and the annotation-list row's Delete

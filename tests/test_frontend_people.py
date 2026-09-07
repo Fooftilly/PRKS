@@ -1,5 +1,7 @@
 """Regression contracts for People index and Person profile presentation."""
 import os
+import json
+import subprocess
 import unittest
 
 
@@ -11,6 +13,33 @@ _CSS = os.path.join(_PROJECT_DIR, "frontend", "css", "style.css")
 def _read(path: str) -> str:
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _extract_function(src: str, name: str) -> str:
+    start = src.index(f"function {name}(")
+    brace = src.index("{", start)
+    depth = 0
+    quote = None
+    escaped = False
+    for index in range(brace, len(src)):
+        char = src[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start : index + 1]
+    raise AssertionError(f"unterminated function {name}")
 
 
 class FrontendPeopleTests(unittest.TestCase):
@@ -135,6 +164,55 @@ class FrontendPeopleTests(unittest.TestCase):
         self.assertIn("group_ids: (Array.isArray(draft.groups) ? draft.groups : [])", src)
         self.assertNotIn("prksGetPersonEditGroupIdsFromDom", src + groups)
         self.assertIn("prksMountPersonProfileGroupPicker(ctx, person, editor)", groups)
+
+    def test_profile_dirty_predicate_detects_scalars_and_semantic_groups(self):
+        src = _read(_PEOPLE)
+        self.assertIn("function prksPersonProfileDraftIsDirty(ctx, person)", src)
+        js = "\n".join(
+            (
+                "const personDateToDisplayFormat = value => String(value == null ? '' : value);",
+                _extract_function(src, "prksPersonDraftFromEntity"),
+                _extract_function(src, "prksPersonProfileDraftIsDirty"),
+                r"""
+const person = {
+  id: 'P1', first_name: 'Ada', last_name: 'Alpha', aliases: 'A', about: 'Bio',
+  birth_date: '1970', death_date: '', image_url: 'img', link_wikipedia: 'wiki',
+  link_stanford_encyclopedia: 'sep', link_iep: 'iep', links_other: 'other',
+  groups: [{ id: 2, name: 'Two' }, { id: 1, name: 'One' }]
+};
+const draft = prksPersonDraftFromEntity(person);
+const ctx = { ui: { personProfileDraft: draft } };
+const fields = ['first_name', 'last_name', 'aliases', 'about', 'birth_date', 'death_date',
+  'image_url', 'link_wikipedia', 'link_stanford_encyclopedia', 'link_iep', 'links_other'];
+const pristine = prksPersonProfileDraftIsDirty(ctx, person);
+const scalarDirty = fields.map(key => {
+  const old = draft[key]; draft[key] = old + ' changed';
+  const dirty = prksPersonProfileDraftIsDirty(ctx, person);
+  draft[key] = old;
+  return dirty;
+});
+const restored = prksPersonProfileDraftIsDirty(ctx, person);
+draft.groups = [{ id: '1', name: 'renamed locally' }, { id: '2', name: 'Two' }];
+const reordered = prksPersonProfileDraftIsDirty(ctx, person);
+draft.groups = [{ id: 1, name: 'One' }];
+const removed = prksPersonProfileDraftIsDirty(ctx, person);
+draft.groups = [{ id: 1 }, { id: 2 }, { id: 3 }];
+const added = prksPersonProfileDraftIsDirty(ctx, person);
+process.stdout.write(JSON.stringify({ pristine, scalarDirty, restored, reordered, removed, added }));
+""",
+            )
+        )
+        proc = subprocess.run(
+            ["node", "-e", js], capture_output=True, text=True, check=False, timeout=15
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(proc.stdout)
+        self.assertFalse(result["pristine"])
+        self.assertTrue(all(result["scalarDirty"]))
+        self.assertFalse(result["restored"])
+        self.assertFalse(result["reordered"])
+        self.assertTrue(result["removed"])
+        self.assertTrue(result["added"])
 
 
 if __name__ == "__main__":

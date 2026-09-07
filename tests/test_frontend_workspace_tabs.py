@@ -284,6 +284,37 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("latestSaveToken", works)
         self.assertIn("saveSequence", works)
 
+    def test_dirty_draft_leave_contract_is_central_and_async(self):
+        app = _read(_APP)
+        ui = _read(_UI)
+        guard = app.split("function prksCanLeaveTabContext(ctx, nextHash)", 1)[1].split(
+            "function prksCanLeaveCurrentRoute", 1
+        )[0]
+        self.assertIn("prksFlushPendingWorkResearchNotes(ctx)", guard)
+        self.assertIn("prksFlushPendingPrivateNotes(ctx)", guard)
+        self.assertIn("window.confirm(", guard)
+        self.assertIn("prksSyncPersonProfileDraftFromEditor", guard)
+        self.assertIn("prksPersonProfileDraftIsDirty(ctx, person)", guard)
+        self.assertIn("prksCaptureWorkMetaDraft(ctx)", guard)
+        self.assertIn("prksWorkMetaDraftIsDirty(ctx, work)", guard)
+        self.assertEqual(guard.count("prksConfirmUnsavedRouteLeave({"), 2)
+        self.assertIn("function prksConfirmUnsavedRouteLeave(options)", ui)
+        confirm = ui.split("function prksConfirmUnsavedRouteLeave(options)", 1)[1].split(
+            "function prksBindModalConfirmOnce", 1
+        )[0]
+        self.assertIn("cancelLabel: 'Keep editing'", confirm)
+        self.assertIn("confirmLabel: 'Discard changes'", confirm)
+        self.assertNotIn("window.confirm", confirm)
+
+        ws = _read(_WS)
+        await_leave = ws.split("function awaitLeave(tabId, nextHash)", 1)[1].split(
+            "function enforceInvariants", 1
+        )[0]
+        self.assertIn("Promise.resolve(canLeave(tabId, nextHash))", await_leave)
+        history = ws.split("function bindHistory()", 1)[1].split("function ensureProduction", 1)[0]
+        self.assertIn("pendingHistoryNavigation", history)
+        self.assertIn("void pending.then(finishHashChange)", history)
+
     def test_docs_and_design_contract(self):
         design = _read(_DESIGN)
         self.assertIn("Local / content tabs versus workspace tabs", design)

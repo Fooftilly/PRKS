@@ -683,6 +683,15 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             page.wait_for_function("() => !document.querySelector('#pd-save-btn').disabled")
             self.assertEqual(page.locator("#pd-about").input_value(), "Draft survives failed save")
             self.assertEqual(_person_group_chip_names(page), {"Group Alpha", "Group Gamma"})
+            page.evaluate(
+                "id => { void window.prksNavigate('#/people/' + id); }",
+                arg=server.ids["person_b"],
+            )
+            page.locator(
+                "#prks-modal-confirm:not(.hidden)", has_text="Discard profile changes?"
+            ).wait_for()
+            page.locator("#prks-modal-confirm-cancel").click()
+            self.assertEqual(page.locator("#pd-about").input_value(), "Draft survives failed save")
             page.locator("#pd-save-btn").click()
             page.wait_for_function(
                 """id => {
@@ -697,11 +706,215 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             )
             self.assertEqual(saved["about"], "Draft survives failed save")
             self.assertEqual({g["name"] for g in saved["groups"]}, {"Group Alpha", "Group Gamma"})
+            page.evaluate(
+                "id => { void window.prksNavigate('#/people/' + id); }",
+                arg=server.ids["person_b"],
+            )
+            page.wait_for_function(
+                "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id",
+                arg=server.ids["person_b"],
+            )
+            self.assertTrue(page.locator("#prks-modal-confirm").get_attribute("class").find("hidden") >= 0)
             collector.console_errors[:] = [
                 error for error in collector.console_errors if "400 (Bad Request)" not in error
             ]
         finally:
             page.unroute("**/api/persons/*", fail_once)
+
+
+class DirtyNavigationGuardTests(_BrowserE2E):
+    def test_browser_back_rejection_waits_and_restores_dirty_person(self):
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        person_b = server.ids["person_b"]
+        page.evaluate("id => window.prksNavigate('#/people/' + id)", arg=person_b)
+        page.wait_for_function(
+            "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id", arg=person_b
+        )
+        page.evaluate("id => window.prksNavigate('#/people/' + id)", arg=person_a)
+        page.wait_for_function(
+            "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id", arg=person_a
+        )
+        tab_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        _open_focused_person_editor(page, person_a)
+        page.locator("#pd-about").fill("Back must wait")
+
+        page.evaluate("() => history.back()")
+        page.locator("#prks-modal-confirm:not(.hidden)", has_text="Discard profile changes?").wait_for()
+        self.assertEqual(
+            page.evaluate("id => window.prksGetTabContext(id).getEntity('person').id", arg=tab_id),
+            person_a,
+        )
+        page.locator("#prks-modal-confirm-cancel").click()
+        page.wait_for_function("id => location.hash === '#/people/' + id", arg=person_a)
+        self.assertEqual(page.locator("#pd-about").input_value(), "Back must wait")
+
+    def test_pristine_person_leaves_without_prompt_and_dirty_same_tab_is_awaited(self):
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        person_b = server.ids["person_b"]
+        page.evaluate("id => window.prksNavigate('#/people/' + id)", arg=person_a)
+        page.wait_for_function(
+            "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id", arg=person_a
+        )
+        tab_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+
+        _open_focused_person_editor(page, person_a)
+        page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", arg=person_b)
+        page.wait_for_function(
+            "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id", arg=person_b
+        )
+        self.assertIn("hidden", page.locator("#prks-modal-confirm").get_attribute("class"))
+
+        page.evaluate("id => window.prksNavigate('#/people/' + id)", arg=person_a)
+        page.wait_for_function(
+            "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id", arg=person_a
+        )
+        _open_focused_person_editor(page, person_a)
+        page.locator("#pd-about").fill("Dirty same-tab Person A")
+        page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", arg=person_b)
+        modal = page.locator("#prks-modal-confirm:not(.hidden)")
+        modal.wait_for()
+        self.assertEqual(page.locator("#prks-modal-confirm-title").inner_text(), "Discard profile changes?")
+        self.assertEqual(page.locator("#prks-modal-confirm-cancel").inner_text(), "Keep editing")
+        self.assertEqual(page.locator("#prks-modal-confirm-ok").inner_text(), "Discard changes")
+        page.locator("#prks-modal-confirm-cancel").click()
+        self.assertEqual(page.locator("#pd-about").input_value(), "Dirty same-tab Person A")
+        self.assertEqual(
+            page.evaluate("id => window.prksGetTabContext(id).getEntity('person').id", arg=tab_id),
+            person_a,
+        )
+
+        page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", arg=person_b)
+        modal.wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function(
+            "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id", arg=person_b
+        )
+        self.assertIsNone(
+            page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft", arg=tab_id)
+        )
+
+    def test_dirty_person_close_rejection_is_noop_then_accepts(self):
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        page.evaluate("id => window.prksNavigate('#/people/' + id)", arg=person_a)
+        page.wait_for_function(
+            "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id", arg=person_a
+        )
+        tab_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        _open_focused_person_editor(page, person_a)
+        page.locator("#pd-first-name").fill("Dirty close Ada")
+        before = page.evaluate("() => JSON.stringify(window.prksWorkspaceSnapshot())")
+
+        close = page.locator(
+            '.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__close' % tab_id
+        )
+        close.click()
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-confirm-cancel").click()
+        self.assertEqual(page.evaluate("() => JSON.stringify(window.prksWorkspaceSnapshot())"), before)
+        self.assertEqual(page.locator("#pd-first-name").input_value(), "Dirty close Ada")
+
+        close.click()
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function(
+            "id => !window.prksWorkspaceSnapshot().tabs.some(tab => tab.id === id)", arg=tab_id
+        )
+
+    def test_two_dirty_people_focus_without_prompt_and_hide_rejects_atomically(self):
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        person_b = server.ids["person_b"]
+        tab_a, tab_b = _open_two_person_split(page, server)
+        _focus_workspace_tab(page, tab_a)
+        _open_focused_person_editor(page, person_a)
+        page.locator("#pd-about").fill("Isolated Person A")
+
+        _focus_workspace_tab(page, tab_b)
+        self.assertIn("hidden", page.locator("#prks-modal-confirm").get_attribute("class"))
+        _open_focused_person_editor(page, person_b)
+        page.locator("#pd-about").fill("Isolated Person B")
+        _focus_workspace_tab(page, tab_a)
+        self.assertEqual(page.locator("#pd-about").input_value(), "Isolated Person A")
+        _focus_workspace_tab(page, tab_b)
+        self.assertEqual(page.locator("#pd-about").input_value(), "Isolated Person B")
+
+        before = page.evaluate("() => JSON.stringify(window.prksWorkspaceSnapshot())")
+        page.locator("#prks-right-panel-close").click()
+        page.wait_for_function("() => !document.body.classList.contains('prks-right-panel-open')")
+        page.locator(
+            '.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__menu' % tab_b
+        ).click()
+        page.locator("#prks-workspace-menu .prks-workspace-menu__item", has_text="Hide from split").click()
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-confirm-cancel").click()
+        self.assertEqual(page.evaluate("() => JSON.stringify(window.prksWorkspaceSnapshot())"), before)
+        self.assertEqual(
+            page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft.about", arg=tab_a),
+            "Isolated Person A",
+        )
+        self.assertEqual(
+            page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft.about", arg=tab_b),
+            "Isolated Person B",
+        )
+
+        page.locator(
+            '.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__close' % tab_b
+        ).click()
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-confirm-cancel").click()
+        _focus_workspace_tab(page, tab_a)
+        page.locator(
+            '.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__close' % tab_a
+        ).click()
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for()
+        self.assertEqual(page.locator("#pd-about").count(), 1)
+        page.locator("#prks-modal-confirm-cancel").click()
+
+    def test_person_and_work_dirty_contexts_are_isolated(self):
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        person_a = server.ids["person_a"]
+        work_a = server.ids["work_a"]
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.evaluate("id => window.prksNavigate('#/people/' + id)", arg=person_a)
+        page.wait_for_function(
+            "id => window.prksGetFocusedTabContext().getEntity('person')?.id === id", arg=person_a
+        )
+        person_tab = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
+        _open_focused_person_editor(page, person_a)
+        page.locator("#pd-about").fill("Person isolated draft")
+
+        page.evaluate("id => window.prksNavigate('#/works/' + id, { target: 'tile' })", arg=work_a)
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        work_tab = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        _focus_workspace_tab(page, work_tab)
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").fill("Work isolated draft")
+        _focus_workspace_tab(page, person_tab)
+        self.assertEqual(page.locator("#pd-about").input_value(), "Person isolated draft")
+
+        page.locator(
+            '.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__close' % person_tab
+        ).click()
+        page.locator("#prks-modal-confirm:not(.hidden)", has_text="Discard profile changes?").wait_for()
+        page.locator("#prks-modal-confirm-cancel").click()
+        self.assertEqual(
+            page.evaluate("id => window.prksGetTabContext(id).ui.workMetaDraft.title", arg=work_tab),
+            "Work isolated draft",
+        )
+
+        _focus_workspace_tab(page, work_tab)
+        page.locator(
+            '.prks-workspace-tab[data-tab-id="%s"] .prks-workspace-tab__close' % work_tab
+        ).click()
+        page.locator("#prks-modal-confirm:not(.hidden)", has_text="Discard metadata changes?").wait_for()
+        page.locator("#prks-modal-confirm-cancel").click()
+        self.assertEqual(
+            page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft.about", arg=person_tab),
+            "Person isolated draft",
+        )
 
 
 class WorkDetailsPolishTests(_BrowserE2E):
@@ -746,7 +959,9 @@ class WorkDetailsPolishTests(_BrowserE2E):
         _open_work_from_home(page, WORK_A_TITLE)
         page.locator("#panel-content button", has_text="Edit metadata").click()
         page.locator("#meta-title").fill("Only Work A Draft")
-        page.evaluate("id => window.prksNavigate('#/works/' + id)", server.ids["work_b"])
+        page.evaluate("id => { void window.prksNavigate('#/works/' + id); }", server.ids["work_b"])
+        page.locator("#prks-modal-confirm:not(.hidden)", has_text="Discard metadata changes?").wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
         page.wait_for_function("id => location.hash.indexOf('#/works/' + id) === 0", arg=server.ids["work_b"])
         page.locator("#panel-content .card-title", has_text=WORK_B_TITLE).wait_for()
         self.assertEqual(page.locator("#meta-title").count(), 0)
@@ -3424,9 +3639,13 @@ class TabContextHostRootTests(_BrowserE2E):
                 page.wait_for_timeout(50)
             self.assertTrue(held, "Work A metadata PATCH was not intercepted")
             page.evaluate(
-                """(id) => window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: true })""",
+                """(id) => { void window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: true }); }""",
                 arg=work_b,
             )
+            page.locator(
+                "#prks-modal-confirm:not(.hidden)", has_text="Discard metadata changes?"
+            ).wait_for()
+            page.locator("#prks-modal-confirm-ok").click()
             page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
             page.wait_for_function(
                 "id => location.hash.indexOf('#/works/' + id) === 0",

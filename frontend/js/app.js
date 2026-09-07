@@ -1490,9 +1490,63 @@ function prksCanLeaveTabContext(ctx, nextHash) {
         typeof window.prksHasPendingWorkAnnotationSync === 'function' &&
         window.prksHasPendingWorkAnnotationSync(ctx)
     ) {
-        return window.confirm(
+        const annotationLeaveApproved = window.confirm(
             'PDF annotation sync still running. Leave page before all changes save to server?'
         );
+        if (!annotationLeaveApproved) return false;
+    }
+    return prksCanLeaveTabContextOwnedDraft(ctx);
+}
+
+function prksCanLeaveTabContextOwnedDraft(ctx) {
+    const prevRoute = ctx && ctx.lastResolvedRoute;
+    if (!ctx || !ctx.ui || !prevRoute) return true;
+
+    if (prevRoute.name === 'person' && ctx.ui.personDetailEditing) {
+        const person = ctx.getEntity ? ctx.getEntity('person') : null;
+        const draft = ctx.ui.personProfileDraft;
+        if (person && draft && String(draft.personId) === String(person.id)) {
+            if (
+                typeof prksRightPanelOwnedBy === 'function' &&
+                prksRightPanelOwnedBy(ctx) &&
+                typeof prksSyncPersonProfileDraftFromEditor === 'function'
+            ) {
+                const panel = document.getElementById('panel-content');
+                const editor = panel && panel.querySelector('.person-panel-edit');
+                if (editor) {
+                    prksSyncPersonProfileDraftFromEditor(ctx, editor, person.id, ctx.generation);
+                }
+            }
+            if (
+                typeof prksPersonProfileDraftIsDirty === 'function' &&
+                prksPersonProfileDraftIsDirty(ctx, person)
+            ) {
+                if (typeof prksConfirmUnsavedRouteLeave !== 'function') return Promise.resolve(false);
+                return prksConfirmUnsavedRouteLeave({
+                    title: 'Discard profile changes?',
+                    message: 'Your unsaved Person profile changes will be discarded.',
+                });
+            }
+        }
+    }
+
+    if (prevRoute.name === 'work' && ctx.ui.workDetailsMode === 'metadata') {
+        const work = ctx.getEntity ? ctx.getEntity('work') : null;
+        if (work) {
+            if (typeof prksCaptureWorkMetaDraft === 'function') {
+                prksCaptureWorkMetaDraft(ctx);
+            }
+            if (
+                typeof prksWorkMetaDraftIsDirty === 'function' &&
+                prksWorkMetaDraftIsDirty(ctx, work)
+            ) {
+                if (typeof prksConfirmUnsavedRouteLeave !== 'function') return Promise.resolve(false);
+                return prksConfirmUnsavedRouteLeave({
+                    title: 'Discard metadata changes?',
+                    message: 'Your unsaved Work metadata changes will be discarded.',
+                });
+            }
+        }
     }
     return true;
 }
@@ -1552,6 +1606,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
             if (!ok) {
                 return { cancelled: true, reason: 'pending-sync' };
             }
+        }
+        const draftLeaveApproved = await Promise.resolve(prksCanLeaveTabContextOwnedDraft(ctx));
+        if (!draftLeaveApproved) {
+            return { cancelled: true, reason: 'unsaved-edit' };
         }
     }
 
