@@ -691,6 +691,194 @@ async function run() {
         assertEq('clearCache actually empties the store', store._entities.size, 0);
     }
 
+    /* ---- shape validation happens BEFORE cache publication: a malformed 200 cannot destroy a good cache ---- */
+    {
+        const store = makeFakeStore();
+        await store.putList('concepts:index', [{ id: 'C-1', name: 'Good' }], '');
+        let body = [{ id: 'C-1', name: 'Good' }];
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.resolve(okJsonResponse(body));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const isArrayShape = function (v) {
+            return Array.isArray(v);
+        };
+        // A reachable server answering 200 with the WRONG shape.
+        body = { error: 'unexpected shape' };
+        let threw = null;
+        try {
+            await runtime.readThroughList('concepts:index', '/api/concepts', {
+                domain: 'concepts',
+                validate: isArrayShape,
+            });
+        } catch (e) {
+            threw = e;
+        }
+        assert('a wrong-shaped authoritative list throws like any other domain error', !!threw);
+        assertEq('the shape rejection is a domain error, not a transport failure', threw && threw.isPrksDomainError, true);
+        assertEq('a wrong-shaped 200 keeps state online (the server did answer)', runtime.getState(), mod.PRKS_OFFLINE_STATE_ONLINE);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq(
+            'the previously good cached list is left completely untouched',
+            store._lists.get('concepts:index').value,
+            [{ id: 'C-1', name: 'Good' }]
+        );
+        // ... and the good cache is still what an offline read falls back to.
+        const offlineRuntime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const fallback = await offlineRuntime.readThroughList('concepts:index', '/api/concepts', {
+            domain: 'concepts',
+            validate: isArrayShape,
+        });
+        assertEq('the good snapshot still serves offline', fallback.source, 'cache');
+        assertEq('the good snapshot is unchanged', fallback.value, [{ id: 'C-1', name: 'Good' }]);
+        // A later well-shaped response publishes normally.
+        body = [{ id: 'C-1', name: 'Fresh' }];
+        const good = await runtime.readThroughList('concepts:index', '/api/concepts', {
+            domain: 'concepts',
+            validate: isArrayShape,
+        });
+        assertEq('a well-shaped response still renders', good.source, 'server');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a well-shaped response publishes to cache', store._lists.get('concepts:index').value, [
+            { id: 'C-1', name: 'Fresh' },
+        ]);
+    }
+
+    /* ---- same rule for one entity: a malformed/mismatched 200 never replaces the cached Concept ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('concept', 'C-1', { id: 'C-1', name: 'Good' }, '');
+        let body = { id: 'C-1', name: 'Good' };
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.resolve(okJsonResponse(body));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const isConcept = function (v) {
+            return !!(v && typeof v === 'object' && !Array.isArray(v) && String(v.id) === 'C-1');
+        };
+        body = { error: 'unexpected shape' };
+        let threw = null;
+        try {
+            await runtime.readThroughEntity('concept', 'C-1', '/api/concepts/C-1', {
+                domain: 'concepts',
+                validate: isConcept,
+            });
+        } catch (e) {
+            threw = e;
+        }
+        assert('a wrong-shaped authoritative entity throws', !!threw);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq(
+            'the previously good cached Concept is untouched by a malformed 200',
+            store._entities.get('concept:C-1').value,
+            { id: 'C-1', name: 'Good' }
+        );
+        // An id that does not match the requested Concept is equally unacceptable.
+        body = { id: 'C-OTHER', name: 'Wrong record' };
+        threw = null;
+        try {
+            await runtime.readThroughEntity('concept', 'C-1', '/api/concepts/C-1', {
+                domain: 'concepts',
+                validate: isConcept,
+            });
+        } catch (e) {
+            threw = e;
+        }
+        assert('a mismatched-id authoritative entity throws', !!threw);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq(
+            'a mismatched-id response never becomes this Concept cache',
+            store._entities.get('concept:C-1').value,
+            { id: 'C-1', name: 'Good' }
+        );
+    }
+
+    /* ---- a validator that throws is treated as rejection, never as acceptance ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('concept', 'C-1', { id: 'C-1', name: 'Good' }, '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.resolve(okJsonResponse({ id: 'C-1', name: 'Replacement' }));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        let threw = null;
+        try {
+            await runtime.readThroughEntity('concept', 'C-1', '/api/concepts/C-1', {
+                validate: function () {
+                    throw new Error('bad validator');
+                },
+            });
+        } catch (e) {
+            threw = e;
+        }
+        assert('a throwing validator rejects the response rather than accepting it', !!threw);
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a throwing validator leaves the cache untouched', store._entities.get('concept:C-1').value, {
+            id: 'C-1',
+            name: 'Good',
+        });
+    }
+
+    /* ---- reads without a validator keep their existing behavior (Work is unchanged) ---- */
+    {
+        const store = makeFakeStore();
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.resolve(okJsonResponse({ id: 'W-1', title: 'Live Work' }));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const result = await runtime.readThroughEntity('work', 'W-1', '/api/works/W-1');
+        assertEq('an unvalidated read still returns server provenance', result.source, 'server');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('an unvalidated read still publishes to cache', store._entities.get('work:W-1').value, {
+            id: 'W-1',
+            title: 'Live Work',
+        });
+    }
+
     /* ---- domain coherence: a domain-scoped read caches normally while its generation is current ---- */
     {
         const store = makeFakeStore();
@@ -888,6 +1076,36 @@ async function run() {
             'unavailable'
         );
         assertEq('online reads keep working after a failed sweep', runtime.getState(), mod.PRKS_OFFLINE_STATE_OFFLINE);
+    }
+
+    /* ---- a partially failed sweep (entities gone, list delete failed) still leaves the domain blocked ---- */
+    {
+        const store = makeFakeStore({
+            deleteList: async function () {
+                return false;
+            },
+        });
+        await store.putList('concepts:index', [{ id: 'C-1' }], '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'], listKeys: ['concepts:index'] });
+        await runtime._domainCleanup('concepts');
+        assertEq(
+            'the domain stays blocked when any part of its sweep did not complete',
+            runtime.isDomainBlocked('concepts'),
+            true
+        );
+        const list = await runtime.readThroughList('concepts:index', '/api/concepts', { domain: 'concepts' });
+        assertEq('a list whose delete never committed is unavailable, never served stale', list.source, 'unavailable');
     }
 
     /* ---- reads with no domain are unaffected by another domain's invalidation ---- */

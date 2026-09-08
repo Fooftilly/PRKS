@@ -2333,6 +2333,144 @@ class OfflineConceptTests(unittest.TestCase):
 
         _wait_entity_uncached(page, "concept", child)
 
+    def test_playlist_inline_work_rename_invalidates_concept_domain(self):
+        """A Work title can also be changed from a Playlist. Cached Concept
+        details carry Work mention titles, so that surface owes the Concepts
+        domain the same invalidation as the metadata editor."""
+        server, page, context, _collector = self._start()
+        child = server.ids["concept_child"]
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_content_contains(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "concept", child)
+        generation_before = _concept_domain_generation(page)
+
+        playlist_id = page.evaluate(
+            """async (workId) => {
+                const id = await createPlaylist('E2E Offline Rename Playlist', '');
+                await addWorkToPlaylist(id, workId);
+                return id;
+            }""",
+            arg=work_a,
+        )
+        page.evaluate("id => window.prksNavigate('#/playlists/' + encodeURIComponent(id))", arg=playlist_id)
+        page.wait_for_selector(".prks-playlist-detail")
+        # The inline per-video rename controls only exist in the Playlist's edit mode.
+        page.locator("#prks-playlist-edit-btn").click()
+        page.wait_for_selector('[data-pl-rename="%s"]' % work_a)
+        page.locator('[data-pl-rename="%s"]' % work_a).click()
+        renamed = "Renamed From The Playlist"
+        page.locator("#prks-pl-rename-input-" + work_a).fill(renamed)
+        page.locator('[data-pl-rename-save="%s"]' % work_a).click()
+        page.wait_for_function("t => document.body.innerText.indexOf(t) !== -1", arg=renamed, timeout=15000)
+
+        self.assertGreater(_concept_domain_generation(page), generation_before)
+        _wait_entity_uncached(page, "concept", child)
+
+        # And the stale mention title can no longer be served offline.
+        context.set_offline(True)
+        _open_concept(page, child)
+        _wait_offline_unavailable(page)
+        self.assertNotIn(WORK_A_TITLE, _content_text(page))
+
+    def test_malformed_concept_index_response_never_replaces_a_good_cache(self):
+        """A reachable server answering HTTP 200 with the wrong shape is a route
+        error, and must not destroy the previously cached index."""
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_concept_index(page)
+        _wait_content_contains(page, CONCEPT_PARENT_NAME)
+        _wait_list_cached(page, "concepts:index")
+        good = _cached_list(page, "concepts:index")
+        self.assertIsInstance(good["value"], list)
+
+        def wrong_shape(route):
+            if route.request.method == "GET" and urlparse(route.request.url).path == "/api/concepts":
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body='{"error":"unexpected shape"}',
+                )
+                return
+            route.fallback()
+
+        page.route("**/api/concepts", wrong_shape)
+        try:
+            page.evaluate("() => { void window.prksNavigate('#/folders'); }")
+            page.wait_for_function("() => location.hash === '#/folders'")
+            _open_concept_index(page)
+            page.wait_for_function(
+                "() => document.querySelector('#prks-route-retry') !== null",
+                timeout=15000,
+            )
+            body = _content_text(page)
+            self.assertNotIn("No Concepts yet.", body)
+            self.assertEqual(_connectivity_state(page), "online")
+            page.wait_for_timeout(500)
+            after = _cached_list(page, "concepts:index")
+            self.assertEqual(after["value"], good["value"])
+        finally:
+            _safe_unroute(page, "**/api/concepts", wrong_shape)
+
+        # The untouched snapshot is still what serves offline.
+        page.evaluate("() => { void window.prksNavigate('#/folders'); }")
+        page.wait_for_function("() => location.hash === '#/folders'")
+        context.set_offline(True)
+        _open_concept_index(page)
+        _wait_offline_banner(page)
+        _wait_content_contains(page, CONCEPT_PARENT_NAME)
+
+    def test_malformed_concept_detail_response_never_replaces_a_good_cache(self):
+        """Same rule for one Concept: a wrong-shaped 200 is a route error and
+        leaves the cached Concept exactly as it was."""
+        server, page, context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        _wait_entity_cached(page, "concept", child)
+        good = _cached_entity(page, "concept", child)
+        self.assertEqual(good["value"]["description"], CONCEPT_CHILD_DEFINITION)
+
+        def wrong_shape(route):
+            if route.request.method == "GET" and urlparse(route.request.url).path == "/api/concepts/" + child:
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body='{"error":"unexpected shape"}',
+                )
+                return
+            route.fallback()
+
+        page.route("**/api/concepts/**", wrong_shape)
+        try:
+            _open_concept_index(page)
+            _wait_content_contains(page, CONCEPT_CHILD_NAME)
+            _open_concept(page, child)
+            page.wait_for_function(
+                "() => document.querySelector('#prks-route-retry') !== null",
+                timeout=15000,
+            )
+            body = _content_text(page)
+            self.assertNotIn("Concept not found", body)
+            self.assertNotIn("not available offline", body)
+            self.assertEqual(_connectivity_state(page), "online")
+            page.wait_for_timeout(500)
+            self.assertEqual(_cached_entity(page, "concept", child)["value"], good["value"])
+        finally:
+            _safe_unroute(page, "**/api/concepts/**", wrong_shape)
+
+        _open_concept_index(page)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        context.set_offline(True)
+        _open_concept(page, child)
+        _wait_offline_banner(page)
+        _wait_content_contains(page, CONCEPT_CHILD_DEFINITION)
+
     def test_unrelated_work_mutation_leaves_concept_cache_alone(self):
         """Tags/folders/playlists do not change the Concept read model."""
         server, page, _context, _collector = self._start()

@@ -347,7 +347,12 @@ function renderPlaylistDetail(ctx, pl, container) {
                     body: JSON.stringify({ title: nextTitle }),
                 });
                 if (!res.ok) throw new Error('save failed');
-                if (typeof prksOfflineMarkEntityChanged === 'function') {
+                // Same canonical Work-title change as the metadata editor, so
+                // it must invalidate the Concepts domain too -- a cached
+                // Concept detail shows this Work's old title in its mentions.
+                if (typeof prksMarkWorkTitleChanged === 'function') {
+                    prksMarkWorkTitleChanged(wid);
+                } else if (typeof prksOfflineMarkEntityChanged === 'function') {
                     prksOfflineMarkEntityChanged('work', wid);
                 }
                 delete playlistRenameMap()[wid];

@@ -3343,17 +3343,13 @@ async function submitWorkMetaEdit(workId) {
             const errData = await saveRes.json().catch(() => ({}));
             throw new Error(errData.error || `Server error ${saveRes.status}`);
         }
+        // The metadata save can change the title, so it goes through the shared
+        // Work-title coherence helper: it evicts this Work's snapshot AND
+        // invalidates the Concepts domain, whose cached details carry Work
+        // mention titles. Phase 1 stays deliberately conservative here rather
+        // than field-diffing which edits actually matter.
         const coherenceToken =
-            typeof prksOfflineMarkEntityChanged === 'function'
-                ? prksOfflineMarkEntityChanged('work', workId)
-                : null;
-        if (typeof prksOfflineMarkConceptsChanged === 'function') {
-            // Cached Concept details carry Work mention titles, so a successful
-            // Work metadata save can stale them even when no Concept
-            // relationship changed. Phase 1 stays deliberately conservative
-            // here rather than field-diffing which edits matter.
-            prksOfflineMarkConceptsChanged();
-        }
+            typeof prksMarkWorkTitleChanged === 'function' ? prksMarkWorkTitleChanged(workId) : null;
         // From here on, background completion must proceed as long as this ctx still owns the
         // Work/route -- NOT gated on panel ownership. Another tile may already own the shared
         // panel by the time this PATCH resolves.

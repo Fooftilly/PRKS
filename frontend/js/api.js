@@ -834,6 +834,25 @@ function prksMarkConceptsDomainChanged() {
     return prksOfflineMarkConceptsChanged();
 }
 
+/**
+ * Coherence hook for EVERY acknowledged canonical Work-title change, wherever
+ * the edit surface lives (the metadata editor, the Playlist inline video
+ * rename, anything added later). A cached Concept detail lists the titles of
+ * the Works that mention it, so a renamed Work stales the Concept read model
+ * even though no Concept record changed. Routing every title save through one
+ * helper is what stops a new title-edit surface from silently reopening that
+ * hole. Returns the Work's coherence token so the caller can still gate a
+ * follow-up complete Work GET.
+ */
+function prksMarkWorkTitleChanged(workId) {
+    const token =
+        typeof prksOfflineMarkEntityChanged === 'function'
+            ? prksOfflineMarkEntityChanged('work', workId)
+            : null;
+    prksMarkConceptsDomainChanged();
+    return token;
+}
+
 async function createConcept(payload) {
     const res = await prksRequest('/api/concepts', {
         method: 'POST',
@@ -1060,6 +1079,7 @@ window.createSavedView = createSavedView;
 window.updateSavedView = updateSavedView;
 window.deleteSavedView = deleteSavedView;
 window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;
+window.prksMarkWorkTitleChanged = prksMarkWorkTitleChanged;
 window.fetchConcepts = fetchConcepts;
 window.fetchConcept = fetchConcept;
 window.createConcept = createConcept;

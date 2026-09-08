@@ -510,6 +510,15 @@ not lost by routing through the runtime: a wrong-shaped *server* body is a route
 error, while a wrong-shaped *cached* body makes the cache unavailable (and is
 discarded best-effort), never a silent empty list or a false "not found."
 
+Authoritative shape acceptance happens **before** cache publication. An
+offline-capable read passes a `validate` callback to
+`prksOfflineReadEntity`/`readList`; the runtime applies it the moment the body
+parses and rejects a bad one as an ordinary non-404 domain error, so nothing is
+written to the cache. A reachable server that answers HTTP 200 with the wrong
+body must never overwrite a previously good snapshot — doing so turns one bad
+response into a route error *now* plus an unavailable-offline Concept domain
+*later*. A validator that itself throws counts as rejection, never acceptance.
+
 ### Offline coherence domains
 
 Some cached read models span multiple canonical records, so per-entity
@@ -540,11 +549,21 @@ same set. It is invalidated after success by: every Concept mutation
 — never gated on route, focused pane, ctx generation, or panel ownership); every
 successful Research Notes save (notes are the canonical Work → Concept mention
 source and unknown markup can create Concepts outright — canonical success
-counts even when that save is stale for the UI); Work deletion; and Work
-metadata saves (cached Concept details carry Work mention titles — deliberately
-conservative rather than field-diffing). Unrelated Work mutations (tags,
-folders, playlists, roles, progress, PDF annotations) do not touch it. A failed,
+counts even when that save is stale for the UI); Work deletion; and **every**
+canonical Work-title change. Unrelated Work mutations (tags, folders,
+playlists, roles, progress, PDF annotations) do not touch it. A failed,
 canceled, or aborted mutation never invalidates anything.
+
+A cached Concept detail lists the titles of the Works that mention it, so a
+Work rename stales the Concept read model even though no Concept record
+changed. Every title-editing surface therefore goes through the one helper
+`prksMarkWorkTitleChanged(workId)` (Work entity eviction *plus* Concepts-domain
+invalidation), never `prksOfflineMarkEntityChanged('work', …)` alone — the Work
+metadata editor and the Playlist inline video rename both do, and a new
+title-editing surface must too. `tests/test_frontend_offline_runtime.py` scans
+for Work-title PATCH sites that skip the helper. The policy is deliberately
+conservative: a date-only metadata edit invalidates Concepts as well, rather
+than relying on a field diff.
 
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`
@@ -564,7 +583,12 @@ Responsibilities stay separated:
   coherence using a bounded range over the existing `["kind", "id"]` compound
   key — no schema/version bump — and resolves true only when the physical
   cleanup actually completed, so its caller can stay conservative when it did
-  not.
+  not. "Completed" means the *transaction committed*, not that individual
+  requests fired `onsuccess`: IndexedDB can still abort a transaction whose
+  requests all succeeded, and a coherence domain unblocked on that basis would
+  republish rows that still exist. Every `readwrite` transaction therefore
+  resolves from `oncomplete` and reports false on `onerror`/`onabort`; reads
+  have no commit to wait for and resolve on the request result.
 - `offline-runtime.js`: online/offline/reconnecting state, the
   read-through/mutation-guard policy, and operational UI state. Holds no
   canonical domain data itself; delegates all persistence to `offline-store.js`.

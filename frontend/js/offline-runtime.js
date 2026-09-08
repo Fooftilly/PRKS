@@ -243,6 +243,31 @@
         }
 
         /**
+         * Shape acceptance for an authoritative response, applied BEFORE any
+         * cache publication. A reachable server that answers 200 with a body
+         * of the wrong shape is a domain error, not cache material: publishing
+         * it first would destroy a previously good snapshot and leave the
+         * route offline-unavailable later. Rejection propagates like any other
+         * non-404 domain failure, so the caller's normal error handling runs
+         * and the previous cache entry is left untouched.
+         */
+        function assertAcceptableShape(validate, raw) {
+            if (typeof validate !== 'function') return;
+            let ok = false;
+            try {
+                ok = !!validate(raw);
+            } catch (_e) {
+                ok = false;
+            }
+            if (ok) return;
+            const err = new Error('Received an unexpected server response.');
+            err.isPrksDomainError = true;
+            err.isPrksShapeError = true;
+            err.status = 200;
+            throw err;
+        }
+
+        /**
          * Reads one entity through the normal online path; on a real
          * network/server-unreachable failure, falls back to the offline
          * store. A real HTTP domain response (404/400/etc.) is never
@@ -284,6 +309,9 @@
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
             noteRequestSuccess();
+            // Validate before publishing: a malformed 200 must never replace a
+            // good cached entity.
+            assertAcceptableShape(options2.validate, raw);
             void cacheEntityForDomain(kind, id, raw, coherenceToken, domain, domainToken);
             return { value: raw, source: 'server', cachedAt: now() };
         }
@@ -484,6 +512,9 @@
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
             noteRequestSuccess();
+            // Validate before publishing: a malformed 200 must never replace a
+            // good cached list snapshot.
+            assertAcceptableShape(options2.validate, raw);
             void cacheListForDomain(listKey, raw, domain, domainToken);
             return { value: raw, source: 'server', cachedAt: now() };
         }

@@ -1,6 +1,7 @@
 """Structural + Node regressions for the offline connectivity/read-through/
 mutation-guard runtime (offline-runtime.js)."""
 import os
+import re
 import shutil
 import subprocess
 import unittest
@@ -105,12 +106,42 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # re-listing the domain's kinds/list keys at each call site.
         for path in (
             os.path.join(_FRONTEND, "js", "api.js"),
-            os.path.join(_FRONTEND, "js", "ui.js"),
             os.path.join(_FRONTEND, "js", "components", "works.js"),
         ):
             caller = _read(path)
             self.assertIn("prksOfflineMarkConceptsChanged", caller)
-            self.assertNotIn("entityKinds:", caller)
+        for path in (
+            os.path.join(_FRONTEND, "js", "api.js"),
+            os.path.join(_FRONTEND, "js", "ui.js"),
+            os.path.join(_FRONTEND, "js", "components", "works.js"),
+            os.path.join(_FRONTEND, "js", "components", "playlists.js"),
+        ):
+            self.assertNotIn("entityKinds:", _read(path))
+
+    def test_every_work_title_surface_uses_the_shared_coherence_helper(self):
+        """A cached Concept detail shows the titles of the Works that mention it,
+        so every canonical Work-title change must invalidate the Concepts domain
+        -- not just the one in the metadata editor."""
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        start = api.index("function prksMarkWorkTitleChanged(")
+        body = api[start : start + 700]
+        self.assertIn("prksOfflineMarkEntityChanged('work', workId)", body)
+        self.assertIn("prksMarkConceptsDomainChanged();", body)
+
+        # Find every surface that PATCHes a Work title, and require each one to
+        # route through that helper rather than evicting only the Work entity.
+        title_patch = re.compile(r"JSON\.stringify\(\{\s*title[:,]")
+        for name in ("ui.js", os.path.join("components", "playlists.js"), os.path.join("components", "works.js")):
+            src = _read(os.path.join(_FRONTEND, "js", name))
+            for match in title_patch.finditer(src):
+                window = src[match.start() : match.start() + 1800]
+                if "/api/works/" not in src[max(0, match.start() - 600) : match.start()]:
+                    continue
+                self.assertIn(
+                    "prksMarkWorkTitleChanged",
+                    window,
+                    "%s PATCHes a Work title without the shared Concepts coherence hook" % name,
+                )
 
     def test_concept_domain_invalidated_by_canonical_research_changes(self):
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))

@@ -117,29 +117,73 @@ class FakeDatabase {
         this._stores.set(name, store);
         return store;
     }
+    /* Models the request/commit distinction real IndexedDB has: `oncomplete`
+     * fires only once every request scheduled in the transaction has settled
+     * (not immediately on creation), so tests can tell "the delete request
+     * succeeded" apart from "the transaction committed". A store's
+     * `failCommit` flag lets a transaction abort AFTER its requests succeeded,
+     * which is exactly the case domain-cleanup coherence must survive. */
     transaction(storeNames, mode) {
         const db = this;
+        const names = Array.isArray(storeNames) ? storeNames : [storeNames];
         const tx = {
             mode: mode,
             oncomplete: null,
             onerror: null,
             onabort: null,
             _aborted: false,
+            _settled: false,
+            _pending: 0,
+            _started: false,
+            // Writes are staged the way a real transaction stages them: an
+            // abort rolls the object store back, so a caller that trusted a
+            // request-level success would be reasoning about rows that still
+            // exist.
+            _snapshots: new Map(),
+            _snapshot: function (st) {
+                if (!tx._snapshots.has(st)) tx._snapshots.set(st, st.rows.slice());
+            },
+            _rollback: function () {
+                tx._snapshots.forEach(function (rows, st) {
+                    st.rows = rows;
+                });
+                tx._snapshots.clear();
+            },
             objectStore: function (name) {
                 const store = db._stores.get(name);
                 if (!store) throw new Error('No such object store: ' + name);
                 return makeStoreHandle(store, tx);
             },
+            _maybeSettle: function () {
+                if (tx._settled || tx._aborted || tx._pending > 0) return;
+                const shouldFailCommit = names.some(function (n) {
+                    const st = db._stores.get(n);
+                    return !!(st && st.failCommit);
+                });
+                tx._settled = true;
+                if (shouldFailCommit) {
+                    tx._aborted = true;
+                    tx._rollback();
+                    if (tx.onabort) tx.onabort({ target: tx });
+                    return;
+                }
+                tx._snapshots.clear();
+                if (tx.oncomplete) tx.oncomplete({ target: tx });
+            },
             abort: function () {
                 if (tx._aborted) return;
                 tx._aborted = true;
+                tx._settled = true;
+                tx._rollback();
                 fireAsync(function () {
                     if (tx.onabort) tx.onabort({ target: tx });
                 });
             },
         };
+        // A transaction with no requests at all still completes on its own.
         fireAsync(function () {
-            if (!tx._aborted && tx.oncomplete) tx.oncomplete({ target: tx });
+            tx._started = true;
+            tx._maybeSettle();
         });
         return tx;
     }
@@ -153,10 +197,15 @@ function makeRequest() {
 function makeStoreHandle(store, tx) {
     function op(fn) {
         const req = makeRequest();
+        tx._pending += 1;
         fireAsync(function () {
-            if (tx._aborted) return;
+            if (tx._aborted) {
+                tx._pending -= 1;
+                return;
+            }
             try {
                 if (store.forceError) throw new Error('Simulated QuotaExceededError');
+                tx._snapshot(store);
                 const result = fn();
                 req.result = result;
                 if (req.onsuccess) req.onsuccess({ target: req });
@@ -164,6 +213,12 @@ function makeStoreHandle(store, tx) {
                 req.error = e;
                 if (req.onerror) req.onerror({ target: req });
             }
+            tx._pending -= 1;
+            // Only settle once the transaction has had a chance to schedule
+            // follow-up requests (a cursor continues from within onsuccess).
+            fireAsync(function () {
+                if (tx._started) tx._maybeSettle();
+            });
         });
         return req;
     }
@@ -222,13 +277,24 @@ function makeStoreHandle(store, tx) {
                 });
             }
             function advance() {
+                // Cursor iteration keeps its transaction alive exactly like a
+                // pending request does, so the fake must not let the
+                // transaction commit between two cursor steps.
+                tx._pending += 1;
                 fireAsync(function () {
-                    if (tx._aborted) return;
+                    if (tx._aborted) {
+                        tx._pending -= 1;
+                        return;
+                    }
                     idx += 1;
                     while (idx < keys.length && !rowFor(keys[idx])) idx += 1;
                     if (idx >= keys.length) {
                         req.result = null;
                         if (req.onsuccess) req.onsuccess({ target: req });
+                        tx._pending -= 1;
+                        fireAsync(function () {
+                            if (tx._started) tx._maybeSettle();
+                        });
                         return;
                     }
                     const key = keys[idx];
@@ -249,6 +315,10 @@ function makeStoreHandle(store, tx) {
                         },
                     };
                     if (req.onsuccess) req.onsuccess({ target: req });
+                    tx._pending -= 1;
+                    fireAsync(function () {
+                        if (tx._started) tx._maybeSettle();
+                    });
                 });
             }
             advance();
@@ -524,6 +594,44 @@ async function run() {
         }
         assert('deleteEntitiesByKind never throws to the caller', !threw);
         assertEq('a failed sweep reports false', result, false);
+    }
+
+    /* ---- deleteEntitiesByKind: requests succeeding but the transaction aborting reports FALSE ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
+        await store.putEntity('concept', 'C-2', { id: 'C-2' }, '');
+        const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
+        assert('fake db created for the commit-failure setup', !!db);
+        // Every delete request succeeds; the transaction then aborts at commit.
+        db._stores.get('entities').failCommit = true;
+        const swept = await store.deleteEntitiesByKind('concept');
+        assertEq(
+            'a sweep whose transaction aborts at commit reports false, not the request-level success',
+            swept,
+            false
+        );
+        db._stores.get('entities').failCommit = false;
+        // The rows are still there, which is exactly why false had to be reported.
+        assert('rows survive an aborted sweep transaction', !!(await store.getEntity('concept', 'C-1')));
+    }
+
+    /* ---- readwrite results come from transaction commit, not merely request success ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore({ indexedDB: idb });
+        await store.putEntity('work', 'W-1', { id: 'W-1' }, '');
+        const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
+        db._stores.get('entities').failCommit = true;
+        assertEq('putEntity reports false when its transaction aborts at commit', await store.putEntity('work', 'W-2', { id: 'W-2' }, ''), false);
+        assertEq('deleteEntity reports false when its transaction aborts at commit', await store.deleteEntity('work', 'W-1'), false);
+        db._stores.get('lists').failCommit = true;
+        assertEq('deleteList reports false when its transaction aborts at commit', await store.deleteList('concepts:index'), false);
+        db._stores.get('entities').failCommit = false;
+        db._stores.get('lists').failCommit = false;
+        assertEq('reads still work after an aborted write transaction', (await store.getEntity('work', 'W-1')).value, { id: 'W-1' });
+        assertEq('a later write commits normally', await store.putEntity('work', 'W-2', { id: 'W-2' }, ''), true);
     }
 
     /* ---- deleteEntitiesByKind: no IndexedDB at all degrades to false, never a throw ---- */

@@ -127,12 +127,23 @@
             return dbPromise;
         }
 
-        /** Runs one IDB request inside its own transaction; never rejects. */
+        /**
+         * Runs one IDB request inside its own transaction; never rejects.
+         *
+         * A request's `onsuccess` means the request ran, NOT that the database
+         * modification committed -- a transaction can still abort afterwards.
+         * Callers that act on a reported write (offline coherence unblocks a
+         * domain only once its cleanup physically completed) need the stronger
+         * boundary, so a `readwrite` transaction resolves from `oncomplete`
+         * and reports false on `onerror`/`onabort`. Reads have no commit to
+         * wait for and resolve as soon as the request produces its result.
+         */
         function runRequest(storeName, mode, fn) {
             return openDb()
                 .then(function (db) {
                     if (!db) return { ok: false, value: null };
                     return new Promise(function (resolve) {
+                        const waitsForCommit = mode === 'readwrite';
                         let tx;
                         try {
                             tx = db.transaction([storeName], mode);
@@ -141,11 +152,15 @@
                             return;
                         }
                         let settled = false;
+                        let pendingResult = null;
                         function finish(result) {
                             if (settled) return;
                             settled = true;
                             resolve(result);
                         }
+                        tx.oncomplete = function () {
+                            finish(pendingResult || { ok: false, value: null });
+                        };
                         tx.onerror = function () {
                             finish({ ok: false, value: null });
                         };
@@ -166,7 +181,12 @@
                             return;
                         }
                         request.onsuccess = function () {
-                            finish({ ok: true, value: request.result });
+                            const result = { ok: true, value: request.result };
+                            if (waitsForCommit) {
+                                pendingResult = result;
+                                return;
+                            }
+                            finish(result);
                         };
                         request.onerror = function () {
                             try {
@@ -255,6 +275,15 @@
                             settled = true;
                             resolve(ok);
                         }
+                        // The sweep is only "done" once the transaction
+                        // COMMITS: individual delete requests succeeding does
+                        // not guarantee the rows are gone, and a caller that
+                        // unblocks a coherence domain on a sweep that later
+                        // aborted would republish known-stale rows.
+                        let swept = false;
+                        tx.oncomplete = function () {
+                            finish(swept);
+                        };
                         tx.onerror = function () {
                             finish(false);
                         };
@@ -284,7 +313,7 @@
                             cursorReq.onsuccess = function () {
                                 const cursor = cursorReq.result;
                                 if (!cursor) {
-                                    finish(true);
+                                    swept = true;
                                     return;
                                 }
                                 let del;
@@ -334,7 +363,7 @@
                             let i = 0;
                             function step() {
                                 if (i >= keys.length) {
-                                    finish(true);
+                                    swept = true;
                                     return;
                                 }
                                 let req;

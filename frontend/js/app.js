@@ -1414,7 +1414,11 @@ async function prksOfflineDetailFetch(kind, id, path, signal, options) {
         return { value: null, source: 'unavailable', cachedAt: null };
     }
     const opts = options && typeof options === 'object' ? options : {};
-    return await prksOfflineReadEntity(kind, id, path, { signal: signal, domain: opts.domain });
+    return await prksOfflineReadEntity(kind, id, path, {
+        signal: signal,
+        domain: opts.domain,
+        validate: opts.validate,
+    });
 }
 
 /**
@@ -1428,7 +1432,11 @@ async function prksOfflineListFetch(listKey, path, signal, options) {
         return { value: null, source: 'unavailable', cachedAt: null };
     }
     const opts = options && typeof options === 'object' ? options : {};
-    return await prksOfflineReadList(listKey, path, { signal: signal, domain: opts.domain });
+    return await prksOfflineReadList(listKey, path, {
+        signal: signal,
+        domain: opts.domain,
+        validate: opts.validate,
+    });
 }
 
 const PRKS_CONCEPTS_LIST_KEY =
@@ -1437,17 +1445,40 @@ const PRKS_CONCEPTS_DOMAIN =
     typeof PRKS_OFFLINE_DOMAIN_CONCEPTS === 'string' ? PRKS_OFFLINE_DOMAIN_CONCEPTS : 'concepts';
 
 /**
- * The old fetchConcepts() normalized the server shape before rendering; routing
- * through the offline runtime must not quietly lose that guarantee. A
- * wrong-shaped *server* body is a route error (never a silent empty list), a
+ * Shape guarantees the old fetchConcepts()/fetchConcept() helpers provided,
+ * kept in one place. They are handed to the offline runtime as its `validate`
+ * callback so an authoritative response is accepted BEFORE it can be published
+ * to the cache -- a reachable server answering 200 with the wrong body must
+ * never overwrite a previously good snapshot -- and reused below to judge a
+ * cached value.
+ */
+function prksIsConceptIndexShape(value) {
+    return Array.isArray(value);
+}
+
+function prksIsConceptShape(value, conceptId) {
+    return !!(
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        value.id != null &&
+        String(value.id) === String(conceptId)
+    );
+}
+
+/**
+ * A wrong-shaped *server* body is a route error (never a silent empty list); a
  * wrong-shaped *cached* body means the cache is unusable -- "no Concept index
  * was cached", never "No Concepts yet." -- and is discarded best-effort.
  * Returns the array, or null when no usable index exists.
  */
 function prksResolveOfflineConceptIndex(offlineResult) {
     if (!offlineResult || offlineResult.source === 'unavailable') return null;
-    if (Array.isArray(offlineResult.value)) return offlineResult.value;
+    if (prksIsConceptIndexShape(offlineResult.value)) return offlineResult.value;
     if (offlineResult.source === 'server') {
+        // Normally unreachable: the runtime rejects a bad authoritative shape
+        // before it ever returns (or caches) one. Kept as the backstop for a
+        // runtime without validator support.
         throw new Error('Received an unexpected Concepts response.');
     }
     if (typeof prksOfflineInvalidateList === 'function') {
@@ -1457,9 +1488,9 @@ function prksResolveOfflineConceptIndex(offlineResult) {
 }
 
 /**
- * Same guarantee for one Concept: fetchConcept() only ever returned an object
- * whose id matched. A bad *server* shape is a route error; a bad *cached* shape
- * makes the cache unavailable rather than a false "Concept not found."
+ * Same split for one Concept: a bad *server* shape is a route error; a bad
+ * *cached* shape makes the cache unavailable rather than a false "Concept not
+ * found."
  */
 function prksResolveOfflineConcept(offlineResult, conceptId) {
     if (!offlineResult || offlineResult.source === 'unavailable') {
@@ -1467,12 +1498,7 @@ function prksResolveOfflineConcept(offlineResult, conceptId) {
     }
     const value = offlineResult.value;
     if (value == null) return { concept: null, unavailable: false };
-    const shapeOk =
-        typeof value === 'object' &&
-        !Array.isArray(value) &&
-        value.id != null &&
-        String(value.id) === String(conceptId);
-    if (shapeOk) return { concept: value, unavailable: false };
+    if (prksIsConceptShape(value, conceptId)) return { concept: value, unavailable: false };
     if (offlineResult.source === 'server') {
         throw new Error('Received an unexpected Concept response.');
     }
@@ -2151,7 +2177,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     PRKS_CONCEPTS_LIST_KEY,
                     '/api/concepts',
                     routeSignal,
-                    { domain: PRKS_CONCEPTS_DOMAIN }
+                    { domain: PRKS_CONCEPTS_DOMAIN, validate: prksIsConceptIndexShape }
                 );
                 if (stale()) return;
                 const conceptItems = prksResolveOfflineConceptIndex(offlineConcepts);
@@ -2173,7 +2199,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     conceptId,
                     '/api/concepts/' + encodeURIComponent(conceptId),
                     routeSignal,
-                    { domain: PRKS_CONCEPTS_DOMAIN }
+                    {
+                        domain: PRKS_CONCEPTS_DOMAIN,
+                        validate: function (value) {
+                            return prksIsConceptShape(value, conceptId);
+                        },
+                    }
                 );
                 if (stale()) return;
                 const resolvedConcept = prksResolveOfflineConcept(offlineConcept, conceptId);
