@@ -78,6 +78,16 @@ def _wait_entity_cached(page, kind, entity_id, timeout=15000):
     )
 
 
+def _cached_entity(page, kind, entity_id):
+    return page.evaluate(
+        """([kind, id]) => {
+            const store = window.createPrksOfflineStore();
+            return store.getEntity(kind, id);
+        }""",
+        [kind, entity_id],
+    )
+
+
 def _wait_pdf_whole_file_cached(page, pdf_path, timeout=15000):
     page.wait_for_function(
         """(path) => {
@@ -149,6 +159,175 @@ class OfflineFoundationTests(unittest.TestCase):
         page.wait_for_function("() => !document.getElementById('prks-connectivity-indicator').hidden")
         self.assertIn("Offline", page.locator("#prks-connectivity-indicator").inner_text())
         self.assertEqual(_connectivity_state(page), "offline")
+
+    def test_authoritative_metadata_refresh_replaces_offline_work_cache(self):
+        """PATCH plus the existing complete Work GET replaces, never merges,
+        the disposable offline snapshot."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+        new_title = "Offline Coherent Metadata Title"
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").fill(new_title)
+        page.locator("#inline-save-metadata-btn").click()
+        page.locator("#panel-content .card-title", has_text=new_title).wait_for(timeout=15000)
+        page.wait_for_function(
+            """([id, title]) => window.createPrksOfflineStore().getEntity('work', id)
+                .then(row => !!row && row.value && row.value.title === title)""",
+            arg=[work_a, new_title],
+            timeout=15000,
+        )
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_function("title => document.body.innerText.indexOf(title) !== -1", arg=new_title)
+        page.locator('[data-prks-role="offline-provenance-banner"]', has_text="Offline").wait_for()
+
+    def test_successful_research_notes_save_invalidates_work_cache(self):
+        """A partial notes PATCH cannot make an older cached complete Work eligible."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        page.locator(".CodeMirror").click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text("offline coherence research note")
+        page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
+        page.wait_for_function(
+            "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
+            arg=work_a,
+            timeout=15000,
+        )
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+
+    def test_successful_private_notes_save_invalidates_work_cache(self):
+        """Private Work note PATCH is partial too; cache must be absent until a fresh Work read."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+        selector = "#prks-private-notes-work-" + work_a
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        page.locator(selector).fill("offline coherence private note")
+        page.locator(selector).blur()
+        page.locator("#prks-private-notes-status-work-" + work_a, has_text="Saved").wait_for(timeout=15000)
+        page.wait_for_function(
+            "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
+            arg=work_a,
+            timeout=15000,
+        )
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+
+    def test_authoritative_tag_refresh_replaces_offline_work_cache(self):
+        """Representative relationship mutation stores only its refreshed full Work."""
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+        tag_name = "Offline Coherent Tag"
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        page.locator("#panel-content button", has_text="Manage tags").click()
+        page.locator("#work-tag-search").fill(tag_name)
+        page.locator("#work-tag-search-results .result-item--create", has_text=tag_name).click()
+        page.locator("#work-tags-list .work-tag-chip", has_text=tag_name).wait_for(timeout=15000)
+        page.wait_for_function(
+            """([id, name]) => window.createPrksOfflineStore().getEntity('work', id)
+                .then(row => !!row && Array.isArray(row.value.tags)
+                    && row.value.tags.some(tag => tag && tag.name === name))""",
+            arg=[work_a, tag_name],
+            timeout=15000,
+        )
+
+    def test_successful_work_delete_evicts_offline_cache(self):
+        """Acknowledged DELETE removes its Work snapshot before offline navigation can reuse it."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        _open_details_drawer_if_tiled(page)
+        advanced = page.locator(".work-details-advanced")
+        if advanced.get_attribute("open") is None:
+            advanced.locator("summary").click()
+        page.locator(".delete-work-btn").click()
+        page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        self.assertIsNone(_cached_entity(page, "work", work_a))
+
+        context.set_offline(True)
+        page.evaluate("id => { void window.prksNavigate('#/works/' + id); }", work_a)
+        page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+
+    def test_failed_notes_save_retains_previous_work_cache(self):
+        """A rejected notes PATCH leaves the last known-good snapshot available."""
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+
+        def reject_notes_patch(route):
+            if route.request.method == "PATCH" and urlparse(route.request.url).path == "/api/works/" + work_a:
+                route.fulfill(status=500, content_type="application/json", body='{"error":"test failure"}')
+                return
+            route.fallback()
+
+        page.route("**/api/works/*", reject_notes_patch)
+        try:
+            page.locator(".CodeMirror").click()
+            page.keyboard.press("Control+A")
+            page.keyboard.insert_text("failed offline coherence note")
+            page.locator('[data-prks-role="editor-status"]', has_text="Error saving changes").wait_for(timeout=15000)
+            cached = _cached_entity(page, "work", work_a)
+            self.assertIsNotNone(cached)
+            self.assertEqual(cached["value"]["id"], work_a)
+        finally:
+            page.unroute("**/api/works/*", reject_notes_patch)
+
+    def test_failed_work_delete_retains_offline_cache(self):
+        """Unacknowledged DELETE must not discard a potentially valid snapshot."""
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+
+        def reject_delete(route):
+            if route.request.method == "DELETE" and urlparse(route.request.url).path == "/api/works/" + work_a:
+                route.fulfill(status=500, content_type="application/json", body='{"error":"test failure"}')
+                return
+            route.fallback()
+
+        page.route("**/api/works/*", reject_delete)
+        try:
+            _open_details_drawer_if_tiled(page)
+            advanced = page.locator(".work-details-advanced")
+            if advanced.get_attribute("open") is None:
+                advanced.locator("summary").click()
+            page.locator(".delete-work-btn").click()
+            page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
+            page.locator("#prks-modal-confirm-ok").click()
+            page.locator("#prks-modal-confirm:not(.hidden)", has_text="Error deleting file!").wait_for()
+            self.assertIsNotNone(_cached_entity(page, "work", work_a))
+        finally:
+            page.unroute("**/api/works/*", reject_delete)
 
     def test_offline_open_of_uncached_work_shows_unavailable(self):
         """Scenario 2: offline navigation to a Work never opened online -- a clean
@@ -308,6 +487,10 @@ class OfflineFoundationTests(unittest.TestCase):
 
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").fill("IndexedDB unavailable still saves")
+        page.locator("#inline-save-metadata-btn").click()
+        page.locator("#panel-content .card-title", has_text="IndexedDB unavailable still saves").wait_for(timeout=15000)
         self.assertEqual(_connectivity_state(page), "online")
 
     def test_research_notes_are_read_only_immediately_when_offline(self):

@@ -791,6 +791,10 @@ async function deleteWork(w_id, ownerCtx) {
             }
             return;
         }
+        if (typeof prksOfflineInvalidateEntity === 'function') {
+            // DELETE is canonical only after this acknowledged success.
+            await prksOfflineInvalidateEntity('work', w_id);
+        }
         window.__prksRecentlyAddedDirty = true;
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
@@ -1423,7 +1427,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     );
     if (transient) transient.promise = savePromise;
     void savePromise
-        .then(function (res) {
+        .then(async function (res) {
             const ok = !!(res && res.ok);
             const localApplied = prksWorkNotesSettleSave(notes, token, ok);
             let transientApplied = false;
@@ -1440,6 +1444,11 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 prksPruneResearchDrafts();
             }
             if (!localApplied && !transientApplied) return undefined;
+            // PATCH has no complete canonical Work payload. A successful
+            // current save must make any older offline Work ineligible.
+            if (ok && typeof prksOfflineInvalidateEntity === 'function') {
+                await prksOfflineInvalidateEntity('work', id);
+            }
             const ownerLive = owner && typeof owner.isCurrent === 'function' && owner.isCurrent();
             if (statusEl && ownerLive) {
                 statusEl.innerText =

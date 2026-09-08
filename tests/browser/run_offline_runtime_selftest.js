@@ -70,6 +70,10 @@ function makeFakeStore(overrides) {
             entities.set(kind + ':' + id, { value: value, cachedAt: 9999, sourceRevision: rev });
             return true;
         },
+        deleteEntity: async function (kind, id) {
+            entities.delete(kind + ':' + id);
+            return true;
+        },
         getList: async function (key) {
             return lists.get(key) || null;
         },
@@ -351,6 +355,56 @@ async function run() {
         assertEq('offline fallback returns cache provenance', result.source, 'cache');
         assertEq('offline fallback returns the previously cached value', result.value, { id: 'W-2', title: 'Cached Work' });
         assertEq('runtime transitioned to offline after the network failure', runtime.getState(), mod.PRKS_OFFLINE_STATE_OFFLINE);
+    }
+
+    /* ---- explicit cache coherence: complete authoritative Work replaces cache; partial success invalidates it ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('work', 'W-coherent', { id: 'W-coherent', title: 'Old' }, '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('unused'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const fresh = { id: 'W-coherent', title: 'New', tags: [{ id: 'tag-1' }] };
+        assertEq('authoritative Work replacement writes cache', await runtime.cacheEntity('work', 'W-coherent', fresh), true);
+        assertEq('authoritative Work replacement overwrites stale cache', (await store.getEntity('work', 'W-coherent')).value, fresh);
+        assertEq('cache helper does not mutate supplied Work', fresh, { id: 'W-coherent', title: 'New', tags: [{ id: 'tag-1' }] });
+        assertEq('partial successful Work mutation invalidates cache', await runtime.invalidateEntity('work', 'W-coherent'), true);
+        assertEq('invalidated Work cannot serve offline fallback', await store.getEntity('work', 'W-coherent'), null);
+        assertEq('null is never cached as an entity replacement', await runtime.cacheEntity('work', 'W-coherent', null), false);
+    }
+
+    /* ---- cache-maintenance failures are non-fatal and never change connectivity ---- */
+    {
+        const store = makeFakeStore({
+            putEntity: async function () {
+                throw new Error('quota');
+            },
+            deleteEntity: async function () {
+                throw new Error('blocked');
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('unused'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        assertEq('cache write failure resolves false', await runtime.cacheEntity('work', 'W-fail', { id: 'W-fail' }), false);
+        assertEq('cache delete failure resolves false', await runtime.invalidateEntity('work', 'W-fail'), false);
+        assertEq('cache maintenance failure keeps connectivity unchanged', runtime.getState(), mod.PRKS_OFFLINE_STATE_ONLINE);
     }
 
     /* ---- readThroughEntity: network failure with nothing cached -> unavailable, not a fake success ---- */

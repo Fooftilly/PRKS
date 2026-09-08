@@ -2711,6 +2711,9 @@ function initForms() {
                 if (typeof fetchWorkDetails === 'function') {
                     const _aw = await fetchWorkDetails(attachWid);
                     if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ownerCtx, attachWid, _aw)) {
+                        if (_aw && typeof prksOfflineCacheEntity === 'function') {
+                            void prksOfflineCacheEntity('work', attachWid, _aw);
+                        }
                         if (ownerCtx && ownerCtx.ui) ownerCtx.ui.workFolderEditing = false;
                         if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(ownerCtx) : false) {
                             updatePanelContent('details');
@@ -2991,6 +2994,9 @@ function initForms() {
         if (ownsWork && typeof fetchWorkDetails === 'function') {
             const _rw = await fetchWorkDetails(work_id);
             if (prksApplyOwnedWorkEntity(ownerCtx, work_id, _rw)) {
+                if (_rw && typeof prksOfflineCacheEntity === 'function') {
+                    void prksOfflineCacheEntity('work', work_id, _rw);
+                }
                 if (typeof prksReplaceFocusedWorkDetailsPanel === 'function') {
                     prksReplaceFocusedWorkDetailsPanel(ownerCtx, _rw);
                 }

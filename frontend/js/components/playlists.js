@@ -601,6 +601,9 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                     signal: ctx && ctx.abortController && ctx.abortController.signal,
                 });
                 if (ownsPanel(panel) && typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _pw)) {
+                    if (_pw && typeof prksOfflineCacheEntity === 'function') {
+                        void prksOfflineCacheEntity('work', wid, _pw);
+                    }
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');
@@ -632,6 +635,9 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                     signal: ctx && ctx.abortController && ctx.abortController.signal,
                 });
                 if (ownsPanel(panel) && typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _rmw)) {
+                    if (_rmw && typeof prksOfflineCacheEntity === 'function') {
+                        void prksOfflineCacheEntity('work', wid, _rmw);
+                    }
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');

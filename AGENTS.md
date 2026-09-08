@@ -550,6 +550,13 @@ an offline condition and never falls back to cache.
 Cached values always carry explicit provenance (`source: 'server' | 'cache' |
 'unavailable'`, plus `cachedAt`) — never hidden, never presented as current.
 
+A successful canonical mutation must never leave a known-stale offline snapshot
+eligible for fallback. When a complete authoritative replacement is available,
+refresh the disposable cached entity; when only a partial successful mutation is
+available, invalidate that entity; when a mutation fails, retain its previous
+cache entry. Cache-maintenance failures are non-fatal and never change canonical
+server state.
+
 Every canonical Work mutation (metadata Save, delete, role/person links,
 folder/playlist/tag attach-or-remove, PDF annotation create/edit/delete) must
 call `prksOfflineGuardMutation()` first and stop when it returns `true`. Never

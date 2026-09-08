@@ -965,6 +965,9 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
         if (typeof fetchWorkDetails === 'function') {
             const _fw = await fetchWorkDetails(wid);
             if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _fw)) {
+                if (_fw && typeof prksOfflineCacheEntity === 'function') {
+                    void prksOfflineCacheEntity('work', wid, _fw);
+                }
                 if (ctx && ctx.ui) ctx.ui.workFolderEditing = false;
                 const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                 if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
@@ -1072,6 +1075,9 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
             if (typeof fetchWorkDetails === 'function') {
                 const _uw = await fetchWorkDetails(wid);
                 if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _uw)) {
+                    if (_uw && typeof prksOfflineCacheEntity === 'function') {
+                        void prksOfflineCacheEntity('work', wid, _uw);
+                    }
                     if (ctx && ctx.ui) ctx.ui.workFolderEditing = false;
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
@@ -1095,6 +1101,9 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
             if (typeof fetchWorkDetails === 'function') {
                 const _rw = await fetchWorkDetails(wid);
                 if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _rw)) {
+                    if (_rw && typeof prksOfflineCacheEntity === 'function') {
+                        void prksOfflineCacheEntity('work', wid, _rw);
+                    }
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');

@@ -233,12 +233,32 @@
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
             noteRequestSuccess();
-            if (store) {
-                store.putEntity(kind, id, raw, '').catch(function () {
-                    /* Caching failure must never fail the online read. */
-                });
-            }
+            void cacheEntity(kind, id, raw);
             return { value: raw, source: 'server', cachedAt: now() };
+        }
+
+        /** Best-effort persistence for a complete authoritative entity value. */
+        function cacheEntity(kind, id, value) {
+            if (value == null || !store || typeof store.putEntity !== 'function') return Promise.resolve(false);
+            try {
+                return Promise.resolve(store.putEntity(kind, id, value, '')).catch(function () {
+                    return false;
+                });
+            } catch (_e) {
+                return Promise.resolve(false);
+            }
+        }
+
+        /** Remove a disposable entity snapshot. Never changes connectivity or server state. */
+        function invalidateEntity(kind, id) {
+            if (!store || typeof store.deleteEntity !== 'function') return Promise.resolve(false);
+            try {
+                return Promise.resolve(store.deleteEntity(kind, id)).catch(function () {
+                    return false;
+                });
+            } catch (_e) {
+                return Promise.resolve(false);
+            }
         }
 
         /** Same policy as readThroughEntity but for a named list snapshot. */
@@ -366,6 +386,8 @@
             noteRequestFailure: noteRequestFailure,
             readThroughEntity: readThroughEntity,
             readThroughList: readThroughList,
+            cacheEntity: cacheEntity,
+            invalidateEntity: invalidateEntity,
             isMutationBlocked: isMutationBlocked,
             guardMutation: guardMutation,
             diagnostics: diagnostics,
@@ -407,6 +429,12 @@
     function prksOfflineReadList(listKey, path, opts) {
         return production.readThroughList(listKey, path, opts);
     }
+    function prksOfflineCacheEntity(kind, id, value) {
+        return production.cacheEntity(kind, id, value);
+    }
+    function prksOfflineInvalidateEntity(kind, id) {
+        return production.invalidateEntity(kind, id);
+    }
     function prksOfflineIsMutationBlocked() {
         return production.isMutationBlocked();
     }
@@ -430,6 +458,8 @@
         prksOfflineNoteRequestFailure: prksOfflineNoteRequestFailure,
         prksOfflineReadEntity: prksOfflineReadEntity,
         prksOfflineReadList: prksOfflineReadList,
+        prksOfflineCacheEntity: prksOfflineCacheEntity,
+        prksOfflineInvalidateEntity: prksOfflineInvalidateEntity,
         prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,

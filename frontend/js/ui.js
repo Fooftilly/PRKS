@@ -1627,6 +1627,9 @@ async function addRoleToWorkFromMetaEditor(workId) {
                 typeof prksApplyOwnedWorkEntity === 'function'
                     ? prksApplyOwnedWorkEntity(ownerCtx, resolvedWorkId, _refreshed)
                     : false;
+            if (applied && _refreshed && typeof prksOfflineCacheEntity === 'function') {
+                void prksOfflineCacheEntity('work', resolvedWorkId, _refreshed);
+            }
             if (applied && prksOwnerTabIsFocused(ownerCtx) && list && _refreshed) {
                 list.innerHTML = buildWorkLinkedPersonsHtml(_refreshed);
             }
@@ -2463,7 +2466,7 @@ function prksEnqueuePrivateNotesSave(editor) {
     );
     entry.promise = promise;
     void promise
-        .then(function (res) {
+        .then(async function (res) {
             if (token !== entry.latestSaveToken) return;
             const ok = !!(res && res.ok);
             const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
@@ -2473,6 +2476,10 @@ function prksEnqueuePrivateNotesSave(editor) {
             entry.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
             entry.updatedAt = Date.now();
             prksPrunePrivateNoteDrafts();
+            if (ok && editor.entityType === 'work' && typeof prksOfflineInvalidateEntity === 'function') {
+                // Successful PATCH is partial even if a newer local draft exists.
+                await prksOfflineInvalidateEntity('work', editor.entityId);
+            }
             if (!prksPrivateNotesOwnerCurrent(editor)) return;
             const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
             if (liveEditor !== editor) return;
@@ -3341,6 +3348,9 @@ async function submitWorkMetaEdit(workId) {
                 ? prksApplyOwnedWorkEntity(ownerCtx, workId, _saved)
                 : false;
         if (!applied) return;
+        if (_saved && typeof prksOfflineCacheEntity === 'function') {
+            void prksOfflineCacheEntity('work', workId, _saved);
+        }
         // Tile-local DOM beneath ownerCtx.root (page header, PDF toolbar) -- not shared-panel
         // DOM -- so it is updated unconditionally, even while another tab owns the panel.
         const headerTitle = ownerCtx && ownerCtx.query ? ownerCtx.query('.page-header--work-title') : null;
@@ -3496,6 +3506,9 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx) {
             const _refreshedW = await fetchWorkDetails(wIdStr);
             if (typeof prksApplyOwnedWorkEntity !== 'function' || !prksApplyOwnedWorkEntity(ctx, workId, _refreshedW)) {
                 return;
+            }
+            if (_refreshedW && typeof prksOfflineCacheEntity === 'function') {
+                void prksOfflineCacheEntity('work', workId, _refreshedW);
             }
             prksReplaceFocusedWorkDetailsPanel(ctx, _refreshedW);
         }
@@ -3910,6 +3923,9 @@ async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx) {
         const fresh = await fetchWorkDetails(entityId);
         if (typeof prksApplyOwnedWorkEntity !== 'function' || !prksApplyOwnedWorkEntity(ctx, entityId, fresh)) {
             return;
+        }
+        if (fresh && typeof prksOfflineCacheEntity === 'function') {
+            void prksOfflineCacheEntity('work', entityId, fresh);
         }
         prksReplaceFocusedWorkDetailsPanel(ctx, fresh);
     } else {
