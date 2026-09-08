@@ -186,6 +186,40 @@ class OfflineFoundationTests(unittest.TestCase):
         page.wait_for_function("title => document.body.innerText.indexOf(title) !== -1", arg=new_title)
         page.locator('[data-prks-role="offline-provenance-banner"]', has_text="Offline").wait_for()
 
+    def test_metadata_success_with_failed_refresh_leaves_work_offline_unavailable(self):
+        """PATCH success invalidates before its complete Work GET; a failed GET
+        cannot leave the old title eligible for fallback."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+
+        def fail_followup_detail(route):
+            req = route.request
+            if req.method == "GET" and urlparse(req.url).path == "/api/works/" + work_a:
+                route.abort("failed")
+                return
+            route.fallback()
+
+        page.route("**/api/works/*", fail_followup_detail)
+        try:
+            page.locator("#panel-content button", has_text="Edit metadata").click()
+            page.locator("#meta-title").fill("New but no follow-up GET")
+            page.locator("#inline-save-metadata-btn").click()
+            page.wait_for_function(
+                "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
+                arg=work_a,
+                timeout=15000,
+            )
+        finally:
+            page.unroute("**/api/works/*", fail_followup_detail)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+
     def test_successful_research_notes_save_invalidates_work_cache(self):
         """A partial notes PATCH cannot make an older cached complete Work eligible."""
         server, page, context, _collector = self._start()

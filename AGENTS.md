@@ -550,12 +550,14 @@ an offline condition and never falls back to cache.
 Cached values always carry explicit provenance (`source: 'server' | 'cache' |
 'unavailable'`, plus `cachedAt`) — never hidden, never presented as current.
 
-A successful canonical mutation must never leave a known-stale offline snapshot
-eligible for fallback. When a complete authoritative replacement is available,
-refresh the disposable cached entity; when only a partial successful mutation is
-available, invalidate that entity; when a mutation fails, retain its previous
-cache entry. Cache-maintenance failures are non-fatal and never change canonical
-server state.
+A successful canonical Work mutation must immediately invalidate its offline
+snapshot independent of UI ownership, focus, route generation, or panel state.
+Only a complete authoritative replacement from that same/current coherence
+generation may make the entity cache-eligible again; an older post-mutation GET
+must never undo a later invalidation. Stale UI callbacks may not repaint, but
+they still acknowledge canonical mutation success for cache coherence. When a
+mutation fails, retain its previous cache entry. Cache-maintenance failures are
+non-fatal and never change canonical server state.
 
 Every canonical Work mutation (metadata Save, delete, role/person links,
 folder/playlist/tag attach-or-remove, PDF annotation create/edit/delete) must

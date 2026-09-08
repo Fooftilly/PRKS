@@ -958,16 +958,16 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
 
     async function assignToNewFolderAndRefresh(newFolderId, message) {
         if (typeof patchWorkFolder !== 'function') return;
-        await patchWorkFolder(wid, newFolderId);
+        const coherenceToken = await patchWorkFolder(wid, newFolderId);
         folderRows = await fetchFolders();
         if (!Array.isArray(folderRows)) folderRows = [];
         if (status) status.textContent = message || 'Folder set.';
         if (typeof fetchWorkDetails === 'function') {
             const _fw = await fetchWorkDetails(wid);
+            if (_fw && typeof prksOfflineCacheEntityIfCurrent === 'function') {
+                void prksOfflineCacheEntityIfCurrent('work', wid, _fw, coherenceToken);
+            }
             if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _fw)) {
-                if (_fw && typeof prksOfflineCacheEntity === 'function') {
-                    void prksOfflineCacheEntity('work', wid, _fw);
-                }
                 if (ctx && ctx.ui) ctx.ui.workFolderEditing = false;
                 const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                 if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
@@ -1070,14 +1070,14 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
         if (!pid) return;
         try {
             if (typeof patchWorkFolder !== 'function') return;
-            await patchWorkFolder(wid, pid);
+            const coherenceToken = await patchWorkFolder(wid, pid);
             if (status) status.textContent = 'Folder updated.';
             if (typeof fetchWorkDetails === 'function') {
                 const _uw = await fetchWorkDetails(wid);
+                if (_uw && typeof prksOfflineCacheEntityIfCurrent === 'function') {
+                    void prksOfflineCacheEntityIfCurrent('work', wid, _uw, coherenceToken);
+                }
                 if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _uw)) {
-                    if (_uw && typeof prksOfflineCacheEntity === 'function') {
-                        void prksOfflineCacheEntity('work', wid, _uw);
-                    }
                     if (ctx && ctx.ui) ctx.ui.workFolderEditing = false;
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
@@ -1094,16 +1094,16 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
         if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         try {
             if (typeof patchWorkFolder !== 'function') return;
-            await patchWorkFolder(wid, null);
+            const coherenceToken = await patchWorkFolder(wid, null);
             input.value = '';
             hidden.value = '';
             if (status) status.textContent = 'Removed from folder.';
             if (typeof fetchWorkDetails === 'function') {
                 const _rw = await fetchWorkDetails(wid);
+                if (_rw && typeof prksOfflineCacheEntityIfCurrent === 'function') {
+                    void prksOfflineCacheEntityIfCurrent('work', wid, _rw, coherenceToken);
+                }
                 if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _rw)) {
-                    if (_rw && typeof prksOfflineCacheEntity === 'function') {
-                        void prksOfflineCacheEntity('work', wid, _rw);
-                    }
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');

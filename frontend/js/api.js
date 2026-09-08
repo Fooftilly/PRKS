@@ -647,6 +647,9 @@ async function patchWorkFolder(workId, folderIdOrNull) {
     if (!res.ok) {
         throw new Error(data.error || 'Could not update folder.');
     }
+    return typeof prksOfflineMarkEntityChanged === 'function'
+        ? prksOfflineMarkEntityChanged('work', workId)
+        : null;
 }
 
 async function createFolder(title, description = '', options = {}) {
@@ -698,6 +701,11 @@ async function bulkUpdateWorks(payload) {
         );
         err.httpStatus = res.status;
         throw err;
+    }
+    if (typeof prksOfflineMarkEntityChanged === 'function' && Array.isArray(payload && payload.work_ids)) {
+        payload.work_ids.forEach(function (workId) {
+            prksOfflineMarkEntityChanged('work', workId);
+        });
     }
     return data;
 }

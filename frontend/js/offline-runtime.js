@@ -72,6 +72,19 @@
         let probeAttempt = 0;
         let probeInFlight = false;
         let bound = false;
+        // Runtime-only coherence state. A canonical mutation makes an older
+        // IndexedDB row ineligible immediately, even while its delete request
+        // is still settling. Nothing here is canonical or persisted.
+        const entityCoherence = new Map();
+        const ineligibleEntities = new Set();
+
+        function entityKey(kind, id) {
+            return String(kind) + '\u0000' + String(id);
+        }
+
+        function currentEntityGeneration(kind, id) {
+            return entityCoherence.get(entityKey(kind, id)) || 0;
+        }
 
         function setState(next) {
             if (state === next) return;
@@ -208,6 +221,7 @@
          */
         async function readThroughEntity(kind, id, path, opts) {
             const options2 = opts && typeof opts === 'object' ? opts : {};
+            const coherenceToken = currentEntityGeneration(kind, id);
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -222,6 +236,9 @@
                     throw err;
                 }
                 noteRequestFailure();
+                if (ineligibleEntities.has(entityKey(kind, id))) {
+                    return { value: null, source: 'unavailable', cachedAt: null };
+                }
                 if (store) {
                     const cached = await store.getEntity(kind, id).catch(function () {
                         return null;
@@ -233,15 +250,28 @@
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
             noteRequestSuccess();
-            void cacheEntity(kind, id, raw);
+            void cacheEntityIfCurrent(kind, id, raw, coherenceToken);
             return { value: raw, source: 'server', cachedAt: now() };
         }
 
         /** Best-effort persistence for a complete authoritative entity value. */
         function cacheEntity(kind, id, value) {
+            return cacheEntityIfCurrent(kind, id, value, currentEntityGeneration(kind, id));
+        }
+
+        /** Cache only if no later canonical change has superseded this value. */
+        function cacheEntityIfCurrent(kind, id, value, coherenceToken) {
             if (value == null || !store || typeof store.putEntity !== 'function') return Promise.resolve(false);
+            const key = entityKey(kind, id);
+            if (coherenceToken !== currentEntityGeneration(kind, id)) return Promise.resolve(false);
             try {
-                return Promise.resolve(store.putEntity(kind, id, value, '')).catch(function () {
+                return Promise.resolve(store.putEntity(kind, id, value, coherenceToken)).then(function (ok) {
+                    if (ok && coherenceToken === currentEntityGeneration(kind, id)) {
+                        ineligibleEntities.delete(key);
+                        return true;
+                    }
+                    return false;
+                }).catch(function () {
                     return false;
                 });
             } catch (_e) {
@@ -259,6 +289,21 @@
             } catch (_e) {
                 return Promise.resolve(false);
             }
+        }
+
+        /**
+         * Call immediately after a successful canonical mutation. This must
+         * happen before any UI ownership test. The returned token gates a
+         * later complete Work GET so an older response cannot undo a newer
+         * invalidation.
+         */
+        function markEntityChanged(kind, id) {
+            const key = entityKey(kind, id);
+            const next = currentEntityGeneration(kind, id) + 1;
+            entityCoherence.set(key, next);
+            ineligibleEntities.add(key);
+            void invalidateEntity(kind, id);
+            return next;
         }
 
         /** Same policy as readThroughEntity but for a named list snapshot. */
@@ -387,7 +432,9 @@
             readThroughEntity: readThroughEntity,
             readThroughList: readThroughList,
             cacheEntity: cacheEntity,
+            cacheEntityIfCurrent: cacheEntityIfCurrent,
             invalidateEntity: invalidateEntity,
+            markEntityChanged: markEntityChanged,
             isMutationBlocked: isMutationBlocked,
             guardMutation: guardMutation,
             diagnostics: diagnostics,
@@ -432,8 +479,14 @@
     function prksOfflineCacheEntity(kind, id, value) {
         return production.cacheEntity(kind, id, value);
     }
+    function prksOfflineCacheEntityIfCurrent(kind, id, value, coherenceToken) {
+        return production.cacheEntityIfCurrent(kind, id, value, coherenceToken);
+    }
     function prksOfflineInvalidateEntity(kind, id) {
         return production.invalidateEntity(kind, id);
+    }
+    function prksOfflineMarkEntityChanged(kind, id) {
+        return production.markEntityChanged(kind, id);
     }
     function prksOfflineIsMutationBlocked() {
         return production.isMutationBlocked();
@@ -459,7 +512,9 @@
         prksOfflineReadEntity: prksOfflineReadEntity,
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
+        prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,
         prksOfflineInvalidateEntity: prksOfflineInvalidateEntity,
+        prksOfflineMarkEntityChanged: prksOfflineMarkEntityChanged,
         prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,

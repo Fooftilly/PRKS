@@ -407,6 +407,65 @@ async function run() {
         assertEq('cache maintenance failure keeps connectivity unchanged', runtime.getState(), mod.PRKS_OFFLINE_STATE_ONLINE);
     }
 
+    /* ---- canonical mutation generations block fallback and stale post-mutation GETs ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('work', 'W-race', { id: 'W-race', title: 'v0' }, '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const tokenA = runtime.markEntityChanged('work', 'W-race');
+        const tokenB = runtime.markEntityChanged('work', 'W-race');
+        assert('later canonical mutation has a newer coherence token', tokenB > tokenA);
+        assertEq(
+            'stale GET A cannot repopulate after mutation B',
+            await runtime.cacheEntityIfCurrent('work', 'W-race', { id: 'W-race', title: 'version A' }, tokenA),
+            false
+        );
+        assertEq(
+            'only current authoritative GET B becomes eligible',
+            await runtime.cacheEntityIfCurrent('work', 'W-race', { id: 'W-race', title: 'version B' }, tokenB),
+            true
+        );
+        assertEq('cache holds current generation B only', (await store.getEntity('work', 'W-race')).value.title, 'version B');
+    }
+
+    /* ---- even a failed IndexedDB delete cannot serve an invalidated row in this runtime ---- */
+    {
+        const entities = new Map();
+        entities.set('work:W-delete-fail', { value: { id: 'W-delete-fail', title: 'old' }, cachedAt: 1 });
+        const store = makeFakeStore({
+            getEntity: async function (kind, id) {
+                return entities.get(kind + ':' + id) || null;
+            },
+            deleteEntity: async function () {
+                return false;
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markEntityChanged('work', 'W-delete-fail');
+        const result = await runtime.readThroughEntity('work', 'W-delete-fail', '/api/works/W-delete-fail');
+        assertEq('invalidated row is unavailable despite delete failure', result.source, 'unavailable');
+    }
+
     /* ---- readThroughEntity: network failure with nothing cached -> unavailable, not a fake success ---- */
     {
         const store = makeFakeStore();

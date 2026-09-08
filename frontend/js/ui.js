@@ -1458,7 +1458,11 @@ async function prksEditRoleCreditOnWork(btn) {
         await prksAlertMessage(data.error || 'Could not update name on file.', 'Could not save');
         return;
     }
-    await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx);
+    const coherenceToken =
+        typeof prksOfflineMarkEntityChanged === 'function'
+            ? prksOfflineMarkEntityChanged('work', workId)
+            : null;
+    await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToken);
 }
 
 window.prksRoleDisplayName = prksRoleDisplayName;
@@ -1621,15 +1625,19 @@ async function addRoleToWorkFromMetaEditor(workId) {
             await prksNotifyRoleLinkFailure(data.error, roleType);
             return;
         }
+        const coherenceToken =
+            typeof prksOfflineMarkEntityChanged === 'function'
+                ? prksOfflineMarkEntityChanged('work', resolvedWorkId)
+                : null;
         if (typeof fetchWorkDetails === 'function') {
             const _refreshed = await fetchWorkDetails(resolvedWorkId);
+            if (_refreshed && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
+                void prksOfflineCacheEntityIfCurrent('work', resolvedWorkId, _refreshed, coherenceToken);
+            }
             const applied =
                 typeof prksApplyOwnedWorkEntity === 'function'
                     ? prksApplyOwnedWorkEntity(ownerCtx, resolvedWorkId, _refreshed)
                     : false;
-            if (applied && _refreshed && typeof prksOfflineCacheEntity === 'function') {
-                void prksOfflineCacheEntity('work', resolvedWorkId, _refreshed);
-            }
             if (applied && prksOwnerTabIsFocused(ownerCtx) && list && _refreshed) {
                 list.innerHTML = buildWorkLinkedPersonsHtml(_refreshed);
             }
@@ -2467,8 +2475,12 @@ function prksEnqueuePrivateNotesSave(editor) {
     entry.promise = promise;
     void promise
         .then(async function (res) {
-            if (token !== entry.latestSaveToken) return;
             const ok = !!(res && res.ok);
+            if (ok && editor.entityType === 'work' && typeof prksOfflineMarkEntityChanged === 'function') {
+                // Canonical success matters even when this UI save is stale.
+                prksOfflineMarkEntityChanged('work', editor.entityId);
+            }
+            if (token !== entry.latestSaveToken) return;
             const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
             entry.settledSaveToken = token;
             entry.promise = null;
@@ -2476,10 +2488,6 @@ function prksEnqueuePrivateNotesSave(editor) {
             entry.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
             entry.updatedAt = Date.now();
             prksPrunePrivateNoteDrafts();
-            if (ok && editor.entityType === 'work' && typeof prksOfflineInvalidateEntity === 'function') {
-                // Successful PATCH is partial even if a newer local draft exists.
-                await prksOfflineInvalidateEntity('work', editor.entityId);
-            }
             if (!prksPrivateNotesOwnerCurrent(editor)) return;
             const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
             if (liveEditor !== editor) return;
@@ -3335,22 +3343,25 @@ async function submitWorkMetaEdit(workId) {
             const errData = await saveRes.json().catch(() => ({}));
             throw new Error(errData.error || `Server error ${saveRes.status}`);
         }
+        const coherenceToken =
+            typeof prksOfflineMarkEntityChanged === 'function'
+                ? prksOfflineMarkEntityChanged('work', workId)
+                : null;
         // From here on, background completion must proceed as long as this ctx still owns the
         // Work/route -- NOT gated on panel ownership. Another tile may already own the shared
         // panel by the time this PATCH resolves.
-        if (!ownsWorkContext()) return;
         const _saved = await fetchWorkDetails(workId, {
             signal: ownerCtx && ownerCtx.abortController && ownerCtx.abortController.signal,
         });
+        if (_saved && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
+            void prksOfflineCacheEntityIfCurrent('work', workId, _saved, coherenceToken);
+        }
         if (!ownsWorkContext()) return;
         const applied =
             typeof prksApplyOwnedWorkEntity === 'function'
                 ? prksApplyOwnedWorkEntity(ownerCtx, workId, _saved)
                 : false;
         if (!applied) return;
-        if (_saved && typeof prksOfflineCacheEntity === 'function') {
-            void prksOfflineCacheEntity('work', workId, _saved);
-        }
         // Tile-local DOM beneath ownerCtx.root (page header, PDF toolbar) -- not shared-panel
         // DOM -- so it is updated unconditionally, even while another tab owns the panel.
         const headerTitle = ownerCtx && ownerCtx.query ? ownerCtx.query('.page-header--work-title') : null;
@@ -3486,10 +3497,14 @@ async function prksRemoveWorkRoleLink(btn) {
         await prksAlertMessage(data.error || 'Could not remove link.', 'Could not save');
         return;
     }
-    await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx);
+    const coherenceToken =
+        typeof prksOfflineMarkEntityChanged === 'function'
+            ? prksOfflineMarkEntityChanged('work', workId)
+            : null;
+    await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToken);
 }
 
-async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx) {
+async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToken) {
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const route = ctx && (ctx.lastResolvedRoute || ctx.route);
     const wIdStr = String(workId);
@@ -3504,11 +3519,11 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx) {
     ) {
         if (typeof fetchWorkDetails === 'function') {
             const _refreshedW = await fetchWorkDetails(wIdStr);
+            if (_refreshedW && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
+                void prksOfflineCacheEntityIfCurrent('work', workId, _refreshedW, coherenceToken);
+            }
             if (typeof prksApplyOwnedWorkEntity !== 'function' || !prksApplyOwnedWorkEntity(ctx, workId, _refreshedW)) {
                 return;
-            }
-            if (_refreshedW && typeof prksOfflineCacheEntity === 'function') {
-                void prksOfflineCacheEntity('work', workId, _refreshedW);
             }
             prksReplaceFocusedWorkDetailsPanel(ctx, _refreshedW);
         }
@@ -3917,15 +3932,15 @@ function renderWorkTagsChips(work, options = {}) {
         .join('');
 }
 
-async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx) {
+async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx, coherenceToken) {
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     if (entityType === 'work') {
         const fresh = await fetchWorkDetails(entityId);
+        if (fresh && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
+            void prksOfflineCacheEntityIfCurrent('work', entityId, fresh, coherenceToken);
+        }
         if (typeof prksApplyOwnedWorkEntity !== 'function' || !prksApplyOwnedWorkEntity(ctx, entityId, fresh)) {
             return;
-        }
-        if (fresh && typeof prksOfflineCacheEntity === 'function') {
-            void prksOfflineCacheEntity('work', entityId, fresh);
         }
         prksReplaceFocusedWorkDetailsPanel(ctx, fresh);
     } else {
@@ -3987,6 +4002,10 @@ async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, trig
             body: JSON.stringify({ tag_id: tagId }),
         });
         if (!res.ok) throw new Error('attach failed');
+        const coherenceToken =
+            entityType === 'work' && typeof prksOfflineMarkEntityChanged === 'function'
+                ? prksOfflineMarkEntityChanged('work', entityId)
+                : null;
         window.__prksAllTagsCache = null;
         if (entityType === 'work') {
             const input = document.getElementById('work-tag-search');
@@ -3995,7 +4014,7 @@ async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, trig
             const input = document.getElementById('folder-tag-search');
             if (input) input.value = '';
         }
-        await prksReloadEntityTagsUI(entityType, entityId, owner);
+        await prksReloadEntityTagsUI(entityType, entityId, owner, coherenceToken);
     } catch (e) {
         console.error(e);
         if (triggerInput) {
@@ -4387,12 +4406,17 @@ async function prksRemoveWorkTag(workId, tagId, btn) {
     if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
-        await prksRequest(
+        const res = await prksRequest(
             `/api/works/${encodeURIComponent(workId)}/tags/${encodeURIComponent(tagId)}`,
             { method: 'DELETE' }
         );
+        if (!res.ok) throw new Error('remove failed');
+        const coherenceToken =
+            typeof prksOfflineMarkEntityChanged === 'function'
+                ? prksOfflineMarkEntityChanged('work', workId)
+                : null;
         window.__prksAllTagsCache = null;
-        await prksReloadEntityTagsUI('work', workId, ownerCtx);
+        await prksReloadEntityTagsUI('work', workId, ownerCtx, coherenceToken);
     } catch (e) {
         console.error(e);
         if (btn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);

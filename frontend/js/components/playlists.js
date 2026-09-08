@@ -70,6 +70,9 @@ async function addWorkToPlaylist(playlistId, workId) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'add failed');
+    return typeof prksOfflineMarkEntityChanged === 'function'
+        ? prksOfflineMarkEntityChanged('work', workId)
+        : null;
 }
 
 async function removeWorkFromPlaylist(playlistId, workId) {
@@ -78,6 +81,9 @@ async function removeWorkFromPlaylist(playlistId, workId) {
         { method: 'DELETE' }
     );
     if (!res.ok) throw new Error('remove failed');
+    return typeof prksOfflineMarkEntityChanged === 'function'
+        ? prksOfflineMarkEntityChanged('work', workId)
+        : null;
 }
 
 async function reorderPlaylist(playlistId, workIds) {
@@ -341,6 +347,9 @@ function renderPlaylistDetail(ctx, pl, container) {
                     body: JSON.stringify({ title: nextTitle }),
                 });
                 if (!res.ok) throw new Error('save failed');
+                if (typeof prksOfflineMarkEntityChanged === 'function') {
+                    prksOfflineMarkEntityChanged('work', wid);
+                }
                 delete playlistRenameMap()[wid];
                 if (!ownsPlaylist()) return;
                 const fresh = await fetchPlaylistDetails(pl.id, {
@@ -592,7 +601,7 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
         const pid = String(hidden.value || '').trim();
         if (!pid) return;
         try {
-            await addWorkToPlaylist(pid, wid);
+            const coherenceToken = await addWorkToPlaylist(pid, wid);
             if (!ownsPanel(status)) return;
             if (status) status.textContent = 'Playlist set.';
             // Refresh current work so the UI shows the selected playlist title consistently.
@@ -600,10 +609,10 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                 const _pw = await fetchWorkDetails(wid, {
                     signal: ctx && ctx.abortController && ctx.abortController.signal,
                 });
+                if (_pw && typeof prksOfflineCacheEntityIfCurrent === 'function') {
+                    void prksOfflineCacheEntityIfCurrent('work', wid, _pw, coherenceToken);
+                }
                 if (ownsPanel(panel) && typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _pw)) {
-                    if (_pw && typeof prksOfflineCacheEntity === 'function') {
-                        void prksOfflineCacheEntity('work', wid, _pw);
-                    }
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');
@@ -625,7 +634,7 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
             return;
         }
         try {
-            await removeWorkFromPlaylist(currentPid, wid);
+            const coherenceToken = await removeWorkFromPlaylist(currentPid, wid);
             if (!ownsPanel(panel)) return;
             input.value = '';
             hidden.value = '';
@@ -634,10 +643,10 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                 const _rmw = await fetchWorkDetails(wid, {
                     signal: ctx && ctx.abortController && ctx.abortController.signal,
                 });
+                if (_rmw && typeof prksOfflineCacheEntityIfCurrent === 'function') {
+                    void prksOfflineCacheEntityIfCurrent('work', wid, _rmw, coherenceToken);
+                }
                 if (ownsPanel(panel) && typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ctx, wid, _rmw)) {
-                    if (_rmw && typeof prksOfflineCacheEntity === 'function') {
-                        void prksOfflineCacheEntity('work', wid, _rmw);
-                    }
                     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
                     if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
                         updatePanelContent('details');

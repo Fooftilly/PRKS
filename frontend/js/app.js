@@ -2700,8 +2700,9 @@ function initForms() {
                 const attachWid = String(pending.workId);
                 window.__prksPendingWorkFolderAttach = null;
                 closeModals();
+                let attachCoherenceToken = null;
                 try {
-                    await patchWorkFolder(attachWid, data.id);
+                    attachCoherenceToken = await patchWorkFolder(attachWid, data.id);
                 } catch (e) {
                     await prksAlertMessage(
                         (e && e.message) || 'Folder created but could not assign this file.',
@@ -2710,10 +2711,10 @@ function initForms() {
                 }
                 if (typeof fetchWorkDetails === 'function') {
                     const _aw = await fetchWorkDetails(attachWid);
+                    if (_aw && typeof prksOfflineCacheEntityIfCurrent === 'function' && attachCoherenceToken != null) {
+                        void prksOfflineCacheEntityIfCurrent('work', attachWid, _aw, attachCoherenceToken);
+                    }
                     if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ownerCtx, attachWid, _aw)) {
-                        if (_aw && typeof prksOfflineCacheEntity === 'function') {
-                            void prksOfflineCacheEntity('work', attachWid, _aw);
-                        }
                         if (ownerCtx && ownerCtx.ui) ownerCtx.ui.workFolderEditing = false;
                         if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(ownerCtx) : false) {
                             updatePanelContent('details');
@@ -2960,6 +2961,7 @@ function initForms() {
             return;
         }
         if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, true, { busyLabel: 'Linking…' });
+        let coherenceToken = null;
         try {
             const res = await prksRequest('/api/roles', {
                 method: 'POST',
@@ -2973,6 +2975,10 @@ function initForms() {
                 }
                 return;
             }
+            coherenceToken =
+                typeof prksOfflineMarkEntityChanged === 'function'
+                    ? prksOfflineMarkEntityChanged('work', work_id)
+                    : null;
         } catch (e) {
             console.error(e);
             if (typeof prksAlertDialog === 'function') {
@@ -2993,10 +2999,10 @@ function initForms() {
             typeof prksApplyOwnedWorkEntity === 'function';
         if (ownsWork && typeof fetchWorkDetails === 'function') {
             const _rw = await fetchWorkDetails(work_id);
+            if (_rw && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
+                void prksOfflineCacheEntityIfCurrent('work', work_id, _rw, coherenceToken);
+            }
             if (prksApplyOwnedWorkEntity(ownerCtx, work_id, _rw)) {
-                if (_rw && typeof prksOfflineCacheEntity === 'function') {
-                    void prksOfflineCacheEntity('work', work_id, _rw);
-                }
                 if (typeof prksReplaceFocusedWorkDetailsPanel === 'function') {
                     prksReplaceFocusedWorkDetailsPanel(ownerCtx, _rw);
                 }

@@ -1096,6 +1096,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (!pdfRes.ok) {
             throw new Error(`PDF save failed (${pdfRes.status})`);
         }
+        if (typeof prksOfflineMarkEntityChanged === 'function') {
+            prksOfflineMarkEntityChanged('work', workId);
+        }
     }
 
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {
@@ -1118,6 +1121,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         });
         if (!annRes.ok) {
             throw new Error(`Annotation save failed (${annRes.status})`);
+        }
+        if (typeof prksOfflineMarkEntityChanged === 'function') {
+            prksOfflineMarkEntityChanged('work', workId);
         }
     }
 
