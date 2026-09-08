@@ -795,6 +795,11 @@ async function deleteWork(w_id, ownerCtx) {
             // DELETE is canonical only after this acknowledged success.
             prksOfflineMarkEntityChanged('work', w_id);
         }
+        if (typeof prksOfflineMarkConceptsChanged === 'function') {
+            // Deleting a Work removes its Concept mentions from canonical
+            // research data, so cached Concept details/counts are now stale.
+            prksOfflineMarkConceptsChanged();
+        }
         window.__prksRecentlyAddedDirty = true;
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
@@ -1432,6 +1437,14 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
             if (ok && typeof prksOfflineMarkEntityChanged === 'function') {
                 // Canonical success matters even when this editor token is stale.
                 prksOfflineMarkEntityChanged('work', id);
+            }
+            if (ok && typeof prksOfflineMarkConceptsChanged === 'function') {
+                // Research Notes are the canonical source of Work -> Concept
+                // mentions, and unknown [[concept:...]] markup can create
+                // Concepts outright, so every acknowledged notes save stales the
+                // cached Concept index/details -- stale-for-UI is still a
+                // successful canonical mutation here.
+                prksOfflineMarkConceptsChanged();
             }
             const localApplied = prksWorkNotesSettleSave(notes, token, ok);
             let transientApplied = false;

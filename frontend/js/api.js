@@ -819,13 +819,30 @@ async function fetchConcept(id, options = {}) {
     }
 }
 
+/**
+ * Concept read models span many canonical records: renaming one Concept changes
+ * its own detail, the Concept index, and every cached relative that displays its
+ * name, while a parent change moves subconcept lists and counts on both sides.
+ * Per-entity invalidation cannot express that, so a successful Concept mutation
+ * invalidates the whole Concepts offline domain at this canonical boundary --
+ * independent of the current route, focused pane, ctx generation, or panel
+ * ownership. Canonical success alone controls coherence. See AGENTS.md
+ * "Offline / PWA".
+ */
+function prksMarkConceptsDomainChanged() {
+    if (typeof prksOfflineMarkConceptsChanged !== 'function') return null;
+    return prksOfflineMarkConceptsChanged();
+}
+
 async function createConcept(payload) {
     const res = await prksRequest('/api/concepts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload || {}),
     });
-    return prksResearchJson(res, 'Could not create Concept.', 'concepts.create');
+    const data = await prksResearchJson(res, 'Could not create Concept.', 'concepts.create');
+    prksMarkConceptsDomainChanged();
+    return data;
 }
 
 async function updateConcept(id, payload) {
@@ -834,12 +851,16 @@ async function updateConcept(id, payload) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload || {}),
     });
-    return prksResearchJson(res, 'Could not update Concept.', 'concepts.update');
+    const data = await prksResearchJson(res, 'Could not update Concept.', 'concepts.update');
+    prksMarkConceptsDomainChanged();
+    return data;
 }
 
 async function deleteConcept(id) {
     const res = await prksRequest('/api/concepts/' + encodeURIComponent(id), { method: 'DELETE' });
-    return prksResearchJson(res, 'Could not delete Concept.', 'concepts.delete');
+    const data = await prksResearchJson(res, 'Could not delete Concept.', 'concepts.delete');
+    prksMarkConceptsDomainChanged();
+    return data;
 }
 
 async function putConceptParents(id, parentIds) {
@@ -848,7 +869,9 @@ async function putConceptParents(id, parentIds) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ parent_ids: parentIds || [] }),
     });
-    return prksResearchJson(res, 'Could not update Concept parents.', 'concepts.parents');
+    const data = await prksResearchJson(res, 'Could not update Concept parents.', 'concepts.parents');
+    prksMarkConceptsDomainChanged();
+    return data;
 }
 
 async function putConceptAliases(id, aliases) {
@@ -857,7 +880,9 @@ async function putConceptAliases(id, aliases) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ aliases: aliases || [] }),
     });
-    return prksResearchJson(res, 'Could not update Concept aliases.', 'concepts.aliases');
+    const data = await prksResearchJson(res, 'Could not update Concept aliases.', 'concepts.aliases');
+    prksMarkConceptsDomainChanged();
+    return data;
 }
 
 async function fetchPositions(options = {}) {
@@ -1034,6 +1059,7 @@ window.fetchSavedView = fetchSavedView;
 window.createSavedView = createSavedView;
 window.updateSavedView = updateSavedView;
 window.deleteSavedView = deleteSavedView;
+window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;
 window.fetchConcepts = fetchConcepts;
 window.fetchConcept = fetchConcept;
 window.createConcept = createConcept;

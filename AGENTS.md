@@ -469,16 +469,82 @@ Do not add another probe timer in the coordinator — recovery stays in
 
 ## Offline / PWA
 
-Phase 1 is read-only offline support, and this first slice is Work-only: the
-offline detail cache, provenance banner, and mutation guard cover Work detail
-pages and their PDFs only. Person, Concept, Position, Argument, and Playlist
-routes are not wrapped in the offline read-through path and must keep their
+Phase 1 is read-only offline support. It currently covers:
+
+- Work detail pages and their managed PDFs
+- the Concept index (`#/concepts`) and Concept detail (`#/concepts/:conceptId`)
+
+Person, Position, Argument, Person Group, Playlist routes and the Research
+Graph are not wrapped in the offline read-through path and must keep their
 ordinary online-only fetch/error behavior until their own mutation surfaces
 are explicitly hardened for offline use — do not add `prksOfflineDetailFetch`/
-`prksOfflineGuardMutation` calls to those routes as an incidental part of
-unrelated Work-page work. There is no offline mutation outbox, sync conflict
-resolution, background sync, or editable offline Research Notes/annotations in
-this phase — those are later-phase work.
+`prksOfflineListFetch`/`prksOfflineGuardMutation` calls to those routes as an
+incidental part of unrelated Work or Concept work. There is no offline mutation
+outbox, sync conflict resolution, background sync, or editable offline Research
+Notes/annotations in this phase — those are later-phase work.
+
+Concept routes are **read-only** offline. The Concept index uses the `lists`
+store under the stable key `concepts:index`; Concept detail uses the `entities`
+store under `kind: 'concept'`. The two caches are independent by design and the
+index deliberately does **not** prefetch every Concept detail — seeing a Concept
+in a cached index is not a promise that its detail was cached, and an unopened
+Concept correctly reports "not available offline" rather than "Concept not
+found." Index search stays entirely client-side over the already-loaded array
+(zero API requests offline, and no offline FTS). Every Concept mutation surface
+(New Concept — including the `prksCreateConceptFlow()` entry point used from
+Work Research Notes — Rename, Delete, Definition, aliases, parents) is guarded
+before its dialog opens *and* re-checked immediately before the canonical
+request, because connectivity can change while a dialog is open. "View in
+graph" is blocked with a clear requires-a-connection message rather than
+navigating into a graph route that cannot load. A Concept page mounted while
+online becomes read-only in place via `prksBindConceptOfflineState()`, whose
+subscription belongs to the route's TabContext — never a global per-render
+listener, and never a global Concept runtime singleton.
+
+An unavailable cached list is not an empty one. A cached `[]` that the server
+genuinely returned may render the ordinary "No Concepts yet." empty state (with
+New Concept still disabled offline); *no* cached list must render an explicit
+"Concepts not available offline / This list has not been cached on this device."
+The shape guarantees the old `fetchConcepts`/`fetchConcept` helpers provided are
+not lost by routing through the runtime: a wrong-shaped *server* body is a route
+error, while a wrong-shaped *cached* body makes the cache unavailable (and is
+discarded best-effort), never a silent empty list or a false "not found."
+
+### Offline coherence domains
+
+Some cached read models span multiple canonical records, so per-entity
+invalidation is not enough and must not be pretended to be. Those use an
+explicit **offline coherence domain**: a named group of entity kinds and list
+keys that are invalidated together.
+
+`prksOfflineMarkDomainChanged(domain, { entityKinds, listKeys })` increments the
+domain's generation and blocks its cached fallback **synchronously**, then
+sweeps the disposable cache (`deleteEntitiesByKind()` / `deleteList()`) in the
+background. During that window no cached value in the domain may be served. The
+domain unblocks only when the sweep **for that same generation** completed
+successfully: a superseded generation's completion may never unblock, reset, or
+publish eligibility for a newer one, and a failed sweep leaves the domain
+conservatively blocked for the life of the runtime. Safe degradation is
+"unavailable offline," never "known-stale shown offline"; online PRKS keeps
+working normally either way. A read associated with a domain captures its
+generation when the authoritative request begins and may publish a cache write
+only while that generation is still current — an authoritative read never waits
+for the sweep before rendering, and a skipped cache write is acceptable because
+a later normal read repopulates it.
+
+The initial domain is `concepts` (`entityKinds: ['concept']`,
+`listKeys: ['concepts:index']`), defined once in
+`prksOfflineMarkConceptsChanged()` so every canonical caller invalidates the
+same set. It is invalidated after success by: every Concept mutation
+(create/update/delete/parents/aliases, at the `api.js` canonical helper boundary
+— never gated on route, focused pane, ctx generation, or panel ownership); every
+successful Research Notes save (notes are the canonical Work → Concept mention
+source and unknown markup can create Concepts outright — canonical success
+counts even when that save is stale for the UI); Work deletion; and Work
+metadata saves (cached Concept details carry Work mention titles — deliberately
+conservative rather than field-diffing). Unrelated Work mutations (tags,
+folders, playlists, roles, progress, PDF annotations) do not touch it. A failed,
+canceled, or aborted mutation never invalidates anything.
 
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`
@@ -494,6 +560,11 @@ Responsibilities stay separated:
   `metadata` object stores). No DOM, no routing, no connectivity policy. Every
   public method resolves (never rejects/throws) and degrades to a safe
   unavailable result if IndexedDB is missing, blocked, corrupt, or over quota.
+  `deleteEntitiesByKind(kind)` sweeps one whole entity kind for domain-level
+  coherence using a bounded range over the existing `["kind", "id"]` compound
+  key — no schema/version bump — and resolves true only when the physical
+  cleanup actually completed, so its caller can stay conservative when it did
+  not.
 - `offline-runtime.js`: online/offline/reconnecting state, the
   read-through/mutation-guard policy, and operational UI state. Holds no
   canonical domain data itself; delegates all persistence to `offline-store.js`.
@@ -552,6 +623,8 @@ Cached values always carry explicit provenance (`source: 'server' | 'cache' |
 
 A successful canonical Work mutation must immediately invalidate its offline
 snapshot independent of UI ownership, focus, route generation, or panel state.
+(Where the affected read model spans several canonical records, invalidate the
+whole offline coherence domain instead — see "Offline coherence domains".)
 Only a complete authoritative replacement from that same/current coherence
 generation may make the entity cache-eligible again; an older post-mutation GET
 must never undo a later invalidation. Stale UI callbacks may not repaint, but

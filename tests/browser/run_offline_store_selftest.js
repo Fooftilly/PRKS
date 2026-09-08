@@ -46,6 +46,49 @@ function keyEquals(a, b) {
     return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/* IndexedDB key ordering, enough for the compound ["kind", "id"] keys used
+ * here: arrays sort after strings, arrays compare element-wise, and a shorter
+ * array sorts before a longer one sharing its prefix. deleteEntitiesByKind()'s
+ * ["kind"] .. ["kind", []] bound depends on exactly those rules. */
+function keyTypeRank(v) {
+    if (Array.isArray(v)) return 3;
+    if (typeof v === 'string') return 2;
+    return 1;
+}
+
+function compareKeys(a, b) {
+    const ra = keyTypeRank(a);
+    const rb = keyTypeRank(b);
+    if (ra !== rb) return ra < rb ? -1 : 1;
+    if (ra === 3) {
+        const n = Math.min(a.length, b.length);
+        for (let i = 0; i < n; i++) {
+            const c = compareKeys(a[i], b[i]);
+            if (c !== 0) return c;
+        }
+        return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+    }
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+const FakeIDBKeyRange = {
+    bound: function (lower, upper, lowerOpen, upperOpen) {
+        return {
+            lower: lower,
+            upper: upper,
+            lowerOpen: !!lowerOpen,
+            upperOpen: !!upperOpen,
+            includes: function (key) {
+                const lo = compareKeys(key, lower);
+                if (lo < 0 || (lo === 0 && this.lowerOpen)) return false;
+                const hi = compareKeys(key, upper);
+                if (hi > 0 || (hi === 0 && this.upperOpen)) return false;
+                return true;
+            },
+        };
+    },
+};
+
 function fireAsync(fn) {
     setTimeout(fn, 0);
 }
@@ -161,6 +204,55 @@ function makeStoreHandle(store, tx) {
             return op(function () {
                 return store.rows.slice();
             });
+        },
+        openCursor: function (range) {
+            const req = makeRequest();
+            const keys = store.rows
+                .map(function (r) {
+                    return keyOf(store.keyPath, r);
+                })
+                .filter(function (k) {
+                    return !range || range.includes(k);
+                })
+                .sort(compareKeys);
+            let idx = -1;
+            function rowFor(key) {
+                return store.rows.find(function (r) {
+                    return keyEquals(keyOf(store.keyPath, r), key);
+                });
+            }
+            function advance() {
+                fireAsync(function () {
+                    if (tx._aborted) return;
+                    idx += 1;
+                    while (idx < keys.length && !rowFor(keys[idx])) idx += 1;
+                    if (idx >= keys.length) {
+                        req.result = null;
+                        if (req.onsuccess) req.onsuccess({ target: req });
+                        return;
+                    }
+                    const key = keys[idx];
+                    req.result = {
+                        key: key,
+                        value: rowFor(key),
+                        delete: function () {
+                            return op(function () {
+                                const i = store.rows.findIndex(function (r) {
+                                    return keyEquals(keyOf(store.keyPath, r), key);
+                                });
+                                if (i >= 0) store.rows.splice(i, 1);
+                                return undefined;
+                            });
+                        },
+                        continue: function () {
+                            advance();
+                        },
+                    };
+                    if (req.onsuccess) req.onsuccess({ target: req });
+                });
+            }
+            advance();
+            return req;
         },
     };
 }
@@ -375,6 +467,69 @@ async function run() {
         const ok = await store.deleteDatabase();
         assert('deleteDatabase resolves true', ok === true);
         assertEq('database removed from the fake factory registry', idb.__databases.has(mod.PRKS_OFFLINE_DB_NAME), false);
+    }
+
+    /* ---- deleteEntitiesByKind: removes one whole kind, leaves every other kind intact ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        await store.putEntity('concept', 'C-1', { id: 'C-1', name: 'Alpha' }, '');
+        await store.putEntity('concept', 'C-2', { id: 'C-2', name: 'Beta' }, '');
+        await store.putEntity('work', 'W-1', { id: 'W-1', title: 'Kept Work' }, '');
+        const ok = await store.deleteEntitiesByKind('concept');
+        assert('deleteEntitiesByKind resolves true after a completed sweep', ok === true);
+        assertEq('first Concept row removed', await store.getEntity('concept', 'C-1'), null);
+        assertEq('second Concept row removed', await store.getEntity('concept', 'C-2'), null);
+        const keptWork = await store.getEntity('work', 'W-1');
+        assert('another kind is untouched by a kind sweep', !!keptWork);
+        assertEq('untouched kind keeps its value', keptWork.value, { id: 'W-1', title: 'Kept Work' });
+        assertEq('lists are not part of an entity-kind sweep', await store.getList('concepts:index'), null);
+    }
+
+    /* ---- deleteEntitiesByKind: an empty kind is a completed sweep, not a failure ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        await store.putEntity('work', 'W-1', { id: 'W-1' }, '');
+        assertEq('sweeping a kind with no rows resolves true', await store.deleteEntitiesByKind('concept'), true);
+        assert('unrelated kind still present', !!(await store.getEntity('work', 'W-1')));
+    }
+
+    /* ---- deleteEntitiesByKind: falls back to a getAll scan when no key range is available ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: null });
+        await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
+        await store.putEntity('concept', 'C-2', { id: 'C-2' }, '');
+        await store.putEntity('work', 'W-1', { id: 'W-1' }, '');
+        assertEq('kind sweep without IDBKeyRange still resolves true', await store.deleteEntitiesByKind('concept'), true);
+        assertEq('fallback sweep removed the kind', await store.getEntity('concept', 'C-2'), null);
+        assert('fallback sweep left other kinds alone', !!(await store.getEntity('work', 'W-1')));
+    }
+
+    /* ---- deleteEntitiesByKind: a failing sweep never throws and reports false so callers can stay conservative ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
+        const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
+        assert('fake db was created for the sweep-failure setup', !!db);
+        db._stores.get('entities').forceError = true;
+        let threw = false;
+        let result;
+        try {
+            result = await store.deleteEntitiesByKind('concept');
+        } catch (_e) {
+            threw = true;
+        }
+        assert('deleteEntitiesByKind never throws to the caller', !threw);
+        assertEq('a failed sweep reports false', result, false);
+    }
+
+    /* ---- deleteEntitiesByKind: no IndexedDB at all degrades to false, never a throw ---- */
+    {
+        const store = mod.createPrksOfflineStore({ indexedDB: null });
+        assertEq('kind sweep without IndexedDB resolves false', await store.deleteEntitiesByKind('concept'), false);
     }
 
     /* ---- module boundaries: no DOM, no routing, no fetch/network ---- */

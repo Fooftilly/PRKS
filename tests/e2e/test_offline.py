@@ -12,7 +12,17 @@ import time
 import unittest
 from urllib.parse import urlparse
 
-from tests.e2e.fixtures import WORK_A_TITLE, WORK_B_TITLE, seed_library
+from tests.e2e.fixtures import (
+    CONCEPT_CHILD_ALIAS,
+    CONCEPT_CHILD_DEFINITION,
+    CONCEPT_CHILD_NAME,
+    CONCEPT_PARENT_NAME,
+    CONCEPT_UNVISITED_NAME,
+    WORK_A_TITLE,
+    WORK_B_TITLE,
+    seed_concepts_library,
+    seed_library,
+)
 from tests.e2e.harness import AppServer, PageCollector, open_app_page, require_chromium
 from tests.e2e.test_app import (
     _FOCUSED_PDF,
@@ -76,6 +86,10 @@ def _wait_entity_cached(page, kind, entity_id, timeout=15000):
         arg=[kind, entity_id],
         timeout=timeout,
     )
+    # Reading the row back through a separate connection does not guarantee the
+    # writing transaction is finished with the page; tearing the page down (go
+    # offline + reload) immediately after can still lose it. Let it settle.
+    page.wait_for_timeout(250)
 
 
 def _cached_entity(page, kind, entity_id):
@@ -85,6 +99,115 @@ def _cached_entity(page, kind, entity_id):
             return store.getEntity(kind, id);
         }""",
         [kind, entity_id],
+    )
+
+
+def _wait_list_cached(page, list_key, timeout=15000):
+    page.wait_for_function(
+        """(key) => {
+            if (typeof window.createPrksOfflineStore !== 'function') return false;
+            return window.createPrksOfflineStore().getList(key).then(v => !!v);
+        }""",
+        arg=list_key,
+        timeout=timeout,
+    )
+    page.wait_for_timeout(250)
+
+
+def _cached_list(page, list_key):
+    return page.evaluate(
+        "(key) => window.createPrksOfflineStore().getList(key)",
+        list_key,
+    )
+
+
+def _clear_cached_list(page, list_key):
+    page.evaluate("(key) => window.createPrksOfflineStore().deleteList(key)", list_key)
+
+
+def _content_text(page):
+    """Visible text of the focused route's own container (ctx.root)."""
+    return page.evaluate(
+        """() => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            return ctx && ctx.root ? ctx.root.innerText : document.body.innerText;
+        }"""
+    )
+
+
+def _wait_entity_uncached(page, kind, entity_id, timeout=15000):
+    page.wait_for_function(
+        """([kind, id]) => window.createPrksOfflineStore().getEntity(kind, id).then(row => row === null)""",
+        arg=[kind, entity_id],
+        timeout=timeout,
+    )
+
+
+def _wait_list_uncached(page, list_key, timeout=15000):
+    page.wait_for_function(
+        "(key) => window.createPrksOfflineStore().getList(key).then(row => row === null)",
+        arg=list_key,
+        timeout=timeout,
+    )
+
+
+def _wait_focused_role(page, role, timeout=30000):
+    page.wait_for_function(
+        """(role) => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const root = ctx && ctx.root;
+            return !!root && !!root.querySelector('[data-prks-role="' + role + '"]');
+        }""",
+        arg=role,
+        timeout=timeout,
+    )
+
+
+def _wait_offline_banner(page, timeout=30000):
+    _wait_focused_role(page, "offline-provenance-banner", timeout)
+
+
+def _wait_offline_unavailable(page, timeout=30000):
+    _wait_focused_role(page, "offline-unavailable", timeout)
+
+
+def _wait_content_contains(page, text, timeout=30000):
+    """Waits on the focused route's own rendered text.
+
+    Deliberately not a visibility-based locator wait: these offline scenarios
+    only care that the focused route rendered the expected content, and polling
+    in-page avoids depending on which pane happens to be laid out.
+    """
+    page.wait_for_function(
+        """(needle) => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const root = ctx && ctx.root;
+            return !!root && root.innerText.indexOf(needle) !== -1;
+        }""",
+        arg=text,
+        timeout=timeout,
+    )
+
+
+def _open_concept_index(page):
+    page.evaluate("() => { void window.prksNavigate('#/concepts'); }")
+    page.wait_for_function("() => location.hash === '#/concepts'")
+
+
+def _open_concept(page, concept_id):
+    page.evaluate("id => { void window.prksNavigate('#/concepts/' + id); }", concept_id)
+    page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=concept_id)
+
+
+def _concept_domain_generation(page):
+    return page.evaluate(
+        "() => (typeof prksOfflineDomainGeneration === 'function' ? prksOfflineDomainGeneration('concepts') : null)"
+    )
+
+
+def _concept_domain_blocked(page):
+    return page.evaluate(
+        "() => (typeof prksOfflineIsDomainBlocked === 'function' ? prksOfflineIsDomainBlocked('concepts') : null)"
     )
 
 
@@ -1565,6 +1688,683 @@ class OfflineFoundationTests(unittest.TestCase):
                 page.unroute("**/api/works/**", fulfill_500)
             except Exception:
                 pass
+
+
+
+class OfflineConceptTests(unittest.TestCase):
+    """Phase 1 read-only Concept routes: #/concepts and #/concepts/:conceptId."""
+
+    def _start(self):
+        server = AppServer(seed_fn=seed_concepts_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
+        self.addCleanup(context.close)
+        return server, page, context, collector
+
+    def _concept_api_calls(self, page):
+        """Records every Concept API request issued from here on."""
+        seen = []
+
+        def record(route):
+            seen.append((route.request.method, urlparse(route.request.url).path))
+            route.fallback()
+
+        page.route("**/api/concepts**", record)
+        self.addCleanup(lambda: _safe_unroute(page, "**/api/concepts**", record))
+        return seen
+
+    # ---- cached index -------------------------------------------------------
+
+    def test_cached_concept_index_renders_and_searches_offline(self):
+        """Cached Concept index renders offline with provenance, searches locally
+        with zero API traffic, and offers no enabled New Concept escape route."""
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_concept_index(page)
+        page.locator(".prks-research-row__title", has_text=CONCEPT_PARENT_NAME).wait_for()
+        _wait_list_cached(page, "concepts:index")
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, CONCEPT_PARENT_NAME)
+        _wait_offline_banner(page)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
+
+        seen = self._concept_api_calls(page)
+        page.locator("#prks-concept-search").fill(CONCEPT_CHILD_NAME)
+        page.wait_for_function(
+            "name => { const rows = document.querySelectorAll('.prks-research-row__title');"
+            " return rows.length === 1 && rows[0].textContent.indexOf(name) !== -1; }",
+            arg=CONCEPT_CHILD_NAME,
+        )
+        # Aliases and parent names are part of the same local filter.
+        page.locator("#prks-concept-search").fill(CONCEPT_CHILD_ALIAS)
+        page.wait_for_function(
+            "name => { const rows = document.querySelectorAll('.prks-research-row__title');"
+            " return rows.length === 1 && rows[0].textContent.indexOf(name) !== -1; }",
+            arg=CONCEPT_CHILD_NAME,
+        )
+        page.locator("#prks-concept-search").fill("no such concept anywhere")
+        page.locator(".prks-research-index__empty", has_text="match").wait_for()
+        self.assertEqual(seen, [], "offline Concept search must issue zero API requests")
+
+        new_btn = page.locator("#prks-concept-new")
+        self.assertTrue(new_btn.is_disabled())
+        self.assertEqual(new_btn.get_attribute("aria-disabled"), "true")
+
+    def test_uncached_concept_index_offline_is_explicitly_unavailable(self):
+        """No cached index is "not cached", never "No Concepts yet."."""
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_concept_index(page)
+        page.locator(".prks-research-row__title", has_text=CONCEPT_PARENT_NAME).wait_for()
+        _wait_list_cached(page, "concepts:index")
+        # Leave the route first, so no in-flight index render can re-cache the
+        # list between the clear and the offline navigation.
+        page.evaluate("() => { void window.prksNavigate('#/folders'); }")
+        page.wait_for_function("() => location.hash === '#/folders'")
+        _clear_cached_list(page, "concepts:index")
+        _wait_list_uncached(page, "concepts:index")
+
+        context.set_offline(True)
+        _open_concept_index(page)
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("not available offline", body)
+        self.assertNotIn("No Concepts yet.", body)
+        self.assertEqual(page.locator("#prks-concept-new").count(), 0)
+
+    # ---- cached detail ------------------------------------------------------
+
+    def test_cached_concept_detail_renders_offline(self):
+        """A Concept opened online renders its full cached detail offline."""
+        server, page, context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        _wait_entity_cached(page, "concept", child)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        _wait_offline_banner(page)
+        body = _content_text(page)
+        self.assertIn(CONCEPT_CHILD_DEFINITION, body)
+        self.assertIn(CONCEPT_CHILD_ALIAS, body)
+        self.assertIn(CONCEPT_PARENT_NAME, body)
+        self.assertIn(WORK_A_TITLE, body)
+
+    def test_cached_index_does_not_prefetch_every_concept_detail(self):
+        """Opening the index caches the list only; an unopened Concept stays
+        unavailable offline rather than mirroring the whole research network."""
+        server, page, context, _collector = self._start()
+        child = server.ids["concept_child"]
+        unvisited = server.ids["concept_unvisited"]
+
+        _wait_sw_active(page)
+        _open_concept_index(page)
+        _wait_list_cached(page, "concepts:index")
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        _open_concept_index(page)
+        page.locator(".prks-research-row__title", has_text=CONCEPT_UNVISITED_NAME).wait_for()
+        self.assertIsNone(_cached_entity(page, "concept", unvisited))
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        _wait_content_contains(page, CONCEPT_UNVISITED_NAME)
+        page.locator('.prks-research-row[href$="%s"]' % unvisited).click()
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("not available offline", body)
+        self.assertNotIn("Concept not found", body)
+        # The Concept that WAS opened online still works from cache. Reload
+        # first so this starts from a clean offline boot rather than inheriting
+        # the previous route's in-flight failed request state.
+        _wait_entity_cached(page, "concept", child)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _open_concept(page, child)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+
+    def test_cached_concept_relationships_navigate_offline(self):
+        """Parent/subconcept and Concept -> Work mention links are ordinary PRKS
+        navigation; there is no offline-specific router."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+        parent = server.ids["concept_parent"]
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, parent)
+        _wait_entity_cached(page, "concept", parent)
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+
+        context.set_offline(True)
+        _open_concept(page, child)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        _wait_offline_banner(page)
+        page.locator('.prks-research-row[href$="%s"]' % parent).click()
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=parent)
+        _wait_content_contains(page, CONCEPT_PARENT_NAME)
+        _wait_offline_banner(page)
+        # ... and back down to the subconcept.
+        page.locator('.prks-research-row[href$="%s"]' % child).click()
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=child)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        # ... and out to the cached Work through the existing Work offline route.
+        page.locator(".research-entity__mention-title", has_text=WORK_A_TITLE).click()
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=work_a)
+        page.wait_for_function("title => document.body.innerText.indexOf(title) !== -1", arg=WORK_A_TITLE)
+
+    # ---- mutation blocking --------------------------------------------------
+
+    def test_offline_concept_detail_cannot_mutate(self):
+        """Every Concept mutation surface is inert offline and issues no request."""
+        server, page, context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        _wait_entity_cached(page, "concept", child)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=child)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
+
+        mutations = []
+
+        def record_mutation(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                mutations.append((route.request.method, urlparse(route.request.url).path))
+            route.fallback()
+
+        page.route("**/api/concepts**", record_mutation)
+        try:
+            for selector in (
+                "#prks-concept-rename",
+                "#prks-concept-delete",
+                "#prks-concept-edit-def",
+                "#prks-concept-edit-aliases",
+                "#prks-concept-edit-parents",
+            ):
+                btn = page.locator(selector)
+                self.assertTrue(btn.is_disabled(), "%s must be disabled offline" % selector)
+                self.assertEqual(btn.get_attribute("aria-disabled"), "true", selector)
+                btn.click(force=True)
+            # The New Concept flow is also reachable from Work Research Notes, so
+            # drive it directly: it must refuse before opening its dialog rather
+            # than reaching the network.
+            page.evaluate("""async () => {
+                    try { await window.prksCreateConceptFlow('Offline concept'); } catch (_e) {}
+                }""")
+            page.wait_for_timeout(300)
+            self.assertEqual(mutations, [])
+            # The guard's own requires-a-connection notice is the only dialog: no
+            # editor was opened that could never save.
+            page.locator("#prks-modal-confirm:not(.hidden)", has_text="requires a connection").wait_for()
+            self.assertEqual(page.locator("#prks-modal-confirm .prks-modal-prompt__input").count(), 0)
+        finally:
+            _safe_unroute(page, "**/api/concepts**", record_mutation)
+
+        self.assertTrue(page.locator("#prks-concept-view-graph").is_disabled())
+
+    def test_disconnect_while_concept_prompt_open_blocks_the_save(self):
+        """Connectivity can change while a dialog is open: the re-check before the
+        canonical request means clicking Save issues no PATCH."""
+        server, page, context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        _wait_entity_cached(page, "concept", child)
+        cached_before = _cached_entity(page, "concept", child)
+        self.assertIsNotNone(cached_before)
+
+        page.locator("#prks-concept-rename").click()
+        prompt_input = page.locator("#prks-modal-confirm .prks-modal-prompt__input")
+        prompt_input.wait_for()
+        prompt_input.fill("Renamed while disconnected")
+
+        mutations = []
+
+        def block_api(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                mutations.append((route.request.method, urlparse(route.request.url).path))
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", block_api)
+        try:
+            # Make PRKS unreachable while the dialog is open.
+            page.evaluate(
+                """async () => {
+                    try { await window.prksRequest('/api/settings'); } catch (_e) {}
+                }"""
+            )
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+                timeout=20000,
+            )
+            page.locator("#prks-modal-confirm-ok").click()
+            page.wait_for_timeout(500)
+            self.assertEqual(mutations, [], "no Concept mutation may be attempted after disconnect")
+        finally:
+            _safe_unroute(page, "**/api/**", block_api)
+
+        self.assertEqual(_cached_entity(page, "concept", child)["value"]["name"], CONCEPT_CHILD_NAME)
+
+    def test_live_concept_page_becomes_read_only_on_disconnect_and_restores(self):
+        """A Concept page mounted online becomes read-only in place when PRKS
+        stops answering, without a reload, and restores on reconnect."""
+        server, page, _context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        self.assertFalse(page.locator("#prks-concept-rename").is_disabled())
+        self.assertFalse(page.locator("#prks-concept-view-graph").is_disabled())
+
+        def abort_api(route):
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", abort_api)
+        try:
+            page.evaluate(
+                """async () => {
+                    try { await window.prksRequest('/api/settings'); } catch (_e) {}
+                }"""
+            )
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+                timeout=20000,
+            )
+            self.assertTrue(page.evaluate("() => navigator.onLine"))
+            page.wait_for_function("() => !!document.querySelector('#prks-concept-rename[disabled]')", timeout=20000)
+            for selector in (
+                "#prks-concept-delete",
+                "#prks-concept-edit-def",
+                "#prks-concept-edit-aliases",
+                "#prks-concept-edit-parents",
+                "#prks-concept-view-graph",
+            ):
+                self.assertTrue(page.locator(selector).is_disabled(), selector)
+            # Read/navigation links stay usable.
+            self.assertEqual(page.locator('.prks-research-row[href$="%s"]' % server.ids["concept_parent"]).count(), 1)
+        finally:
+            _safe_unroute(page, "**/api/**", abort_api)
+
+        page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+            timeout=20000,
+        )
+        page.wait_for_function("() => !document.querySelector('#prks-concept-rename[disabled]')", timeout=20000)
+        self.assertFalse(page.locator("#prks-concept-view-graph").is_disabled())
+
+    # ---- HTTP errors are never disguised as offline -------------------------
+
+    def test_concept_detail_http_errors_keep_their_normal_meaning(self):
+        """404 is not-found, 500 is a route error, and only a transport failure
+        consults the cache."""
+        server, page, context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+
+        _open_concept(page, "C-DOES-NOT-EXIST")
+        _wait_content_contains(page, "Concept not found")
+        self.assertEqual(_connectivity_state(page), "online")
+
+        failing = {"on": True}
+
+        def fulfill_500(route):
+            if (
+                failing["on"]
+                and route.request.method == "GET"
+                and urlparse(route.request.url).path.startswith("/api/concepts/")
+            ):
+                route.fulfill(status=500, content_type="application/json", body='{"error":"boom"}')
+                return
+            route.fallback()
+
+        page.route("**/api/concepts/**", fulfill_500)
+        self.addCleanup(lambda: _safe_unroute(page, "**/api/concepts/**", fulfill_500))
+        _open_concept(page, child)
+        page.wait_for_function(
+            "() => document.querySelector('#prks-route-retry') !== null"
+            " || document.body.innerText.indexOf('Could not load') !== -1",
+            timeout=15000,
+        )
+        body = _content_text(page)
+        self.assertNotIn("Concept not found", body)
+        self.assertNotIn(CONCEPT_CHILD_DEFINITION, body)
+        self.assertEqual(_connectivity_state(page), "online")
+        self.assertTrue(page.locator("#prks-connectivity-indicator[hidden]").count() >= 1)
+        # Stop intercepting entirely while still reachable: leaving a route
+        # handler installed once the context is offline makes its pass-through
+        # unreliable, and this phase must exercise a real transport failure.
+        failing["on"] = False
+        _safe_unroute(page, "**/api/concepts/**", fulfill_500)
+        # Leave the failed route too, so the navigation below is a real one
+        # rather than a same-hash no-op.
+        _open_concept_index(page)
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+
+        context.set_offline(True)
+        _open_concept(page, child)
+        _wait_offline_banner(page)
+        _wait_content_contains(page, CONCEPT_CHILD_DEFINITION)
+        _open_concept(page, server.ids["concept_unvisited"])
+        _wait_offline_unavailable(page)
+
+    # ---- domain coherence ---------------------------------------------------
+
+    def test_concept_mutation_invalidates_the_whole_concept_domain(self):
+        """Renaming one Concept conservatively stales every cached Concept, since
+        siblings may display its old name as a parent/subconcept."""
+        server, page, context, _collector = self._start()
+        parent = server.ids["concept_parent"]
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept_index(page)
+        _wait_list_cached(page, "concepts:index")
+        _open_concept(page, parent)
+        _wait_entity_cached(page, "concept", parent)
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        generation_before = _concept_domain_generation(page)
+
+        page.evaluate(
+            "id => window.updateConcept(id, { description: 'Domain coherence rename check.' })",
+            parent,
+        )
+        self.assertGreater(_concept_domain_generation(page), generation_before)
+        _wait_entity_uncached(page, "concept", child)
+        _wait_list_uncached(page, "concepts:index")
+
+        context.set_offline(True)
+        _open_concept(page, child)
+        _wait_offline_unavailable(page)
+        _open_concept_index(page)
+        _wait_offline_unavailable(page)
+
+    def test_failed_concept_mutation_retains_the_concept_cache(self):
+        """A rejected Concept PATCH never advances Concept-domain coherence."""
+        server, page, context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        generation_before = _concept_domain_generation(page)
+
+        def reject_patch(route):
+            if route.request.method == "PATCH":
+                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
+                return
+            route.fallback()
+
+        page.route("**/api/concepts/**", reject_patch)
+        try:
+            page.evaluate(
+                """async (id) => {
+                    try { await window.updateConcept(id, { description: 'never applied' }); } catch (_e) {}
+                }""",
+                child,
+            )
+            page.wait_for_timeout(300)
+            self.assertEqual(_concept_domain_generation(page), generation_before)
+            self.assertIsNotNone(_cached_entity(page, "concept", child))
+        finally:
+            _safe_unroute(page, "**/api/concepts/**", reject_patch)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        _wait_offline_banner(page)
+
+    def test_stale_pre_mutation_concept_read_cannot_repopulate_the_cache(self):
+        """A GET begun before a Concept mutation must not become eligible cache
+        data when it finally resolves."""
+        server, page, _context, _collector = self._start()
+        # A Concept nothing has fetched yet, so the read really goes to the
+        # network rather than being answered from in-memory request state.
+        target = server.ids["concept_unvisited"]
+        parent = server.ids["concept_parent"]
+
+        _wait_sw_active(page)
+        _open_concept_index(page)
+        _wait_list_cached(page, "concepts:index")
+        self.assertIsNone(_cached_entity(page, "concept", target))
+
+        held = []
+
+        def hold_target_get(route):
+            req = route.request
+            if req.method == "GET" and urlparse(req.url).path == "/api/concepts/" + target:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/concepts/**", hold_target_get)
+        try:
+            page.evaluate(
+                """id => {
+                    window.__prksHeldConceptRead = window.prksOfflineReadEntity(
+                        'concept', id, '/api/concepts/' + id, { domain: 'concepts' }
+                    );
+                }""",
+                target,
+            )
+            for _ in range(100):
+                if held:
+                    break
+                page.wait_for_timeout(100)
+            self.assertTrue(held, "the Concept GET was not intercepted")
+            generation_before = _concept_domain_generation(page)
+            # A canonical Concept mutation lands while that read is still in flight.
+            page.evaluate(
+                "id => window.updateConcept(id, { description: 'stale-read coherence check.' })",
+                parent,
+            )
+            self.assertGreater(_concept_domain_generation(page), generation_before)
+            page.wait_for_function(
+                "() => (typeof prksOfflineIsDomainBlocked === 'function'"
+                " ? prksOfflineIsDomainBlocked('concepts') : true) === false",
+                timeout=15000,
+            )
+            held[0].fallback()
+            result = page.evaluate("() => window.__prksHeldConceptRead")
+            # The pre-mutation response still resolves to its caller ...
+            self.assertEqual(result["source"], "server")
+            page.wait_for_timeout(500)
+            # ... but it is not eligible offline cache data.
+            self.assertIsNone(
+                _cached_entity(page, "concept", target),
+                "a pre-mutation read must not repopulate the invalidated domain",
+            )
+        finally:
+            _safe_unroute(page, "**/api/concepts/**", hold_target_get)
+
+        # A later authoritative read in the current generation populates it again.
+        _open_concept(page, target)
+        _wait_entity_cached(page, "concept", target)
+
+    def test_successful_research_notes_save_invalidates_concept_domain(self):
+        """Research Notes are the canonical Work -> Concept mention source."""
+        server, page, context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept_index(page)
+        _wait_list_cached(page, "concepts:index")
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text("[[concept:%s]] plus a new note line" % CONCEPT_PARENT_NAME)
+        page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
+
+        _wait_entity_uncached(page, "concept", child)
+        _wait_list_uncached(page, "concepts:index")
+
+    def test_superseded_notes_save_still_invalidates_concept_domain(self):
+        """Save #1 succeeded canonically even if a newer save #2 fails: stale for
+        the UI is not the same as unsuccessful."""
+        server, page, _context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text("first save that really commits")
+        page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
+        generation_after_first = _concept_domain_generation(page)
+
+        def reject_notes(route):
+            if route.request.method == "PATCH":
+                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
+                return
+            route.fallback()
+
+        page.route("**/api/works/**", reject_notes)
+        try:
+            page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
+            page.keyboard.press("Control+A")
+            page.keyboard.insert_text("second save that fails")
+            page.locator('[data-prks-role="editor-status"]', has_text="Error saving changes").wait_for(timeout=15000)
+        finally:
+            _safe_unroute(page, "**/api/works/**", reject_notes)
+
+        # The failed second save adds nothing, but the first one already did.
+        self.assertGreaterEqual(generation_after_first, 1)
+        self.assertIsNone(_cached_entity(page, "concept", child))
+
+    def test_successful_work_metadata_save_invalidates_concept_domain(self):
+        """Cached Concept details carry Work mention titles."""
+        server, page, _context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        _open_work_from_home(page, WORK_A_TITLE)
+        new_title = "Concept Mention Title Changed"
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").fill(new_title)
+        page.locator("#inline-save-metadata-btn").click()
+        page.locator("#panel-content .card-title", has_text=new_title).wait_for(timeout=15000)
+
+        _wait_entity_uncached(page, "concept", child)
+
+    def test_failed_work_metadata_save_retains_concept_cache(self):
+        server, page, _context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        _open_work_from_home(page, WORK_A_TITLE)
+        generation_before = _concept_domain_generation(page)
+
+        def reject_patch(route):
+            if route.request.method == "PATCH":
+                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
+                return
+            route.fallback()
+
+        page.route("**/api/works/**", reject_patch)
+        try:
+            page.locator("#panel-content button", has_text="Edit metadata").click()
+            page.locator("#meta-title").fill("Rejected title")
+            page.locator("#inline-save-metadata-btn").click()
+            page.wait_for_timeout(700)
+            self.assertEqual(_concept_domain_generation(page), generation_before)
+            self.assertIsNotNone(_cached_entity(page, "concept", child))
+        finally:
+            _safe_unroute(page, "**/api/works/**", reject_patch)
+
+    def test_successful_work_delete_invalidates_concept_domain(self):
+        """Deleting a Work removes its Concept mentions from canonical data."""
+        server, page, _context, _collector = self._start()
+        child = server.ids["concept_child"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _open_details_drawer_if_tiled(page)
+        advanced = page.locator(".work-details-advanced")
+        if advanced.get_attribute("open") is None:
+            advanced.locator("summary").click()
+        page.locator(".delete-work-btn").click()
+        page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+
+        _wait_entity_uncached(page, "concept", child)
+
+    def test_unrelated_work_mutation_leaves_concept_cache_alone(self):
+        """Tags/folders/playlists do not change the Concept read model."""
+        server, page, _context, _collector = self._start()
+        child = server.ids["concept_child"]
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_concept(page, child)
+        _wait_entity_cached(page, "concept", child)
+        generation_before = _concept_domain_generation(page)
+
+        page.evaluate(
+            """async (workId) => {
+                const folderId = await createFolder('Concept-neutral folder', '');
+                return addWorkToFolder(folderId, workId);
+            }""",
+            arg=work_a,
+        )
+        page.wait_for_function(
+            "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
+            arg=work_a,
+            timeout=15000,
+        )
+        self.assertEqual(_concept_domain_generation(page), generation_before)
+        self.assertIsNotNone(_cached_entity(page, "concept", child))
+
+
+def _safe_unroute(page, pattern, handler):
+    try:
+        page.unroute(pattern, handler)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

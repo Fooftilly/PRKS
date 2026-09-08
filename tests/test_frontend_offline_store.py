@@ -52,6 +52,16 @@ class FrontendOfflineStoreTests(unittest.TestCase):
         self.assertIn("sourceRevision", src)
         self.assertIn("keyPath: ['kind', 'id']", src)
 
+    def test_kind_sweep_reuses_the_existing_compound_key_without_a_schema_bump(self):
+        src = _read(_STORE)
+        # Domain-level coherence sweeps a whole entity kind; the existing
+        # ["kind", "id"] compound key is enough for a bounded range, so the
+        # IndexedDB schema/version must not have been changed for it.
+        self.assertIn("function deleteEntitiesByKind(", src)
+        self.assertIn("const DB_VERSION = 1;", src)
+        self.assertIn("keyPath: ['kind', 'id']", src)
+        self.assertIn("openCursor", src)
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for offline store tests")

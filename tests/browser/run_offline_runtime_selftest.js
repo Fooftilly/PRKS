@@ -74,6 +74,16 @@ function makeFakeStore(overrides) {
             entities.delete(kind + ':' + id);
             return true;
         },
+        deleteEntitiesByKind: async function (kind) {
+            Array.from(entities.keys()).forEach(function (key) {
+                if (key.indexOf(kind + ':') === 0) entities.delete(key);
+            });
+            return true;
+        },
+        deleteList: async function (key) {
+            lists.delete(key);
+            return true;
+        },
         getList: async function (key) {
             return lists.get(key) || null;
         },
@@ -679,6 +689,237 @@ async function run() {
         assert('clearCache resolves true', ok === true);
         assertEq('clearCache removes the pdf cache by its documented name', deletedCacheName, mod.PRKS_OFFLINE_PDF_CACHE_NAME);
         assertEq('clearCache actually empties the store', store._entities.size, 0);
+    }
+
+    /* ---- domain coherence: a domain-scoped read caches normally while its generation is current ---- */
+    {
+        const store = makeFakeStore();
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.resolve(okJsonResponse([{ id: 'C-1', name: 'Alpha' }]));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        assertEq('a fresh domain starts at generation 0', runtime.currentDomainGeneration('concepts'), 0);
+        assertEq('a fresh domain is not blocked', runtime.isDomainBlocked('concepts'), false);
+        const res = await runtime.readThroughList('concepts:index', '/api/concepts', { domain: 'concepts' });
+        assertEq('domain list read returns server provenance', res.source, 'server');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('domain list read published its snapshot', store._lists.get('concepts:index').value, [
+            { id: 'C-1', name: 'Alpha' },
+        ]);
+    }
+
+    /* ---- markDomainChanged: generation bump and fallback block are synchronous ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('concept', 'C-1', { id: 'C-1', name: 'old' }, '');
+        await store.putEntity('concept', 'C-2', { id: 'C-2', name: 'sibling' }, '');
+        await store.putList('concepts:index', [{ id: 'C-1' }, { id: 'C-2' }], '');
+        let releaseDelete = null;
+        const slowStore = Object.assign({}, store, {
+            deleteEntitiesByKind: function (kind) {
+                return new Promise(function (resolve) {
+                    releaseDelete = function () {
+                        Array.from(store._entities.keys()).forEach(function (key) {
+                            if (key.indexOf(kind + ':') === 0) store._entities.delete(key);
+                        });
+                        resolve(true);
+                    };
+                });
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: slowStore,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const gen = runtime.markDomainChanged('concepts', {
+            entityKinds: ['concept'],
+            listKeys: ['concepts:index'],
+        });
+        assertEq('markDomainChanged returns the new generation', gen, 1);
+        assertEq('domain generation increments synchronously', runtime.currentDomainGeneration('concepts'), 1);
+        assertEq('domain is blocked synchronously', runtime.isDomainBlocked('concepts'), true);
+        // The physical delete has NOT run yet -- the rows are still in the store.
+        assert('rows are still physically present mid-invalidation', !!store._entities.get('concept:C-1'));
+        const mutated = await runtime.readThroughEntity('concept', 'C-1', '/api/concepts/C-1', { domain: 'concepts' });
+        assertEq('the mutated Concept cannot fall back to its stale row', mutated.source, 'unavailable');
+        const sibling = await runtime.readThroughEntity('concept', 'C-2', '/api/concepts/C-2', { domain: 'concepts' });
+        assertEq(
+            'a sibling in the same domain is conservatively unavailable too (it may show the old name)',
+            sibling.source,
+            'unavailable'
+        );
+        const list = await runtime.readThroughList('concepts:index', '/api/concepts', { domain: 'concepts' });
+        assertEq('the domain list cannot fall back either', list.source, 'unavailable');
+        releaseDelete();
+        await runtime._domainCleanup('concepts');
+        assertEq('completed cleanup unblocks the domain', runtime.isDomainBlocked('concepts'), false);
+        assertEq('cleanup physically removed the entity rows', store._entities.get('concept:C-1'), undefined);
+        assertEq('cleanup physically removed the list row', store._lists.get('concepts:index'), undefined);
+    }
+
+    /* ---- a read begun before the mutation cannot repopulate the domain afterwards ---- */
+    {
+        const store = makeFakeStore();
+        let releaseGet = null;
+        let nextResponse = null;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                if (nextResponse) return Promise.resolve(nextResponse);
+                return new Promise(function (resolve) {
+                    releaseGet = function () {
+                        resolve(okJsonResponse({ id: 'C-1', name: 'pre-mutation name' }));
+                    };
+                });
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const pending = runtime.readThroughEntity('concept', 'C-1', '/api/concepts/C-1', { domain: 'concepts' });
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'], listKeys: ['concepts:index'] });
+        await runtime._domainCleanup('concepts');
+        releaseGet();
+        const stale = await pending;
+        assertEq('the stale response still resolves to its caller', stale.source, 'server');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a pre-mutation read never becomes eligible cache data', store._entities.get('concept:C-1'), undefined);
+        // A later authoritative read, begun in the new generation on the SAME
+        // runtime, caches normally once the sweep has settled the domain.
+        nextResponse = okJsonResponse({ id: 'C-1', name: 'post-mutation name' });
+        const fresh = await runtime.readThroughEntity('concept', 'C-1', '/api/concepts/C-1', { domain: 'concepts' });
+        assertEq('a fresh-generation read still returns server data', fresh.source, 'server');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq(
+            'a fresh-generation read may publish cache normally',
+            store._entities.get('concept:C-1').value.name,
+            'post-mutation name'
+        );
+    }
+
+    /* ---- an older invalidation completing later must not settle a newer one ---- */
+    {
+        const store = makeFakeStore();
+        const releases = [];
+        const slowStore = Object.assign({}, store, {
+            deleteEntitiesByKind: function () {
+                return new Promise(function (resolve) {
+                    releases.push(function () {
+                        resolve(true);
+                    });
+                });
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: slowStore,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const genA = runtime.markDomainChanged('concepts', { entityKinds: ['concept'] });
+        const genB = runtime.markDomainChanged('concepts', { entityKinds: ['concept'] });
+        assert('the second invalidation has a newer generation', genB > genA);
+        // Settle the FIRST invalidation only.
+        releases[0]();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq(
+            'a superseded invalidation completing cannot unblock the newer generation',
+            runtime.isDomainBlocked('concepts'),
+            true
+        );
+        assertEq('a superseded completion never resets the generation', runtime.currentDomainGeneration('concepts'), genB);
+        releases[1]();
+        await runtime._domainCleanup('concepts');
+        assertEq('the current generation settles the domain normally', runtime.isDomainBlocked('concepts'), false);
+    }
+
+    /* ---- a failed cleanup leaves the domain conservatively blocked for this runtime ---- */
+    {
+        const store = makeFakeStore({
+            deleteEntitiesByKind: async function () {
+                return false;
+            },
+        });
+        await store.putEntity('concept', 'C-1', { id: 'C-1', name: 'stale' }, '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'], listKeys: ['concepts:index'] });
+        await runtime._domainCleanup('concepts');
+        assertEq('a failed sweep keeps the domain blocked', runtime.isDomainBlocked('concepts'), true);
+        const result = await runtime.readThroughEntity('concept', 'C-1', '/api/concepts/C-1', { domain: 'concepts' });
+        assertEq(
+            'unavailable beats known-stale when the disposable cleanup could not complete',
+            result.source,
+            'unavailable'
+        );
+        assertEq('online reads keep working after a failed sweep', runtime.getState(), mod.PRKS_OFFLINE_STATE_OFFLINE);
+    }
+
+    /* ---- reads with no domain are unaffected by another domain's invalidation ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('work', 'W-1', { id: 'W-1', title: 'Cached Work' }, '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'], listKeys: ['concepts:index'] });
+        const work = await runtime.readThroughEntity('work', 'W-1', '/api/works/W-1');
+        assertEq('Work offline behavior is unchanged by a Concepts invalidation', work.source, 'cache');
+        assertEq('the cached Work value is still served', work.value, { id: 'W-1', title: 'Cached Work' });
+    }
+
+    /* ---- the Concepts domain shape is defined once, and covers list + entities together ---- */
+    {
+        const globalRoot = typeof globalThis !== 'undefined' ? globalThis : this;
+        assert(
+            'prksOfflineMarkConceptsChanged is exported for every canonical caller to share',
+            typeof globalRoot.prksOfflineMarkConceptsChanged === 'function'
+        );
+        assertEq('the Concepts domain has a stable name', mod.PRKS_OFFLINE_DOMAIN_CONCEPTS, 'concepts');
+        assertEq('the Concept index uses a stable list key', mod.PRKS_OFFLINE_CONCEPTS_LIST_KEY, 'concepts:index');
     }
 
     /* ---- module boundaries: no DOM writes, no canonical persistence, memory-only re: request coordinator ---- */

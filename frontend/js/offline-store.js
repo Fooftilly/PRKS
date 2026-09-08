@@ -51,6 +51,13 @@
         const now = options.now || defaultNow;
         const dbName = options.dbName || DB_NAME;
         const dbVersion = options.dbVersion || DB_VERSION;
+        const keyRangeApi = Object.prototype.hasOwnProperty.call(options, 'idbKeyRange')
+            ? options.idbKeyRange
+            : typeof IDBKeyRange !== 'undefined'
+              ? IDBKeyRange
+              : root && root.IDBKeyRange
+                ? root.IDBKeyRange
+                : null;
 
         let dbPromise = null;
         let unavailable = !idbFactory;
@@ -207,6 +214,151 @@
             });
         }
 
+        /** Bounded compound-key range covering every ["kind", *] row, so a
+         * whole-kind sweep needs no schema/index change. IndexedDB array-key
+         * ordering puts ["kind"] before every ["kind", <string id>], and
+         * ["kind", []] after every one of them (arrays sort after strings). */
+        function kindKeyRange(kind) {
+            if (!keyRangeApi || typeof keyRangeApi.bound !== 'function') return null;
+            try {
+                return keyRangeApi.bound([kind], [kind, []], false, false);
+            } catch (_e) {
+                return null;
+            }
+        }
+
+        /**
+         * Removes every cached entity of one kind. Used by domain-level offline
+         * coherence (see offline-runtime.js): some cached read models span many
+         * canonical records, so one canonical change can stale a whole kind
+         * rather than a single row. Follows the store contract -- always
+         * resolves, never throws to the caller -- and resolves true only when
+         * the physical cleanup actually completed, so a caller may keep a
+         * domain conservatively blocked when it did not.
+         */
+        function deleteEntitiesByKind(kind) {
+            const wanted = String(kind);
+            return openDb()
+                .then(function (db) {
+                    if (!db) return false;
+                    return new Promise(function (resolve) {
+                        let tx;
+                        try {
+                            tx = db.transaction([STORE_ENTITIES], 'readwrite');
+                        } catch (_e) {
+                            resolve(false);
+                            return;
+                        }
+                        let settled = false;
+                        function finish(ok) {
+                            if (settled) return;
+                            settled = true;
+                            resolve(ok);
+                        }
+                        tx.onerror = function () {
+                            finish(false);
+                        };
+                        tx.onabort = function () {
+                            finish(false);
+                        };
+                        let store;
+                        try {
+                            store = tx.objectStore(STORE_ENTITIES);
+                        } catch (_e) {
+                            finish(false);
+                            return;
+                        }
+                        const range = kindKeyRange(wanted);
+                        let cursorReq = null;
+                        if (range && typeof store.openCursor === 'function') {
+                            try {
+                                cursorReq = store.openCursor(range);
+                            } catch (_e) {
+                                cursorReq = null;
+                            }
+                        }
+                        if (cursorReq) {
+                            cursorReq.onerror = function () {
+                                finish(false);
+                            };
+                            cursorReq.onsuccess = function () {
+                                const cursor = cursorReq.result;
+                                if (!cursor) {
+                                    finish(true);
+                                    return;
+                                }
+                                let del;
+                                try {
+                                    del = cursor.delete();
+                                } catch (_e) {
+                                    finish(false);
+                                    return;
+                                }
+                                del.onerror = function () {
+                                    finish(false);
+                                };
+                                del.onsuccess = function () {
+                                    try {
+                                        cursor.continue();
+                                    } catch (_e) {
+                                        finish(false);
+                                    }
+                                };
+                            };
+                            return;
+                        }
+                        /* Engines without a usable key range/cursor: read the
+                         * rows once, then delete the matching keys in order. */
+                        let allReq;
+                        try {
+                            allReq = store.getAll ? store.getAll() : null;
+                        } catch (_e) {
+                            allReq = null;
+                        }
+                        if (!allReq) {
+                            finish(false);
+                            return;
+                        }
+                        allReq.onerror = function () {
+                            finish(false);
+                        };
+                        allReq.onsuccess = function () {
+                            const rows = Array.isArray(allReq.result) ? allReq.result : [];
+                            const keys = rows
+                                .filter(function (row) {
+                                    return row && String(row.kind) === wanted;
+                                })
+                                .map(function (row) {
+                                    return [String(row.kind), String(row.id)];
+                                });
+                            let i = 0;
+                            function step() {
+                                if (i >= keys.length) {
+                                    finish(true);
+                                    return;
+                                }
+                                let req;
+                                try {
+                                    req = store.delete(keys[i]);
+                                } catch (_e) {
+                                    finish(false);
+                                    return;
+                                }
+                                i += 1;
+                                req.onerror = function () {
+                                    finish(false);
+                                };
+                                req.onsuccess = step;
+                            }
+                            step();
+                        };
+                    });
+                })
+                .catch(function () {
+                    return false;
+                });
+        }
+
         function putList(listKey, value, sourceRevision) {
             const envelope = {
                 listKey: String(listKey),
@@ -332,6 +484,7 @@
             putEntity: putEntity,
             getEntity: getEntity,
             deleteEntity: deleteEntity,
+            deleteEntitiesByKind: deleteEntitiesByKind,
             putList: putList,
             getList: getList,
             deleteList: deleteList,

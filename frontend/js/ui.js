@@ -3347,6 +3347,13 @@ async function submitWorkMetaEdit(workId) {
             typeof prksOfflineMarkEntityChanged === 'function'
                 ? prksOfflineMarkEntityChanged('work', workId)
                 : null;
+        if (typeof prksOfflineMarkConceptsChanged === 'function') {
+            // Cached Concept details carry Work mention titles, so a successful
+            // Work metadata save can stale them even when no Concept
+            // relationship changed. Phase 1 stays deliberately conservative
+            // here rather than field-diffing which edits matter.
+            prksOfflineMarkConceptsChanged();
+        }
         // From here on, background completion must proceed as long as this ctx still owns the
         // Work/route -- NOT gated on panel ownership. Another tile may already own the shared
         // panel by the time this PATCH resolves.

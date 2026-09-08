@@ -7,7 +7,14 @@ from pathlib import Path
 
 from backend.db_manager import PRKSDatabase
 from backend.research_index import PRKSResearchIndex
-from backend.research_network import create_argument, create_position, save_work_notes
+from backend.research_network import (
+    create_argument,
+    create_concept,
+    create_position,
+    replace_concept_aliases,
+    replace_concept_parents,
+    save_work_notes,
+)
 from backend.storage.config import StorageConfig
 
 REPO = Path(__file__).resolve().parents[2]
@@ -141,4 +148,44 @@ def seed_graph_context_library(storage_root: str) -> dict:
     ids["sourced_argument"] = sourced_arg["id"]
     ids["concept_a"] = GRAPH_CONCEPT_A
     ids["concept_b"] = GRAPH_CONCEPT_B
+    return ids
+
+
+CONCEPT_PARENT_NAME = "E2E Parent Concept"
+CONCEPT_CHILD_NAME = "E2E Child Concept"
+CONCEPT_UNVISITED_NAME = "E2E Unvisited Concept"
+CONCEPT_CHILD_ALIAS = "E2E Child Alias"
+CONCEPT_CHILD_DEFINITION = "Child concept definition used by offline Concept detail assertions."
+
+
+def seed_concepts_library(storage_root: str) -> dict:
+    """seed_library plus an explicit Concept hierarchy for offline Concept scenarios.
+
+    Gives the offline tests a parent/child pair to navigate between, a Concept
+    that is deliberately never opened online (so "cached index, uncached detail"
+    is testable), and a child Concept that is mentioned by Work A's research
+    notes so a Concept -> Work mention link can be followed offline.
+    """
+    ids = seed_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    parent = create_concept(db, CONCEPT_PARENT_NAME, "Parent concept definition.")
+    child = create_concept(db, CONCEPT_CHILD_NAME, CONCEPT_CHILD_DEFINITION)
+    unvisited = create_concept(db, CONCEPT_UNVISITED_NAME, "Never opened while online.")
+    replace_concept_parents(db, child["id"], [parent["id"]])
+    replace_concept_aliases(db, child["id"], [CONCEPT_CHILD_ALIAS])
+    notes = "Initial research notes.\n\n[[concept:%s]]\n" % CONCEPT_CHILD_NAME
+    save_work_notes(db, ids["work_a"], notes)
+    PRKSResearchIndex(storage=cfg).sync_work(ids["work_a"], notes, db)
+    ids.update(
+        {
+            "concept_parent": parent["id"],
+            "concept_child": child["id"],
+            "concept_unvisited": unvisited["id"],
+            "concept_parent_name": CONCEPT_PARENT_NAME,
+            "concept_child_name": CONCEPT_CHILD_NAME,
+            "concept_unvisited_name": CONCEPT_UNVISITED_NAME,
+            "concept_child_alias": CONCEPT_CHILD_ALIAS,
+        }
+    )
     return ids

@@ -234,9 +234,9 @@ Each visible tab has a TabContext. Route state, page DOM (`ctx.root` / `ctx.quer
 async generation, and live resources (PDF viewer, notes editor, graph) live
 there. Stacked mode mounts one context. Split view mounts Main plus every visible Secondary pane (up to 4 panes total).
 
-## Offline / PWA (read-only, Work-only in Phase 1)
+## Offline / PWA (read-only in Phase 1)
 
-PRKS can be installed as a Progressive Web App and stays useful for a while when the PRKS server becomes temporarily unreachable. This is **read-only** support, and this first slice covers **Work detail pages and PDFs only** — Person, Concept, Position, Argument, and Playlist pages are not part of the offline cache yet and behave exactly as they do without any of this (a temporarily unreachable server surfaces their normal error state, not a cached read). Phase 1 also has no offline mutation queue.
+PRKS can be installed as a Progressive Web App and stays useful for a while when the PRKS server becomes temporarily unreachable. This is **read-only** support, and it currently covers **Work detail pages and their PDFs, plus the Concepts list and individually opened Concept pages**. Person, Position, Argument/Stance, Person Group and Playlist pages, and the Research Graph, are not part of the offline cache yet and behave exactly as they do without any of this (a temporarily unreachable server surfaces their normal error state, not a cached read). Phase 1 also has no offline mutation queue.
 
 Connectivity is decided by whether the PRKS server actually answers, never by the browser's own `navigator.onLine` guess: any real HTTP response (even an error status) means PRKS is reachable, and only a genuinely failed request (no transport response at all) means it is not. A probe starts immediately at app startup and again whenever the browser's `online`/`offline` hints fire. Ordinary PRKS `/api` traffic through `prksRequest()` also feeds that same reachability state, so a Work request that fails at the transport layer while the browser still thinks it is online will move PRKS to "Offline," and a later real HTTP response (or the bounded probe) will restore "Online." A browser that already thinks it's online but can't actually reach PRKS still ends up "Offline," and a browser that thinks it's offline but can reach PRKS still ends up "Online."
 
@@ -245,8 +245,11 @@ What works offline:
 - The app shell itself launches on the very first offline attempt after the service worker has installed once — it does not need a second online page load first. Every core CSS/JS/font/icon file the ordinary shell needs to boot is precached eagerly on install from an explicit manifest in `sw.js` (checked against `index.html` by `tests/test_frontend_service_worker.py` so the two can't silently drift). The PDF-viewer bundle itself stays cache-on-first-PDF-use, since it is not needed just to launch the shell.
 - A previously opened Work detail page reopens from an on-device cache.
 - A previously fully opened PDF reopens and renders from cache, including page scrolling (the service worker slices the cached whole file for the viewer's normal range requests).
-- Navigating between cached Works, including via the command palette and links inside research notes, works exactly like online navigation (`prksNavigate`) — there is no separate offline router.
-- A shell-level connectivity pill appears ("Offline" / "Reconnecting…") using calm, non-destructive styling. A cached Work page also shows its own concise marker, e.g. *Offline · cached 18:42*. Cached data is never presented as if it were current.
+- The Concepts list reopens from cache if you visited it while online, and its search box keeps working — it filters that cached list locally by name, alias, and parent name without contacting the server. Note that a cached list only knows about the Concepts that existed when it was cached.
+- A Concept page you opened while online reopens from cache with its definition, aliases, parent concepts, subconcepts, and research-note mentions.
+- **Seeing a Concept in the cached list does not guarantee its full detail has been cached.** The list and the individual Concept pages are cached separately, and opening the list deliberately does not download every Concept behind it. A Concept you never opened reports "This item is not available offline." — not a misleading "Concept not found."
+- Navigating between cached Works and cached Concepts — parent/subconcept links, a Concept's research-note mentions back to a cached Work, the command palette, and links inside research notes — works exactly like online navigation (`prksNavigate`). There is no separate offline router.
+- A shell-level connectivity pill appears ("Offline" / "Reconnecting…") using calm, non-destructive styling. A cached Work or Concept page also shows its own concise marker, e.g. *Offline · cached 18:42*. Cached data is never presented as if it were current.
 
 What stays read-only or unavailable offline:
 
@@ -254,15 +257,19 @@ What stays read-only or unavailable offline:
 - Research notes and private notes render their last-cached text but the editor starts out explicitly read-only from the moment it mounts ("Offline — notes are read-only"), even when you reopen a cached Work directly while already offline; they are not queued for later sync in this phase.
 - A previously cached PDF reopened offline mounts the viewer in its own read-only preview mode: you can render, scroll, zoom, and navigate pages, but the highlight/underline/annotation toolbar is not available, and no annotation is created, edited, or deleted. If connectivity drops while a PDF is already open, the same mounted viewer is switched live into that read-only interaction mode and annotation persistence is paused, preserving any pending in-memory annotation state — the document is not torn down or remounted.
 - A Work you never opened while online is not available offline: you see "This item is not available offline." rather than a false "not found." A real HTTP error from a reachable server (404, 403, 500, …) is never disguised as an offline/cache condition either way.
-- Search/browse offline is limited to Works already cached on this device — there is no offline full-text search.
+- Creating, renaming, deleting, or editing a Concept (definition, aliases, parent concepts) requires a connection. Those controls are disabled while PRKS is unreachable, including on a Concept page that was already open when the connection dropped, and they come back automatically once PRKS answers again. If the connection drops while an edit dialog is open, saving is refused rather than half-attempted.
+- **View in graph** and the Research Graph itself require a connection, and say so rather than opening a graph page that cannot load.
+- Search/browse offline is limited to the Works and Concepts already cached on this device — there is no offline full-text search.
 
 What is cached on the device, and how to clear it:
 
 - The service worker caches the app shell and static JS/CSS/icons (Cache Storage) plus complete managed PDFs you have actually opened (keyed by the server's own file identity, e.g. ETag/Content-Length, so a replaced PDF is not served stale once you are back online).
-- The app additionally keeps a small IndexedDB (`prks-offline-v1`) of the Work records above, each stamped with when it was cached.
+- The app additionally keeps a small IndexedDB (`prks-offline-v1`) of the Work and Concept records above, plus the cached Concepts list, each stamped with when it was cached.
 - All of this is a **disposable client-side cache**, never another source of truth. The PRKS server's SQLite database and managed files remain canonical; deleting this browser storage never touches them.
 - **Settings → Offline storage** shows cache availability, an approximate on-device size, and **Clear offline cache**, which only clears this browser's cache (never the server, database, or PDFs) and asks for a normal confirmation first.
 - If the browser's IndexedDB is unavailable, blocked, or corrupted, PRKS keeps working online exactly as before — that only turns off the offline cache, never the live app.
+
+Some cached pages depend on more than one record — a Concept page shows other Concepts' names and the titles of the Works that mention it. So when something changes that could make any of them wrong (any Concept edit, a saved research note, a deleted Work, or a Work title change), PRKS drops the whole cached Concept set rather than show you a page it knows may be out of date. Those Concepts simply become unavailable offline until you next view them online. This is deliberately cautious: nothing on the server is affected, and PRKS keeps working normally while you are online.
 
 When the server becomes reachable again, PRKS quietly moves from "Offline" to "Reconnecting…" to "Online," and only the page you are currently looking at is refreshed with the current server version (other open tabs refresh normally the next time you visit them — there is no request storm on reconnect).
 
@@ -462,7 +469,7 @@ python tests/browser/pointer_capture.py
 | `frontend/` | Static SPA (HTML, CSS, JS), PWA assets. |
 | `frontend/js/request-coordinator.js` | Client request coordinator for ordinary same-origin `/api` traffic. Memory-only; not offline support. |
 | `frontend/js/offline-store.js` | Disposable IndexedDB client cache (entities/lists/metadata). No DOM, no routing, no connectivity policy. |
-| `frontend/js/offline-runtime.js` | Online/offline/reconnecting state, read-through cache policy, mutation guard. No canonical persistence of its own. |
+| `frontend/js/offline-runtime.js` | Online/offline/reconnecting state, read-through cache policy, offline coherence domains, mutation guard. No canonical persistence of its own. |
 | `frontend/sw.js` | Service worker: app-shell/static-asset availability plus a focused managed-PDF cache. Never queues API mutations. |
 | `data/` | Default production database and files (gitignored as appropriate). |
 | `data_testing/` | Test fixtures and isolated DB/PDFs for automated tests. |

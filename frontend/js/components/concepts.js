@@ -125,7 +125,9 @@
             actionsHtml +=
                 '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="' +
                 esc(o.actionId) +
-                '">' +
+                '"' +
+                (o.actionRole ? ' data-prks-role="' + esc(o.actionRole) + '"' : '') +
+                '>' +
                 esc(o.actionLabel || 'Edit') +
                 '</button>';
         }
@@ -175,11 +177,113 @@
         );
     }
 
+    /* --- Offline policy for Concept routes (AGENTS.md "Offline / PWA") -------
+     * Concepts are read-only offline in Phase 1: cached index/detail render, but
+     * every canonical mutation is blocked outright -- never queued, never faked.
+     * Controls carry these roles so one helper can disable them all, including
+     * markup rerendered after the initial bind. */
+    const CONCEPT_MUTATION_ROLE = 'concept-mutation-control';
+    const CONCEPT_ONLINE_ONLY_ROLE = 'concept-online-only-control';
+    const CONCEPT_CONTROL_SELECTOR =
+        '[data-prks-role="' + CONCEPT_MUTATION_ROLE + '"], [data-prks-role="' + CONCEPT_ONLINE_ONLY_ROLE + '"]';
+
+    function conceptRuntimeState() {
+        return typeof root.prksOfflineRuntimeState === 'function' ? root.prksOfflineRuntimeState() : 'online';
+    }
+
+    /** Blocks a canonical Concept mutation while PRKS is unreachable. */
+    function conceptMutationBlocked(message) {
+        return typeof root.prksOfflineGuardMutation === 'function'
+            ? root.prksOfflineGuardMutation(message)
+            : false;
+    }
+
+    /** Read-only actions that still need the server (the Research Graph is not cached). */
+    function conceptConnectionRequired(message) {
+        if (conceptRuntimeState() === 'online') return false;
+        if (typeof root.prksAlertMessage === 'function') {
+            root.prksAlertMessage(message || 'This action requires a connection to PRKS.', 'Offline');
+        }
+        return true;
+    }
+
+    function applyConceptOfflineState(container) {
+        if (!container || !container.querySelectorAll) return;
+        const online = conceptRuntimeState() === 'online';
+        const nodes = container.querySelectorAll(CONCEPT_CONTROL_SELECTOR);
+        for (let i = 0; i < nodes.length; i++) {
+            const el = nodes[i];
+            // Native `disabled` blocks both pointer and keyboard activation and
+            // already carries the shared .prks-btn:disabled styling.
+            if ('disabled' in el) el.disabled = !online;
+            if (online) {
+                el.removeAttribute('aria-disabled');
+                el.removeAttribute('title');
+            } else {
+                el.setAttribute('aria-disabled', 'true');
+                el.setAttribute('title', 'Requires a connection to PRKS');
+            }
+        }
+    }
+
+    /**
+     * Keeps a mounted Concept page's controls in step with connectivity: a page
+     * built while online becomes read-only in place when PRKS stops answering,
+     * and restores on reconnect. Read/navigation links are never touched.
+     *
+     * The subscription belongs to the route's owning TabContext, and each bind
+     * replaces the previous one on the same container -- a TabContext container
+     * survives route changes and rerenders, so re-binding must not accumulate
+     * listeners (and there is no global Concept runtime singleton).
+     */
+    function bindConceptOfflineState(ctx, container) {
+        if (!container) return function () {};
+        if (typeof container.__prksConceptOfflineDispose === 'function') {
+            try {
+                container.__prksConceptOfflineDispose();
+            } catch (_e) {
+                /* a stale disposer must not block the new binding */
+            }
+        }
+        // Read current state immediately: a Concept page rendered after the
+        // runtime already left 'online' is never briefly mutable.
+        applyConceptOfflineState(container);
+        let unsubscribe = function () {};
+        if (typeof root.prksOfflineRuntimeSubscribe === 'function') {
+            unsubscribe =
+                root.prksOfflineRuntimeSubscribe(function () {
+                    if (container.__prksConceptOfflineDispose !== dispose) return;
+                    applyConceptOfflineState(container);
+                }) || function () {};
+        }
+        let unregister = function () {};
+        function dispose() {
+            if (container.__prksConceptOfflineDispose === dispose) container.__prksConceptOfflineDispose = null;
+            unregister();
+            unsubscribe();
+        }
+        if (ctx && typeof ctx.registerCleanup === 'function') {
+            unregister = ctx.registerCleanup(dispose) || function () {};
+        }
+        container.__prksConceptOfflineDispose = dispose;
+        return dispose;
+    }
+
+    /** No cached Concept index on this device -- explicitly different from a cached empty one. */
+    function renderConceptsIndexUnavailable(container) {
+        if (!container) return;
+        container.innerHTML =
+            '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concepts not available offline</h2></div>' +
+            '<p class="prks-inline-message" data-prks-role="offline-unavailable">This list has not been cached on this device.</p>';
+    }
+
     function conceptsEmptyDataHtml() {
         return (
             '<div class="prks-research-index__empty">' +
             '<p class="meta-row">No Concepts yet.</p>' +
-            '<p><button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-new-empty">New Concept</button></p>' +
+            '<p><button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-new-empty" data-prks-role="' +
+            CONCEPT_MUTATION_ROLE +
+            '">New Concept</button></p>' +
             '<p class="meta-row prks-research-index__empty-hint">Concepts are also created automatically when you type <code>[[concept:Name]]</code> in research notes.</p>' +
             '</div>'
         );
@@ -220,7 +324,12 @@
         return false;
     }
 
-    function renderConceptsIndex(items, container) {
+    /**
+     * `ctx` is the owning TabContext: the index subscribes to connectivity so its
+     * New Concept controls follow live state, and that subscription is registered
+     * with the route's context rather than leaked globally per render.
+     */
+    function renderConceptsIndex(ctx, items, container) {
         const list = Array.isArray(items) ? items : [];
         const icon = typeof root.prksIcon === 'function' ? root.prksIcon('network', { size: 'sm' }) : '';
 
@@ -241,6 +350,9 @@
                 const emptyBtn = host.querySelector('#prks-concept-new-empty');
                 if (emptyBtn) emptyBtn.addEventListener('click', function () { void createConceptFlow(); });
             }
+            // Local search rerenders replace the empty-state New Concept button,
+            // so re-apply the current connectivity state to the fresh markup.
+            applyConceptOfflineState(container);
         }
 
         container.innerHTML =
@@ -248,7 +360,9 @@
             (typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('network') : '') +
             ' Concepts</h2>' +
             '<div class="page-header__actions">' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-new">New Concept</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-new" data-prks-role="' +
+            CONCEPT_MUTATION_ROLE +
+            '">New Concept</button>' +
             '</div></div></div>' +
             (list.length ? researchIndexToolbarHtml('prks-concept-search', 'Search concepts…') : '') +
             '<div class="list-view prks-research-index" id="prks-concept-rows"></div>';
@@ -261,6 +375,9 @@
         }
         renderRows(list, '');
         if (list.length) {
+            // Offline search stays entirely client-side over the already-loaded
+            // (possibly cached) array -- it issues no API requests, and it can
+            // only match Concepts as of that snapshot.
             bindResearchIndexSearch(container, {
                 inputSelector: '#prks-concept-search',
                 items: list,
@@ -268,10 +385,14 @@
                 renderRows: renderRows,
             });
         }
+        bindConceptOfflineState(ctx, container);
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
     }
 
     async function createConceptFlow(initialName) {
+        // Guard before the dialog opens: nothing typed into an editor that can
+        // never save. Also reachable from the Work Research Notes markup flow.
+        if (conceptMutationBlocked('Creating a Concept requires a connection to PRKS.')) return null;
         const name = await promptText({
             title: 'New Concept',
             defaultValue: initialName || '',
@@ -279,6 +400,9 @@
         });
         if (name == null || !String(name).trim()) return null;
         if (typeof root.createConcept !== 'function') return null;
+        // Connectivity can change while the dialog is open; re-check immediately
+        // before the canonical request so no POST is ever attempted offline.
+        if (conceptMutationBlocked('Creating a Concept requires a connection to PRKS.')) return null;
         try {
             const created = await root.createConcept({ name: String(name).trim() });
             if (created && created.id && typeof root.prksNavigate === 'function') {
@@ -389,13 +513,20 @@
             '<p class="saved-view-detail__kicker">Concept</p><h2 class="prks-page-title">' +
             esc(c.name || 'Concept') +
             '</h2></div><div class="page-header__actions">' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-view-graph">View in graph</button>' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-rename">Rename</button>' +
-            '<button type="button" class="prks-btn prks-btn--quiet-danger prks-page-action--destructive" id="prks-concept-delete">Delete</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-view-graph" data-prks-role="' +
+            CONCEPT_ONLINE_ONLY_ROLE +
+            '">View in graph</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-rename" data-prks-role="' +
+            CONCEPT_MUTATION_ROLE +
+            '">Rename</button>' +
+            '<button type="button" class="prks-btn prks-btn--quiet-danger prks-page-action--destructive" id="prks-concept-delete" data-prks-role="' +
+            CONCEPT_MUTATION_ROLE +
+            '">Delete</button>' +
             '</div></div></div>' +
             '<div class="research-entity">' +
             '<section class="research-entity__section" aria-labelledby="prks-concept-def-h">' +
-            researchSectionHeadHtml('Definition', { headingId: 'prks-concept-def-h', actionId: 'prks-concept-edit-def' }) +
+            researchSectionHeadHtml('Definition', { headingId: 'prks-concept-def-h', actionId: 'prks-concept-edit-def',
+                actionRole: CONCEPT_MUTATION_ROLE }) +
             '<div class="research-md">' +
             md(c.description) +
             '</div></section>' +
@@ -403,6 +534,7 @@
             researchSectionHeadHtml('Search keys / aliases', {
                 headingId: 'prks-concept-aliases-h',
                 actionId: 'prks-concept-edit-aliases',
+                actionRole: CONCEPT_MUTATION_ROLE,
                 sub: aliasList.length ? String(aliasList.length) + (aliasList.length === 1 ? ' alias' : ' aliases') : '',
             }) +
             aliasesHtml +
@@ -411,6 +543,7 @@
             researchSectionHeadHtml('Parent concepts', {
                 headingId: 'prks-concept-parents-h',
                 actionId: 'prks-concept-edit-parents',
+                actionRole: CONCEPT_MUTATION_ROLE,
                 sub: parentList.length ? String(parentList.length) + (parentList.length === 1 ? ' parent' : ' parents') : '',
             }) +
             parentsHtml +
@@ -430,6 +563,9 @@
         const viewGraph = container.querySelector('#prks-concept-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
+                // The Research Graph is online-only in Phase 1: say so plainly
+                // rather than navigating into a route that cannot load its data.
+                if (conceptConnectionRequired('The Research Graph requires a connection to PRKS.')) return;
                 const hash =
                     typeof root.prksGraphFocusHash === 'function'
                         ? root.prksGraphFocusHash('concept', c.id)
@@ -445,6 +581,7 @@
         });
         container.querySelector('#prks-concept-edit-def').addEventListener('click', function () {
             void (async function () {
+                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const next = await promptText({
                     title: 'Definition',
                     message: 'Markdown',
@@ -454,12 +591,15 @@
                 });
                 if (next == null) return;
                 if (!ownsConcept()) return;
+                // Connectivity may have dropped while the dialog was open.
+                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 await root.updateConcept(c.id, { description: next });
                 refreshConcept();
             })();
         });
         container.querySelector('#prks-concept-edit-aliases').addEventListener('click', function () {
             void (async function () {
+                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const next = await promptText({
                     title: 'Search keys / aliases',
                     message: 'One alias per line',
@@ -469,6 +609,7 @@
                 });
                 if (next == null) return;
                 if (!ownsConcept()) return;
+                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const aliases = next.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean);
                 await root.putConceptAliases(c.id, aliases);
                 refreshConcept();
@@ -476,6 +617,7 @@
         });
         container.querySelector('#prks-concept-edit-parents').addEventListener('click', function () {
             void (async function () {
+                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const next = await promptText({
                     title: 'Parent concepts',
                     message: 'Parent Concept IDs, comma-separated',
@@ -484,15 +626,18 @@
                 });
                 if (next == null) return;
                 if (!ownsConcept()) return;
+                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const ids = next.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
                 await root.putConceptParents(c.id, ids);
                 refreshConcept();
             })();
         });
+        bindConceptOfflineState(ctx, container);
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
     }
 
     async function renameConcept(ctx, generation, c) {
+        if (conceptMutationBlocked('Renaming a Concept requires a connection to PRKS.')) return;
         const next = await promptText({
             title: 'Rename Concept',
             defaultValue: c.name || '',
@@ -500,6 +645,8 @@
         });
         if (next == null || !String(next).trim()) return;
         if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
+        // Re-check: PRKS may have become unreachable while the dialog was open.
+        if (conceptMutationBlocked('Renaming a Concept requires a connection to PRKS.')) return;
         try {
             await root.updateConcept(c.id, { name: String(next).trim() });
             if (
@@ -521,6 +668,7 @@
     }
 
     async function deleteConcept(ctx, generation, c) {
+        if (conceptMutationBlocked('Deleting a Concept requires a connection to PRKS.')) return;
         const ok =
             typeof root.prksConfirmDestructive === 'function'
                 ? await root.prksConfirmDestructive({
@@ -531,6 +679,8 @@
                 : true;
         if (!ok) return;
         if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
+        // Re-check: PRKS may have become unreachable while the confirm was open.
+        if (conceptMutationBlocked('Deleting a Concept requires a connection to PRKS.')) return;
         try {
             await root.deleteConcept(c.id);
             if (
@@ -554,8 +704,11 @@
 
     const api = {
         renderConceptsIndex: renderConceptsIndex,
+        renderConceptsIndexUnavailable: renderConceptsIndexUnavailable,
         renderConceptDetail: renderConceptDetail,
         renderConceptNotFound: renderConceptNotFound,
+        prksBindConceptOfflineState: bindConceptOfflineState,
+        prksApplyConceptOfflineState: applyConceptOfflineState,
         prksCreateConceptFlow: createConceptFlow,
         prksResearchMarkdownHtml: md,
         prksResearchIndexRowHtml: researchIndexRowHtml,

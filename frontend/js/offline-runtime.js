@@ -13,6 +13,10 @@
  *     canonical domain data itself.
  *   - Cached values are never handed back with server provenance. Callers
  *     always receive { value, source: 'server' | 'cache' | 'unavailable', cachedAt }.
+ *   - Owns offline coherence domains: some cached read models span many
+ *     canonical records, so one canonical change can stale a whole group of
+ *     cached entities/lists at once. markDomainChanged() blocks that group
+ *     synchronously and sweeps the disposable cache afterwards.
  */
 (function (root) {
     'use strict';
@@ -22,6 +26,8 @@
     const STATE_RECONNECTING = 'reconnecting';
 
     const PROBE_PATH = '/api/settings';
+    const DOMAIN_CONCEPTS = 'concepts';
+    const CONCEPTS_LIST_KEY = 'concepts:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
     const PDF_CACHE_NAME = 'prks-pdf-v1';
 
@@ -77,6 +83,14 @@
         // is still settling. Nothing here is canonical or persisted.
         const entityCoherence = new Map();
         const ineligibleEntities = new Set();
+        // Domain-level coherence. Some cached read models span many canonical
+        // records (a Concept rename changes that Concept's detail, the Concept
+        // index, and every cached relative that displays its name), so
+        // per-entity invalidation is not enough. A domain is a named group of
+        // entity kinds + list keys that are invalidated together.
+        const domainGeneration = new Map();
+        const blockedDomains = new Set();
+        const domainInvalidation = new Map();
 
         function entityKey(kind, id) {
             return String(kind) + '\u0000' + String(id);
@@ -84,6 +98,24 @@
 
         function currentEntityGeneration(kind, id) {
             return entityCoherence.get(entityKey(kind, id)) || 0;
+        }
+
+        function currentDomainGeneration(domain) {
+            if (!domain) return 0;
+            return domainGeneration.get(String(domain)) || 0;
+        }
+
+        /** True while a domain's cached rows are ineligible for offline fallback. */
+        function isDomainBlocked(domain) {
+            return !!domain && blockedDomains.has(String(domain));
+        }
+
+        /** A read may publish its result only from the domain generation it began in. */
+        function domainCacheEligible(domain, capturedGeneration) {
+            if (!domain) return true;
+            const key = String(domain);
+            if (capturedGeneration !== currentDomainGeneration(key)) return false;
+            return !blockedDomains.has(key);
         }
 
         function setState(next) {
@@ -221,7 +253,9 @@
          */
         async function readThroughEntity(kind, id, path, opts) {
             const options2 = opts && typeof opts === 'object' ? opts : {};
+            const domain = options2.domain ? String(options2.domain) : '';
             const coherenceToken = currentEntityGeneration(kind, id);
+            const domainToken = currentDomainGeneration(domain);
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -236,7 +270,7 @@
                     throw err;
                 }
                 noteRequestFailure();
-                if (ineligibleEntities.has(entityKey(kind, id))) {
+                if (ineligibleEntities.has(entityKey(kind, id)) || isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
                 if (store) {
@@ -250,7 +284,7 @@
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
             noteRequestSuccess();
-            void cacheEntityIfCurrent(kind, id, raw, coherenceToken);
+            void cacheEntityForDomain(kind, id, raw, coherenceToken, domain, domainToken);
             return { value: raw, source: 'server', cachedAt: now() };
         }
 
@@ -306,9 +340,122 @@
             return next;
         }
 
+        /** Remove a disposable list snapshot. Never changes connectivity or server state. */
+        function invalidateList(listKey) {
+            if (!store || typeof store.deleteList !== 'function') return Promise.resolve(false);
+            try {
+                return Promise.resolve(store.deleteList(listKey)).catch(function () {
+                    return false;
+                });
+            } catch (_e) {
+                return Promise.resolve(false);
+            }
+        }
+
+        /**
+         * Entity cache publication gated on BOTH its own entity generation and
+         * its domain generation. A write that finishes after a domain
+         * invalidation swept the store could otherwise survive as a stale row
+         * that becomes servable again the moment cleanup unblocks the domain,
+         * so such a write is removed again rather than published.
+         */
+        function cacheEntityForDomain(kind, id, value, coherenceToken, domain, domainToken) {
+            if (!domainCacheEligible(domain, domainToken)) return Promise.resolve(false);
+            return cacheEntityIfCurrent(kind, id, value, coherenceToken).then(function (ok) {
+                if (!ok) return false;
+                if (domainCacheEligible(domain, domainToken)) return true;
+                ineligibleEntities.add(entityKey(kind, id));
+                void invalidateEntity(kind, id);
+                return false;
+            });
+        }
+
+        /** Same publication gate as cacheEntityForDomain, for a named list snapshot. */
+        function cacheListForDomain(listKey, value, domain, domainToken) {
+            if (!store || typeof store.putList !== 'function') return Promise.resolve(false);
+            if (!domainCacheEligible(domain, domainToken)) return Promise.resolve(false);
+            try {
+                return Promise.resolve(store.putList(listKey, value, ''))
+                    .then(function (ok) {
+                        if (!ok) return false;
+                        if (domainCacheEligible(domain, domainToken)) return true;
+                        void invalidateList(listKey);
+                        return false;
+                    })
+                    .catch(function () {
+                        return false;
+                    });
+            } catch (_e) {
+                return Promise.resolve(false);
+            }
+        }
+
+        /**
+         * Call immediately after a successful canonical mutation whose effect
+         * spans a whole cached read model rather than one row. The generation
+         * bump and the fallback block are synchronous, so the stale domain is
+         * ineligible the instant the mutation was acknowledged -- long before
+         * the IndexedDB sweep settles. The domain unblocks only when the sweep
+         * for this same generation completes successfully; a failed sweep
+         * leaves it conservatively blocked (unavailable beats known-stale) and
+         * a superseded generation may never settle a newer one.
+         */
+        function markDomainChanged(domain, spec) {
+            const key = String(domain);
+            const options3 = spec && typeof spec === 'object' ? spec : {};
+            const next = currentDomainGeneration(key) + 1;
+            domainGeneration.set(key, next);
+            blockedDomains.add(key);
+            const kinds = Array.isArray(options3.entityKinds) ? options3.entityKinds : [];
+            const listKeys = Array.isArray(options3.listKeys) ? options3.listKeys : [];
+            const jobs = [];
+            kinds.forEach(function (kind) {
+                if (!store || typeof store.deleteEntitiesByKind !== 'function') {
+                    jobs.push(Promise.resolve(!store));
+                    return;
+                }
+                jobs.push(
+                    Promise.resolve(store.deleteEntitiesByKind(kind)).catch(function () {
+                        return false;
+                    })
+                );
+            });
+            listKeys.forEach(function (listKey) {
+                if (!store || typeof store.deleteList !== 'function') {
+                    jobs.push(Promise.resolve(!store));
+                    return;
+                }
+                jobs.push(invalidateList(listKey));
+            });
+            const cleanup = (jobs.length ? Promise.all(jobs) : Promise.resolve([]))
+                .then(function (results) {
+                    return results.every(function (ok) {
+                        return ok !== false;
+                    });
+                })
+                .catch(function () {
+                    return false;
+                })
+                .then(function (ok) {
+                    // Only the current generation may settle the domain: an
+                    // older invalidation completing later must never unblock,
+                    // reset, or publish eligibility for a newer one.
+                    if (currentDomainGeneration(key) !== next) return ok;
+                    if (ok) {
+                        blockedDomains.delete(key);
+                        domainInvalidation.delete(key);
+                    }
+                    return ok;
+                });
+            domainInvalidation.set(key, { generation: next, promise: cleanup });
+            return next;
+        }
+
         /** Same policy as readThroughEntity but for a named list snapshot. */
         async function readThroughList(listKey, path, opts) {
             const options2 = opts && typeof opts === 'object' ? opts : {};
+            const domain = options2.domain ? String(options2.domain) : '';
+            const domainToken = currentDomainGeneration(domain);
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -323,6 +470,9 @@
                     throw err;
                 }
                 noteRequestFailure();
+                if (isDomainBlocked(domain)) {
+                    return { value: null, source: 'unavailable', cachedAt: null };
+                }
                 if (store) {
                     const cached = await store.getList(listKey).catch(function () {
                         return null;
@@ -334,9 +484,7 @@
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
             noteRequestSuccess();
-            if (store) {
-                store.putList(listKey, raw, '').catch(function () {});
-            }
+            void cacheListForDomain(listKey, raw, domain, domainToken);
             return { value: raw, source: 'server', cachedAt: now() };
         }
 
@@ -434,13 +582,21 @@
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
             invalidateEntity: invalidateEntity,
+            invalidateList: invalidateList,
             markEntityChanged: markEntityChanged,
+            markDomainChanged: markDomainChanged,
+            currentDomainGeneration: currentDomainGeneration,
+            isDomainBlocked: isDomainBlocked,
             isMutationBlocked: isMutationBlocked,
             guardMutation: guardMutation,
             diagnostics: diagnostics,
             clearCache: clearCache,
             /* test/inspection hooks */
             _runProbe: runProbe,
+            _domainCleanup: function (domain) {
+                const rec = domainInvalidation.get(String(domain));
+                return rec ? rec.promise : Promise.resolve(true);
+            },
         };
     }
 
@@ -485,8 +641,32 @@
     function prksOfflineInvalidateEntity(kind, id) {
         return production.invalidateEntity(kind, id);
     }
+    function prksOfflineInvalidateList(listKey) {
+        return production.invalidateList(listKey);
+    }
     function prksOfflineMarkEntityChanged(kind, id) {
         return production.markEntityChanged(kind, id);
+    }
+    function prksOfflineMarkDomainChanged(domain, spec) {
+        return production.markDomainChanged(domain, spec);
+    }
+    function prksOfflineDomainGeneration(domain) {
+        return production.currentDomainGeneration(domain);
+    }
+    function prksOfflineIsDomainBlocked(domain) {
+        return production.isDomainBlocked(domain);
+    }
+    /**
+     * The one place that spells out what the Concepts offline domain contains,
+     * so every canonical caller that can stale it (Concept mutations,
+     * successful Research Notes saves, Work deletion, Work metadata changes
+     * that alter mention titles) invalidates exactly the same set.
+     */
+    function prksOfflineMarkConceptsChanged() {
+        return production.markDomainChanged(DOMAIN_CONCEPTS, {
+            entityKinds: ['concept'],
+            listKeys: [CONCEPTS_LIST_KEY],
+        });
     }
     function prksOfflineIsMutationBlocked() {
         return production.isMutationBlocked();
@@ -514,7 +694,12 @@
         prksOfflineCacheEntity: prksOfflineCacheEntity,
         prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,
         prksOfflineInvalidateEntity: prksOfflineInvalidateEntity,
+        prksOfflineInvalidateList: prksOfflineInvalidateList,
         prksOfflineMarkEntityChanged: prksOfflineMarkEntityChanged,
+        prksOfflineMarkDomainChanged: prksOfflineMarkDomainChanged,
+        prksOfflineDomainGeneration: prksOfflineDomainGeneration,
+        prksOfflineIsDomainBlocked: prksOfflineIsDomainBlocked,
+        prksOfflineMarkConceptsChanged: prksOfflineMarkConceptsChanged,
         prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,
@@ -523,6 +708,8 @@
         PRKS_OFFLINE_STATE_OFFLINE: STATE_OFFLINE,
         PRKS_OFFLINE_STATE_RECONNECTING: STATE_RECONNECTING,
         PRKS_OFFLINE_PDF_CACHE_NAME: PDF_CACHE_NAME,
+        PRKS_OFFLINE_DOMAIN_CONCEPTS: DOMAIN_CONCEPTS,
+        PRKS_OFFLINE_CONCEPTS_LIST_KEY: CONCEPTS_LIST_KEY,
     };
 
     Object.keys(api).forEach(function (k) {

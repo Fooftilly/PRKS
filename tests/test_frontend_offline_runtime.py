@@ -83,6 +83,65 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertNotIn("queueMutation", src)
         self.assertNotIn("pendingMutation", src)
 
+    def test_domain_invalidation_blocks_before_the_physical_sweep(self):
+        src = _read(_RUNTIME)
+        start = src.index("function markDomainChanged(")
+        body = src[start : start + 2200]
+        block_at = body.index("blockedDomains.add(key)")
+        # The generation bump and the fallback block must both be synchronous,
+        # and must come before any IndexedDB work is scheduled: a stale domain
+        # is ineligible the instant a canonical mutation is acknowledged.
+        self.assertLess(body.index("domainGeneration.set(key, next)"), block_at)
+        self.assertLess(block_at, body.index("deleteEntitiesByKind"))
+        # Only the current generation may settle the domain.
+        self.assertIn("if (currentDomainGeneration(key) !== next) return ok;", body)
+
+    def test_concepts_domain_shape_is_defined_once(self):
+        src = _read(_RUNTIME)
+        self.assertIn("function prksOfflineMarkConceptsChanged()", src)
+        self.assertIn("entityKinds: ['concept']", src)
+        self.assertIn("const CONCEPTS_LIST_KEY = 'concepts:index';", src)
+        # Every canonical caller shares that one definition rather than
+        # re-listing the domain's kinds/list keys at each call site.
+        for path in (
+            os.path.join(_FRONTEND, "js", "api.js"),
+            os.path.join(_FRONTEND, "js", "ui.js"),
+            os.path.join(_FRONTEND, "js", "components", "works.js"),
+        ):
+            caller = _read(path)
+            self.assertIn("prksOfflineMarkConceptsChanged", caller)
+            self.assertNotIn("entityKinds:", caller)
+
+    def test_concept_domain_invalidated_by_canonical_research_changes(self):
+        works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
+        # Successful Research Notes save and successful Work deletion both change
+        # canonical Work -> Concept research data.
+        notes_at = works.index("function prksEnqueueWorkResearchNotesSave(")
+        notes_body = works[notes_at : notes_at + 6000]
+        self.assertIn("prksOfflineMarkConceptsChanged()", notes_body)
+        delete_at = works.index("async function deleteWork(")
+        delete_body = works[delete_at : delete_at + 2500]
+        self.assertIn("prksOfflineMarkConceptsChanged()", delete_body)
+        # ... and only on acknowledged success, never on a failed/aborted save.
+        self.assertIn("if (ok && typeof prksOfflineMarkConceptsChanged === 'function')", notes_body)
+
+    def test_concept_mutations_invalidate_at_the_canonical_helper_boundary(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        for fn in (
+            "async function createConcept(",
+            "async function updateConcept(",
+            "async function deleteConcept(",
+            "async function putConceptParents(",
+            "async function putConceptAliases(",
+        ):
+            start = api.index(fn)
+            body = api[start : start + 900]
+            # prksResearchJson throws on a non-ok response, so reaching the
+            # invalidation means the canonical mutation actually succeeded.
+            self.assertIn("prksResearchJson(", body, fn)
+            self.assertIn("prksMarkConceptsDomainChanged();", body, fn)
+            self.assertLess(body.index("prksResearchJson("), body.index("prksMarkConceptsDomainChanged();"), fn)
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for offline runtime tests")

@@ -1409,11 +1409,77 @@ function initSidebarBrandHome() {
  * handling (prksRenderRouteError) takes over instead of a wrong "not
  * found" page. See AGENTS.md "Offline / PWA".
  */
-async function prksOfflineDetailFetch(kind, id, path, signal) {
+async function prksOfflineDetailFetch(kind, id, path, signal, options) {
     if (typeof prksOfflineReadEntity !== 'function') {
         return { value: null, source: 'unavailable', cachedAt: null };
     }
-    return await prksOfflineReadEntity(kind, id, path, { signal: signal });
+    const opts = options && typeof options === 'object' ? options : {};
+    return await prksOfflineReadEntity(kind, id, path, { signal: signal, domain: opts.domain });
+}
+
+/**
+ * List counterpart of prksOfflineDetailFetch, so an offline-capable index route
+ * stays symmetrical with the Work detail route. Deliberately thin: fetch/retry/
+ * connectivity policy and the network-vs-domain distinction stay owned by the
+ * offline runtime, never re-implemented here.
+ */
+async function prksOfflineListFetch(listKey, path, signal, options) {
+    if (typeof prksOfflineReadList !== 'function') {
+        return { value: null, source: 'unavailable', cachedAt: null };
+    }
+    const opts = options && typeof options === 'object' ? options : {};
+    return await prksOfflineReadList(listKey, path, { signal: signal, domain: opts.domain });
+}
+
+const PRKS_CONCEPTS_LIST_KEY =
+    typeof PRKS_OFFLINE_CONCEPTS_LIST_KEY === 'string' ? PRKS_OFFLINE_CONCEPTS_LIST_KEY : 'concepts:index';
+const PRKS_CONCEPTS_DOMAIN =
+    typeof PRKS_OFFLINE_DOMAIN_CONCEPTS === 'string' ? PRKS_OFFLINE_DOMAIN_CONCEPTS : 'concepts';
+
+/**
+ * The old fetchConcepts() normalized the server shape before rendering; routing
+ * through the offline runtime must not quietly lose that guarantee. A
+ * wrong-shaped *server* body is a route error (never a silent empty list), a
+ * wrong-shaped *cached* body means the cache is unusable -- "no Concept index
+ * was cached", never "No Concepts yet." -- and is discarded best-effort.
+ * Returns the array, or null when no usable index exists.
+ */
+function prksResolveOfflineConceptIndex(offlineResult) {
+    if (!offlineResult || offlineResult.source === 'unavailable') return null;
+    if (Array.isArray(offlineResult.value)) return offlineResult.value;
+    if (offlineResult.source === 'server') {
+        throw new Error('Received an unexpected Concepts response.');
+    }
+    if (typeof prksOfflineInvalidateList === 'function') {
+        void prksOfflineInvalidateList(PRKS_CONCEPTS_LIST_KEY);
+    }
+    return null;
+}
+
+/**
+ * Same guarantee for one Concept: fetchConcept() only ever returned an object
+ * whose id matched. A bad *server* shape is a route error; a bad *cached* shape
+ * makes the cache unavailable rather than a false "Concept not found."
+ */
+function prksResolveOfflineConcept(offlineResult, conceptId) {
+    if (!offlineResult || offlineResult.source === 'unavailable') {
+        return { concept: null, unavailable: true };
+    }
+    const value = offlineResult.value;
+    if (value == null) return { concept: null, unavailable: false };
+    const shapeOk =
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        value.id != null &&
+        String(value.id) === String(conceptId);
+    if (shapeOk) return { concept: value, unavailable: false };
+    if (offlineResult.source === 'server') {
+        throw new Error('Received an unexpected Concept response.');
+    }
+    if (typeof prksOfflineInvalidateEntity === 'function') {
+        void prksOfflineInvalidateEntity('concept', conceptId);
+    }
+    return { concept: null, unavailable: true };
 }
 
 function prksOfflineProvenanceBannerHtml(offlineResult) {
@@ -2081,15 +2147,42 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'concepts': {
-                const items = typeof fetchConcepts === 'function' ? await fetchConcepts({ signal: routeSignal }) : [];
+                const offlineConcepts = await prksOfflineListFetch(
+                    PRKS_CONCEPTS_LIST_KEY,
+                    '/api/concepts',
+                    routeSignal,
+                    { domain: PRKS_CONCEPTS_DOMAIN }
+                );
                 if (stale()) return;
-                if (typeof renderConceptsIndex === 'function') renderConceptsIndex(items, contentDiv);
+                const conceptItems = prksResolveOfflineConceptIndex(offlineConcepts);
+                if (!conceptItems) {
+                    if (typeof renderConceptsIndexUnavailable === 'function') renderConceptsIndexUnavailable(contentDiv);
+                    else prksOfflineRenderUnavailable(contentDiv, 'Concepts not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Concepts not available offline' };
+                    break;
+                }
+                if (typeof renderConceptsIndex === 'function') renderConceptsIndex(ctx, conceptItems, contentDiv);
                 else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concepts</h2></div>';
+                prksOfflinePrependBanner(contentDiv, offlineConcepts);
                 break;
             }
             case 'concept-detail': {
-                const item = typeof fetchConcept === 'function' ? await fetchConcept(route.params.conceptId, { signal: routeSignal }) : null;
+                const conceptId = route.params.conceptId;
+                const offlineConcept = await prksOfflineDetailFetch(
+                    'concept',
+                    conceptId,
+                    '/api/concepts/' + encodeURIComponent(conceptId),
+                    routeSignal,
+                    { domain: PRKS_CONCEPTS_DOMAIN }
+                );
                 if (stale()) return;
+                const resolvedConcept = prksResolveOfflineConcept(offlineConcept, conceptId);
+                if (resolvedConcept.unavailable) {
+                    prksOfflineRenderUnavailable(contentDiv, 'Concept not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Concept not available offline' };
+                    break;
+                }
+                const item = resolvedConcept.concept;
                 if (!item) {
                     if (typeof renderConceptNotFound === 'function') renderConceptNotFound(contentDiv);
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concept not found.</h2></div>';
@@ -2097,6 +2190,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 } else {
                     ctx.setEntity('concept', item);
                     if (typeof renderConceptDetail === 'function') renderConceptDetail(ctx, item, contentDiv);
+                    prksOfflinePrependBanner(contentDiv, offlineConcept);
                     titleOpts = { entityTitle: item.name || 'Concept' };
                 }
                 break;
