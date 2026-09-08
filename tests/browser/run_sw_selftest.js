@@ -396,28 +396,36 @@ async function run() {
 
     /* ---- performInstall(): required-asset failure fails the whole install,
      * decorative optional-asset failure never blocks it (AGENTS.md "Make
-     * shell precache success meaningful") ---- */
+     * shell precache success meaningful"). Writes go into the *staging*
+     * caches only -- never the live SHELL_CACHE/STATIC_CACHE names -- so a
+     * concurrently-active old worker's cache is never touched by install;
+     * see the "failed installs cannot poison the active cache" block below
+     * for performActivate()'s promotion step. ---- */
     {
         // Happy path: every required and optional asset fetches fine ->
-        // performInstall() resolves and every path lands in the right cache.
+        // performInstall() resolves and every path lands in the staging cache.
         const cacheStorage = makeFakeCacheStorage();
         const fetched = [];
         await sw.performInstall(cacheStorage, function (path) {
             fetched.push(path);
             return Promise.resolve(new Response('body:' + path, { status: 200 }));
         });
-        const shellCache = await cacheStorage.open(sw.PRKS_SW_SHELL_CACHE);
-        const staticCache = await cacheStorage.open(sw.PRKS_SW_STATIC_CACHE);
+        const shellStaging = await cacheStorage.open(sw.PRKS_SW_SHELL_STAGING_CACHE);
+        const staticStaging = await cacheStorage.open(sw.PRKS_SW_STATIC_STAGING_CACHE);
         let allShellCached = true;
         for (const p of sw.PRKS_SW_SHELL_PRECACHE_PATHS) {
-            if (!(await shellCache.match(p))) allShellCached = false;
+            if (!(await shellStaging.match(p))) allShellCached = false;
         }
-        assert('performInstall happy path caches every shell path', allShellCached);
+        assert('performInstall happy path stages every shell path', allShellCached);
         let allStaticCached = true;
         for (const p of sw.PRKS_SW_STATIC_PRECACHE_PATHS) {
-            if (!(await staticCache.match(p))) allStaticCached = false;
+            if (!(await staticStaging.match(p))) allStaticCached = false;
         }
-        assert('performInstall happy path caches every static path (required + optional)', allStaticCached);
+        assert('performInstall happy path stages every static path (required + optional)', allStaticCached);
+        const shellLive = await cacheStorage.open(sw.PRKS_SW_SHELL_CACHE);
+        const staticLive = await cacheStorage.open(sw.PRKS_SW_STATIC_CACHE);
+        assertEq('performInstall alone never writes into the live shell cache', (await shellLive.keys()).length, 0);
+        assertEq('performInstall alone never writes into the live static cache', (await staticLive.keys()).length, 0);
     }
     await assertRejectsOrThrows(
         'performInstall rejects when a required (non-optional) static asset fetch fails',
@@ -449,25 +457,149 @@ async function run() {
     });
     {
         // The inverse: a failing *optional* decorative asset (manifest/icon)
-        // must never fail the install, and every required asset still lands.
+        // must never fail the install, and every required asset still lands
+        // in staging.
         const cacheStorage = makeFakeCacheStorage();
         const optionalSet = new Set(sw.PRKS_SW_STATIC_PRECACHE_OPTIONAL_PATHS);
         await sw.performInstall(cacheStorage, function (path) {
             if (optionalSet.has(path)) return Promise.reject(new Error('icon missing'));
             return Promise.resolve(new Response('body:' + path, { status: 200 }));
         });
-        const staticCache = await cacheStorage.open(sw.PRKS_SW_STATIC_CACHE);
+        const staticStaging = await cacheStorage.open(sw.PRKS_SW_STATIC_STAGING_CACHE);
         let allRequiredCached = true;
         for (const p of sw.PRKS_SW_STATIC_PRECACHE_PATHS) {
             if (optionalSet.has(p)) continue;
-            if (!(await staticCache.match(p))) allRequiredCached = false;
+            if (!(await staticStaging.match(p))) allRequiredCached = false;
         }
-        assert('performInstall tolerates a failing optional asset and still caches every required one', allRequiredCached);
+        assert('performInstall tolerates a failing optional asset and still stages every required one', allRequiredCached);
         let noOptionalCached = true;
         for (const p of optionalSet) {
-            if (await staticCache.match(p)) noOptionalCached = false;
+            if (await staticStaging.match(p)) noOptionalCached = false;
         }
-        assert('performInstall never caches a failing optional asset', noOptionalCached);
+        assert('performInstall never stages a failing optional asset', noOptionalCached);
+    }
+
+    /* ---- performActivate(): promotes staging -> live and retires stale
+     * caches (AGENTS.md "Make failed SW installs unable to poison the
+     * active shell cache") ---- */
+    {
+        const cacheStorage = makeFakeCacheStorage();
+        await sw.performInstall(cacheStorage, function (path) {
+            return Promise.resolve(new Response('body:' + path, { status: 200 }));
+        });
+        await sw.performActivate(cacheStorage);
+        const shellLive = await cacheStorage.open(sw.PRKS_SW_SHELL_CACHE);
+        const staticLive = await cacheStorage.open(sw.PRKS_SW_STATIC_CACHE);
+        let allShellPromoted = true;
+        for (const p of sw.PRKS_SW_SHELL_PRECACHE_PATHS) {
+            if (!(await shellLive.match(p))) allShellPromoted = false;
+        }
+        assert('performActivate promotes every staged shell path into the live cache', allShellPromoted);
+        let allStaticPromoted = true;
+        for (const p of sw.PRKS_SW_STATIC_PRECACHE_PATHS) {
+            if (!(await staticLive.match(p))) allStaticPromoted = false;
+        }
+        assert('performActivate promotes every staged static path into the live cache', allStaticPromoted);
+        assertEq(
+            'performActivate deletes the shell staging cache afterward',
+            cacheStorage._stores.has(sw.PRKS_SW_SHELL_STAGING_CACHE),
+            false
+        );
+        assertEq(
+            'performActivate deletes the static staging cache afterward',
+            cacheStorage._stores.has(sw.PRKS_SW_STATIC_STAGING_CACHE),
+            false
+        );
+    }
+    {
+        // Old-versioned cache names (a real release version bump) are
+        // retired once activation completes.
+        const cacheStorage = makeFakeCacheStorage();
+        await cacheStorage.open('prks-shell-v0');
+        await cacheStorage.open('prks-static-v0');
+        await sw.performInstall(cacheStorage, function (path) {
+            return Promise.resolve(new Response('body:' + path, { status: 200 }));
+        });
+        await sw.performActivate(cacheStorage);
+        assertEq('performActivate retires an old-versioned shell cache', cacheStorage._stores.has('prks-shell-v0'), false);
+        assertEq('performActivate retires an old-versioned static cache', cacheStorage._stores.has('prks-static-v0'), false);
+    }
+
+    /* ---- SW rollback regression: a failed new-worker install must never
+     * partially rewrite the cache an already-active old worker is serving
+     * from (AGENTS.md "Make failed SW installs unable to poison the active
+     * shell cache") ---- */
+    {
+        const cacheStorage = makeFakeCacheStorage();
+
+        // Seed "old active" shell/static caches with identifiable old
+        // contents, as if an earlier worker's successful install+activate
+        // already ran.
+        const shellLive = await cacheStorage.open(sw.PRKS_SW_SHELL_CACHE);
+        const staticLive = await cacheStorage.open(sw.PRKS_SW_STATIC_CACHE);
+        for (const p of sw.PRKS_SW_SHELL_PRECACHE_PATHS) {
+            await shellLive.put(p, new Response('OLD:' + p, { status: 200 }));
+        }
+        for (const p of sw.PRKS_SW_STATIC_PRECACHE_PATHS) {
+            await staticLive.put(p, new Response('OLD:' + p, { status: 200 }));
+        }
+        const snapshotBefore = {};
+        for (const p of sw.PRKS_SW_SHELL_PRECACHE_PATHS.concat(sw.PRKS_SW_STATIC_PRECACHE_PATHS)) {
+            const cache = sw.PRKS_SW_SHELL_PRECACHE_PATHS.indexOf(p) !== -1 ? shellLive : staticLive;
+            snapshotBefore[p] = await (await cache.match(p)).text();
+        }
+
+        // Attempt installing a new revision: most required files succeed,
+        // one required file (/js/app.js) fails.
+        await assertRejectsOrThrows('rollback: new-worker install rejects on one failing required file', async function () {
+            await sw.performInstall(cacheStorage, function (path) {
+                if (path === '/js/app.js') return Promise.reject(new Error('network down'));
+                return Promise.resolve(new Response('NEW:' + path, { status: 200 }));
+            });
+        });
+
+        // Old cache entries must be byte-for-byte unchanged.
+        let oldUnchanged = true;
+        for (const p of sw.PRKS_SW_SHELL_PRECACHE_PATHS) {
+            const got = await (await shellLive.match(p)).text();
+            if (got !== snapshotBefore[p]) oldUnchanged = false;
+        }
+        for (const p of sw.PRKS_SW_STATIC_PRECACHE_PATHS) {
+            const got = await (await staticLive.match(p)).text();
+            if (got !== snapshotBefore[p]) oldUnchanged = false;
+        }
+        assert('rollback: old live cache entries are byte-for-byte unchanged after a failed install', oldUnchanged);
+
+        // Partial new entries exist only in the staging cache, never live.
+        const staticStagingAfterFailure = await cacheStorage.open(sw.PRKS_SW_STATIC_STAGING_CACHE);
+        const someStagedEntry = await staticStagingAfterFailure.match('/css/style.css');
+        assert('rollback: a successfully-fetched required path still lands in the staging cache', !!someStagedEntry);
+        const liveStyleAfterFailure = await staticLive.match('/css/style.css');
+        assertEq(
+            'rollback: the live cache keeps its old content for a path the failed install also touched',
+            liveStyleAfterFailure ? await liveStyleAfterFailure.text() : null,
+            'OLD:/css/style.css'
+        );
+
+        // Now retry with a fully successful install + activate: the live
+        // cache becomes complete with the new content, and staging is
+        // cleaned up.
+        await sw.performInstall(cacheStorage, function (path) {
+            return Promise.resolve(new Response('NEW:' + path, { status: 200 }));
+        });
+        await sw.performActivate(cacheStorage);
+        let liveComplete = true;
+        for (const p of sw.PRKS_SW_SHELL_PRECACHE_PATHS.concat(sw.PRKS_SW_STATIC_PRECACHE_PATHS)) {
+            const cache = sw.PRKS_SW_SHELL_PRECACHE_PATHS.indexOf(p) !== -1 ? shellLive : staticLive;
+            const res = await cache.match(p);
+            if (!res || (await res.text()) !== 'NEW:' + p) liveComplete = false;
+        }
+        assert('rollback: a subsequent successful install+activate makes the live cache complete with new content', liveComplete);
+        assertEq(
+            'rollback: staging caches are retired after the successful activate',
+            cacheStorage._stores.has(sw.PRKS_SW_STATIC_STAGING_CACHE),
+            false
+        );
     }
 
     /* ---- source has no generic /api/... JSON caching and no mutation queueing ---- */

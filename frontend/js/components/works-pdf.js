@@ -954,6 +954,7 @@ function prksEnsureAnnotationBeforeUnloadGuard() {
 async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupToken) {
     const generation = ctx && typeof ctx.generation === 'number' ? ctx.generation : undefined;
     if (!viewer || typeof viewer.saveCopy !== 'function' || typeof viewer.getAnnotations !== 'function') {
+        if (runtime) runtime._persistenceSetupStarted = false;
         return;
     }
     if (ctx && typeof ctx.clearTimer === 'function') ctx.clearTimer('annotationSyncInterval');
@@ -966,6 +967,29 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         return typeof prksPdfPersistenceStillLive === 'function'
             ? prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)
             : !!(runtime && !runtime._destroyed);
+    }
+
+    // Setup-time eligibility: stricter than stillLive() above. An async
+    // setup begun while the runtime was 'work'/online must re-check, after
+    // every await boundary and immediately before installing the worker,
+    // that it is still 'work'/online -- a reconcile may have flipped the
+    // live viewer into preview mode (or PRKS may have gone offline) while
+    // this GET/JSON-parse was in flight. This is *not* the same predicate an
+    // already-installed worker keeps using once paused (AGENTS.md
+    // "persistence setup cannot install an active worker after an offline
+    // transition"; "an already-installed worker should remain live while
+    // paused offline").
+    function setupEligible() {
+        return typeof prksPdfPersistenceSetupEligible === 'function'
+            ? prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken)
+            : stillLive();
+    }
+
+    // Abandon this setup attempt without installing a worker and without
+    // destroying the viewer -- reset the started-flag so a later online
+    // reconcile can call prksEnsureAnnotationPersistence() again.
+    function abandonSetup() {
+        runtime._persistenceSetupStarted = false;
     }
 
     const syncState = runtime.syncState || {
@@ -1018,9 +1042,15 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             retry: false,
             freshForMs: 0,
         });
-        if (!stillLive()) return;
+        if (!setupEligible()) {
+            abandonSetup();
+            return;
+        }
         const savedData = await savedRes.json();
-        if (!stillLive()) return;
+        if (!setupEligible()) {
+            abandonSetup();
+            return;
+        }
         const saved = JSON.parse(savedData.annotations_json || '[]');
         if (Array.isArray(saved) && saved.length > 0) {
             runtime.annotationCache = {
@@ -1033,7 +1063,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             renderAnnotationFallbackList(saved, 'DB', workId, ctx);
         }
     } catch (_e) {}
-    if (!stillLive()) return;
+    if (!setupEligible()) {
+        abandonSetup();
+        return;
+    }
 
     runtime.annotationCache = runtime.annotationCache || {
         allItems: [],
@@ -1088,23 +1121,33 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         }
     }
 
+    // PRKS may go offline mid-confirmation-loop (the persistence worker
+    // pauses itself, but this poll loop only checked stillLive() before) --
+    // this must stop issuing /save-confirm requests the instant that
+    // happens, both before starting a new attempt and before continuing
+    // through a backoff delay, and leave pendingChanges/lastConfirmedToken
+    // untouched so the outer queue naturally resumes once reconnected.
+    function pausedOffline() {
+        return !!(worker && worker.paused);
+    }
+
     async function confirmPersistedToken(saveToken) {
         const tries = 8;
         for (let attempt = 0; attempt < tries; attempt++) {
-            if (!stillLive()) return false;
+            if (!stillLive() || pausedOffline()) return false;
             try {
                 const probe = await prksRequest(
                     `/api/works/${workId}/save-confirm?token=${encodeURIComponent(saveToken)}&t=${Date.now()}`,
                     { cache: 'no-store' },
                     { dedupe: false, retry: false, freshForMs: 0 }
                 );
-                if (!stillLive()) return false;
+                if (!stillLive() || pausedOffline()) return false;
                 if (probe.ok) {
                     const body = await probe.json().catch(() => ({}));
                     if (body && body.saved === true) return true;
                 }
             } catch (_e) {}
-            if (!stillLive()) return false;
+            if (!stillLive() || pausedOffline()) return false;
             const wait = attempt < 2 ? 250 : attempt < 5 ? 450 : 800;
             await new Promise((r) => setTimeout(r, wait));
         }
@@ -1186,6 +1229,15 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         void requestFlush('annotation-event');
     }
 
+    // Final eligibility gate, immediately before the worker is actually
+    // installed: viewer identity, 'work' mode, and online connectivity must
+    // all still hold. Do not destroy the viewer either way -- only decide
+    // whether to install.
+    if (!setupEligible()) {
+        abandonSetup();
+        return;
+    }
+
     const installed = typeof prksInstallPdfAnnotationPersistenceIfCurrent === 'function'
         ? prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, viewer, setupToken, function () {
             worker =
@@ -1247,7 +1299,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             }
         })
         : false;
-    if (!installed) return;
+    if (!installed) {
+        abandonSetup();
+        return;
+    }
 }
 
 function prksPdfLastPageLocalKey(workId) {

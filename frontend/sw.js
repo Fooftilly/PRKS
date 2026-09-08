@@ -17,6 +17,18 @@
     const SHELL_CACHE = 'prks-shell-v1';
     const STATIC_CACHE = 'prks-static-v1';
     const PDF_CACHE = 'prks-pdf-v1';
+    // Install-time-only staging buckets (AGENTS.md "Make failed SW installs
+    // unable to poison the active shell cache"): a currently-active worker
+    // may still be serving fetches out of SHELL_CACHE/STATIC_CACHE while a
+    // new worker's install runs. performInstall() writes exclusively into
+    // these distinct staging names -- never the live ones -- so a failed
+    // install (even one that already wrote some, but not all, required
+    // paths) can never leave the live shell/static cache the old worker is
+    // reading from in a partially-overwritten state. Only a *successful*
+    // install reaches activate, where performActivate() promotes staging
+    // into the live cache names and deletes the staging buckets.
+    const SHELL_STAGING_CACHE = SHELL_CACHE + '-staging';
+    const STATIC_STAGING_CACHE = STATIC_CACHE + '-staging';
     const CURRENT_CACHES = [SHELL_CACHE, STATIC_CACHE, PDF_CACHE];
     const RETIRE_PREFIXES = ['prks-shell-', 'prks-static-'];
 
@@ -362,6 +374,13 @@
     // to activate a new one that claims offline support but is missing
     // app.js/style.css/etc. Only the small decorative STATIC_PRECACHE_OPTIONAL_PATHS
     // subset (manifest/icons) is best-effort.
+    //
+    // Writes go into SHELL_STAGING_CACHE / STATIC_STAGING_CACHE, never the
+    // live SHELL_CACHE / STATIC_CACHE an already-active worker may be
+    // concurrently reading from -- see performActivate() for the promotion
+    // step that only runs once install has fully succeeded. Any staging
+    // cache left over from a previous failed install is cleared first so a
+    // stale entry never survives into a later successful install.
     function performInstall(cachesApi, fetchImpl) {
         if (!cachesApi || typeof fetchImpl !== 'function') return Promise.resolve();
         const requiredStaticPaths = STATIC_PRECACHE_PATHS.filter(function (path) {
@@ -371,16 +390,68 @@
             return STATIC_PRECACHE_OPTIONAL_PATHS.indexOf(path) !== -1;
         });
         return Promise.all([
-            cachesApi.open(SHELL_CACHE).then(function (cache) {
-                return precacheRequiredPaths(cache, fetchImpl, SHELL_PRECACHE_PATHS);
-            }),
-            cachesApi.open(STATIC_CACHE).then(function (cache) {
-                return Promise.all([
-                    precacheRequiredPaths(cache, fetchImpl, requiredStaticPaths),
-                    precacheOptionalPaths(cache, fetchImpl, optionalStaticPaths),
-                ]);
-            }),
+            Promise.resolve(cachesApi.delete(SHELL_STAGING_CACHE))
+                .catch(function () {})
+                .then(function () {
+                    return cachesApi.open(SHELL_STAGING_CACHE);
+                })
+                .then(function (cache) {
+                    return precacheRequiredPaths(cache, fetchImpl, SHELL_PRECACHE_PATHS);
+                }),
+            Promise.resolve(cachesApi.delete(STATIC_STAGING_CACHE))
+                .catch(function () {})
+                .then(function () {
+                    return cachesApi.open(STATIC_STAGING_CACHE);
+                })
+                .then(function (cache) {
+                    return Promise.all([
+                        precacheRequiredPaths(cache, fetchImpl, requiredStaticPaths),
+                        precacheOptionalPaths(cache, fetchImpl, optionalStaticPaths),
+                    ]);
+                }),
         ]);
+    }
+
+    /** Copies every staging entry into the live cache, then deletes the staging cache. */
+    function promoteStagingCache(cachesApi, stagingName, liveName) {
+        return cachesApi.open(stagingName).then(function (staging) {
+            return cachesApi.open(liveName).then(function (live) {
+                return staging.keys().then(function (requests) {
+                    return Promise.all(
+                        requests.map(function (req) {
+                            return staging.match(req).then(function (res) {
+                                if (res) return live.put(req, res);
+                                return undefined;
+                            });
+                        })
+                    );
+                });
+            });
+        }).then(function () {
+            return cachesApi.delete(stagingName);
+        });
+    }
+
+    // Runs once a new worker's install has fully succeeded (activate never
+    // fires for a rejected install): promotes both staging caches into the
+    // live SHELL_CACHE/STATIC_CACHE names, then retires any genuinely
+    // older-versioned cache names still around (RETIRE_PREFIXES).
+    function performActivate(cachesApi) {
+        if (!cachesApi) return Promise.resolve();
+        return Promise.all([
+            promoteStagingCache(cachesApi, SHELL_STAGING_CACHE, SHELL_CACHE),
+            promoteStagingCache(cachesApi, STATIC_STAGING_CACHE, STATIC_CACHE),
+        ])
+            .then(function () {
+                return cachesApi.keys();
+            })
+            .then(function (names) {
+                return Promise.all(
+                    names.filter(shouldRetireCache).map(function (name) {
+                        return cachesApi.delete(name);
+                    })
+                );
+            });
     }
 
     function attachServiceWorkerListeners(scope) {
@@ -410,18 +481,9 @@
                 return;
             }
             event.waitUntil(
-                scope.caches
-                    .keys()
-                    .then(function (names) {
-                        return Promise.all(
-                            names.filter(shouldRetireCache).map(function (name) {
-                                return scope.caches.delete(name);
-                            })
-                        );
-                    })
-                    .then(function () {
-                        return scope.clients && scope.clients.claim ? scope.clients.claim() : undefined;
-                    })
+                performActivate(scope.caches).then(function () {
+                    return scope.clients && scope.clients.claim ? scope.clients.claim() : undefined;
+                })
             );
         });
 
@@ -451,6 +513,8 @@
         createHandlers: createHandlers,
         attachServiceWorkerListeners: attachServiceWorkerListeners,
         performInstall: performInstall,
+        performActivate: performActivate,
+        promoteStagingCache: promoteStagingCache,
         isGetRequest: isGetRequest,
         isSameOriginUrl: isSameOriginUrl,
         pathnameOf: pathnameOf,
@@ -465,6 +529,8 @@
         PRKS_SW_SHELL_CACHE: SHELL_CACHE,
         PRKS_SW_STATIC_CACHE: STATIC_CACHE,
         PRKS_SW_PDF_CACHE: PDF_CACHE,
+        PRKS_SW_SHELL_STAGING_CACHE: SHELL_STAGING_CACHE,
+        PRKS_SW_STATIC_STAGING_CACHE: STATIC_STAGING_CACHE,
         PRKS_SW_SHELL_PRECACHE_PATHS: SHELL_PRECACHE_PATHS,
         PRKS_SW_STATIC_PRECACHE_PATHS: STATIC_PRECACHE_PATHS,
         PRKS_SW_STATIC_PRECACHE_OPTIONAL_PATHS: STATIC_PRECACHE_OPTIONAL_PATHS,

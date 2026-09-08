@@ -57,6 +57,25 @@
         return true;
     }
 
+    /**
+     * Setup-time eligibility for *installing a new* annotation-persistence
+     * worker. Stricter than prksPdfPersistenceStillLive(): an async setup
+     * that began while the runtime was online/'work' must re-verify, after
+     * every await boundary and immediately before installing, that none of
+     * that has changed underneath it. This deliberately does NOT belong on
+     * prksPdfPersistenceStillLive() itself, because an *already-installed*
+     * worker must keep passing that check (and simply stay paused) while
+     * offline -- only a not-yet-installed setup needs to abandon outright.
+     */
+    function prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken) {
+        if (!prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)) return false;
+        if (runtime.mode !== 'work') return false;
+        if (typeof root.prksOfflineRuntimeState === 'function' && root.prksOfflineRuntimeState() !== 'online') {
+            return false;
+        }
+        return true;
+    }
+
     function createPdfAnnotationPersistenceWorker(options) {
         const opts = options || {};
         const runtime = opts.runtime || null;
@@ -307,6 +326,7 @@
         createWorkPdfRuntime: createWorkPdfRuntime,
         createPdfAnnotationPersistenceWorker: createPdfAnnotationPersistenceWorker,
         prksPdfPersistenceStillLive: prksPdfPersistenceStillLive,
+        prksPdfPersistenceSetupEligible: prksPdfPersistenceSetupEligible,
         prksInstallPdfAnnotationPersistenceIfCurrent: prksInstallPdfAnnotationPersistenceIfCurrent,
         prksHasPendingWorkAnnotationSync: prksHasPendingWorkAnnotationSync,
         prksEmptyPdfAnnotationCache: emptyAnnotationCache,

@@ -171,6 +171,10 @@ function prksFilterWorksForWikiHint(rows, query) {
 
 /** CodeMirror hint pick: replace query with title and close wiki link. */
 function prksWikiLinkCompletionPick(cm, data, completion) {
+    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
+        if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
+        return;
+    }
     const from = completion.from != null ? completion.from : data.from;
     const to = completion.to != null ? completion.to : data.to;
     const title = typeof completion.text === 'string' ? completion.text : '';
@@ -357,6 +361,10 @@ function prksFilterPdfAnnForHint(rows, query) {
 }
 
 function prksPdfAnnLinkCompletionPick(cm, data, completion) {
+    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
+        if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
+        return;
+    }
     const from = completion.from != null ? completion.from : data.from;
     const to = completion.to != null ? completion.to : data.to;
     const id = typeof completion.text === 'string' ? completion.text : '';
@@ -446,6 +454,10 @@ function prksFilterConceptsForHint(query, cm) {
 }
 
 function prksConceptLinkCompletionPick(cm, data, completion) {
+    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
+        if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
+        return;
+    }
     const from = completion.from != null ? completion.from : data.from;
     const to = completion.to != null ? completion.to : data.to;
     const name = typeof completion.text === 'string' ? completion.text : '';
@@ -470,15 +482,21 @@ function prksConceptLinkHint(cm) {
 
 /**
  * CodeMirror's own `readOnly` option is not enough: PRKS's toolbar-driven
- * insert paths (Concept picker, Argument picker, wiki-link autocomplete
- * pick) call this directly and none of them consult CodeMirror state first.
- * This is the one predicate every PRKS-owned programmatic Research Notes
- * edit boundary must check before mutating anything. It requires both
- * current PRKS connectivity and a live/current Work Notes resource --
- * `ctx` may be stale (route navigated away) even while PRKS itself is
- * online, and either failure must block the edit.
+ * insert paths (Concept picker, Argument picker, wiki-link/PDF-annotation/
+ * Concept autocomplete picks) call this directly and none of them consult
+ * CodeMirror state first. This is the one predicate every PRKS-owned
+ * programmatic Research Notes edit boundary must check before mutating
+ * anything. It requires:
+ *   - current PRKS connectivity == online
+ *   - `ctx` (the resolved owner TabContext) is still live/current -- it may
+ *     be stale (route navigated away) even while PRKS itself is online
+ *   - a live `workNotes` resource on that ctx
+ *   - when a CodeMirror instance `cm` is supplied (every real caller has
+ *     one), it is the *exact* live instance still installed at
+ *     notes.editor.codemirror -- never a detached CodeMirror from a picker/
+ *     autocomplete callback that outlived a navigation to a different Work
  */
-function prksWorkNotesMutationAllowed(ctx) {
+function prksWorkNotesMutationAllowed(ctx, cm) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     if (!owner) return false;
     if (
@@ -490,6 +508,7 @@ function prksWorkNotesMutationAllowed(ctx) {
     }
     const notes = typeof owner.getResource === 'function' ? owner.getResource('workNotes') : null;
     if (!notes || !notes.editor) return false;
+    if (cm && notes.editor.codemirror !== cm) return false;
     if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') return false;
     return true;
 }
@@ -498,7 +517,7 @@ window.prksWorkNotesMutationAllowed = prksWorkNotesMutationAllowed;
 
 function prksInsertNotesMarkup(cm, markup) {
     if (!cm || !markup) return;
-    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm))) {
+    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
         if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
         return;
     }
@@ -699,7 +718,7 @@ function prksOpenArgumentPicker(cm, work) {
         });
     };
     function insertCreatedArgument(kind, name) {
-        if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm))) {
+        if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
             if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
             return;
         }
@@ -1205,6 +1224,8 @@ function initEasyMDE(ctx, work) {
                 const cm = easyMDE.codemirror;
                 const handler = easyMDE.__notesChangeHandler;
                 if (cm && handler) cm.off('change', handler);
+                const beforeChangeHandler = easyMDE.__notesBeforeChangeHandler;
+                if (cm && beforeChangeHandler) cm.off('beforeChange', beforeChangeHandler);
             } catch (_e) {}
             try {
                 if (typeof easyMDE.toTextArea === 'function') easyMDE.toTextArea();
@@ -1262,6 +1283,26 @@ function initEasyMDE(ctx, work) {
     };
     easyMDE.codemirror.on("change", notesChangeHandler);
     easyMDE.__notesChangeHandler = notesChangeHandler;
+
+    // Hard offline mutation barrier: CodeMirror's `readOnly` option only
+    // blocks DOM-driven input (keyboard/mouse); it does not stop a
+    // programmatic replaceRange/replaceSelection call from a toolbar
+    // command, EasyMDE internal command, autocomplete pick, or a stale
+    // picker callback left over from a previous Work. `beforeChange` fires
+    // for every change regardless of origin and can cancel it outright, so
+    // it is the one barrier that actually can't be bypassed by any of
+    // those paths. 'setValue' is the sole allowlisted origin -- EasyMDE's
+    // own initial-content set during construction (before this handler is
+    // even attached) and any future programmatic full-content replace never
+    // represent a user/tool mutation.
+    const notesBeforeChangeHandler = function (_instance, changeObj) {
+        if (!changeObj || changeObj.origin === 'setValue') return;
+        if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') {
+            if (typeof changeObj.cancel === 'function') changeObj.cancel();
+        }
+    };
+    easyMDE.codemirror.on('beforeChange', notesBeforeChangeHandler);
+    easyMDE.__notesBeforeChangeHandler = notesBeforeChangeHandler;
 }
 
 function prksWorkNotesMarkEdit(notes, workId, text) {

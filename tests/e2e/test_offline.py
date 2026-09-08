@@ -22,6 +22,7 @@ from tests.e2e.test_app import (
     _continue_held_routes,
     _open_details_drawer_if_tiled,
     _open_work_from_home,
+    _pdf_selection_geometry,
     _viewer_annotation_count,
     _wait_pdf_viewer,
 )
@@ -794,6 +795,330 @@ class OfflineFoundationTests(unittest.TestCase):
         )
         self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
         context.set_offline(False)
+
+    def test_ctrl_b_shortcut_does_not_alter_notes_while_offline(self):
+        """Scenario 14 (AGENTS.md "hard CodeMirror offline mutation barrier"):
+        a formatting keyboard shortcut (EasyMDE's default Ctrl/Cmd-B ->
+        toggleBold) calls `cm.replaceSelection()` directly -- it never goes
+        through the disabled toolbar button at all, so the disabled-button
+        belt alone would not stop it. The `beforeChange` barrier must cancel
+        it while offline regardless."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        page.wait_for_selector(".CodeMirror")
+        original_text = page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES)
+
+        context.set_offline(True)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
+            timeout=20000,
+        )
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                const cm = notes && notes.editor && notes.editor.codemirror;
+                return !!(cm && cm.getOption('readOnly'));
+            }"""
+        )
+
+        page.locator(".CodeMirror").click()
+        page.evaluate(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext();
+                const cm = ctx.getResource('workNotes').editor.codemirror;
+                const last = cm.lastLine();
+                cm.setCursor({ line: last, ch: cm.getLine(last).length });
+                cm.focus();
+            }"""
+        )
+        page.keyboard.press("Control+b")
+        page.wait_for_timeout(200)
+        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+
+    def test_stale_autocomplete_picker_does_not_mutate_notes_offline(self):
+        """Scenario 15 (AGENTS.md "guard every Research Notes autocomplete
+        completion"): opening a wiki/concept/PDF-annotation autocomplete
+        dropdown while online, then losing connectivity before picking a
+        suggestion, must never let that click mutate the document --
+        `prksWorkNotesMutationAllowed()` re-checks connectivity (and editor
+        identity) at pick time, not merely at the moment the dropdown opened.
+        One parameterized helper drives all three completion kinds."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_entity_cached(page, "work", work_a)
+        page.wait_for_selector(".CodeMirror")
+
+        # A real PDF annotation must exist server-side for the [[pdf: ...
+        # completion to have a real candidate; commit one online first and
+        # let its persistence settle before touching Research Notes.
+        _commit_pdf_highlight(page)
+        page.wait_for_function(_PDF_SYNC_SETTLED_JS, timeout=20000)
+        # A committed highlight is immediately followed by a programmatic
+        # `selectAnnotation()` (selection-menu.tsx's apply()), which can fire
+        # its own slightly-delayed annotation event and a second, unrelated
+        # flush pass. Let that fully settle before attaching the mutation
+        # listener below, so only *new* activity caused by the offline
+        # completion-pick attempts is ever counted.
+        page.wait_for_timeout(800)
+        page.wait_for_function(_PDF_SYNC_SETTLED_JS, timeout=20000)
+
+        annotation_post_count = [0]
+
+        def on_request(req):
+            if req.method == "POST" and urlparse(req.url).path == "/api/works/%s/annotations" % work_a:
+                annotation_post_count[0] += 1
+
+        page.on("request", on_request)
+
+        def cm_set_cursor_to_end():
+            page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext();
+                    const cm = ctx.getResource('workNotes').editor.codemirror;
+                    const last = cm.lastLine();
+                    cm.setCursor({ line: last, ch: cm.getLine(last).length });
+                    cm.focus();
+                }"""
+            )
+
+        def notes_text():
+            return page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES)
+
+        def close_any_open_hints():
+            page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext();
+                    const cm = ctx.getResource('workNotes').editor.codemirror;
+                    if (cm.state && cm.state.completionActive) cm.state.completionActive.close();
+                }"""
+            )
+
+        for label, trigger_text in (
+            ("wiki", "[[" + WORK_B_TITLE[:11]),
+            ("concept", "[[concept:E2E Fix"),
+            ("pdf-annotation", "[[pdf:"),
+        ):
+            self.assertEqual(_connectivity_state(page), "online", "expected online before %s trigger" % label)
+            page.locator(".CodeMirror").click()
+            cm_set_cursor_to_end()
+            before_trigger = notes_text()
+            page.keyboard.press("Enter")
+            page.keyboard.type(trigger_text)
+            try:
+                page.wait_for_selector(".CodeMirror-hints .CodeMirror-hint", timeout=8000)
+            except Exception as exc:
+                raise AssertionError(
+                    "%s autocomplete dropdown never appeared after typing %r" % (label, trigger_text)
+                ) from exc
+            text_with_dropdown_open = notes_text()
+
+            context.set_offline(True)
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
+                timeout=20000,
+            )
+
+            hint_item = page.locator(".CodeMirror-hints .CodeMirror-hint").first
+            self.assertGreater(
+                hint_item.count(),
+                0,
+                "%s autocomplete dropdown closed before an offline pick could be attempted" % label,
+            )
+            hint_item.click()
+            # The guarded pick calls prksOfflineGuardMutation(), which raises
+            # the shared "Offline" confirm alert -- dismiss it before moving on.
+            page.locator("#prks-modal-confirm-title", has_text="Offline").wait_for(timeout=5000)
+            page.locator("#prks-modal-confirm-ok").click()
+            page.locator("#prks-modal-confirm:not(.hidden)").wait_for(state="detached", timeout=5000)
+
+            self.assertEqual(
+                notes_text(),
+                text_with_dropdown_open,
+                "%s completion pick mutated Research Notes text while offline" % label,
+            )
+
+            close_any_open_hints()
+            context.set_offline(False)
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+                timeout=20000,
+            )
+            # Undo the harmless trigger-text typing itself (never a picked
+            # completion) so the next iteration starts from clean note text.
+            page.evaluate(
+                "(text) => %s.value(text)" % _FOCUSED_WORK_NOTES,
+                before_trigger,
+            )
+            page.wait_for_timeout(50)
+
+        # The one real PDF annotation POST already happened (and settled)
+        # before this listener was attached -- none of the offline
+        # completion-pick attempts below may cause another.
+        self.assertEqual(annotation_post_count[0], 0)
+
+    def test_active_markup_tool_cleared_on_disconnect(self):
+        """Scenario 16 (AGENTS.md "clear an already-active PDF markup tool
+        when mutations are disabled"): the Highlight *tool* (toolbar
+        activation, not a committed annotation) must be cleared the instant
+        connectivity drops -- never merely hidden a frame later -- and a
+        subsequent drag/select on the PDF must create nothing and issue no
+        mutation request."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        annotation_count_before = _viewer_annotation_count(page)
+
+        mutation_requests = []
+        page.on(
+            "request",
+            lambda req: mutation_requests.append(req.method)
+            if req.method in ("POST", "PUT", "PATCH", "DELETE") and "/api/works/" in req.url
+            else None,
+        )
+
+        highlight_btn = page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]')
+        highlight_btn.wait_for()
+        highlight_btn.click()
+        page.wait_for_function(
+            """() => {
+                const b = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]');
+                return b && b.getAttribute('aria-pressed') === 'true';
+            }"""
+        )
+
+        context.set_offline(True)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
+            timeout=20000,
+        )
+        self.assertEqual(_pdf_mode(page), "preview")
+        page.wait_for_function(
+            """() => !document.querySelector(
+                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
+            )"""
+        )
+        # Tool cleared -> Pointer (no active markup tool, no panning) shows pressed.
+        page.wait_for_function(
+            """() => {
+                const b = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Pointer"]');
+                return b && b.getAttribute('aria-pressed') === 'true';
+            }"""
+        )
+
+        geo = _pdf_selection_geometry(page)
+        page.mouse.move(geo["sx"], geo["sy"])
+        page.mouse.down()
+        page.mouse.move(geo["ex"], geo["ey"], steps=12)
+        page.mouse.up()
+        page.wait_for_timeout(400)
+
+        self.assertEqual(page.locator(".prks-pdf-selection-popup").count(), 0)
+        self.assertEqual(_viewer_annotation_count(page), annotation_count_before)
+        self.assertFalse(_pdf_has_pending_changes(page))
+        self.assertEqual(mutation_requests, [])
+
+        context.set_offline(False)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+            timeout=20000,
+        )
+        page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
+        page.locator(
+            '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
+        ).wait_for()
+
+    def test_persistence_setup_abandons_on_disconnect_before_worker_install(self):
+        """Scenario 17 (AGENTS.md "an async annotation-persistence setup...
+        must re-check current viewer identity, runtime.mode, and
+        connectivity... after every await boundary"): holding the initial
+        `GET /api/works/<id>/annotations` past an offline transition must
+        make setup abandon rather than install an active worker, and must
+        reset `_persistenceSetupStarted` so a later online reconcile can
+        retry exactly once."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        held = []
+
+        def hold_annotations_get(route):
+            req = route.request
+            if req.method == "GET" and urlparse(req.url).path == "/api/works/%s/annotations" % work_a:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/works/**", hold_annotations_get)
+        try:
+            _wait_sw_active(page)
+            _open_work_from_home(page, WORK_A_TITLE)
+            _wait_pdf_viewer(page)
+
+            deadline = time.time() + 12
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "initial GET /annotations did not start")
+            self.assertEqual(len(held), 1)
+            self.assertEqual(_pdf_mode(page), "work")
+
+            context.set_offline(True)
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
+                timeout=20000,
+            )
+            self.assertEqual(_pdf_mode(page), "preview")
+
+            # Release the held GET only now, after PRKS has already
+            # transitioned offline -- setup must abandon, not install.
+            _continue_held_routes(held)
+            held.clear()
+            page.unroute("**/api/works/**", hold_annotations_get)
+            page.wait_for_timeout(600)
+
+            self.assertIsNone(
+                page.evaluate(
+                    "() => { const pdf = %s; return pdf ? pdf.annotationPersistence : null; }" % _FOCUSED_PDF
+                )
+            )
+            self.assertFalse(
+                page.evaluate(
+                    "() => { const pdf = %s; return !!(pdf && pdf._persistenceSetupStarted); }" % _FOCUSED_PDF
+                )
+            )
+            self.assertEqual(_pdf_mode(page), "preview")
+
+            context.set_offline(False)
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+                timeout=20000,
+            )
+            page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
+            page.wait_for_function(
+                "() => { const pdf = %s; return !!(pdf && pdf.annotationPersistence); }" % _FOCUSED_PDF,
+                timeout=20000,
+            )
+            self.assertTrue(
+                page.evaluate(
+                    "() => { const pdf = %s; return !!(pdf && pdf._persistenceSetupStarted); }" % _FOCUSED_PDF
+                )
+            )
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/**", hold_annotations_get)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

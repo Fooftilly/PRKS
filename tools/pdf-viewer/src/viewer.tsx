@@ -204,8 +204,14 @@ function ApiBinder({
                     annotation?.setActiveTool(tool);
                 },
                 clearActiveTool: () => annotation?.setActiveTool(null),
-                undo: () => historyCap?.forDocument(activeDocumentId)?.undo(),
-                redo: () => historyCap?.forDocument(activeDocumentId)?.redo(),
+                undo: () => {
+                    if (mode !== 'work') return;
+                    historyCap?.forDocument(activeDocumentId)?.undo();
+                },
+                redo: () => {
+                    if (mode !== 'work') return;
+                    historyCap?.forDocument(activeDocumentId)?.redo();
+                },
                 getAnnotations: () => {
                     const items = annotation?.getAnnotations() || [];
                     return items.map((ta) => normalizeAnnotation(ta.object));
@@ -450,6 +456,19 @@ export async function createPrksPdfViewer(
     handle.setMutationEnabled = (enabled: boolean) => {
         const nextMode = enabled ? 'work' : 'preview';
         if (nextMode === currentMode) return;
+        if (!enabled) {
+            // Leaving 'work' mode: synchronously return the annotation
+            // plugin to a non-mutating pointer state *before* the render
+            // that flips ApiBinder's own mode-gated implementations -- an
+            // already-active markup tool (Highlight, etc.) must never stay
+            // selectable the instant PRKS goes offline, and must not rely
+            // solely on the toolbar button disappearing a frame later.
+            try {
+                handle.clearActiveTool();
+            } catch {
+                /* viewer not ready yet -- nothing to clear */
+            }
+        }
         currentMode = nextMode;
         renderTree();
     };

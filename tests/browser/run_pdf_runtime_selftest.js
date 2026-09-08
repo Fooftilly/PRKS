@@ -14,7 +14,14 @@ const {
     prksWarmParkTabContext,
     prksUnmountTabContext,
 } = tc;
-const { createWorkPdfRuntime, prksHasPendingWorkAnnotationSync, createPdfAnnotationPersistenceWorker, prksPdfPersistenceStillLive, prksInstallPdfAnnotationPersistenceIfCurrent } = pdfRt;
+const {
+    createWorkPdfRuntime,
+    prksHasPendingWorkAnnotationSync,
+    createPdfAnnotationPersistenceWorker,
+    prksPdfPersistenceStillLive,
+    prksPdfPersistenceSetupEligible,
+    prksInstallPdfAnnotationPersistenceIfCurrent,
+} = pdfRt;
 
 let passed = 0;
 let failed = 0;
@@ -345,6 +352,52 @@ assert('stale runtime has no worker', staleRt.annotationPersistence == null);
     pausableWorker.pause();
     pausableWorker.resume();
     assertEq('resume() with nothing pending does not flush again', pauseFlushCount, 1);
+
+    // --- prksPdfPersistenceSetupEligible() (AGENTS.md "persistence setup
+    // cannot install an active worker after an offline transition"):
+    // stricter than prksPdfPersistenceStillLive() -- also requires
+    // runtime.mode === 'work' and current online connectivity, so an async
+    // setup started while online/'work' correctly abandons if either
+    // changed underneath it, even though viewer identity/ctx/generation are
+    // all still current. ---
+    rtC.viewer = viewer2;
+    rtC.viewerSetupToken = 2;
+    rtC.mode = 'work';
+    global.prksOfflineRuntimeState = function () {
+        return 'online';
+    };
+    assert(
+        'setup eligible when live + work mode + online',
+        prksPdfPersistenceSetupEligible(ctxC, ctxC.generation, rtC, viewer2, 2) === true
+    );
+    rtC.mode = 'preview';
+    assertEq(
+        'setup ineligible once runtime.mode flips to preview',
+        prksPdfPersistenceSetupEligible(ctxC, ctxC.generation, rtC, viewer2, 2),
+        false
+    );
+    rtC.mode = 'work';
+    global.prksOfflineRuntimeState = function () {
+        return 'offline';
+    };
+    assertEq(
+        'setup ineligible once connectivity is not online',
+        prksPdfPersistenceSetupEligible(ctxC, ctxC.generation, rtC, viewer2, 2),
+        false
+    );
+    global.prksOfflineRuntimeState = function () {
+        return 'online';
+    };
+    assertEq(
+        'setup ineligible for a superseded viewer/token even in work/online',
+        prksPdfPersistenceSetupEligible(ctxC, ctxC.generation, rtC, viewer1, 1),
+        false
+    );
+    assert(
+        'setup eligible again once mode/connectivity/viewer all match',
+        prksPdfPersistenceSetupEligible(ctxC, ctxC.generation, rtC, viewer2, 2) === true
+    );
+    delete global.prksOfflineRuntimeState;
 
     prksDestroyAllTabContexts();
 

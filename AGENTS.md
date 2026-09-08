@@ -549,13 +549,31 @@ A previously cached PDF reopened while not online mounts the vendor viewer in
 its own `mode: 'preview'` (render/scroll/zoom/navigate only — no
 highlight/underline/delete/comment/save, and no annotation-sync persistence
 worker installed), chosen via `prksPdfDesiredMode()` at mount time — never
-`mode: 'work'` hardcoded and then locked down after the fact. Because that
-mode is fixed at construction time in the vendor viewer, connectivity changing
-while a Work PDF viewer is already mounted rebuilds it in place (tearing down
-any running annotation-sync worker first, then the old viewer, then
-remounting at the same page) rather than trying to flip an interaction mode
-live — going offline must stop annotation tools immediately, not merely
-disable them.
+`mode: 'work'` hardcoded and then locked down after the fact. Connectivity
+changing while a Work PDF viewer is already mounted never destroys/recreates
+the viewer or document; `prksReconcilePdfMutationMode()` flips the same
+`'work'`/`'preview'` interaction boundary live via
+`PrksPdfViewerHandle.setMutationEnabled()` in place, pausing/resuming (never
+tearing down) the same annotation-sync worker so pendingChanges/unsaved state
+survives the transition. Going offline must stop annotation tools
+immediately, not merely disable them: `setMutationEnabled(false)`
+synchronously clears any already-active markup tool
+(`annotation.setActiveTool(null)` via `clearActiveTool()`) and returns the
+plugin to pointer mode before the render that hides the markup toolbar —
+never relying solely on the toolbar button disappearing a frame later. Every
+mutating viewer API (`activateMarkupTool`, `createAnnotation`,
+`updateAnnotation`, `deleteAnnotation`, `undo`, `redo`) requires
+`mode === 'work'`; `selectAnnotation`/jump/zoom/page navigation stay
+read-only in either mode. An async annotation-persistence setup started while
+`'work'`/online must re-check current viewer identity, `runtime.mode`, and
+connectivity (`prksPdfPersistenceSetupEligible()`) after every await boundary
+and immediately before installing a worker — if any changed underneath it,
+abandon without installing and reset `runtime._persistenceSetupStarted` so a
+later online reconcile can retry, without destroying the viewer. An
+already-installed worker uses the weaker `prksPdfPersistenceStillLive()` and
+stays live (paused) while offline; its save-confirmation poll
+(`confirmPersistedToken()`) stops issuing `save-confirm` requests the moment
+the worker is `paused`, resuming only once reconnected.
 
 Offline cache contents are private research data: never log cached entity
 bodies, note text, titles, search text, or PDF contents. Diagnostics

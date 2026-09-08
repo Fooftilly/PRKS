@@ -116,12 +116,39 @@ class FrontendServiceWorkerTests(unittest.TestCase):
         self.assertIn("performInstall(scope.caches", install_block)
 
         perform_start = src.index("function performInstall(cachesApi, fetchImpl)")
-        perform_end = src.index("function attachServiceWorkerListeners")
+        perform_end = src.index("function promoteStagingCache")
         perform_body = src[perform_start:perform_end]
-        self.assertIn("cachesApi.open(SHELL_CACHE)", perform_body)
+        # Install writes into the staging buckets, never the live
+        # SHELL_CACHE/STATIC_CACHE names an already-active worker may still
+        # be reading from (AGENTS.md "Make failed SW installs unable to
+        # poison the active shell cache").
+        self.assertIn("cachesApi.open(SHELL_STAGING_CACHE)", perform_body)
         self.assertIn("SHELL_PRECACHE_PATHS", perform_body)
-        self.assertIn("cachesApi.open(STATIC_CACHE)", perform_body)
+        self.assertIn("cachesApi.open(STATIC_STAGING_CACHE)", perform_body)
         self.assertIn("STATIC_PRECACHE_PATHS", perform_body)
+        self.assertNotIn("cachesApi.open(SHELL_CACHE)", perform_body)
+        self.assertNotIn("cachesApi.open(STATIC_CACHE)", perform_body)
+
+    def test_activate_promotes_staging_into_live_caches(self):
+        """AGENTS.md 'Make failed SW installs unable to poison the active
+        shell cache': the promotion from staging into the live cache names
+        must only happen in performActivate(), which only ever runs once
+        install has fully succeeded."""
+        src = _read(_SW)
+        self.assertIn("function performActivate(cachesApi)", src)
+        activate_start = src.index("function performActivate(cachesApi)")
+        activate_end = src.index("function attachServiceWorkerListeners")
+        activate_body = src[activate_start:activate_end]
+        self.assertIn("promoteStagingCache(cachesApi, SHELL_STAGING_CACHE, SHELL_CACHE)", activate_body)
+        self.assertIn("promoteStagingCache(cachesApi, STATIC_STAGING_CACHE, STATIC_CACHE)", activate_body)
+        self.assertIn("shouldRetireCache", activate_body)
+
+        install_listener_start = src.index("addEventListener('install'")
+        activate_listener_start = src.index("addEventListener('activate'")
+        activate_listener_end = src.index("addEventListener('fetch'")
+        self.assertLess(install_listener_start, activate_listener_start)
+        activate_listener_body = src[activate_listener_start:activate_listener_end]
+        self.assertIn("performActivate(scope.caches)", activate_listener_body)
 
     def test_install_precache_essential_asset_failure_fails_the_whole_install(self):
         """AGENTS.md 'Make shell precache success meaningful': one required

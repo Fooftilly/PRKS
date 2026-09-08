@@ -179,6 +179,71 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(types_path)
         self.assertIn("setMutationEnabled(enabled: boolean): void;", src)
 
+    def test_set_mutation_enabled_clears_active_tool_before_preview(self):
+        """setMutationEnabled(false) must synchronously return the annotation
+        plugin to a non-mutating pointer state (clearActiveTool()) before the
+        render that flips ApiBinder into 'preview' -- an already-active
+        markup tool must never survive merely because the toolbar disappears
+        a frame later."""
+        viewer_path = os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "viewer.tsx")
+        src = _read(viewer_path)
+        start = src.index("handle.setMutationEnabled = (enabled: boolean) => {")
+        end = src.index("\n    };", start)
+        body = src[start:end]
+        self.assertIn("handle.clearActiveTool()", body)
+        clear_idx = body.index("handle.clearActiveTool()")
+        mode_flip_idx = body.index("currentMode = nextMode;")
+        self.assertLess(clear_idx, mode_flip_idx)
+
+    def test_undo_redo_gated_by_work_mode(self):
+        viewer_path = os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "viewer.tsx")
+        src = _read(viewer_path)
+        for fn in ("undo: () => {", "redo: () => {"):
+            at = src.index(fn)
+            snippet = src[at : at + 150]
+            self.assertIn("if (mode !== 'work') return;", snippet)
+
+    def test_setup_annotation_persistence_has_setup_time_eligibility_gate(self):
+        """AGENTS.md 'persistence setup cannot install an active worker after
+        an offline transition': setupAnnotationPersistence() must re-check
+        eligibility (viewer identity + 'work' mode + online) after every
+        async boundary and immediately before installing, and abandon
+        (resetting _persistenceSetupStarted, never destroying the viewer)
+        rather than install when ineligible."""
+        src = _read(_WORKS_PDF)
+        setup_start = src.index("async function setupAnnotationPersistence")
+        setup_end = src.index("function prksPdfLastPageLocalKey")
+        body = src[setup_start:setup_end]
+        self.assertIn("function setupEligible()", body)
+        self.assertIn("prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken)", body)
+        self.assertIn("function abandonSetup()", body)
+        self.assertIn("runtime._persistenceSetupStarted = false;", body)
+        self.assertNotIn(".destroy()", body)
+        # Gate immediately before the actual install call.
+        install_idx = body.index("prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, viewer, setupToken")
+        preceding = body[:install_idx]
+        self.assertIn("if (!setupEligible()) {", preceding[-260:])
+
+    def test_setup_eligibility_helper_checks_mode_and_connectivity(self):
+        src = _read(_PDF_RUNTIME)
+        self.assertIn("function prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken)", src)
+        start = src.index("function prksPdfPersistenceSetupEligible")
+        end = src.index("\n    }\n", start)
+        body = src[start:end]
+        self.assertIn("prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)", body)
+        self.assertIn("runtime.mode !== 'work'", body)
+        self.assertIn("prksOfflineRuntimeState", body)
+
+    def test_confirm_persisted_token_stops_when_worker_paused(self):
+        src = _read(_WORKS_PDF)
+        start = src.index("async function confirmPersistedToken")
+        end = src.index("\n    }\n", start)
+        body = src[start:end]
+        self.assertIn("pausedOffline()", body)
+        # Checked before the first attempt, after the network probe, and
+        # before the backoff delay -- i.e. at least 3 occurrences.
+        self.assertGreaterEqual(body.count("pausedOffline()"), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

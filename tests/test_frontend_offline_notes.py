@@ -25,14 +25,73 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
 
     def test_mutation_allowed_predicate_exists_and_checks_connectivity_and_liveness(self):
         src = _read(_WORKS)
-        self.assertIn("function prksWorkNotesMutationAllowed(ctx)", src)
-        start = src.index("function prksWorkNotesMutationAllowed(ctx)")
+        self.assertIn("function prksWorkNotesMutationAllowed(ctx, cm)", src)
+        start = src.index("function prksWorkNotesMutationAllowed(ctx, cm)")
         end = src.index("\n}\n", start)
         body = src[start:end]
         self.assertIn("isCurrent", body)
         self.assertIn("getResource('workNotes')", body)
         self.assertIn("prksOfflineRuntimeState() !== 'online'", body)
         self.assertIn("window.prksWorkNotesMutationAllowed = prksWorkNotesMutationAllowed;", src)
+
+    def test_mutation_allowed_requires_exact_live_codemirror_instance(self):
+        """A stale picker/autocomplete callback bound to a detached CodeMirror
+        from a previous Work must never be allowed to mutate, even if the
+        TabContext/resource otherwise look live -- e.g. the same TabContext
+        has since navigated to a different Work whose
+        workNotes.editor.codemirror is a different instance."""
+        src = _read(_WORKS)
+        start = src.index("function prksWorkNotesMutationAllowed(ctx, cm)")
+        end = src.index("\n}\n", start)
+        body = src[start:end]
+        self.assertIn("if (cm && notes.editor.codemirror !== cm) return false;", body)
+
+    def test_completion_pickers_are_guarded_and_editor_instance_aware(self):
+        """prksWikiLinkCompletionPick / prksPdfAnnLinkCompletionPick /
+        prksConceptLinkCompletionPick must all check
+        prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm) before
+        cm.replaceRange() -- CodeMirror's own readOnly option does not
+        protect these programmatic completion callbacks."""
+        src = _read(_WORKS)
+        for fn_name in (
+            "function prksWikiLinkCompletionPick(cm, data, completion)",
+            "function prksPdfAnnLinkCompletionPick(cm, data, completion)",
+            "function prksConceptLinkCompletionPick(cm, data, completion)",
+        ):
+            start = src.index(fn_name)
+            end = src.index("\n}\n", start)
+            body = src[start:end]
+            self.assertIn("prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)", body, fn_name)
+            self.assertIn("prksOfflineGuardMutation", body, fn_name)
+            guard_idx = body.index("prksWorkNotesMutationAllowed(")
+            mutate_idx = body.index("replaceRange(")
+            self.assertLess(guard_idx, mutate_idx, fn_name)
+
+    def test_hard_beforechange_barrier_installed_and_removed(self):
+        """A ctx-owned CodeMirror `beforeChange` handler must cancel every
+        non-'setValue' change while PRKS is not online -- the one barrier no
+        keyboard shortcut/toolbar command/EasyMDE internal command/
+        autocomplete/stale picker can bypass -- and must be removed on
+        editor destroy."""
+        src = _read(_WORKS)
+        init_start = src.index("function initEasyMDE(ctx, work)")
+        init_end = src.index("function prksWorkNotesMarkEdit")
+        init_body = src[init_start:init_end]
+        self.assertIn("notesBeforeChangeHandler", init_body)
+        self.assertIn("easyMDE.codemirror.on('beforeChange', notesBeforeChangeHandler);", init_body)
+        self.assertIn("easyMDE.__notesBeforeChangeHandler = notesBeforeChangeHandler;", init_body)
+        handler_start = init_body.index("const notesBeforeChangeHandler = function")
+        handler_end = init_body.index("easyMDE.codemirror.on('beforeChange'", handler_start)
+        handler_body = init_body[handler_start:handler_end]
+        self.assertIn("changeObj.origin === 'setValue'", handler_body)
+        self.assertIn("prksOfflineRuntimeState() !== 'online'", handler_body)
+        self.assertIn("changeObj.cancel()", handler_body)
+
+        destroy_start = src.index("destroy: function () {")
+        destroy_end = src.index("if (transient)", destroy_start)
+        destroy_body = src[destroy_start:destroy_end]
+        self.assertIn("__notesBeforeChangeHandler", destroy_body)
+        self.assertIn("cm.off('beforeChange', beforeChangeHandler);", destroy_body)
 
     def test_insert_notes_markup_is_guarded(self):
         src = _read(_WORKS)
