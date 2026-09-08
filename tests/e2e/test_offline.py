@@ -307,6 +307,61 @@ class OfflineFoundationTests(unittest.TestCase):
         page.evaluate("id => { void window.prksNavigate('#/works/' + id); }", work_a)
         page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
 
+    def test_successful_folder_add_work_invalidates_offline_work_cache(self):
+        """Folder endpoint attachment shares Work coherence helper behavior."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        page.evaluate(
+            """async (workId) => {
+                const folderId = await createFolder('Offline coherence folder add', '');
+                return addWorkToFolder(folderId, workId);
+            }""",
+            arg=work_a,
+        )
+        page.wait_for_function(
+            "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
+            arg=work_a,
+            timeout=15000,
+        )
+
+        context.set_offline(True)
+        page.evaluate("id => { void window.prksNavigate('#/works/' + id); }", work_a)
+        page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+
+    def test_failed_folder_add_work_retains_offline_work_cache(self):
+        """Non-success Folder attachment never advances Work coherence."""
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        folder_id = page.evaluate("() => createFolder('Offline failed folder add', '')")
+
+        def reject_folder_add(route):
+            if route.request.method == "POST" and urlparse(route.request.url).path == "/api/folders/" + folder_id + "/works":
+                route.fulfill(status=409, content_type="application/json", body='{"error":"test failure"}')
+                return
+            route.fallback()
+
+        page.route("**/api/folders/*/works", reject_folder_add)
+        try:
+            failed = page.evaluate(
+                """async ([folderId, workId]) => {
+                    try { await addWorkToFolder(folderId, workId); return false; }
+                    catch (_e) { return true; }
+                }""",
+                arg=[folder_id, work_a],
+            )
+            self.assertTrue(failed)
+            self.assertIsNotNone(_cached_entity(page, "work", work_a))
+        finally:
+            page.unroute("**/api/folders/*/works", reject_folder_add)
+
     def test_failed_notes_save_retains_previous_work_cache(self):
         """A rejected notes PATCH leaves the last known-good snapshot available."""
         server, page, _context, _collector = self._start()

@@ -635,6 +635,9 @@ async function addWorkToFolder(folderId, workId) {
     if (!res.ok) {
         throw new Error(data.error || 'Could not add file to folder.');
     }
+    return typeof prksOfflineMarkEntityChanged === 'function'
+        ? prksOfflineMarkEntityChanged('work', workId)
+        : null;
 }
 
 async function patchWorkFolder(workId, folderIdOrNull) {
