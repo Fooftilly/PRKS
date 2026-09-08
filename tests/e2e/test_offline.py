@@ -685,21 +685,33 @@ class OfflineFoundationTests(unittest.TestCase):
             page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]').count(),
             0,
         )
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
+        # Startup probe retries (~250ms + 750ms) hold probeInFlight, which
+        # makes the browser 'online' handler a no-op. Let them exhaust while
+        # the context is still offline. Ordinary Work GETs now report
+        # reachability, so holding only /api/settings would let a Work GET
+        # sneak the runtime online before the held probe is observed.
+        page.wait_for_timeout(1500)
 
         held_probe = []
 
-        def hold_settings_get(route):
+        def hold_reachability_gets(route):
             req = route.request
-            if req.method == "GET" and urlparse(req.url).path == "/api/settings":
+            path = urlparse(req.url).path
+            if req.method == "GET" and path.startswith("/api/") and not path.startswith("/api/pdfs/"):
                 held_probe.append(route)
                 return
             route.fallback()
 
-        page.route("**/api/settings", hold_settings_get)
+        page.route("**/api/**", hold_reachability_gets)
         try:
-            # Network access is restored, but the reachability probe itself
-            # is held -- the runtime must stay non-online (and the viewer
-            # must stay in 'preview') until that probe actually resolves.
+            # Network access is restored, but reachability confirmation
+            # (probe and ordinary JSON GETs) is held -- the runtime must stay
+            # non-online (and the viewer must stay in 'preview') until a held
+            # request is actually resolved.
             context.set_offline(False)
             deadline = time.time() + 12
             while time.time() < deadline and not held_probe:
@@ -710,12 +722,24 @@ class OfflineFoundationTests(unittest.TestCase):
             self.assertNotEqual(_connectivity_state(page), "online")
             self.assertEqual(_pdf_mode(page), "preview")
 
-            for route in list(held_probe):
+            settings_held = [
+                route
+                for route in held_probe
+                if urlparse(route.request.url).path == "/api/settings"
+            ]
+            others = [
+                route
+                for route in held_probe
+                if urlparse(route.request.url).path != "/api/settings"
+            ]
+            for route in settings_held:
                 try:
                     route.fulfill(status=200, content_type="application/json", body="{}")
                 except Exception:
                     pass
+            _continue_held_routes(others)
             held_probe.clear()
+            page.unroute("**/api/**", hold_reachability_gets)
 
             page.wait_for_function(
                 "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
@@ -738,7 +762,7 @@ class OfflineFoundationTests(unittest.TestCase):
         finally:
             _continue_held_routes(held_probe)
             try:
-                page.unroute("**/api/settings", hold_settings_get)
+                page.unroute("**/api/**", hold_reachability_gets)
             except Exception:
                 pass
 
@@ -1117,6 +1141,156 @@ class OfflineFoundationTests(unittest.TestCase):
             _continue_held_routes(held)
             try:
                 page.unroute("**/api/works/**", hold_annotations_get)
+            except Exception:
+                pass
+
+
+    def test_transport_failure_while_browser_stays_online_goes_offline_and_recovers(self):
+        """Server-unreachable while navigator.onLine remains true: an ordinary
+        prksRequest() transport failure must flip the runtime offline (notes
+        read-only, PDF preview) without context.set_offline, and a later real
+        HTTP response must restore online mutation capability."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_entity_cached(page, "work", work_a)
+        page.wait_for_selector(".CodeMirror")
+        private_selector = "#prks-private-notes-work-" + work_a
+        page.locator(private_selector).wait_for()
+
+        self.assertTrue(page.evaluate("() => navigator.onLine"))
+        self.assertEqual(_connectivity_state(page), "online")
+        self.assertEqual(_pdf_mode(page), "work")
+
+        hits = []
+
+        def abort_api(route):
+            hits.append(route.request.url)
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", abort_api)
+        try:
+            outcome = page.evaluate(
+                """async (id) => {
+                    try {
+                        const res = await window.prksRequest('/api/works/' + id);
+                        return { ok: true, status: res.status };
+                    } catch (e) {
+                        return {
+                            ok: false,
+                            name: e && e.name ? String(e.name) : '',
+                            message: e && e.message ? String(e.message) : '',
+                        };
+                    }
+                }""",
+                work_a,
+            )
+            self.assertTrue(hits, "Playwright did not intercept the Work request")
+            self.assertFalse(outcome.get("ok"), "Work request should fail at transport: %s" % outcome)
+            self.assertNotEqual(outcome.get("name"), "AbortError")
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+                timeout=20000,
+            )
+            self.assertTrue(page.evaluate("() => navigator.onLine"))
+            page.wait_for_function("() => !document.getElementById('prks-connectivity-indicator').hidden")
+            self.assertIn("Offline", page.locator("#prks-connectivity-indicator").inner_text())
+            self.assertTrue(
+                page.evaluate(
+                    """() => {
+                        const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                        const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                        const cm = notes && notes.editor && notes.editor.codemirror;
+                        return !!(cm && cm.getOption('readOnly'));
+                    }"""
+                )
+            )
+            page.locator(
+                '[data-prks-role="editor-status"]', has_text="Offline — notes are read-only"
+            ).wait_for()
+            self.assertTrue(page.evaluate("(sel) => document.querySelector(sel).readOnly", private_selector))
+            page.wait_for_function(_PDF_READ_ONLY_JS, timeout=20000)
+            self.assertEqual(_pdf_mode(page), "preview")
+        finally:
+            try:
+                page.unroute("**/api/**", abort_api)
+            except Exception:
+                pass
+
+        self.assertTrue(page.evaluate("() => navigator.onLine"))
+        page.evaluate(
+            """async (id) => {
+                await window.prksRequest('/api/works/' + id);
+            }""",
+            work_a,
+        )
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+            timeout=20000,
+        )
+        page.wait_for_function("() => document.getElementById('prks-connectivity-indicator').hidden")
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                const cm = notes && notes.editor && notes.editor.codemirror;
+                return !!(cm && !cm.getOption('readOnly'));
+            }""",
+            timeout=20000,
+        )
+        self.assertFalse(page.evaluate("(sel) => document.querySelector(sel).readOnly", private_selector))
+        page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
+        self.assertEqual(_pdf_mode(page), "work")
+
+    def test_http_500_does_not_mark_runtime_offline(self):
+        """A reachable PRKS process returning HTTP 500 is application health,
+        not transport unreachability — the runtime must stay online."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        self.assertTrue(page.evaluate("() => navigator.onLine"))
+        self.assertEqual(_connectivity_state(page), "online")
+
+        def fulfill_500(route):
+            req = route.request
+            if req.method == "GET" and urlparse(req.url).path == "/api/works/%s" % work_a:
+                route.fulfill(status=500, content_type="application/json", body='{"error":"boom"}')
+                return
+            route.fallback()
+
+        page.route("**/api/works/**", fulfill_500)
+        try:
+            status = page.evaluate(
+                """async (id) => {
+                    const res = await window.prksRequest('/api/works/' + id);
+                    return res.status;
+                }""",
+                work_a,
+            )
+            self.assertEqual(status, 500)
+            self.assertTrue(page.evaluate("() => navigator.onLine"))
+            self.assertEqual(_connectivity_state(page), "online")
+            self.assertTrue(page.locator("#prks-connectivity-indicator[hidden]").count() >= 1)
+            self.assertEqual(_pdf_mode(page), "work")
+            self.assertFalse(
+                page.evaluate(
+                    """() => {
+                        const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                        const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                        const cm = notes && notes.editor && notes.editor.codemirror;
+                        return !!(cm && cm.getOption('readOnly'));
+                    }"""
+                )
+            )
+        finally:
+            try:
+                page.unroute("**/api/works/**", fulfill_500)
             except Exception:
                 pass
 

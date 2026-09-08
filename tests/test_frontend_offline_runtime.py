@@ -37,9 +37,13 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
 
     def test_request_coordinator_stays_memory_only(self):
         coord = _read(_COORD)
-        self.assertNotIn("offline-runtime", coord)
         self.assertNotIn("createPrksOfflineRuntime", coord)
         self.assertNotIn("indexedDB", coord)
+        self.assertNotIn("createPrksOfflineStore", coord)
+        # Transport-health signalling is allowed via dynamic lookups; it must
+        # not import or construct the offline runtime/store.
+        self.assertIn("root.prksOfflineNoteRequestSuccess", coord)
+        self.assertIn("root.prksOfflineNoteRequestFailure", coord)
 
     def test_no_canonical_persistence_in_runtime(self):
         src = _read(_RUNTIME)

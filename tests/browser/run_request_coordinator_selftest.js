@@ -922,6 +922,245 @@ async function testWorkHintStalePublication() {
     );
 }
 
+function installReachabilitySpies() {
+    const signals = { success: 0, failure: 0 };
+    global.prksOfflineNoteRequestSuccess = function () {
+        signals.success += 1;
+    };
+    global.prksOfflineNoteRequestFailure = function () {
+        signals.failure += 1;
+    };
+    return signals;
+}
+
+function clearReachabilitySpies() {
+    delete global.prksOfflineNoteRequestSuccess;
+    delete global.prksOfflineNoteRequestFailure;
+}
+
+async function testReachabilitySignalling() {
+    /* A. fetch resolves 200 -> success exactly once */
+    try {
+        const signals = installReachabilitySpies();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({ fetchBundle: box });
+        const p = coord.prksRequest('/api/works');
+        await waitUntil(function () {
+            return box.calls.length === 1;
+        });
+        box.calls[0].resolve(jsonResponse({ ok: true }, 200));
+        const res = await p;
+        record('A 200 reports reachable exactly once', signals.success === 1 && signals.failure === 0 && res.status === 200, 's=' + signals.success + ' f=' + signals.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* B. fetch resolves 500 -> success, no failure */
+    try {
+        const signals = installReachabilitySpies();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({ fetchBundle: box });
+        const p = coord.prksRequest('/api/works');
+        await waitUntil(function () {
+            return box.calls.length === 1;
+        });
+        box.calls[0].resolve(jsonResponse({ err: true }, 500));
+        const res = await p;
+        record('B 500 reports reachable and not unreachable', signals.success === 1 && signals.failure === 0 && res.status === 500, 's=' + signals.success + ' f=' + signals.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* C. first transport attempt fails, retry succeeds -> no failure, success */
+    try {
+        const signals = installReachabilitySpies();
+        let n = 0;
+        const fetchImpl = function () {
+            n += 1;
+            if (n === 1) return Promise.reject(new TypeError('network'));
+            return Promise.resolve(jsonResponse([]));
+        };
+        const coord = makeCoordinator({ fetchImpl: fetchImpl });
+        const res = await coord.prksRequest('/api/works');
+        record(
+            'C retry-after-transport-fail reports success not failure',
+            signals.success === 1 && signals.failure === 0 && res.ok && n === 2,
+            's=' + signals.success + ' f=' + signals.failure + ' n=' + n
+        );
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* D. all transport attempts fail -> failure exactly once when exhausted */
+    try {
+        const signals = installReachabilitySpies();
+        const fetchImpl = function () {
+            return Promise.reject(new TypeError('network'));
+        };
+        const coord = makeCoordinator({ fetchImpl: fetchImpl });
+        let err = null;
+        try {
+            await coord.prksRequest('/api/works');
+        } catch (e) {
+            err = e;
+        }
+        record(
+            'D exhausted transport reports unreachable exactly once',
+            signals.success === 0 && signals.failure === 1 && err && err.name !== 'AbortError' && coord.snapshot().counts.retries === 2,
+            's=' + signals.success + ' f=' + signals.failure + ' retries=' + coord.snapshot().counts.retries
+        );
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* E. AbortError -> neither failure nor success */
+    try {
+        const signals = installReachabilitySpies();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({ fetchBundle: box });
+        const ac = new AbortController();
+        const p = coord.prksRequest('/api/works', { signal: ac.signal });
+        await waitUntil(function () {
+            return box.calls.length === 1;
+        });
+        ac.abort();
+        const aborted = await expectAbort(p);
+        record(
+            'E AbortError reports neither reachable nor unreachable',
+            aborted && signals.success === 0 && signals.failure === 0,
+            's=' + signals.success + ' f=' + signals.failure
+        );
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* F. mutation resolved 500 -> success */
+    try {
+        const signals = installReachabilitySpies();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({ fetchBundle: box });
+        const p = coord.prksRequest('/api/works/1', { method: 'PATCH', body: '{}' });
+        await waitUntil(function () {
+            return box.calls.length === 1;
+        });
+        box.calls[0].resolve(jsonResponse({ err: true }, 500));
+        const res = await p;
+        record('F mutation 500 reports reachable', signals.success === 1 && signals.failure === 0 && res.status === 500, 's=' + signals.success + ' f=' + signals.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* G. mutation transport rejection -> failure */
+    try {
+        const signals = installReachabilitySpies();
+        const fetchImpl = function () {
+            return Promise.reject(new TypeError('network'));
+        };
+        const coord = makeCoordinator({ fetchImpl: fetchImpl });
+        let err = null;
+        try {
+            await coord.prksRequest('/api/works/1', { method: 'POST', body: '{}' });
+        } catch (e) {
+            err = e;
+        }
+        record(
+            'G mutation transport reports unreachable',
+            signals.success === 0 && signals.failure === 1 && err && !isAbort(err),
+            's=' + signals.success + ' f=' + signals.failure
+        );
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* Memory-cache hit is not a fresh reachability signal. */
+    try {
+        const signals = installReachabilitySpies();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({ fetchBundle: box, nowMs: 5000 });
+        const policy = { freshForMs: PRKS_REQUEST_BURST_FRESH_MS };
+        const first = coord.prksRequest('/api/works', {}, policy);
+        await waitUntil(function () {
+            return box.calls.length === 1;
+        });
+        box.calls[0].resolve(jsonResponse([{ id: 'c' }]));
+        await (await first).json();
+        record('cache populate reports reachable once', signals.success === 1 && signals.failure === 0, 's=' + signals.success);
+        const second = coord.prksRequest('/api/works', {}, policy);
+        await (await second).json();
+        record(
+            'memory-cache hit does not report fresh reachability',
+            signals.success === 1 && signals.failure === 0 && box.calls.length === 1 && coord.snapshot().counts.burstCacheHits === 1,
+            's=' + signals.success + ' calls=' + box.calls.length
+        );
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* Deduped in-flight GETs share one fetch and therefore one success signal. */
+    try {
+        const signals = installReachabilitySpies();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({ fetchBundle: box });
+        const p1 = coord.prksRequest('/api/works');
+        const p2 = coord.prksRequest('/api/works');
+        const p3 = coord.prksRequest('/api/works');
+        await waitUntil(function () {
+            return box.calls.length === 1;
+        });
+        box.calls[0].resolve(jsonResponse([]));
+        await Promise.all([p1, p2, p3]);
+        record('deduped GET reports reachable once', signals.success === 1 && signals.failure === 0 && box.calls.length === 1, 's=' + signals.success);
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* 503 is still a resolved Response: reachable immediately, even though retry continues. */
+    try {
+        const signals = installReachabilitySpies();
+        let n = 0;
+        const fetchImpl = function () {
+            n += 1;
+            if (n < 3) return Promise.resolve(jsonResponse({}, 503));
+            return Promise.resolve(jsonResponse([]));
+        };
+        const coord = makeCoordinator({ fetchImpl: fetchImpl });
+        const res = await coord.prksRequest('/api/works');
+        record(
+            '503 retry reports reachable per resolved fetch and never unreachable',
+            signals.success === 3 && signals.failure === 0 && res.ok,
+            's=' + signals.success + ' f=' + signals.failure + ' n=' + n
+        );
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    /* Managed PDF GETs may be satisfied by the service worker's Cache Storage
+     * without the PRKS server answering -- they must not count as reachability. */
+    try {
+        const signals = installReachabilitySpies();
+        const box = makeDeferredFetch();
+        const coord = makeCoordinator({ fetchBundle: box });
+        const p = coord.prksRequest('/api/pdfs/example.pdf');
+        await waitUntil(function () {
+            return box.calls.length === 1;
+        });
+        box.calls[0].resolve(
+            new Response(new Uint8Array([1, 2, 3]), {
+                status: 200,
+                headers: { 'Content-Type': 'application/pdf', 'Content-Length': '3' },
+            })
+        );
+        await p;
+        record(
+            'managed PDF 200 does not report reachability',
+            signals.success === 0 && signals.failure === 0,
+            's=' + signals.success + ' f=' + signals.failure
+        );
+    } finally {
+        clearReachabilitySpies();
+    }
+}
+
 async function testApiWarningOwnership() {
     const apiSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/api.js'), 'utf8');
     let nextStatus = 200;
@@ -971,6 +1210,7 @@ async function main() {
     await testCoalesce();
     await testDiagnosticsPrivacyAndReset();
     await testWorkHintStalePublication();
+    await testReachabilitySignalling();
     await testApiWarningOwnership();
     console.log(passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);

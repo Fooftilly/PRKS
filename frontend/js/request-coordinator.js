@@ -1,6 +1,12 @@
 /**
  * Client request coordinator for ordinary same-origin PRKS /api traffic.
  * Does not monkeypatch fetch. Persistent caching/offline sync is out of scope.
+ * Best-effort reachability signalling (dynamic lookups of
+ * prksOfflineNoteRequestSuccess / prksOfflineNoteRequestFailure)
+ * is transport-health only: a resolved Response means PRKS answered; a
+ * non-abort transport rejection after retries are exhausted means it did not.
+ * Managed PDF GETs (/api/pdfs/...) are excluded: the service worker may
+ * resolve those from Cache Storage without the PRKS server answering.
  */
 (function (root) {
     'use strict';
@@ -44,6 +50,19 @@
             return error.name === 'AbortError' || error.code === 20;
         }
         return false;
+    }
+
+    function reportPrksReachable() {
+        if (typeof root.prksOfflineNoteRequestSuccess === 'function') {
+            root.prksOfflineNoteRequestSuccess();
+        }
+    }
+
+    function reportPrksUnreachable(error) {
+        if (prksIsAbortError(error)) return;
+        if (typeof root.prksOfflineNoteRequestFailure === 'function') {
+            root.prksOfflineNoteRequestFailure();
+        }
     }
 
     function defaultNow() {
@@ -100,6 +119,11 @@
 
     function isWorkThumbnailPath(pathname) {
         return /^\/api\/works\/[^/]+\/thumbnail$/.test(pathname);
+    }
+
+    function isManagedPdfHref(href) {
+        const path = String(href || '').split('?')[0];
+        return /^\/api\/pdfs\/[^/]+$/.test(path);
     }
 
     function isProcessingFilesRescan(pathname, searchParams) {
@@ -488,6 +512,7 @@
                 if (signal.aborted) throw makeAbortError();
                 try {
                     const response = await fetchImpl(href, networkInit(fetchOptions, signal));
+                    if (!isManagedPdfHref(href)) reportPrksReachable();
                     if (retryEnabled && shouldRetryStatus(response.status) && attempt < PRKS_REQUEST_RETRY_MAX) {
                         counts.retries += 1;
                         attempt += 1;
@@ -506,10 +531,14 @@
                         await sleep(delay, signal);
                         continue;
                     }
+                    if (!isManagedPdfHref(href)) reportPrksUnreachable(err);
                     throw err;
                 }
             }
-            if (lastError) throw lastError;
+            if (lastError) {
+                if (!isManagedPdfHref(href)) reportPrksUnreachable(lastError);
+                throw lastError;
+            }
             throw new Error('prksRequest retry exhausted.');
         }
 
@@ -600,9 +629,11 @@
             let networkFailed = false;
             try {
                 response = await fetchImpl(job.href, networkInit(job.fetchOptions, undefined));
+                if (!isManagedPdfHref(job.href)) reportPrksReachable();
             } catch (err) {
                 error = err;
                 networkFailed = !prksIsAbortError(err);
+                if (!isManagedPdfHref(job.href)) reportPrksUnreachable(err);
             }
             if (response && response.ok) {
                 bumpEpochAndClearCache();

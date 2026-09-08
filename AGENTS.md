@@ -455,7 +455,17 @@ contain private URL, query, body, Work ID, search text, or coalesce-key content.
 
 Persistent cache, IndexedDB, outbox, and offline synchronization do not belong in
 `frontend/js/request-coordinator.js`. The burst catalog cache is memory-only and
-short-lived. It is not offline support.
+short-lived. It is not offline support. The coordinator may make a best-effort
+reachability signal (dynamic lookup of `prksOfflineNoteRequestSuccess` /
+`prksOfflineNoteRequestFailure`) at the real `fetch` boundary only: a resolved
+`Response` of any HTTP status means PRKS answered; a non-abort transport
+rejection after retries are exhausted means it did not. Managed PDF GETs
+(`/api/pdfs/...`) are excluded: the service worker may resolve those from Cache
+Storage without the PRKS process answering. Memory-cache hits,
+deduped completed responses, `AbortError` / route cancellation, `response.clone()`
+failure, and JSON/domain errors must not be treated as a connectivity change.
+Do not add another probe timer in the coordinator — recovery stays in
+`offline-runtime.js`.
 
 ## Offline / PWA
 
@@ -511,10 +521,16 @@ and not application-level health. `navigator.onLine`/the browser's
 The probe itself treats *any* resolved HTTP response — 2xx, 4xx, or 5xx — as
 "PRKS answered" (→ online); only a rejected request with no transport response
 at all means the server is unreachable (→ offline, with bounded/backoff
-retry). A domain-level error (e.g. a 500) must never flip the shell into
-"Offline." The runtime begins a real probe immediately on `init()`, so a
-runtime that starts up while PRKS is already unreachable reaches `offline` on
-its own, without needing a failed Work request first.
+retry). Ordinary `prksRequest()` traffic feeds the same state: a real fetch
+`Response` (including 404/409/500/503) calls `noteRequestSuccess()`, and a
+non-abort transport failure after GET retries are exhausted (or a mutation
+transport rejection) calls `noteRequestFailure()`. A domain-level error
+(e.g. a 500) must never flip the shell into "Offline." The runtime begins a
+real probe immediately on `init()`, so a runtime that starts up while PRKS is
+already unreachable reaches `offline` on its own, without needing a failed
+Work request first. Once `noteRequestFailure()` has moved state to offline,
+the existing bounded/backoff probe owns recovery; a later ordinary request
+that receives a real HTTP response may also restore online immediately.
 
 An offline-capable read must distinguish a 404 (normal "not found," server is
 reachable) from every other domain/parse failure (400/403/409/500, invalid

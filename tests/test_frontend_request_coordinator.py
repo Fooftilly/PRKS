@@ -113,6 +113,18 @@ class FrontendRequestCoordinatorTests(unittest.TestCase):
         self.assertIn("PRKS_REQUEST_CACHE_MAX_BYTES", src)
         self.assertIn("size == null || size < 0 || size > PRKS_REQUEST_CACHE_MAX_BYTES", src)
 
+    def test_reachability_reporters_are_transport_only_dynamic_lookups(self):
+        src = _read(_COORD)
+        self.assertIn("function reportPrksReachable()", src)
+        self.assertIn("function reportPrksUnreachable(error)", src)
+        self.assertIn("root.prksOfflineNoteRequestSuccess", src)
+        self.assertIn("root.prksOfflineNoteRequestFailure", src)
+        self.assertIn("if (prksIsAbortError(error)) return;", src)
+        self.assertIn("if (!isManagedPdfHref(href)) reportPrksReachable();", src)
+        self.assertIn("reportPrksUnreachable(err);", src)
+        self.assertNotIn("indexedDB", src)
+        self.assertNotIn("localStorage", src)
+
     def test_raw_fetch_bypass_contract(self):
         leftover = []
         for path in _frontend_js_files():
