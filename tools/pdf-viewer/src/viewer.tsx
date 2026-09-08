@@ -230,6 +230,7 @@ function ApiBinder({
                     annotation?.selectAnnotation(pi, annotationId);
                 },
                 updateAnnotation: (annotationId, patch) => {
+                    if (mode !== 'work') return;
                     const got = annotation?.getAnnotationById(annotationId);
                     const obj = got?.object;
                     const pi = obj?.pageIndex;
@@ -428,15 +429,30 @@ export async function createPrksPdfViewer(
     }
     const controller = new ViewerController();
     const root = createRoot(host);
-    root.render(
-        <ViewerTree
-            options={options}
-            controller={controller}
-            plugins={plugins}
-            wasmUrl={wasmUrl}
-        />,
-    );
+    // `currentMode` is the one piece of live-mutable viewer state. Re-rendering
+    // the same `<ViewerTree>` element type with a new `mode` prop is an
+    // ordinary React prop update -- it never remounts `EmbedPDF`/the pdfium
+    // engine/document, so toggling it is safe to do at any time without
+    // losing in-memory (including unsaved) annotation state.
+    let currentMode: 'work' | 'preview' = options.mode || 'work';
+    const renderTree = () => {
+        root.render(
+            <ViewerTree
+                options={{ ...options, mode: currentMode }}
+                controller={controller}
+                plugins={plugins}
+                wasmUrl={wasmUrl}
+            />,
+        );
+    };
+    renderTree();
     const handle = controller.asHandle();
+    handle.setMutationEnabled = (enabled: boolean) => {
+        const nextMode = enabled ? 'work' : 'preview';
+        if (nextMode === currentMode) return;
+        currentMode = nextMode;
+        renderTree();
+    };
     if (options.onAnnotationChange) {
         handle.onAnnotationEvent(options.onAnnotationChange);
     }

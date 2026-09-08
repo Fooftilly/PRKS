@@ -1987,6 +1987,13 @@ body.prks-workspace-dragging * {
     align-items: center;
 }
 
+/* Research Notes toolbar buttons disabled while offline (mutation lock,
+ * belt to CodeMirror readOnly -- see prksSetEasyMDEToolbarMutationEnabled). */
+.editor-toolbar button.prks-toolbar-btn--disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 /* 10 Dialogs / overlays — structural language; existing .modal rules remain the implementation */
 .prks-dialog {
     position: relative;

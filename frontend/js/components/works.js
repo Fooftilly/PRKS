@@ -468,8 +468,40 @@ function prksConceptLinkHint(cm) {
     };
 }
 
+/**
+ * CodeMirror's own `readOnly` option is not enough: PRKS's toolbar-driven
+ * insert paths (Concept picker, Argument picker, wiki-link autocomplete
+ * pick) call this directly and none of them consult CodeMirror state first.
+ * This is the one predicate every PRKS-owned programmatic Research Notes
+ * edit boundary must check before mutating anything. It requires both
+ * current PRKS connectivity and a live/current Work Notes resource --
+ * `ctx` may be stale (route navigated away) even while PRKS itself is
+ * online, and either failure must block the edit.
+ */
+function prksWorkNotesMutationAllowed(ctx) {
+    const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (!owner) return false;
+    if (
+        typeof owner.isCurrent === 'function' &&
+        typeof owner.generation === 'number' &&
+        !owner.isCurrent(owner.generation)
+    ) {
+        return false;
+    }
+    const notes = typeof owner.getResource === 'function' ? owner.getResource('workNotes') : null;
+    if (!notes || !notes.editor) return false;
+    if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') return false;
+    return true;
+}
+
+window.prksWorkNotesMutationAllowed = prksWorkNotesMutationAllowed;
+
 function prksInsertNotesMarkup(cm, markup) {
     if (!cm || !markup) return;
+    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm))) {
+        if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
+        return;
+    }
     const cur = cm.getCursor();
     cm.replaceRange(markup, cur, cur, 'complete');
     cm.focus();
@@ -667,6 +699,10 @@ function prksOpenArgumentPicker(cm, work) {
         });
     };
     function insertCreatedArgument(kind, name) {
+        if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm))) {
+            if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
+            return;
+        }
         void (async function () {
             if (typeof window.prksCreateArgumentFromWork !== 'function') return;
             const created = await window.prksCreateArgumentFromWork({
@@ -1449,11 +1485,46 @@ window.prksFlushPendingWorkResearchNotes = prksFlushPendingWorkResearchNotes;
  * user type for minutes only to discover nothing persisted). Reconnecting
  * quietly re-enqueues any draft that was held back while offline.
  */
+/**
+ * EasyMDE toolbar buttons that alter Markdown content. PRKS's own Concept/
+ * Argument buttons call picker/insert logic directly and never consult
+ * CodeMirror's readOnly flag at all -- disabling every mutating button here
+ * (native `disabled`, blocks both mouse and keyboard activation) is the
+ * belt to prksWorkNotesMutationAllowed()'s suspenders. Preview/side-by-side/
+ * fullscreen/Help never alter the document and stay available.
+ */
+const PRKS_EASYMDE_MUTATING_TOOLBAR_CLASSES = [
+    'bold',
+    'italic',
+    'heading',
+    'quote',
+    'unordered-list',
+    'ordered-list',
+    'link',
+    'image',
+    'prks-insert-concept',
+    'prks-insert-argument',
+];
+
+function prksSetEasyMDEToolbarMutationEnabled(ctx, enabled) {
+    const toolbar = ctx && ctx.query ? ctx.query('.work-notes-editor-wrap .editor-toolbar') : null;
+    if (!toolbar) return;
+    toolbar.querySelectorAll('button').forEach((btn) => {
+        const mutating = PRKS_EASYMDE_MUTATING_TOOLBAR_CLASSES.some((cls) => btn.classList.contains(cls));
+        if (!mutating) return;
+        btn.disabled = !enabled;
+        btn.classList.toggle('prks-toolbar-btn--disabled', !enabled);
+        if (enabled) btn.removeAttribute('aria-disabled');
+        else btn.setAttribute('aria-disabled', 'true');
+    });
+}
+
 function prksApplyOfflineNotesReadOnly(ctx, offline) {
     const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
     const cm = notes && notes.editor && notes.editor.codemirror;
     if (!cm) return;
     cm.setOption('readOnly', !!offline);
+    prksSetEasyMDEToolbarMutationEnabled(ctx, !offline);
     const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
     if (!statusEl) return;
     if (offline) {

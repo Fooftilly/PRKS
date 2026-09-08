@@ -44,6 +44,16 @@ export interface PrksAnnotationEvent {
 
 export interface PrksPdfViewerHandle {
     destroy(): void;
+    /**
+     * Live mutation lock, independent of document/viewer lifetime. Never
+     * recreates the PDF engine or document -- toggles the same 'work' /
+     * 'preview' interaction contract already gating the toolbar, selection
+     * popups, and annotation API in place. Disabling leaves existing
+     * annotations rendered and scroll/zoom/page navigation working; it only
+     * removes markup-tool activation and comment/create/update/delete
+     * mutation.
+     */
+    setMutationEnabled(enabled: boolean): void;
     zoomIn(): void;
     zoomOut(): void;
     fitWidth(): void;

@@ -41,6 +41,19 @@
     // launch the ordinary shell -- `pdf-viewer-runtime.js` only `import()`s it
     // lazily the first time a PDF viewer is actually created. It stays
     // cache-on-first-PDF-use via the static-path rule below.
+    // Decorative subset of STATIC_PRECACHE_PATHS (manifest/icons): the shell
+    // boots and works fully offline without any of these, so they stay
+    // best-effort during install and must never fail/block it. Every other
+    // STATIC_PRECACHE_PATHS entry (below) is essential JS/CSS/font and is
+    // treated as required -- see performInstall().
+    const STATIC_PRECACHE_OPTIONAL_PATHS = [
+        '/manifest.webmanifest',
+        '/favicon.svg',
+        '/logo.svg',
+        '/icons/icon-192.png',
+        '/icons/icon-512.png',
+    ];
+
     const STATIC_PRECACHE_PATHS = [
         '/manifest.webmanifest',
         '/favicon.svg',
@@ -306,6 +319,70 @@
         };
     }
 
+    // Precaches every path in `paths` and rejects the whole call if any one
+    // fetch throws or resolves to a non-ok response -- the same
+    // atomic-or-nothing contract as the native Cache.addAll(), but built on
+    // an injectable fetchImpl so it is exercisable from a plain Node test
+    // without a real ServiceWorkerGlobalScope/CacheStorage.
+    function precacheRequiredPaths(cache, fetchImpl, paths) {
+        return Promise.all(
+            paths.map(function (path) {
+                return Promise.resolve(fetchImpl(path)).then(function (response) {
+                    if (!response || !response.ok) {
+                        throw new Error('required shell precache fetch failed: ' + path);
+                    }
+                    return cache.put(path, response.clone ? response.clone() : response);
+                });
+            })
+        );
+    }
+
+    // Best-effort precache for purely decorative assets (manifest/icons):
+    // one missing/failing asset must never fail install.
+    function precacheOptionalPaths(cache, fetchImpl, paths) {
+        return Promise.all(
+            paths.map(function (path) {
+                return Promise.resolve(fetchImpl(path))
+                    .then(function (response) {
+                        if (!response || !response.ok) return undefined;
+                        return cache.put(path, response.clone ? response.clone() : response);
+                    })
+                    .catch(function () {
+                        /* Decorative asset: best-effort only, must never block install. */
+                    });
+            })
+        );
+    }
+
+    // The full install-time precache. Every SHELL_PRECACHE_PATHS entry and
+    // every non-optional STATIC_PRECACHE_PATHS entry (essential JS/CSS/font)
+    // is required: if any one of those fetches fails, this Promise rejects
+    // so the caller's `event.waitUntil()` fails the whole installation --
+    // it is better to keep the previous, still-working service worker than
+    // to activate a new one that claims offline support but is missing
+    // app.js/style.css/etc. Only the small decorative STATIC_PRECACHE_OPTIONAL_PATHS
+    // subset (manifest/icons) is best-effort.
+    function performInstall(cachesApi, fetchImpl) {
+        if (!cachesApi || typeof fetchImpl !== 'function') return Promise.resolve();
+        const requiredStaticPaths = STATIC_PRECACHE_PATHS.filter(function (path) {
+            return STATIC_PRECACHE_OPTIONAL_PATHS.indexOf(path) === -1;
+        });
+        const optionalStaticPaths = STATIC_PRECACHE_PATHS.filter(function (path) {
+            return STATIC_PRECACHE_OPTIONAL_PATHS.indexOf(path) !== -1;
+        });
+        return Promise.all([
+            cachesApi.open(SHELL_CACHE).then(function (cache) {
+                return precacheRequiredPaths(cache, fetchImpl, SHELL_PRECACHE_PATHS);
+            }),
+            cachesApi.open(STATIC_CACHE).then(function (cache) {
+                return Promise.all([
+                    precacheRequiredPaths(cache, fetchImpl, requiredStaticPaths),
+                    precacheOptionalPaths(cache, fetchImpl, optionalStaticPaths),
+                ]);
+            }),
+        ]);
+    }
+
     function attachServiceWorkerListeners(scope) {
         if (!scope || typeof scope.addEventListener !== 'function') return;
 
@@ -321,26 +398,9 @@
             scope.skipWaiting();
             if (!scope.caches || typeof event.waitUntil !== 'function') return;
             event.waitUntil(
-                Promise.all([
-                    scope.caches.open(SHELL_CACHE).then(function (cache) {
-                        return Promise.all(
-                            SHELL_PRECACHE_PATHS.map(function (path) {
-                                return cache.add(path).catch(function () {
-                                    /* Best-effort precache: one missing asset must not block install. */
-                                });
-                            })
-                        );
-                    }),
-                    scope.caches.open(STATIC_CACHE).then(function (cache) {
-                        return Promise.all(
-                            STATIC_PRECACHE_PATHS.map(function (path) {
-                                return cache.add(path).catch(function () {
-                                    /* Best-effort precache: one missing asset must not block install. */
-                                });
-                            })
-                        );
-                    }),
-                ])
+                performInstall(scope.caches, function (path) {
+                    return scope.fetch(path);
+                })
             );
         });
 
@@ -390,6 +450,7 @@
     const api = {
         createHandlers: createHandlers,
         attachServiceWorkerListeners: attachServiceWorkerListeners,
+        performInstall: performInstall,
         isGetRequest: isGetRequest,
         isSameOriginUrl: isSameOriginUrl,
         pathnameOf: pathnameOf,
@@ -406,6 +467,7 @@
         PRKS_SW_PDF_CACHE: PDF_CACHE,
         PRKS_SW_SHELL_PRECACHE_PATHS: SHELL_PRECACHE_PATHS,
         PRKS_SW_STATIC_PRECACHE_PATHS: STATIC_PRECACHE_PATHS,
+        PRKS_SW_STATIC_PRECACHE_OPTIONAL_PATHS: STATIC_PRECACHE_OPTIONAL_PATHS,
     };
 
     Object.keys(api).forEach(function (k) {

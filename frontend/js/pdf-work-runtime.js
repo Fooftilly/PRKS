@@ -28,7 +28,16 @@
         };
     }
 
-    function prksPdfPersistenceStillLive(ctx, generation, runtime) {
+    /**
+     * `viewer`/`setupToken` are optional identity pins: when supplied, this
+     * requires not merely that `runtime` is still the ctx's current PDF
+     * resource, but that `runtime.viewer` is still the exact viewer instance
+     * (and `runtime.viewerSetupToken` the exact setup generation) this call
+     * was bound to. An async persistence setup started for one viewer must
+     * never install/keep a worker bound to a runtime that has since moved on
+     * to a different viewer instance.
+     */
+    function prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken) {
         if (!runtime || runtime._destroyed) return false;
         if (ctx && ctx.destroyed) return false;
         if (ctx && typeof ctx.isCurrent === 'function' && typeof generation === 'number' && !ctx.isCurrent(generation)) {
@@ -37,11 +46,13 @@
         if (ctx && typeof ctx.getResource === 'function' && ctx.getResource('pdf') !== runtime) {
             return false;
         }
+        if (viewer !== undefined && runtime.viewer !== viewer) return false;
+        if (setupToken !== undefined && runtime.viewerSetupToken !== setupToken) return false;
         return true;
     }
 
-    function prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, installer) {
-        if (!prksPdfPersistenceStillLive(ctx, generation, runtime)) return false;
+    function prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, viewer, setupToken, installer) {
+        if (!prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)) return false;
         if (typeof installer === 'function') installer();
         return true;
     }
@@ -55,6 +66,7 @@
 
         const worker = {
             destroyed: false,
+            paused: false,
             retryTimer: null,
             flushPasses: 0,
             retriesFired: 0,
@@ -71,8 +83,41 @@
             return undefined;
         };
 
+        /**
+         * PRKS is offline/reconnecting: stop the network retry loop
+         * immediately (no retry storm against an unreachable server) while
+         * keeping every bit of state a resume needs -- pendingChanges, the
+         * viewer/document, and any unsaved annotation edits already made
+         * while online. This never destroys the worker or the viewer.
+         */
+        worker.pause = function () {
+            if (isDead() || worker.paused) return;
+            worker.paused = true;
+            if (worker.retryTimer != null) {
+                try {
+                    unschedule(worker.retryTimer);
+                } catch (_e) {}
+                worker.retryTimer = null;
+            }
+            if (typeof opts.clearTimer === 'function') {
+                try {
+                    opts.clearTimer();
+                } catch (_e2) {}
+            }
+        };
+
+        /** Online again: resume normal retry/flush behavior; if a change was
+         * left pending while paused, request exactly one flush. */
+        worker.resume = function () {
+            if (isDead() || !worker.paused) return;
+            worker.paused = false;
+            if (typeof opts.hasPendingChanges === 'function' && opts.hasPendingChanges()) {
+                void worker.requestFlush('resume');
+            }
+        };
+
         worker.scheduleRetry = function () {
-            if (isDead()) return;
+            if (isDead() || worker.paused) return;
             if (worker.retryTimer != null) return;
             const timerId = schedule(function () {
                 worker.retryTimer = null;
@@ -126,6 +171,16 @@
         const workId = String(opts.workId || '');
         const runtime = {
             viewer: opts.viewer || null,
+            // Bumped every time `runtime.viewer` is (re)published. Lets an
+            // in-flight async annotation-persistence setup started for a
+            // prior viewer instance detect it has been superseded and must
+            // not install itself. See prksPdfPersistenceStillLive().
+            viewerSetupToken: 0,
+            // 'work' | 'preview' -- the last mutation-capability mode this
+            // runtime's single viewer instance was reconciled to. Distinct
+            // from mutationEnabled-in-flight bookkeeping: this is the
+            // settled value used to decide whether a reconcile is a no-op.
+            mode: null,
             workId: workId,
             pageSession: opts.pageSession || {
                 workId: workId,

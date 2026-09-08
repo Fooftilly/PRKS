@@ -202,7 +202,7 @@ assert(
     'stale live check false',
     prksPdfPersistenceStillLive(ctxA, genBeforeInstall, staleRt) === false
 );
-prksInstallPdfAnnotationPersistenceIfCurrent(ctxA, genBeforeInstall, staleRt, function () {
+prksInstallPdfAnnotationPersistenceIfCurrent(ctxA, genBeforeInstall, staleRt, undefined, undefined, function () {
     installedAfterStale += 1;
     staleRt.annotationPersistence = { attached: true };
 });
@@ -214,7 +214,7 @@ assert('stale runtime has no worker', staleRt.annotationPersistence == null);
         return Promise.resolve({ annotations_json: '[]' }).then(function () {
             if (!prksPdfPersistenceStillLive(ctx, generation, runtime)) return 'stale';
             let attached = false;
-            prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, function () {
+            prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, undefined, undefined, function () {
                 attached = true;
                 runtime.annotationPersistence = { attached: true };
                 runtime.viewerOn = true;
@@ -240,7 +240,7 @@ assert('stale runtime has no worker', staleRt.annotationPersistence == null);
         rtLive.destroy();
     });
     let installedLive = 0;
-    prksInstallPdfAnnotationPersistenceIfCurrent(ctxA, ctxA.generation, rtLive, function () {
+    prksInstallPdfAnnotationPersistenceIfCurrent(ctxA, ctxA.generation, rtLive, undefined, undefined, function () {
         installedLive += 1;
     });
     assertEq('current ctx installs persistence', installedLive, 1);
@@ -262,6 +262,89 @@ assert('stale runtime has no worker', staleRt.annotationPersistence == null);
     assert('late A viewer destroyed', lateDestroyed);
     assertEq('B pending still true', prksHasPendingWorkAnnotationSync(ctxB), true);
     assertEq('B cache still B', ctxB.getResource('pdf').annotationCache.workId, 'WB');
+
+    // --- viewer-identity-safe stillLive() (AGENTS.md "Make annotation
+    // persistence viewer-identity-safe"): an async setup pinned to viewer V1
+    // must see itself as stale the instant runtime.viewer moves on to V2,
+    // even though ctx/runtime identity are both still current. ---
+    const ctxC = prksEnsureTabContext('pdf-c');
+    ctxC.mount(makeHost());
+    ctxC.beginRoute({ name: 'work', hash: '#/works/WC' });
+    const rtC = createWorkPdfRuntime({ workId: 'WC' });
+    ctxC.setResource('pdf', rtC, function () {
+        rtC.destroy();
+    });
+    const viewer1 = { id: 'v1' };
+    rtC.viewer = viewer1;
+    rtC.viewerSetupToken = 1;
+    assert(
+        'stillLive true for the exact viewer/token it was set up with',
+        prksPdfPersistenceStillLive(ctxC, ctxC.generation, rtC, viewer1, 1) === true
+    );
+    const viewer2 = { id: 'v2' };
+    rtC.viewer = viewer2;
+    rtC.viewerSetupToken = 2;
+    assertEq(
+        'stillLive false once runtime.viewer moves on to a different instance',
+        prksPdfPersistenceStillLive(ctxC, ctxC.generation, rtC, viewer1, 1),
+        false
+    );
+    assert(
+        'stillLive true again for the new viewer/token',
+        prksPdfPersistenceStillLive(ctxC, ctxC.generation, rtC, viewer2, 2) === true
+    );
+    let installedForStaleViewer = 0;
+    prksInstallPdfAnnotationPersistenceIfCurrent(ctxC, ctxC.generation, rtC, viewer1, 1, function () {
+        installedForStaleViewer += 1;
+    });
+    assertEq('install refuses a setup pinned to a superseded viewer', installedForStaleViewer, 0);
+    let installedForCurrentViewer = 0;
+    prksInstallPdfAnnotationPersistenceIfCurrent(ctxC, ctxC.generation, rtC, viewer2, 2, function () {
+        installedForCurrentViewer += 1;
+    });
+    assertEq('install succeeds for the current viewer/token', installedForCurrentViewer, 1);
+
+    // --- annotation-persistence worker pause()/resume() (AGENTS.md "Pause
+    // annotation persistence while unreachable"). ---
+    let pauseRetryQueue = [];
+    let pauseFlushCount = 0;
+    let pendingForResume = true;
+    const pausableWorker = createPdfAnnotationPersistenceWorker({
+        runtime: rtC,
+        retryDelayMs: 1,
+        schedule: function (fn) {
+            pauseRetryQueue.push(fn);
+            return pauseRetryQueue.length;
+        },
+        unschedule: function (id) {
+            pauseRetryQueue = pauseRetryQueue.filter(function (_fn, i) {
+                return i + 1 !== id;
+            });
+        },
+        onFlush: function () {
+            pauseFlushCount += 1;
+        },
+        hasPendingChanges: function () {
+            return pendingForResume;
+        },
+    });
+    pausableWorker.scheduleRetry();
+    assert('pausable worker retry timer armed before pause', pausableWorker.retryTimer != null);
+    pausableWorker.pause();
+    assertEq('pause() cancels the armed retry timer', pausableWorker.retryTimer, null);
+    assertEq('pause() does not destroy the worker', pausableWorker.destroyed, false);
+    pauseRetryQueue.slice().forEach(function (fn) {
+        fn();
+    });
+    assertEq('no flush fires from a timer already cancelled by pause()', pauseFlushCount, 0);
+    pausableWorker.scheduleRetry();
+    assertEq('scheduleRetry() while paused is a no-op (no retry storm offline)', pausableWorker.retryTimer, null);
+    pausableWorker.resume();
+    assertEq('resume() with pendingChanges requests exactly one flush', pauseFlushCount, 1);
+    pendingForResume = false;
+    pausableWorker.pause();
+    pausableWorker.resume();
+    assertEq('resume() with nothing pending does not flush again', pauseFlushCount, 1);
 
     prksDestroyAllTabContexts();
 

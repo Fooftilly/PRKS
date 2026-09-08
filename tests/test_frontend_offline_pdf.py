@@ -1,16 +1,17 @@
 """Structural regressions for offline-mode behavior in the Work PDF viewer
-integration (works-pdf.js): the viewer must be created/rebuilt in the vendor
-viewer's own read-only `mode: 'preview'` boundary whenever PRKS is not
-confirmed online, annotation-sync persistence must never be installed for a
-preview-mode viewer, and every annotation mutation entry point must be
-guarded the same way as other canonical Work mutations."""
+integration (works-pdf.js): the viewer's live mutation capability must follow
+connectivity (PrksPdfViewerHandle.setMutationEnabled) without ever
+destroying/recreating the viewer or document, annotation-sync persistence
+must pause/resume rather than get torn down, and every annotation mutation
+entry point must be guarded the same way as other canonical Work
+mutations."""
 import os
-import re
 import unittest
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FRONTEND = os.path.join(_PROJECT_DIR, "frontend")
 _WORKS_PDF = os.path.join(_FRONTEND, "js", "components", "works-pdf.js")
+_PDF_RUNTIME = os.path.join(_FRONTEND, "js", "pdf-work-runtime.js")
 
 
 def _read(path: str) -> str:
@@ -25,9 +26,9 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
     def test_viewer_mode_is_never_hardcoded_to_work(self):
         src = _read(_WORKS_PDF)
         # The only two modes this integration ever passes to the vendor
-        # viewer are 'work' and 'preview', decided by prksPdfDesiredMode()/
-        # explicit rebuild target -- never a hardcoded mode: 'work' literal
-        # that would ignore current connectivity.
+        # viewer are 'work' and 'preview', decided by prksPdfDesiredMode() --
+        # never a hardcoded mode: 'work' literal that would ignore current
+        # connectivity.
         self.assertNotIn("mode: 'work',", src)
         self.assertNotIn('mode: "work",', src)
         self.assertIn("function prksPdfDesiredMode()", src)
@@ -45,45 +46,120 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         mount_start = src.index("async function prksMountPdfViewer")
         mount_end = src.index("export function initPdfViewerForWork")
         mount_body = src[mount_start:mount_end]
-        self.assertIn("if (mode === 'work') {", mount_body)
-        self.assertIn("setupAnnotationPersistence(ctx, runtime, work.id)", mount_body)
-        # Must be conditioned on mode, not called unconditionally after every mount.
-        unconditional = re.search(r"\n\s*void setupAnnotationPersistence\(ctx, runtime, work\.id\);\n", mount_body)
-        # the only call is inside the `if (mode === 'work')` block; confirm indentation
-        # depth right above the call includes that guard.
-        idx = mount_body.index("void setupAnnotationPersistence(ctx, runtime, work.id);")
+        self.assertIn("if (desired === 'work') {", mount_body)
+        self.assertIn(
+            "prksEnsureAnnotationPersistence(ctx, runtime, work.id, viewer, setupToken)", mount_body
+        )
+        idx = mount_body.index("prksEnsureAnnotationPersistence(ctx, runtime, work.id, viewer, setupToken)")
         preceding = mount_body[:idx]
-        self.assertIn("if (mode === 'work') {", preceding[-120:] if len(preceding) >= 120 else preceding)
+        self.assertIn("if (desired === 'work') {", preceding[-120:])
 
-    def test_online_to_offline_transition_rebuilds_existing_viewer(self):
+    def test_mount_reconciles_stale_desired_mode_before_publishing(self):
+        """A viewer that began mounting for a stale `mode` (connectivity
+        changed while createPrksPdfViewer() awaited) must be reconciled to
+        the *current* desired mode via the live mutation lock -- never left
+        stuck on the mode it started with, and never discarded/recreated."""
         src = _read(_WORKS_PDF)
-        self.assertIn("function prksRebuildPdfViewerForModeChange(ctx, runtime, desiredMode)", src)
-        self.assertIn("prksOfflineRuntimeSubscribe(function (state)", src)
+        mount_start = src.index("async function prksMountPdfViewer")
+        mount_end = src.index("export function initPdfViewerForWork")
+        mount_body = src[mount_start:mount_end]
+        self.assertIn("const desired = prksPdfDesiredMode();", mount_body)
+        self.assertIn("if (desired !== mode", mount_body)
+        self.assertIn("viewer.setMutationEnabled(desired === 'work');", mount_body)
+        # The reconciliation happens before runtime.mode is set to the
+        # publish-time value, i.e. before this viewer is treated as settled.
+        reconcile_at = mount_body.index("viewer.setMutationEnabled(desired === 'work');")
+        publish_at = mount_body.index("runtime.mode = desired;")
+        self.assertLess(reconcile_at, publish_at)
+        # Never destroy/recreate the just-created viewer merely because its
+        # starting mode was stale.
+        after_await = mount_body[mount_body.index("const viewer = await createPrksPdfViewer") :]
+        stale_reconcile_region = after_await[after_await.index("const desired = prksPdfDesiredMode();") :]
+        self.assertNotIn("viewer.destroy()", stale_reconcile_region[:400])
+
+    def test_connectivity_reconcile_never_destroys_the_viewer(self):
+        src = _read(_WORKS_PDF)
+        reconcile_start = src.index("function prksReconcilePdfMutationMode")
+        reconcile_end = src.index(
+            "if (typeof prksOfflineRuntimeSubscribe === 'function') {",
+            reconcile_start,
+        )
+        reconcile_body = src[reconcile_start:reconcile_end]
+        self.assertIn("runtime.viewer.setMutationEnabled(desired === 'work');", reconcile_body)
+        self.assertNotIn(".destroy()", reconcile_body)
+        self.assertNotIn("createPrksPdfViewer", reconcile_body)
+        self.assertNotIn("prksMountPdfViewer", reconcile_body)
+
+    def test_connectivity_reconcile_pauses_and_resumes_persistence(self):
+        src = _read(_WORKS_PDF)
+        reconcile_start = src.index("function prksReconcilePdfMutationMode")
+        reconcile_end = src.index(
+            "if (typeof prksOfflineRuntimeSubscribe === 'function') {",
+            reconcile_start,
+        )
+        reconcile_body = src[reconcile_start:reconcile_end]
+        self.assertIn("runtime.annotationPersistence.resume()", reconcile_body)
+        self.assertIn("runtime.annotationPersistence.pause()", reconcile_body)
+        self.assertIn("prksEnsureAnnotationPersistence(", reconcile_body)
+
+    def test_subscriber_reconciles_every_live_pdf_runtime(self):
+        src = _read(_WORKS_PDF)
         sub_start = src.index("if (typeof prksOfflineRuntimeSubscribe === 'function') {")
-        sub_body = src[sub_start : sub_start + 700]
-        self.assertIn("desiredMode = state === 'online' ? 'work' : 'preview'", sub_body)
-        self.assertIn("prksRebuildPdfViewerForModeChange(ctx, runtime, desiredMode)", sub_body)
+        sub_body = src[sub_start : sub_start + 500]
+        self.assertIn("prksForEachLiveTabContext(function (ctx) {", sub_body)
+        self.assertIn("prksReconcilePdfMutationMode(ctx, runtime)", sub_body)
 
-    def test_rebuild_stops_annotation_persistence_before_tearing_down_viewer(self):
+    def test_ensure_annotation_persistence_installs_at_most_once(self):
         src = _read(_WORKS_PDF)
-        rebuild_start = src.index("function prksRebuildPdfViewerForModeChange")
-        rebuild_end = src.index("if (typeof prksOfflineRuntimeSubscribe === 'function') {")
-        rebuild_body = src[rebuild_start:rebuild_end]
-        persistence_destroy_at = rebuild_body.index("runtime.annotationPersistence.destroy()")
-        old_viewer_destroy_at = rebuild_body.index("oldViewer.destroy()")
-        self.assertLess(
-            persistence_destroy_at,
-            old_viewer_destroy_at,
-            "the annotation-sync worker must be stopped before the viewer it syncs is destroyed",
+        start = src.index("function prksEnsureAnnotationPersistence")
+        end = src.index("async function prksMountPdfViewer")
+        body = src[start:end]
+        self.assertIn("runtime.annotationPersistence || runtime._persistenceSetupStarted", body)
+        self.assertIn("runtime._persistenceSetupStarted = true;", body)
+
+    def test_annotation_persistence_stilllive_pinned_to_viewer_identity(self):
+        src = _read(_WORKS_PDF)
+        setup_start = src.index("async function setupAnnotationPersistence")
+        still_live_at = src.index("function stillLive()", setup_start)
+        snippet = src[still_live_at : still_live_at + 300]
+        self.assertIn(
+            "prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)", snippet
         )
 
-    def test_rebuild_preserves_current_page(self):
+    def test_viewer_setup_token_bumped_on_every_publish(self):
         src = _read(_WORKS_PDF)
-        self.assertIn("function prksCurrentPdfPageNumber(runtime)", src)
-        rebuild_start = src.index("function prksRebuildPdfViewerForModeChange")
-        rebuild_body = src[rebuild_start : rebuild_start + 1800]
-        self.assertIn("prksCurrentPdfPageNumber(runtime)", rebuild_body)
-        self.assertIn("prksMountPdfViewer(ctx, work, runtime, targetNode, page, desiredMode)", rebuild_body)
+        mount_start = src.index("async function prksMountPdfViewer")
+        mount_end = src.index("export function initPdfViewerForWork")
+        mount_body = src[mount_start:mount_end]
+        self.assertIn("runtime.viewerSetupToken = (runtime.viewerSetupToken || 0) + 1;", mount_body)
+
+    def test_persistence_worker_stilllive_helper_supports_viewer_identity(self):
+        src = _read(_PDF_RUNTIME)
+        self.assertIn(
+            "function prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)", src
+        )
+        self.assertIn("if (viewer !== undefined && runtime.viewer !== viewer) return false;", src)
+        self.assertIn(
+            "if (setupToken !== undefined && runtime.viewerSetupToken !== setupToken) return false;", src
+        )
+
+    def test_persistence_worker_has_pause_and_resume(self):
+        src = _read(_PDF_RUNTIME)
+        self.assertIn("worker.pause = function ()", src)
+        self.assertIn("worker.resume = function ()", src)
+        pause_start = src.index("worker.pause = function ()")
+        pause_body = src[pause_start : pause_start + 500]
+        self.assertIn("unschedule(worker.retryTimer)", pause_body)
+        resume_start = src.index("worker.resume = function ()")
+        resume_body = src[resume_start : resume_start + 400]
+        self.assertIn("opts.hasPendingChanges", resume_body)
+
+    def test_drain_queue_does_not_spin_while_paused(self):
+        src = _read(_WORKS_PDF)
+        drain_start = src.index("async function drainFlushQueue")
+        drain_end = src.index("function requestFlush(")
+        drain_body = src[drain_start:drain_end]
+        self.assertIn("worker && worker.paused", drain_body)
 
     def test_annotation_mutation_entry_points_are_guarded(self):
         src = _read(_WORKS_PDF)
@@ -97,6 +173,11 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         at = src.index(".annotation-row__delete")
         snippet = src[at : at + 400]
         self.assertIn("prksOfflineGuardMutation", snippet)
+
+    def test_vendor_handle_exposes_set_mutation_enabled(self):
+        types_path = os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "types.ts")
+        src = _read(types_path)
+        self.assertIn("setMutationEnabled(enabled: boolean): void;", src)
 
 
 if __name__ == "__main__":

@@ -394,6 +394,82 @@ async function run() {
         assert('range-only first response never seeds the whole-file pdf cache', !(await pdfCache.match(pathname)));
     }
 
+    /* ---- performInstall(): required-asset failure fails the whole install,
+     * decorative optional-asset failure never blocks it (AGENTS.md "Make
+     * shell precache success meaningful") ---- */
+    {
+        // Happy path: every required and optional asset fetches fine ->
+        // performInstall() resolves and every path lands in the right cache.
+        const cacheStorage = makeFakeCacheStorage();
+        const fetched = [];
+        await sw.performInstall(cacheStorage, function (path) {
+            fetched.push(path);
+            return Promise.resolve(new Response('body:' + path, { status: 200 }));
+        });
+        const shellCache = await cacheStorage.open(sw.PRKS_SW_SHELL_CACHE);
+        const staticCache = await cacheStorage.open(sw.PRKS_SW_STATIC_CACHE);
+        let allShellCached = true;
+        for (const p of sw.PRKS_SW_SHELL_PRECACHE_PATHS) {
+            if (!(await shellCache.match(p))) allShellCached = false;
+        }
+        assert('performInstall happy path caches every shell path', allShellCached);
+        let allStaticCached = true;
+        for (const p of sw.PRKS_SW_STATIC_PRECACHE_PATHS) {
+            if (!(await staticCache.match(p))) allStaticCached = false;
+        }
+        assert('performInstall happy path caches every static path (required + optional)', allStaticCached);
+    }
+    await assertRejectsOrThrows(
+        'performInstall rejects when a required (non-optional) static asset fetch fails',
+        async function () {
+            const cacheStorage = makeFakeCacheStorage();
+            const optional = sw.PRKS_SW_STATIC_PRECACHE_OPTIONAL_PATHS;
+            await sw.performInstall(cacheStorage, function (path) {
+                if (path === '/js/app.js') return Promise.reject(new Error('network down'));
+                return Promise.resolve(new Response('body:' + path, { status: 200 }));
+            });
+        }
+    );
+    await assertRejectsOrThrows(
+        'performInstall rejects when a required static asset responds non-ok',
+        async function () {
+            const cacheStorage = makeFakeCacheStorage();
+            await sw.performInstall(cacheStorage, function (path) {
+                if (path === '/css/style.css') return Promise.resolve(new Response('nope', { status: 404 }));
+                return Promise.resolve(new Response('body:' + path, { status: 200 }));
+            });
+        }
+    );
+    await assertRejectsOrThrows('performInstall rejects when a shell navigation path fetch fails', async function () {
+        const cacheStorage = makeFakeCacheStorage();
+        await sw.performInstall(cacheStorage, function (path) {
+            if (path === '/index.html') return Promise.reject(new Error('network down'));
+            return Promise.resolve(new Response('body:' + path, { status: 200 }));
+        });
+    });
+    {
+        // The inverse: a failing *optional* decorative asset (manifest/icon)
+        // must never fail the install, and every required asset still lands.
+        const cacheStorage = makeFakeCacheStorage();
+        const optionalSet = new Set(sw.PRKS_SW_STATIC_PRECACHE_OPTIONAL_PATHS);
+        await sw.performInstall(cacheStorage, function (path) {
+            if (optionalSet.has(path)) return Promise.reject(new Error('icon missing'));
+            return Promise.resolve(new Response('body:' + path, { status: 200 }));
+        });
+        const staticCache = await cacheStorage.open(sw.PRKS_SW_STATIC_CACHE);
+        let allRequiredCached = true;
+        for (const p of sw.PRKS_SW_STATIC_PRECACHE_PATHS) {
+            if (optionalSet.has(p)) continue;
+            if (!(await staticCache.match(p))) allRequiredCached = false;
+        }
+        assert('performInstall tolerates a failing optional asset and still caches every required one', allRequiredCached);
+        let noOptionalCached = true;
+        for (const p of optionalSet) {
+            if (await staticCache.match(p)) noOptionalCached = false;
+        }
+        assert('performInstall never caches a failing optional asset', noOptionalCached);
+    }
+
     /* ---- source has no generic /api/... JSON caching and no mutation queueing ---- */
     const src = require('fs').readFileSync(path.join(rootDir, 'frontend/sw.js'), 'utf8');
     assert('sw.js has no localStorage', src.indexOf('localStorage') === -1);

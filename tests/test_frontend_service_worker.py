@@ -113,10 +113,45 @@ class FrontendServiceWorkerTests(unittest.TestCase):
         install_start = src.index("addEventListener('install'")
         install_end = src.index("addEventListener('activate'")
         install_block = src[install_start:install_end]
-        self.assertIn("caches.open(SHELL_CACHE)", install_block)
-        self.assertIn("SHELL_PRECACHE_PATHS.map", install_block)
-        self.assertIn("caches.open(STATIC_CACHE)", install_block)
-        self.assertIn("STATIC_PRECACHE_PATHS.map", install_block)
+        self.assertIn("performInstall(scope.caches", install_block)
+
+        perform_start = src.index("function performInstall(cachesApi, fetchImpl)")
+        perform_end = src.index("function attachServiceWorkerListeners")
+        perform_body = src[perform_start:perform_end]
+        self.assertIn("cachesApi.open(SHELL_CACHE)", perform_body)
+        self.assertIn("SHELL_PRECACHE_PATHS", perform_body)
+        self.assertIn("cachesApi.open(STATIC_CACHE)", perform_body)
+        self.assertIn("STATIC_PRECACHE_PATHS", perform_body)
+
+    def test_install_precache_essential_asset_failure_fails_the_whole_install(self):
+        """AGENTS.md 'Make shell precache success meaningful': one required
+        (non-optional) precache fetch rejecting must fail performInstall()'s
+        Promise -- the caller's event.waitUntil() -- rather than silently
+        activating an incomplete shell. Only the small decorative
+        STATIC_PRECACHE_OPTIONAL_PATHS subset may swallow a failure."""
+        src = _read(_SW)
+        self.assertIn("function performInstall(cachesApi, fetchImpl)", src)
+        self.assertIn("function precacheRequiredPaths(cache, fetchImpl, paths)", src)
+        self.assertIn("function precacheOptionalPaths(cache, fetchImpl, paths)", src)
+
+        required_start = src.index("function precacheRequiredPaths(cache, fetchImpl, paths)")
+        required_end = src.index("function precacheOptionalPaths")
+        required_body = src[required_start:required_end]
+        # The required path must throw (reject), never swallow a failure with .catch().
+        self.assertNotIn(".catch(", required_body)
+        self.assertIn("throw new Error(", required_body)
+
+        optional_start = required_end
+        optional_end = src.index("function performInstall")
+        optional_body = src[optional_start:optional_end]
+        self.assertIn(".catch(", optional_body)
+
+        perform_start = src.index("function performInstall(cachesApi, fetchImpl)")
+        perform_end = src.index("function attachServiceWorkerListeners")
+        perform_body = src[perform_start:perform_end]
+        self.assertIn("precacheRequiredPaths(cache, fetchImpl, requiredStaticPaths)", perform_body)
+        self.assertIn("precacheOptionalPaths(cache, fetchImpl, optionalStaticPaths)", perform_body)
+        self.assertIn("STATIC_PRECACHE_OPTIONAL_PATHS.indexOf(path) === -1", perform_body)
 
     def test_shell_manifest_covers_every_index_html_local_asset(self):
         """Anti-drift regression: a new <script src>/<link href> in index.html

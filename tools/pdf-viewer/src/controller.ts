@@ -77,6 +77,9 @@ export class ViewerController {
                 this.api = null;
                 this.annotationListeners.clear();
             },
+            // Overwritten in createPrksPdfViewer() with the real live-mode
+            // toggle -- this placeholder only satisfies the handle shape.
+            setMutationEnabled: () => {},
             zoomIn: () => need().zoomIn(),
             zoomOut: () => need().zoomOut(),
             fitWidth: () => need().fitWidth(),

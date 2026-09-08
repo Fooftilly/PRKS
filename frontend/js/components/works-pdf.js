@@ -951,17 +951,20 @@ function prksEnsureAnnotationBeforeUnloadGuard() {
     });
 }
 
-async function setupAnnotationPersistence(ctx, runtime, workId) {
+async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupToken) {
     const generation = ctx && typeof ctx.generation === 'number' ? ctx.generation : undefined;
-    const viewer = runtime && runtime.viewer;
     if (!viewer || typeof viewer.saveCopy !== 'function' || typeof viewer.getAnnotations !== 'function') {
         return;
     }
     if (ctx && typeof ctx.clearTimer === 'function') ctx.clearTimer('annotationSyncInterval');
 
+    // Pinned to the exact viewer instance + setup generation this call was
+    // started for (AGENTS.md "Make annotation persistence viewer-identity-
+    // safe"): an async setup must never install/keep running for a runtime
+    // that has since moved on to a different viewer.
     function stillLive() {
         return typeof prksPdfPersistenceStillLive === 'function'
-            ? prksPdfPersistenceStillLive(ctx, generation, runtime)
+            ? prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)
             : !!(runtime && !runtime._destroyed);
     }
 
@@ -1119,6 +1122,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
                 queueRequested = false;
                 break;
             }
+            if (worker && worker.paused) {
+                // PRKS is offline/reconnecting: leave pendingChanges/
+                // queueRequested representing the unsynced state and stop --
+                // worker.resume() requests exactly one flush once reachable
+                // again. Never poll/retry against an unreachable server.
+                break;
+            }
             if (!stillLive()) {
                 queueRequested = false;
                 break;
@@ -1177,7 +1187,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
     }
 
     const installed = typeof prksInstallPdfAnnotationPersistenceIfCurrent === 'function'
-        ? prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, function () {
+        ? prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, viewer, setupToken, function () {
             worker =
                 typeof createPdfAnnotationPersistenceWorker === 'function'
                     ? createPdfAnnotationPersistenceWorker({
@@ -1195,6 +1205,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
                           onFlush: function (reason) {
                               return requestFlush(reason);
                           },
+                          hasPendingChanges: function () {
+                              return !!(syncState && syncState.pendingChanges);
+                          },
                           onDestroy: function () {
                               if (viewer && typeof viewer.offAnnotationEvent === 'function') {
                                   try {
@@ -1205,8 +1218,15 @@ async function setupAnnotationPersistence(ctx, runtime, workId) {
                       })
                     : {
                           destroyed: false,
+                          paused: false,
                           requestFlush: requestFlush,
                           scheduleRetry: function () {},
+                          pause: function () {
+                              this.paused = true;
+                          },
+                          resume: function () {
+                              this.paused = false;
+                          },
                           flush: function () {
                               return requestFlush('manual');
                           },
@@ -1364,11 +1384,12 @@ function prksDestroyWorkPdfViewer(ctx) {
 
 /**
  * PRKS is offline (or still reconnecting) whenever the runtime is not
- * confirmed reachable. A Work PDF viewer created/rebuilt in that state uses
- * the viewer's own `mode: 'preview'` interaction boundary (render/scroll/
- * zoom/navigate only) instead of `'work'` -- highlight/underline/delete/
- * comment/save are all gated by that same mode inside the vendor viewer, and
- * annotation-sync persistence is never installed for a preview-mode viewer.
+ * confirmed reachable. A Work PDF viewer mounted or reconciled in that state
+ * runs with mutation disabled -- render/scroll/zoom/navigate stay available,
+ * but highlight/underline/select-to-markup/comment/create/update/delete are
+ * all gated by the same 'work'/'preview' interaction boundary inside the
+ * vendor viewer (see PrksPdfViewerHandle.setMutationEnabled), and
+ * annotation-sync persistence is paused rather than installed/kept running.
  * See AGENTS.md "Offline / PWA".
  */
 function prksPdfDesiredMode() {
@@ -1379,6 +1400,18 @@ function prksCurrentPdfPageNumber(runtime) {
     const sess = runtime && runtime.pageSession;
     const p = sess && sess.pageNumber != null ? Number(sess.pageNumber) : NaN;
     return Number.isFinite(p) && p >= 1 ? p : 1;
+}
+
+/**
+ * Starts annotation-sync persistence for `runtime` at most once per viewer
+ * instance. Guards against a reconcile calling this a second time while an
+ * earlier async setup (its initial GET of previously-saved annotations) is
+ * still in flight -- e.g. rapid offline->online->offline toggles.
+ */
+function prksEnsureAnnotationPersistence(ctx, runtime, workId, viewer, setupToken) {
+    if (!runtime || runtime.annotationPersistence || runtime._persistenceSetupStarted) return;
+    runtime._persistenceSetupStarted = true;
+    void setupAnnotationPersistence(ctx, runtime, workId, viewer, setupToken);
 }
 
 /** Builds + awaits one viewer instance for a Work PDF; installs annotation persistence only in 'work' mode. */
@@ -1406,7 +1439,11 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
         initialPage: initialPage,
         onPageChange: (info) => runtime.lastPage && runtime.lastPage.onPageChange(info),
         onAnnotationCommentRequest: (info) => {
-            if (mode !== 'work' || !info || !info.annotationId) return;
+            // Live-checked against the runtime's currently reconciled mode,
+            // not the mode this mount started with -- a Work viewer that
+            // began online and was later mutation-locked offline must not
+            // still let a click open the comment editor.
+            if (runtime.mode !== 'work' || !info || !info.annotationId) return;
             if (typeof window.openPdfAnnotationEditorById === 'function') {
                 void window.openPdfAnnotationEditorById(ctx, info.annotationId);
             }
@@ -1421,9 +1458,22 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
     }
     if (runtime.lastPage && typeof runtime.lastPage.setViewer === 'function') runtime.lastPage.setViewer(viewer);
     runtime.viewer = viewer;
-    runtime.mode = mode;
-    if (mode === 'work') {
-        void setupAnnotationPersistence(ctx, runtime, work.id);
+    runtime.viewerSetupToken = (runtime.viewerSetupToken || 0) + 1;
+    const setupToken = runtime.viewerSetupToken;
+    // `mode` reflects the desired state when this async mount *started*;
+    // createPrksPdfViewer() awaits engine/document load, so connectivity can
+    // change mid-flight. Reconcile against the *current* desired mode before
+    // publishing capability -- via the live mutation lock, never by
+    // discarding this viewer/document and mounting another one -- so a
+    // viewer that began mounting offline-preview but finished after PRKS
+    // came back online (or vice versa) is never stuck on the stale mode.
+    const desired = prksPdfDesiredMode();
+    if (desired !== mode && typeof viewer.setMutationEnabled === 'function') {
+        viewer.setMutationEnabled(desired === 'work');
+    }
+    runtime.mode = desired;
+    if (desired === 'work') {
+        prksEnsureAnnotationPersistence(ctx, runtime, work.id, viewer, setupToken);
     }
     return viewer;
 }
@@ -1480,59 +1530,41 @@ export function initPdfViewerForWork(ctx, work) {
 }
 
 /**
- * Handle connectivity changing while a Work PDF viewer is already mounted.
- * The vendor viewer's interaction mode is fixed at construction time (it has
- * no live setMode), so the smallest correct mechanism is rebuilding the
- * viewer in the newly-desired mode at the same page -- never leaving
- * annotation tools usable merely because the viewer was created while
- * online, and never leaving a stale 'work' annotation-sync worker running
- * once the connection actually drops.
+ * Reconciles a mounted Work PDF viewer's live mutation capability against
+ * current connectivity. Never destroys/recreates the viewer or document
+ * (PrksPdfViewerHandle.setMutationEnabled toggles the same 'work'/'preview'
+ * boundary in place) -- an annotation created while online must never
+ * disappear merely because connectivity dropped before it finished saving.
+ * Pausing/resuming the same annotation-sync worker (rather than tearing it
+ * down) keeps pendingChanges/unsaved state intact across the transition.
  */
-function prksRebuildPdfViewerForModeChange(ctx, runtime, desiredMode) {
-    if (!ctx || !runtime || runtime._destroyed || runtime.rebuilding) return;
-    const targetNode = ctx.query ? ctx.query('[data-prks-role="pdf-viewer"]') : null;
-    const work = runtime.work;
-    if (!targetNode || !work) return;
-    runtime.rebuilding = true;
-    const oldViewer = runtime.viewer;
-    const page = prksCurrentPdfPageNumber(runtime);
-    // Stop the annotation-sync worker before tearing down its viewer -- it
-    // must never keep syncing (or retry-scheduling) against a destroyed
-    // instance, and going offline must stop it immediately.
-    if (runtime.annotationPersistence && typeof runtime.annotationPersistence.destroy === 'function') {
-        try {
-            runtime.annotationPersistence.destroy();
-        } catch (_e) {}
+function prksReconcilePdfMutationMode(ctx, runtime) {
+    if (!ctx || !runtime || runtime._destroyed || !runtime.viewer) return;
+    const desired = prksPdfDesiredMode();
+    if (runtime.mode === desired) return;
+    if (typeof runtime.viewer.setMutationEnabled === 'function') {
+        runtime.viewer.setMutationEnabled(desired === 'work');
     }
-    runtime.annotationPersistence = null;
-    runtime.viewer = null;
-    Promise.resolve()
-        .then(() => {
-            if (oldViewer && typeof oldViewer.destroy === 'function') {
-                try {
-                    oldViewer.destroy();
-                } catch (_e) {}
-            }
-            if (runtime._destroyed || (ctx.getResource ? ctx.getResource('pdf') !== runtime : false)) return null;
-            targetNode.innerHTML = '';
-            return prksMountPdfViewer(ctx, work, runtime, targetNode, page, desiredMode);
-        })
-        .catch((err) => {
-            console.error('PDF viewer mode rebuild failed', err);
-        })
-        .finally(() => {
-            runtime.rebuilding = false;
-        });
+    runtime.mode = desired;
+    if (desired === 'work') {
+        if (runtime.annotationPersistence && typeof runtime.annotationPersistence.resume === 'function') {
+            runtime.annotationPersistence.resume();
+        } else {
+            // Offline-created viewer that never installed persistence yet
+            // (nothing to resume) -- install it for the first time now.
+            prksEnsureAnnotationPersistence(ctx, runtime, runtime.workId, runtime.viewer, runtime.viewerSetupToken);
+        }
+    } else if (runtime.annotationPersistence && typeof runtime.annotationPersistence.pause === 'function') {
+        runtime.annotationPersistence.pause();
+    }
 }
 
 if (typeof prksOfflineRuntimeSubscribe === 'function') {
-    prksOfflineRuntimeSubscribe(function (state) {
+    prksOfflineRuntimeSubscribe(function () {
         if (typeof prksForEachLiveTabContext !== 'function') return;
-        const desiredMode = state === 'online' ? 'work' : 'preview';
         prksForEachLiveTabContext(function (ctx) {
             const runtime = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
-            if (!runtime || !runtime.viewer || runtime.mode === desiredMode) return;
-            prksRebuildPdfViewerForModeChange(ctx, runtime, desiredMode);
+            if (runtime) prksReconcilePdfMutationMode(ctx, runtime);
         });
     });
 }

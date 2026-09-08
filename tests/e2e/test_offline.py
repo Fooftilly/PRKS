@@ -8,14 +8,21 @@ opened with service_workers="allow".
 from __future__ import annotations
 
 import os
+import time
 import unittest
+from urllib.parse import urlparse
 
 from tests.e2e.fixtures import WORK_A_TITLE, WORK_B_TITLE, seed_library
 from tests.e2e.harness import AppServer, PageCollector, open_app_page, require_chromium
 from tests.e2e.test_app import (
+    _FOCUSED_PDF,
+    _FOCUSED_VIEWER,
     _FOCUSED_WORK_NOTES,
+    _commit_pdf_highlight,
+    _continue_held_routes,
     _open_details_drawer_if_tiled,
     _open_work_from_home,
+    _viewer_annotation_count,
     _wait_pdf_viewer,
 )
 
@@ -85,6 +92,29 @@ def _connectivity_state(page):
     return page.evaluate(
         "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null)"
     )
+
+
+def _pdf_mode(page):
+    return page.evaluate("() => { const pdf = %s; return pdf ? pdf.mode : null; }" % _FOCUSED_PDF)
+
+
+def _pdf_has_pending_changes(page):
+    return bool(
+        page.evaluate(
+            "() => { const pdf = %s; return !!(pdf && pdf.syncState && pdf.syncState.pendingChanges); }"
+            % _FOCUSED_PDF
+        )
+    )
+
+
+_PDF_WORK_CAPABLE_ONLINE_JS = (
+    "() => { const pdf = %s; return !!(pdf && pdf.mode === 'work' && pdf.viewer); }" % _FOCUSED_PDF
+)
+_PDF_READ_ONLY_JS = "() => { const pdf = %s; return !!(pdf && pdf.mode !== 'work' && pdf.viewer); }" % _FOCUSED_PDF
+_PDF_SYNC_SETTLED_JS = (
+    "() => { const pdf = %s; return !!(pdf && pdf.syncState && !pdf.syncState.pendingChanges && !pdf.syncState.inFlight); }"
+    % _FOCUSED_PDF
+)
 
 
 class OfflineFoundationTests(unittest.TestCase):
@@ -398,6 +428,372 @@ class OfflineFoundationTests(unittest.TestCase):
                 }"""
             )
         )
+
+    def test_offline_research_notes_toolbar_and_pickers_are_inert(self):
+        """Scenario 10: reopening a cached Work directly offline leaves Research
+        Notes unmutable through every PRKS-owned edit path, not merely
+        CodeMirror's own readOnly flag -- keyboard typing, mutating EasyMDE
+        toolbar buttons (native `disabled`, so clicks never dispatch), and
+        (as defense-in-depth beyond the disabled toolbar button) the
+        Concept/Argument picker's onPick/onCreate guard all leave note text
+        byte-for-byte unchanged and never issue a POST /api/arguments."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        page.wait_for_selector(".CodeMirror")
+        original_text = page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES)
+
+        argument_posts = []
+        page.on(
+            "request",
+            lambda req: argument_posts.append(req.method)
+            if req.method == "POST" and "/api/arguments" in req.url
+            else None,
+        )
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        self.assertIn(work_a, page.evaluate("() => location.hash"))
+        page.wait_for_selector(".CodeMirror")
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                const cm = notes && notes.editor && notes.editor.codemirror;
+                return !!(cm && cm.getOption('readOnly'));
+            }"""
+        )
+
+        # Keyboard typing still fails (same guarantee as scenario 7, re-verified
+        # here as the baseline for the toolbar/picker assertions below).
+        page.locator(".CodeMirror").click()
+        page.keyboard.type("SHOULD-NOT-APPEAR")
+        page.wait_for_timeout(150)
+        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+
+        # Mutating toolbar buttons are natively disabled -- clicking a disabled
+        # <button> never dispatches a click event at all, so this is a real
+        # inertness check, not merely a CSS/visual one.
+        for cls in ("bold", "italic", "heading", "quote", "unordered-list", "ordered-list", "link", "image"):
+            self.assertTrue(
+                page.evaluate(
+                    "(c) => { const b = document.querySelector('.editor-toolbar button.' + c); return !!(b && b.disabled); }",
+                    cls,
+                ),
+                "expected .%s toolbar button disabled while offline" % cls,
+            )
+        # Non-mutating actions remain enabled.
+        for cls in ("preview", "side-by-side", "fullscreen"):
+            self.assertFalse(
+                page.evaluate(
+                    "(c) => { const b = document.querySelector('.editor-toolbar button.' + c); return !!(b && b.disabled); }",
+                    cls,
+                ),
+                "expected .%s toolbar button to remain enabled while offline" % cls,
+            )
+
+        page.evaluate("() => document.querySelector('.editor-toolbar button.bold').click()")
+        page.wait_for_timeout(100)
+        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+
+        self.assertTrue(
+            page.evaluate(
+                """() => { const b = document.querySelector('.editor-toolbar button.prks-insert-concept'); return !!(b && b.disabled); }"""
+            )
+        )
+        page.evaluate("() => document.querySelector('.editor-toolbar button.prks-insert-concept').click()")
+        page.wait_for_timeout(100)
+        self.assertEqual(page.locator("#prks-research-picker").count(), 0)
+        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+
+        self.assertTrue(
+            page.evaluate(
+                """() => { const b = document.querySelector('.editor-toolbar button.prks-insert-argument'); return !!(b && b.disabled); }"""
+            )
+        )
+
+        # Defense-in-depth: even if an Argument picker is opened directly
+        # (bypassing the disabled toolbar button), picking an existing
+        # Argument/Stance is a guarded no-op while offline.
+        page.evaluate(
+            """(workId) => {
+                const ctx = window.prksGetFocusedTabContext();
+                ctx.setResource('argumentHintList', [
+                    { id: 'e2e-fixture-argument', name: 'Existing Fixture Argument', kind: 'argument' },
+                ]);
+                const cm = ctx.getResource('workNotes').editor.codemirror;
+                window.prksOpenArgumentPicker(cm, { id: workId });
+            }""",
+            work_a,
+        )
+        page.wait_for_selector("#prks-research-picker .prks-dialog")
+        page.locator(
+            "#prks-research-picker .prks-research-picker__item", has_text="Existing Fixture Argument"
+        ).click()
+        page.wait_for_function("() => !document.getElementById('prks-research-picker')")
+        page.locator("#prks-modal-confirm-title", has_text="Offline").wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for(state="detached", timeout=5000)
+        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+
+        # Attempting to create a brand-new Argument likewise never reaches the
+        # network and never mutates the note.
+        page.evaluate(
+            """(workId) => {
+                const ctx = window.prksGetFocusedTabContext();
+                const cm = ctx.getResource('workNotes').editor.codemirror;
+                window.prksOpenArgumentPicker(cm, { id: workId });
+            }""",
+            work_a,
+        )
+        page.wait_for_selector("#prks-research-picker .prks-dialog")
+        page.locator("#prks-research-picker input.prks-input").fill("Offline Created Argument")
+        page.locator("#prks-research-picker [data-create='argument']").click()
+        page.wait_for_function("() => !document.getElementById('prks-research-picker')")
+        page.locator("#prks-modal-confirm-title", has_text="Offline").wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for(state="detached", timeout=5000)
+        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+        self.assertEqual(argument_posts, [])
+
+    def test_pending_annotation_survives_disconnect_and_resumes_on_reconnect(self):
+        """Scenario 11: an annotation created while ONLINE must not be lost
+        because connectivity vanishes before persistence completes. The live
+        Work viewer/document stay mounted, mutation tools become unavailable,
+        no retry storm fires while offline, and reconnecting resumes exactly
+        one flush that saves the held annotation."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+
+        held = []
+        ann_post_count = [0]
+
+        def hold_annotations_post(route):
+            req = route.request
+            if req.method == "POST" and urlparse(req.url).path == "/api/works/%s/annotations" % work_a:
+                ann_post_count[0] += 1
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/works/**", hold_annotations_post)
+        try:
+            _commit_pdf_highlight(page)
+            deadline = time.time() + 12
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "annotation persistence POST did not start")
+            self.assertEqual(len(held), 1)
+            self.assertTrue(_pdf_has_pending_changes(page))
+            annotation_count_before = _viewer_annotation_count(page)
+            self.assertGreaterEqual(annotation_count_before, 1)
+
+            context.set_offline(True)
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+                timeout=20000,
+            )
+
+            # Same annotation remains visible; viewer/document not destroyed.
+            self.assertEqual(_viewer_annotation_count(page), annotation_count_before)
+            self.assertTrue(page.evaluate("() => !!%s" % _FOCUSED_VIEWER))
+
+            # Mutation tools become unavailable (preview-equivalent toolbar).
+            self.assertEqual(
+                page.locator(
+                    '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
+                ).count(),
+                0,
+            )
+
+            # Pending state remains represented, and no repeated persistence
+            # requests fire while offline (no retry storm).
+            page.wait_for_timeout(1500)
+            self.assertEqual(len(held), 1, "annotation persistence retried a request while offline")
+            self.assertTrue(_pdf_has_pending_changes(page))
+
+            # Reconnect: persistence resumes and the held annotation is saved.
+            # resume() itself queues another pass through the same drain loop
+            # if a mutation was requested while the original save was still
+            # in flight, so releasing the request(s) currently in `held` is
+            # not necessarily a one-shot affair -- keep draining whatever
+            # newly appears in `held` until the sync settles.
+            context.set_offline(False)
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+                timeout=20000,
+            )
+            deadline = time.time() + 20
+            settled = False
+            while time.time() < deadline:
+                if held:
+                    _continue_held_routes(held)
+                    held.clear()
+                if page.evaluate(_PDF_SYNC_SETTLED_JS):
+                    settled = True
+                    break
+                page.wait_for_timeout(100)
+            self.assertTrue(settled, "annotation persistence never settled after reconnect")
+            self.assertGreaterEqual(ann_post_count[0], 1)
+            self.assertEqual(
+                page.locator(
+                    '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
+                ).count(),
+                1,
+            )
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/**", hold_annotations_post)
+            except Exception:
+                pass
+
+    def test_reconnect_probe_race_settles_pdf_to_online_work_capable_state(self):
+        """Scenario 12 (browser-level approximation -- the exact millisecond
+        async-mount race is covered deterministically at the unit level by
+        tests/test_frontend_offline_pdf.py's
+        test_mount_reconciles_stale_desired_mode_before_publishing and
+        tests/browser/run_pdf_runtime_selftest.js): a PDF mounted offline in
+        'preview' mode, with the reachability probe held in flight while
+        network access is actually restored, must settle to a single
+        Work-capable online viewer once that probe resolves -- never a
+        leftover preview viewer, never a duplicate mount, exactly one
+        annotation persistence worker."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_whole_file_cached(page, pdf_path)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        self.assertIn(work_a, page.evaluate("() => location.hash"))
+        _wait_pdf_viewer(page)
+        self.assertEqual(_pdf_mode(page), "preview")
+        self.assertEqual(
+            page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]').count(),
+            0,
+        )
+
+        held_probe = []
+
+        def hold_settings_get(route):
+            req = route.request
+            if req.method == "GET" and urlparse(req.url).path == "/api/settings":
+                held_probe.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/settings", hold_settings_get)
+        try:
+            # Network access is restored, but the reachability probe itself
+            # is held -- the runtime must stay non-online (and the viewer
+            # must stay in 'preview') until that probe actually resolves.
+            context.set_offline(False)
+            deadline = time.time() + 12
+            while time.time() < deadline and not held_probe:
+                page.wait_for_timeout(50)
+            self.assertTrue(held_probe, "reachability probe did not start")
+
+            page.wait_for_timeout(200)
+            self.assertNotEqual(_connectivity_state(page), "online")
+            self.assertEqual(_pdf_mode(page), "preview")
+
+            for route in list(held_probe):
+                try:
+                    route.fulfill(status=200, content_type="application/json", body="{}")
+                except Exception:
+                    pass
+            held_probe.clear()
+
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+                timeout=20000,
+            )
+            page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
+            self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
+            self.assertEqual(
+                page.locator(
+                    '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
+                ).count(),
+                1,
+            )
+            # prksEnsureAnnotationPersistence()'s setup is async (fire-and-forget
+            # from the reconciler) -- give it a moment past the mode flip to land.
+            page.wait_for_function(
+                "() => { const pdf = %s; return !!(pdf && pdf.annotationPersistence); }" % _FOCUSED_PDF,
+                timeout=20000,
+            )
+        finally:
+            _continue_held_routes(held_probe)
+            try:
+                page.unroute("**/api/settings", hold_settings_get)
+            except Exception:
+                pass
+
+    def test_rapid_connectivity_transitions_settle_to_latest_state(self):
+        """Scenario 13: online -> offline -> online (rapid) must end in an
+        online, mutation-capable viewer; offline -> online -> offline (rapid)
+        must end read-only. No stale worker/viewer survives either
+        sequence (exactly one PDF viewer container remains mounted)."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+
+        # online -> offline -> online, rapid.
+        context.set_offline(True)
+        page.wait_for_timeout(300)
+        context.set_offline(False)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+            timeout=20000,
+        )
+        page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
+        self.assertEqual(
+            page.locator(
+                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
+            ).count(),
+            1,
+        )
+        self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
+
+        # offline -> online -> offline, rapid. A few hundred ms between each
+        # toggle (rather than zero) avoids a pure CDP-level race where a
+        # probe request dispatched in one transition races the *next*
+        # transition's own network-condition change rather than the app's
+        # own reconciliation logic; runProbe()'s in-flight guard plus the
+        # 'online'/'offline' event handlers are what is actually under test.
+        context.set_offline(True)
+        page.wait_for_timeout(300)
+        context.set_offline(False)
+        page.wait_for_timeout(300)
+        context.set_offline(True)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
+            timeout=20000,
+        )
+        page.wait_for_function(_PDF_READ_ONLY_JS, timeout=20000)
+        self.assertEqual(
+            page.locator(
+                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
+            ).count(),
+            0,
+        )
+        self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
+        context.set_offline(False)
 
 
 if __name__ == "__main__":
