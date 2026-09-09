@@ -710,6 +710,13 @@ async function bulkUpdateWorks(payload) {
             prksOfflineMarkEntityChanged('work', workId);
         });
     }
+    // A cached Person's Work cards display status, so a bulk status change
+    // stales them. The other bulk actions -- move_folder, add_tags,
+    // remove_tags -- are NOT on those cards and deliberately leave the People
+    // cache alone.
+    if (payload && payload.action === 'set_status') {
+        prksMarkPeopleDomainChanged();
+    }
     return data;
 }
 
@@ -776,6 +783,64 @@ async function deleteSavedView(id) {
     if (!res.ok) {
         throw new Error((data && data.error) || 'Could not delete Saved View.');
     }
+}
+
+/* Canonical Person Group mutation wrappers.
+ *
+ * Groups themselves are NOT offline-capable, but their names and membership are
+ * embedded in cached People index rows and cached Person details, so these are
+ * pure coherence hooks for the People domain. Routing the Group UI's requests
+ * through here is what stops one Group surface from silently skipping it.
+ * `createPersonGroup` is deliberately absent: a brand-new unassigned Group
+ * cannot appear in any existing Person's read model, and the Person PATCH that
+ * later assigns it invalidates People on its own. */
+
+async function updatePersonGroup(groupId, payload) {
+    const res = await prksRequest('/api/person-groups/' + encodeURIComponent(groupId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    // Conservative: a rename directly stales the Group chips embedded in
+    // People, and a description/hierarchy-only edit invalidating too is an
+    // acceptable Phase-1 cost against field-diffing this shape.
+    if (res.ok) prksMarkPeopleDomainChanged();
+    return { ok: res.ok, data: data };
+}
+
+async function deletePersonGroup(groupId) {
+    const res = await prksRequest('/api/person-groups/' + encodeURIComponent(groupId), {
+        method: 'DELETE',
+    });
+    const data = await res.json().catch(() => ({}));
+    // Deleting a Group removes memberships from every Person that was in it.
+    if (res.ok) prksMarkPeopleDomainChanged();
+    return { ok: res.ok, data: data };
+}
+
+async function addPersonGroupMember(groupId, personId) {
+    const res = await prksRequest('/api/person-groups/' + encodeURIComponent(groupId) + '/members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ person_id: personId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) prksMarkPeopleDomainChanged();
+    return { ok: res.ok, data: data };
+}
+
+async function removePersonGroupMember(groupId, personId) {
+    const res = await prksRequest(
+        '/api/person-groups/' +
+            encodeURIComponent(groupId) +
+            '/members/' +
+            encodeURIComponent(personId),
+        { method: 'DELETE' }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) prksMarkPeopleDomainChanged();
+    return { ok: res.ok, data: data };
 }
 
 async function prksResearchJson(res, fallbackMessage, source) {
@@ -873,35 +938,61 @@ function prksMarkArgumentsDomainChanged() {
     return prksOfflineMarkArgumentsChanged();
 }
 
+/**
+ * Coherence hook for a canonical change to the People read model. A cached
+ * Person carries full Work-card summaries for every Work it is linked to, the
+ * role assignments themselves, and its Group memberships -- so Work metadata,
+ * Work-role and Group mutations all stale it, not just Person edits. See
+ * AGENTS.md for the dependency table and the deliberate exclusions.
+ */
+function prksMarkPeopleDomainChanged() {
+    if (typeof prksOfflineMarkPeopleChanged !== 'function') return null;
+    return prksOfflineMarkPeopleChanged();
+}
+
+/**
+ * Every canonical change to a Work's *displayed* metadata. A Work title shows
+ * in cached Concept mentions and cached Argument sources/mentions, and a cached
+ * Person embeds whole Work cards (title, status, doc type, year, author text,
+ * thumbnail metadata, file size), so one metadata save stales three domains.
+ */
 function prksMarkWorkTitleChanged(workId) {
     const token =
         typeof prksOfflineMarkEntityChanged === 'function'
             ? prksOfflineMarkEntityChanged('work', workId)
             : null;
-    // A Work title appears in cached Concept mentions AND in cached Argument
-    // sources/mentions, so one title save stales both domains.
     prksMarkConceptsDomainChanged();
     prksMarkArgumentsDomainChanged();
+    prksMarkPeopleDomainChanged();
     return token;
 }
 
 /**
- * Coherence hook for the Work-role surfaces (link, unlink, credit-name edit).
- * Cached Argument sources carry each source Work's Author rows -- person names
- * and per-Work credit names -- so an Author change stales Arguments even though
- * nothing about the Argument moved. Other role types are not in that read model
- * and deliberately do not invalidate it. Routing every role surface through one
- * helper is what stops a new one from silently reopening the gap.
+ * Coherence hook for every Work-role surface (link, unlink, credit-name edit).
+ *
+ * People is staled by EVERY role type: the People index carries
+ * `assigned_roles`, a cached Person lists the Work with its role_type/
+ * order_index/credit_name, and the server may append a non-empty credit name to
+ * `persons.aliases` -- which feeds Person display and People search. Arguments
+ * is staled only by Author changes, because a cached Argument source lists just
+ * that Work's Authors. Routing every role surface through one helper is what
+ * stops a new one from silently reopening either gap.
  */
-function prksMarkWorkAuthorDisplayChanged(workId, roleType) {
+function prksMarkWorkRoleChanged(workId, roleType) {
     const token =
         typeof prksOfflineMarkEntityChanged === 'function'
             ? prksOfflineMarkEntityChanged('work', workId)
             : null;
+    prksMarkPeopleDomainChanged();
     if (String(roleType || '').trim() === 'Author') {
         prksMarkArgumentsDomainChanged();
     }
     return token;
+}
+
+/** Former name of prksMarkWorkRoleChanged; kept as a thin delegate only. */
+function prksMarkWorkAuthorDisplayChanged(workId, roleType) {
+    return prksMarkWorkRoleChanged(workId, roleType);
 }
 
 async function createConcept(payload) {
@@ -1174,6 +1265,12 @@ window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;
 window.prksMarkWorkTitleChanged = prksMarkWorkTitleChanged;
 window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
 window.prksMarkArgumentsDomainChanged = prksMarkArgumentsDomainChanged;
+window.prksMarkPeopleDomainChanged = prksMarkPeopleDomainChanged;
+window.updatePersonGroup = updatePersonGroup;
+window.deletePersonGroup = deletePersonGroup;
+window.addPersonGroupMember = addPersonGroupMember;
+window.removePersonGroupMember = removePersonGroupMember;
+window.prksMarkWorkRoleChanged = prksMarkWorkRoleChanged;
 window.prksMarkWorkAuthorDisplayChanged = prksMarkWorkAuthorDisplayChanged;
 window.fetchConcepts = fetchConcepts;
 window.fetchConcept = fetchConcept;

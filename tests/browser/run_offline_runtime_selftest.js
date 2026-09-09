@@ -1592,6 +1592,203 @@ async function run() {
         );
     }
 
+    /* ---- FOUR DOMAINS: a fourth domain reveals no hard-coded assumptions about three ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
+        await store.putEntity('position', 'P-1', { id: 'P-1' }, '');
+        await store.putEntity('argument', 'A-1', { id: 'A-1' }, '');
+        await store.putEntity('person', 'PE-1', { id: 'PE-1', name: 'Person' }, '');
+        await store.putList('people:index', [{ id: 'PE-1' }], '');
+        const sweptKinds = [];
+        const sweptLists = [];
+        const auditedStore = Object.assign({}, store, {
+            deleteEntitiesByKind: async function (kind) {
+                sweptKinds.push(kind);
+                Array.from(store._entities.keys()).forEach(function (key) {
+                    if (key.indexOf(kind + ':') === 0) store._entities.delete(key);
+                });
+                return true;
+            },
+            deleteList: async function (key) {
+                sweptLists.push(key);
+                store._lists.delete(key);
+                return true;
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: auditedStore,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'] });
+        runtime.markDomainChanged('positions', { entityKinds: ['position'] });
+        runtime.markDomainChanged('positions', { entityKinds: ['position'] });
+        runtime.markDomainChanged('arguments', { entityKinds: ['argument'] });
+        runtime.markDomainChanged('arguments', { entityKinds: ['argument'] });
+        runtime.markDomainChanged('arguments', { entityKinds: ['argument'] });
+        const peopleGen = runtime.markDomainChanged('people', {
+            entityKinds: ['person'],
+            listKeys: ['people:index'],
+        });
+        assertEq('four domains keep four independent generations', [
+            runtime.currentDomainGeneration('concepts'),
+            runtime.currentDomainGeneration('positions'),
+            runtime.currentDomainGeneration('arguments'),
+            runtime.currentDomainGeneration('people'),
+        ], [1, 2, 3, 1]);
+        assertEq('markDomainChanged returned the people generation', peopleGen, 1);
+        await runtime._domainCleanup('people');
+        assert('the people sweep touched its own kind', sweptKinds.indexOf('person') !== -1);
+        assert('the people sweep removed only its own list key', sweptLists.every(function (k) {
+            return k === 'people:index';
+        }));
+        assertEq('the people sweep removed the person row', store._entities.get('person:PE-1'), undefined);
+        assertEq('a completed people sweep unblocks only people', runtime.isDomainBlocked('people'), false);
+        assertEq('a people invalidation never advances another domain', runtime.currentDomainGeneration('concepts'), 1);
+        // Each domain swept exactly its own kind, once per invalidation, and
+        // nothing else -- no domain reached into another's entities.
+        assertEq('every sweep stayed inside its own domain', sweptKinds.slice().sort(), [
+            'argument',
+            'argument',
+            'argument',
+            'concept',
+            'person',
+            'position',
+            'position',
+        ]);
+        assertEq('only the domain with a list key swept a list', sweptLists, ['people:index']);
+    }
+
+    /* ---- FOUR DOMAINS: a failed People sweep degrades only People ---- */
+    {
+        const store = makeFakeStore({
+            deleteEntitiesByKind: async function (kind) {
+                return kind !== 'person';
+            },
+        });
+        await store.putEntity('person', 'PE-1', { id: 'PE-1' }, '');
+        await store.putEntity('argument', 'A-1', { id: 'A-1' }, '');
+        await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('people', { entityKinds: ['person'], listKeys: ['people:index'] });
+        await runtime._domainCleanup('people');
+        assertEq('a failed People sweep keeps People blocked', runtime.isDomainBlocked('people'), true);
+        assertEq('a failed People sweep never blocks Arguments', runtime.isDomainBlocked('arguments'), false);
+        assertEq('a failed People sweep never blocks Concepts', runtime.isDomainBlocked('concepts'), false);
+        const person = await runtime.readThroughEntity('person', 'PE-1', '/api/persons/PE-1', { domain: 'people' });
+        assertEq('People degrade to unavailable, never known-stale', person.source, 'unavailable');
+        const argument = await runtime.readThroughEntity('argument', 'A-1', '/api/arguments/A-1', {
+            domain: 'arguments',
+        });
+        assertEq('the healthy Arguments domain keeps serving offline', argument.source, 'cache');
+        // A later Concepts invalidation still settles normally alongside it.
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'] });
+        await runtime._domainCleanup('concepts');
+        assertEq('another domain settles while People stays degraded', runtime.isDomainBlocked('concepts'), false);
+        assertEq('People is still degraded', runtime.isDomainBlocked('people'), true);
+    }
+
+    /* ---- FOUR DOMAINS: superseded People cleanup + stale People reads (list AND entity) ---- */
+    {
+        const store = makeFakeStore();
+        const releases = [];
+        let releaseEntity = null;
+        let releaseList = null;
+        let mode = 'entity';
+        const slowStore = Object.assign({}, store, {
+            deleteEntitiesByKind: function () {
+                return new Promise(function (resolve) {
+                    releases.push(function () {
+                        resolve(true);
+                    });
+                });
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                if (mode === 'entity') {
+                    return new Promise(function (resolve) {
+                        releaseEntity = function () {
+                            resolve(okJsonResponse({ id: 'PE-1', name: 'pre-mutation' }));
+                        };
+                    });
+                }
+                return new Promise(function (resolve) {
+                    releaseList = function () {
+                        resolve(okJsonResponse([{ id: 'PE-1' }]));
+                    };
+                });
+            },
+            store: slowStore,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const pendingEntity = runtime.readThroughEntity('person', 'PE-1', '/api/persons/PE-1', { domain: 'people' });
+        mode = 'list';
+        const pendingList = runtime.readThroughList('people:index', '/api/persons', { domain: 'people' });
+        // A role mutation, then a Work metadata save: overlapping People
+        // invalidations are the normal case here.
+        const genA = runtime.markDomainChanged('people', { entityKinds: ['person'] });
+        const genB = runtime.markDomainChanged('people', { entityKinds: ['person'] });
+        assert('the second People invalidation has a newer generation', genB > genA);
+        releases[0]();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a superseded People cleanup cannot unblock the newer one', runtime.isDomainBlocked('people'), true);
+        releases[1]();
+        await runtime._domainCleanup('people');
+        assertEq('the current People generation settles normally', runtime.isDomainBlocked('people'), false);
+        releaseEntity();
+        releaseList();
+        const staleEntity = await pendingEntity;
+        const staleList = await pendingList;
+        assertEq('the pre-mutation Person response still resolves', staleEntity.source, 'server');
+        assertEq('the pre-mutation People list response still resolves', staleList.source, 'server');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a pre-mutation Person read never becomes eligible cache data', store._entities.get('person:PE-1'), undefined);
+        assertEq('a pre-mutation People list read never becomes eligible cache data', store._lists.get('people:index'), undefined);
+    }
+
+    /* ---- the People domain shape is defined once, alongside the other three ---- */
+    {
+        const globalRoot = typeof globalThis !== 'undefined' ? globalThis : this;
+        assert(
+            'prksOfflineMarkPeopleChanged is exported for every canonical caller to share',
+            typeof globalRoot.prksOfflineMarkPeopleChanged === 'function'
+        );
+        assertEq('the People domain has a stable name', mod.PRKS_OFFLINE_DOMAIN_PEOPLE, 'people');
+        assertEq('the People index uses a stable list key', mod.PRKS_OFFLINE_PEOPLE_LIST_KEY, 'people:index');
+        const names = [
+            mod.PRKS_OFFLINE_DOMAIN_CONCEPTS,
+            mod.PRKS_OFFLINE_DOMAIN_POSITIONS,
+            mod.PRKS_OFFLINE_DOMAIN_ARGUMENTS,
+            mod.PRKS_OFFLINE_DOMAIN_PEOPLE,
+        ];
+        assertEq('the four domains are four distinct names', new Set(names).size, 4);
+    }
+
     /* ---- the Arguments domain shape is defined once, alongside the other two ---- */
     {
         const globalRoot = typeof globalThis !== 'undefined' ? globalThis : this;

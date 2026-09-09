@@ -550,6 +550,14 @@ window.prksBindAutosizeTextareas = prksBindAutosizeTextareas;
 
 // Modal Logic
 function openModal(id) {
+    // `person-modal` is creation-only, so guarding here covers every caller at
+    // once -- the People page, the ribbon, the command palette and anything
+    // added later -- instead of relying on each surface to remember.
+    // `person-template-modal` is deliberately exempt: it only edits an unsaved
+    // local draft and performs no canonical mutation of its own.
+    if (id === 'person-modal' && typeof prksOfflineGuardMutation === 'function') {
+        if (prksOfflineGuardMutation('Creating a Person requires a connection to PRKS.')) return;
+    }
     if (typeof window.prksCloseTagsAliasModal === 'function') {
         window.prksCloseTagsAliasModal();
     }
@@ -1458,11 +1466,11 @@ async function prksEditRoleCreditOnWork(btn) {
         await prksAlertMessage(data.error || 'Could not update name on file.', 'Could not save');
         return;
     }
-    // Cached Argument sources carry each Author's name and per-Work credit
-    // name, so both editing and removing an Author link stale Arguments.
+    // Every role type stales People; Author additionally stales cached
+    // Argument source authors. One helper owns both dependencies.
     const coherenceToken =
-        typeof prksMarkWorkAuthorDisplayChanged === 'function'
-            ? prksMarkWorkAuthorDisplayChanged(workId, roleType)
+        typeof prksMarkWorkRoleChanged === 'function'
+            ? prksMarkWorkRoleChanged(workId, roleType)
             : typeof prksOfflineMarkEntityChanged === 'function'
               ? prksOfflineMarkEntityChanged('work', workId)
               : null;
@@ -1498,6 +1506,8 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
         return;
     }
     const { first_name, last_name } = prksSplitTypedPersonName(trimmed);
+    // Connectivity can change between the guard above and the request.
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     try {
         const res = await prksRequest('/api/persons', {
             method: 'POST',
@@ -1514,6 +1524,9 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
             await prksAlertMessage(data.error || 'Could not create person.', 'Could not save');
             return;
         }
+        // Canonical success owns coherence -- never the fetchPersons() refresh
+        // below, which is only UI state.
+        if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
         allPersons = await fetchPersons();
         window.allPersons = allPersons;
         window.__prksProcessingPeople = allPersons;
@@ -1629,11 +1642,12 @@ async function addRoleToWorkFromMetaEditor(workId) {
             await prksNotifyRoleLinkFailure(data.error, roleType);
             return;
         }
-        // Cached Argument sources list each source Work's Authors, so an Author
-        // link stales the Arguments domain; other role types do not.
+        // Every role type stales People (assigned_roles, the Person's linked
+        // Work rows, and aliases via credit names); Author additionally stales
+        // cached Argument source authors.
         const coherenceToken =
-            typeof prksMarkWorkAuthorDisplayChanged === 'function'
-                ? prksMarkWorkAuthorDisplayChanged(resolvedWorkId, roleType)
+            typeof prksMarkWorkRoleChanged === 'function'
+                ? prksMarkWorkRoleChanged(resolvedWorkId, roleType)
                 : typeof prksOfflineMarkEntityChanged === 'function'
                   ? prksOfflineMarkEntityChanged('work', resolvedWorkId)
                   : null;
@@ -3508,11 +3522,11 @@ async function prksRemoveWorkRoleLink(btn) {
         await prksAlertMessage(data.error || 'Could not remove link.', 'Could not save');
         return;
     }
-    // Cached Argument sources carry each Author's name and per-Work credit
-    // name, so both editing and removing an Author link stale Arguments.
+    // Every role type stales People; Author additionally stales cached
+    // Argument source authors. One helper owns both dependencies.
     const coherenceToken =
-        typeof prksMarkWorkAuthorDisplayChanged === 'function'
-            ? prksMarkWorkAuthorDisplayChanged(workId, roleType)
+        typeof prksMarkWorkRoleChanged === 'function'
+            ? prksMarkWorkRoleChanged(workId, roleType)
             : typeof prksOfflineMarkEntityChanged === 'function'
               ? prksOfflineMarkEntityChanged('work', workId)
               : null;

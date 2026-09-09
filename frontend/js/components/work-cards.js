@@ -136,10 +136,16 @@ function prksWorkCardHtml(w, options = {}) {
     const filePath = w.file_path ? String(w.file_path).trim() : '';
     const hasPdf = !!filePath && filePath.startsWith('/api/pdfs/');
     const inferredKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(w) : '';
+    // `suppressThumbnail` is for pages rendered from cached offline data: a
+    // thumbnail is a PRKS-server request that cannot succeed there, and a
+    // broken image is worse than none. Normal card appearance is untouched.
+    const suppressThumbnail = options.suppressThumbnail === true;
     const thumbPage = options.thumbPage != null ? options.thumbPage : w.thumb_page;
     const isVideoKind = !hasPdf && inferredKind === 'video';
     const thumbKindClass = isVideoKind ? 'work-card__thumb--video' : 'work-card__thumb--pdf';
-    const thumbSrc = hasPdf
+    const thumbSrc = suppressThumbnail
+        ? ''
+        : hasPdf
         ? prksWorkThumbUrl(w.id, thumbPage)
         : isVideoKind && w.thumb_url
           ? String(w.thumb_url).trim()

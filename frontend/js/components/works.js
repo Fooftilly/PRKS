@@ -806,6 +806,11 @@ async function deleteWork(w_id, ownerCtx) {
             // research-note backlinks disappear from mentions.
             prksOfflineMarkArgumentsChanged();
         }
+        if (typeof prksOfflineMarkPeopleChanged === 'function') {
+            // Deleting a Work removes its role rows, so every Person that was
+            // linked to it loses a Work card and possibly an assigned role.
+            prksOfflineMarkPeopleChanged();
+        }
         window.__prksRecentlyAddedDirty = true;
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&

@@ -2934,8 +2934,8 @@ class PRKSDatabase:
         )
         return person_id
 
-    def update_person_metadata(self, person_id: str, fields: dict):
-        allowed = {
+    PERSON_METADATA_FIELDS = frozenset(
+        {
             "first_name",
             "last_name",
             "aliases",
@@ -2948,7 +2948,10 @@ class PRKSDatabase:
             "birth_date",
             "death_date",
         }
-        updates = {k: v for k, v in fields.items() if k in allowed}
+    )
+
+    def update_person_metadata(self, person_id: str, fields: dict):
+        updates = {k: v for k, v in fields.items() if k in self.PERSON_METADATA_FIELDS}
         if not updates:
             return
         set_clause = ", ".join(f"{k} = ?" for k in updates)
@@ -3280,6 +3283,57 @@ class PRKSDatabase:
             "DELETE FROM person_group_members WHERE person_id = ? AND group_id = ?",
             (person_id, group_id),
         )
+
+    def update_person_profile(self, person_id: str, fields: dict, group_ids=None) -> None:
+        """Atomically update Person metadata and (optionally) group memberships.
+
+        Applying metadata and memberships as two separate committed statements
+        let an unknown group id return HTTP 400 *after* the metadata had already
+        been written, so a failed request could still have changed canonical
+        state. Offline coherence depends on the opposite guarantee -- a failed
+        canonical request must leave the previous cache eligible -- so when
+        `group_ids` is supplied both parts share one transaction and roll back
+        together.
+        """
+        updates = {k: v for k, v in (fields or {}).items() if k in self.PERSON_METADATA_FIELDS}
+        if group_ids is None:
+            # Metadata-only PATCH keeps its original single-statement behavior.
+            self.update_person_metadata(person_id, updates)
+            return
+        if not isinstance(group_ids, list):
+            raise ValueError("group_ids must be a JSON array")
+        with self.connection() as conn:
+            if not conn.execute("SELECT 1 FROM persons WHERE id = ?", (person_id,)).fetchone():
+                raise ValueError("Person not found.")
+            seen = set()
+            clean: List[str] = []
+            for gid in group_ids:
+                if not gid or gid in seen:
+                    continue
+                seen.add(gid)
+                # Validate every group BEFORE any write, so a bad id cannot
+                # leave half the profile updated.
+                if not conn.execute(
+                    "SELECT 1 FROM person_groups WHERE id = ?", (gid,)
+                ).fetchone():
+                    raise ValueError(f"Unknown group id: {gid}")
+                clean.append(gid)
+            if updates:
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
+                conn.execute(
+                    f"UPDATE persons SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    tuple(list(updates.values()) + [person_id]),
+                )
+            conn.execute("DELETE FROM person_group_members WHERE person_id = ?", (person_id,))
+            for gid in clean:
+                conn.execute(
+                    """
+                    INSERT INTO person_group_members (person_id, group_id)
+                    VALUES (?, ?)
+                    """,
+                    (person_id, gid),
+                )
+            conn.commit()
 
     def set_person_group_memberships(self, person_id: str, group_ids: List[str]) -> None:
         ok = self.execute_query("SELECT 1 FROM persons WHERE id = ?", (person_id,))

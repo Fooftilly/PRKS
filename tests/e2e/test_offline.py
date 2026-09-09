@@ -36,9 +36,15 @@ from tests.e2e.fixtures import (
     PERSON_LAST,
     STANCE_NAME,
     STANCE_TEXT,
+    PERSON_A_ABOUT,
+    PERSON_A_ALIASES,
+    PERSON_B_DISPLAY,
+    PERSON_GROUP_NAME,
+    PERSON_UNVISITED_DISPLAY,
     seed_arguments_library,
     seed_concepts_library,
     seed_library,
+    seed_people_library,
     seed_positions_library,
 )
 from tests.e2e.harness import AppServer, PageCollector, open_app_page, require_chromium
@@ -241,6 +247,24 @@ def _open_argument(page, argument_id):
 def _row_titles(page):
     return page.evaluate(
         "() => Array.from(document.querySelectorAll('.prks-research-row__title')).map(e => e.textContent.trim())"
+    )
+
+
+def _open_people_index(page, role=""):
+    target = "#/people" + ("/role/" + role if role else "")
+    page.evaluate("h => { void window.prksNavigate(h); }", target)
+    page.wait_for_function("h => location.hash === h", arg=target)
+
+
+def _open_person(page, person_id):
+    page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", person_id)
+    page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=person_id)
+
+
+def _person_row_names(page):
+    return page.evaluate(
+        "() => Array.from(document.querySelectorAll('.prks-people-list__title'))"
+        ".map(e => e.textContent.trim())"
     )
 
 
@@ -4835,6 +4859,1220 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         before = _domain_generation(page, "arguments")
         self._save_person_profile(page, person, "#pd-first-name", "Renamed")
         self._assert_arguments_invalidated(page, server, before)
+
+
+class OfflinePeopleTests(unittest.TestCase):
+    """Phase 1 read-only People routes: #/people, #/people/role/:role, #/people/:id."""
+
+    def _start(self, seed_fn=seed_people_library):
+        server = AppServer(seed_fn=seed_fn)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
+        self.addCleanup(context.close)
+        return server, page, context, collector
+
+    def _record_calls(self, page, pattern):
+        seen = []
+
+        def record(route):
+            seen.append((route.request.method, urlparse(route.request.url).path))
+            route.fallback()
+
+        page.route(pattern, record)
+        self.addCleanup(lambda: _safe_unroute(page, pattern, record))
+        return seen
+
+    # ---- one cached index, local role filtering -----------------------------
+
+    def test_one_cached_index_serves_every_role_view_offline(self):
+        """Visiting a role view online must cache the COMPLETE collection, so
+        every other role view and the unfiltered list work offline from that one
+        key. This is the regression test for the single-cache-key design."""
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        # Deliberately start from the most filtered route.
+        _open_people_index(page, "Author")
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_list_cached(page, "people:index")
+
+        cached = _cached_list(page, "people:index")["value"]
+        roles = sorted({r for row in cached for r in row["assigned_roles"]})
+        self.assertIn("Reviewer", roles, "a role view cached a role-filtered list")
+        self.assertIn(PERSON_UNVISITED_DISPLAY.split()[-1], [row["last_name"] for row in cached])
+
+        requested = []
+
+        def record_urls(route):
+            requested.append(route.request.url)
+            route.fallback()
+
+        page.route("**/api/persons**", record_urls)
+        self.addCleanup(lambda: _safe_unroute(page, "**/api/persons**", record_urls))
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_offline_banner(page)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
+        author_names = _person_row_names(page)
+        self.assertIn(PERSON_DISPLAY, author_names)
+        self.assertNotIn(PERSON_B_DISPLAY, author_names)
+
+        _open_people_index(page, "Reviewer")
+        _wait_content_contains(page, PERSON_B_DISPLAY)
+        reviewer_names = _person_row_names(page)
+        self.assertIn(PERSON_B_DISPLAY, reviewer_names)
+        self.assertNotIn(PERSON_DISPLAY, reviewer_names)
+
+        _open_people_index(page)
+        _wait_content_contains(page, PERSON_UNVISITED_DISPLAY)
+        all_names = _person_row_names(page)
+        self.assertGreater(len(all_names), len(reviewer_names))
+        # A route change may still attempt its read-through; what matters is
+        # that it never asks the server for a filtered subset.
+        self.assertTrue(requested, "the route should still attempt its read-through")
+        for url in requested:
+            self.assertEqual(urlparse(url).path, "/api/persons")
+            self.assertEqual(urlparse(url).query, "", url)
+
+    def test_cached_people_index_searches_locally(self):
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_list_cached(page, "people:index")
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_offline_banner(page)
+
+        seen = self._record_calls(page, "**/api/persons**")
+        search = page.locator("#prks-people-library-search")
+        for needle, expected in (
+            (PERSON_B_DISPLAY, PERSON_B_DISPLAY),   # canonical name
+            (PERSON_A_ALIASES, PERSON_DISPLAY),      # aliases
+            ("offline Person detail", PERSON_DISPLAY),  # biography
+            ("Reviewer", PERSON_B_DISPLAY),          # assigned role name
+            (PERSON_GROUP_NAME, PERSON_DISPLAY),     # group name
+        ):
+            search.fill(needle)
+            page.wait_for_function(
+                "n => { const r = document.querySelectorAll('.prks-people-list__title');"
+                " return r.length === 1 && r[0].textContent.trim() === n; }",
+                arg=expected,
+                timeout=15000,
+            )
+        search.fill("no such person anywhere")
+        page.wait_for_function(
+            "() => document.querySelectorAll('.prks-people-list__title').length === 0"
+        )
+        self.assertEqual(seen, [], "offline People search must issue zero API requests")
+
+        page.wait_for_function(
+            "() => !!document.querySelector('[data-prks-role=\"person-mutation-control\"][disabled]')",
+            timeout=20000,
+        )
+
+    def test_uncached_people_index_offline_is_explicitly_unavailable(self):
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_list_cached(page, "people:index")
+        page.evaluate("() => { void window.prksNavigate('#/folders'); }")
+        page.wait_for_function("() => location.hash === '#/folders'")
+        _clear_cached_list(page, "people:index")
+        _wait_list_uncached(page, "people:index")
+
+        context.set_offline(True)
+        _open_people_index(page)
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("not available offline", body)
+        self.assertNotIn("No people yet.", body)
+        # The same applies to a role view.
+        _open_people_index(page, "Author")
+        _wait_offline_unavailable(page)
+
+    def test_cached_empty_people_index_is_not_the_uncached_state(self):
+        """An authoritative [] that really was cached still renders the ordinary
+        empty state -- with New Person disabled offline."""
+        server, page, context, _collector = self._start(seed_fn=seed_library)
+        # seed_library seeds one Person, so remove it to get a real empty list.
+        page.evaluate(
+            """async (id) => {
+                await window.prksRequest('/api/works/' + id, { method: 'DELETE' });
+            }""",
+            server.ids["work_a"],
+        )
+        page.evaluate(
+            """async (id) => {
+                await window.prksRequest('/api/persons/' + id, { method: 'DELETE' });
+            }""",
+            server.ids["person"],
+        )
+
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_content_contains(page, "No people yet.")
+        _wait_list_cached(page, "people:index")
+        self.assertEqual(_cached_list(page, "people:index")["value"], [])
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, "No people yet.")
+        _wait_offline_banner(page)
+        self.assertNotIn("not available offline", _content_text(page))
+        page.wait_for_function(
+            "() => !!document.querySelector('[data-prks-role=\"person-mutation-control\"][disabled]')",
+            timeout=20000,
+        )
+
+    def test_cached_empty_role_subset_is_not_the_uncached_state(self):
+        """People exist, but none hold this role: a legitimate empty role view,
+        not an offline-unavailable one."""
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_list_cached(page, "people:index")
+
+        context.set_offline(True)
+        # Nothing in the fixture holds the Translator role.
+        _open_people_index(page, "Translator")
+        _wait_offline_banner(page)
+        body = _content_text(page)
+        self.assertNotIn("not available offline", body)
+        self.assertEqual(_person_row_names(page), [])
+
+    # ---- cached detail ------------------------------------------------------
+
+    def test_cached_person_detail_renders_offline(self):
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_entity_cached(page, "person", person_a)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_offline_banner(page)
+        body = _content_text(page)
+        self.assertIn(PERSON_A_ABOUT, body)          # biography
+        self.assertIn(PERSON_A_ALIASES, body)        # aliases
+        self.assertIn("1903", body)                  # lifespan
+        self.assertIn(PERSON_GROUP_NAME, body)       # group membership
+        self.assertIn(WORK_A_TITLE, body)            # linked Work card
+        self.assertIn("Author", body)                # role label
+
+    def test_cached_index_does_not_prefetch_every_person_detail(self):
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+        unvisited = server.ids["person_unvisited"]
+
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_list_cached(page, "people:index")
+        _open_person(page, person_a)
+        _wait_entity_cached(page, "person", person_a)
+        _open_people_index(page)
+        _wait_content_contains(page, PERSON_UNVISITED_DISPLAY)
+        self.assertIsNone(_cached_entity(page, "person", unvisited))
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        _wait_content_contains(page, PERSON_UNVISITED_DISPLAY)
+        page.locator('.prks-people-list__link[href$="%s"]' % unvisited).click()
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("not available offline", body)
+        self.assertNotIn("Person not found", body)
+        _wait_entity_cached(page, "person", person_a)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_DISPLAY)
+
+    def test_cached_person_work_links_use_the_existing_work_route(self):
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+        person_b = server.ids["person_b"]
+        work_a = server.ids["work_a"]
+        work_b = server.ids["work_b"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_entity_cached(page, "person", person_a)
+        _open_person(page, person_b)
+        _wait_entity_cached(page, "person", person_b)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+        self.assertIsNone(_cached_entity(page, "work", work_b))
+
+        context.set_offline(True)
+        _open_person(page, person_a)
+        _wait_content_contains(page, WORK_A_TITLE)
+        _wait_offline_banner(page)
+        page.locator('[data-prks-route="#/works/%s"]' % work_a).first.click()
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=work_a)
+        page.wait_for_function("t => document.body.innerText.indexOf(t) !== -1", arg=WORK_A_TITLE)
+
+        # A linked Work whose detail was never cached gets the ordinary Work
+        # offline-unavailable state -- no Person-specific Work router.
+        _open_person(page, person_b)
+        _wait_content_contains(page, WORK_B_TITLE)
+        page.locator('[data-prks-route="#/works/%s"]' % work_b).first.click()
+        _wait_offline_unavailable(page)
+
+    def test_cached_person_mounts_request_no_prks_media(self):
+        """Phase 1 caches structured data only, so a cached mount must not ask
+        for portrait or thumbnail bytes it cannot get."""
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        # Give the Person an image_url so a portrait would normally be requested.
+        page.evaluate(
+            """async (id) => {
+                await window.prksRequest('/api/persons/' + id, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image_url: 'https://example.com/portrait.png' }),
+                });
+            }""",
+            person_a,
+        )
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_entity_cached(page, "person", person_a)
+
+        media = []
+
+        def record_media(route):
+            path = urlparse(route.request.url).path
+            if path.endswith("/profile-image") or "/thumbnail" in path:
+                media.append(path)
+            route.fallback()
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_offline_banner(page)
+        page.route("**/api/**", record_media)
+        try:
+            page.wait_for_timeout(1200)
+            self.assertEqual(media, [], "cached Person mount requested PRKS media: %r" % (media,))
+            # ... and the profile still renders cleanly, with no broken image.
+            self.assertIn(PERSON_A_ABOUT, _content_text(page))
+            self.assertEqual(page.locator("img.person-portrait").count(), 0)
+            # Work cards keep their placeholder box (no broken image), but carry
+            # no thumbnail source to fetch.
+            self.assertEqual(page.locator("[data-prks-thumb-src]").count(), 0)
+            self.assertGreaterEqual(page.locator(".work-card__thumb--empty").count(), 1)
+        finally:
+            _safe_unroute(page, "**/api/**", record_media)
+
+
+class OfflinePeopleMutationTests(unittest.TestCase):
+    """Every Person mutation surface is online-only, and an open editor keeps
+    its draft when connectivity drops."""
+
+    def _start(self):
+        server = AppServer(seed_fn=seed_people_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
+        self.addCleanup(context.close)
+        return server, page, context, collector
+
+    def _go_offline_via_transport(self, page):
+        def abort_api(route):
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", abort_api)
+        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
+        return lambda: _safe_unroute(page, "**/api/**", abort_api)
+
+    def test_new_person_is_blocked_from_every_surface_offline(self):
+        """Guarding is centralized in openModal('person-modal'), so the People
+        page, the ribbon and the command palette all fail safely at once."""
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_list_cached(page, "people:index")
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, PERSON_DISPLAY)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
+
+        mutations = []
+
+        def record_mutation(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                mutations.append((route.request.method, urlparse(route.request.url).path))
+            route.fallback()
+
+        page.route("**/api/persons**", record_mutation)
+        try:
+            btn = page.locator('[data-prks-role="person-mutation-control"]').first
+            self.assertTrue(btn.is_disabled())
+            btn.click(force=True)
+            page.wait_for_timeout(200)
+            self.assertEqual(page.locator("#person-modal:not(.hidden)").count(), 0)
+            # The central guard covers every other caller of the same modal.
+            page.evaluate("() => { try { openModal('person-modal'); } catch (_e) {} }")
+            page.wait_for_timeout(200)
+            self.assertEqual(page.locator("#person-modal:not(.hidden)").count(), 0)
+            self.assertEqual(mutations, [])
+        finally:
+            _safe_unroute(page, "**/api/persons**", record_mutation)
+
+    def test_disconnect_while_new_person_modal_open_blocks_the_post(self):
+        server, page, _context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        page.evaluate("() => openModal('person-modal')")
+        page.locator("#person-modal:not(.hidden)").wait_for()
+        page.locator("#person-lname").fill("Disconnected")
+
+        mutations = []
+
+        def block_api(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                mutations.append((route.request.method, urlparse(route.request.url).path))
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", block_api)
+        try:
+            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+                timeout=20000,
+            )
+            page.locator("#save-person-btn").click()
+            page.wait_for_timeout(500)
+            self.assertEqual(mutations, [], "no Person create may be attempted after disconnect")
+        finally:
+            _safe_unroute(page, "**/api/**", block_api)
+
+        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+            timeout=20000,
+        )
+        names = page.evaluate("() => fetchPersons().then(items => items.map(p => p.last_name))")
+        self.assertNotIn("Disconnected", names)
+
+    def test_cached_person_detail_is_read_only_offline(self):
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_entity_cached(page, "person", person_a)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_offline_banner(page)
+        _open_details_drawer_if_tiled(page)
+
+        page.wait_for_function(
+            "() => { const b = document.querySelector('#panel-content"
+            " [data-prks-role=\"person-mutation-control\"]'); return !!b && b.disabled; }",
+            timeout=20000,
+        )
+        self.assertTrue(page.locator("#prks-person-view-graph").is_disabled())
+        # Relationship editing cannot be entered ...
+        page.evaluate("() => { try { prksTogglePersonWorksEdit(); } catch (_e) {} }")
+        page.wait_for_timeout(200)
+        self.assertEqual(page.locator(".person-profile__card-unlink").count(), 0)
+        # ... nor can profile editing.
+        page.evaluate("() => { try { openPersonProfileEdit(); } catch (_e) {} }")
+        page.wait_for_timeout(200)
+        self.assertEqual(page.locator(".person-panel-edit").count(), 0)
+        # Work links stay usable.
+        self.assertGreaterEqual(page.locator('[data-prks-route^="#/works/"]').count(), 1)
+
+    def test_group_links_require_a_connection_offline(self):
+        """Person Groups are not offline-capable, so their links stay visible
+        with real hrefs but refuse every activation gesture."""
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+        group_id = server.ids["person_group"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_GROUP_NAME)
+        _wait_entity_cached(page, "person", person_a)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_offline_banner(page)
+        page.wait_for_function(
+            "() => { const a = document.querySelector('[data-prks-role=\"person-group-link\"]');"
+            " return !!a && a.getAttribute('aria-disabled') === 'true'; }",
+            timeout=20000,
+        )
+        link = page.locator('[data-prks-role="person-group-link"]').first
+        self.assertEqual(link.get_attribute("href"), "#/people/groups/" + group_id)
+
+        seen = []
+
+        def record(route):
+            seen.append(urlparse(route.request.url).path)
+            route.fallback()
+
+        page.route("**/api/person-groups**", record)
+        self.addCleanup(lambda: _safe_unroute(page, "**/api/person-groups**", record))
+
+        hash_before = page.evaluate("() => location.hash")
+        tabs_before = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length")
+        pages_before = len(context.pages)
+        for gesture in ("plain", "middle", "ctrl", "alt"):
+            if gesture == "plain":
+                link.click(force=True)
+            elif gesture == "middle":
+                link.click(button="middle", force=True)
+            elif gesture == "ctrl":
+                link.click(modifiers=["ControlOrMeta"], force=True)
+            else:
+                link.click(modifiers=["Alt"], force=True)
+            page.locator("#prks-modal-confirm:not(.hidden)", has_text="not available offline yet").wait_for(
+                timeout=15000
+            )
+            page.locator("#prks-modal-confirm-ok").click()
+            page.wait_for_function(
+                "() => document.getElementById('prks-modal-confirm').classList.contains('hidden')",
+                timeout=15000,
+            )
+            self.assertEqual(len(context.pages), pages_before, "%s opened a browser tab" % gesture)
+            self.assertEqual(
+                page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length"),
+                tabs_before,
+                "%s created a PRKS workspace tab" % gesture,
+            )
+            self.assertEqual(page.evaluate("() => location.hash"), hash_before, gesture)
+        self.assertEqual(seen, [], "no Group API request may be issued offline")
+
+        # Reconnecting restores ordinary navigation.
+        context.set_offline(False)
+        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+        page.wait_for_function(
+            "() => { const a = document.querySelector('[data-prks-role=\"person-group-link\"]');"
+            " return !!a && a.getAttribute('aria-disabled') === null; }",
+            timeout=20000,
+        )
+        page.locator('[data-prks-role="person-group-link"]').first.click()
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=group_id)
+
+    def test_person_graph_action_requires_a_connection_offline(self):
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_entity_cached(page, "person", person_a)
+        _open_details_drawer_if_tiled(page)
+        self.assertFalse(page.locator("#prks-person-view-graph").is_disabled())
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_offline_banner(page)
+        _open_details_drawer_if_tiled(page)
+        page.wait_for_function(
+            "() => !!document.querySelector('#prks-person-view-graph[disabled]')", timeout=20000
+        )
+        page.locator("#prks-person-view-graph").click(force=True)
+        page.wait_for_timeout(300)
+        self.assertNotIn("/graph", page.evaluate("() => location.hash"))
+
+        context.set_offline(False)
+        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+        page.wait_for_function(
+            "() => !document.querySelector('#prks-person-view-graph[disabled]')", timeout=20000
+        )
+
+    def test_open_profile_editor_survives_disconnect_without_losing_the_draft(self):
+        server, page, _context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _open_details_drawer_if_tiled(page)
+        page.locator("#panel-content button", has_text="Edit profile").click()
+        page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_a).wait_for()
+        draft = "Draft written before the connection dropped"
+        page.locator("#pd-about").fill(draft)
+
+        mutations = []
+
+        def block_api(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                mutations.append((route.request.method, urlparse(route.request.url).path))
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", block_api)
+        try:
+            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+                timeout=20000,
+            )
+            page.wait_for_function(
+                "() => !!document.querySelector('#pd-about[disabled]')", timeout=20000
+            )
+            # The draft is still there ...
+            self.assertEqual(page.locator("#pd-about").input_value(), draft)
+            self.assertTrue(page.locator("#pd-first-name").is_disabled())
+            self.assertTrue(page.locator("#pd-save-btn").is_disabled())
+            self.assertTrue(page.locator("#pd-group-add-btn").is_disabled())
+            # ... Cancel stays usable ...
+            self.assertFalse(
+                page.locator('.person-panel-edit [data-prks-person-cancel]').is_disabled()
+            )
+            # ... and Save cannot reach the network.
+            page.locator("#pd-save-btn").click(force=True)
+            page.wait_for_timeout(400)
+            self.assertEqual(mutations, [])
+        finally:
+            _safe_unroute(page, "**/api/**", block_api)
+
+        page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
+        page.wait_for_function("() => !document.querySelector('#pd-about[disabled]')", timeout=20000)
+        self.assertEqual(page.locator("#pd-about").input_value(), draft)
+        self.assertFalse(page.locator("#pd-save-btn").is_disabled())
+
+    def test_relationship_editor_becomes_inert_on_disconnect(self):
+        server, page, _context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, WORK_A_TITLE)
+        page.locator("button", has_text="Edit relationships").first.click()
+        page.locator(".person-profile__card-unlink").first.wait_for()
+
+        mutations = []
+
+        def block_api(route):
+            if route.request.method == "DELETE":
+                mutations.append(urlparse(route.request.url).path)
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", block_api)
+        try:
+            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+            page.wait_for_function(
+                "() => { const b = document.querySelector('.person-profile__card-unlink');"
+                " return !!b && b.disabled; }",
+                timeout=20000,
+            )
+            # The relationship list stays visible; only unlink goes inert.
+            self.assertIn(WORK_A_TITLE, _content_text(page))
+            page.locator(".person-profile__card-unlink").first.click(force=True)
+            page.wait_for_timeout(400)
+            self.assertEqual(mutations, [])
+            # Done still exits relationship-edit mode.
+            page.locator("button", has_text="Done").first.click()
+            page.wait_for_timeout(300)
+            self.assertEqual(page.locator(".person-profile__card-unlink").count(), 0)
+        finally:
+            _safe_unroute(page, "**/api/**", block_api)
+
+    def test_profile_group_creation_is_blocked_after_disconnect(self):
+        server, page, _context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _open_details_drawer_if_tiled(page)
+        page.locator("#panel-content button", has_text="Edit profile").click()
+        page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_a).wait_for()
+        page.wait_for_function(
+            "() => typeof document.querySelector('#pd-group-add-btn')?.onclick === 'function'"
+        )
+        page.locator("#pd-group-search").fill("Brand New Offline Group")
+
+        mutations = []
+
+        def block_api(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                mutations.append((route.request.method, urlparse(route.request.url).path))
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", block_api)
+        try:
+            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+                timeout=20000,
+            )
+            page.locator("#pd-group-add-btn").click(force=True)
+            page.wait_for_timeout(400)
+            self.assertEqual(mutations, [], "no Group create may be attempted offline")
+            # The draft the user was building is untouched.
+            self.assertEqual(page.locator("#pd-group-search").input_value(), "Brand New Offline Group")
+        finally:
+            _safe_unroute(page, "**/api/**", block_api)
+
+
+class OfflinePeopleCoherenceTests(unittest.TestCase):
+    """People is staled by Person, role, Work and Group changes -- and
+    deliberately not by Concept, Position, Argument or Research Notes changes."""
+
+    def _start(self):
+        server = AppServer(seed_fn=seed_people_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
+        self.addCleanup(context.close)
+        return server, page, context, collector
+
+    def _cache_people(self, page, server):
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_list_cached(page, "people:index")
+        _open_person(page, server.ids["person_a"])
+        _wait_entity_cached(page, "person", server.ids["person_a"])
+
+    def _assert_people_invalidated(self, page, server, before):
+        page.wait_for_function(
+            "n => (typeof prksOfflineDomainGeneration === 'function'"
+            " ? prksOfflineDomainGeneration('people') : 0) > n",
+            arg=before,
+            timeout=20000,
+        )
+        _wait_entity_uncached(page, "person", server.ids["person_a"])
+        _wait_list_uncached(page, "people:index")
+
+    # ---- Person mutations ---------------------------------------------------
+
+    def test_person_create_update_and_delete_invalidate_people(self):
+        server, page, _context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            """async () => {
+                await window.prksRequest('/api/persons', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ first_name: 'New', last_name: 'Person' }),
+                });
+                window.prksMarkPeopleDomainChanged();
+            }"""
+        )
+        self._assert_people_invalidated(page, server, before)
+
+        # A biography-only edit stales People but NOT Arguments.
+        self._cache_people(page, server)
+        _open_argument(page, server.ids["argument_a"])
+        _wait_entity_cached(page, "argument", server.ids["argument_a"])
+        before = _domain_generation(page, "people")
+        arguments_before = _domain_generation(page, "arguments")
+        self._save_person_profile(page, person_a, "#pd-about", "A revised biography, same name.")
+        self._assert_people_invalidated(page, server, before)
+        self.assertEqual(_domain_generation(page, "arguments"), arguments_before)
+        self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
+
+        # A canonical-name change stales both.
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        arguments_before = _domain_generation(page, "arguments")
+        self._save_person_profile(page, person_a, "#pd-first-name", "Renamed")
+        self._assert_people_invalidated(page, server, before)
+        self.assertGreater(_domain_generation(page, "arguments"), arguments_before)
+
+        # Delete an unlinked Person.
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            """async (id) => {
+                await window.prksRequest('/api/persons/' + id, { method: 'DELETE' });
+                window.prksMarkPeopleDomainChanged();
+            }""",
+            server.ids["person_unvisited"],
+        )
+        self._assert_people_invalidated(page, server, before)
+
+    def _save_person_profile(self, page, person_id, field, value):
+        page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", person_id)
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=person_id)
+        _open_details_drawer_if_tiled(page)
+        page.locator("#panel-content button", has_text="Edit profile").click()
+        page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_id).wait_for()
+        page.locator(field).fill(value)
+        page.locator("#pd-save-btn").click()
+        page.wait_for_selector(".person-panel-edit", state="detached", timeout=15000)
+
+    def test_failed_person_mutation_retains_the_people_cache(self):
+        server, page, _context, _collector = self._start()
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+
+        def reject(route):
+            if route.request.method in ("POST", "PATCH", "DELETE"):
+                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
+                return
+            route.fallback()
+
+        page.route("**/api/persons**", reject)
+        try:
+            page.evaluate(
+                """async (id) => {
+                    try {
+                        const res = await window.prksRequest('/api/persons/' + id, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ about: 'never applied' }),
+                        });
+                        if (res.ok) window.prksMarkPeopleDomainChanged();
+                    } catch (_e) {}
+                }""",
+                server.ids["person_a"],
+            )
+            page.wait_for_timeout(400)
+            self.assertEqual(_domain_generation(page, "people"), before)
+            self.assertIsNotNone(_cached_entity(page, "person", server.ids["person_a"]))
+        finally:
+            _safe_unroute(page, "**/api/persons**", reject)
+
+    # ---- role mutations -----------------------------------------------------
+
+    def test_every_role_type_invalidates_people_but_only_author_invalidates_arguments(self):
+        """People carries assigned_roles, the Person's linked Work rows and
+        aliases (credit names), so EVERY role type stales it. Arguments only
+        lists a source Work's Authors."""
+        server, page, _context, _collector = self._start()
+        work_b = server.ids["work_b"]
+        person_unvisited = server.ids["person_unvisited"]
+
+        # Non-Author role: People only.
+        self._cache_people(page, server)
+        _open_argument(page, server.ids["argument_a"])
+        _wait_entity_cached(page, "argument", server.ids["argument_a"])
+        before = _domain_generation(page, "people")
+        arguments_before = _domain_generation(page, "arguments")
+        page.evaluate(
+            """async ([workId, personId]) => {
+                const res = await window.prksRequest('/api/roles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ person_id: personId, work_id: workId, role_type: 'Editor' }),
+                });
+                if (res.ok) window.prksMarkWorkRoleChanged(workId, 'Editor');
+            }""",
+            [work_b, person_unvisited],
+        )
+        self._assert_people_invalidated(page, server, before)
+        self.assertEqual(_domain_generation(page, "arguments"), arguments_before)
+        self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
+
+        # Author role: People AND Arguments.
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        arguments_before = _domain_generation(page, "arguments")
+        page.evaluate(
+            """async ([workId, personId]) => {
+                const res = await window.prksRequest('/api/roles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ person_id: personId, work_id: workId, role_type: 'Author' }),
+                });
+                if (res.ok) window.prksMarkWorkRoleChanged(workId, 'Author');
+            }""",
+            [work_b, person_unvisited],
+        )
+        self._assert_people_invalidated(page, server, before)
+        self.assertGreater(_domain_generation(page, "arguments"), arguments_before)
+
+    def test_role_unlink_through_the_real_ui_invalidates_people(self):
+        server, page, _context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        _open_work_from_home(page, WORK_A_TITLE)
+        _open_details_drawer_if_tiled(page)
+        page.locator("#panel-content button", has_text="Manage relationships").click()
+        unlink = page.locator(
+            '.work-linked-persons__unlink[data-role-type="Author"][data-person-id="%s"]' % person_a
+        )
+        unlink.wait_for(timeout=15000)
+        unlink.click()
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for(timeout=15000)
+        page.locator("#prks-modal-confirm-ok").click()
+        self._assert_people_invalidated(page, server, before)
+
+    # ---- Work mutations -----------------------------------------------------
+
+    def test_work_metadata_save_invalidates_people(self):
+        server, page, _context, _collector = self._start()
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").fill("Person Work Card Title Changed")
+        page.locator("#inline-save-metadata-btn").click()
+        page.locator("#panel-content .card-title", has_text="Person Work Card Title Changed").wait_for(
+            timeout=15000
+        )
+        self._assert_people_invalidated(page, server, before)
+
+    def test_playlist_work_rename_invalidates_people(self):
+        """The shared Work-title helper owns this dependency, so the Playlist
+        rename surface gets it without its own hook."""
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        playlist_id = page.evaluate(
+            """async (workId) => {
+                const id = await createPlaylist('E2E People Rename Playlist', '');
+                await addWorkToPlaylist(id, workId);
+                return id;
+            }""",
+            arg=work_a,
+        )
+        page.evaluate("id => window.prksNavigate('#/playlists/' + encodeURIComponent(id))", arg=playlist_id)
+        page.wait_for_selector(".prks-playlist-detail")
+        page.locator("#prks-playlist-edit-btn").click()
+        page.wait_for_selector('[data-pl-rename="%s"]' % work_a)
+        page.locator('[data-pl-rename="%s"]' % work_a).click()
+        page.locator("#prks-pl-rename-input-" + work_a).fill("Renamed From The Playlist")
+        page.locator('[data-pl-rename-save="%s"]' % work_a).click()
+        page.wait_for_function(
+            "t => document.body.innerText.indexOf(t) !== -1", arg="Renamed From The Playlist", timeout=15000
+        )
+        self._assert_people_invalidated(page, server, before)
+
+    def test_bulk_status_invalidates_people_but_folder_and_tag_moves_do_not(self):
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            "id => window.bulkUpdateWorks({ action: 'set_status', work_ids: [id], status: 'Completed' })",
+            work_a,
+        )
+        self._assert_people_invalidated(page, server, before)
+
+        # A folder move and a tag change are not on a Person's Work cards.
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            """async (id) => {
+                const folderId = await createFolder('People-neutral folder', '');
+                await window.bulkUpdateWorks({ action: 'move_folder', work_ids: [id], folder_id: folderId });
+                const tagRes = await window.prksRequest('/api/tags', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: 'people-neutral-tag', color: '#6d6cf7' }),
+                });
+                const tag = await tagRes.json();
+                await window.bulkUpdateWorks({ action: 'add_tags', work_ids: [id], tag_ids: [tag.id] });
+            }""",
+            work_a,
+        )
+        page.wait_for_timeout(500)
+        self.assertEqual(_domain_generation(page, "people"), before)
+        self.assertIsNotNone(_cached_entity(page, "person", server.ids["person_a"]))
+
+    def test_work_deletion_invalidates_people(self):
+        server, page, _context, _collector = self._start()
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        _open_work_from_home(page, WORK_A_TITLE)
+        _open_details_drawer_if_tiled(page)
+        advanced = page.locator(".work-details-advanced")
+        if advanced.get_attribute("open") is None:
+            advanced.locator("summary").click()
+        page.locator(".delete-work-btn").click()
+        page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        self._assert_people_invalidated(page, server, before)
+
+    def test_work_creation_invalidates_people_only_when_it_carries_role_links(self):
+        server, page, _context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            """async () => {
+                await window.prksRequest('/api/works', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: 'Roleless Work', doc_type: 'book', roles: [] }),
+                });
+            }"""
+        )
+        page.wait_for_timeout(500)
+        self.assertEqual(
+            _domain_generation(page, "people"),
+            before,
+            "a Work created with no role links cannot change the People read model",
+        )
+        self.assertIsNotNone(_cached_entity(page, "person", person_a))
+
+        # The canonical create path can create role links without POST /api/roles.
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            """async (personId) => {
+                const payload = {
+                    title: 'Work With Roles',
+                    doc_type: 'book',
+                    roles: [{ person_id: personId, role_type: 'Reviewer' }],
+                };
+                const res = await window.prksRequest('/api/works', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (res.ok && payload.roles.length) window.prksMarkPeopleDomainChanged();
+            }""",
+            person_a,
+        )
+        self._assert_people_invalidated(page, server, before)
+
+    # ---- Group mutations ----------------------------------------------------
+
+    def test_group_membership_update_and_delete_invalidate_people(self):
+        server, page, _context, _collector = self._start()
+        group_id = server.ids["person_group"]
+        person_b = server.ids["person_b"]
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            "([g, p]) => window.addPersonGroupMember(g, p)", [group_id, person_b]
+        )
+        self._assert_people_invalidated(page, server, before)
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            "([g, p]) => window.removePersonGroupMember(g, p)", [group_id, person_b]
+        )
+        self._assert_people_invalidated(page, server, before)
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate("g => window.updatePersonGroup(g, { name: 'Renamed Group' })", group_id)
+        self._assert_people_invalidated(page, server, before)
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate("g => window.deletePersonGroup(g)", group_id)
+        self._assert_people_invalidated(page, server, before)
+
+    def test_creating_an_unassigned_group_leaves_people_eligible(self):
+        """A brand-new Group appears in no existing Person's read model."""
+        server, page, _context, _collector = self._start()
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            """async () => {
+                await window.prksRequest('/api/person-groups', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: 'Freshly Created Empty Group', description: '' }),
+                });
+            }"""
+        )
+        page.wait_for_timeout(500)
+        self.assertEqual(_domain_generation(page, "people"), before)
+        self.assertIsNotNone(_cached_entity(page, "person", server.ids["person_a"]))
+
+    # ---- domain isolation ---------------------------------------------------
+
+    def test_unrelated_domains_never_invalidate_people(self):
+        server, page, _context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        self._cache_people(page, server)
+        before = _domain_generation(page, "people")
+        page.evaluate(
+            """async ([conceptId, positionId, argumentId]) => {
+                await window.updateConcept(conceptId, { description: 'People isolation check.' });
+                await window.updatePosition(positionId, { description: 'People isolation check.' });
+                await window.putArgumentSources(argumentId, []);
+            }""",
+            [server.ids["concept_child"], server.ids["position_a"], server.ids["argument_a"]],
+        )
+        page.wait_for_timeout(600)
+        self.assertEqual(
+            _domain_generation(page, "people"),
+            before,
+            "Concept/Position/Argument data is not in the People read model",
+        )
+        self.assertIsNotNone(_cached_entity(page, "person", person_a))
+
+        # Research Notes drive Concept and Argument mentions, not People.
+        before = _domain_generation(page, "people")
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text("a note that touches no Person data")
+        page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
+        page.wait_for_timeout(400)
+        self.assertEqual(_domain_generation(page, "people"), before)
+        self.assertIsNotNone(_cached_entity(page, "person", person_a))
+
+    def test_people_invalidation_leaves_the_other_three_domains_alone(self):
+        server, page, _context, _collector = self._start()
+        concept_child = server.ids["concept_child"]
+        position_a = server.ids["position_a"]
+        argument_a = server.ids["argument_a"]
+
+        self._cache_people(page, server)
+        _open_concept(page, concept_child)
+        _wait_entity_cached(page, "concept", concept_child)
+        _open_position(page, position_a)
+        _wait_entity_cached(page, "position", position_a)
+        _open_argument(page, argument_a)
+        _wait_entity_cached(page, "argument", argument_a)
+        before = _domain_generation(page, "people")
+        others = {
+            d: _domain_generation(page, d) for d in ("concepts", "positions", "arguments")
+        }
+
+        # A Group membership change is People-only.
+        page.evaluate(
+            "([g, p]) => window.addPersonGroupMember(g, p)",
+            [server.ids["person_group"], server.ids["person_b"]],
+        )
+        self._assert_people_invalidated(page, server, before)
+        for domain, gen in others.items():
+            self.assertEqual(_domain_generation(page, domain), gen, domain)
+            self.assertFalse(_domain_blocked(page, domain), domain)
+        self.assertIsNotNone(_cached_entity(page, "concept", concept_child))
+        self.assertIsNotNone(_cached_entity(page, "position", position_a))
+        self.assertIsNotNone(_cached_entity(page, "argument", argument_a))
+
+    def test_stale_pre_invalidation_people_reads_cannot_repopulate_the_cache(self):
+        server, page, _context, _collector = self._start()
+        target = server.ids["person_unvisited"]
+
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_list_cached(page, "people:index")
+        _clear_cached_list(page, "people:index")
+        _wait_list_uncached(page, "people:index")
+        self.assertIsNone(_cached_entity(page, "person", target))
+
+        held = []
+
+        def hold_gets(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "GET" and path in ("/api/persons", "/api/persons/" + target):
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/persons**", hold_gets)
+        try:
+            page.evaluate(
+                """id => {
+                    window.__heldPerson = window.prksOfflineReadEntity(
+                        'person', id, '/api/persons/' + id, { domain: 'people' }
+                    );
+                    window.__heldList = window.prksOfflineReadList(
+                        'people:index', '/api/persons', { domain: 'people' }
+                    );
+                }""",
+                target,
+            )
+            for _ in range(100):
+                if len(held) >= 2:
+                    break
+                page.wait_for_timeout(100)
+            self.assertGreaterEqual(len(held), 2, "the People GETs were not intercepted")
+            before = _domain_generation(page, "people")
+            # A role mutation lands while both reads are still in flight.
+            page.evaluate(
+                """async ([workId, personId]) => {
+                    const res = await window.prksRequest('/api/roles', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ person_id: personId, work_id: workId, role_type: 'Editor' }),
+                    });
+                    if (res.ok) window.prksMarkWorkRoleChanged(workId, 'Editor');
+                }""",
+                [server.ids["work_b"], server.ids["person_b"]],
+            )
+            self.assertGreater(_domain_generation(page, "people"), before)
+            page.wait_for_function(
+                "() => (typeof prksOfflineIsDomainBlocked === 'function'"
+                " ? prksOfflineIsDomainBlocked('people') : true) === false",
+                timeout=15000,
+            )
+            for route in held:
+                route.fallback()
+            page.evaluate("() => window.__heldPerson")
+            page.evaluate("() => window.__heldList")
+            page.wait_for_timeout(600)
+            self.assertIsNone(
+                _cached_entity(page, "person", target),
+                "a pre-invalidation Person read must not repopulate the domain",
+            )
+            self.assertIsNone(
+                _cached_list(page, "people:index"),
+                "a pre-invalidation People list read must not repopulate the domain",
+            )
+        finally:
+            _safe_unroute(page, "**/api/persons**", hold_gets)
+
+        # A later authoritative read populates normally.
+        _open_person(page, target)
+        _wait_entity_cached(page, "person", target)
 
 
 def _safe_unroute(page, pattern, handler):

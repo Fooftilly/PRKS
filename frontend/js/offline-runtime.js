@@ -32,6 +32,8 @@
     const POSITIONS_LIST_KEY = 'positions:index';
     const DOMAIN_ARGUMENTS = 'arguments';
     const ARGUMENTS_LIST_KEY = 'arguments:index';
+    const DOMAIN_PEOPLE = 'people';
+    const PEOPLE_LIST_KEY = 'people:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
     const PDF_CACHE_NAME = 'prks-pdf-v1';
 
@@ -730,6 +732,19 @@
             listKeys: [ARGUMENTS_LIST_KEY],
         });
     }
+    /**
+     * The one place that spells out what the People offline domain contains.
+     * A cached Person embeds Work-card summaries, role assignments and Group
+     * memberships, so it is staled by a wide set of canonical callers -- every
+     * Work-role mutation (not just Author), Work metadata/status/PDF changes,
+     * and Group membership/rename/deletion. See AGENTS.md.
+     */
+    function prksOfflineMarkPeopleChanged() {
+        return production.markDomainChanged(DOMAIN_PEOPLE, {
+            entityKinds: ['person'],
+            listKeys: [PEOPLE_LIST_KEY],
+        });
+    }
     function prksOfflineIsMutationBlocked() {
         return production.isMutationBlocked();
     }
@@ -764,6 +779,7 @@
         prksOfflineMarkConceptsChanged: prksOfflineMarkConceptsChanged,
         prksOfflineMarkPositionsChanged: prksOfflineMarkPositionsChanged,
         prksOfflineMarkArgumentsChanged: prksOfflineMarkArgumentsChanged,
+        prksOfflineMarkPeopleChanged: prksOfflineMarkPeopleChanged,
         prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,
@@ -778,6 +794,8 @@
         PRKS_OFFLINE_POSITIONS_LIST_KEY: POSITIONS_LIST_KEY,
         PRKS_OFFLINE_DOMAIN_ARGUMENTS: DOMAIN_ARGUMENTS,
         PRKS_OFFLINE_ARGUMENTS_LIST_KEY: ARGUMENTS_LIST_KEY,
+        PRKS_OFFLINE_DOMAIN_PEOPLE: DOMAIN_PEOPLE,
+        PRKS_OFFLINE_PEOPLE_LIST_KEY: PEOPLE_LIST_KEY,
     };
 
     Object.keys(api).forEach(function (k) {

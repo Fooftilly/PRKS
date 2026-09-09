@@ -1109,23 +1109,36 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
                 p_id = path.split('/')[-1]
                 group_ids = data.pop('group_ids', None)
-                if 'image_url' in data:
+                image_url_changed = 'image_url' in data
+                if image_url_changed:
                     try:
                         data['image_url'] = normalize_person_image_url(data.get('image_url'))
                     except PersonImageUrlError:
                         self.send_json(400, {'error': 'Invalid image_url'})
                         return
-                    prks_delete_person_image_cache(p_id, _bound_storage.people_dir)
-                db.update_person_metadata(p_id, data)
-                if group_ids is not None:
-                    if not isinstance(group_ids, list):
-                        self.send_json(400, {'error': 'group_ids must be a JSON array'})
-                        return
+                if group_ids is not None and not isinstance(group_ids, list):
+                    self.send_json(400, {'error': 'group_ids must be a JSON array'})
+                    return
+                # Metadata and memberships commit or roll back together, so an
+                # unknown group id cannot leave the profile half-updated. A
+                # failed request must not have changed canonical state -- that
+                # is what makes "failed mutation keeps its cache" sound.
+                try:
+                    db.update_person_profile(p_id, data, group_ids)
+                except ValueError as e:
+                    self.send_json(400, {'error': str(e)})
+                    return
+                if image_url_changed:
+                    # Disposable portrait cache, cleared only after the canonical
+                    # profile change committed; a failure here never fails the PATCH.
                     try:
-                        db.set_person_group_memberships(p_id, group_ids)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
+                        prks_delete_person_image_cache(p_id, _bound_storage.people_dir)
+                    except Exception as e:
+                        LOGGER.warning(
+                            "person_image_cache_cleanup_failed person_id=%s error_type=%s",
+                            safe_log_id(p_id),
+                            safe_error_type(e),
+                        )
                 self.send_json(200, {'status': 'updated'})
             elif path.startswith('/api/person-groups/') and len(path.split('/')) == 4:
                 g_id = path.split('/')[-1]

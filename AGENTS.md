@@ -489,11 +489,13 @@ Phase 1 is read-only offline support. It currently covers:
 - the Position index (`#/positions`) and Position detail (`#/positions/:positionId`)
 - the Argument/Stance index (`#/arguments`, including `?kind=argument` and
   `?kind=stance`) and detail (`#/arguments/:argumentId`)
+- the People index (`#/people`), its role views (`#/people/role/:role`) and
+  Person detail (`#/people/:personId`)
 
-Person, Person Group, Playlist routes and the Research Graph are not wrapped in
-the offline read-through path and must keep their ordinary online-only
-fetch/error behavior until their own mutation surfaces are explicitly hardened
-for offline use — do not add `prksOfflineDetailFetch`/`prksOfflineListFetch`/
+Person Group and Playlist routes and the Research Graph are not wrapped in the
+offline read-through path and must keep their ordinary online-only fetch/error
+behavior until their own mutation surfaces are explicitly hardened for offline
+use — do not add `prksOfflineDetailFetch`/`prksOfflineListFetch`/
 `prksOfflineGuardMutation` calls to those routes as an incidental part of
 unrelated work elsewhere. There is no offline mutation
 outbox, sync conflict resolution, background sync, or editable offline Research
@@ -606,6 +608,50 @@ invent transactional semantics across an API where a partial save was already
 possible. Any request that already succeeded keeps its cache invalidation — see
 "partial canonical success" below.
 
+People routes are **read-only** offline. The index caches the complete
+collection under one key, `people:index`, and every role view is a local
+projection of it via `filterPersonsByAssignedRole()` — both routes go through
+the single `prksOfflinePeopleFetch()` helper so a future People route cannot
+introduce a second, role-filtered cache. Visiting one role view online warms
+every other view. A legitimately empty *role subset* (cached People, none
+holding that role) renders the ordinary empty role state; only a missing cached
+list is offline-unavailable. Person detail uses `kind: 'person'`, and the two
+caches stay independent — the index never prefetches details.
+
+Person validators accept a sparse profile: no first name, biography, dates or
+links is normal. What they do require is a usable id on every nested row that
+becomes a route — `works[]` (→ `#/works/:id`) and `groups[]` (→
+`#/people/groups/:id`) — and that `assigned_roles[]` entries are strings without
+an allow-list, since canonical data carries roles like `Mentioned` that are not
+navigable filters.
+
+Two destinations reachable from a cached Person are not cached: the Research
+Graph, and Person Groups (`#/people/groups/:id` is a later slice). Group chips
+keep rendering with their canonical `href` intact, marked `aria-disabled` and
+intercepted on both `click` and middle-button `auxclick`, exactly like the
+Position → Argument contract. Linked Work cards are ordinary PRKS links, so the
+Work route decides for itself whether it has cached data — that is the main
+reason People is useful offline.
+
+**Offline media policy.** Phase 1 caches structured data only. A Person route
+mounted from cache sets `ctx.ui.personOfflineCached`, which suppresses the
+portrait (`/api/persons/:id/profile-image`) and passes `suppressThumbnail: true`
+to `prksWorkCardHtml()`, so a cached mount issues no PRKS media request and
+shows the ordinary no-photo/empty-thumb presentation rather than broken images.
+Portrait and thumbnail bytes are never cached — not in IndexedDB, not in the
+service worker. Media already loaded online is not torn down when connectivity
+drops, and re-hydrating it after reconnect is explicitly not required.
+
+`prksBindPersonOfflineState()` settles all of that live. Because the Person
+editor lives in the shared right panel, its portion only runs when
+`prksRightPanelOwnedBy()` says this context owns that panel — a background
+Person tab must never disable or rewrite another tab's panel. An editor open
+when connectivity drops keeps its unsaved draft with only its mutating controls
+inert (**Cancel stays live**), while `openPersonProfileEdit()` refuses to start
+a *new* session offline. `openModal('person-modal')` is guarded centrally so the
+People page, the ribbon and the command palette are all covered at once;
+`person-template-modal` is exempt because it only edits an unsaved local draft.
+
 ### Offline coherence domains
 
 Some cached read models span multiple canonical records, so per-entity
@@ -714,6 +760,45 @@ and `putArgumentTargets` then fails, the Arguments domain stays invalidated —
 canonical success of any individual request controls coherence, and a UI
 workflow failing later is not a rollback. This is the same principle as a stale
 Research Notes save completion.
+
+The fourth domain is `people` (`entityKinds: ['person']`,
+`listKeys: ['people:index']`), defined once in `prksOfflineMarkPeopleChanged()`.
+A cached Person carries whole Work-card summaries, its role assignments and its
+Group memberships, so it is invalidated after canonical success by:
+
+| Canonical change | Why it stales cached People |
+| --- | --- |
+| Person create / update / delete | every profile field is in the read model |
+| **any** Work-role create / unlink / credit-name edit | `assigned_roles`, the Person's linked Work rows (role_type, order_index, credit_name), and `persons.aliases`, which the server may extend with a non-empty credit name |
+| Work metadata/title save (via `prksMarkWorkTitleChanged`) | the Work card shows title, status, doc type, year, author text, thumbnail metadata and file size |
+| bulk `set_status` | status is on that card |
+| Work deletion | removes the role rows entirely |
+| Work creation carrying `roles: [...]` | the create endpoint links roles without ever calling `POST /api/roles` |
+| managed PDF save | changes `file_size_bytes`, and the backend can add `Mentioned` roles from annotation markup |
+| Group membership add/remove, Group update, Group delete | Group chips and memberships are embedded in both People read models |
+
+Role coherence is owned by one helper, `prksMarkWorkRoleChanged(workId,
+roleType)`: People unconditionally, Arguments only for `Author`. The former
+`prksMarkWorkAuthorDisplayChanged` name survives purely as a delegate.
+
+Deliberately **not** invalidating People: creating an unassigned Group (it
+appears in no existing Person's read model, and the Person PATCH that later
+assigns it invalidates People on its own); bulk `move_folder`/`add_tags`/
+`remove_tags` and ordinary tag/folder/playlist-membership edits (none are on a
+Person's Work cards); the annotations-JSON save, as distinct from the managed
+PDF save; Research Notes saves; and every Concept, Position and Argument
+mutation. Note the distinction: playlist *membership* does not invalidate
+People, but a playlist inline Work *rename* does, because it goes through the
+shared Work-title helper.
+
+**Person profile PATCH is atomic.** `update_person_profile()` applies metadata
+and group memberships in one transaction when `group_ids` is supplied, so an
+unknown group id can no longer return 400 *after* the metadata was written.
+Offline coherence rests on "a failed canonical request keeps the previous cache
+eligible", which is only sound if a 4xx really means nothing changed. A
+metadata-only PATCH (no `group_ids`) keeps its original behavior, and the
+disposable portrait cache is cleared only after that transaction commits — its
+failure never fails the PATCH.
 
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`

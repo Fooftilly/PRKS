@@ -659,13 +659,8 @@ async function mountPersonGroupEditPanel(g) {
             }
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
             try {
-                const res = await prksRequest(`/api/person-groups/${encodeURIComponent(g.id)}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
+                const { ok: res_ok, data } = await updatePersonGroup(g.id, payload);
+                if (!res_ok) {
                     await prksAlertMessage(data.error || 'Could not save group.', 'Could not save');
                     return;
                 }
@@ -699,9 +694,8 @@ async function mountPersonGroupEditPanel(g) {
             });
             if (!confirmed) return;
             try {
-                const res = await prksRequest(`/api/person-groups/${encodeURIComponent(g.id)}`, { method: 'DELETE' });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
+                const { ok: res_ok, data } = await deletePersonGroup(g.id);
+                if (!res_ok) {
                     await prksAlertMessage(data.error || 'Could not delete.', 'Error');
                     return;
                 }
@@ -734,12 +728,8 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
             if (!confirmed) return;
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, true);
             try {
-                const res = await prksRequest(
-                    `/api/person-groups/${encodeURIComponent(g.id)}/members/${encodeURIComponent(pid)}`,
-                    { method: 'DELETE' }
-                );
-                if (!res.ok) {
-                    const data = await res.json().catch(() => ({}));
+                const { ok: res_ok, data } = await removePersonGroupMember(g.id, pid);
+                if (!res_ok) {
                     await prksAlertMessage(data.error || 'Could not remove member.', 'Error');
                     return;
                 }
@@ -796,13 +786,8 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
             }
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(addBtn, true, { busyLabel: 'Adding…' });
             try {
-                const res = await prksRequest(`/api/person-groups/${encodeURIComponent(g.id)}/members`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ person_id: pid })
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
+                const { ok: res_ok, data } = await addPersonGroupMember(g.id, pid);
+                if (!res_ok) {
                     await prksAlertMessage(data.error || 'Could not add member.', 'Error');
                     return;
                 }
@@ -1031,8 +1016,16 @@ async function prksMountPersonProfileGroupPicker(ctx, person, editor) {
         }
         const existing = prksPersonEditFindGroupByNameInsensitive(typed, window.allGroups);
         if (existing) {
+            // Picking an existing Group only edits the unsaved local draft, so
+            // it stays available offline; the Person PATCH that would persist
+            // it is guarded on its own.
             addGroupId(existing.id, existing.name);
             return;
+        }
+        // Creating a brand-new Group is a canonical mutation and cannot happen
+        // offline, even from an editor that was already open.
+        if (typeof prksOfflineGuardMutation === 'function') {
+            if (prksOfflineGuardMutation('Creating a group requires a connection to PRKS.')) return;
         }
         try {
             const res = await prksRequest('/api/person-groups', {

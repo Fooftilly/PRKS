@@ -125,6 +125,164 @@ function safeHttpUrl(url) {
 }
 
 /** Cached profile image via API (remote fetch + disk cache server-side). */
+/* --- Offline policy for People routes (AGENTS.md "Offline / PWA") ------------
+ * People are read-only offline in Phase 1: cached index/role views and Person
+ * profiles render, every canonical mutation is blocked outright (never queued,
+ * never faked), and the two destinations that are not cached at all -- the
+ * Research Graph and Person Groups -- say so instead of navigating somewhere
+ * broken. Linked Work cards stay ordinary PRKS links so the Work route decides
+ * for itself. Controls carry these roles so one helper can settle them all,
+ * including markup rerendered after the initial bind. */
+const PERSON_MUTATION_ROLE = 'person-mutation-control';
+const PERSON_ONLINE_ONLY_ROLE = 'person-online-only-control';
+const PERSON_GROUP_LINK_ROLE = 'person-group-link';
+const PERSON_CONTROL_SELECTOR =
+    '[data-prks-role="' + PERSON_MUTATION_ROLE + '"], ' +
+    '[data-prks-role="' + PERSON_ONLINE_ONLY_ROLE + '"], ' +
+    '[data-prks-role="' + PERSON_GROUP_LINK_ROLE + '"]';
+/* The profile editor's own inputs: disabled while offline so a draft is held
+ * rather than silently discarded. Cancel is deliberately excluded so the user
+ * can always leave edit mode. */
+const PERSON_EDITOR_SELECTOR =
+    '.person-panel-edit input, .person-panel-edit textarea, .person-panel-edit select,' +
+    ' .person-panel-edit button:not(#pd-cancel-btn):not([data-prks-person-cancel])';
+const PERSON_GROUPS_OFFLINE_MESSAGE = 'Person Groups are not available offline yet.';
+
+function prksPersonRuntimeState() {
+    return typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : 'online';
+}
+
+/** Blocks a canonical Person mutation while PRKS is unreachable. */
+function prksPersonMutationBlocked(message) {
+    return typeof prksOfflineGuardMutation === 'function' ? prksOfflineGuardMutation(message) : false;
+}
+
+/** Read-only destinations that are still online-only (graph, Person Groups). */
+function prksPersonConnectionRequired(message) {
+    if (prksPersonRuntimeState() === 'online') return false;
+    if (typeof prksAlertMessage === 'function') {
+        prksAlertMessage(message || 'This action requires a connection to PRKS.', 'Offline');
+    }
+    return true;
+}
+
+function prksApplyPersonOfflineState(container) {
+    if (!container || !container.querySelectorAll) return;
+    const online = prksPersonRuntimeState() === 'online';
+    const nodes = container.querySelectorAll(PERSON_CONTROL_SELECTOR);
+    for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
+        const isGroupLink = el.getAttribute('data-prks-role') === PERSON_GROUP_LINK_ROLE;
+        // Buttons take native `disabled`. A Group chip keeps its real anchor and
+        // canonical href so the destination stays inspectable and copyable -- it
+        // is marked, and its activation is intercepted below.
+        if (!isGroupLink && 'disabled' in el) el.disabled = !online;
+        if (online) {
+            el.removeAttribute('aria-disabled');
+            el.removeAttribute('title');
+        } else {
+            el.setAttribute('aria-disabled', 'true');
+            el.setAttribute('title', isGroupLink ? PERSON_GROUPS_OFFLINE_MESSAGE : 'Requires a connection to PRKS');
+        }
+    }
+}
+
+/**
+ * The Person editor lives in the shared right panel, so it is only ever
+ * settled when this context actually owns that panel -- a background Person tab
+ * must never disable or rewrite the panel another tab owns.
+ */
+function prksApplyPersonPanelOfflineState(ctx) {
+    const panel = document.getElementById('panel-content');
+    if (!panel) return;
+    if (typeof prksRightPanelOwnedBy === 'function' && !prksRightPanelOwnedBy(ctx, panel)) return;
+    prksApplyPersonOfflineState(panel);
+    const online = prksPersonRuntimeState() === 'online';
+    const editorNodes = panel.querySelectorAll(PERSON_EDITOR_SELECTOR);
+    for (let i = 0; i < editorNodes.length; i++) {
+        const el = editorNodes[i];
+        if (!('disabled' in el)) continue;
+        el.disabled = !online;
+        if (online) el.removeAttribute('aria-disabled');
+        else el.setAttribute('aria-disabled', 'true');
+    }
+}
+
+/**
+ * Keeps a mounted Person page's controls in step with connectivity: a page
+ * built while online becomes read-only in place when PRKS stops answering, and
+ * restores on reconnect. Cached content stays readable and linked Work cards
+ * stay usable so the Work route can decide for itself.
+ *
+ * The subscription belongs to the route's owning TabContext, and each bind
+ * replaces the previous one on the same container -- a TabContext container
+ * survives route changes and rerenders, so re-binding must not accumulate
+ * listeners (and there is no global Person runtime singleton).
+ */
+function prksBindPersonOfflineState(ctx, container) {
+    if (!container) return function () {};
+    if (typeof container.__prksPersonOfflineDispose === 'function') {
+        try {
+            container.__prksPersonOfflineDispose();
+        } catch (_e) {
+            /* a stale disposer must not block the new binding */
+        }
+    }
+    function applyAll() {
+        prksApplyPersonOfflineState(container);
+        prksApplyPersonPanelOfflineState(ctx);
+    }
+    // Read current state immediately: a page rendered after the runtime already
+    // left 'online' is never briefly mutable.
+    applyAll();
+    // Group-link activation is delegated once per container and decides at
+    // activation time. Both real activation events are covered: modified left
+    // clicks arrive as `click`, a middle click only ever as `auxclick`.
+    if (!container.__prksPersonGroupGuardBound) {
+        container.__prksPersonGroupGuardBound = true;
+        const guardActivation = function (ev) {
+            if (ev.type === 'auxclick' && ev.button !== 1) return;
+            const link =
+                ev.target.closest && ev.target.closest('[data-prks-role="' + PERSON_GROUP_LINK_ROLE + '"]');
+            if (!link) return;
+            if (prksPersonRuntimeState() === 'online') return;
+            ev.preventDefault();
+            if (typeof prksAlertMessage === 'function') {
+                prksAlertMessage(PERSON_GROUPS_OFFLINE_MESSAGE, 'Offline');
+            }
+        };
+        container.addEventListener('click', guardActivation);
+        container.addEventListener('auxclick', guardActivation);
+    }
+    let unsubscribe = function () {};
+    if (typeof prksOfflineRuntimeSubscribe === 'function') {
+        unsubscribe =
+            prksOfflineRuntimeSubscribe(function () {
+                if (container.__prksPersonOfflineDispose !== dispose) return;
+                applyAll();
+            }) || function () {};
+    }
+    let unregister = function () {};
+    function dispose() {
+        if (container.__prksPersonOfflineDispose === dispose) container.__prksPersonOfflineDispose = null;
+        unregister();
+        unsubscribe();
+    }
+    if (ctx && typeof ctx.registerCleanup === 'function') {
+        unregister = ctx.registerCleanup(dispose) || function () {};
+    }
+    container.__prksPersonOfflineDispose = dispose;
+    return dispose;
+}
+
+/** No cached People index on this device -- distinct from a cached empty one. */
+function renderPeopleListUnavailable(container) {
+    if (!container) return;
+    container.innerHTML =
+        '<div class="prks-page-header page-header"><h2 class="prks-page-title">People not available offline</h2></div>' +
+        '<p class="prks-inline-message" data-prks-role="offline-unavailable">This list has not been cached on this device.</p>';
+}
+
 function personProfileImageSrc(person) {
     if (!person || !person.id) return null;
     const raw = (person.image_url || '').trim();
@@ -448,7 +606,7 @@ function buildPersonListDetailsHtml(p, options = {}) {
         const tags = p.groups
             .map(
                 (g) =>
-                    `<a class="tag" href="#/people/groups/${encodeURIComponent(String(g.id || ''))}">${escapeHtmlPerson(g.name)}</a>`
+                    `<a class="tag" data-prks-role="${PERSON_GROUP_LINK_ROLE}" href="#/people/groups/${encodeURIComponent(String(g.id || ''))}">${escapeHtmlPerson(g.name)}</a>`
             )
             .join(' ');
         metaBits.push(`<span class="prks-people-list__groups">${tags}</span>`);
@@ -575,7 +733,7 @@ function prksPeopleListEmptyHtml(persons, filterQuery, roleFilter) {
     if (q) {
         return '<p class="prks-inline-message prks-people-list__empty">No people match your search.</p>';
     }
-    return '<div class="prks-people-list__empty-state"><p class="prks-inline-message prks-people-list__empty">No people yet.</p><button type="button" class="prks-btn prks-btn--primary" onclick="openModal(\'person-modal\')">New Person</button></div>';
+    return '<div class="prks-people-list__empty-state"><p class="prks-inline-message prks-people-list__empty">No people yet.</p><button type="button" class="prks-btn prks-btn--primary" data-prks-role="' + PERSON_MUTATION_ROLE + '" onclick="openModal(\'person-modal\')">New Person</button></div>';
 }
 
 function prksPeopleListInnerHtml(persons, filterQuery, roleFilter) {
@@ -597,6 +755,9 @@ function prksRerenderPeopleListOnly(root) {
     const host = root.querySelector('[data-prks-people-list-host]');
     if (host) {
         host.innerHTML = prksPeopleListInnerHtml(st.persons, st.filterQuery, st.roleFilter);
+        // Rerendered rows carry fresh Group chips, so re-apply connectivity
+        // state to them.
+        prksApplyPersonOfflineState(host);
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
     }
 }
@@ -649,7 +810,12 @@ function prksBindPeopleLibrarySearch(root) {
     prksSyncPeopleLibrarySearchClear(input, clearBtn);
 }
 
-function renderPeopleList(persons, container, options = {}) {
+/**
+ * `ctx` is the owning TabContext: the list subscribes to connectivity so its
+ * creation control and Group chips follow live state, and that subscription is
+ * registered with the route's context rather than leaked globally.
+ */
+function renderPeopleList(ctx, persons, container, options = {}) {
     const roleFilter = options.roleFilter || null;
     const list = Array.isArray(persons) ? persons : [];
     const filterQuery = prksPeopleLibraryFilterFromStorage();
@@ -676,7 +842,7 @@ function renderPeopleList(persons, container, options = {}) {
         <div class="prks-people-library">
         <div class="prks-page-header page-header prks-people-library__header">
             <h2 class="prks-page-title">People${escapeHtmlPerson(titleExtra)}</h2>
-            <button type="button" class="prks-btn prks-btn--primary" onclick="openModal('person-modal')">New Person</button>
+            <button type="button" class="prks-btn prks-btn--primary" data-prks-role="${PERSON_MUTATION_ROLE}" onclick="openModal('person-modal')">New Person</button>
         </div>
         ${searchToolbar}
         ${listHost}
@@ -684,9 +850,12 @@ function renderPeopleList(persons, container, options = {}) {
 
     const root = container.querySelector('.prks-people-library');
     if (root) {
+        // Offline search stays entirely client-side over the already-loaded
+        // (possibly cached) array -- it issues no API requests.
         root.__prksPeopleLibraryState = { persons: list, container, filterQuery, roleFilter };
         prksBindPeopleLibrarySearch(root);
     }
+    prksBindPersonOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
@@ -830,6 +999,10 @@ function openPersonProfileEdit() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const person = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
     if (!ctx || !ctx.ui || !person) return;
+    // Starting a NEW editing session offline is refused outright: a cached
+    // profile stays read-only. An already-open session is a different case --
+    // it keeps its draft and only goes inert.
+    if (prksPersonMutationBlocked('Editing a profile requires a connection to PRKS.')) return;
     if (ctx && ctx.ui) {
         ctx.ui.personWorksEditing = false;
         ctx.ui.personDetailEditing = true;
@@ -860,6 +1033,7 @@ async function deletePerson() {
     const p = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
     const personId = p && p.id ? String(p.id) : '';
     if (!personId) return;
+    if (prksPersonMutationBlocked('Deleting a Person requires a connection to PRKS.')) return;
     const linkedWorks = p ? prksUniquePersonWorks(p).length : 0;
     if (linkedWorks > 0) {
         await prksAlertMessage('Cannot delete person with linked files. Unlink all files first.', 'Not allowed');
@@ -875,6 +1049,8 @@ async function deletePerson() {
         typeof prksTabContextOwnsEntityRoute === 'function' &&
         !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
     ) return;
+    // Re-check: PRKS may have become unreachable while the confirm was open.
+    if (prksPersonMutationBlocked('Deleting a Person requires a connection to PRKS.')) return;
     try {
         const res = await prksRequest(`/api/persons/${encodeURIComponent(personId)}`, { method: 'DELETE' });
         const body = await res.json().catch(() => ({}));
@@ -884,6 +1060,8 @@ async function deletePerson() {
             }
             return;
         }
+        // Canonical success controls coherence, before any UI ownership test.
+        if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
             !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
@@ -907,9 +1085,11 @@ function prksTogglePersonWorksEdit() {
     if (!p || !ctx) return;
     const nowEditing = !!(ctx.ui && ctx.ui.personWorksEditing);
     if (nowEditing) {
+        // Leaving relationship-edit mode stays possible while offline.
         ctx.ui.personWorksEditing = false;
     } else {
         if (!p.works || p.works.length === 0) return;
+        if (prksPersonMutationBlocked('Editing relationships requires a connection to PRKS.')) return;
         ctx.ui.personWorksEditing = true;
     }
     const root = ctx.root;
@@ -965,7 +1145,7 @@ function renderPersonProfileDetailsSidebarHtml(person) {
     const nGroups = Array.isArray(person.groups) ? person.groups.length : 0;
     const nRefs = personReferenceCount(person);
     const deleteBtn = nWorks === 0
-        ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" onclick="deletePerson()">Delete person</button>`
+        ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" data-prks-role="${PERSON_MUTATION_ROLE}" onclick="deletePerson()">Delete person</button>`
         : `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" disabled title="Unlink all files first">Delete person</button>`;
     return `
         <div class="doc-meta-card person-sidebar-summary">
@@ -975,8 +1155,8 @@ function renderPersonProfileDetailsSidebarHtml(person) {
                 <li>${nGroups} group${nGroups === 1 ? '' : 's'}</li>
                 <li>${nRefs} reference${nRefs === 1 ? '' : 's'}</li>
             </ul>
-            <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" onclick="openPersonProfileEdit()">Edit profile</button>
-            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
+            <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_MUTATION_ROLE}" onclick="openPersonProfileEdit()">Edit profile</button>
+            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" data-prks-role="${PERSON_ONLINE_ONLY_ROLE}" onclick="prksPersonViewInGraph()">View in graph</button>
             <details class="person-sidebar__advanced" onkeydown="prksPersonAdvancedKeydown(event)">
                 <summary>More</summary>
                 <div class="person-sidebar__advanced-actions">
@@ -1047,7 +1227,7 @@ function renderPersonProfileEditFormHtml(person, draft) {
                     </fieldset>
                 </section>
             </div>
-            <div class="form-actions prks-form-actions--split person-edit-footer"><button type="button" onclick="closePersonProfileEdit()" class="prks-btn prks-btn--secondary">Cancel</button><button type="button" id="pd-save-btn" class="prks-btn prks-btn--primary" onclick="savePersonProfile('${id}')">Save profile</button></div>
+            <div class="form-actions prks-form-actions--split person-edit-footer"><button type="button" data-prks-person-cancel onclick="closePersonProfileEdit()" class="prks-btn prks-btn--secondary">Cancel</button><button type="button" id="pd-save-btn" class="prks-btn prks-btn--primary" onclick="savePersonProfile('${id}')">Save profile</button></div>
         </div>`;
 }
 
@@ -1093,6 +1273,9 @@ async function savePersonProfile(personId) {
         await prksAlertMessage('Last name is required.', 'Validation');
         return;
     }
+    // Connectivity can change while the editor is open, so re-check
+    // immediately before the canonical request.
+    if (prksPersonMutationBlocked('Saving a profile requires a connection to PRKS.')) return;
     const btn = panel.querySelector('#pd-save-btn');
     if (btn && typeof prksSetButtonBusy === 'function') {
         prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
@@ -1123,9 +1306,12 @@ async function savePersonProfile(personId) {
             }
             return;
         }
+        // Canonical success controls coherence, so these run before any UI
+        // ownership test -- exactly like the Work-side coherence hooks. Every
+        // profile field is part of the People read model, so People always
+        // goes; Arguments only when the displayed author name changed.
+        if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
         if (_personNameChanged && typeof prksMarkArgumentsDomainChanged === 'function') {
-            // Canonical success controls coherence, so this runs before any UI
-            // ownership test -- exactly like the Work-side coherence hooks.
             prksMarkArgumentsDomainChanged();
         }
         if (
@@ -1196,6 +1382,11 @@ function renderPersonDetails(ctx, person, container) {
     if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
 
     const worksEditing = !!(ctx && ctx.ui && ctx.ui.personWorksEditing);
+    // A page mounted from cached data while PRKS is unreachable must not ask
+    // the server for portrait or thumbnail bytes it cannot get -- a broken
+    // image is worse than the ordinary no-photo presentation. Media already
+    // loaded online is never rerendered away just because connectivity changed.
+    const offlineCached = !!(ctx && ctx.ui && ctx.ui.personOfflineCached);
     const rolesByWork = prksPersonWorkRolesById(person);
     let worksHtml = '';
     if (person.works && person.works.length > 0) {
@@ -1209,13 +1400,16 @@ function renderPersonDetails(ctx, person, container) {
             for (const [role, worksList] of Object.entries(groupedWorks)) {
                 let cards = '';
                 worksList.forEach((w) => {
-                    const card = typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w) : '';
+                    const card =
+                        typeof prksWorkCardHtml === 'function'
+                            ? prksWorkCardHtml(w, offlineCached ? { suppressThumbnail: true } : {})
+                            : '';
                     const oi =
                         w.order_index != null && w.order_index !== '' ? String(w.order_index) : '0';
                     const rt = escapeHtmlPerson(w.role_type || 'Linked');
                     const pid = escapeHtmlPerson(person.id);
                     const wid = escapeHtmlPerson(w.id);
-                    cards += `<div class="person-profile__work-card-wrap">${card}<button type="button" class="person-profile__card-unlink" aria-label="Remove link to this file" data-work-id="${wid}" data-person-id="${pid}" data-role-type="${rt}" data-order-index="${escapeHtmlPerson(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></div>`;
+                    cards += `<div class="person-profile__work-card-wrap">${card}<button type="button" class="person-profile__card-unlink" data-prks-role="${PERSON_MUTATION_ROLE}" aria-label="Remove link to this file" data-work-id="${wid}" data-person-id="${pid}" data-role-type="${rt}" data-order-index="${escapeHtmlPerson(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></div>`;
                 });
                 worksHtml += personRoleBlockHtml(role || 'Linked', worksList.length, cards);
             }
@@ -1245,7 +1439,14 @@ function renderPersonDetails(ctx, person, container) {
                         : roleContext;
                     const card =
                         typeof prksWorkCardHtml === 'function'
-                            ? prksWorkCardHtml(w, subtitle ? { subtitle: subtitle } : {})
+                            ? prksWorkCardHtml(
+                                  w,
+                                  Object.assign(
+                                      {},
+                                      subtitle ? { subtitle: subtitle } : {},
+                                      offlineCached ? { suppressThumbnail: true } : {}
+                                  )
+                              )
                             : '';
                     cards += `<div class="person-profile__work-card-wrap">${card}</div>`;
                 });
@@ -1256,7 +1457,7 @@ function renderPersonDetails(ctx, person, container) {
         worksHtml = '<p class="prks-inline-message">This person is not linked to any files.</p>';
     }
 
-    const portraitApi = personProfileImageSrc(person);
+    const portraitApi = offlineCached ? null : personProfileImageSrc(person);
     const heroNoPhotoClass = portraitApi ? '' : ' person-profile__hero--no-photo';
     const portraitCol = portraitApi
         ? `<div class="person-profile__portrait"><div class="person-portrait-wrap"><img class="person-portrait" src="${escapeHtmlPerson(portraitApi)}" alt=""></div></div>`
@@ -1276,7 +1477,7 @@ function renderPersonDetails(ctx, person, container) {
         const tags = person.groups
             .map(
                 (g) =>
-                    `<a class="tag" href="#/people/groups/${encodeURIComponent(String(g.id || ''))}">${escapeHtmlPerson(g.name)}</a>`
+                    `<a class="tag" data-prks-role="${PERSON_GROUP_LINK_ROLE}" href="#/people/groups/${encodeURIComponent(String(g.id || ''))}">${escapeHtmlPerson(g.name)}</a>`
             )
             .join(' ');
         groupsHtml = `<p class="meta-row person-profile__groups">${tags}</p>`;
@@ -1309,7 +1510,7 @@ function renderPersonDetails(ctx, person, container) {
                     <div class="person-profile__works-head">
                     <h2 id="person-profile-works-heading" class="person-profile__works-title">Linked files</h2>
                     <span class="person-profile__works-count">${nWorks}</span>
-                    ${nWorks > 0 || worksEditing ? `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm person-profile__works-action" onclick="prksTogglePersonWorksEdit()">${worksEditing ? 'Done' : 'Edit relationships'}</button>` : ''}
+                    ${nWorks > 0 || worksEditing ? `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm person-profile__works-action"${worksEditing ? '' : ` data-prks-role="${PERSON_MUTATION_ROLE}"`} onclick="prksTogglePersonWorksEdit()">${worksEditing ? 'Done' : 'Edit relationships'}</button>` : ''}
                     </div>
                     ${worksHtml}
                 </section>
@@ -1319,5 +1520,6 @@ function renderPersonDetails(ctx, person, container) {
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(container);
     }
+    prksBindPersonOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }

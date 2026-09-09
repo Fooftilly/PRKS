@@ -2077,6 +2077,69 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(person.get("image_url"), url_ok)
         self.assertTrue(os.path.isfile(cache_path))
 
+    def test_person_profile_patch_is_atomic_across_metadata_and_groups(self):
+        """A rejected group id must not leave the metadata half-updated.
+
+        Offline coherence rests on "a failed canonical request keeps the
+        previous cache eligible", which is only sound if a 4xx really means
+        nothing changed.
+        """
+        group_id = server_module.db.add_person_group("Atomic Test Group")
+        p_id = server_module.db.add_person(first_name="Old", last_name="Atomic")
+        server_module.db.set_person_group_memberships(p_id, [group_id])
+
+        req = urllib.request.Request(
+            f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}",
+            data=json.dumps(
+                {"first_name": "New", "group_ids": ["missing-group"]}
+            ).encode(),
+            method="PATCH",
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 400)
+
+        person = server_module.db.get_person(p_id)
+        self.assertEqual(person["first_name"], "Old", "metadata was written despite a 400")
+        self.assertEqual([g["id"] for g in person["groups"]], [group_id])
+
+    def test_person_profile_patch_applies_metadata_and_groups_together(self):
+        group_a = server_module.db.add_person_group("Atomic Group A")
+        group_b = server_module.db.add_person_group("Atomic Group B")
+        p_id = server_module.db.add_person(first_name="Before", last_name="Atomic")
+        server_module.db.set_person_group_memberships(p_id, [group_a])
+
+        req = urllib.request.Request(
+            f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}",
+            data=json.dumps({"first_name": "After", "group_ids": [group_b]}).encode(),
+            method="PATCH",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+        person = server_module.db.get_person(p_id)
+        self.assertEqual(person["first_name"], "After")
+        self.assertEqual([g["id"] for g in person["groups"]], [group_b])
+
+    def test_person_metadata_only_patch_leaves_memberships_untouched(self):
+        """Omitting group_ids must keep the ordinary metadata-only PATCH working."""
+        group_id = server_module.db.add_person_group("Metadata Only Group")
+        p_id = server_module.db.add_person(first_name="Meta", last_name="Only")
+        server_module.db.set_person_group_memberships(p_id, [group_id])
+
+        req = urllib.request.Request(
+            f"{self._base_url}/api/persons/{urllib.parse.quote(p_id)}",
+            data=json.dumps({"about": "A new biography."}).encode(),
+            method="PATCH",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+        person = server_module.db.get_person(p_id)
+        self.assertEqual(person["about"], "A new biography.")
+        self.assertEqual([g["id"] for g in person["groups"]], [group_id])
+
     def test_server_stale_loopback_image_url_never_connects(self):
         p_id = server_module.db.add_person(
             first_name="Legacy",

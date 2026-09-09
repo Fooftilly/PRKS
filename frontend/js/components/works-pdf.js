@@ -1099,6 +1099,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (typeof prksOfflineMarkEntityChanged === 'function') {
             prksOfflineMarkEntityChanged('work', workId);
         }
+        if (typeof prksOfflineMarkPeopleChanged === 'function') {
+            // Two independent effects on cached People: a Person's Work cards
+            // show file_size_bytes, derived from the managed PDF on disk, and
+            // the PDF-save backend can add 'Mentioned' roles from annotation
+            // markup. Invalidate on success rather than trying to detect which.
+            prksOfflineMarkPeopleChanged();
+        }
     }
 
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {

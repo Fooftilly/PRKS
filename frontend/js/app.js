@@ -1707,6 +1707,104 @@ function prksResolveOfflineArgument(offlineResult, argumentId) {
     return { argument: null, unavailable: true };
 }
 
+const PRKS_PEOPLE_LIST_KEY =
+    typeof PRKS_OFFLINE_PEOPLE_LIST_KEY === 'string' ? PRKS_OFFLINE_PEOPLE_LIST_KEY : 'people:index';
+const PRKS_PEOPLE_DOMAIN =
+    typeof PRKS_OFFLINE_DOMAIN_PEOPLE === 'string' ? PRKS_OFFLINE_DOMAIN_PEOPLE : 'people';
+
+/**
+ * Shape guarantees for the People read models. As everywhere else: require what
+ * the renderer and its links are actually built from -- usable ids on every
+ * nested row that becomes a route -- and never a display field the server
+ * leaves free to be blank. A Person legitimately has no first name, no
+ * biography, no dates and no links.
+ */
+/**
+ * Both `#/people` and `#/people/role/:role` read the COMPLETE collection under
+ * one key. Kept as a single helper so a future People route cannot accidentally
+ * introduce a second, role-filtered cache.
+ */
+async function prksOfflinePeopleFetch(signal) {
+    return await prksOfflineListFetch(PRKS_PEOPLE_LIST_KEY, '/api/persons', signal, {
+        domain: PRKS_PEOPLE_DOMAIN,
+        validate: prksIsPeopleIndexShape,
+    });
+}
+
+function prksIsPersonGroupRowShape(row) {
+    // The id becomes #/people/groups/:id.
+    return prksHasUsableRowId(row);
+}
+
+function prksIsPersonWorkRowShape(row) {
+    // The id becomes #/works/:id. Card display fields (title, status, doc_type,
+    // year, authors, thumbnail, file size) all stay optional -- the shared
+    // Work-card renderer already tolerates them missing.
+    return prksHasUsableRowId(row);
+}
+
+function prksIsAssignedRoleShape(value) {
+    // Canonical data can carry roles beyond the navigable filter set (e.g.
+    // 'Mentioned'), so accept any string rather than an allow-list.
+    return typeof value === 'string';
+}
+
+function prksIsPeopleIndexRowShape(row) {
+    if (!prksHasUsableRowId(row)) return false;
+    if (!Array.isArray(row.assigned_roles) || !row.assigned_roles.every(prksIsAssignedRoleShape)) {
+        return false;
+    }
+    return Array.isArray(row.groups) && row.groups.every(prksIsPersonGroupRowShape);
+}
+
+function prksIsPeopleIndexShape(value) {
+    if (!Array.isArray(value)) return false;
+    return value.every(prksIsPeopleIndexRowShape);
+}
+
+function prksIsPersonShape(value, personId) {
+    if (!prksHasUsableRowId(value)) return false;
+    if (String(value.id) !== String(personId)) return false;
+    if (!Array.isArray(value.works) || !value.works.every(prksIsPersonWorkRowShape)) return false;
+    return Array.isArray(value.groups) && value.groups.every(prksIsPersonGroupRowShape);
+}
+
+/**
+ * The complete People collection is cached under one key. Every role-filtered
+ * view (`#/people/role/:role`) is a local projection of it, so visiting one
+ * role view online warms every other view and the unfiltered list too.
+ */
+function prksResolveOfflinePeopleIndex(offlineResult) {
+    if (!offlineResult || offlineResult.source === 'unavailable') return null;
+    if (prksIsPeopleIndexShape(offlineResult.value)) return offlineResult.value;
+    if (offlineResult.source === 'server') {
+        // Normally unreachable: the runtime rejects a bad authoritative shape
+        // before it ever returns (or caches) one. Kept as the backstop for a
+        // runtime without validator support.
+        throw new Error('Received an unexpected People response.');
+    }
+    if (typeof prksOfflineInvalidateList === 'function') {
+        void prksOfflineInvalidateList(PRKS_PEOPLE_LIST_KEY);
+    }
+    return null;
+}
+
+function prksResolveOfflinePerson(offlineResult, personId) {
+    if (!offlineResult || offlineResult.source === 'unavailable') {
+        return { person: null, unavailable: true };
+    }
+    const value = offlineResult.value;
+    if (value == null) return { person: null, unavailable: false };
+    if (prksIsPersonShape(value, personId)) return { person: value, unavailable: false };
+    if (offlineResult.source === 'server') {
+        throw new Error('Received an unexpected Person response.');
+    }
+    if (typeof prksOfflineInvalidateEntity === 'function') {
+        void prksOfflineInvalidateEntity('person', personId);
+    }
+    return { person: null, unavailable: true };
+}
+
 function prksOfflineProvenanceBannerHtml(offlineResult) {
     if (!offlineResult || offlineResult.source !== 'cache') return '';
     const at =
@@ -2184,22 +2282,40 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'people': {
-                const persons = await fetchPersons({ signal: routeSignal });
+                const offlinePeople = await prksOfflinePeopleFetch(routeSignal);
                 if (stale()) return;
-                renderPeopleList(persons, contentDiv);
+                const persons = prksResolveOfflinePeopleIndex(offlinePeople);
+                if (!persons) {
+                    if (typeof renderPeopleListUnavailable === 'function') renderPeopleListUnavailable(contentDiv);
+                    else prksOfflineRenderUnavailable(contentDiv, 'People not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'People not available offline' };
+                    break;
+                }
+                renderPeopleList(ctx, persons, contentDiv);
+                prksOfflinePrependBanner(contentDiv, offlinePeople);
                 break;
             }
             case 'people-role': {
                 const roleFilter = route.params.knownRole ? route.params.role : null;
-                const persons = await fetchPersons({ signal: routeSignal });
+                // The same complete list under the same key: role views are
+                // local projections, never separately cached server subsets.
+                const offlineRolePeople = await prksOfflinePeopleFetch(routeSignal);
                 if (stale()) return;
+                const rolePersons = prksResolveOfflinePeopleIndex(offlineRolePeople);
                 publishSidebar({ role: roleFilter || route.params.role || 'Unknown role' });
-                if (roleFilter) {
-                    renderPeopleList(persons, contentDiv, { roleFilter });
-                } else {
+                if (!roleFilter) {
                     contentDiv.innerHTML =
                         '<div class="prks-page-header page-header"><h2 class="prks-page-title">People</h2></div><p class="prks-inline-message">Unknown role filter.</p>';
+                    break;
                 }
+                if (!rolePersons) {
+                    if (typeof renderPeopleListUnavailable === 'function') renderPeopleListUnavailable(contentDiv);
+                    else prksOfflineRenderUnavailable(contentDiv, 'People not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'People not available offline' };
+                    break;
+                }
+                renderPeopleList(ctx, rolePersons, contentDiv, { roleFilter });
+                prksOfflinePrependBanner(contentDiv, offlineRolePeople);
                 break;
             }
             case 'people-groups': {
@@ -2557,8 +2673,28 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'person': {
-                const person = await fetchPersonDetails(route.params.personId, { signal: routeSignal });
+                const personId = route.params.personId;
+                const offlinePerson = await prksOfflineDetailFetch(
+                    'person',
+                    personId,
+                    '/api/persons/' + encodeURIComponent(personId),
+                    routeSignal,
+                    {
+                        domain: PRKS_PEOPLE_DOMAIN,
+                        validate: function (value) {
+                            return prksIsPersonShape(value, personId);
+                        },
+                    }
+                );
                 if (stale()) return;
+                const resolvedPerson = prksResolveOfflinePerson(offlinePerson, personId);
+                if (resolvedPerson.unavailable) {
+                    prksOfflineRenderUnavailable(contentDiv, 'Person not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Person not available offline' };
+                    ctx.setEntity('person', null);
+                    break;
+                }
+                const person = resolvedPerson.person;
                 publishSidebar(
                     person
                         ? {
@@ -2576,10 +2712,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         : { personDisplayName: 'Person not found', linkedWorks: 0 }
                 );
                 ctx.setEntity('person', person);
+                // A freshly mounted route always starts read-only, even if a
+                // previous mount left an edit session behind.
                 ctx.ui.personDetailEditing = false;
                 ctx.ui.personProfileDraft = null;
                 ctx.ui.personWorksEditing = false;
+                // A page served from cache must not ask PRKS for portrait or
+                // Work-thumbnail bytes it cannot get; render the no-media form.
+                ctx.ui.personOfflineCached = offlinePerson.source === 'cache';
                 renderPersonDetails(ctx, person, contentDiv);
+                prksOfflinePrependBanner(contentDiv, offlinePerson);
                 if (person) {
                     const nm =
                         typeof personDisplayName === 'function'
@@ -2901,6 +3043,12 @@ function initForms() {
             return;
         }
         const data = await res.json().catch(() => ({}));
+        if (res.ok && Array.isArray(payload.roles) && payload.roles.length) {
+            // The Work-create endpoint can create role links in the same
+            // canonical request, bypassing POST /api/roles entirely -- so this
+            // path owes People its own invalidation.
+            if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
+        }
         if (!res.ok) {
             const errText = data.error || 'Could not create the file.';
             if (statusMsg) {
@@ -3254,6 +3402,9 @@ function initForms() {
                 await prksAlertMessage('Last name is required.', 'Validation');
                 return;
             }
+            // The modal was guarded when it opened; connectivity can change
+            // while it is open, so re-check immediately before the POST.
+            if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(personBtn, true, { busyLabel: 'Saving…' });
             try {
                 const res = await prksRequest('/api/persons', {
@@ -3266,6 +3417,7 @@ function initForms() {
                     await prksAlertMessage(data.error || `Could not save person (${res.status})`, 'Could not save');
                     return;
                 }
+                if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
             } catch (e) {
                 await prksAlertMessage('Network error — could not save person.', 'Error');
                 return;
@@ -3371,11 +3523,12 @@ function initForms() {
                 }
                 return;
             }
-            // Author links appear in cached Argument sources; the shared helper
-            // owns that dependency so every role surface stays consistent.
+            // Role links appear in cached Person read models (every role type) and
+            // in cached Argument sources (Author only); the shared helper owns
+            // both so every role surface stays consistent.
             coherenceToken =
-                typeof prksMarkWorkAuthorDisplayChanged === 'function'
-                    ? prksMarkWorkAuthorDisplayChanged(work_id, role_type)
+                typeof prksMarkWorkRoleChanged === 'function'
+                    ? prksMarkWorkRoleChanged(work_id, role_type)
                     : typeof prksOfflineMarkEntityChanged === 'function'
                       ? prksOfflineMarkEntityChanged('work', work_id)
                       : null;

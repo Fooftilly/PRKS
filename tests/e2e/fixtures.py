@@ -298,3 +298,57 @@ def seed_arguments_library(storage_root: str) -> dict:
         }
     )
     return ids
+
+
+PERSON_B_FIRST = "Bea"
+PERSON_B_LAST = "Reviewer"
+PERSON_B_DISPLAY = "Bea Reviewer"
+PERSON_UNVISITED_FIRST = "Uma"
+PERSON_UNVISITED_LAST = "Unvisited"
+PERSON_UNVISITED_DISPLAY = "Uma Unvisited"
+PERSON_A_ABOUT = "Biography text used by offline Person detail assertions."
+PERSON_A_ALIASES = "E. Author"
+PERSON_GROUP_NAME = "E2E Person Group"
+PERSON_A_BIRTH = "1903"
+PERSON_A_DEATH = "1969"
+
+
+def seed_people_library(storage_root: str) -> dict:
+    """seed_arguments_library plus a richer People shape.
+
+    Person A keeps the seeded Author role on Work A and gains a biography,
+    aliases, a lifespan and a Group membership; Person B carries a *non-Author*
+    role so the People-vs-Arguments coherence boundary is observable; Person C is
+    deliberately never opened so "cached index, uncached detail" is testable.
+    """
+    ids = seed_arguments_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    db.update_person_metadata(
+        ids["person"],
+        {
+            "about": PERSON_A_ABOUT,
+            "aliases": PERSON_A_ALIASES,
+            "birth_date": PERSON_A_BIRTH,
+            "death_date": PERSON_A_DEATH,
+            "link_wikipedia": "https://example.com/wiki/e2e-author",
+        },
+    )
+    group_id = db.add_person_group(PERSON_GROUP_NAME)
+    db.set_person_group_memberships(ids["person"], [group_id])
+    person_b = db.add_person(first_name=PERSON_B_FIRST, last_name=PERSON_B_LAST)
+    db.add_role(person_b, ids["work_b"], "Reviewer")
+    person_unvisited = db.add_person(
+        first_name=PERSON_UNVISITED_FIRST, last_name=PERSON_UNVISITED_LAST
+    )
+    ids.update(
+        {
+            "person_a": ids["person"],
+            "person_b": person_b,
+            "person_unvisited": person_unvisited,
+            "person_group": group_id,
+            "person_b_display": PERSON_B_DISPLAY,
+            "person_unvisited_display": PERSON_UNVISITED_DISPLAY,
+        }
+    )
+    return ids
