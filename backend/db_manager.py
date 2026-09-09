@@ -3068,21 +3068,6 @@ class PRKSDatabase:
         """
         return list(self.execute_query(q, (person_id,)))
 
-    def _person_group_descendant_ids(self, group_id: str) -> set:
-        """Strict descendants of group_id (not including group_id)."""
-        rows = self.execute_query(
-            """
-            WITH RECURSIVE sub(id) AS (
-                SELECT id FROM person_groups WHERE parent_id = ?
-                UNION ALL
-                SELECT g.id FROM person_groups g JOIN sub ON g.parent_id = sub.id
-            )
-            SELECT id FROM sub
-            """,
-            (group_id,),
-        )
-        return {r["id"] for r in rows}
-
     def _person_group_id_for_name_insensitive(self, name: str) -> Optional[str]:
         n = (name or "").strip()
         if not n:
@@ -3099,22 +3084,11 @@ class PRKSDatabase:
         if found and found != exclude_group_id:
             raise ValueError("A group with this name already exists.")
 
-    def resolve_or_create_parent_group_by_name(
-        self, parent_name: str, for_child_group_id: Optional[str] = None
-    ) -> str:
-        """Existing group id (case-insensitive) or new top-level group id."""
-        pn = (parent_name or "").strip()
-        if not pn:
-            raise ValueError("Parent name is required.")
-        row = self.execute_query(
-            "SELECT id FROM person_groups WHERE LOWER(name) = LOWER(?) LIMIT 1", (pn,)
-        )
-        if row:
-            found = row[0]["id"]
-            if for_child_group_id and found == for_child_group_id:
-                raise ValueError("A group cannot be its own parent.")
-            return found
-        return self.add_person_group(pn, None, "")
+    # Parent resolution and the descendant/cycle walk deliberately live only
+    # inside the transaction-aware `_resolve_group_parent` / `_update_person_group`
+    # helpers below. A standalone, auto-committing version of either is what let
+    # a failed Group request leave an orphan typed parent behind, so do not
+    # reintroduce one -- and do not move parent resolution back into server.py.
 
     def add_person_group(
         self, name: str, parent_id: Optional[str] = None, description: str = ""

@@ -49,6 +49,7 @@ from tests.e2e.fixtures import (
 )
 from tests.e2e.harness import AppServer, PageCollector, open_app_page, require_chromium
 from tests.e2e.test_app import (
+    MINIMAL_PDF,
     _FOCUSED_PDF,
     _FOCUSED_VIEWER,
     _FOCUSED_WORK_NOTES,
@@ -5784,6 +5785,58 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         _wait_entity_uncached(page, "person", server.ids["person_a"])
         _wait_list_uncached(page, "people:index")
 
+    # Person Groups shares every Work-side dependency People has, because a
+    # cached Group detail embeds whole People index rows (assigned_roles and
+    # all). These helpers keep that half of the matrix assertable next to the
+    # workflow that owns it rather than only in the Person Groups suite.
+    def _cache_person_groups(self, page, server):
+        page.evaluate("() => window.prksNavigate('#/people/groups')")
+        _wait_list_cached(page, "person-groups:index")
+        page.evaluate(
+            "id => window.prksNavigate('#/people/groups/' + encodeURIComponent(id))",
+            server.ids["person_group"],
+        )
+        _wait_entity_cached(page, "person-group", server.ids["person_group"])
+
+    def _assert_person_groups_invalidated(self, page, server, before):
+        page.wait_for_function(
+            "n => (typeof prksOfflineDomainGeneration === 'function'"
+            " ? prksOfflineDomainGeneration('person-groups') : 0) > n",
+            arg=before,
+            timeout=20000,
+        )
+        _wait_entity_uncached(page, "person-group", server.ids["person_group"])
+        _wait_list_uncached(page, "person-groups:index")
+
+    def _assert_person_groups_intact(self, page, server, before):
+        self.assertEqual(_domain_generation(page, "person-groups"), before)
+        self.assertIsNotNone(_cached_list(page, "person-groups:index"))
+        self.assertIsNotNone(_cached_entity(page, "person-group", server.ids["person_group"]))
+
+    def _create_work_through_the_modal(self, page, title, role=None):
+        """Drives the real New File modal, so the create handler's own
+        invalidation hooks are what is under test -- not a helper called by the
+        test itself."""
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.fill("#work-title", title)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        if role is not None:
+            person_id, role_type = role
+            page.evaluate(
+                """([pid, roleType]) => {
+                    document.getElementById('upload-person-id').value = pid;
+                    document.getElementById('upload-person-search').value = 'E2E linked person';
+                    document.getElementById('upload-role-type').value = roleType;
+                }""",
+                [person_id, role_type],
+            )
+            page.evaluate("() => window.addRoleToUploadList()")
+            page.locator("#upload-roles-list .author-tag").first.wait_for()
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
+
     # ---- Person mutations ---------------------------------------------------
 
     def test_person_create_update_and_delete_invalidate_people(self):
@@ -5927,12 +5980,70 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         self._assert_people_invalidated(page, server, before)
         self.assertGreater(_domain_generation(page, "arguments"), arguments_before)
 
-    def test_role_unlink_through_the_real_ui_invalidates_people(self):
+    def test_role_changes_through_the_real_ui_invalidate_people_and_groups(self):
+        """`prksMarkWorkRoleChanged()` owns the People/Person Groups/Arguments
+        split, but only a real role surface proves every surface calls it. Both
+        halves of the Author boundary are exercised through the same UI: a
+        non-Author link stales People and Person Groups and leaves Arguments
+        alone; an Author unlink additionally stales Arguments."""
         server, page, _context, _collector = self._start()
         person_a = server.ids["person_a"]
+        person_b = server.ids["person_b"]
 
+        # Non-Author link, through the Manage relationships panel.
         self._cache_people(page, server)
+        self._cache_person_groups(page, server)
         before = _domain_generation(page, "people")
+        before_groups = _domain_generation(page, "person-groups")
+        before_arguments = _domain_generation(page, "arguments")
+        _open_work_from_home(page, WORK_A_TITLE)
+        _open_details_drawer_if_tiled(page)
+        page.locator("#panel-content button", has_text="Manage relationships").click()
+        page.locator(".work-link-person-btn").click()
+        page.wait_for_selector("#role-modal:not(.hidden)")
+        # The role segmented control is mounted when the modal opens, so pick
+        # the role through it rather than writing its hidden input first.
+        page.locator('#role-role-seg-mount .prks-segmented__btn[data-value="Reviewer"]').click()
+        page.evaluate(
+            """([pid, wid]) => {
+                document.getElementById('role-person-id').value = pid;
+                document.getElementById('role-person-search').value = 'E2E linked person';
+                document.getElementById('role-work-id').value = wid;
+                document.getElementById('role-work-search').value = 'E2E linked work';
+            }""",
+            [person_b, server.ids["work_a"]],
+        )
+        self.assertEqual(page.locator("#role-type").input_value(), "Reviewer")
+        page.locator("#save-role-btn").click()
+        page.locator("#role-modal").wait_for(state="hidden", timeout=20000)
+        self.assertIn(
+            "Reviewer",
+            page.evaluate(
+                """async ([wid, pid]) => {
+                    const w = await fetchWorkDetails(wid);
+                    // A work role row is the joined Person row, so its `id`
+                    // is the person's id.
+                    return (w.roles || [])
+                        .filter(r => String(r.id) === String(pid))
+                        .map(r => r.role_type);
+                }""",
+                [server.ids["work_a"], person_b],
+            ),
+        )
+        self._assert_people_invalidated(page, server, before)
+        self._assert_person_groups_invalidated(page, server, before_groups)
+        self.assertEqual(
+            _domain_generation(page, "arguments"),
+            before_arguments,
+            "a non-Author role cannot change any cached Argument's displayed authors",
+        )
+
+        # Author unlink, same panel.
+        self._cache_people(page, server)
+        self._cache_person_groups(page, server)
+        before = _domain_generation(page, "people")
+        before_groups = _domain_generation(page, "person-groups")
+        before_arguments = _domain_generation(page, "arguments")
         _open_work_from_home(page, WORK_A_TITLE)
         _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Manage relationships").click()
@@ -5944,6 +6055,10 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         page.locator("#prks-modal-confirm:not(.hidden)").wait_for(timeout=15000)
         page.locator("#prks-modal-confirm-ok").click()
         self._assert_people_invalidated(page, server, before)
+        self._assert_person_groups_invalidated(page, server, before_groups)
+        page.wait_for_function(
+            "n => prksOfflineDomainGeneration('arguments') > n", arg=before_arguments, timeout=20000
+        )
 
     # ---- Work mutations -----------------------------------------------------
 
@@ -6022,11 +6137,15 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         self.assertEqual(_domain_generation(page, "people"), before)
         self.assertIsNotNone(_cached_entity(page, "person", server.ids["person_a"]))
 
-    def test_work_deletion_invalidates_people(self):
+    def test_work_deletion_invalidates_people_and_person_groups(self):
+        """Deleting a Work drops its role rows, so every cached Person *and*
+        every cached Group member row that carried them is now stale."""
         server, page, _context, _collector = self._start()
 
         self._cache_people(page, server)
+        self._cache_person_groups(page, server)
         before = _domain_generation(page, "people")
+        before_groups = _domain_generation(page, "person-groups")
         _open_work_from_home(page, WORK_A_TITLE)
         _open_details_drawer_if_tiled(page)
         advanced = page.locator(".work-details-advanced")
@@ -6037,49 +6156,125 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         page.locator("#prks-modal-confirm-ok").click()
         page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
         self._assert_people_invalidated(page, server, before)
+        self._assert_person_groups_invalidated(page, server, before_groups)
 
-    def test_work_creation_invalidates_people_only_when_it_carries_role_links(self):
+    def test_work_creation_invalidates_people_and_groups_only_with_role_links(self):
+        """Driven through the real New File modal, so the create handler's own
+        hooks are what is under test. The Work-create endpoint can link roles in
+        the same canonical request, bypassing POST /api/roles, so it owes People
+        *and* Person Groups their own invalidation -- and owes them nothing at
+        all when the payload carries no roles."""
         server, page, _context, _collector = self._start()
         person_a = server.ids["person_a"]
+        _wait_sw_active(page)
 
+        # Case A: no role links -- neither read model can have changed.
         self._cache_people(page, server)
-        before = _domain_generation(page, "people")
-        page.evaluate(
-            """async () => {
-                await window.prksRequest('/api/works', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: 'Roleless Work', doc_type: 'book', roles: [] }),
-                });
-            }"""
-        )
+        self._cache_person_groups(page, server)
+        before_people = _domain_generation(page, "people")
+        before_groups = _domain_generation(page, "person-groups")
+        self._create_work_through_the_modal(page, "Roleless Modal Work")
         page.wait_for_timeout(500)
         self.assertEqual(
             _domain_generation(page, "people"),
-            before,
+            before_people,
             "a Work created with no role links cannot change the People read model",
         )
         self.assertIsNotNone(_cached_entity(page, "person", person_a))
+        self._assert_person_groups_intact(page, server, before_groups)
 
-        # The canonical create path can create role links without POST /api/roles.
-        before = _domain_generation(page, "people")
-        page.evaluate(
-            """async (personId) => {
-                const payload = {
-                    title: 'Work With Roles',
-                    doc_type: 'book',
-                    roles: [{ person_id: personId, role_type: 'Reviewer' }],
-                };
-                const res = await window.prksRequest('/api/works', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-                if (res.ok && payload.roles.length) window.prksMarkPeopleDomainChanged();
-            }""",
-            person_a,
+        # Case B: a non-Author role link stales People and Person Groups, and
+        # deliberately not Arguments.
+        self._cache_people(page, server)
+        self._cache_person_groups(page, server)
+        before_people = _domain_generation(page, "people")
+        before_groups = _domain_generation(page, "person-groups")
+        before_arguments = _domain_generation(page, "arguments")
+        self._create_work_through_the_modal(
+            page, "Reviewer Modal Work", role=(person_a, "Reviewer")
         )
-        self._assert_people_invalidated(page, server, before)
+        self._assert_people_invalidated(page, server, before_people)
+        self._assert_person_groups_invalidated(page, server, before_groups)
+        self.assertEqual(_domain_generation(page, "arguments"), before_arguments)
+
+        # Case C: an Author role link on a *newly created* Work stales the same
+        # two domains and no more.
+        self._cache_people(page, server)
+        self._cache_person_groups(page, server)
+        before_people = _domain_generation(page, "people")
+        before_groups = _domain_generation(page, "person-groups")
+        before_arguments = _domain_generation(page, "arguments")
+        self._create_work_through_the_modal(
+            page, "Author Modal Work", role=(person_a, "Author")
+        )
+        self._assert_people_invalidated(page, server, before_people)
+        self._assert_person_groups_invalidated(page, server, before_groups)
+        # ...but *not* Arguments, unlike an Author link onto an existing Work.
+        # A Work that did not exist a moment ago cannot be in any cached
+        # Argument's `sources[]` (those rows only come from putArgumentSources)
+        # or `mentions[]` (those come from research notes, empty at create), and
+        # no Person's displayed name changed. Copying the Author rule here would
+        # shorten the Arguments cache for nothing.
+        self.assertEqual(_domain_generation(page, "arguments"), before_arguments)
+
+    def test_managed_pdf_save_invalidates_people_and_person_groups(self):
+        """The managed PDF save changes file_size_bytes on every Person Work
+        card and can add `Mentioned` roles from annotation markup, both of which
+        are embedded in a cached Group's member rows. Driven by a real
+        highlight, so the hook lives on the canonical persistence path."""
+        server, page, _context, _collector = self._start()
+        _wait_sw_active(page)
+        self._cache_people(page, server)
+        self._cache_person_groups(page, server)
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.wait_for_function(
+            "() => { const pdf = %s; return !!(pdf && pdf.annotationPersistence); }" % _FOCUSED_PDF,
+            timeout=20000,
+        )
+        before_people = _domain_generation(page, "people")
+        before_groups = _domain_generation(page, "person-groups")
+        _commit_pdf_highlight(page)
+        page.wait_for_function(_PDF_SYNC_SETTLED_JS, timeout=30000)
+        self._assert_people_invalidated(page, server, before_people)
+        self._assert_person_groups_invalidated(page, server, before_groups)
+
+    def test_failed_managed_pdf_save_retains_the_person_groups_cache(self):
+        """Coherence is published only on acknowledged canonical success."""
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+        _wait_sw_active(page)
+        self._cache_people(page, server)
+        self._cache_person_groups(page, server)
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.wait_for_function(
+            "() => { const pdf = %s; return !!(pdf && pdf.annotationPersistence); }" % _FOCUSED_PDF,
+            timeout=20000,
+        )
+        before_groups = _domain_generation(page, "person-groups")
+
+        def fail_pdf_save(route):
+            if route.request.method == "POST":
+                route.fulfill(status=500, content_type="application/json", body="{}")
+            else:
+                route.fallback()
+
+        pattern = "**/api/works/%s/pdf" % work_a
+        page.route(pattern, fail_pdf_save)
+        try:
+            _commit_pdf_highlight(page)
+            page.wait_for_function(
+                "() => { const pdf = %s; return !!(pdf && pdf.syncState && pdf.syncState.lastError); }"
+                % _FOCUSED_PDF,
+                timeout=30000,
+            )
+            self._assert_person_groups_intact(page, server, before_groups)
+        finally:
+            _safe_unroute(page, pattern, fail_pdf_save)
+
 
     # ---- Group mutations ----------------------------------------------------
 

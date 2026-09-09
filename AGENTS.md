@@ -491,9 +491,11 @@ Phase 1 is read-only offline support. It currently covers:
   `?kind=stance`) and detail (`#/arguments/:argumentId`)
 - the People index (`#/people`), its role views (`#/people/role/:role`) and
   Person detail (`#/people/:personId`)
+- the Person Groups hierarchy (`#/people/groups`) and Group detail
+  (`#/people/groups/:groupId`)
 
-Person Group and Playlist routes and the Research Graph are not wrapped in the
-offline read-through path and must keep their ordinary online-only fetch/error
+Playlist routes and the Research Graph are not wrapped in the offline
+read-through path and must keep their ordinary online-only fetch/error
 behavior until their own mutation surfaces are explicitly hardened for offline
 use — do not add `prksOfflineDetailFetch`/`prksOfflineListFetch`/
 `prksOfflineGuardMutation` calls to those routes as an incidental part of
@@ -628,13 +630,17 @@ strings when renderers/search operate on them as strings; linked Work `year` and
 `published_date` follow the same rule. Validation protects type/shape, not
 business completeness, so empty strings remain valid.
 
-Two destinations reachable from a cached Person are not cached: the Research
-Graph, and Person Groups (`#/people/groups/:id` is a later slice). Group chips
-keep rendering with their canonical `href` intact, marked `aria-disabled` and
-intercepted on both `click` and middle-button `auxclick`, exactly like the
-Position → Argument contract. Linked Work cards are ordinary PRKS links, so the
-Work route decides for itself whether it has cached data — that is the main
-reason People is useful offline.
+One destination reachable from a cached Person is still not cached: the
+Research Graph. A Person's Group chips are now **ordinary PRKS links** — a
+cached Group detail opens offline, an uncached one reports "Group not available
+offline" — so `people.js` must not reintroduce the old `aria-disabled` /
+`click`+`auxclick` interception on `PERSON_GROUP_LINK_ROLE`; that role survives
+for styling and test identification only and is deliberately absent from
+`PERSON_CONTROL_SELECTOR`. Linked Work cards are ordinary PRKS links for the
+same reason, so the Work route decides for itself whether it has cached data —
+that is the main reason People is useful offline. There is no offline-specific
+router: every one of these destinations is reached through the same
+`prksNavigate` as online.
 
 **Offline media policy.** Phase 1 caches structured data only. A Person route
 mounted from cache sets `ctx.ui.personOfflineCached`, which suppresses the
@@ -802,6 +808,117 @@ eligible", which is only sound if a 4xx really means nothing changed. A
 metadata-only PATCH (no `group_ids`) keeps its original behavior, and the
 disposable portrait cache is cleared only after that transaction commits — its
 failure never fails the PATCH.
+
+Person Groups are **read-only** offline. The hierarchy uses the `lists` store
+under `person-groups:index`; Group detail uses the `entities` store under
+`kind: 'person-group'`. The two caches are independent and the index
+deliberately does **not** prefetch Group details — seeing a Group in the cached
+hierarchy is not a promise its detail was cached, and an unopened Group reports
+"Group not available offline" rather than "Group not found". The hierarchy
+tree, its local search, and expand/collapse all run entirely client-side over
+the one cached array (zero API requests offline). A cached *empty* array is the
+ordinary "No Person Groups yet." state; only a missing or invalid cached list is
+offline-unavailable. Group members are ordinary People rows validated by the
+shared `prksIsPeopleIndexRowShape()` — never a weaker Group-local duplicate —
+and parent/subgroup links are ordinary Group routes, so each destination decides
+for itself.
+
+The Group validators (`prksIsPersonGroupSummaryShape`,
+`prksIsPersonGroupsIndexShape`, `prksIsPersonGroupShape`) are deliberately split
+rather than uniformly strict: `child_count` is required on **index** rows only,
+because the canonical detail endpoint serialises it on neither the group itself
+nor its `children[]`. `prksIsGroupCount()` stays strict (finite, non-negative
+number) because every count is a SQL `COUNT(*)`. `parent` is always present on a
+detail — `null` for a top-level group — so a missing key is a malformed
+response, not a root group.
+
+The fifth domain is `person-groups` (`entityKinds: ['person-group']`,
+`listKeys: ['person-groups:index']`), defined once in
+`prksOfflineMarkPersonGroupsChanged()`. **Person Group data is a domain-level
+read model, not a per-Group cache**, and that is why the whole domain goes at
+once:
+
+- renaming child C stales the index, C's detail, *and* C's parent's
+  `children[]`
+- changing C's membership stales C's `member_count`, C's detail, *and* the
+  parent detail's child `member_count`
+- reparenting C stales the old parent, the new parent, *and* the hierarchy index
+
+Its dependency table:
+
+| Canonical change | Domains invalidated |
+| --- | --- |
+| Group create | Person Groups only |
+| Group update | Person Groups + People |
+| Group delete | Person Groups + People |
+| Group member add/remove | Person Groups + People |
+| Person profile update | People + Person Groups (+ Arguments on a canonical **name** change only) |
+| Person delete | People + Person Groups |
+| Person create | People only |
+| any Work-role mutation | People + Person Groups (+ Arguments for `Author` only) |
+| Work creation carrying `roles: [...]` | People + Person Groups — **never** Arguments, even for an `Author` role |
+| Work deletion | Person Groups + Concepts, Arguments, People |
+| managed PDF save | People + Person Groups |
+
+Two asymmetries are deliberate, and both follow from the same rule: a record
+that did not exist a moment ago cannot be inside anyone's cached read model. A
+brand-new Group never invalidates People — the Person PATCH that later assigns
+it does that on its own. And a brand-new Work carrying an `Author` role never
+invalidates Arguments, unlike an Author link onto an *existing* Work: the new
+Work is in no cached Argument's `sources[]` (those rows only come from
+`putArgumentSources`) or `mentions[]` (those come from research notes, empty at
+create), and no Person's displayed name changed. Do not "fix" that by routing
+Work-create through `prksMarkWorkRoleChanged()`; it would shorten the Arguments
+cache for nothing.
+
+Everything else Work-side is inherited rather than invented: a cached Group
+detail embeds whole People index rows, so anything that stales a Person's
+`assigned_roles` stales the Group that Person is in. Role coherence therefore rides on the same one helper,
+`prksMarkWorkRoleChanged(workId, roleType)` — Person Groups and People
+unconditionally, Arguments only for `Author`.
+
+Deliberately **not** invalidating Person Groups: Work metadata/title/status
+saves, Work folder/tag/playlist membership, Research Notes saves, and every
+Concept, Position and Argument/Stance mutation — none of them can change a
+Group's name, hierarchy or membership rows. Ordinary *unassigned* Person
+creation is excluded for the same reason Group creation does not invalidate
+People. Person Groups must not become a catch-all invalidation domain; that
+exclusion list is the point of the domain, not an oversight.
+
+**Person Group mutations are canonically atomic.**
+`add_person_group_with_parent_options`, `update_person_group` and
+`delete_person_group` each run their multi-write work in **one** transaction:
+typed-parent resolution/creation plus the requested create, typed-parent
+resolution/creation plus the update, and child reparenting plus the deletion. A failed canonical Group request must therefore never leave a
+partial mutation behind — no orphan typed parent survives a rejected create or
+update, and a failed delete leaves the child hierarchy intact. This matters
+independently of offline support, but offline coherence rests on it directly:
+"a failed canonical request keeps the previous cache eligible" is only sound if
+a 4xx really means nothing changed. Parent resolution lives only in
+`db_manager.py`'s transaction-aware `_resolve_group_parent` /
+`_insert_person_group` / `_update_person_group` helpers — the standalone
+auto-committing versions (`resolve_or_create_parent_group_by_name`,
+`_person_group_descendant_ids`) were the source of the orphan-parent bug and are
+gone. Do not reintroduce either, and do not move parent resolution back into
+`server.py`.
+
+Every Group mutation surface routes through the `api.js` canonical wrappers
+(`createPersonGroup`, `updatePersonGroup`, `deletePersonGroup`,
+`addPersonGroupMember`, `removePersonGroupMember`), which guard connectivity
+*before* the request and publish coherence only after acknowledged success —
+including the standard New Group modal and typed Group creation from the Person
+profile editor. `openModal('group-modal')` is guarded centrally so the Group
+page, the ribbon and the command palette are covered at once, and Save/Delete/
+add/remove each re-check connectivity immediately before their canonical
+request because the connection can drop while a dialog is open.
+`prksBindPersonGroupOfflineState()` settles the live half: a mounted Group
+editor or membership manager keeps its unsaved draft with only its mutating
+controls inert (**Cancel and Done stay live**) rather than being reloaded on a
+connectivity change. Because that editor lives in the shared right panel, its
+async picker setup re-checks ctx generation, that the editor is still mounted,
+that this ctx still owns the panel, and that the same edit panel is still
+present — never "whichever context is focused when the callback happens to
+finish", which would mutate another tab's panel.
 
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`

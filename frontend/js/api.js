@@ -1302,6 +1302,7 @@ window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
 window.prksMarkArgumentsDomainChanged = prksMarkArgumentsDomainChanged;
 window.prksMarkPeopleDomainChanged = prksMarkPeopleDomainChanged;
 window.prksMarkPersonGroupsDomainChanged = prksMarkPersonGroupsDomainChanged;
+window.createPersonGroup = createPersonGroup;
 window.updatePersonGroup = updatePersonGroup;
 window.deletePersonGroup = deletePersonGroup;
 window.addPersonGroupMember = addPersonGroupMember;

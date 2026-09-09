@@ -170,6 +170,42 @@ async function run() {
         assertEq('Group list constant', mod.PRKS_OFFLINE_PERSON_GROUPS_LIST_KEY, 'person-groups:index');
         assert('Group canonical runtime helper exported', typeof mod.prksOfflineMarkPersonGroupsChanged === 'function');
     }
+    /* The superseded-cleanup invariant is domain-generic, but each existing
+     * case names an earlier domain, so one focused Group case keeps the fifth
+     * domain covered without cloning the whole suite under a new name. */
+    {
+        const store = makeFakeStore();
+        const releases = [];
+        const slowStore = Object.assign({}, store, {
+            deleteEntitiesByKind: function () {
+                return new Promise(function (resolve) {
+                    releases.push(function () { resolve(true); });
+                });
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: () => Promise.reject(Error('offline')),
+            store: slowStore, setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        // A Group rename, then a membership change: overlapping Person Groups
+        // invalidations are the normal case here.
+        const genA = runtime.markDomainChanged('person-groups', { entityKinds: ['person-group'] });
+        const genB = runtime.markDomainChanged('person-groups', { entityKinds: ['person-group'] });
+        assert('the second Groups invalidation has a newer generation', genB > genA);
+        releases[0]();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a superseded Groups cleanup cannot unblock the newer one',
+            runtime.isDomainBlocked('person-groups'), true);
+        assertEq('a superseded completion never resets the generation',
+            runtime.currentDomainGeneration('person-groups'), genB);
+        releases[1]();
+        await runtime._domainCleanup('person-groups');
+        assertEq('the current Groups generation settles normally',
+            runtime.isDomainBlocked('person-groups'), false);
+    }
     /* ---- connectivity FSM: request failure -> offline, probe backoff, recovery -> online ---- */
     {
         const timers = makeFakeTimers();

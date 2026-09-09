@@ -128,25 +128,26 @@ function safeHttpUrl(url) {
 /* --- Offline policy for People routes (AGENTS.md "Offline / PWA") ------------
  * People are read-only offline in Phase 1: cached index/role views and Person
  * profiles render, every canonical mutation is blocked outright (never queued,
- * never faked), and the two destinations that are not cached at all -- the
- * Research Graph and Person Groups -- say so instead of navigating somewhere
- * broken. Linked Work cards stay ordinary PRKS links so the Work route decides
- * for itself. Controls carry these roles so one helper can settle them all,
- * including markup rerendered after the initial bind. */
+ * never faked), and the one destination that is not cached at all -- the
+ * Research Graph -- says so instead of navigating somewhere broken. Linked Work
+ * cards and Group chips stay ordinary PRKS links so the Work and Group routes
+ * decide for themselves. Controls carry these roles so one helper can settle
+ * them all, including markup rerendered after the initial bind. */
 const PERSON_MUTATION_ROLE = 'person-mutation-control';
 const PERSON_ONLINE_ONLY_ROLE = 'person-online-only-control';
+/* Group chips keep this role for styling/test identification only: since Person
+ * Groups became offline-capable they are ordinary links and are deliberately
+ * absent from PERSON_CONTROL_SELECTOR. */
 const PERSON_GROUP_LINK_ROLE = 'person-group-link';
 const PERSON_CONTROL_SELECTOR =
     '[data-prks-role="' + PERSON_MUTATION_ROLE + '"], ' +
-    '[data-prks-role="' + PERSON_ONLINE_ONLY_ROLE + '"], ' +
-    '[data-prks-role="' + PERSON_GROUP_LINK_ROLE + '"]';
+    '[data-prks-role="' + PERSON_ONLINE_ONLY_ROLE + '"]';
 /* The profile editor's own inputs: disabled while offline so a draft is held
  * rather than silently discarded. Cancel is deliberately excluded so the user
  * can always leave edit mode. */
 const PERSON_EDITOR_SELECTOR =
     '.person-panel-edit input, .person-panel-edit textarea, .person-panel-edit select,' +
     ' .person-panel-edit button:not(#pd-cancel-btn):not([data-prks-person-cancel])';
-const PERSON_GROUPS_OFFLINE_MESSAGE = 'Person Groups are not available offline yet.';
 
 function prksPersonRuntimeState() {
     return typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : 'online';
@@ -157,32 +158,19 @@ function prksPersonMutationBlocked(message) {
     return typeof prksOfflineGuardMutation === 'function' ? prksOfflineGuardMutation(message) : false;
 }
 
-/** Read-only destinations that are still online-only (graph, Person Groups). */
-function prksPersonConnectionRequired(message) {
-    if (prksPersonRuntimeState() === 'online') return false;
-    if (typeof prksAlertMessage === 'function') {
-        prksAlertMessage(message || 'This action requires a connection to PRKS.', 'Offline');
-    }
-    return true;
-}
-
 function prksApplyPersonOfflineState(container) {
     if (!container || !container.querySelectorAll) return;
     const online = prksPersonRuntimeState() === 'online';
     const nodes = container.querySelectorAll(PERSON_CONTROL_SELECTOR);
     for (let i = 0; i < nodes.length; i++) {
         const el = nodes[i];
-        const isGroupLink = el.getAttribute('data-prks-role') === PERSON_GROUP_LINK_ROLE;
-        // Buttons take native `disabled`. A Group chip keeps its real anchor and
-        // canonical href so the destination stays inspectable and copyable -- it
-        // is marked, and its activation is intercepted below.
-        if (!isGroupLink && 'disabled' in el) el.disabled = !online;
-        if (online || isGroupLink) {
+        if ('disabled' in el) el.disabled = !online;
+        if (online) {
             el.removeAttribute('aria-disabled');
             el.removeAttribute('title');
         } else {
             el.setAttribute('aria-disabled', 'true');
-            el.setAttribute('title', isGroupLink ? PERSON_GROUPS_OFFLINE_MESSAGE : 'Requires a connection to PRKS');
+            el.setAttribute('title', 'Requires a connection to PRKS');
         }
     }
 }

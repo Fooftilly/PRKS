@@ -220,8 +220,10 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         )
 
     def test_graph_and_playlists_stay_online_only(self):
-        """Phase 1 stops at Work/Concept/Position/Argument/People. Nothing else
-        may be wrapped in the offline read-through path as a side effect."""
+        """Phase 1 covers Work, Concepts, Positions, Arguments/Stances, People
+        and Person Groups. Playlists and the Research Graph are the remaining
+        online-only read routes; neither may be wrapped in the offline
+        read-through path as a side effect of unrelated work."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         for case in (
             "case 'research-graph': {",
@@ -334,6 +336,56 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # Work creation can create role links in the same canonical request.
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         self.assertIn("Array.isArray(payload.roles) && payload.roles.length", app)
+
+    def test_person_groups_domain_exclusions_and_work_side_hooks(self):
+        """Person Groups inherits every Work-side dependency People has, because
+        a cached Group detail embeds whole People index rows -- and inherits
+        People's exclusions with it. The E2Es prove the behavior; this catches a
+        hook being moved off the canonical-success path by a refactor."""
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        # Role coherence is owned by the one shared helper.
+        role_at = api.index("function prksMarkWorkRoleChanged(")
+        role_body = api[role_at : api.index("\nasync function ", role_at)]
+        self.assertIn("prksMarkPersonGroupsDomainChanged();", role_body)
+        # Work title/metadata and bulk status are People-only: a Group's name,
+        # hierarchy and membership rows cannot change.
+        title_at = api.index("function prksMarkWorkTitleChanged(")
+        self.assertNotIn("PersonGroups", api[title_at : title_at + 800])
+        bulk_at = api.index("async function bulkUpdateWorks(")
+        self.assertNotIn("PersonGroups", api[bulk_at : bulk_at + 1600])
+        # Work deletion drops role rows out of every cached Group member row.
+        works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
+        delete_at = works.index("async function deleteWork(")
+        self.assertIn("prksOfflineMarkPersonGroupsChanged()", works[delete_at : delete_at + 3000])
+        # The managed PDF save owns it; the separate annotations JSON save does not.
+        pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
+        pdf_at = pdf.index("async function exportAndPersistPdfCopy(")
+        pdf_body = pdf[pdf_at : pdf_at + 1800]
+        self.assertIn("prksOfflineMarkPersonGroupsChanged()", pdf_body)
+        # ... and only after the canonical response was acknowledged.
+        self.assertLess(pdf_body.index("if (!pdfRes.ok)"), pdf_body.index("PersonGroups"))
+        ann_at = pdf.index("async function runWorkAnnotationAndPdfPersistencePass(")
+        ann_body = pdf[ann_at : ann_at + 2000]
+        self.assertNotIn("PersonGroups", ann_body.split("/annotations")[1])
+        # Work creation can link roles without ever calling POST /api/roles.
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        create_at = app.index("if (res.ok && Array.isArray(payload.roles) && payload.roles.length) {")
+        self.assertIn("prksMarkPersonGroupsDomainChanged();", app[create_at : create_at + 600])
+        # Person mutations: profile save and delete stale Groups, plain
+        # creation does not.
+        people = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
+        for fn in ("async function savePersonProfile(", "async function deletePerson("):
+            at = people.index(fn)
+            self.assertIn("prksMarkPersonGroupsDomainChanged", people[at : at + 4600], fn)
+        # Concept, Position and Argument mutations never touch it. (Research
+        # Notes saves are covered behaviourally by the Person Groups E2Es.)
+        for name in ("async function createConcept(",
+                     "async function updateConcept(", "async function createPosition(",
+                     "async function updatePosition(", "async function createArgument(",
+                     "async function updateArgument(", "async function putArgumentTargets(",
+                     "async function putArgumentSources("):
+            at = api.index(name)
+            self.assertNotIn("PersonGroups", api[at : at + 1400], name)
 
     def test_group_mutations_invalidate_people_except_bare_creation(self):
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))

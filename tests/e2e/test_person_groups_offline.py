@@ -93,6 +93,13 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         page.evaluate("async () => { await prksRequest('/api/settings'); }")
         page.wait_for_function("prksOfflineRuntimeState() === 'online'")
 
+    def watch(self, page, methods, fragment='/api/person-groups'):
+        """Records every canonical Group request of the given methods."""
+        seen = []
+        page.on('request', lambda req: seen.append(req.method + ' ' + urlparse(req.url).path)
+                if req.method in methods and fragment in urlparse(req.url).path else None)
+        return seen
+
     def test_hierarchy_search_expansion_and_no_detail_prefetch(self):
         server, page, context = self.start()
         seen = []
@@ -114,7 +121,11 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         o._wait_content_contains(page, 'Parent Branch')
         o._wait_content_contains(page, o.PERSON_GROUP_NAME)
         o._wait_content_contains(page, 'Child Branch')
-        self.assertEqual([p for p in seen if p.startswith('/api/')], [])
+        # The connectivity probe (`/api/settings`) runs on its own backoff
+        # while offline and is not something this page issued; everything else
+        # under /api/ would be.
+        self.assertEqual(
+            [p for p in seen if p.startswith('/api/') and p != '/api/settings'], [])
         self.assertTrue(page.locator('[data-prks-role="group-mutation-control"]').first.is_disabled())
         page.locator('a.prks-group-tree__link', has_text='Child Branch').click()
         o._wait_offline_unavailable(page)
@@ -298,6 +309,22 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.assertEqual(page.locator('#group-modal:not(.hidden)').count(), 0)
         self.assertEqual(posts, [])
 
+    def test_global_new_group_surfaces_are_covered_by_the_central_guard(self):
+        """The ribbon and the command palette both route through
+        openModal('group-modal'), so guarding openModal covers every surface at
+        once. One global surface is exercised offline to prove that in situ."""
+        server, page, context = self.start()
+        self.index(page)
+        page.wait_for_selector('.prks-group-library')
+        self.offline(page, context)
+        posts = self.watch(page, ('POST',))
+        page.locator('#prks-ribbon-new-more').click()
+        page.wait_for_selector('#prks-create-menu:not([hidden])')
+        page.locator("#prks-create-menu [role='menuitem']", has_text='New Group').click()
+        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
+        self.assertEqual(page.locator('#group-modal:not(.hidden)').count(), 0)
+        self.assertEqual(posts, [])
+
     def test_cached_group_cannot_enter_mutation_modes(self):
         server, page, context = self.start()
         self.cache(page, server.ids)
@@ -350,6 +377,79 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.offline(page, context)
         page.locator('button[onclick="prksTogglePersonGroupMembersEdit()"]').click()
         self.assertEqual(page.locator('#group-add-member-btn').count(), 0)
+
+    def test_group_save_after_disconnect_issues_no_patch(self):
+        """Disabled controls are the visible half; the guards inside the Save
+        handler and inside updatePersonGroup() are what actually has to hold
+        when the click still arrives."""
+        server, page, context = self.start()
+        self.detail(page, server.ids['person_group'])
+        o._wait_content_contains(page, 'Group description')
+        o._open_details_drawer_if_tiled(page)
+        page.evaluate('openPersonGroupEdit()')
+        page.wait_for_function("!!document.querySelector('#gd-save-btn')?.onclick")
+        page.locator('#gd-name').fill('Renamed while connected')
+        self.offline(page, context)
+        seen = self.watch(page, ('PATCH',))
+        # The button is disabled, so invoke the handler directly: the guards
+        # inside it -- not the disabled attribute -- are what is under test.
+        page.evaluate("() => { void document.getElementById('gd-save-btn').onclick(); }")
+        page.wait_for_timeout(500)
+        self.assertEqual(seen, [])
+        self.assertEqual(page.locator('#gd-name').input_value(), 'Renamed while connected')
+        self.assertEqual(page.locator('.group-sidebar-pane--edit').count(), 1)
+
+    def test_delete_confirmed_after_disconnect_issues_no_delete(self):
+        """The connection can drop while the confirmation dialog is open, so the
+        handler re-checks after the user confirms, not only before asking."""
+        server, page, context = self.start()
+        self.detail(page, server.ids['person_group'])
+        o._wait_content_contains(page, 'Group description')
+        o._open_details_drawer_if_tiled(page)
+        page.evaluate('openPersonGroupEdit()')
+        page.wait_for_function("!!document.querySelector('#gd-delete-btn')?.onclick")
+        page.evaluate("() => { void document.getElementById('gd-delete-btn').onclick(); }")
+        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
+        self.offline(page, context)
+        seen = self.watch(page, ('DELETE',))
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_timeout(500)
+        self.assertEqual(seen, [])
+        self.assertEqual(page.evaluate("() => location.hash").split('/')[-1], server.ids['person_group'])
+
+    def test_member_remove_confirmed_after_disconnect_issues_no_delete(self):
+        server, page, context = self.start()
+        gid = server.ids['person_group']
+        self.detail(page, gid)
+        o._wait_content_contains(page, 'Group description')
+        page.evaluate('prksTogglePersonGroupMembersEdit()')
+        page.wait_for_function("!!document.querySelector('#group-add-member-btn')?.onclick")
+        page.locator('[data-remove-member]').first.click()
+        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
+        self.offline(page, context)
+        seen = self.watch(page, ('DELETE',))
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_timeout(500)
+        self.assertEqual(seen, [])
+        for member in (o.PERSON_DISPLAY, o.PERSON_UNVISITED_DISPLAY):
+            self.assertIn(member, o._content_text(page))
+
+    def test_member_add_after_disconnect_issues_no_post(self):
+        server, page, context = self.start()
+        gid = server.ids['person_group']
+        self.detail(page, gid)
+        o._wait_content_contains(page, 'Group description')
+        page.evaluate('prksTogglePersonGroupMembersEdit()')
+        page.wait_for_function("!!document.querySelector('#group-add-member-btn')?.onclick")
+        page.evaluate("pid => { document.getElementById('group-add-member-id').value = pid; }",
+                      server.ids['person_b'])
+        self.offline(page, context)
+        seen = self.watch(page, ('POST',))
+        page.evaluate("() => { void document.getElementById('group-add-member-btn').onclick(); }")
+        page.wait_for_timeout(500)
+        self.assertEqual(seen, [])
+        self.assertEqual(page.evaluate("() => document.getElementById('group-add-member-id').value"),
+                         server.ids['person_b'])
 
     def test_direct_group_operations_invalidate_exact_domains(self):
         server, page, context = self.start()
