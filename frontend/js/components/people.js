@@ -1097,6 +1097,15 @@ async function savePersonProfile(personId) {
     if (btn && typeof prksSetButtonBusy === 'function') {
         prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
     }
+    // Cached Argument sources display each source Work's Authors by canonical
+    // first/last name, so only a real name change stales the Arguments domain.
+    // Everything else on this form (biography, links, dates, groups, portrait)
+    // is absent from that read model and must not cost the user their cache.
+    const _personBefore = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
+    const _personNameChanged =
+        !_personBefore ||
+        String(_personBefore.first_name || '') !== String(payload.first_name || '') ||
+        String(_personBefore.last_name || '') !== String(payload.last_name || '');
     try {
         const res = await prksRequest(`/api/persons/${personId}`, {
             method: 'PATCH',
@@ -1113,6 +1122,11 @@ async function savePersonProfile(personId) {
                 await prksAlertMessage(patchBody.error || 'Could not save profile.', 'Could not save');
             }
             return;
+        }
+        if (_personNameChanged && typeof prksMarkArgumentsDomainChanged === 'function') {
+            // Canonical success controls coherence, so this runs before any UI
+            // ownership test -- exactly like the Work-side coherence hooks.
+            prksMarkArgumentsDomainChanged();
         }
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&

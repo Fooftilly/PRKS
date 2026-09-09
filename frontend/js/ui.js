@@ -1458,10 +1458,14 @@ async function prksEditRoleCreditOnWork(btn) {
         await prksAlertMessage(data.error || 'Could not update name on file.', 'Could not save');
         return;
     }
+    // Cached Argument sources carry each Author's name and per-Work credit
+    // name, so both editing and removing an Author link stale Arguments.
     const coherenceToken =
-        typeof prksOfflineMarkEntityChanged === 'function'
-            ? prksOfflineMarkEntityChanged('work', workId)
-            : null;
+        typeof prksMarkWorkAuthorDisplayChanged === 'function'
+            ? prksMarkWorkAuthorDisplayChanged(workId, roleType)
+            : typeof prksOfflineMarkEntityChanged === 'function'
+              ? prksOfflineMarkEntityChanged('work', workId)
+              : null;
     await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToken);
 }
 
@@ -1625,10 +1629,14 @@ async function addRoleToWorkFromMetaEditor(workId) {
             await prksNotifyRoleLinkFailure(data.error, roleType);
             return;
         }
+        // Cached Argument sources list each source Work's Authors, so an Author
+        // link stales the Arguments domain; other role types do not.
         const coherenceToken =
-            typeof prksOfflineMarkEntityChanged === 'function'
-                ? prksOfflineMarkEntityChanged('work', resolvedWorkId)
-                : null;
+            typeof prksMarkWorkAuthorDisplayChanged === 'function'
+                ? prksMarkWorkAuthorDisplayChanged(resolvedWorkId, roleType)
+                : typeof prksOfflineMarkEntityChanged === 'function'
+                  ? prksOfflineMarkEntityChanged('work', resolvedWorkId)
+                  : null;
         if (typeof fetchWorkDetails === 'function') {
             const _refreshed = await fetchWorkDetails(resolvedWorkId);
             if (_refreshed && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
@@ -3500,10 +3508,14 @@ async function prksRemoveWorkRoleLink(btn) {
         await prksAlertMessage(data.error || 'Could not remove link.', 'Could not save');
         return;
     }
+    // Cached Argument sources carry each Author's name and per-Work credit
+    // name, so both editing and removing an Author link stale Arguments.
     const coherenceToken =
-        typeof prksOfflineMarkEntityChanged === 'function'
-            ? prksOfflineMarkEntityChanged('work', workId)
-            : null;
+        typeof prksMarkWorkAuthorDisplayChanged === 'function'
+            ? prksMarkWorkAuthorDisplayChanged(workId, roleType)
+            : typeof prksOfflineMarkEntityChanged === 'function'
+              ? prksOfflineMarkEntityChanged('work', workId)
+              : null;
     await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToken);
 }
 

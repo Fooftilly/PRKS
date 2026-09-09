@@ -229,3 +229,72 @@ def seed_positions_library(storage_root: str) -> dict:
         }
     )
     return ids
+
+
+ARGUMENT_A_NAME = "E2E Cached Argument"
+ARGUMENT_A_TEXT = "Argument main text used by offline Argument detail assertions."
+ARGUMENT_B_NAME = "E2E Target Argument"
+ARGUMENT_C_NAME = "E2E Response Argument"
+ARGUMENT_UNVISITED_NAME = "E2E Unvisited Argument"
+STANCE_NAME = "E2E Cached Stance"
+STANCE_TEXT = "Stance main text used by offline Stance detail assertions."
+ARGUMENT_SOURCE_PAGES = "11-22"
+
+
+def seed_arguments_library(storage_root: str) -> dict:
+    """seed_positions_library plus a full Argument/Stance relationship set.
+
+    Argument A is the interesting one: it targets a Position *and* another
+    Argument, sources a Work (whose Author is a real Person), is answered by a
+    response Argument, and is mentioned by a second Work's research notes. That
+    single record therefore depends on five different canonical record families,
+    which is exactly the coherence surface this milestone has to get right.
+    """
+    ids = seed_positions_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    target = create_argument(db, name=ARGUMENT_B_NAME, kind="argument")
+    stance = create_argument(
+        db,
+        name=STANCE_NAME,
+        kind="stance",
+        main_text=STANCE_TEXT,
+        targets=[{"type": "position", "id": ids["position_a"], "verdict_id": "holds"}],
+    )
+    create_argument(db, name=ARGUMENT_UNVISITED_NAME, kind="argument")
+    argument_a = create_argument(
+        db,
+        name=ARGUMENT_A_NAME,
+        kind="argument",
+        main_text=ARGUMENT_A_TEXT,
+        sources=[{"work_id": ids["work_a"], "pages": ARGUMENT_SOURCE_PAGES}],
+        targets=[
+            {"type": "position", "id": ids["position_a"], "verdict_id": "supports"},
+            {"type": "argument", "id": target["id"], "verdict_id": "opposes"},
+        ],
+    )
+    response = create_argument(
+        db,
+        name=ARGUMENT_C_NAME,
+        kind="argument",
+        targets=[{"type": "argument", "id": argument_a["id"], "verdict_id": "opposes"}],
+    )
+    # Work B's research notes mention Argument A, giving it a mention backlink.
+    notes = "Related notes.\n\n[[argument:%s|%s]]\n" % (argument_a["id"], ARGUMENT_A_NAME)
+    save_work_notes(db, ids["work_b"], notes)
+    PRKSResearchIndex(storage=cfg).sync_work(ids["work_b"], notes, db)
+    ids.update(
+        {
+            "argument_a": argument_a["id"],
+            "argument_target": target["id"],
+            "argument_response": response["id"],
+            "argument_unvisited": [
+                row["id"]
+                for row in db.execute_query("SELECT id FROM arguments WHERE name = ?", (ARGUMENT_UNVISITED_NAME,))
+            ][0],
+            "stance": stance["id"],
+            "argument_a_name": ARGUMENT_A_NAME,
+            "stance_name": STANCE_NAME,
+        }
+    )
+    return ids

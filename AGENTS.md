@@ -179,14 +179,18 @@ Normal navigation targets the originating workspace context (the TabContext that
 
 Ctrl/Cmd-click and middle-click target a background PRKS tab.
 
-The shared link layer intercepts anchor clicks in the capture phase, so it must
-bow out entirely — no `preventDefault`, no `stopPropagation` — for a
-destination the owning component has explicitly marked `aria-disabled="true"`,
-in every intent (same tab, background tab, tile). That component then gives its
-own feedback from an ordinary bubble-phase handler. Offline pages rely on this
-to keep a relationship's real `href` inspectable while explaining that the
-destination is not cached; without it the capture-phase handler would navigate
-first and swallow the explanation.
+The shared link layer intercepts anchor clicks in the capture phase, so
+`handleNavEvent` must bow out entirely — no `preventDefault`, no
+`stopPropagation` — for a destination the owning component has explicitly
+marked `aria-disabled="true"`, in every intent (same tab, background tab,
+tile). That component then refuses the activation and explains why, from an
+ordinary bubble-phase `click`/`auxclick` handler; a middle click only ever
+arrives as `auxclick`. Offline pages rely on this to keep a relationship's real
+`href` inspectable while saying the destination is not cached; without it the
+capture-phase handler would navigate first and swallow the explanation.
+`onMiddleMouseDown` is deliberately *not* part of that contract: it only
+suppresses the middle-button mousedown default (autoscroll) and never
+navigates, so it has nothing to bow out of.
 
 Alt-click and `prksNavigate(..., { target: "tile" })` open a Secondary leaf when the route is tile-capable.
 
@@ -483,13 +487,15 @@ Phase 1 is read-only offline support. It currently covers:
 - Work detail pages and their managed PDFs
 - the Concept index (`#/concepts`) and Concept detail (`#/concepts/:conceptId`)
 - the Position index (`#/positions`) and Position detail (`#/positions/:positionId`)
+- the Argument/Stance index (`#/arguments`, including `?kind=argument` and
+  `?kind=stance`) and detail (`#/arguments/:argumentId`)
 
-Person, Argument/Stance, Person Group, Playlist routes and the Research Graph
-are not wrapped in the offline read-through path and must keep their ordinary
-online-only fetch/error behavior until their own mutation surfaces are
-explicitly hardened for offline use — do not add `prksOfflineDetailFetch`/
-`prksOfflineListFetch`/`prksOfflineGuardMutation` calls to those routes as an
-incidental part of unrelated Work, Concept or Position work. There is no offline mutation
+Person, Person Group, Playlist routes and the Research Graph are not wrapped in
+the offline read-through path and must keep their ordinary online-only
+fetch/error behavior until their own mutation surfaces are explicitly hardened
+for offline use — do not add `prksOfflineDetailFetch`/`prksOfflineListFetch`/
+`prksOfflineGuardMutation` calls to those routes as an incidental part of
+unrelated work elsewhere. There is no offline mutation
 outbox, sync conflict resolution, background sync, or editable offline Research
 Notes/annotations in this phase — those are later-phase work.
 
@@ -554,6 +560,39 @@ entity's read model is not a cache of the entity it summarises.
 TabContext-owned, one-binding-per-container contract as
 `prksBindConceptOfflineState()`.
 
+Argument/Stance routes are **read-only** offline. Both kinds are one record
+family and one cache: entity `kind: 'argument'` covers Stances too (a Stance is
+an Argument with `kind: 'stance'`), and there is no separate `stances` domain —
+Arguments and Stances target and answer each other, so the read model is a
+single interconnected graph.
+
+The index caches the **complete unfiltered collection** under one key,
+`arguments:index`. The route always fetches `/api/arguments` without a `kind`
+parameter and applies `?kind=` locally via `prksFilterArgumentsByKind()`. That
+is deliberate: visiting the Stances tab online warms the cache for All and
+Arguments too, and switching tabs offline needs no separately cached
+server-filtered list. Never introduce `arguments:index:argument` /
+`arguments:index:stance` keys. A legitimately empty *filtered subset* (a cached
+list with real Arguments and zero Stances) still renders the ordinary "No
+Stances yet." empty state — only a missing cached list is offline-unavailable.
+
+Cached relationship links are ordinary PRKS links, and every destination decides
+for itself whether it has cached data: a target Position, a target or response
+Argument, a source Work, and a note-mention Work each resolve through their own
+route and their own offline state. There is no Argument-specific navigation
+fallback. "View in graph" stays online-only like everywhere else.
+
+An Argument edit session gets one special case. A form mounted while online
+keeps its unsaved values when PRKS stops answering — only the controls that
+could submit or alter them go inert, with **Cancel deliberately left live** so
+the user can leave edit mode. A route freshly mounted from cache while already
+offline starts read-only instead. `saveArgumentForm()` issues three canonical
+requests (`updateArgument`, `putArgumentTargets`, `putArgumentSources`); it
+guards before the first and re-checks before each subsequent one, but does not
+invent transactional semantics across an API where a partial save was already
+possible. Any request that already succeeded keeps its cache invalidation — see
+"partial canonical success" below.
+
 ### Offline coherence domains
 
 Some cached read models span multiple canonical records, so per-entity
@@ -614,9 +653,8 @@ The second domain is `positions` (`entityKinds: ['position']`,
 Position detail embeds derived Argument/Stance summaries (name, kind, verdict)
 plus its whole targeting list — also by `createArgument`, `updateArgument`,
 `deleteArgument` and `putArgumentTargets`, all at the `api.js` canonical helper
-boundary. Those Argument hooks are pure coherence for cached *Position* data:
-they do **not** make Arguments offline-capable, and no Argument entity cache or
-`arguments:index` exists.
+boundary — those hooks predate Argument offline support and remain independent
+of it, so a change to one domain's policy never silently rides on the other's.
 
 Deliberately **not** invalidating Positions: `putArgumentSources` (Position
 detail never displays an Argument's source Works), Research Notes saves (notes
@@ -629,6 +667,40 @@ Editing one Argument legitimately issues several canonical requests
 (`updateArgument` then `putArgumentTargets`), so overlapping Positions
 invalidations are normal and are handled by the generic generation machinery —
 do not add sequencing to the Argument form to avoid them.
+
+The third domain is `arguments` (`entityKinds: ['argument']`,
+`listKeys: ['arguments:index']`), defined once in
+`prksOfflineMarkArgumentsChanged()`. It has the widest dependency set in PRKS,
+because a cached Argument embeds data owned by five other record families. It is
+invalidated after canonical success by:
+
+| Canonical change | Why it stales a cached Argument |
+| --- | --- |
+| `createArgument`, `updateArgument`, `deleteArgument` | name/kind appear in every other Argument that targets or answers it, and in the index |
+| `putArgumentTargets` | this Argument's targets *and* the target's responses list |
+| `putArgumentSources` | source Works, their titles, pages and authors |
+| `updatePosition` | targets embed the Position's name |
+| Work title change (via `prksMarkWorkTitleChanged`) | `sources[].work_title` and `mentions[].title` |
+| successful Research Notes save | notes are the canonical source of `[[argument:…]]` mentions and `mention_count` |
+| Work deletion | drops `argument_sources` rows *and* that Work's note backlinks |
+| Work Author link/unlink/credit-name (via `prksMarkWorkAuthorDisplayChanged`) | `sources[].authors[]` carries person names and per-Work credit names |
+| Person canonical-name change | those same author rows display `first_name`/`last_name` |
+
+Deliberately **not** invalidating Arguments: `createPosition` (a new Position
+cannot already be targeted) and Position deletion (a targeted Position cannot be
+deleted); every Concept mutation; Work tags, folders, playlist membership,
+progress and PDF annotations; non-Author Work roles; Person Group membership;
+and Person profile fields that cannot change the displayed author — biography,
+links, dates, portrait, groups. The Person hook does a plain first/last-name
+diff precisely so a biography edit does not cost the user their cached
+Arguments. Only `putArgumentTargets` (not `putArgumentSources`) also invalidates
+Positions: source Works are in the Argument read model and not the Position one.
+
+**Partial canonical success still invalidates.** If `updateArgument` succeeds
+and `putArgumentTargets` then fails, the Arguments domain stays invalidated —
+canonical success of any individual request controls coherence, and a UI
+workflow failing later is not a rollback. This is the same principle as a stale
+Research Notes save completion.
 
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`

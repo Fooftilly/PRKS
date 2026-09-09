@@ -30,6 +30,8 @@
     const CONCEPTS_LIST_KEY = 'concepts:index';
     const DOMAIN_POSITIONS = 'positions';
     const POSITIONS_LIST_KEY = 'positions:index';
+    const DOMAIN_ARGUMENTS = 'arguments';
+    const ARGUMENTS_LIST_KEY = 'arguments:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
     const PDF_CACHE_NAME = 'prks-pdf-v1';
 
@@ -714,6 +716,20 @@
             listKeys: [POSITIONS_LIST_KEY],
         });
     }
+    /**
+     * The one place that spells out what the Arguments offline domain contains.
+     * Stances are Arguments with `kind: 'stance'` -- one record family, one
+     * domain, because the read model is fully interconnected (an Argument can
+     * target or respond to a Stance and vice versa). Its cached data embeds
+     * Position names, Work titles, Work authors and note mentions, so a wide
+     * set of canonical callers invalidates it; see AGENTS.md.
+     */
+    function prksOfflineMarkArgumentsChanged() {
+        return production.markDomainChanged(DOMAIN_ARGUMENTS, {
+            entityKinds: ['argument'],
+            listKeys: [ARGUMENTS_LIST_KEY],
+        });
+    }
     function prksOfflineIsMutationBlocked() {
         return production.isMutationBlocked();
     }
@@ -747,6 +763,7 @@
         prksOfflineIsDomainBlocked: prksOfflineIsDomainBlocked,
         prksOfflineMarkConceptsChanged: prksOfflineMarkConceptsChanged,
         prksOfflineMarkPositionsChanged: prksOfflineMarkPositionsChanged,
+        prksOfflineMarkArgumentsChanged: prksOfflineMarkArgumentsChanged,
         prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,
@@ -759,6 +776,8 @@
         PRKS_OFFLINE_CONCEPTS_LIST_KEY: CONCEPTS_LIST_KEY,
         PRKS_OFFLINE_DOMAIN_POSITIONS: DOMAIN_POSITIONS,
         PRKS_OFFLINE_POSITIONS_LIST_KEY: POSITIONS_LIST_KEY,
+        PRKS_OFFLINE_DOMAIN_ARGUMENTS: DOMAIN_ARGUMENTS,
+        PRKS_OFFLINE_ARGUMENTS_LIST_KEY: ARGUMENTS_LIST_KEY,
     };
 
     Object.keys(api).forEach(function (k) {

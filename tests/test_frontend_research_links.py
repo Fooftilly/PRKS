@@ -213,8 +213,11 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("prks-btn--quiet-danger", concepts)
         self.assertIn("prks-arg-delete", args)
         self.assertIn("prks-btn--quiet-danger", args)
-        # New response stays a prominent, always-visible primary action -- not moved aside.
-        self.assertIn('id="prks-arg-response">New response', args)
+        # New response stays a prominent, always-visible primary action -- not moved
+        # aside. Asserted on the button and its label rather than on exact
+        # attribute order, which offline control roles legitimately extend.
+        self.assertIn('id="prks-arg-response"', args)
+        self.assertIn(">New response</button>", args)
 
     def test_research_index_clear_search_uses_a_current_controller_slot(self):
         concepts = _read(_CONCEPTS)

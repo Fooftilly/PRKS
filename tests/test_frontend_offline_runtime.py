@@ -219,23 +219,72 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             app,
         )
 
-    def test_argument_and_graph_routes_stay_online_only(self):
+    def test_graph_people_and_playlists_stay_online_only(self):
+        """Phase 1 stops at Work/Concept/Position/Argument. Nothing else may be
+        wrapped in the offline read-through path as a side effect."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
-        args_at = app.index("case 'arguments': {")
-        args_body = app[args_at : args_at + 3000]
-        # Arguments are the NEXT offline slice, not this one.
-        for forbidden in ("prksOfflineListFetch", "prksOfflineDetailFetch", "arguments:index"):
-            self.assertNotIn(forbidden, args_body)
-        self.assertIn("fetchArguments(", args_body)
-        graph_at = app.index("case 'graph': {") if "case 'graph': {" in app else None
-        if graph_at is not None:
-            graph_body = app[graph_at : graph_at + 1500]
-            self.assertNotIn("prksOfflineDetailFetch", graph_body)
-            self.assertNotIn("prksOfflineListFetch", graph_body)
-        # No Argument cache of any kind was introduced.
+        for case in ("case 'research-graph': {", "case 'people': {", "case 'playlists': {"):
+            if case not in app:
+                continue
+            start = app.index(case)
+            body = app[start : start + 1600]
+            for forbidden in ("prksOfflineListFetch", "prksOfflineDetailFetch"):
+                self.assertNotIn(forbidden, body, case)
         runtime = _read(_RUNTIME)
-        self.assertNotIn("'argument'", runtime)
-        self.assertNotIn("arguments:index", runtime)
+        for forbidden in ("'person'", "people:index", "playlists:index", "graph:"):
+            self.assertNotIn(forbidden, runtime)
+
+    def test_argument_routes_use_offline_read_through(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        index_at = app.index("case 'arguments': {")
+        index_body = app[index_at : app.index("case 'argument-detail': {")]
+        self.assertIn("prksOfflineListFetch(", index_body)
+        self.assertIn("PRKS_ARGUMENTS_LIST_KEY", index_body)
+        self.assertIn("domain: PRKS_ARGUMENTS_DOMAIN", index_body)
+        self.assertIn("validate: prksIsArgumentIndexShape", index_body)
+        self.assertIn("renderArgumentsIndexUnavailable", index_body)
+        self.assertIn("prksOfflinePrependBanner(", index_body)
+        # The COMPLETE collection is fetched and cached under one key; ?kind= is
+        # a local subset of it, never a separately cached server-filtered list.
+        self.assertIn("'/api/arguments',", index_body)
+        self.assertNotIn("kind=", index_body.split("prksOfflineListFetch(")[1].split(");")[0])
+        self.assertIn("prksFilterArgumentsByKind(allArguments, kind)", index_body)
+        self.assertNotIn("fetchArguments(", index_body)
+
+        detail_at = app.index("case 'argument-detail': {")
+        detail_body = app[detail_at : detail_at + 3000]
+        self.assertIn("prksOfflineDetailFetch(", detail_body)
+        self.assertIn("'argument',", detail_body)
+        self.assertIn("domain: PRKS_ARGUMENTS_DOMAIN", detail_body)
+        self.assertIn("prksIsArgumentShape(value, argumentId)", detail_body)
+        self.assertIn(
+            "prksOfflineRenderUnavailable(contentDiv, 'Argument or Stance not available offline')", detail_body
+        )
+        # A reachable-server 404 keeps its own distinct meaning.
+        self.assertIn("renderArgumentNotFound", detail_body)
+        self.assertNotIn("fetchArgument(", detail_body)
+        # A freshly mounted route always starts read-only.
+        self.assertIn("ctx.ui.argumentEditing = false;", detail_body)
+
+        self.assertIn("prksFilterArgumentsByKind", app)
+        self.assertIn(
+            "typeof PRKS_OFFLINE_ARGUMENTS_LIST_KEY === 'string' ? PRKS_OFFLINE_ARGUMENTS_LIST_KEY : 'arguments:index'",
+            app,
+        )
+
+    def test_arguments_domain_shape_is_defined_once(self):
+        src = _read(_RUNTIME)
+        self.assertIn("function prksOfflineMarkArgumentsChanged()", src)
+        self.assertIn("entityKinds: ['argument']", src)
+        self.assertIn("const ARGUMENTS_LIST_KEY = 'arguments:index';", src)
+        self.assertIn("const DOMAIN_ARGUMENTS = 'arguments';", src)
+        # Stances are not a separate domain: they are Arguments with kind
+        # 'stance', and the read model is interconnected across both.
+        self.assertNotIn("'stances'", src)
+        self.assertNotIn("stances:index", src)
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        self.assertIn("prksOfflineMarkArgumentsChanged", api)
+        self.assertNotIn("'arguments:index'", api)
 
     def test_position_mutations_invalidate_at_the_canonical_helper_boundary(self):
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
@@ -289,6 +338,119 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             self.assertNotIn("prksMarkPositionsDomainChanged", src, name)
         concepts = _read(os.path.join(_FRONTEND, "js", "components", "concepts.js"))
         self.assertNotIn("Positions", concepts)
+
+    def test_direct_argument_mutations_invalidate_the_arguments_domain(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        for fn in (
+            "async function createArgument(",
+            "async function updateArgument(",
+            "async function deleteArgument(",
+            "async function putArgumentTargets(",
+            "async function putArgumentSources(",
+        ):
+            start = api.index(fn)
+            body = api[start : start + 1200]
+            self.assertIn("prksResearchJson(", body, fn)
+            self.assertIn("prksMarkArgumentsDomainChanged();", body, fn)
+            self.assertLess(
+                body.index("prksResearchJson("), body.index("prksMarkArgumentsDomainChanged();"), fn
+            )
+
+    def test_argument_sources_touch_arguments_but_never_positions(self):
+        """Source Works and their authors are in the Argument read model and NOT
+        in the Position one -- the sharpest boundary between the two domains."""
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        start = api.index("async function putArgumentSources(")
+        body = api[start : api.index("async function putArgumentTargets(")]
+        self.assertIn("prksMarkArgumentsDomainChanged();", body)
+        self.assertNotIn("prksMarkPositionsDomainChanged", body)
+        # ... while targets legitimately move both.
+        targets_start = api.index("async function putArgumentTargets(")
+        targets_body = api[targets_start : targets_start + 1200]
+        self.assertIn("prksMarkArgumentsDomainChanged();", targets_body)
+        self.assertIn("prksMarkPositionsDomainChanged();", targets_body)
+
+    def test_position_rename_invalidates_arguments_but_create_delete_do_not(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        update_start = api.index("async function updatePosition(")
+        update_body = api[update_start : api.index("async function deletePosition(")]
+        # A cached Argument's targets embed the Position's name.
+        self.assertIn("prksMarkArgumentsDomainChanged();", update_body)
+        create_body = api[api.index("async function createPosition(") : update_start]
+        self.assertNotIn("prksMarkArgumentsDomainChanged", create_body)
+        delete_start = api.index("async function deletePosition(")
+        delete_body = api[delete_start : delete_start + 800]
+        self.assertNotIn("prksMarkArgumentsDomainChanged", delete_body)
+
+    def test_work_title_helper_owns_both_dependent_domains(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        start = api.index("function prksMarkWorkTitleChanged(")
+        body = api[start : start + 900]
+        self.assertIn("prksOfflineMarkEntityChanged('work', workId)", body)
+        # A Work title shows in cached Concept mentions AND cached Argument
+        # sources/mentions, so one helper owns both.
+        self.assertIn("prksMarkConceptsDomainChanged();", body)
+        self.assertIn("prksMarkArgumentsDomainChanged();", body)
+
+    def test_author_role_surfaces_share_one_arguments_coherence_helper(self):
+        """Cached Argument sources carry each source Work's Author rows, so every
+        role surface owes Arguments an invalidation -- for Authors only."""
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        start = api.index("function prksMarkWorkAuthorDisplayChanged(")
+        body = api[start : start + 900]
+        self.assertIn("prksOfflineMarkEntityChanged('work', workId)", body)
+        self.assertIn("=== 'Author'", body)
+        self.assertIn("prksMarkArgumentsDomainChanged();", body)
+        # Every role surface routes through it rather than evicting only the Work.
+        for name in ("ui.js", "app.js"):
+            src = _read(os.path.join(_FRONTEND, "js", name))
+            self.assertIn("prksMarkWorkAuthorDisplayChanged", src, name)
+        ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
+        # link, credit-name edit and unlink: three call sites.
+        self.assertGreaterEqual(ui.count("prksMarkWorkAuthorDisplayChanged("), 3)
+
+    def test_research_notes_and_work_delete_invalidate_arguments_too(self):
+        works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
+        notes_at = works.index("function prksEnqueueWorkResearchNotesSave(")
+        notes_body = works[notes_at : notes_at + 7000]
+        # Notes are the canonical source of [[argument:...]] mentions.
+        self.assertIn("prksOfflineMarkArgumentsChanged()", notes_body)
+        self.assertIn("if (ok && typeof prksOfflineMarkArgumentsChanged === 'function')", notes_body)
+        delete_at = works.index("async function deleteWork(")
+        delete_body = works[delete_at : delete_at + 3000]
+        self.assertIn("prksOfflineMarkArgumentsChanged()", delete_body)
+
+    def test_person_rename_invalidates_arguments_only_on_a_real_name_change(self):
+        people = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
+        start = people.index("async function savePersonProfile(")
+        body = people[start : start + 6000]
+        self.assertIn("_personNameChanged", body)
+        self.assertIn("first_name", body)
+        self.assertIn("last_name", body)
+        self.assertIn("if (_personNameChanged && typeof prksMarkArgumentsDomainChanged === 'function')", body)
+        # The diff exists precisely so a biography/links/dates/groups edit does
+        # not cost the user their cached Arguments.
+        self.assertLess(body.index("_personNameChanged ="), body.index("prksRequest(`/api/persons/"))
+
+    def test_arguments_are_not_invalidated_by_unrelated_read_models(self):
+        """Concept mutations and ordinary Work relationship edits do not touch
+        the Argument read model, and must not be cargo-culted into it."""
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        for fn in (
+            "async function createConcept(",
+            "async function updateConcept(",
+            "async function deleteConcept(",
+            "async function putConceptParents(",
+            "async function putConceptAliases(",
+        ):
+            start = api.index(fn)
+            body = api[start : start + 900]
+            self.assertNotIn("prksMarkArgumentsDomainChanged", body, fn)
+        concepts = _read(os.path.join(_FRONTEND, "js", "components", "concepts.js"))
+        self.assertNotIn("prksOfflineMarkArgumentsChanged", concepts)
+        playlists = _read(os.path.join(_FRONTEND, "js", "components", "playlists.js"))
+        self.assertNotIn("prksOfflineMarkArgumentsChanged", playlists)
+        self.assertNotIn("prksMarkArgumentsDomainChanged", playlists)
 
     def test_node_selftest(self):
         node = shutil.which("node")

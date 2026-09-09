@@ -1579,6 +1579,123 @@ function prksResolveOfflinePosition(offlineResult, positionId) {
     return { position: null, unavailable: true };
 }
 
+const PRKS_ARGUMENTS_LIST_KEY =
+    typeof PRKS_OFFLINE_ARGUMENTS_LIST_KEY === 'string' ? PRKS_OFFLINE_ARGUMENTS_LIST_KEY : 'arguments:index';
+const PRKS_ARGUMENTS_DOMAIN =
+    typeof PRKS_OFFLINE_DOMAIN_ARGUMENTS === 'string' ? PRKS_OFFLINE_DOMAIN_ARGUMENTS : 'arguments';
+
+function prksIsArgumentKind(value) {
+    return value === 'argument' || value === 'stance';
+}
+
+/**
+ * Shape guarantees for the Argument/Stance read models, applied as the
+ * runtime's `validate` callback so an authoritative response is accepted BEFORE
+ * it can be published to the cache, and reused to judge a cached value.
+ *
+ * The rule throughout: require what a link or a filter is actually built from
+ * (usable ids, the target's `type`, a valid `kind`, the collections the server
+ * always sends), and never require a presentational field the server contract
+ * leaves optional (verdict_label, work_title, author names, pages, ...).
+ */
+function prksIsArgumentTargetShape(row) {
+    if (!prksHasUsableRowId(row)) return false;
+    // `type` decides whether the row links to #/positions/:id or #/arguments/:id.
+    return row.type === 'position' || row.type === 'argument';
+}
+
+function prksIsArgumentSourceShape(row) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
+    if (row.work_id == null || !String(row.work_id).trim()) return false;
+    return Array.isArray(row.authors);
+}
+
+function prksIsArgumentMentionShape(row) {
+    return !!(
+        row &&
+        typeof row === 'object' &&
+        !Array.isArray(row) &&
+        row.work_id != null &&
+        String(row.work_id).trim()
+    );
+}
+
+function prksIsArgumentResponseShape(row) {
+    if (!prksHasUsableRowId(row)) return false;
+    return row.kind == null || prksIsArgumentKind(row.kind);
+}
+
+/** One row of the complete /api/arguments collection. */
+function prksIsArgumentIndexRowShape(row) {
+    if (!prksHasUsableRowId(row)) return false;
+    // The route filters All/Arguments/Stances locally off this field.
+    if (!prksIsArgumentKind(row.kind)) return false;
+    if (!Array.isArray(row.targets) || !row.targets.every(prksIsArgumentTargetShape)) return false;
+    return Array.isArray(row.sources) && row.sources.every(prksIsArgumentSourceShape);
+}
+
+function prksIsArgumentIndexShape(value) {
+    if (!Array.isArray(value)) return false;
+    return value.every(prksIsArgumentIndexRowShape);
+}
+
+function prksIsArgumentShape(value, argumentId) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    if (value.id == null || String(value.id) !== String(argumentId)) return false;
+    if (!prksIsArgumentKind(value.kind)) return false;
+    if (!Array.isArray(value.targets) || !value.targets.every(prksIsArgumentTargetShape)) return false;
+    if (!Array.isArray(value.sources) || !value.sources.every(prksIsArgumentSourceShape)) return false;
+    if (!Array.isArray(value.responses) || !value.responses.every(prksIsArgumentResponseShape)) return false;
+    if (!Array.isArray(value.mentions) || !value.mentions.every(prksIsArgumentMentionShape)) return false;
+    return Array.isArray(value.verdicts) && value.verdicts.every(prksHasUsableRowId);
+}
+
+/**
+ * The complete unfiltered collection is what gets cached, under one key. A
+ * `?kind=` route then selects its subset locally, so visiting the Stances tab
+ * online still warms the cache for All and Arguments, and switching tabs
+ * offline needs no separately cached server-filtered list.
+ */
+function prksFilterArgumentsByKind(items, filterKind) {
+    const list = Array.isArray(items) ? items : [];
+    if (filterKind !== 'argument' && filterKind !== 'stance') return list.slice();
+    return list.filter(function (row) {
+        return row && row.kind === filterKind;
+    });
+}
+
+/** Same server/cache split as Concepts and Positions: route error vs. unusable cache. */
+function prksResolveOfflineArgumentIndex(offlineResult) {
+    if (!offlineResult || offlineResult.source === 'unavailable') return null;
+    if (prksIsArgumentIndexShape(offlineResult.value)) return offlineResult.value;
+    if (offlineResult.source === 'server') {
+        // Normally unreachable: the runtime rejects a bad authoritative shape
+        // before it ever returns (or caches) one. Kept as the backstop for a
+        // runtime without validator support.
+        throw new Error('Received an unexpected Arguments response.');
+    }
+    if (typeof prksOfflineInvalidateList === 'function') {
+        void prksOfflineInvalidateList(PRKS_ARGUMENTS_LIST_KEY);
+    }
+    return null;
+}
+
+function prksResolveOfflineArgument(offlineResult, argumentId) {
+    if (!offlineResult || offlineResult.source === 'unavailable') {
+        return { argument: null, unavailable: true };
+    }
+    const value = offlineResult.value;
+    if (value == null) return { argument: null, unavailable: false };
+    if (prksIsArgumentShape(value, argumentId)) return { argument: value, unavailable: false };
+    if (offlineResult.source === 'server') {
+        throw new Error('Received an unexpected Argument response.');
+    }
+    if (typeof prksOfflineInvalidateEntity === 'function') {
+        void prksOfflineInvalidateEntity('argument', argumentId);
+    }
+    return { argument: null, unavailable: true };
+}
+
 function prksOfflineProvenanceBannerHtml(offlineResult) {
     if (!offlineResult || offlineResult.source !== 'cache') return '';
     const at =
@@ -2353,23 +2470,62 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'arguments': {
                 const kind = route.params.kind || '';
-                const items = typeof fetchArguments === 'function' ? await fetchArguments(kind || undefined, { signal: routeSignal }) : [];
+                // Always the COMPLETE collection: one cache key holds the whole
+                // list and every ?kind= route derives its subset locally, so a
+                // visit to any tab warms the cache for all of them.
+                const offlineArguments = await prksOfflineListFetch(
+                    PRKS_ARGUMENTS_LIST_KEY,
+                    '/api/arguments',
+                    routeSignal,
+                    { domain: PRKS_ARGUMENTS_DOMAIN, validate: prksIsArgumentIndexShape }
+                );
                 if (stale()) return;
-                if (typeof renderArgumentsIndex === 'function') renderArgumentsIndex(items, contentDiv, kind || 'all');
+                const allArguments = prksResolveOfflineArgumentIndex(offlineArguments);
+                if (!allArguments) {
+                    if (typeof renderArgumentsIndexUnavailable === 'function') renderArgumentsIndexUnavailable(contentDiv);
+                    else prksOfflineRenderUnavailable(contentDiv, 'Arguments & Stances not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Arguments & Stances not available offline' };
+                    break;
+                }
+                const argumentItems = prksFilterArgumentsByKind(allArguments, kind);
+                if (typeof renderArgumentsIndex === 'function') renderArgumentsIndex(ctx, argumentItems, contentDiv, kind || 'all');
                 else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Arguments &amp; Stances</h2></div>';
+                prksOfflinePrependBanner(contentDiv, offlineArguments);
                 break;
             }
             case 'argument-detail': {
-                const item = typeof fetchArgument === 'function' ? await fetchArgument(route.params.argumentId, { signal: routeSignal }) : null;
+                const argumentId = route.params.argumentId;
+                const offlineArgument = await prksOfflineDetailFetch(
+                    'argument',
+                    argumentId,
+                    '/api/arguments/' + encodeURIComponent(argumentId),
+                    routeSignal,
+                    {
+                        domain: PRKS_ARGUMENTS_DOMAIN,
+                        validate: function (value) {
+                            return prksIsArgumentShape(value, argumentId);
+                        },
+                    }
+                );
                 if (stale()) return;
+                const resolvedArgument = prksResolveOfflineArgument(offlineArgument, argumentId);
+                if (resolvedArgument.unavailable) {
+                    prksOfflineRenderUnavailable(contentDiv, 'Argument or Stance not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Argument or Stance not available offline' };
+                    break;
+                }
+                const item = resolvedArgument.argument;
                 if (!item) {
                     if (typeof renderArgumentNotFound === 'function') renderArgumentNotFound(contentDiv);
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Argument not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Argument not found' };
                 } else {
                     ctx.setEntity('argument', item);
+                    // A freshly rendered route always starts read-only, even if a
+                    // previous mount left an edit session behind.
                     ctx.ui.argumentEditing = false;
                     if (typeof renderArgumentDetail === 'function') renderArgumentDetail(ctx, item, contentDiv);
+                    prksOfflinePrependBanner(contentDiv, offlineArgument);
                     titleOpts = { entityTitle: item.name || 'Argument' };
                 }
                 break;
@@ -3204,10 +3360,14 @@ function initForms() {
                 }
                 return;
             }
+            // Author links appear in cached Argument sources; the shared helper
+            // owns that dependency so every role surface stays consistent.
             coherenceToken =
-                typeof prksOfflineMarkEntityChanged === 'function'
-                    ? prksOfflineMarkEntityChanged('work', work_id)
-                    : null;
+                typeof prksMarkWorkAuthorDisplayChanged === 'function'
+                    ? prksMarkWorkAuthorDisplayChanged(work_id, role_type)
+                    : typeof prksOfflineMarkEntityChanged === 'function'
+                      ? prksOfflineMarkEntityChanged('work', work_id)
+                      : null;
         } catch (e) {
             console.error(e);
             if (typeof prksAlertDialog === 'function') {

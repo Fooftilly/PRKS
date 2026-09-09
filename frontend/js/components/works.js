@@ -800,6 +800,12 @@ async function deleteWork(w_id, ownerCtx) {
             // research data, so cached Concept details/counts are now stale.
             prksOfflineMarkConceptsChanged();
         }
+        if (typeof prksOfflineMarkArgumentsChanged === 'function') {
+            // Two independent effects on cached Arguments: relational cleanup
+            // drops any argument_sources rows for this Work, and its
+            // research-note backlinks disappear from mentions.
+            prksOfflineMarkArgumentsChanged();
+        }
         window.__prksRecentlyAddedDirty = true;
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
@@ -1445,6 +1451,12 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 // cached Concept index/details -- stale-for-UI is still a
                 // successful canonical mutation here.
                 prksOfflineMarkConceptsChanged();
+            }
+            if (ok && typeof prksOfflineMarkArgumentsChanged === 'function') {
+                // Notes are equally the canonical source of [[argument:...]]
+                // mentions, which cached Argument list/detail carry as
+                // mention_count and mentions[].
+                prksOfflineMarkArgumentsChanged();
             }
             const localApplied = prksWorkNotesSettleSave(notes, token, ok);
             let transientApplied = false;

@@ -358,14 +358,27 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertLess(body.index(skip), body.index("e.preventDefault();"))
         self.assertLess(body.index(skip), body.index("e.stopPropagation();"))
 
-        # Middle click goes through its own mousedown handler, which suppresses
-        # autoscroll for navigable elements; it has to bow out for the same
-        # disabled destinations, or middle click ends up silently inert instead
-        # of reaching the owning component's explanation.
+        # The split is deliberate. onMiddleMouseDown only suppresses the
+        # middle-button *mousedown* default (autoscroll); it never navigates, so
+        # it has no reason to special-case a disabled destination. The activation
+        # event that follows (auxclick) is where handleNavEvent bows out and the
+        # owning component refuses and explains.
         mid_start = src.index("function onMiddleMouseDown(")
         mid_body = src[mid_start : src.index("function bindNewTabButton(")]
-        self.assertIn(skip, mid_body)
-        self.assertLess(mid_body.index(skip), mid_body.index("e.preventDefault();"))
+        self.assertNotIn("aria-disabled", mid_body)
+
+    def test_disabled_destination_refusal_belongs_to_the_owning_component(self):
+        """The shared layer only declines to navigate; the component that marked
+        the destination disabled is what tells the user why."""
+        positions = _read(os.path.join(_FRONTEND, "js", "components", "positions.js"))
+        start = positions.index("function bindPositionOfflineState(")
+        body = positions[start : positions.index("function renderPositionsIndexUnavailable(")]
+        # Both activation events: a modified left click arrives as `click`, a
+        # middle click only ever as `auxclick`.
+        self.assertIn("container.addEventListener('click', guardActivation);", body)
+        self.assertIn("container.addEventListener('auxclick', guardActivation);", body)
+        self.assertIn("if (ev.type === 'auxclick' && ev.button !== 1) return;", body)
+        self.assertIn("ev.preventDefault();", body)
 
     def test_node_selftest(self):
         node = shutil.which("node")

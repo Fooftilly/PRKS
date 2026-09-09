@@ -25,6 +25,17 @@ from tests.e2e.fixtures import (
     POSITION_B_NAME,
     WORK_A_TITLE,
     WORK_B_TITLE,
+    ARGUMENT_A_NAME,
+    ARGUMENT_A_TEXT,
+    ARGUMENT_B_NAME,
+    ARGUMENT_C_NAME,
+    ARGUMENT_SOURCE_PAGES,
+    ARGUMENT_UNVISITED_NAME,
+    PERSON_DISPLAY,
+    PERSON_LAST,
+    STANCE_NAME,
+    STANCE_TEXT,
+    seed_arguments_library,
     seed_concepts_library,
     seed_library,
     seed_positions_library,
@@ -213,6 +224,23 @@ def _open_position_index(page):
 def _open_position(page, position_id):
     page.evaluate("id => { void window.prksNavigate('#/positions/' + id); }", position_id)
     page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=position_id)
+
+
+def _open_argument_index(page, kind=""):
+    target = "#/arguments" + ("?kind=" + kind if kind else "")
+    page.evaluate("h => { void window.prksNavigate(h); }", target)
+    page.wait_for_function("h => location.hash === h", arg=target)
+
+
+def _open_argument(page, argument_id):
+    page.evaluate("id => { void window.prksNavigate('#/arguments/' + id); }", argument_id)
+    page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=argument_id)
+
+
+def _row_titles(page):
+    return page.evaluate(
+        "() => Array.from(document.querySelectorAll('.prks-research-row__title')).map(e => e.textContent.trim())"
+    )
 
 
 def _domain_generation(page, domain):
@@ -3483,6 +3511,1186 @@ class OfflinePositionTests(unittest.TestCase):
         _open_position(page, position_a)
         _wait_offline_banner(page)
         _wait_content_contains(page, POSITION_A_NAME)
+
+
+class OfflineArgumentTests(unittest.TestCase):
+    """Phase 1 read-only Argument/Stance routes: #/arguments and #/arguments/:id."""
+
+    def _start(self):
+        server = AppServer(seed_fn=seed_arguments_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
+        self.addCleanup(context.close)
+        return server, page, context, collector
+
+    def _record_calls(self, page, pattern):
+        seen = []
+
+        def record(route):
+            seen.append((route.request.method, urlparse(route.request.url).path))
+            route.fallback()
+
+        page.route(pattern, record)
+        self.addCleanup(lambda: _safe_unroute(page, pattern, record))
+        return seen
+
+    # ---- one cached index, local ?kind= filtering ---------------------------
+
+    def test_one_cached_index_serves_every_kind_filter_offline(self):
+        """Visiting the Stances tab online must cache the COMPLETE collection, so
+        All/Arguments/Stances all work offline from that single key. This is the
+        regression test for the single-cache-key design."""
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        # Deliberately the most filtered route.
+        _open_argument_index(page, "stance")
+        _wait_content_contains(page, STANCE_NAME)
+        _wait_list_cached(page, "arguments:index")
+
+        cached = _cached_list(page, "arguments:index")["value"]
+        kinds = sorted({row["kind"] for row in cached})
+        self.assertEqual(kinds, ["argument", "stance"], "a filtered route cached a filtered list")
+        self.assertIn(ARGUMENT_A_NAME, [row["name"] for row in cached])
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, STANCE_NAME)
+        _wait_offline_banner(page)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
+        # The Stances tab shows only Stances ...
+        stance_titles = _row_titles(page)
+        self.assertIn(STANCE_NAME, stance_titles)
+        self.assertNotIn(ARGUMENT_A_NAME, stance_titles)
+
+        # A route change is still a fresh read-through -- it attempts the server
+        # and falls back to cache -- so what matters here is that it never asks
+        # for a server-filtered list. That is the single-cache-key invariant.
+        requested = []
+
+        def record_urls(route):
+            requested.append(route.request.url)
+            route.fallback()
+
+        page.route("**/api/arguments**", record_urls)
+        self.addCleanup(lambda: _safe_unroute(page, "**/api/arguments**", record_urls))
+
+        _open_argument_index(page, "argument")
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        argument_titles = _row_titles(page)
+        self.assertIn(ARGUMENT_A_NAME, argument_titles)
+        self.assertNotIn(STANCE_NAME, argument_titles)
+
+        _open_argument_index(page)
+        _wait_content_contains(page, STANCE_NAME)
+        all_titles = _row_titles(page)
+        self.assertIn(ARGUMENT_A_NAME, all_titles)
+        self.assertIn(STANCE_NAME, all_titles)
+        self.assertGreater(len(all_titles), len(argument_titles))
+        # Every one of those subsets came from the same cached complete snapshot.
+        self.assertTrue(requested, "the route should still attempt its read-through")
+        for url in requested:
+            self.assertEqual(urlparse(url).path, "/api/arguments")
+            self.assertNotIn("kind=", urlparse(url).query, url)
+
+    def test_cached_argument_index_searches_locally(self):
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_argument_index(page)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_list_cached(page, "arguments:index")
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_offline_banner(page)
+
+        seen = self._record_calls(page, "**/api/arguments**")
+        search = page.locator("#prks-argument-search")
+        # By name ...
+        search.fill(ARGUMENT_C_NAME)
+        page.wait_for_function(
+            "n => { const r = document.querySelectorAll('.prks-research-row__title');"
+            " return r.length === 1 && r[0].textContent.indexOf(n) !== -1; }",
+            arg=ARGUMENT_C_NAME,
+        )
+        # ... by kind ...
+        search.fill("stance")
+        page.wait_for_function(
+            "n => { const r = document.querySelectorAll('.prks-research-row__title');"
+            " return r.length === 1 && r[0].textContent.indexOf(n) !== -1; }",
+            arg=STANCE_NAME,
+        )
+        # ... by target name ...
+        search.fill(POSITION_A_NAME)
+        page.wait_for_function(
+            "() => document.querySelectorAll('.prks-research-row__title').length >= 2"
+        )
+        # ... and by source Work title.
+        search.fill(WORK_A_TITLE)
+        page.wait_for_function(
+            "n => { const r = document.querySelectorAll('.prks-research-row__title');"
+            " return r.length === 1 && r[0].textContent.indexOf(n) !== -1; }",
+            arg=ARGUMENT_A_NAME,
+        )
+        search.fill("no such argument anywhere")
+        page.locator(".prks-research-index__empty", has_text="match").wait_for()
+        self.assertEqual(seen, [], "offline Argument search must issue zero API requests")
+
+        self.assertTrue(page.locator("#prks-argument-new").is_disabled())
+        self.assertTrue(page.locator("#prks-stance-new").is_disabled())
+
+    def test_uncached_argument_index_offline_is_explicitly_unavailable(self):
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_argument_index(page)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_list_cached(page, "arguments:index")
+        page.evaluate("() => { void window.prksNavigate('#/folders'); }")
+        page.wait_for_function("() => location.hash === '#/folders'")
+        _clear_cached_list(page, "arguments:index")
+        _wait_list_uncached(page, "arguments:index")
+
+        context.set_offline(True)
+        _open_argument_index(page)
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("not available offline", body)
+        self.assertNotIn("No Arguments or Stances yet.", body)
+        self.assertEqual(page.locator("#prks-argument-new").count(), 0)
+
+    def test_legitimately_empty_kind_subset_is_not_the_uncached_state(self):
+        """A cached complete list with zero Stances still shows the ordinary
+        "No Stances yet." empty state -- with creation disabled offline."""
+        server = AppServer(seed_fn=seed_positions_library)  # Arguments, no Stances
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, _collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
+        self.addCleanup(context.close)
+
+        _wait_sw_active(page)
+        _open_argument_index(page)
+        _wait_list_cached(page, "arguments:index")
+        cached = _cached_list(page, "arguments:index")["value"]
+        self.assertTrue(cached, "fixture should seed at least one Argument")
+        self.assertEqual([row for row in cached if row["kind"] == "stance"], [])
+
+        context.set_offline(True)
+        _open_argument_index(page, "stance")
+        _wait_content_contains(page, "No Stances yet.")
+        body = _content_text(page)
+        self.assertNotIn("not available offline", body)
+        page.wait_for_function(
+            "() => !!document.querySelector('#prks-stance-new-empty[disabled]')", timeout=20000
+        )
+
+    # ---- cached detail ------------------------------------------------------
+
+    def test_cached_argument_detail_renders_offline(self):
+        server, page, context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        _wait_sw_active(page)
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_entity_cached(page, "argument", argument_a)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_offline_banner(page)
+        body = _content_text(page)
+        self.assertIn("Argument", body)
+        self.assertIn(ARGUMENT_A_TEXT, body)
+        self.assertIn(POSITION_A_NAME, body)          # Position target
+        self.assertIn(ARGUMENT_B_NAME, body)          # Argument target
+        self.assertIn(WORK_A_TITLE, body)             # source Work
+        self.assertIn("E2E Author", body)             # source Work author
+        self.assertIn(ARGUMENT_SOURCE_PAGES, body)    # source pages
+        self.assertIn(ARGUMENT_C_NAME, body)          # incoming response
+        self.assertIn(WORK_B_TITLE, body)             # note mention backlink
+        self.assertIn("Supports", body)               # verdict labels
+        self.assertIn("Opposes", body)
+
+    def test_cached_stance_detail_renders_offline(self):
+        """A Stance is an Argument with kind 'stance'; the route and domain must
+        not be accidentally Argument-only."""
+        server, page, context, _collector = self._start()
+        stance = server.ids["stance"]
+
+        _wait_sw_active(page)
+        _open_argument(page, stance)
+        _wait_content_contains(page, STANCE_NAME)
+        _wait_entity_cached(page, "argument", stance)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, STANCE_NAME)
+        _wait_offline_banner(page)
+        body = _content_text(page)
+        self.assertIn("Stance", body)
+        self.assertIn(STANCE_TEXT, body)
+        self.assertIn(POSITION_A_NAME, body)
+        self.assertIn("Holds", body)
+
+    def test_cached_index_does_not_prefetch_every_argument_detail(self):
+        server, page, context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+        unvisited = server.ids["argument_unvisited"]
+
+        _wait_sw_active(page)
+        _open_argument_index(page)
+        _wait_list_cached(page, "arguments:index")
+        _open_argument(page, argument_a)
+        _wait_entity_cached(page, "argument", argument_a)
+        _open_argument_index(page)
+        _wait_content_contains(page, ARGUMENT_UNVISITED_NAME)
+        self.assertIsNone(_cached_entity(page, "argument", unvisited))
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        _wait_content_contains(page, ARGUMENT_UNVISITED_NAME)
+        page.locator('.prks-research-row[href$="%s"]' % unvisited).click()
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("not available offline", body)
+        self.assertNotIn("Argument not found", body)
+        _wait_entity_cached(page, "argument", argument_a)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+
+    def test_cached_argument_relationships_navigate_offline(self):
+        """Relationship links are ordinary PRKS links: each destination decides
+        for itself whether it has cached data. No offline-specific router."""
+        server, page, context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+        target = server.ids["argument_target"]
+        position_a = server.ids["position_a"]
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        for arg_id in (argument_a, target):
+            _open_argument(page, arg_id)
+            _wait_entity_cached(page, "argument", arg_id)
+        _open_position(page, position_a)
+        _wait_entity_cached(page, "position", position_a)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+
+        context.set_offline(True)
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_offline_banner(page)
+
+        # ... to a cached Argument target
+        page.locator('.prks-research-row[href$="%s"]' % target).click()
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=target)
+        _wait_content_contains(page, ARGUMENT_B_NAME)
+        # ... back, then to a cached Position target
+        _open_argument(page, argument_a)
+        _wait_offline_banner(page)
+        page.locator('.prks-research-row[href$="%s"]' % position_a).click()
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=position_a)
+        _wait_content_contains(page, POSITION_A_NAME)
+        # ... and out to a cached source Work through the existing Work route.
+        _open_argument(page, argument_a)
+        _wait_offline_banner(page)
+        page.locator('.prks-research-row[href$="%s"]' % work_a).click()
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=work_a)
+        page.wait_for_function("t => document.body.innerText.indexOf(t) !== -1", arg=WORK_A_TITLE)
+
+        # An UNCACHED destination gives that destination's own offline state.
+        _open_argument(page, argument_a)
+        _wait_offline_banner(page)
+        page.locator('.prks-research-row[href$="%s"]' % server.ids["argument_response"]).click()
+        _wait_offline_unavailable(page)
+        self.assertIn("not available offline", _content_text(page))
+
+    def test_argument_graph_action_requires_a_connection_offline(self):
+        server, page, context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        _wait_sw_active(page)
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_entity_cached(page, "argument", argument_a)
+        self.assertFalse(page.locator("#prks-arg-view-graph").is_disabled())
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_offline_banner(page)
+        page.wait_for_function(
+            "() => !!document.querySelector('#prks-arg-view-graph[disabled]')", timeout=20000
+        )
+        page.locator("#prks-arg-view-graph").click(force=True)
+        page.wait_for_timeout(300)
+        self.assertNotIn("/graph", page.evaluate("() => location.hash"))
+
+        context.set_offline(False)
+        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+        page.wait_for_function(
+            "() => !document.querySelector('#prks-arg-view-graph[disabled]')", timeout=20000
+        )
+
+    # ---- mutation blocking --------------------------------------------------
+
+    def test_offline_argument_index_and_detail_cannot_mutate(self):
+        server, page, context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        _wait_sw_active(page)
+        _open_argument_index(page)
+        _wait_list_cached(page, "arguments:index")
+        _open_argument(page, argument_a)
+        _wait_entity_cached(page, "argument", argument_a)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
+
+        mutations = []
+
+        def record_mutation(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                mutations.append((route.request.method, urlparse(route.request.url).path))
+            route.fallback()
+
+        page.route("**/api/arguments**", record_mutation)
+        try:
+            for selector in ("#prks-arg-edit", "#prks-arg-response", "#prks-arg-delete"):
+                btn = page.locator(selector)
+                self.assertTrue(btn.is_disabled(), "%s must be disabled offline" % selector)
+                self.assertEqual(btn.get_attribute("aria-disabled"), "true", selector)
+                btn.click(force=True)
+                page.wait_for_timeout(150)
+            # Edit must not have opened a form the user could never submit.
+            self.assertEqual(page.locator("#prks-arg-form").count(), 0)
+
+            _open_argument_index(page)
+            _wait_content_contains(page, ARGUMENT_A_NAME)
+            for selector in ("#prks-argument-new", "#prks-stance-new"):
+                btn = page.locator(selector)
+                self.assertTrue(btn.is_disabled(), selector)
+                btn.click(force=True)
+                page.wait_for_timeout(150)
+            self.assertEqual(page.locator("#prks-modal-confirm .prks-modal-prompt__input").count(), 0)
+
+            # The Work Research Notes creation path is a second mutation surface.
+            page.evaluate(
+                """async () => {
+                    try { await window.prksCreateArgumentFromWork({ name: 'Offline argument' }); } catch (_e) {}
+                }"""
+            )
+            page.wait_for_timeout(300)
+            self.assertEqual(mutations, [])
+        finally:
+            _safe_unroute(page, "**/api/arguments**", record_mutation)
+
+    def test_disconnect_while_argument_prompt_open_blocks_the_create(self):
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_argument_index(page)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        page.locator("#prks-argument-new").click()
+        prompt_input = page.locator("#prks-modal-confirm .prks-modal-prompt__input")
+        prompt_input.wait_for()
+        prompt_input.fill("Created while disconnected")
+
+        mutations = []
+
+        def block_api(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                mutations.append((route.request.method, urlparse(route.request.url).path))
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", block_api)
+        try:
+            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+                timeout=20000,
+            )
+            page.locator("#prks-modal-confirm-ok").click()
+            page.wait_for_timeout(500)
+            self.assertEqual(mutations, [], "no Argument create may be attempted after disconnect")
+        finally:
+            _safe_unroute(page, "**/api/**", block_api)
+
+        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
+            timeout=20000,
+        )
+        names = page.evaluate("() => fetchArguments().then(items => items.map(a => a.name))")
+        self.assertNotIn("Created while disconnected", names)
+
+    def test_open_edit_form_survives_disconnect_without_losing_the_draft(self):
+        """An editor mounted online keeps its unsaved values when PRKS stops
+        answering; only the controls that could submit them go inert."""
+        server, page, _context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        _wait_sw_active(page)
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        page.locator("#prks-arg-edit").click()
+        page.locator("#prks-arg-form").wait_for()
+        draft = "Draft written before the connection dropped"
+        page.locator("#prks-arg-name").fill(draft)
+
+        mutations = []
+
+        def block_api(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                mutations.append((route.request.method, urlparse(route.request.url).path))
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", block_api)
+        try:
+            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+            page.wait_for_function(
+                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+                timeout=20000,
+            )
+            # The draft is still there ...
+            page.wait_for_function(
+                "() => !!document.querySelector('#prks-arg-name[disabled]')", timeout=20000
+            )
+            self.assertEqual(page.locator("#prks-arg-name").input_value(), draft)
+            self.assertTrue(page.locator("#prks-arg-text").is_disabled())
+            self.assertTrue(page.locator("#prks-arg-kind").is_disabled())
+            self.assertTrue(page.locator("#prks-arg-add-target").is_disabled())
+            # ... Cancel stays usable so the user can leave edit mode ...
+            self.assertFalse(page.locator("#prks-arg-cancel").is_disabled())
+            # ... and Save cannot reach the network.
+            page.locator("#prks-arg-form button[type=submit]").click(force=True)
+            page.wait_for_timeout(400)
+            self.assertEqual(mutations, [])
+        finally:
+            _safe_unroute(page, "**/api/**", block_api)
+
+        page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
+        page.wait_for_function(
+            "() => !document.querySelector('#prks-arg-name[disabled]')", timeout=20000
+        )
+        self.assertEqual(page.locator("#prks-arg-name").input_value(), draft)
+        self.assertFalse(page.locator("#prks-arg-form button[type=submit]").is_disabled())
+
+    def test_fresh_offline_route_renders_read_mode(self):
+        """A cached detail mounted while already offline starts read-only rather
+        than inheriting a stale edit session."""
+        server, page, context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        _wait_sw_active(page)
+        _open_argument(page, argument_a)
+        _wait_entity_cached(page, "argument", argument_a)
+        page.locator("#prks-arg-edit").click()
+        page.locator("#prks-arg-form").wait_for()
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_offline_banner(page)
+        self.assertEqual(page.locator("#prks-arg-form").count(), 0)
+        self.assertEqual(page.locator("#prks-arg-edit").count(), 1)
+
+    def test_live_argument_pages_react_to_connectivity(self):
+        server, page, _context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        _wait_sw_active(page)
+        _open_argument_index(page)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        self.assertFalse(page.locator("#prks-argument-new").is_disabled())
+
+        def abort_api(route):
+            route.abort("connectionrefused")
+
+        page.route("**/api/**", abort_api)
+        try:
+            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+            page.wait_for_function(
+                "() => !!document.querySelector('#prks-argument-new[disabled]')", timeout=20000
+            )
+            self.assertTrue(page.evaluate("() => navigator.onLine"))
+            self.assertTrue(page.locator("#prks-stance-new").is_disabled())
+        finally:
+            _safe_unroute(page, "**/api/**", abort_api)
+
+        page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
+        page.wait_for_function(
+            "() => !document.querySelector('#prks-argument-new[disabled]')", timeout=20000
+        )
+
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_entity_cached(page, "argument", argument_a)
+        page.route("**/api/**", abort_api)
+        try:
+            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+            page.wait_for_function(
+                "() => !!document.querySelector('#prks-arg-edit[disabled]')", timeout=20000
+            )
+            for selector in ("#prks-arg-response", "#prks-arg-delete", "#prks-arg-view-graph"):
+                self.assertTrue(page.locator(selector).is_disabled(), selector)
+            # Read-only content and relationship links stay usable.
+            body = _content_text(page)
+            self.assertIn(ARGUMENT_A_TEXT, body)
+            self.assertIn(POSITION_A_NAME, body)
+            self.assertGreaterEqual(page.locator(".prks-research-row").count(), 3)
+        finally:
+            _safe_unroute(page, "**/api/**", abort_api)
+
+        page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
+        page.wait_for_function(
+            "() => !document.querySelector('#prks-arg-edit[disabled]')", timeout=20000
+        )
+
+    def test_argument_shape_validators_reject_unusable_rows(self):
+        """The validators gate cache publication, so they are checked directly
+        against the shapes a server could actually hand back."""
+        server, page, _context, _collector = self._start()
+        _wait_sw_active(page)
+        _open_argument_index(page)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+
+        index_cases = page.evaluate(
+            """() => {
+                const ok = { id: 'A-1', kind: 'argument', targets: [], sources: [] };
+                return {
+                    empty: prksIsArgumentIndexShape([]),
+                    ok: prksIsArgumentIndexShape([ok]),
+                    stanceOk: prksIsArgumentIndexShape([{ id: 'A-2', kind: 'stance', targets: [], sources: [] }]),
+                    notArray: prksIsArgumentIndexShape({ error: 'boom' }),
+                    nullValue: prksIsArgumentIndexShape(null),
+                    missingId: prksIsArgumentIndexShape([{ kind: 'argument', targets: [], sources: [] }]),
+                    blankId: prksIsArgumentIndexShape([{ id: '  ', kind: 'argument', targets: [], sources: [] }]),
+                    badKind: prksIsArgumentIndexShape([{ id: 'A-1', kind: 'claim', targets: [], sources: [] }]),
+                    missingKind: prksIsArgumentIndexShape([{ id: 'A-1', targets: [], sources: [] }]),
+                    targetsNotArray: prksIsArgumentIndexShape([{ id: 'A-1', kind: 'argument', targets: {}, sources: [] }]),
+                    sourcesNotArray: prksIsArgumentIndexShape([{ id: 'A-1', kind: 'argument', targets: [], sources: {} }]),
+                    targetMissingId: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument', targets: [{ type: 'position' }], sources: [] }]),
+                    targetMissingType: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument', targets: [{ id: 'P-1' }], sources: [] }]),
+                    targetBadType: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument', targets: [{ id: 'P-1', type: 'concept' }], sources: [] }]),
+                    sourceMissingWorkId: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument', targets: [], sources: [{ authors: [] }] }]),
+                    sourceAuthorsNotArray: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument', targets: [], sources: [{ work_id: 'W-1' }] }]),
+                    optionalDisplayFieldsAbsent: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument',
+                          targets: [{ id: 'P-1', type: 'position' }],
+                          sources: [{ work_id: 'W-1', authors: [] }] }]),
+                };
+            }"""
+        )
+        self.assertEqual(
+            index_cases,
+            {
+                "empty": True,
+                "ok": True,
+                "stanceOk": True,
+                "notArray": False,
+                "nullValue": False,
+                "missingId": False,
+                "blankId": False,
+                "badKind": False,
+                "missingKind": False,
+                "targetsNotArray": False,
+                "sourcesNotArray": False,
+                "targetMissingId": False,
+                "targetMissingType": False,
+                "targetBadType": False,
+                "sourceMissingWorkId": False,
+                "sourceAuthorsNotArray": False,
+                "optionalDisplayFieldsAbsent": True,
+            },
+        )
+
+        detail_cases = page.evaluate(
+            """() => {
+                const base = () => ({ id: 'A-1', kind: 'argument', targets: [], sources: [],
+                                      responses: [], mentions: [], verdicts: [] });
+                const withField = (k, v) => { const o = base(); o[k] = v; return o; };
+                return {
+                    ok: prksIsArgumentShape(base(), 'A-1'),
+                    stanceOk: prksIsArgumentShape(withField('kind', 'stance'), 'A-1'),
+                    wrongId: prksIsArgumentShape(base(), 'A-2'),
+                    badKind: prksIsArgumentShape(withField('kind', 'claim'), 'A-1'),
+                    targetsNotArray: prksIsArgumentShape(withField('targets', {}), 'A-1'),
+                    sourcesNotArray: prksIsArgumentShape(withField('sources', null), 'A-1'),
+                    responsesNotArray: prksIsArgumentShape(withField('responses', {}), 'A-1'),
+                    mentionsNotArray: prksIsArgumentShape(withField('mentions', 'x'), 'A-1'),
+                    verdictsNotArray: prksIsArgumentShape(withField('verdicts', {}), 'A-1'),
+                    targetMissingId: prksIsArgumentShape(
+                        withField('targets', [{ type: 'argument' }]), 'A-1'),
+                    sourceMissingWorkId: prksIsArgumentShape(
+                        withField('sources', [{ authors: [] }]), 'A-1'),
+                    responseMissingId: prksIsArgumentShape(
+                        withField('responses', [{ name: 'x' }]), 'A-1'),
+                    responseBadKind: prksIsArgumentShape(
+                        withField('responses', [{ id: 'A-9', kind: 'claim' }]), 'A-1'),
+                    mentionMissingWorkId: prksIsArgumentShape(
+                        withField('mentions', [{ title: 'x' }]), 'A-1'),
+                    verdictMissingId: prksIsArgumentShape(
+                        withField('verdicts', [{ label: 'Supports' }]), 'A-1'),
+                    errorBody: prksIsArgumentShape({ error: 'boom' }, 'A-1'),
+                    arrayBody: prksIsArgumentShape([], 'A-1'),
+                    optionalDisplayFieldsAbsent: prksIsArgumentShape({
+                        id: 'A-1', kind: 'argument',
+                        targets: [{ id: 'A-9', type: 'argument' }],
+                        sources: [{ work_id: 'W-1', authors: [] }],
+                        responses: [{ id: 'A-8' }],
+                        mentions: [{ work_id: 'W-2' }],
+                        verdicts: [{ id: 'supports' }],
+                    }, 'A-1'),
+                };
+            }"""
+        )
+        self.assertEqual(
+            detail_cases,
+            {
+                "ok": True,
+                "stanceOk": True,
+                "wrongId": False,
+                "badKind": False,
+                "targetsNotArray": False,
+                "sourcesNotArray": False,
+                "responsesNotArray": False,
+                "mentionsNotArray": False,
+                "verdictsNotArray": False,
+                "targetMissingId": False,
+                "sourceMissingWorkId": False,
+                "responseMissingId": False,
+                "responseBadKind": False,
+                "mentionMissingWorkId": False,
+                "verdictMissingId": False,
+                "errorBody": False,
+                "arrayBody": False,
+                "optionalDisplayFieldsAbsent": True,
+            },
+        )
+
+    # ---- HTTP errors --------------------------------------------------------
+
+    def test_argument_detail_http_errors_keep_their_normal_meaning(self):
+        server, page, context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        _wait_sw_active(page)
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_entity_cached(page, "argument", argument_a)
+        good = _cached_entity(page, "argument", argument_a)
+
+        _open_argument(page, "A-DOES-NOT-EXIST")
+        _wait_content_contains(page, "Argument not found")
+        self.assertEqual(_connectivity_state(page), "online")
+
+        mode = {"status": 500}
+
+        def broken(route):
+            req = route.request
+            if req.method == "GET" and urlparse(req.url).path == "/api/arguments/" + argument_a:
+                if mode["status"] == 500:
+                    route.fulfill(status=500, content_type="application/json", body='{"error":"boom"}')
+                    return
+                if mode["status"] == 200:
+                    route.fulfill(
+                        status=200, content_type="application/json", body='{"error":"unexpected shape"}'
+                    )
+                    return
+            route.fallback()
+
+        page.route("**/api/arguments/**", broken)
+        try:
+            _open_argument(page, argument_a)
+            page.wait_for_function(
+                "() => document.querySelector('#prks-route-retry') !== null", timeout=15000
+            )
+            body = _content_text(page)
+            self.assertNotIn("Argument not found", body)
+            self.assertNotIn("not available offline", body)
+            self.assertEqual(_connectivity_state(page), "online")
+
+            mode["status"] = 200
+            _open_argument_index(page)
+            _wait_content_contains(page, ARGUMENT_A_NAME)
+            _open_argument(page, argument_a)
+            page.wait_for_function(
+                "() => document.querySelector('#prks-route-retry') !== null", timeout=15000
+            )
+            page.wait_for_timeout(500)
+            self.assertEqual(_cached_entity(page, "argument", argument_a)["value"], good["value"])
+            mode["status"] = 0
+            _safe_unroute(page, "**/api/arguments/**", broken)
+        except Exception:
+            _safe_unroute(page, "**/api/arguments/**", broken)
+            raise
+
+        _open_argument_index(page)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        context.set_offline(True)
+        _open_argument(page, argument_a)
+        _wait_offline_banner(page)
+        _wait_content_contains(page, ARGUMENT_A_TEXT)
+        _open_argument(page, server.ids["argument_unvisited"])
+        _wait_offline_unavailable(page)
+
+
+class OfflineArgumentCoherenceTests(unittest.TestCase):
+    """The Arguments read model depends on five other canonical record families,
+    so its coherence hooks get their own suite."""
+
+    def _start(self):
+        server = AppServer(seed_fn=seed_arguments_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
+        self.addCleanup(context.close)
+        return server, page, context, collector
+
+    def _cache_arguments(self, page, server):
+        """Caches the complete index plus Argument A's detail."""
+        _wait_sw_active(page)
+        _open_argument_index(page)
+        _wait_list_cached(page, "arguments:index")
+        _open_argument(page, server.ids["argument_a"])
+        _wait_entity_cached(page, "argument", server.ids["argument_a"])
+
+    def _assert_arguments_invalidated(self, page, server, generation_before):
+        # Canonical mutations driven through the UI resolve asynchronously, so
+        # wait for the generation to advance rather than sampling it.
+        page.wait_for_function(
+            "n => (typeof prksOfflineDomainGeneration === 'function'"
+            " ? prksOfflineDomainGeneration('arguments') : 0) > n",
+            arg=generation_before,
+            timeout=20000,
+        )
+        _wait_entity_uncached(page, "argument", server.ids["argument_a"])
+        _wait_list_uncached(page, "arguments:index")
+
+    # ---- direct Argument mutations -----------------------------------------
+
+    def test_argument_create_update_and_delete_invalidate_arguments(self):
+        server, page, _context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+        page.evaluate("() => window.createArgument({ name: 'Created Argument', kind: 'argument' })")
+        self._assert_arguments_invalidated(page, server, before)
+
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+        # B may embed A as a target or a response, so the whole domain goes.
+        page.evaluate("id => window.updateArgument(id, { name: 'Renamed Argument', kind: 'stance' })", argument_a)
+        self._assert_arguments_invalidated(page, server, before)
+
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+        page.evaluate("id => window.deleteArgument(id)", server.ids["argument_unvisited"])
+        self._assert_arguments_invalidated(page, server, before)
+
+    def test_failed_argument_mutations_retain_the_cache(self):
+        server, page, _context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+
+        def reject(route):
+            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
+                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
+                return
+            route.fallback()
+
+        page.route("**/api/arguments**", reject)
+        try:
+            page.evaluate(
+                """async (id) => {
+                    try { await window.updateArgument(id, { name: 'never applied' }); } catch (_e) {}
+                    try { await window.createArgument({ name: 'never created', kind: 'argument' }); } catch (_e) {}
+                    try { await window.deleteArgument(id); } catch (_e) {}
+                    try { await window.putArgumentSources(id, []); } catch (_e) {}
+                }""",
+                argument_a,
+            )
+            page.wait_for_timeout(400)
+            self.assertEqual(_domain_generation(page, "arguments"), before)
+            self.assertIsNotNone(_cached_entity(page, "argument", argument_a))
+        finally:
+            _safe_unroute(page, "**/api/arguments**", reject)
+
+    def test_partial_multi_request_save_keeps_arguments_invalidated(self):
+        """updateArgument succeeded, putArgumentTargets failed: canonical success
+        of the first request controls coherence, not the UI workflow's outcome."""
+        server, page, _context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+
+        def reject_targets(route):
+            if route.request.method == "PUT" and urlparse(route.request.url).path.endswith("/targets"):
+                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
+                return
+            route.fallback()
+
+        page.route("**/api/arguments/**", reject_targets)
+        try:
+            outcome = page.evaluate(
+                """async (id) => {
+                    await window.updateArgument(id, { name: 'Partially saved', kind: 'argument' });
+                    try {
+                        await window.putArgumentTargets(id, []);
+                        return 'targets-succeeded';
+                    } catch (_e) {
+                        return 'targets-failed';
+                    }
+                }""",
+                argument_a,
+            )
+            self.assertEqual(outcome, "targets-failed")
+            self._assert_arguments_invalidated(page, server, before)
+        finally:
+            _safe_unroute(page, "**/api/arguments/**", reject_targets)
+
+    # ---- domain boundaries --------------------------------------------------
+
+    def test_argument_sources_invalidate_arguments_but_not_positions(self):
+        server, page, _context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+        position_a = server.ids["position_a"]
+        concept_child = server.ids["concept_child"]
+
+        self._cache_arguments(page, server)
+        _open_position(page, position_a)
+        _wait_entity_cached(page, "position", position_a)
+        _open_concept(page, concept_child)
+        _wait_entity_cached(page, "concept", concept_child)
+        arguments_before = _domain_generation(page, "arguments")
+        positions_before = _domain_generation(page, "positions")
+        concepts_before = _domain_generation(page, "concepts")
+
+        page.evaluate(
+            "([id, workId]) => window.putArgumentSources(id, [{ work_id: workId, pages: '3-4' }])",
+            [argument_a, server.ids["work_b"]],
+        )
+        self._assert_arguments_invalidated(page, server, arguments_before)
+        # Source Works are not in the Position read model, and nothing here
+        # touches Concepts at all.
+        self.assertEqual(_domain_generation(page, "positions"), positions_before)
+        self.assertEqual(_domain_generation(page, "concepts"), concepts_before)
+        self.assertIsNotNone(_cached_entity(page, "position", position_a))
+        self.assertIsNotNone(_cached_entity(page, "concept", concept_child))
+
+    def test_argument_targets_invalidate_arguments_and_positions_only(self):
+        server, page, _context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+        position_a = server.ids["position_a"]
+        concept_child = server.ids["concept_child"]
+
+        self._cache_arguments(page, server)
+        _open_position(page, position_a)
+        _wait_entity_cached(page, "position", position_a)
+        _open_concept(page, concept_child)
+        _wait_entity_cached(page, "concept", concept_child)
+        arguments_before = _domain_generation(page, "arguments")
+        positions_before = _domain_generation(page, "positions")
+        concepts_before = _domain_generation(page, "concepts")
+
+        page.evaluate(
+            """([id, positionId]) => window.putArgumentTargets(id, [
+                { type: 'position', id: positionId, verdict_id: 'qualifies' },
+            ])""",
+            [argument_a, position_a],
+        )
+        self._assert_arguments_invalidated(page, server, arguments_before)
+        self.assertGreater(_domain_generation(page, "positions"), positions_before)
+        _wait_entity_uncached(page, "position", position_a)
+        self.assertEqual(_domain_generation(page, "concepts"), concepts_before)
+        self.assertIsNotNone(_cached_entity(page, "concept", concept_child))
+
+    def test_concept_mutation_leaves_arguments_and_positions_alone(self):
+        server, page, _context, _collector = self._start()
+        position_a = server.ids["position_a"]
+        concept_child = server.ids["concept_child"]
+
+        self._cache_arguments(page, server)
+        _open_position(page, position_a)
+        _wait_entity_cached(page, "position", position_a)
+        _open_concept(page, concept_child)
+        _wait_entity_cached(page, "concept", concept_child)
+        arguments_before = _domain_generation(page, "arguments")
+        positions_before = _domain_generation(page, "positions")
+
+        page.evaluate("id => window.updateConcept(id, { description: 'Domain isolation check.' })", concept_child)
+        _wait_entity_uncached(page, "concept", concept_child)
+        self.assertEqual(_domain_generation(page, "arguments"), arguments_before)
+        self.assertEqual(_domain_generation(page, "positions"), positions_before)
+        self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
+        self.assertIsNotNone(_cached_entity(page, "position", position_a))
+
+    # ---- external dependencies ----------------------------------------------
+
+    def test_position_rename_invalidates_arguments(self):
+        server, page, _context, _collector = self._start()
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+        # A cached Argument's targets embed the Position's name.
+        page.evaluate(
+            "id => window.updatePosition(id, { name: 'Renamed Target Position' })", server.ids["position_a"]
+        )
+        self._assert_arguments_invalidated(page, server, before)
+
+        # A failed Position update retains the cache.
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+
+        def reject(route):
+            if route.request.method == "PATCH":
+                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
+                return
+            route.fallback()
+
+        page.route("**/api/positions/**", reject)
+        try:
+            page.evaluate(
+                """async (id) => {
+                    try { await window.updatePosition(id, { name: 'never applied' }); } catch (_e) {}
+                }""",
+                server.ids["position_a"],
+            )
+            page.wait_for_timeout(400)
+            self.assertEqual(_domain_generation(page, "arguments"), before)
+            self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
+        finally:
+            _safe_unroute(page, "**/api/positions/**", reject)
+
+    def test_work_title_change_invalidates_arguments_and_concepts_but_not_positions(self):
+        """A Work title appears in cached Argument sources/mentions and cached
+        Concept mentions -- and in neither Position field."""
+        server, page, _context, _collector = self._start()
+        concept_child = server.ids["concept_child"]
+        position_a = server.ids["position_a"]
+
+        self._cache_arguments(page, server)
+        _open_concept(page, concept_child)
+        _wait_entity_cached(page, "concept", concept_child)
+        _open_position(page, position_a)
+        _wait_entity_cached(page, "position", position_a)
+        arguments_before = _domain_generation(page, "arguments")
+        concepts_before = _domain_generation(page, "concepts")
+        positions_before = _domain_generation(page, "positions")
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator("#panel-content button", has_text="Edit metadata").click()
+        page.locator("#meta-title").fill("Argument Source Title Changed")
+        page.locator("#inline-save-metadata-btn").click()
+        page.locator("#panel-content .card-title", has_text="Argument Source Title Changed").wait_for(timeout=15000)
+
+        self._assert_arguments_invalidated(page, server, arguments_before)
+        self.assertGreater(_domain_generation(page, "concepts"), concepts_before)
+        self.assertEqual(_domain_generation(page, "positions"), positions_before)
+        self.assertIsNotNone(_cached_entity(page, "position", position_a))
+
+    def test_playlist_inline_work_rename_invalidates_arguments(self):
+        """The shared Work-title helper owns this dependency, so the Playlist
+        rename surface gets it without its own hook."""
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+
+        playlist_id = page.evaluate(
+            """async (workId) => {
+                const id = await createPlaylist('E2E Argument Rename Playlist', '');
+                await addWorkToPlaylist(id, workId);
+                return id;
+            }""",
+            arg=work_a,
+        )
+        page.evaluate("id => window.prksNavigate('#/playlists/' + encodeURIComponent(id))", arg=playlist_id)
+        page.wait_for_selector(".prks-playlist-detail")
+        page.locator("#prks-playlist-edit-btn").click()
+        page.wait_for_selector('[data-pl-rename="%s"]' % work_a)
+        page.locator('[data-pl-rename="%s"]' % work_a).click()
+        page.locator("#prks-pl-rename-input-" + work_a).fill("Renamed From The Playlist")
+        page.locator('[data-pl-rename-save="%s"]' % work_a).click()
+        page.wait_for_function(
+            "t => document.body.innerText.indexOf(t) !== -1", arg="Renamed From The Playlist", timeout=15000
+        )
+        self._assert_arguments_invalidated(page, server, before)
+
+    def test_research_notes_save_invalidates_arguments_and_concepts(self):
+        server, page, _context, _collector = self._start()
+        concept_child = server.ids["concept_child"]
+
+        self._cache_arguments(page, server)
+        _open_concept(page, concept_child)
+        _wait_entity_cached(page, "concept", concept_child)
+        arguments_before = _domain_generation(page, "arguments")
+        concepts_before = _domain_generation(page, "concepts")
+
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text("[[argument:%s|mention]] and a note line" % server.ids["argument_a"])
+        page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
+
+        self._assert_arguments_invalidated(page, server, arguments_before)
+        self.assertGreater(_domain_generation(page, "concepts"), concepts_before)
+
+    def test_superseded_notes_save_still_invalidates_arguments(self):
+        server, page, _context, _collector = self._start()
+
+        self._cache_arguments(page, server)
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text("first save that really commits")
+        page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
+        after_first = _domain_generation(page, "arguments")
+        self.assertGreaterEqual(after_first, 1)
+
+        def reject_notes(route):
+            if route.request.method == "PATCH":
+                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
+                return
+            route.fallback()
+
+        page.route("**/api/works/**", reject_notes)
+        try:
+            page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
+            page.keyboard.press("Control+A")
+            page.keyboard.insert_text("second save that fails")
+            page.locator('[data-prks-role="editor-status"]', has_text="Error saving changes").wait_for(timeout=15000)
+        finally:
+            _safe_unroute(page, "**/api/works/**", reject_notes)
+
+        # Save #1 changed canonical mention data; #2 failing does not undo that.
+        self.assertIsNone(_cached_entity(page, "argument", server.ids["argument_a"]))
+
+    def test_work_deletion_invalidates_arguments(self):
+        server, page, _context, _collector = self._start()
+
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+        _open_work_from_home(page, WORK_A_TITLE)
+        _open_details_drawer_if_tiled(page)
+        advanced = page.locator(".work-details-advanced")
+        if advanced.get_attribute("open") is None:
+            advanced.locator("summary").click()
+        page.locator(".delete-work-btn").click()
+        page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        self._assert_arguments_invalidated(page, server, before)
+
+    def test_author_role_changes_invalidate_arguments(self):
+        """Cached Argument sources carry each source Work's Author rows, so an
+        Author link change stales them -- and other role types do not."""
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+        person = server.ids["person"]
+
+        # A non-Author role is not part of the Argument read model.
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+        linked = page.evaluate(
+            """async ([workId, personId]) => {
+                const res = await window.prksRequest('/api/roles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ person_id: personId, work_id: workId, role_type: 'Editor' }),
+                });
+                if (res.ok) window.prksMarkWorkAuthorDisplayChanged(workId, 'Editor');
+                return res.ok;
+            }""",
+            [work_a, person],
+        )
+        self.assertTrue(linked)
+        page.wait_for_timeout(300)
+        self.assertEqual(
+            _domain_generation(page, "arguments"),
+            before,
+            "a non-Author role is not part of the Argument read model",
+        )
+        self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
+
+        # Removing the seeded Author link through the real Work-details UI must.
+        before = _domain_generation(page, "arguments")
+        _open_work_from_home(page, WORK_A_TITLE)
+        _open_details_drawer_if_tiled(page)
+        # The per-role unlink control only renders in the editable people mode.
+        page.locator("#panel-content button", has_text="Manage relationships").click()
+        unlink = page.locator(
+            '.work-linked-persons__unlink[data-role-type="Author"][data-person-id="%s"]' % person
+        )
+        unlink.wait_for(timeout=15000)
+        unlink.click()
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for(timeout=15000)
+        page.locator("#prks-modal-confirm-ok").click()
+        self._assert_arguments_invalidated(page, server, before)
+
+    def _save_person_profile(self, page, person_id, field, value):
+        """Drives the real profile editor: open, change one field, Save."""
+        page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", person_id)
+        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=person_id)
+        _open_details_drawer_if_tiled(page)
+        page.locator("#panel-content button", has_text="Edit profile").click()
+        page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_id).wait_for()
+        page.locator(field).fill(value)
+        page.locator("#pd-save-btn").click()
+        page.wait_for_selector(".person-panel-edit", state="detached", timeout=15000)
+
+    def test_person_rename_invalidates_arguments_but_other_profile_edits_do_not(self):
+        """Cached Argument sources show each author by canonical first/last name,
+        so a rename stales them -- and nothing else on that form does."""
+        server, page, _context, _collector = self._start()
+        person = server.ids["person"]
+
+        # A biography-only edit is not part of the Argument read model.
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+        self._save_person_profile(page, person, "#pd-about", "A revised biography, same name.")
+        page.wait_for_timeout(400)
+        self.assertEqual(
+            _domain_generation(page, "arguments"),
+            before,
+            "an edit that cannot change the displayed author must not cost the cache",
+        )
+        self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
+
+        # A canonical-name change does stale it.
+        before = _domain_generation(page, "arguments")
+        self._save_person_profile(page, person, "#pd-first-name", "Renamed")
+        self._assert_arguments_invalidated(page, server, before)
 
 
 def _safe_unroute(page, pattern, handler):

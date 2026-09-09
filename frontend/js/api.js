@@ -859,12 +859,48 @@ function prksMarkPositionsDomainChanged() {
     return prksOfflineMarkPositionsChanged();
 }
 
+/**
+ * Coherence hook for a canonical change to the Arguments read model. That model
+ * is the widest in PRKS: an Argument/Stance embeds its targets' Position and
+ * Argument names, its source Works' titles AND those Works' Author names and
+ * credit names, its incoming responses, and its research-note mentions. So a
+ * lot of canonical callers outside `arguments` itself invalidate this domain --
+ * each documented in AGENTS.md with the field it can stale. Stances live here
+ * too: they are Arguments with `kind: 'stance'`, not a separate domain.
+ */
+function prksMarkArgumentsDomainChanged() {
+    if (typeof prksOfflineMarkArgumentsChanged !== 'function') return null;
+    return prksOfflineMarkArgumentsChanged();
+}
+
 function prksMarkWorkTitleChanged(workId) {
     const token =
         typeof prksOfflineMarkEntityChanged === 'function'
             ? prksOfflineMarkEntityChanged('work', workId)
             : null;
+    // A Work title appears in cached Concept mentions AND in cached Argument
+    // sources/mentions, so one title save stales both domains.
     prksMarkConceptsDomainChanged();
+    prksMarkArgumentsDomainChanged();
+    return token;
+}
+
+/**
+ * Coherence hook for the Work-role surfaces (link, unlink, credit-name edit).
+ * Cached Argument sources carry each source Work's Author rows -- person names
+ * and per-Work credit names -- so an Author change stales Arguments even though
+ * nothing about the Argument moved. Other role types are not in that read model
+ * and deliberately do not invalidate it. Routing every role surface through one
+ * helper is what stops a new one from silently reopening the gap.
+ */
+function prksMarkWorkAuthorDisplayChanged(workId, roleType) {
+    const token =
+        typeof prksOfflineMarkEntityChanged === 'function'
+            ? prksOfflineMarkEntityChanged('work', workId)
+            : null;
+    if (String(roleType || '').trim() === 'Author') {
+        prksMarkArgumentsDomainChanged();
+    }
     return token;
 }
 
@@ -967,6 +1003,10 @@ async function updatePosition(id, payload) {
     });
     const data = await prksResearchJson(res, 'Could not update Position.', 'positions.update');
     prksMarkPositionsDomainChanged();
+    // A cached Argument's targets embed the Position's name, so a rename stales
+    // Arguments too. Create/delete do not: a brand-new Position cannot already
+    // be targeted, and a targeted Position cannot be deleted.
+    prksMarkArgumentsDomainChanged();
     return data;
 }
 
@@ -1034,6 +1074,7 @@ async function createArgument(payload) {
     });
     // A create payload may already carry Position targets.
     const data = await prksResearchJson(res, 'Could not create Argument.', 'arguments.create');
+    prksMarkArgumentsDomainChanged();
     prksMarkPositionsDomainChanged();
     return data;
 }
@@ -1044,16 +1085,21 @@ async function updateArgument(id, payload) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload || {}),
     });
-    // name/kind are both displayed in a Position's Arguments & Stances list.
+    // name/kind are both displayed in a Position's Arguments & Stances list --
+    // and in every other Argument that targets or responds to this one, which
+    // is why the whole Arguments domain goes rather than one row.
     const data = await prksResearchJson(res, 'Could not update Argument.', 'arguments.update');
+    prksMarkArgumentsDomainChanged();
     prksMarkPositionsDomainChanged();
     return data;
 }
 
 async function deleteArgument(id) {
     const res = await prksRequest('/api/arguments/' + encodeURIComponent(id), { method: 'DELETE' });
-    // A deleted Argument must stop appearing in a cached Position's list.
+    // A deleted Argument must stop appearing in a cached Position's list, and in
+    // any cached Argument that targeted or was answered by it.
     const data = await prksResearchJson(res, 'Could not delete Argument.', 'arguments.delete');
+    prksMarkArgumentsDomainChanged();
     prksMarkPositionsDomainChanged();
     return data;
 }
@@ -1064,8 +1110,11 @@ async function putArgumentSources(id, sources) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sources: sources || [] }),
     });
-    // No Positions invalidation: Position detail never displays source Works.
-    return prksResearchJson(res, 'Could not update Argument sources.', 'arguments.sources');
+    // Arguments only: source Works (and their authors) are part of the Argument
+    // read model, and deliberately NOT of the Position one.
+    const data = await prksResearchJson(res, 'Could not update Argument sources.', 'arguments.sources');
+    prksMarkArgumentsDomainChanged();
+    return data;
 }
 
 async function putArgumentTargets(id, targets) {
@@ -1074,8 +1123,10 @@ async function putArgumentTargets(id, targets) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targets: targets || [] }),
     });
-    // Changes Position membership and per-Position verdict on both sides.
+    // Changes Position membership and per-Position verdict, and on the Argument
+    // side both this Argument's targets and the target's responses list.
     const data = await prksResearchJson(res, 'Could not update Argument targets.', 'arguments.targets');
+    prksMarkArgumentsDomainChanged();
     prksMarkPositionsDomainChanged();
     return data;
 }
@@ -1122,6 +1173,8 @@ window.deleteSavedView = deleteSavedView;
 window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;
 window.prksMarkWorkTitleChanged = prksMarkWorkTitleChanged;
 window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
+window.prksMarkArgumentsDomainChanged = prksMarkArgumentsDomainChanged;
+window.prksMarkWorkAuthorDisplayChanged = prksMarkWorkAuthorDisplayChanged;
 window.fetchConcepts = fetchConcepts;
 window.fetchConcept = fetchConcept;
 window.createConcept = createConcept;
