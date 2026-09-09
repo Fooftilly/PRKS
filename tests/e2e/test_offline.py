@@ -5584,79 +5584,22 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         # Work links stay usable.
         self.assertGreaterEqual(page.locator('[data-prks-route^="#/works/"]').count(), 1)
 
-    def test_group_links_require_a_connection_offline(self):
-        """Person Groups are not offline-capable, so their links stay visible
-        with real hrefs but refuse every activation gesture."""
+    def test_person_group_links_use_normal_offline_destination(self):
         server, page, context, _collector = self._start()
         person_a = server.ids["person_a"]
         group_id = server.ids["person_group"]
-
         _wait_sw_active(page)
         _open_person(page, person_a)
-        _wait_content_contains(page, PERSON_GROUP_NAME)
         _wait_entity_cached(page, "person", person_a)
-
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
-        page.wait_for_selector("#sidebar")
         _wait_offline_banner(page)
-        page.wait_for_function(
-            "() => { const a = document.querySelector('[data-prks-role=\"person-group-link\"]');"
-            " return !!a && a.getAttribute('aria-disabled') === 'true'; }",
-            timeout=20000,
-        )
         link = page.locator('[data-prks-role="person-group-link"]').first
-        self.assertEqual(link.get_attribute("href"), "#/people/groups/" + group_id)
-
-        seen = []
-
-        def record(route):
-            seen.append(urlparse(route.request.url).path)
-            route.fallback()
-
-        page.route("**/api/person-groups**", record)
-        self.addCleanup(lambda: _safe_unroute(page, "**/api/person-groups**", record))
-
-        hash_before = page.evaluate("() => location.hash")
-        tabs_before = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length")
-        pages_before = len(context.pages)
-        for gesture in ("plain", "middle", "ctrl", "alt"):
-            if gesture == "plain":
-                link.click(force=True)
-            elif gesture == "middle":
-                link.click(button="middle", force=True)
-            elif gesture == "ctrl":
-                link.click(modifiers=["ControlOrMeta"], force=True)
-            else:
-                link.click(modifiers=["Alt"], force=True)
-            page.locator("#prks-modal-confirm:not(.hidden)", has_text="not available offline yet").wait_for(
-                timeout=15000
-            )
-            page.locator("#prks-modal-confirm-ok").click()
-            page.wait_for_function(
-                "() => document.getElementById('prks-modal-confirm').classList.contains('hidden')",
-                timeout=15000,
-            )
-            self.assertEqual(len(context.pages), pages_before, "%s opened a browser tab" % gesture)
-            self.assertEqual(
-                page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length"),
-                tabs_before,
-                "%s created a PRKS workspace tab" % gesture,
-            )
-            self.assertEqual(page.evaluate("() => location.hash"), hash_before, gesture)
-        self.assertEqual(seen, [], "no Group API request may be issued offline")
-
-        # Reconnecting restores ordinary navigation.
-        context.set_offline(False)
-        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-        page.wait_for_function(
-            "() => { const a = document.querySelector('[data-prks-role=\"person-group-link\"]');"
-            " return !!a && a.getAttribute('aria-disabled') === null; }",
-            timeout=20000,
-        )
-        page.locator('[data-prks-role="person-group-link"]').first.click()
-        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=group_id)
-
+        self.assertIsNone(link.get_attribute("aria-disabled"))
+        link.click()
+        _wait_offline_unavailable(page)
+        self.assertEqual(page.evaluate("location.hash"), "#/people/groups/" + group_id)
+        self.assertIn("Group not available offline", _content_text(page))
     def test_person_graph_action_requires_a_connection_offline(self):
         server, page, context, _collector = self._start()
         person_a = server.ids["person_a"]

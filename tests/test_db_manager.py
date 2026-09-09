@@ -513,6 +513,35 @@ class TestDBManager(unittest.TestCase):
         roles = self.db.get_work_roles(w_id)
         self.assertEqual(len(roles), 1)
 
+    def test_group_create_rolls_back_typed_parent(self):
+        self.db.add_person_group('A')
+        before = self.db.get_all_person_groups()
+        with self.assertRaises(ValueError):
+            self.db.add_person_group_with_parent_options('A', parent_name='New Parent')
+        self.assertEqual(self.db.get_all_person_groups(), before)
+
+    def test_group_update_rolls_back_typed_parent(self):
+        a = self.db.add_person_group('A')
+        self.db.add_person_group('B')
+        before = self.db.get_all_person_groups()
+        with self.assertRaises(ValueError):
+            self.db.update_person_group(a, {'name': 'B', 'parent_name': 'New Parent'})
+        self.assertEqual(self.db.get_all_person_groups(), before)
+
+    def test_group_delete_rolls_back_reparenting(self):
+        import sqlite3
+        parent = self.db.add_person_group('Parent')
+        group = self.db.add_person_group('Group', parent)
+        child = self.db.add_person_group('Child', group)
+        with self.db.connection() as conn:
+            # A persistent trigger is needed because the operation owns its connection.
+            conn.execute("""CREATE TRIGGER reject_group_delete BEFORE DELETE ON person_groups
+                BEGIN SELECT RAISE(ABORT, 'forced delete failure'); END""")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.delete_person_group(group)
+        self.assertIsNotNone(self.db.get_person_group(group))
+        self.assertEqual(self.db.get_person_group(child)['parent_id'], group)
+
     def test_person_and_role_operations(self):
         p_id = self.db.add_person(first_name="Jane", last_name="Smith", aliases="J. Smith")
         w_id = self.db.add_work(title="Jane's Book")

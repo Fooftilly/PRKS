@@ -1142,20 +1142,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, {'status': 'updated'})
             elif path.startswith('/api/person-groups/') and len(path.split('/')) == 4:
                 g_id = path.split('/')[-1]
-                if 'parent_name' in data:
-                    data = dict(data)
-                    raw = data.pop('parent_name')
-                    data.pop('parent_id', None)
-                    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
-                        data['parent_id'] = None
-                    else:
-                        try:
-                            data['parent_id'] = db.resolve_or_create_parent_group_by_name(
-                                str(raw).strip(), g_id
-                            )
-                        except ValueError as e:
-                            self.send_json(400, {'error': str(e)})
-                            return
                 try:
                     db.update_person_group(g_id, data)
                 except ValueError as e:

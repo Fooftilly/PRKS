@@ -9,6 +9,53 @@ function escapeHtmlGroup(s) {
         .replace(/'/g, '&#39;');
 }
 
+function prksPersonGroupMutationBlocked(message) {
+    return typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation(message);
+}
+
+function prksApplyPersonGroupOfflineState(container) {
+    if (!container) return;
+    const online = typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
+    const selector = '[data-prks-role="group-mutation-control"], [data-remove-member], ' +
+        '#group-add-member-search, #group-add-member-btn, #gd-name, #gd-description, ' +
+        '#gd-parent-search, #gd-save-btn, #gd-delete-btn';
+    container.querySelectorAll(selector).forEach((el) => {
+        el.disabled = !online || el.getAttribute('aria-busy') === 'true';
+        if (online) el.removeAttribute('aria-disabled');
+        else el.setAttribute('aria-disabled', 'true');
+    });
+    container.querySelectorAll('#gd-parent-results, #group-add-member-results').forEach((el) => {
+        el.inert = !online;
+        if (!online) el.classList.add('hidden');
+    });
+}
+
+function prksApplyPersonGroupPanelOfflineState(ctx) {
+    const panel = document.getElementById('panel-content');
+    if (!panel || typeof prksRightPanelOwnedBy !== 'function' || !prksRightPanelOwnedBy(ctx, panel)) return;
+    prksApplyPersonGroupOfflineState(panel);
+}
+
+function prksBindPersonGroupOfflineState(ctx, container) {
+    if (!container) return;
+    if (container.__prksGroupOfflineDispose) container.__prksGroupOfflineDispose();
+    const apply = () => {
+        prksApplyPersonGroupOfflineState(container);
+        prksApplyPersonGroupPanelOfflineState(ctx);
+    };
+    apply();
+    const unsubscribe = typeof prksOfflineRuntimeSubscribe === 'function'
+        ? prksOfflineRuntimeSubscribe(apply) : () => {};
+    let unregister = () => {};
+    const dispose = () => {
+        unsubscribe();
+        unregister();
+        if (container.__prksGroupOfflineDispose === dispose) container.__prksGroupOfflineDispose = null;
+    };
+    container.__prksGroupOfflineDispose = dispose;
+    if (ctx && ctx.registerCleanup) unregister = ctx.registerCleanup(dispose);
+}
+
 function groupPathLabel(groupId, byId) {
     const parts = [];
     let cur = byId.get(groupId);
@@ -63,7 +110,7 @@ function prksBindGroupSearchComboboxElements(input, results, hidden, excludedIds
                 div.className = 'result-item';
                 div.textContent = prksGroupRowLabel(g, list);
                 div.onmousedown = (e) => {
-                    if (!stillLive()) return;
+                    if (!stillLive() || input.disabled) return;
                     e.preventDefault();
                     hidden.value = g.id;
                     input.value = prksGroupRowLabel(g, list);
@@ -80,12 +127,13 @@ function prksBindGroupSearchComboboxElements(input, results, hidden, excludedIds
     }
 
     input.onfocus = () => {
+        if (input.disabled) return;
         void prksEnsureAllGroupsCache().then(() => {
             if (stillLive()) renderList();
         });
     };
     input.oninput = () => {
-        if (!stillLive()) return;
+        if (!stillLive() || input.disabled) return;
         hidden.value = '';
         void prksEnsureAllGroupsCache().then(() => {
             if (stillLive()) renderList();
@@ -310,7 +358,7 @@ function prksGroupTreeEmptySearchHtml() {
 
 function prksGroupLibraryTreeInnerHtml(list, filterQuery) {
     if (!list || !list.length) {
-        return '<div class="prks-group-library__empty-state"><p class="prks-inline-message prks-group-tree__empty">No Person Groups yet.</p><button type="button" class="prks-btn prks-btn--primary" onclick="openModal(\'group-modal\')">New Group</button></div>';
+        return '<div class="prks-group-library__empty-state"><p class="prks-inline-message prks-group-tree__empty">No Person Groups yet.</p><button type="button" class="prks-btn prks-btn--primary" data-prks-role="group-mutation-control" onclick="openModal(\'group-modal\')">New Group</button></div>';
     }
     return `<div class="prks-group-tree" role="tree">${renderGroupTreeRoots(list, { filterQuery })}</div>`;
 }
@@ -321,6 +369,7 @@ function prksRerenderGroupTreeOnly(root) {
     const host = root.querySelector('[data-prks-group-tree-host]');
     if (host) {
         host.innerHTML = prksGroupLibraryTreeInnerHtml(st.groups, st.filterQuery);
+        prksApplyPersonGroupOfflineState(host);
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
     }
     prksUpdateGroupLibraryExpandToggleBtn(root);
@@ -453,7 +502,7 @@ function renderGroupTreeRoots(groups, options = {}) {
     return roots.map((r) => renderNode(r, 0)).join('');
 }
 
-function renderPersonGroupsPage(groups, container) {
+function renderPersonGroupsPage(groups, container, ctx) {
     const list = Array.isArray(groups) ? groups : [];
     const filterQuery = prksGroupLibraryFilterFromStorage();
     const filterEsc = escapeHtmlGroup(filterQuery);
@@ -483,13 +532,13 @@ function renderPersonGroupsPage(groups, container) {
     const treeHost =
         list.length > 0
             ? `<div class="prks-group-library__scroll" data-prks-group-tree-host>${prksGroupLibraryTreeInnerHtml(list, filterQuery)}</div>`
-            : '<div class="prks-group-library__empty-state"><p class="prks-inline-message prks-group-library__empty">No Person Groups yet.</p><button type="button" class="prks-btn prks-btn--primary" onclick="openModal(\'group-modal\')">New Group</button></div>';
+            : '<div class="prks-group-library__empty-state"><p class="prks-inline-message prks-group-library__empty">No Person Groups yet.</p><button type="button" class="prks-btn prks-btn--primary" data-prks-role="group-mutation-control" onclick="openModal(\'group-modal\')">New Group</button></div>';
 
     container.innerHTML = `
         <div class="prks-group-library">
         <div class="prks-page-header page-header prks-group-library__header page-header--split">
             <h2 class="prks-page-title">People groups</h2>
-            <button type="button" class="prks-btn prks-btn--secondary" onclick="openModal('group-modal')">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New group</button>
+            <button type="button" class="prks-btn prks-btn--secondary" data-prks-role="group-mutation-control" onclick="openModal('group-modal')">${typeof prksIcon === 'function' ? prksIcon('plus', { size: 'sm' }) : ''} New group</button>
         </div>
         <p class="meta-row prks-group-library__intro">Organize people into hierarchical groups. A person can belong to multiple groups.</p>
         ${searchToolbar}
@@ -506,6 +555,7 @@ function renderPersonGroupsPage(groups, container) {
             expandToggle.addEventListener('click', () => prksToggleAllGroupNodes(expandToggle));
         }
     }
+    prksBindPersonGroupOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
@@ -543,7 +593,7 @@ function renderPersonGroupSummarySidebarHtml(g) {
                 <li>${nMem} member${nMem === 1 ? '' : 's'}</li>
                 <li>${nSub} subgroup${nSub === 1 ? '' : 's'}</li>
             </ul>
-            <button type="button" class="prks-btn prks-btn--primary group-sidebar__primary-btn" onclick="openPersonGroupEdit()">Edit group</button>
+            <button type="button" class="prks-btn prks-btn--primary group-sidebar__primary-btn" data-prks-role="group-mutation-control" onclick="openPersonGroupEdit()">Edit group</button>
             <p class="route-sidebar__action"><a href="#/people/groups" class="route-sidebar__link">All groups</a></p>
         </div>`;
 }
@@ -575,13 +625,14 @@ function prksSyncPersonGroupMemberEditUi(ownerCtx) {
 }
 
 function openPersonGroupEdit() {
+    if (prksPersonGroupMutationBlocked('Editing a Person Group requires a connection to PRKS.')) return;
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     if (ctx && ctx.ui) {
         ctx.ui.personGroupMembersEditing = false;
         ctx.ui.personGroupEditing = true;
     }
     const g = ctx && ctx.getEntity ? ctx.getEntity('personGroup') : null;
-    if (ctx && ctx.root && g) renderPersonGroupDetail(g, ctx.root);
+    if (ctx && ctx.root && g) renderPersonGroupDetail(g, ctx.root, ctx);
     prksSyncPersonGroupMemberEditUi(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
@@ -600,9 +651,10 @@ function prksTogglePersonGroupMembersEdit() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const g = ctx && ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!ctx || !g) return;
+    if (!ctx.ui.personGroupMembersEditing && prksPersonGroupMutationBlocked('Managing members requires a connection to PRKS.')) return;
     ctx.ui.personGroupEditing = false;
     ctx.ui.personGroupMembersEditing = !ctx.ui.personGroupMembersEditing;
-    if (ctx.root) renderPersonGroupDetail(g, ctx.root);
+    if (ctx.root) renderPersonGroupDetail(g, ctx.root, ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
 window.prksTogglePersonGroupMembersEdit = prksTogglePersonGroupMembersEdit;
@@ -618,16 +670,23 @@ function prksNavigateIfOwnerFocused(ownerCtx, hash, expectedGroupId) {
     if (typeof prksNavigate === 'function') prksNavigate(hash);
 }
 
-async function mountPersonGroupEditPanel(g) {
-    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+async function mountPersonGroupEditPanel(g, ownerCtx) {
+    ownerCtx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const generation = ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined;
+    const panel = document.getElementById('panel-content');
+    const editor = panel && panel.querySelector('.group-sidebar-pane--edit');
+    const current = () => !!(ownerCtx && ownerCtx.isCurrent(generation) && editor && editor.isConnected &&
+        prksRightPanelOwnedBy(ownerCtx, panel) && panel.querySelector('.group-sidebar-pane--edit') === editor);
+    prksApplyPersonGroupPanelOfflineState(ownerCtx);
     const all = await prksEnsureAllGroupsCache();
+    if (!current()) return;
     if (ownerCtx && typeof generation === 'number' && typeof ownerCtx.isCurrent === 'function' && !ownerCtx.isCurrent(generation)) {
         return;
     }
     const descendants = prksCollectDescendantIds(g.id, all);
     descendants.add(g.id);
-    prksBindGroupSearchCombobox('gd-parent-search', 'gd-parent-results', 'gd-parent-id', descendants);
+    prksBindGroupSearchComboboxElements(editor.querySelector('#gd-parent-search'),
+        editor.querySelector('#gd-parent-results'), editor.querySelector('#gd-parent-id'), descendants, current);
 
     const searchEl = document.getElementById('gd-parent-search');
     const hidEl = document.getElementById('gd-parent-id');
@@ -643,7 +702,8 @@ async function mountPersonGroupEditPanel(g) {
     const saveBtn = document.getElementById('gd-save-btn');
     if (saveBtn) {
         saveBtn.onclick = async () => {
-            const saveCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : ownerCtx;
+            if (!current() || prksPersonGroupMutationBlocked()) return;
+            const saveCtx = ownerCtx;
             const btn = document.getElementById('gd-save-btn');
             const name = document.getElementById('gd-name').value.trim();
             const description = document.getElementById('gd-description').value;
@@ -678,6 +738,7 @@ async function mountPersonGroupEditPanel(g) {
                 await prksAlertMessage('Could not save group.', 'Error');
             } finally {
                 if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
+                prksApplyPersonGroupPanelOfflineState(ownerCtx);
             }
         };
     }
@@ -685,7 +746,8 @@ async function mountPersonGroupEditPanel(g) {
     const delBtn = document.getElementById('gd-delete-btn');
     if (delBtn) {
         delBtn.onclick = async () => {
-            const delCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : ownerCtx;
+            if (!current() || prksPersonGroupMutationBlocked()) return;
+            const delCtx = ownerCtx;
             const confirmed = await prksConfirmDestructive({
                 title: `Delete group “${g.name}”?`,
                 message:
@@ -693,6 +755,7 @@ async function mountPersonGroupEditPanel(g) {
                 confirmLabel: 'Delete group',
             });
             if (!confirmed) return;
+            if (!current() || prksPersonGroupMutationBlocked()) return;
             try {
                 const { ok: res_ok, data } = await deletePersonGroup(g.id);
                 if (!res_ok) {
@@ -713,6 +776,7 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
     buttons.forEach((btn) => {
         btn.addEventListener('click', async (ev) => {
             ev.stopPropagation();
+            if (prksPersonGroupMutationBlocked()) return;
             const pid = btn.getAttribute('data-remove-member');
             if (!pid) return;
             const member = (g.members || []).find((m) => String(m.id) === String(pid));
@@ -726,6 +790,7 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
                 confirmLabel: 'Remove from group',
             });
             if (!confirmed) return;
+            if (prksPersonGroupMutationBlocked()) return;
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, true);
             try {
                 const { ok: res_ok, data } = await removePersonGroupMember(g.id, pid);
@@ -743,6 +808,7 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
                 await prksAlertMessage('Could not remove member.', 'Error');
             } finally {
                 if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
+                prksApplyPersonGroupOfflineState(ownerCtx.root);
             }
         });
     });
@@ -778,6 +844,7 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
     const addBtn = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-btn') : null;
     if (addBtn) {
         addBtn.onclick = async () => {
+            if (prksPersonGroupMutationBlocked()) return;
             const idInput = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-id') : null;
             const pid = idInput ? idInput.value : '';
             if (!pid) {
@@ -801,6 +868,7 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
                 await prksAlertMessage('Could not add member.', 'Error');
             } finally {
                 if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(addBtn, false);
+                prksApplyPersonGroupOfflineState(ownerCtx.root);
             }
         };
     }
@@ -822,9 +890,9 @@ function renderPersonGroupAddMemberPanelHtml() {
         </div>`;
 }
 
-function renderPersonGroupDetail(group, container) {
+function renderPersonGroupDetail(group, container, ownerCtx) {
     const g = group;
-    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const membersEditing = !!(ctx && ctx.ui && ctx.ui.personGroupMembersEditing);
     const parentLink = g.parent
         ? `<a href="#/people/groups/${encodeURIComponent(String(g.parent.id || ''))}" class="route-sidebar__link">${escapeHtmlGroup(g.parent.name)}</a>`
@@ -842,7 +910,7 @@ function renderPersonGroupDetail(group, container) {
             <div class="group-detail__relationship"><span>Parent</span><span>${parentLink || 'Top-level group'}</span></div>
             <div class="group-detail__relationship"><span>Subgroups · ${children.length}</span>${children.length ? renderPersonGroupSubgroupsListHtml(g, { main: true }) : '<span class="meta-row">No subgroups.</span>'}</div>
         </section>`;
-    let membersHtml = `<section class="group-detail__section group-detail__members" aria-labelledby="group-members-heading"><div class="group-detail__section-head"><h3 id="group-members-heading">Members</h3><span class="group-detail__count">${Array.isArray(g.members) ? g.members.length : 0}</span><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksTogglePersonGroupMembersEdit()">${membersEditing ? 'Done' : 'Manage members'}</button></div>`;
+    let membersHtml = `<section class="group-detail__section group-detail__members" aria-labelledby="group-members-heading"><div class="group-detail__section-head"><h3 id="group-members-heading">Members</h3><span class="group-detail__count">${Array.isArray(g.members) ? g.members.length : 0}</span><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" ${membersEditing ? '' : 'data-prks-role="group-mutation-control"'} onclick="prksTogglePersonGroupMembersEdit()">${membersEditing ? 'Done' : 'Manage members'}</button></div>`;
     if (membersEditing) membersHtml += renderPersonGroupAddMemberPanelHtml();
 
     if (g.members && g.members.length > 0) {
@@ -886,6 +954,7 @@ function renderPersonGroupDetail(group, container) {
         void mountPersonGroupAddMemberControls(g, ctx);
     }
     prksSyncPersonGroupMemberEditUi(ctx);
+    prksBindPersonGroupOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
@@ -1028,15 +1097,9 @@ async function prksMountPersonProfileGroupPicker(ctx, person, editor) {
             if (prksOfflineGuardMutation('Creating a group requires a connection to PRKS.')) return;
         }
         try {
-            const res = await prksRequest('/api/person-groups', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: typed, description: '' })
-            });
+            const { ok, data } = await createPersonGroup({ name: typed, description: '' });
             if (!logicalSessionCurrent()) return;
-            const data = await res.json().catch(() => ({}));
-            if (!logicalSessionCurrent()) return;
-            if (!res.ok) {
+            if (!ok) {
                 if (data.error && String(data.error).includes('already exists')) {
                     await prksEnsureAllGroupsCache();
                     if (!logicalSessionCurrent()) return;

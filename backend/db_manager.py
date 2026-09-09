@@ -3144,25 +3144,52 @@ class PRKSDatabase:
         parent_name: Optional[str] = None,
         description: str = "",
     ) -> str:
-        """Create a group; parent from parent_id, else resolve/create from parent_name (top-level)."""
+        """Resolve/create the parent and child in one canonical transaction."""
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            n = (name or "").strip()
+            pn = (parent_name or "").strip()
+            if not parent_id and pn and pn.lower() == n.lower():
+                raise ValueError("Parent group cannot have the same name as the new group.")
+            pid = parent_id or (self._resolve_group_parent(conn, pn) if pn else None)
+            return self._insert_person_group(conn, n, pid, description)
+
+    def _insert_person_group(self, conn, name, parent_id=None, description="") -> str:
         n = (name or "").strip()
         if not n:
             raise ValueError("Group name is required.")
-        pid: Optional[str] = None
-        if parent_id:
-            pid = parent_id
-            ok = self.execute_query("SELECT 1 FROM person_groups WHERE id = ?", (pid,))
-            if not ok:
-                raise ValueError("Parent group not found.")
-        else:
-            pn = (parent_name or "").strip() if parent_name is not None else ""
-            if pn:
-                if pn.lower() == n.lower():
-                    raise ValueError("Parent group cannot have the same name as the new group.")
-                pid = self.resolve_or_create_parent_group_by_name(pn, None)
-        return self.add_person_group(n, pid, description)
+        if conn.execute("SELECT 1 FROM person_groups WHERE LOWER(name) = LOWER(?)", (n,)).fetchone():
+            raise ValueError("A group with this name already exists.")
+        if parent_id and not conn.execute(
+            "SELECT 1 FROM person_groups WHERE id = ?", (parent_id,)
+        ).fetchone():
+            raise ValueError("Parent group not found.")
+        gid = self.generate_id("PG")
+        conn.execute(
+            "INSERT INTO person_groups (id, name, parent_id, description) VALUES (?, ?, ?, ?)",
+            (gid, n, parent_id or None, (description or "").strip()),
+        )
+        return gid
+
+    def _resolve_group_parent(self, conn, name) -> str:
+        row = conn.execute(
+            "SELECT id FROM person_groups WHERE LOWER(name) = LOWER(?) LIMIT 1", (name,)
+        ).fetchone()
+        return row["id"] if row else self._insert_person_group(conn, name)
 
     def update_person_group(self, group_id: str, fields: dict) -> None:
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM person_groups WHERE id = ?", (group_id,)).fetchone():
+                raise ValueError("Group not found.")
+            fields = dict(fields)
+            if "parent_name" in fields:
+                raw = fields.pop("parent_name")
+                pn = str(raw).strip() if raw is not None else ""
+                fields["parent_id"] = self._resolve_group_parent(conn, pn) if pn else None
+            self._update_person_group(conn, group_id, fields)
+
+    def _update_person_group(self, conn, group_id, fields) -> None:
         allowed = {"name", "parent_id", "description"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
@@ -3174,38 +3201,48 @@ class PRKSDatabase:
             if new_parent == group_id:
                 raise ValueError("A group cannot be its own parent.")
             if new_parent:
-                ok = self.execute_query(
+                ok = conn.execute(
                     "SELECT 1 FROM person_groups WHERE id = ?", (new_parent,)
-                )
+                ).fetchone()
                 if not ok:
                     raise ValueError("Parent group not found.")
-                desc = self._person_group_descendant_ids(group_id)
+                desc = {row[0] for row in conn.execute(
+                    """WITH RECURSIVE sub(id) AS (
+                        SELECT id FROM person_groups WHERE parent_id = ?
+                        UNION SELECT g.id FROM person_groups g JOIN sub ON g.parent_id = sub.id
+                    ) SELECT id FROM sub""", (group_id,)
+                )}
                 if new_parent in desc:
                     raise ValueError("Cannot set parent to a subgroup (cycle).")
         if "name" in updates:
             updates["name"] = (updates["name"] or "").strip()
             if not updates["name"]:
                 raise ValueError("Group name is required.")
-            self._assert_group_name_free(updates["name"], exclude_group_id=group_id)
+            if conn.execute(
+                "SELECT 1 FROM person_groups WHERE LOWER(name) = LOWER(?) AND id != ?",
+                (updates["name"], group_id),
+            ).fetchone():
+                raise ValueError("A group with this name already exists.")
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         vals = list(updates.values()) + [group_id]
-        self.execute_query(
+        conn.execute(
             f"UPDATE person_groups SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             tuple(vals),
         )
 
     def delete_person_group(self, group_id: str) -> None:
-        row = self.execute_query(
-            "SELECT parent_id FROM person_groups WHERE id = ?", (group_id,)
-        )
-        if not row:
-            raise ValueError("Group not found.")
-        parent = row[0]["parent_id"]
-        self.execute_query(
-            "UPDATE person_groups SET parent_id = ? WHERE parent_id = ?",
-            (parent, group_id),
-        )
-        self.execute_query("DELETE FROM person_groups WHERE id = ?", (group_id,))
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT parent_id FROM person_groups WHERE id = ?", (group_id,)
+            ).fetchone()
+            if not row:
+                raise ValueError("Group not found.")
+            conn.execute(
+                "UPDATE person_groups SET parent_id = ? WHERE parent_id = ?",
+                (row["parent_id"], group_id),
+            )
+            conn.execute("DELETE FROM person_groups WHERE id = ?", (group_id,))
 
     def get_all_person_groups(self) -> List[dict]:
         q = """

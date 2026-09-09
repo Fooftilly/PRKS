@@ -130,6 +130,46 @@ function domainErrorResponse(status) {
 }
 
 async function run() {
+    /* Fifth-domain cleanup is audited: no sweep may touch another domain. */
+    {
+        const domains = ['concepts', 'positions', 'arguments', 'people', 'person-groups'];
+        const kinds = ['concept', 'position', 'argument', 'person', 'person-group'];
+        const sweeps = [];
+        const store = makeFakeStore({
+            deleteEntitiesByKind: async kind => {
+                sweeps.push(kind);
+                if (kind !== 'person-group') throw Error('cross-domain entity sweep');
+                return false;
+            },
+            deleteList: async key => {
+                sweeps.push(key);
+                if (key !== 'person-groups:index') throw Error('cross-domain list sweep');
+                return false;
+            },
+        });
+        for (const kind of [...kinds, 'work']) await store.putEntity(kind, '1', {id:'1'}, '');
+        for (const domain of domains) await store.putList(domain + ':index', [], '');
+        const runtime = mod.createPrksOfflineRuntime({
+            store, prksRequest: () => Promise.reject(Error('offline')),
+            setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.markDomainChanged('person-groups', {
+            entityKinds:['person-group'], listKeys:['person-groups:index'],
+        });
+        await runtime._domainCleanup('person-groups');
+        assertEq('Group cleanup touches exactly its kind and key', sweeps.sort(), ['person-group','person-groups:index']);
+        assertEq('five generations remain independent', domains.map(d=>runtime.currentDomainGeneration(d)), [0,0,0,0,1]);
+        assertEq('only Groups blocked after failed cleanup', domains.map(d=>runtime.isDomainBlocked(d)), [false,false,false,false,true]);
+        for (let i=0; i<domains.length; i++) {
+            const result = await runtime.readThroughEntity(kinds[i], '1', '/api/test', {domain:domains[i]});
+            assertEq(domains[i] + ' fallback isolation', result.source, i===4 ? 'unavailable' : 'cache');
+        }
+        assertEq('Works unaffected by Group cleanup', (await runtime.readThroughEntity('work','1','/api/test')).source, 'cache');
+        assertEq('Group constant', mod.PRKS_OFFLINE_DOMAIN_PERSON_GROUPS, 'person-groups');
+        assertEq('Group list constant', mod.PRKS_OFFLINE_PERSON_GROUPS_LIST_KEY, 'person-groups:index');
+        assert('Group canonical runtime helper exported', typeof mod.prksOfflineMarkPersonGroupsChanged === 'function');
+    }
     /* ---- connectivity FSM: request failure -> offline, probe backoff, recovery -> online ---- */
     {
         const timers = makeFakeTimers();

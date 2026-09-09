@@ -34,6 +34,8 @@
     const ARGUMENTS_LIST_KEY = 'arguments:index';
     const DOMAIN_PEOPLE = 'people';
     const PEOPLE_LIST_KEY = 'people:index';
+    const DOMAIN_PERSON_GROUPS = 'person-groups';
+    const PERSON_GROUPS_LIST_KEY = 'person-groups:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
     const PDF_CACHE_NAME = 'prks-pdf-v1';
 
@@ -748,6 +750,12 @@
     function prksOfflineIsMutationBlocked() {
         return production.isMutationBlocked();
     }
+    function prksOfflineMarkPersonGroupsChanged() {
+        return production.markDomainChanged(DOMAIN_PERSON_GROUPS, {
+            entityKinds: ['person-group'],
+            listKeys: [PERSON_GROUPS_LIST_KEY],
+        });
+    }
     function prksOfflineGuardMutation(message) {
         return production.guardMutation(message);
     }
@@ -780,6 +788,7 @@
         prksOfflineMarkPositionsChanged: prksOfflineMarkPositionsChanged,
         prksOfflineMarkArgumentsChanged: prksOfflineMarkArgumentsChanged,
         prksOfflineMarkPeopleChanged: prksOfflineMarkPeopleChanged,
+        prksOfflineMarkPersonGroupsChanged: prksOfflineMarkPersonGroupsChanged,
         prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,
@@ -796,6 +805,8 @@
         PRKS_OFFLINE_ARGUMENTS_LIST_KEY: ARGUMENTS_LIST_KEY,
         PRKS_OFFLINE_DOMAIN_PEOPLE: DOMAIN_PEOPLE,
         PRKS_OFFLINE_PEOPLE_LIST_KEY: PEOPLE_LIST_KEY,
+        PRKS_OFFLINE_DOMAIN_PERSON_GROUPS: DOMAIN_PERSON_GROUPS,
+        PRKS_OFFLINE_PERSON_GROUPS_LIST_KEY: PERSON_GROUPS_LIST_KEY,
     };
 
     Object.keys(api).forEach(function (k) {

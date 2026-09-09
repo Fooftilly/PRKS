@@ -177,7 +177,7 @@ function prksApplyPersonOfflineState(container) {
         // canonical href so the destination stays inspectable and copyable -- it
         // is marked, and its activation is intercepted below.
         if (!isGroupLink && 'disabled' in el) el.disabled = !online;
-        if (online) {
+        if (online || isGroupLink) {
             el.removeAttribute('aria-disabled');
             el.removeAttribute('title');
         } else {
@@ -235,25 +235,6 @@ function prksBindPersonOfflineState(ctx, container) {
     // Read current state immediately: a page rendered after the runtime already
     // left 'online' is never briefly mutable.
     applyAll();
-    // Group-link activation is delegated once per container and decides at
-    // activation time. Both real activation events are covered: modified left
-    // clicks arrive as `click`, a middle click only ever as `auxclick`.
-    if (!container.__prksPersonGroupGuardBound) {
-        container.__prksPersonGroupGuardBound = true;
-        const guardActivation = function (ev) {
-            if (ev.type === 'auxclick' && ev.button !== 1) return;
-            const link =
-                ev.target.closest && ev.target.closest('[data-prks-role="' + PERSON_GROUP_LINK_ROLE + '"]');
-            if (!link) return;
-            if (prksPersonRuntimeState() === 'online') return;
-            ev.preventDefault();
-            if (typeof prksAlertMessage === 'function') {
-                prksAlertMessage(PERSON_GROUPS_OFFLINE_MESSAGE, 'Offline');
-            }
-        };
-        container.addEventListener('click', guardActivation);
-        container.addEventListener('auxclick', guardActivation);
-    }
     let unsubscribe = function () {};
     if (typeof prksOfflineRuntimeSubscribe === 'function') {
         unsubscribe =
@@ -1062,6 +1043,7 @@ async function deletePerson() {
         }
         // Canonical success controls coherence, before any UI ownership test.
         if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
+        if (typeof prksMarkPersonGroupsDomainChanged === 'function') prksMarkPersonGroupsDomainChanged();
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
             !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
@@ -1314,6 +1296,7 @@ async function savePersonProfile(personId) {
         if (_personNameChanged && typeof prksMarkArgumentsDomainChanged === 'function') {
             prksMarkArgumentsDomainChanged();
         }
+        if (typeof prksMarkPersonGroupsDomainChanged === 'function') prksMarkPersonGroupsDomainChanged();
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
             !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')

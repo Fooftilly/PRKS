@@ -785,17 +785,25 @@ async function deleteSavedView(id) {
     }
 }
 
-/* Canonical Person Group mutation wrappers.
- *
- * Groups themselves are NOT offline-capable, but their names and membership are
- * embedded in cached People index rows and cached Person details, so these are
- * pure coherence hooks for the People domain. Routing the Group UI's requests
- * through here is what stops one Group surface from silently skipping it.
- * `createPersonGroup` is deliberately absent: a brand-new unassigned Group
- * cannot appear in any existing Person's read model, and the Person PATCH that
- * later assigns it invalidates People on its own. */
+/* Group operations publish coherence only after acknowledged canonical success. */
+async function createPersonGroup(payload) {
+    if (typeof prksOfflineGuardMutation === 'function' &&
+        prksOfflineGuardMutation('Creating a Person Group requires a connection to PRKS.')) {
+        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
+    }
+    const res = await prksRequest('/api/person-groups', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) prksMarkPersonGroupsDomainChanged();
+    return { ok: res.ok, data };
+}
 
 async function updatePersonGroup(groupId, payload) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
+        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
+    }
     const res = await prksRequest('/api/person-groups/' + encodeURIComponent(groupId), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -805,32 +813,50 @@ async function updatePersonGroup(groupId, payload) {
     // Conservative: a rename directly stales the Group chips embedded in
     // People, and a description/hierarchy-only edit invalidating too is an
     // acceptable Phase-1 cost against field-diffing this shape.
-    if (res.ok) prksMarkPeopleDomainChanged();
+    if (res.ok) {
+        prksMarkPeopleDomainChanged();
+        prksMarkPersonGroupsDomainChanged();
+    }
     return { ok: res.ok, data: data };
 }
 
 async function deletePersonGroup(groupId) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
+        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
+    }
     const res = await prksRequest('/api/person-groups/' + encodeURIComponent(groupId), {
         method: 'DELETE',
     });
     const data = await res.json().catch(() => ({}));
     // Deleting a Group removes memberships from every Person that was in it.
-    if (res.ok) prksMarkPeopleDomainChanged();
+    if (res.ok) {
+        prksMarkPeopleDomainChanged();
+        prksMarkPersonGroupsDomainChanged();
+    }
     return { ok: res.ok, data: data };
 }
 
 async function addPersonGroupMember(groupId, personId) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
+        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
+    }
     const res = await prksRequest('/api/person-groups/' + encodeURIComponent(groupId) + '/members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ person_id: personId }),
     });
     const data = await res.json().catch(() => ({}));
-    if (res.ok) prksMarkPeopleDomainChanged();
+    if (res.ok) {
+        prksMarkPeopleDomainChanged();
+        prksMarkPersonGroupsDomainChanged();
+    }
     return { ok: res.ok, data: data };
 }
 
 async function removePersonGroupMember(groupId, personId) {
+    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
+        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
+    }
     const res = await prksRequest(
         '/api/person-groups/' +
             encodeURIComponent(groupId) +
@@ -839,7 +865,10 @@ async function removePersonGroupMember(groupId, personId) {
         { method: 'DELETE' }
     );
     const data = await res.json().catch(() => ({}));
-    if (res.ok) prksMarkPeopleDomainChanged();
+    if (res.ok) {
+        prksMarkPeopleDomainChanged();
+        prksMarkPersonGroupsDomainChanged();
+    }
     return { ok: res.ok, data: data };
 }
 
@@ -945,6 +974,11 @@ function prksMarkArgumentsDomainChanged() {
  * Work-role and Group mutations all stale it, not just Person edits. See
  * AGENTS.md for the dependency table and the deliberate exclusions.
  */
+function prksMarkPersonGroupsDomainChanged() {
+    if (typeof prksOfflineMarkPersonGroupsChanged !== 'function') return null;
+    return prksOfflineMarkPersonGroupsChanged();
+}
+
 function prksMarkPeopleDomainChanged() {
     if (typeof prksOfflineMarkPeopleChanged !== 'function') return null;
     return prksOfflineMarkPeopleChanged();
@@ -979,6 +1013,7 @@ function prksMarkWorkTitleChanged(workId) {
  * stops a new one from silently reopening either gap.
  */
 function prksMarkWorkRoleChanged(workId, roleType) {
+    prksMarkPersonGroupsDomainChanged();
     const token =
         typeof prksOfflineMarkEntityChanged === 'function'
             ? prksOfflineMarkEntityChanged('work', workId)
@@ -1266,6 +1301,7 @@ window.prksMarkWorkTitleChanged = prksMarkWorkTitleChanged;
 window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
 window.prksMarkArgumentsDomainChanged = prksMarkArgumentsDomainChanged;
 window.prksMarkPeopleDomainChanged = prksMarkPeopleDomainChanged;
+window.prksMarkPersonGroupsDomainChanged = prksMarkPersonGroupsDomainChanged;
 window.updatePersonGroup = updatePersonGroup;
 window.deletePersonGroup = deletePersonGroup;
 window.addPersonGroupMember = addPersonGroupMember;

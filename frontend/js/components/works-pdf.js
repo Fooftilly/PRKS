@@ -1106,6 +1106,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             // markup. Invalidate on success rather than trying to detect which.
             prksOfflineMarkPeopleChanged();
         }
+        if (typeof prksOfflineMarkPersonGroupsChanged === 'function') prksOfflineMarkPersonGroupsChanged();
     }
 
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {

@@ -550,6 +550,9 @@ window.prksBindAutosizeTextareas = prksBindAutosizeTextareas;
 
 // Modal Logic
 function openModal(id) {
+    if (id === 'group-modal' && typeof prksOfflineGuardMutation === 'function') {
+        if (prksOfflineGuardMutation('Creating a Person Group requires a connection to PRKS.')) return;
+    }
     // `person-modal` is creation-only, so guarding here covers every caller at
     // once -- the People page, the ribbon, the command palette and anything
     // added later -- instead of relying on each surface to remember.
@@ -2818,8 +2821,9 @@ function updatePanelContent(tabId) {
                 focusedCtx.ui.personGroupEditing &&
                 typeof mountPersonGroupEditPanel === 'function'
             ) {
-                void mountPersonGroupEditPanel(g);
+                void mountPersonGroupEditPanel(g, focusedCtx);
             }
+            if (typeof prksApplyPersonGroupPanelOfflineState === 'function') prksApplyPersonGroupPanelOfflineState(focusedCtx);
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';
         }

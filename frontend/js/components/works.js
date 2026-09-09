@@ -811,6 +811,7 @@ async function deleteWork(w_id, ownerCtx) {
             // linked to it loses a Work card and possibly an assigned role.
             prksOfflineMarkPeopleChanged();
         }
+        if (typeof prksOfflineMarkPersonGroupsChanged === 'function') prksOfflineMarkPersonGroupsChanged();
         window.__prksRecentlyAddedDirty = true;
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&

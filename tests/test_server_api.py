@@ -2104,6 +2104,26 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(person["first_name"], "Old", "metadata was written despite a 400")
         self.assertEqual([g["id"] for g in person["groups"]], [group_id])
 
+    def test_group_http_failure_does_not_create_typed_parent(self):
+        a = server_module.db.add_person_group('Atomic A')
+        server_module.db.add_person_group('Atomic B')
+        before = server_module.db.get_all_person_groups()
+        for method, path, name in (
+            ('POST', '/api/person-groups', 'Atomic A'),
+            ('PATCH', '/api/person-groups/' + a, 'Atomic B'),
+        ):
+            with self.subTest(method=method):
+                req = urllib.request.Request(
+                    self._base_url + path, method=method,
+                    data=json.dumps({'name': name, 'parent_name': 'Atomic Orphan'}).encode(),
+                    headers={'Content-Type': 'application/json'},
+                )
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(req)
+                self.assertEqual(error.exception.code, 400)
+                error.exception.close()
+                self.assertEqual(server_module.db.get_all_person_groups(), before)
+
     def test_person_profile_patch_applies_metadata_and_groups_together(self):
         group_a = server_module.db.add_person_group("Atomic Group A")
         group_b = server_module.db.add_person_group("Atomic Group B")

@@ -219,14 +219,12 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             app,
         )
 
-    def test_graph_groups_and_playlists_stay_online_only(self):
+    def test_graph_and_playlists_stay_online_only(self):
         """Phase 1 stops at Work/Concept/Position/Argument/People. Nothing else
         may be wrapped in the offline read-through path as a side effect."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         for case in (
             "case 'research-graph': {",
-            "case 'people-groups': {",
-            "case 'person-group-detail': {",
             "case 'playlists': {",
         ):
             if case not in app:
@@ -239,7 +237,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             for forbidden in ("prksOfflineListFetch", "prksOfflineDetailFetch"):
                 self.assertNotIn(forbidden, body, case)
         runtime = _read(_RUNTIME)
-        for forbidden in ("'person-group'", "person-groups:index", "playlists:index", "graph:"):
+        for forbidden in ("playlists:index", "graph:"):
             self.assertNotIn(forbidden, runtime)
 
     def test_people_domain_shape_is_defined_once(self):
@@ -346,13 +344,19 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             "async function removePersonGroupMember(",
         ):
             start = api.index(fn)
-            body = api[start : start + 900]
-            self.assertIn("if (res.ok) prksMarkPeopleDomainChanged();", body, fn)
+            body = api[start : api.index('\nasync function ', start + 1)]
+            self.assertIn("if (res.ok) {", body, fn)
+            self.assertIn("prksMarkPeopleDomainChanged();", body, fn)
+            self.assertIn("prksMarkPersonGroupsDomainChanged();", body, fn)
         # A brand-new unassigned Group cannot appear in any Person's read model.
-        self.assertNotIn("async function createPersonGroup(", api)
+        create = api.split('async function createPersonGroup(', 1)[1].split('async function updatePersonGroup(', 1)[0]
+        self.assertNotIn('prksMarkPeopleDomainChanged', create)
+        self.assertIn('prksMarkPersonGroupsDomainChanged', create)
         groups = _read(os.path.join(_FRONTEND, "js", "components", "people-groups.js"))
         # Every Group mutation goes through the wrappers, none direct.
         self.assertNotIn("`/api/person-groups/${", groups)
+        self.assertNotIn("prksRequest('/api/person-groups'", groups)
+        self.assertNotIn("prksRequest('/api/person-groups'", _read(os.path.join(_FRONTEND, 'js', 'app.js')))
         for wrapper in (
             "updatePersonGroup(",
             "deletePersonGroup(",

@@ -1794,6 +1794,51 @@ function prksIsPersonShape(value, personId) {
     return Array.isArray(value.groups) && value.groups.every(prksIsPersonGroupRowShape);
 }
 
+const PRKS_PERSON_GROUPS_LIST_KEY = 'person-groups:index';
+const PRKS_PERSON_GROUPS_DOMAIN = 'person-groups';
+
+function prksIsGroupCount(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function prksIsPersonGroupSummaryShape(group) {
+    return prksHasUsableRowId(group) &&
+        prksIsOptionalString(group.name) && prksIsOptionalString(group.description) &&
+        (group.parent_id === null ||
+            (typeof group.parent_id === 'string' && !!group.parent_id.trim())) &&
+        prksIsGroupCount(group.member_count);
+}
+
+function prksIsPersonGroupsIndexShape(value) {
+    return Array.isArray(value) && value.every((group) =>
+        prksIsPersonGroupSummaryShape(group) && prksIsGroupCount(group.child_count));
+}
+
+function prksIsPersonGroupShape(value, groupId) {
+    if (!prksIsPersonGroupSummaryShape(value) || String(value.id) !== String(groupId)) return false;
+    if (value.parent !== null && !(prksHasUsableRowId(value.parent) &&
+        prksIsOptionalString(value.parent.name))) return false;
+    return Array.isArray(value.children) && value.children.every(prksIsPersonGroupSummaryShape) &&
+        Array.isArray(value.members) && value.members.every(prksIsPeopleIndexRowShape);
+}
+
+function prksResolveOfflinePersonGroupsIndex(result) {
+    if (!result || result.source === 'unavailable') return null;
+    if (prksIsPersonGroupsIndexShape(result.value)) return result.value;
+    if (result.source === 'server') throw new Error('Received an unexpected Person Groups response.');
+    if (typeof prksOfflineInvalidateList === 'function') void prksOfflineInvalidateList(PRKS_PERSON_GROUPS_LIST_KEY);
+    return null;
+}
+
+function prksResolveOfflinePersonGroup(result, groupId) {
+    if (!result || result.source === 'unavailable') return { group: null, unavailable: true };
+    if (result.source === 'server' && result.value === null) return { group: null, unavailable: false };
+    if (prksIsPersonGroupShape(result.value, groupId)) return { group: result.value, unavailable: false };
+    if (result.source === 'server') throw new Error('Received an unexpected Person Group response.');
+    if (typeof prksOfflineInvalidateEntity === 'function') void prksOfflineInvalidateEntity('person-group', groupId);
+    return { group: null, unavailable: true };
+}
+
 /**
  * The complete People collection is cached under one key. Every role-filtered
  * view (`#/people/role/:role`) is a local projection of it, so visiting one
@@ -1869,7 +1914,7 @@ function prksOfflineMaybeRefreshFocusedRoute() {
     if (typeof prksGetFocusedTabContext !== 'function' || typeof prksRenderTabRoute !== 'function') return;
     const ctx = prksGetFocusedTabContext();
     if (!ctx || !ctx.root || ctx.destroyed || !ctx.lastResolvedRoute) return;
-    if (ctx.ui && (ctx.ui.workDetailsMode === 'metadata' || ctx.ui.personDetailEditing || ctx.ui.argumentEditing)) return;
+    if (ctx.ui && (ctx.ui.workDetailsMode === 'metadata' || ctx.ui.personDetailEditing || ctx.ui.argumentEditing || ctx.ui.personGroupEditing || ctx.ui.personGroupMembersEditing)) return;
     const banner = ctx.root.querySelector('[data-prks-role="offline-provenance-banner"], [data-prks-role="offline-unavailable"]');
     if (!banner) return;
     void prksRenderTabRoute(ctx, ctx.lastResolvedRoute.canonicalHash, { leaveApproved: true });
@@ -2344,15 +2389,36 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'people-groups': {
-                const groups = await fetchPersonGroups({ signal: routeSignal });
+                const offlineGroups = await prksOfflineListFetch(
+                    PRKS_PERSON_GROUPS_LIST_KEY, '/api/person-groups', routeSignal,
+                    { domain: PRKS_PERSON_GROUPS_DOMAIN, validate: prksIsPersonGroupsIndexShape }
+                );
                 if (stale()) return;
+                const groups = prksResolveOfflinePersonGroupsIndex(offlineGroups);
+                if (!groups) {
+                    prksOfflineRenderUnavailable(contentDiv, 'Person Groups not available offline');
+                    break;
+                }
                 publishSidebar({ groupCount: Array.isArray(groups) ? groups.length : 0 });
-                renderPersonGroupsPage(groups, contentDiv);
+                renderPersonGroupsPage(groups, contentDiv, ctx);
+                prksOfflinePrependBanner(contentDiv, offlineGroups);
                 break;
             }
             case 'person-group-detail': {
-                const group = route.params.groupId ? await fetchPersonGroupDetails(route.params.groupId, { signal: routeSignal }) : null;
+                const groupId = route.params.groupId;
+                const offlineGroup = await prksOfflineDetailFetch(
+                    'person-group', groupId, '/api/person-groups/' + encodeURIComponent(groupId), routeSignal,
+                    { domain: PRKS_PERSON_GROUPS_DOMAIN, validate: (value) => prksIsPersonGroupShape(value, groupId) }
+                );
                 if (stale()) return;
+                const resolvedGroup = prksResolveOfflinePersonGroup(offlineGroup, groupId);
+                if (resolvedGroup.unavailable) {
+                    ctx.setEntity('personGroup', null);
+                    prksOfflineRenderUnavailable(contentDiv, 'Group not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Group not available offline' };
+                    break;
+                }
+                const group = resolvedGroup.group;
                 if (!group) {
                     contentDiv.innerHTML =
                         '<div class="prks-page-header page-header"><h2 class="prks-page-title">Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
@@ -2361,7 +2427,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     const preserveMembersEditing =
                         previousPersonGroupId &&
                         previousPersonGroupId === String(group.id) &&
-                        previousPersonGroupMembersEditing;
+                        previousPersonGroupMembersEditing && offlineGroup.source === 'server';
                     ctx.setEntity('personGroup', group);
                     ctx.ui.personGroupEditing = false;
                     ctx.ui.personGroupMembersEditing = preserveMembersEditing;
@@ -2370,7 +2436,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         memberCount: Array.isArray(group.members) ? group.members.length : 0,
                         subgroupCount: Array.isArray(group.children) ? group.children.length : 0,
                     });
-                    renderPersonGroupDetail(group, contentDiv);
+                    renderPersonGroupDetail(group, contentDiv, ctx);
+                    prksOfflinePrependBanner(contentDiv, offlineGroup);
                     titleOpts = { entityTitle: group.name || 'Group' };
                 }
                 break;
@@ -3069,6 +3136,7 @@ function initForms() {
         }
         const data = await res.json().catch(() => ({}));
         if (res.ok && Array.isArray(payload.roles) && payload.roles.length) {
+            prksMarkPersonGroupsDomainChanged();
             // The Work-create endpoint can create role links in the same
             // canonical request, bypassing POST /api/roles entirely -- so this
             // path owes People its own invalidation.
@@ -3456,6 +3524,8 @@ function initForms() {
     const saveGroupBtn = document.getElementById('save-group-btn');
     if (saveGroupBtn) {
         saveGroupBtn.onclick = async () => {
+            if (typeof prksOfflineGuardMutation === 'function' &&
+                prksOfflineGuardMutation('Creating a Person Group requires a connection to PRKS.')) return;
             const name = document.getElementById('group-name')?.value || '';
             const parentHid = document.getElementById('group-parent-id')?.value?.trim() || '';
             const parentSearch = document.getElementById('group-parent-search')?.value?.trim() || '';
@@ -3472,13 +3542,8 @@ function initForms() {
             else if (parentSearch) payload.parent_name = parentSearch;
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveGroupBtn, true, { busyLabel: 'Creating…' });
             try {
-                const res = await prksRequest('/api/person-groups', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
+                const { ok, data } = await createPersonGroup(payload);
+                if (!ok) {
                     await prksAlertMessage(data.error || 'Could not create group.', 'Could not save');
                     return;
                 }
