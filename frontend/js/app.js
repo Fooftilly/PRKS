@@ -1736,11 +1736,34 @@ function prksIsPersonGroupRowShape(row) {
     return prksHasUsableRowId(row);
 }
 
+function prksIsOptionalString(value) {
+    return value == null || typeof value === 'string';
+}
+
+const PRKS_PERSON_OPTIONAL_STRING_FIELDS = [
+    'first_name',
+    'last_name',
+    'aliases',
+    'about',
+    'image_url',
+    'link_wikipedia',
+    'link_stanford_encyclopedia',
+    'link_iep',
+    'links_other',
+    'birth_date',
+    'death_date',
+];
+
+function prksIsPersonScalarShape(person) {
+    if (!person || typeof person !== 'object' || Array.isArray(person)) return false;
+    return PRKS_PERSON_OPTIONAL_STRING_FIELDS.every((field) => prksIsOptionalString(person[field]));
+}
+
 function prksIsPersonWorkRowShape(row) {
-    // The id becomes #/works/:id. Card display fields (title, status, doc_type,
-    // year, authors, thumbnail, file size) all stay optional -- the shared
-    // Work-card renderer already tolerates them missing.
-    return prksHasUsableRowId(row);
+    // The id becomes #/works/:id. Most card display fields safely coerce their
+    // values, but the year fallback directly applies string operations.
+    if (!prksHasUsableRowId(row)) return false;
+    return prksIsOptionalString(row.year) && prksIsOptionalString(row.published_date);
 }
 
 function prksIsAssignedRoleShape(value) {
@@ -1751,6 +1774,7 @@ function prksIsAssignedRoleShape(value) {
 
 function prksIsPeopleIndexRowShape(row) {
     if (!prksHasUsableRowId(row)) return false;
+    if (!prksIsPersonScalarShape(row)) return false;
     if (!Array.isArray(row.assigned_roles) || !row.assigned_roles.every(prksIsAssignedRoleShape)) {
         return false;
     }
@@ -1765,6 +1789,7 @@ function prksIsPeopleIndexShape(value) {
 function prksIsPersonShape(value, personId) {
     if (!prksHasUsableRowId(value)) return false;
     if (String(value.id) !== String(personId)) return false;
+    if (!prksIsPersonScalarShape(value)) return false;
     if (!Array.isArray(value.works) || !value.works.every(prksIsPersonWorkRowShape)) return false;
     return Array.isArray(value.groups) && value.groups.every(prksIsPersonGroupRowShape);
 }

@@ -55,6 +55,21 @@
         const noContext = cardHtml({ id: 'W-2', title: 'No Subtitle', year: '2001' });
         assert('no context line when subtitle omitted', noContext.indexOf('work-card__context') === -1);
 
+        // Cache validation rejects these shapes. Card helper still fails safe
+        // when called directly with imperfect data from another surface.
+        let malformedYearCard = '';
+        let malformedDateCard = '';
+        let malformedCardError = '';
+        try {
+            malformedYearCard = cardHtml({ id: 'W-bad-year', title: 'Bad year', year: [] });
+            malformedDateCard = cardHtml({ id: 'W-bad-date', title: 'Bad date', published_date: {} });
+        } catch (err) {
+            malformedCardError = String(err && err.message ? err.message : err);
+        }
+        assertEq('malformed year/date do not throw', malformedCardError, '');
+        assert('malformed year omitted', malformedYearCard.indexOf('work-card__meta') === -1);
+        assert('malformed published date omitted', malformedDateCard.indexOf('work-card__meta') === -1);
+
         // Title clamp contract: full title kept via title attribute, not truncated.
         const longTitle =
             'A Very Long Work Title That Would Otherwise Break Card Height Consistency Across A Dense Grid Layout';

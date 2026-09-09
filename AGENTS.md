@@ -623,7 +623,10 @@ links is normal. What they do require is a usable id on every nested row that
 becomes a route — `works[]` (→ `#/works/:id`) and `groups[]` (→
 `#/people/groups/:id`) — and that `assigned_roles[]` entries are strings without
 an allow-list, since canonical data carries roles like `Mentioned` that are not
-navigable filters.
+navigable filters. Optional Person display fields must also be null/omitted or
+strings when renderers/search operate on them as strings; linked Work `year` and
+`published_date` follow the same rule. Validation protects type/shape, not
+business completeness, so empty strings remain valid.
 
 Two destinations reachable from a cached Person are not cached: the Research
 Graph, and Person Groups (`#/people/groups/:id` is a later slice). Group chips

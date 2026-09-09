@@ -4883,6 +4883,75 @@ class OfflinePeopleTests(unittest.TestCase):
         self.addCleanup(lambda: _safe_unroute(page, pattern, record))
         return seen
 
+    def test_people_validator_matches_renderer_scalar_contract(self):
+        server, page, _context, _collector = self._start()
+
+        cases = page.evaluate(
+            """() => {
+                const scalarFields = [
+                    'first_name', 'last_name', 'aliases', 'about', 'image_url',
+                    'link_wikipedia', 'link_stanford_encyclopedia', 'link_iep',
+                    'links_other', 'birth_date', 'death_date',
+                ];
+                const badValues = [{}, [], 3, true];
+                const allowedValues = [undefined, null, '', 'value'];
+                const detail = () => ({ id: 'P-1', works: [], groups: [] });
+                const index = () => ({ id: 'P-1', assigned_roles: [], groups: [] });
+                const withField = (base, field, value) => Object.assign(base, { [field]: value });
+                const workWith = (field, value) => ({
+                    id: 'P-1', works: [withField({ id: 'W-1' }, field, value)], groups: [],
+                });
+                const malformedExamples = {
+                    first_name: {}, last_name: [], aliases: [], about: {}, image_url: [],
+                    link_wikipedia: 7, link_stanford_encyclopedia: false, link_iep: {},
+                    links_other: {}, birth_date: [], death_date: true,
+                };
+                return {
+                    optionalStringContract:
+                        prksIsOptionalString(undefined) && prksIsOptionalString(null) &&
+                        prksIsOptionalString('') && prksIsOptionalString('value') &&
+                        !prksIsOptionalString([]) && !prksIsOptionalString({}) &&
+                        !prksIsOptionalString(3) && !prksIsOptionalString(true),
+                    everyScalarRejectsEveryBadType: scalarFields.every((field) =>
+                        badValues.every((value) =>
+                            !prksIsPersonShape(withField(detail(), field, value), 'P-1') &&
+                            !prksIsPeopleIndexShape([withField(index(), field, value)])
+                        )
+                    ),
+                    everyScalarAcceptsOptionalStrings: scalarFields.every((field) =>
+                        allowedValues.every((value) =>
+                            prksIsPersonShape(withField(detail(), field, value), 'P-1') &&
+                            prksIsPeopleIndexShape([withField(index(), field, value)])
+                        )
+                    ),
+                    everyAuditedMalformedExampleRejected: Object.entries(malformedExamples).every(
+                        ([field, value]) =>
+                            !prksIsPersonShape(withField(detail(), field, value), 'P-1') &&
+                            !prksIsPeopleIndexShape([withField(index(), field, value)])
+                    ),
+                    sparseDetailAccepted: prksIsPersonShape({
+                        id: 'P-1', first_name: null, last_name: '', aliases: '', about: '',
+                        image_url: null, link_wikipedia: null,
+                        link_stanford_encyclopedia: null, link_iep: null, links_other: '',
+                        birth_date: null, death_date: null, works: [], groups: [],
+                    }, 'P-1'),
+                    sparseIndexAccepted: prksIsPeopleIndexShape([{
+                        id: 'P-1', first_name: null, last_name: '', aliases: '', about: '',
+                        image_url: null, link_wikipedia: null,
+                        link_stanford_encyclopedia: null, link_iep: null, links_other: '',
+                        birth_date: null, death_date: null, assigned_roles: [], groups: [],
+                    }]),
+                    workScalarsRejectBadTypes: ['year', 'published_date'].every((field) =>
+                        badValues.every((value) => !prksIsPersonShape(workWith(field, value), 'P-1'))
+                    ),
+                    workScalarsAcceptOptionalStrings: ['year', 'published_date'].every((field) =>
+                        allowedValues.every((value) => prksIsPersonShape(workWith(field, value), 'P-1'))
+                    ),
+                };
+            }"""
+        )
+        self.assertTrue(all(cases.values()), cases)
+
     # ---- one cached index, local role filtering -----------------------------
 
     def test_one_cached_index_serves_every_role_view_offline(self):
@@ -5057,6 +5126,47 @@ class OfflinePeopleTests(unittest.TestCase):
         self.assertNotIn("not available offline", body)
         self.assertEqual(_person_row_names(page), [])
 
+    def test_malformed_people_index_response_never_replaces_a_good_cache(self):
+        server, page, context, _collector = self._start()
+
+        _wait_sw_active(page)
+        _open_people_index(page)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_list_cached(page, "people:index")
+        good = _cached_list(page, "people:index")
+        malformed = json.loads(json.dumps(good["value"]))
+        malformed[0]["first_name"] = {}
+
+        def bad_index(route):
+            if route.request.method == "GET" and urlparse(route.request.url).path == "/api/persons":
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(malformed))
+                return
+            route.fallback()
+
+        page.route("**/api/persons", bad_index)
+        try:
+            page.evaluate("() => { void window.prksNavigate('#/folders'); }")
+            page.wait_for_function("() => location.hash === '#/folders'")
+            _open_people_index(page)
+            page.wait_for_function(
+                "() => document.querySelector('#prks-route-retry') !== null", timeout=15000
+            )
+            body = _content_text(page)
+            self.assertNotIn("No people yet.", body)
+            self.assertNotIn("not available offline", body)
+            self.assertEqual(_connectivity_state(page), "online")
+            page.wait_for_timeout(500)
+            self.assertEqual(_cached_list(page, "people:index"), good)
+        finally:
+            _safe_unroute(page, "**/api/persons", bad_index)
+
+        page.evaluate("() => { void window.prksNavigate('#/folders'); }")
+        page.wait_for_function("() => location.hash === '#/folders'")
+        context.set_offline(True)
+        _open_people_index(page)
+        _wait_offline_banner(page)
+        _wait_content_contains(page, PERSON_DISPLAY)
+
     # ---- cached detail ------------------------------------------------------
 
     def test_cached_person_detail_renders_offline(self):
@@ -5080,6 +5190,154 @@ class OfflinePeopleTests(unittest.TestCase):
         self.assertIn(PERSON_GROUP_NAME, body)       # group membership
         self.assertIn(WORK_A_TITLE, body)            # linked Work card
         self.assertIn("Author", body)                # role label
+
+    def test_malformed_person_responses_never_replace_a_good_cache(self):
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_entity_cached(page, "person", person_a)
+        good = _cached_entity(page, "person", person_a)
+
+        malformed_values = {"value": good["value"]}
+
+        def bad_detail(route):
+            if (
+                route.request.method == "GET"
+                and urlparse(route.request.url).path == "/api/persons/" + person_a
+            ):
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(malformed_values["value"]),
+                )
+                return
+            route.fallback()
+
+        scalar_cases = {
+            "first_name": {},
+            "last_name": [],
+            "aliases": [],
+            "about": {},
+            "image_url": [],
+            "link_wikipedia": 7,
+            "link_stanford_encyclopedia": False,
+            "link_iep": {},
+            "links_other": {},
+            "birth_date": [],
+            "death_date": True,
+        }
+        malformed_cases = []
+        for field, value in scalar_cases.items():
+            row = json.loads(json.dumps(good["value"]))
+            row[field] = value
+            malformed_cases.append((field, row))
+        for field, value in (("year", []), ("published_date", {})):
+            row = json.loads(json.dumps(good["value"]))
+            row["works"][0][field] = value
+            malformed_cases.append(("works[]." + field, row))
+
+        page.route("**/api/persons/**", bad_detail)
+        try:
+            for label, malformed in malformed_cases:
+                with self.subTest(field=label):
+                    malformed_values["value"] = malformed
+                    _open_people_index(page)
+                    _wait_content_contains(page, PERSON_DISPLAY)
+                    _open_person(page, person_a)
+                    page.wait_for_function(
+                        "() => document.querySelector('#prks-route-retry') !== null",
+                        timeout=15000,
+                    )
+                    body = _content_text(page)
+                    self.assertNotIn("Person not found", body)
+                    self.assertNotIn("not available offline", body)
+                    self.assertEqual(_connectivity_state(page), "online")
+                    page.wait_for_timeout(100)
+                    self.assertEqual(_cached_entity(page, "person", person_a), good)
+        finally:
+            _safe_unroute(page, "**/api/persons/**", bad_detail)
+
+        _open_people_index(page)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        context.set_offline(True)
+        _open_person(page, person_a)
+        _wait_offline_banner(page)
+        _wait_content_contains(page, PERSON_A_ABOUT)
+
+    def test_malformed_cached_person_scalar_is_discarded_before_render(self):
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_entity_cached(page, "person", person_a)
+        page.evaluate(
+            """async (id) => {
+                const store = window.createPrksOfflineStore();
+                const row = await store.getEntity('person', id);
+                row.value.aliases = [];
+                await store.putEntity('person', id, row.value, '');
+            }""",
+            person_a,
+        )
+        page.wait_for_function(
+            """(id) => window.createPrksOfflineStore().getEntity('person', id)
+                .then(row => !!row && Array.isArray(row.value.aliases))""",
+            arg=person_a,
+        )
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("Person not available offline", body)
+        self.assertNotIn("Person not found", body)
+        self.assertNotIn(PERSON_A_ABOUT, body)
+        self.assertEqual(errors, [])
+        _wait_entity_uncached(page, "person", person_a)
+
+    def test_malformed_cached_person_work_scalar_is_discarded_before_render(self):
+        server, page, context, _collector = self._start()
+        person_a = server.ids["person_a"]
+
+        _wait_sw_active(page)
+        _open_person(page, person_a)
+        _wait_content_contains(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "person", person_a)
+        page.evaluate(
+            """async (id) => {
+                const store = window.createPrksOfflineStore();
+                const row = await store.getEntity('person', id);
+                row.value.works[0].year = [];
+                await store.putEntity('person', id, row.value, '');
+            }""",
+            person_a,
+        )
+        page.wait_for_function(
+            """(id) => window.createPrksOfflineStore().getEntity('person', id)
+                .then(row => !!row && Array.isArray(row.value.works[0].year))""",
+            arg=person_a,
+        )
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("Person not available offline", body)
+        self.assertNotIn("Person not found", body)
+        self.assertNotIn(WORK_A_TITLE, body)
+        self.assertEqual(errors, [])
+        _wait_entity_uncached(page, "person", person_a)
 
     def test_cached_index_does_not_prefetch_every_person_detail(self):
         server, page, context, _collector = self._start()
