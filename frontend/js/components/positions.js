@@ -24,19 +24,159 @@
             : '<a class="prks-list-row prks-research-row" href="' + opts.href + '">' + opts.title + '</a>';
     }
 
+    /** Tags an already-built research row anchor with a data-prks-role. */
+    function rowHtmlWithRole(opts, role) {
+        const html = rowHtml(opts);
+        return html.replace('<a ', '<a data-prks-role="' + esc(role) + '" ');
+    }
+
     function sectionHead(title, opts) {
         if (typeof root.prksResearchSectionHeadHtml === 'function') return root.prksResearchSectionHeadHtml(title, opts);
         return '<h3>' + esc(title) + '</h3>';
     }
 
+    /* --- Offline policy for Position routes (AGENTS.md "Offline / PWA") ------
+     * Positions are read-only offline in Phase 1: a cached index/detail
+     * renders, every canonical mutation is blocked outright (never queued,
+     * never faked), and the two destinations that are not cached at all -- the
+     * Research Graph and Argument/Stance detail -- say so instead of navigating
+     * somewhere broken. Controls carry these roles so one helper can settle
+     * them all, including markup rerendered after the initial bind. */
+    const POSITION_MUTATION_ROLE = 'position-mutation-control';
+    const POSITION_ONLINE_ONLY_ROLE = 'position-online-only-control';
+    const POSITION_ARGUMENT_LINK_ROLE = 'position-argument-link';
+    const POSITION_CONTROL_SELECTOR =
+        '[data-prks-role="' + POSITION_MUTATION_ROLE + '"], ' +
+        '[data-prks-role="' + POSITION_ONLINE_ONLY_ROLE + '"], ' +
+        '[data-prks-role="' + POSITION_ARGUMENT_LINK_ROLE + '"]';
+    const ARGUMENTS_OFFLINE_MESSAGE = 'Arguments and Stances are not available offline yet.';
+
+    function positionRuntimeState() {
+        return typeof root.prksOfflineRuntimeState === 'function' ? root.prksOfflineRuntimeState() : 'online';
+    }
+
+    /** Blocks a canonical Position mutation while PRKS is unreachable. */
+    function positionMutationBlocked(message) {
+        return typeof root.prksOfflineGuardMutation === 'function'
+            ? root.prksOfflineGuardMutation(message)
+            : false;
+    }
+
+    /** Read-only destinations that are still online-only (graph, Argument detail). */
+    function positionConnectionRequired(message) {
+        if (positionRuntimeState() === 'online') return false;
+        if (typeof root.prksAlertMessage === 'function') {
+            root.prksAlertMessage(message || 'This action requires a connection to PRKS.', 'Offline');
+        }
+        return true;
+    }
+
+    function applyPositionOfflineState(container) {
+        if (!container || !container.querySelectorAll) return;
+        const online = positionRuntimeState() === 'online';
+        const nodes = container.querySelectorAll(POSITION_CONTROL_SELECTOR);
+        for (let i = 0; i < nodes.length; i++) {
+            const el = nodes[i];
+            const isArgumentLink = el.getAttribute('data-prks-role') === POSITION_ARGUMENT_LINK_ROLE;
+            // Buttons take native `disabled` (blocks pointer AND keyboard, and
+            // carries the shared .prks-btn:disabled styling). An Argument row
+            // keeps its real anchor and canonical href so the destination stays
+            // inspectable and copyable -- it is marked, and its activation is
+            // intercepted below, rather than being neutered or hidden.
+            if (!isArgumentLink && 'disabled' in el) el.disabled = !online;
+            if (online) {
+                el.removeAttribute('aria-disabled');
+                el.removeAttribute('title');
+            } else {
+                el.setAttribute('aria-disabled', 'true');
+                el.setAttribute(
+                    'title',
+                    isArgumentLink ? ARGUMENTS_OFFLINE_MESSAGE : 'Requires a connection to PRKS'
+                );
+            }
+        }
+    }
+
+    /**
+     * Keeps a mounted Position page's controls in step with connectivity: a page
+     * built while online becomes read-only in place when PRKS stops answering,
+     * and restores on reconnect. Cached Position content itself stays readable.
+     *
+     * The subscription belongs to the route's owning TabContext, and each bind
+     * replaces the previous one on the same container -- a TabContext container
+     * survives route changes and rerenders, so re-binding must not accumulate
+     * listeners (and there is no global Position runtime singleton).
+     */
+    function bindPositionOfflineState(ctx, container) {
+        if (!container) return function () {};
+        if (typeof container.__prksPositionOfflineDispose === 'function') {
+            try {
+                container.__prksPositionOfflineDispose();
+            } catch (_e) {
+                /* a stale disposer must not block the new binding */
+            }
+        }
+        // Read current state immediately: a Position page rendered after the
+        // runtime already left 'online' is never briefly mutable.
+        applyPositionOfflineState(container);
+        // Activation interception is delegated once per container and decides
+        // at click time, so it stays correct across rerenders and reconnects.
+        if (!container.__prksPositionArgumentGuardBound) {
+            container.__prksPositionArgumentGuardBound = true;
+            container.addEventListener('click', function (ev) {
+                const link =
+                    ev.target.closest &&
+                    ev.target.closest('[data-prks-role="' + POSITION_ARGUMENT_LINK_ROLE + '"]');
+                if (!link) return;
+                if (positionRuntimeState() === 'online') return;
+                ev.preventDefault();
+                if (typeof root.prksAlertMessage === 'function') {
+                    root.prksAlertMessage(ARGUMENTS_OFFLINE_MESSAGE, 'Offline');
+                }
+            });
+        }
+        let unsubscribe = function () {};
+        if (typeof root.prksOfflineRuntimeSubscribe === 'function') {
+            unsubscribe =
+                root.prksOfflineRuntimeSubscribe(function () {
+                    if (container.__prksPositionOfflineDispose !== dispose) return;
+                    applyPositionOfflineState(container);
+                }) || function () {};
+        }
+        let unregister = function () {};
+        function dispose() {
+            if (container.__prksPositionOfflineDispose === dispose) container.__prksPositionOfflineDispose = null;
+            unregister();
+            unsubscribe();
+        }
+        if (ctx && typeof ctx.registerCleanup === 'function') {
+            unregister = ctx.registerCleanup(dispose) || function () {};
+        }
+        container.__prksPositionOfflineDispose = dispose;
+        return dispose;
+    }
+
+    /** No cached Position index on this device -- distinct from a cached empty one. */
+    function renderPositionsIndexUnavailable(container) {
+        if (!container) return;
+        container.innerHTML =
+            '<div class="prks-page-header page-header"><h2 class="prks-page-title">Positions not available offline</h2></div>' +
+            '<p class="prks-inline-message" data-prks-role="offline-unavailable">This list has not been cached on this device.</p>';
+    }
+
     async function createPositionFlow(ctx, ownsIndex) {
         if (typeof root.prksPromptTextDialog !== 'function') return null;
+        // Guard before the dialog opens: never an editor the user cannot save.
+        if (positionMutationBlocked('Creating a Position requires a connection to PRKS.')) return null;
         const name = await root.prksPromptTextDialog({
             title: 'New Position',
             okLabel: 'Create',
         });
         if (!name || !String(name).trim()) return null;
         if (ctx && !ownsIndex()) return null;
+        // Connectivity can change while the prompt is open, so re-check
+        // immediately before the canonical request: zero POST while offline.
+        if (positionMutationBlocked('Creating a Position requires a connection to PRKS.')) return null;
         const created = await root.createPosition({ name: String(name).trim() });
         if (created && created.id && (!ctx || ownsIndex()) && typeof root.prksNavigate === 'function') {
             root.prksNavigate('#/positions/' + encodeURIComponent(created.id), {
@@ -50,7 +190,9 @@
         return (
             '<div class="prks-research-index__empty">' +
             '<p class="meta-row">No Positions yet.</p>' +
-            '<p><button type="button" class="prks-btn prks-btn--secondary" id="prks-position-new-empty">New Position</button></p>' +
+            '<p><button type="button" class="prks-btn prks-btn--secondary" id="prks-position-new-empty" data-prks-role="' +
+            POSITION_MUTATION_ROLE +
+            '">New Position</button></p>' +
             '</div>'
         );
     }
@@ -109,6 +251,9 @@
                     });
                 }
             }
+            // Local search rerenders replace the empty-state New Position
+            // button, so re-apply the current connectivity state to it.
+            applyPositionOfflineState(container);
         }
 
         container.innerHTML =
@@ -116,7 +261,9 @@
             (typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('flag') : '') +
             ' Positions</h2>' +
             '<div class="page-header__actions">' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-new">New Position</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-new" data-prks-role="' +
+            POSITION_MUTATION_ROLE +
+            '">New Position</button>' +
             '</div></div></div>' +
             (list.length && typeof root.prksResearchIndexToolbarHtml === 'function'
                 ? root.prksResearchIndexToolbarHtml('prks-position-search', 'Search positions…')
@@ -130,6 +277,9 @@
         }
         renderRows(list, '');
         if (list.length && typeof root.prksBindResearchIndexSearch === 'function') {
+            // Offline search stays entirely client-side over the already-loaded
+            // (possibly cached) array -- it issues no API requests, and it can
+            // only match Positions as of that snapshot.
             root.prksBindResearchIndexSearch(container, {
                 inputSelector: '#prks-position-search',
                 items: list,
@@ -137,6 +287,7 @@
                 renderRows: renderRows,
             });
         }
+        bindPositionOfflineState(ctx, container);
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
     }
 
@@ -155,12 +306,19 @@
               argList
                   .map(function (a) {
                       const kindLabel = a.kind === 'stance' ? 'Stance' : 'Argument';
-                      return rowHtml({
-                          href: '#/arguments/' + encodeURIComponent(a.id),
-                          title: esc(a.name || a.id),
-                          kind: esc(kindLabel),
-                          meta: [esc(a.verdict_label || a.verdict_id || '')],
-                      });
+                      // Rendered from the cached Position detail even offline --
+                      // the relationship is real data. The destination is not
+                      // cached though, so the row keeps its canonical href and
+                      // is marked/intercepted rather than hidden. See §12.
+                      return rowHtmlWithRole(
+                          {
+                              href: '#/arguments/' + encodeURIComponent(a.id),
+                              title: esc(a.name || a.id),
+                              kind: esc(kindLabel),
+                              meta: [esc(a.verdict_label || a.verdict_id || '')],
+                          },
+                          POSITION_ARGUMENT_LINK_ROLE
+                      );
                   })
                   .join('') +
               '</div>'
@@ -170,7 +328,9 @@
             '<p class="saved-view-detail__kicker">Position</p><h2 class="prks-page-title">' +
             esc(p.name || 'Position') +
             '</h2></div><div class="page-header__actions">' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-view-graph">View in graph</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-view-graph" data-prks-role="' +
+            POSITION_ONLINE_ONLY_ROLE +
+            '">View in graph</button>' +
             '</div></div></div>' +
             '<div class="research-entity">' +
             '<section class="research-entity__section" aria-labelledby="prks-position-desc-h">' +
@@ -186,6 +346,9 @@
         const viewGraph = container.querySelector('#prks-position-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
+                // The Research Graph is online-only in Phase 1: say so plainly
+                // rather than navigating into a route that cannot load its data.
+                if (positionConnectionRequired('The Research Graph requires a connection to PRKS.')) return;
                 const hash =
                     typeof root.prksGraphFocusHash === 'function'
                         ? root.prksGraphFocusHash('position', p.id)
@@ -195,13 +358,17 @@
                 }
             });
         }
+        bindPositionOfflineState(ctx, container);
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
     }
 
     const api = {
         renderPositionsIndex: renderPositionsIndex,
+        renderPositionsIndexUnavailable: renderPositionsIndexUnavailable,
         renderPositionDetail: renderPositionDetail,
         renderPositionNotFound: renderPositionNotFound,
+        prksBindPositionOfflineState: bindPositionOfflineState,
+        prksApplyPositionOfflineState: applyPositionOfflineState,
     };
     Object.keys(api).forEach(function (k) {
         root[k] = api[k];

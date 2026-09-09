@@ -1108,6 +1108,258 @@ async function run() {
         assertEq('a list whose delete never committed is unavailable, never served stale', list.source, 'unavailable');
     }
 
+    /* ---- MULTI-DOMAIN: generations are per-domain, never one shared counter ---- */
+    {
+        const store = makeFakeStore();
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'] });
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'] });
+        runtime.markDomainChanged('positions', { entityKinds: ['position'] });
+        assertEq('concepts advanced only for its own invalidations', runtime.currentDomainGeneration('concepts'), 2);
+        assertEq('positions advanced only for its own invalidations', runtime.currentDomainGeneration('positions'), 1);
+        assertEq('an unrelated domain stays at zero', runtime.currentDomainGeneration('people'), 0);
+    }
+
+    /* ---- MULTI-DOMAIN: invalidating Positions leaves cached Concepts fully eligible ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('concept', 'C-1', { id: 'C-1', name: 'Concept' }, '');
+        await store.putList('concepts:index', [{ id: 'C-1' }], '');
+        await store.putEntity('position', 'P-1', { id: 'P-1', name: 'Position' }, '');
+        await store.putList('positions:index', [{ id: 'P-1' }], '');
+        let releasePositions = null;
+        const slowStore = Object.assign({}, store, {
+            deleteEntitiesByKind: function (kind) {
+                if (kind !== 'position') {
+                    throw new Error('only the invalidated domain may sweep, got: ' + kind);
+                }
+                return new Promise(function (resolve) {
+                    releasePositions = function () {
+                        store._entities.delete('position:P-1');
+                        resolve(true);
+                    };
+                });
+            },
+            deleteList: async function (key) {
+                if (key !== 'positions:index') {
+                    throw new Error('only the invalidated domain may sweep, got: ' + key);
+                }
+                store._lists.delete(key);
+                return true;
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: slowStore,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('positions', {
+            entityKinds: ['position'],
+            listKeys: ['positions:index'],
+        });
+        assertEq('the invalidated domain blocks immediately', runtime.isDomainBlocked('positions'), true);
+        assertEq('the other domain is not blocked by it', runtime.isDomainBlocked('concepts'), false);
+        assertEq('the other domain generation is untouched', runtime.currentDomainGeneration('concepts'), 0);
+
+        const position = await runtime.readThroughEntity('position', 'P-1', '/api/positions/P-1', {
+            domain: 'positions',
+        });
+        assertEq('the invalidated Position cannot serve its cached row', position.source, 'unavailable');
+        const concept = await runtime.readThroughEntity('concept', 'C-1', '/api/concepts/C-1', {
+            domain: 'concepts',
+        });
+        assertEq('a Concept in another domain still serves from cache', concept.source, 'cache');
+        assertEq('the cached Concept value is intact', concept.value, { id: 'C-1', name: 'Concept' });
+        const conceptList = await runtime.readThroughList('concepts:index', '/api/concepts', {
+            domain: 'concepts',
+        });
+        assertEq('the other domain list still serves from cache', conceptList.source, 'cache');
+
+        releasePositions();
+        await runtime._domainCleanup('positions');
+        assertEq('a completed sweep unblocks only its own domain', runtime.isDomainBlocked('positions'), false);
+        assert('the other domain cache rows were never swept', !!store._entities.get('concept:C-1'));
+        assert('the other domain list row was never swept', !!store._lists.get('concepts:index'));
+    }
+
+    /* ---- MULTI-DOMAIN: the reverse direction -- Concepts invalidation leaves Positions eligible ---- */
+    {
+        const store = makeFakeStore();
+        await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
+        await store.putEntity('position', 'P-1', { id: 'P-1', name: 'Position' }, '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'], listKeys: ['concepts:index'] });
+        await runtime._domainCleanup('concepts');
+        assertEq('positions is never blocked by a Concepts invalidation', runtime.isDomainBlocked('positions'), false);
+        assertEq('positions generation is untouched by Concepts', runtime.currentDomainGeneration('positions'), 0);
+        const position = await runtime.readThroughEntity('position', 'P-1', '/api/positions/P-1', {
+            domain: 'positions',
+        });
+        assertEq('the cached Position still serves offline', position.source, 'cache');
+        assertEq('the cached Position value is intact', position.value, { id: 'P-1', name: 'Position' });
+        assertEq('the invalidated Concept row really was swept', store._entities.get('concept:C-1'), undefined);
+    }
+
+    /* ---- MULTI-DOMAIN: a failed sweep degrades only its own domain ---- */
+    {
+        const store = makeFakeStore({
+            deleteEntitiesByKind: async function (kind) {
+                if (kind === 'position') return false;
+                return true;
+            },
+        });
+        await store.putEntity('position', 'P-1', { id: 'P-1' }, '');
+        await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('positions', { entityKinds: ['position'], listKeys: ['positions:index'] });
+        await runtime._domainCleanup('positions');
+        assertEq('a failed sweep keeps its own domain blocked', runtime.isDomainBlocked('positions'), true);
+        assertEq('a failed sweep never blocks a different domain', runtime.isDomainBlocked('concepts'), false);
+        const concept = await runtime.readThroughEntity('concept', 'C-1', '/api/concepts/C-1', {
+            domain: 'concepts',
+        });
+        assertEq('the healthy domain keeps serving offline', concept.source, 'cache');
+        // ... and a later Concepts invalidation can still settle normally.
+        runtime.markDomainChanged('concepts', { entityKinds: ['concept'] });
+        await runtime._domainCleanup('concepts');
+        assertEq('the healthy domain settles normally', runtime.isDomainBlocked('concepts'), false);
+        assertEq('the degraded domain is still blocked', runtime.isDomainBlocked('positions'), true);
+    }
+
+    /* ---- MULTI-DOMAIN: a superseded Positions cleanup cannot settle a newer Positions generation ---- */
+    {
+        const store = makeFakeStore();
+        const releases = [];
+        const slowStore = Object.assign({}, store, {
+            deleteEntitiesByKind: function () {
+                return new Promise(function (resolve) {
+                    releases.push(function () {
+                        resolve(true);
+                    });
+                });
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                return Promise.reject(new Error('offline'));
+            },
+            store: slowStore,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        // Editing one Argument really does issue several canonical requests
+        // (update + targets), so overlapping Positions invalidations are normal.
+        const genA = runtime.markDomainChanged('positions', { entityKinds: ['position'] });
+        const genB = runtime.markDomainChanged('positions', { entityKinds: ['position'] });
+        assert('the second Positions invalidation has a newer generation', genB > genA);
+        releases[0]();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a superseded Positions cleanup cannot unblock the newer one', runtime.isDomainBlocked('positions'), true);
+        assertEq('a superseded completion never resets the generation', runtime.currentDomainGeneration('positions'), genB);
+        releases[1]();
+        await runtime._domainCleanup('positions');
+        assertEq('the current Positions generation settles normally', runtime.isDomainBlocked('positions'), false);
+    }
+
+    /* ---- MULTI-DOMAIN: a Position read begun before an invalidation cannot repopulate it ---- */
+    {
+        const store = makeFakeStore();
+        let releaseGet = null;
+        let nextResponse = null;
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                if (nextResponse) return Promise.resolve(nextResponse);
+                return new Promise(function (resolve) {
+                    releaseGet = function () {
+                        resolve(okJsonResponse({ id: 'P-1', name: 'pre-mutation', arguments: [] }));
+                    };
+                });
+            },
+            store: store,
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        const pending = runtime.readThroughEntity('position', 'P-1', '/api/positions/P-1', { domain: 'positions' });
+        // An Argument-side mutation invalidates Positions while that GET is open.
+        runtime.markDomainChanged('positions', { entityKinds: ['position'], listKeys: ['positions:index'] });
+        await runtime._domainCleanup('positions');
+        releaseGet();
+        const stale = await pending;
+        assertEq('the pre-mutation Position response still resolves to its caller', stale.source, 'server');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a pre-mutation Position read never becomes eligible cache data', store._entities.get('position:P-1'), undefined);
+        nextResponse = okJsonResponse({ id: 'P-1', name: 'post-mutation', arguments: [] });
+        const fresh = await runtime.readThroughEntity('position', 'P-1', '/api/positions/P-1', { domain: 'positions' });
+        assertEq('a fresh-generation Position read still renders', fresh.source, 'server');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq(
+            'a fresh-generation Position read publishes normally',
+            store._entities.get('position:P-1').value.name,
+            'post-mutation'
+        );
+    }
+
+    /* ---- the Positions domain shape is defined once, alongside (never merged with) Concepts ---- */
+    {
+        const globalRoot = typeof globalThis !== 'undefined' ? globalThis : this;
+        assert(
+            'prksOfflineMarkPositionsChanged is exported for every canonical caller to share',
+            typeof globalRoot.prksOfflineMarkPositionsChanged === 'function'
+        );
+        assertEq('the Positions domain has a stable name', mod.PRKS_OFFLINE_DOMAIN_POSITIONS, 'positions');
+        assertEq('the Position index uses a stable list key', mod.PRKS_OFFLINE_POSITIONS_LIST_KEY, 'positions:index');
+        assert(
+            'the two domains are distinct names',
+            mod.PRKS_OFFLINE_DOMAIN_POSITIONS !== mod.PRKS_OFFLINE_DOMAIN_CONCEPTS
+        );
+    }
+
     /* ---- reads with no domain are unaffected by another domain's invalidation ---- */
     {
         const store = makeFakeStore();

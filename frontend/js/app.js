@@ -1508,6 +1508,69 @@ function prksResolveOfflineConcept(offlineResult, conceptId) {
     return { concept: null, unavailable: true };
 }
 
+const PRKS_POSITIONS_LIST_KEY =
+    typeof PRKS_OFFLINE_POSITIONS_LIST_KEY === 'string' ? PRKS_OFFLINE_POSITIONS_LIST_KEY : 'positions:index';
+const PRKS_POSITIONS_DOMAIN =
+    typeof PRKS_OFFLINE_DOMAIN_POSITIONS === 'string' ? PRKS_OFFLINE_DOMAIN_POSITIONS : 'positions';
+
+/**
+ * Shape guarantees the old fetchPositions()/fetchPosition() helpers provided,
+ * applied as the runtime's `validate` callback so an authoritative response is
+ * accepted BEFORE it can be published to the cache, and reused to judge a
+ * cached value. Only what the server actually promises is required: the detail
+ * read model always carries an `arguments` array, while the per-Argument
+ * display fields (kind, verdict_label, ...) stay optional.
+ */
+function prksIsPositionIndexShape(value) {
+    if (!Array.isArray(value)) return false;
+    return value.every(function (row) {
+        return !!(row && typeof row === 'object' && !Array.isArray(row) && row.id != null && String(row.id));
+    });
+}
+
+function prksIsPositionShape(value, positionId) {
+    return !!(
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        value.id != null &&
+        String(value.id) === String(positionId) &&
+        Array.isArray(value.arguments)
+    );
+}
+
+/** Same server/cache split as Concepts: route error vs. unusable cache. */
+function prksResolveOfflinePositionIndex(offlineResult) {
+    if (!offlineResult || offlineResult.source === 'unavailable') return null;
+    if (prksIsPositionIndexShape(offlineResult.value)) return offlineResult.value;
+    if (offlineResult.source === 'server') {
+        // Normally unreachable: the runtime rejects a bad authoritative shape
+        // before it ever returns (or caches) one. Kept as the backstop for a
+        // runtime without validator support.
+        throw new Error('Received an unexpected Positions response.');
+    }
+    if (typeof prksOfflineInvalidateList === 'function') {
+        void prksOfflineInvalidateList(PRKS_POSITIONS_LIST_KEY);
+    }
+    return null;
+}
+
+function prksResolveOfflinePosition(offlineResult, positionId) {
+    if (!offlineResult || offlineResult.source === 'unavailable') {
+        return { position: null, unavailable: true };
+    }
+    const value = offlineResult.value;
+    if (value == null) return { position: null, unavailable: false };
+    if (prksIsPositionShape(value, positionId)) return { position: value, unavailable: false };
+    if (offlineResult.source === 'server') {
+        throw new Error('Received an unexpected Position response.');
+    }
+    if (typeof prksOfflineInvalidateEntity === 'function') {
+        void prksOfflineInvalidateEntity('position', positionId);
+    }
+    return { position: null, unavailable: true };
+}
+
 function prksOfflineProvenanceBannerHtml(offlineResult) {
     if (!offlineResult || offlineResult.source !== 'cache') return '';
     const at =
@@ -2227,15 +2290,47 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'positions': {
-                const items = typeof fetchPositions === 'function' ? await fetchPositions({ signal: routeSignal }) : [];
+                const offlinePositions = await prksOfflineListFetch(
+                    PRKS_POSITIONS_LIST_KEY,
+                    '/api/positions',
+                    routeSignal,
+                    { domain: PRKS_POSITIONS_DOMAIN, validate: prksIsPositionIndexShape }
+                );
                 if (stale()) return;
-                if (typeof renderPositionsIndex === 'function') renderPositionsIndex(ctx, items, contentDiv);
+                const positionItems = prksResolveOfflinePositionIndex(offlinePositions);
+                if (!positionItems) {
+                    if (typeof renderPositionsIndexUnavailable === 'function') renderPositionsIndexUnavailable(contentDiv);
+                    else prksOfflineRenderUnavailable(contentDiv, 'Positions not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Positions not available offline' };
+                    break;
+                }
+                if (typeof renderPositionsIndex === 'function') renderPositionsIndex(ctx, positionItems, contentDiv);
                 else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Positions</h2></div>';
+                prksOfflinePrependBanner(contentDiv, offlinePositions);
                 break;
             }
             case 'position-detail': {
-                const item = typeof fetchPosition === 'function' ? await fetchPosition(route.params.positionId, { signal: routeSignal }) : null;
+                const positionId = route.params.positionId;
+                const offlinePosition = await prksOfflineDetailFetch(
+                    'position',
+                    positionId,
+                    '/api/positions/' + encodeURIComponent(positionId),
+                    routeSignal,
+                    {
+                        domain: PRKS_POSITIONS_DOMAIN,
+                        validate: function (value) {
+                            return prksIsPositionShape(value, positionId);
+                        },
+                    }
+                );
                 if (stale()) return;
+                const resolvedPosition = prksResolveOfflinePosition(offlinePosition, positionId);
+                if (resolvedPosition.unavailable) {
+                    prksOfflineRenderUnavailable(contentDiv, 'Position not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Position not available offline' };
+                    break;
+                }
+                const item = resolvedPosition.position;
                 if (!item) {
                     if (typeof renderPositionNotFound === 'function') renderPositionNotFound(contentDiv);
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Position not found.</h2></div>';
@@ -2243,6 +2338,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 } else {
                     ctx.setEntity('position', item);
                     if (typeof renderPositionDetail === 'function') renderPositionDetail(ctx, item, contentDiv);
+                    prksOfflinePrependBanner(contentDiv, offlinePosition);
                     titleOpts = { entityTitle: item.name || 'Position' };
                 }
                 break;

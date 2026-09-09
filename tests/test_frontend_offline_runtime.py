@@ -173,6 +173,123 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             self.assertIn("prksMarkConceptsDomainChanged();", body, fn)
             self.assertLess(body.index("prksResearchJson("), body.index("prksMarkConceptsDomainChanged();"), fn)
 
+    def test_positions_domain_shape_is_defined_once(self):
+        src = _read(_RUNTIME)
+        self.assertIn("function prksOfflineMarkPositionsChanged()", src)
+        self.assertIn("entityKinds: ['position']", src)
+        self.assertIn("const POSITIONS_LIST_KEY = 'positions:index';", src)
+        self.assertIn("const DOMAIN_POSITIONS = 'positions';", src)
+        # Callers share that one definition rather than re-listing the domain's
+        # kinds/list keys, and the two domains stay separate names.
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        self.assertIn("prksOfflineMarkPositionsChanged", api)
+        self.assertNotIn("'positions:index'", api)
+        self.assertNotIn("entityKinds:", api)
+
+    def test_position_routes_use_offline_read_through(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        index_at = app.index("case 'positions': {")
+        index_body = app[index_at : app.index("case 'position-detail': {")]
+        self.assertIn("prksOfflineListFetch(", index_body)
+        self.assertIn("PRKS_POSITIONS_LIST_KEY", index_body)
+        self.assertIn("domain: PRKS_POSITIONS_DOMAIN", index_body)
+        self.assertIn("validate: prksIsPositionIndexShape", index_body)
+        self.assertIn("renderPositionsIndexUnavailable", index_body)
+        self.assertIn("prksOfflinePrependBanner(", index_body)
+        # The plain online-only fetch helper is no longer the route's read path.
+        self.assertNotIn("fetchPositions(", index_body)
+
+        detail_at = app.index("case 'position-detail': {")
+        detail_body = app[detail_at : app.index("case 'arguments': {")]
+        self.assertIn("prksOfflineDetailFetch(", detail_body)
+        self.assertIn("'position',", detail_body)
+        self.assertIn("domain: PRKS_POSITIONS_DOMAIN", detail_body)
+        self.assertIn("prksIsPositionShape(value, positionId)", detail_body)
+        self.assertIn("prksOfflineRenderUnavailable(contentDiv, 'Position not available offline')", detail_body)
+        # A reachable-server 404 keeps its own distinct meaning.
+        self.assertIn("renderPositionNotFound", detail_body)
+        self.assertNotIn("fetchPosition(", detail_body)
+
+        self.assertIn(
+            "typeof PRKS_OFFLINE_POSITIONS_LIST_KEY === 'string' ? PRKS_OFFLINE_POSITIONS_LIST_KEY : 'positions:index'",
+            app,
+        )
+        self.assertIn(
+            "typeof PRKS_OFFLINE_DOMAIN_POSITIONS === 'string' ? PRKS_OFFLINE_DOMAIN_POSITIONS : 'positions'",
+            app,
+        )
+
+    def test_argument_and_graph_routes_stay_online_only(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        args_at = app.index("case 'arguments': {")
+        args_body = app[args_at : args_at + 3000]
+        # Arguments are the NEXT offline slice, not this one.
+        for forbidden in ("prksOfflineListFetch", "prksOfflineDetailFetch", "arguments:index"):
+            self.assertNotIn(forbidden, args_body)
+        self.assertIn("fetchArguments(", args_body)
+        graph_at = app.index("case 'graph': {") if "case 'graph': {" in app else None
+        if graph_at is not None:
+            graph_body = app[graph_at : graph_at + 1500]
+            self.assertNotIn("prksOfflineDetailFetch", graph_body)
+            self.assertNotIn("prksOfflineListFetch", graph_body)
+        # No Argument cache of any kind was introduced.
+        runtime = _read(_RUNTIME)
+        self.assertNotIn("'argument'", runtime)
+        self.assertNotIn("arguments:index", runtime)
+
+    def test_position_mutations_invalidate_at_the_canonical_helper_boundary(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        for fn in (
+            "async function createPosition(",
+            "async function updatePosition(",
+            "async function deletePosition(",
+        ):
+            start = api.index(fn)
+            body = api[start : start + 900]
+            # prksResearchJson throws on a non-ok response, so reaching the
+            # invalidation means the canonical mutation actually succeeded.
+            self.assertIn("prksResearchJson(", body, fn)
+            self.assertIn("prksMarkPositionsDomainChanged();", body, fn)
+            self.assertLess(
+                body.index("prksResearchJson("), body.index("prksMarkPositionsDomainChanged();"), fn
+            )
+
+    def test_argument_mutations_that_stale_position_summaries_invalidate_positions(self):
+        """A cached Position detail embeds Argument name/kind/verdict and the
+        whole targeting list, so those Argument helpers owe it an invalidation --
+        while Argument *sources* (Works) are not in the Position read model."""
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        for fn in (
+            "async function createArgument(",
+            "async function updateArgument(",
+            "async function deleteArgument(",
+            "async function putArgumentTargets(",
+        ):
+            start = api.index(fn)
+            body = api[start : start + 900]
+            self.assertIn("prksResearchJson(", body, fn)
+            self.assertIn("prksMarkPositionsDomainChanged();", body, fn)
+            self.assertLess(
+                body.index("prksResearchJson("), body.index("prksMarkPositionsDomainChanged();"), fn
+            )
+        sources_at = api.index("async function putArgumentSources(")
+        sources_body = api[sources_at : api.index("async function putArgumentTargets(")]
+        self.assertNotIn(
+            "prksMarkPositionsDomainChanged",
+            sources_body,
+            "Argument source Works are not part of the Position read model",
+        )
+
+    def test_positions_are_not_invalidated_by_unrelated_read_models(self):
+        """Research Notes, Work and Concept coherence hooks must not have been
+        cargo-culted onto the Positions domain."""
+        for name in ("ui.js", os.path.join("components", "works.js"), os.path.join("components", "playlists.js")):
+            src = _read(os.path.join(_FRONTEND, "js", name))
+            self.assertNotIn("prksOfflineMarkPositionsChanged", src, name)
+            self.assertNotIn("prksMarkPositionsDomainChanged", src, name)
+        concepts = _read(os.path.join(_FRONTEND, "js", "components", "concepts.js"))
+        self.assertNotIn("Positions", concepts)
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for offline runtime tests")

@@ -844,6 +844,21 @@ function prksMarkConceptsDomainChanged() {
  * hole. Returns the Work's coherence token so the caller can still gate a
  * follow-up complete Work GET.
  */
+/**
+ * Coherence hook for a canonical change to the Positions read model. A cached
+ * Position detail embeds derived Argument/Stance summaries (name, kind,
+ * verdict) and its whole targeting list, so Argument-side changes stale it even
+ * though no Position record moved. Phase 1 is deliberately conservative: any
+ * successful call to one of those helpers invalidates the whole Positions
+ * domain rather than working out which Positions were actually affected.
+ * Independent of the Concepts domain by construction -- see AGENTS.md
+ * "Offline coherence domains".
+ */
+function prksMarkPositionsDomainChanged() {
+    if (typeof prksOfflineMarkPositionsChanged !== 'function') return null;
+    return prksOfflineMarkPositionsChanged();
+}
+
 function prksMarkWorkTitleChanged(workId) {
     const token =
         typeof prksOfflineMarkEntityChanged === 'function'
@@ -939,7 +954,9 @@ async function createPosition(payload) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload || {}),
     });
-    return prksResearchJson(res, 'Could not create Position.', 'positions.create');
+    const data = await prksResearchJson(res, 'Could not create Position.', 'positions.create');
+    prksMarkPositionsDomainChanged();
+    return data;
 }
 
 async function updatePosition(id, payload) {
@@ -948,12 +965,16 @@ async function updatePosition(id, payload) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload || {}),
     });
-    return prksResearchJson(res, 'Could not update Position.', 'positions.update');
+    const data = await prksResearchJson(res, 'Could not update Position.', 'positions.update');
+    prksMarkPositionsDomainChanged();
+    return data;
 }
 
 async function deletePosition(id) {
     const res = await prksRequest('/api/positions/' + encodeURIComponent(id), { method: 'DELETE' });
-    return prksResearchJson(res, 'Could not delete Position.', 'positions.delete');
+    const data = await prksResearchJson(res, 'Could not delete Position.', 'positions.delete');
+    prksMarkPositionsDomainChanged();
+    return data;
 }
 
 async function fetchArguments(kind, options = {}) {
@@ -998,13 +1019,23 @@ async function fetchArgumentVerdicts(options = {}) {
     }
 }
 
+/* Argument mutations below invalidate the POSITIONS domain, not an Arguments
+ * one: Arguments are not offline-capable in this phase. A cached Position
+ * detail simply embeds their name/kind/verdict and targeting membership, so
+ * these are pure coherence hooks for cached Position data. `putArgumentSources`
+ * is deliberately absent -- source Works are not part of the Position read
+ * model. */
+
 async function createArgument(payload) {
     const res = await prksRequest('/api/arguments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload || {}),
     });
-    return prksResearchJson(res, 'Could not create Argument.', 'arguments.create');
+    // A create payload may already carry Position targets.
+    const data = await prksResearchJson(res, 'Could not create Argument.', 'arguments.create');
+    prksMarkPositionsDomainChanged();
+    return data;
 }
 
 async function updateArgument(id, payload) {
@@ -1013,12 +1044,18 @@ async function updateArgument(id, payload) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload || {}),
     });
-    return prksResearchJson(res, 'Could not update Argument.', 'arguments.update');
+    // name/kind are both displayed in a Position's Arguments & Stances list.
+    const data = await prksResearchJson(res, 'Could not update Argument.', 'arguments.update');
+    prksMarkPositionsDomainChanged();
+    return data;
 }
 
 async function deleteArgument(id) {
     const res = await prksRequest('/api/arguments/' + encodeURIComponent(id), { method: 'DELETE' });
-    return prksResearchJson(res, 'Could not delete Argument.', 'arguments.delete');
+    // A deleted Argument must stop appearing in a cached Position's list.
+    const data = await prksResearchJson(res, 'Could not delete Argument.', 'arguments.delete');
+    prksMarkPositionsDomainChanged();
+    return data;
 }
 
 async function putArgumentSources(id, sources) {
@@ -1027,6 +1064,7 @@ async function putArgumentSources(id, sources) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sources: sources || [] }),
     });
+    // No Positions invalidation: Position detail never displays source Works.
     return prksResearchJson(res, 'Could not update Argument sources.', 'arguments.sources');
 }
 
@@ -1036,7 +1074,10 @@ async function putArgumentTargets(id, targets) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targets: targets || [] }),
     });
-    return prksResearchJson(res, 'Could not update Argument targets.', 'arguments.targets');
+    // Changes Position membership and per-Position verdict on both sides.
+    const data = await prksResearchJson(res, 'Could not update Argument targets.', 'arguments.targets');
+    prksMarkPositionsDomainChanged();
+    return data;
 }
 
 window.bulkUpdateWorks = bulkUpdateWorks;
@@ -1080,6 +1121,7 @@ window.updateSavedView = updateSavedView;
 window.deleteSavedView = deleteSavedView;
 window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;
 window.prksMarkWorkTitleChanged = prksMarkWorkTitleChanged;
+window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
 window.fetchConcepts = fetchConcepts;
 window.fetchConcept = fetchConcept;
 window.createConcept = createConcept;

@@ -2430,6 +2430,13 @@
         if (intent === 'ignore') return;
         const navEl = e.target.closest('[data-prks-route], a[href]');
         if (!navEl) return;
+        // A destination the owning component has explicitly marked disabled is
+        // never navigated by this layer, in any intent (same tab, background
+        // tab, tile). Offline pages use this to keep a relationship's real href
+        // inspectable while explaining that the destination is not cached, so
+        // this must bow out entirely -- no preventDefault, no stopPropagation --
+        // and let that component's own handler give the feedback.
+        if (navEl.getAttribute && navEl.getAttribute('aria-disabled') === 'true') return;
         if (nestedInteractive(e.target, navEl)) return;
         let hash = '';
         if (navEl.hasAttribute('data-prks-route')) {

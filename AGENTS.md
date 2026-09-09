@@ -179,6 +179,15 @@ Normal navigation targets the originating workspace context (the TabContext that
 
 Ctrl/Cmd-click and middle-click target a background PRKS tab.
 
+The shared link layer intercepts anchor clicks in the capture phase, so it must
+bow out entirely — no `preventDefault`, no `stopPropagation` — for a
+destination the owning component has explicitly marked `aria-disabled="true"`,
+in every intent (same tab, background tab, tile). That component then gives its
+own feedback from an ordinary bubble-phase handler. Offline pages rely on this
+to keep a relationship's real `href` inspectable while explaining that the
+destination is not cached; without it the capture-phase handler would navigate
+first and swallow the explanation.
+
 Alt-click and `prksNavigate(..., { target: "tile" })` open a Secondary leaf when the route is tile-capable.
 
 User-facing copy says "Split view", "Split right", "Split down", "Make main", "Hide from split", "Hide split" / "Show split". Internal APIs stay `tile`, `secondaryTree`, split-node IDs, and `target: "tile"` — never user-facing.
@@ -473,13 +482,14 @@ Phase 1 is read-only offline support. It currently covers:
 
 - Work detail pages and their managed PDFs
 - the Concept index (`#/concepts`) and Concept detail (`#/concepts/:conceptId`)
+- the Position index (`#/positions`) and Position detail (`#/positions/:positionId`)
 
-Person, Position, Argument, Person Group, Playlist routes and the Research
-Graph are not wrapped in the offline read-through path and must keep their
-ordinary online-only fetch/error behavior until their own mutation surfaces
-are explicitly hardened for offline use — do not add `prksOfflineDetailFetch`/
+Person, Argument/Stance, Person Group, Playlist routes and the Research Graph
+are not wrapped in the offline read-through path and must keep their ordinary
+online-only fetch/error behavior until their own mutation surfaces are
+explicitly hardened for offline use — do not add `prksOfflineDetailFetch`/
 `prksOfflineListFetch`/`prksOfflineGuardMutation` calls to those routes as an
-incidental part of unrelated Work or Concept work. There is no offline mutation
+incidental part of unrelated Work, Concept or Position work. There is no offline mutation
 outbox, sync conflict resolution, background sync, or editable offline Research
 Notes/annotations in this phase — those are later-phase work.
 
@@ -519,6 +529,31 @@ body must never overwrite a previously good snapshot — doing so turns one bad
 response into a route error *now* plus an unavailable-offline Concept domain
 *later*. A validator that itself throws counts as rejection, never acceptance.
 
+Position routes are **read-only** offline and follow the Concept pattern
+exactly: the index uses the `lists` store under `positions:index`, detail uses
+the `entities` store under `kind: 'position'`, the two caches are independent,
+the index never prefetches details, and index search stays client-side over the
+already-loaded array. New Position is guarded before its prompt opens *and*
+re-checked immediately before `createPosition()`. Position detail's own
+shape guarantee is stricter than a Concept's: the authoritative body must carry
+an `arguments` array, while the per-Argument display fields (kind,
+verdict_label, …) stay optional, matching what the server actually promises.
+
+Two destinations reachable from a cached Position are **not** cached, and must
+say so rather than navigating somewhere broken: "View in graph" (the Research
+Graph stays online-only) and Argument/Stance detail (`#/arguments/:id` is the
+next offline slice, not this one). A cached Position's Arguments & Stances rows
+are real cached data and keep rendering offline with their canonical `href`
+intact so the destination stays inspectable and copyable — they are marked
+`aria-disabled` and their activation is intercepted with "Arguments and Stances
+are not available offline yet.", never hidden, and never treated as though the
+embedded summary meant the full Argument was cached. An embedded summary in one
+entity's read model is not a cache of the entity it summarises.
+
+`prksBindPositionOfflineState()` settles all of that live, on the same
+TabContext-owned, one-binding-per-container contract as
+`prksBindConceptOfflineState()`.
+
 ### Offline coherence domains
 
 Some cached read models span multiple canonical records, so per-entity
@@ -541,7 +576,14 @@ only while that generation is still current — an authoritative read never wait
 for the sweep before rendering, and a skipped cache write is acceptable because
 a later normal read repopulates it.
 
-The initial domain is `concepts` (`entityKinds: ['concept']`,
+Domains are **independent**. Each is keyed by name in the runtime's
+generation map, blocked set, and pending-invalidation map, so invalidating one
+must never increment another's generation, block another's fallback, delete
+another's disposable cache, or settle/unblock another's pending invalidation. A
+domain whose cleanup failed degrades only itself: the others keep serving
+offline, and PRKS keeps working online regardless.
+
+The first domain is `concepts` (`entityKinds: ['concept']`,
 `listKeys: ['concepts:index']`), defined once in
 `prksOfflineMarkConceptsChanged()` so every canonical caller invalidates the
 same set. It is invalidated after success by: every Concept mutation
@@ -564,6 +606,29 @@ title-editing surface must too. `tests/test_frontend_offline_runtime.py` scans
 for Work-title PATCH sites that skip the helper. The policy is deliberately
 conservative: a date-only metadata edit invalidates Concepts as well, rather
 than relying on a field diff.
+
+The second domain is `positions` (`entityKinds: ['position']`,
+`listKeys: ['positions:index']`), defined once in
+`prksOfflineMarkPositionsChanged()`. It is invalidated after success by
+`createPosition`/`updatePosition`/`deletePosition`, and — because a cached
+Position detail embeds derived Argument/Stance summaries (name, kind, verdict)
+plus its whole targeting list — also by `createArgument`, `updateArgument`,
+`deleteArgument` and `putArgumentTargets`, all at the `api.js` canonical helper
+boundary. Those Argument hooks are pure coherence for cached *Position* data:
+they do **not** make Arguments offline-capable, and no Argument entity cache or
+`arguments:index` exists.
+
+Deliberately **not** invalidating Positions: `putArgumentSources` (Position
+detail never displays an Argument's source Works), Research Notes saves (notes
+drive Concept references and Argument mentions, not `positions` or
+`argument_target_positions`), Work metadata/title/role changes, tags, folders,
+playlists, progress, PDF annotations, and Concept mutations. None of those
+change the Position index/detail read model, and copying the Concepts policy
+onto Positions without checking would only shorten cache life for nothing.
+Editing one Argument legitimately issues several canonical requests
+(`updateArgument` then `putArgumentTargets`), so overlapping Positions
+invalidations are normal and are handled by the generic generation machinery —
+do not add sequencing to the Argument form to avoid them.
 
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`

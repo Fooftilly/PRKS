@@ -189,3 +189,43 @@ def seed_concepts_library(storage_root: str) -> dict:
         }
     )
     return ids
+
+
+POSITION_A_NAME = "E2E Cached Position"
+POSITION_A_DESCRIPTION = "Position description used by offline Position detail assertions."
+POSITION_B_NAME = "E2E Unvisited Position"
+POSITION_ARGUMENT_NAME = "E2E Targeting Argument"
+POSITION_ARGUMENT_VERDICT_LABEL = "Supports"
+
+
+def seed_positions_library(storage_root: str) -> dict:
+    """seed_concepts_library plus Positions and a targeting Argument.
+
+    Gives the offline tests a Position whose detail embeds an Argument summary
+    (name/kind/verdict) — the cross-domain dependency Position coherence has to
+    handle — a Position that is deliberately never opened online, and the
+    Concept fixtures alongside them so domain independence can be observed with
+    two live domains at once.
+    """
+    ids = seed_concepts_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    position_a = create_position(db, POSITION_A_NAME, POSITION_A_DESCRIPTION)
+    position_b = create_position(db, POSITION_B_NAME, "Never opened while online.")
+    argument = create_argument(
+        db,
+        name=POSITION_ARGUMENT_NAME,
+        kind="argument",
+        targets=[{"type": "position", "id": position_a["id"], "verdict_id": "supports"}],
+    )
+    ids.update(
+        {
+            "position_a": position_a["id"],
+            "position_b": position_b["id"],
+            "position_argument": argument["id"],
+            "position_a_name": POSITION_A_NAME,
+            "position_b_name": POSITION_B_NAME,
+            "position_argument_name": POSITION_ARGUMENT_NAME,
+        }
+    )
+    return ids

@@ -28,6 +28,8 @@
     const PROBE_PATH = '/api/settings';
     const DOMAIN_CONCEPTS = 'concepts';
     const CONCEPTS_LIST_KEY = 'concepts:index';
+    const DOMAIN_POSITIONS = 'positions';
+    const POSITIONS_LIST_KEY = 'positions:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
     const PDF_CACHE_NAME = 'prks-pdf-v1';
 
@@ -699,6 +701,19 @@
             listKeys: [CONCEPTS_LIST_KEY],
         });
     }
+    /**
+     * The one place that spells out what the Positions offline domain contains,
+     * so every canonical caller that can stale it invalidates exactly the same
+     * set: Position mutations, plus the Argument mutations whose results are
+     * embedded in a cached Position detail (name/kind/verdict/target
+     * membership). Domains are independent -- this never touches Concepts.
+     */
+    function prksOfflineMarkPositionsChanged() {
+        return production.markDomainChanged(DOMAIN_POSITIONS, {
+            entityKinds: ['position'],
+            listKeys: [POSITIONS_LIST_KEY],
+        });
+    }
     function prksOfflineIsMutationBlocked() {
         return production.isMutationBlocked();
     }
@@ -731,6 +746,7 @@
         prksOfflineDomainGeneration: prksOfflineDomainGeneration,
         prksOfflineIsDomainBlocked: prksOfflineIsDomainBlocked,
         prksOfflineMarkConceptsChanged: prksOfflineMarkConceptsChanged,
+        prksOfflineMarkPositionsChanged: prksOfflineMarkPositionsChanged,
         prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,
@@ -741,6 +757,8 @@
         PRKS_OFFLINE_PDF_CACHE_NAME: PDF_CACHE_NAME,
         PRKS_OFFLINE_DOMAIN_CONCEPTS: DOMAIN_CONCEPTS,
         PRKS_OFFLINE_CONCEPTS_LIST_KEY: CONCEPTS_LIST_KEY,
+        PRKS_OFFLINE_DOMAIN_POSITIONS: DOMAIN_POSITIONS,
+        PRKS_OFFLINE_POSITIONS_LIST_KEY: POSITIONS_LIST_KEY,
     };
 
     Object.keys(api).forEach(function (k) {

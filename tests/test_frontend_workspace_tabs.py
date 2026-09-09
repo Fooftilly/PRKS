@@ -343,6 +343,21 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("Workspace logical state is persistent", design)
         self.assertIn("workspace runtime state is ephemeral", design.lower())
 
+    def test_link_layer_skips_explicitly_disabled_destinations(self):
+        """The link layer hijacks anchor clicks in the capture phase, so an
+        anchor the owning component marked aria-disabled must make it bow out
+        entirely -- otherwise its preventDefault/stopPropagation would swallow
+        the component's own explanation (e.g. an offline page keeping a real
+        href while saying the destination is not cached)."""
+        src = _read(_WS)
+        start = src.index("function handleNavEvent(")
+        body = src[start : src.index("function onMiddleMouseDown(")]
+        skip = "if (navEl.getAttribute && navEl.getAttribute('aria-disabled') === 'true') return;"
+        self.assertIn(skip, body)
+        # The bail-out has to happen before the event is consumed.
+        self.assertLess(body.index(skip), body.index("e.preventDefault();"))
+        self.assertLess(body.index(skip), body.index("e.stopPropagation();"))
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for workspace tab tests")
