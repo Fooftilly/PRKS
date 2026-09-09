@@ -582,10 +582,23 @@ Argument, a source Work, and a note-mention Work each resolve through their own
 route and their own offline state. There is no Argument-specific navigation
 fallback. "View in graph" stays online-only like everywhere else.
 
+Validators require what the renderer and the links actually walk, and nothing
+more. That includes every *nested* row a template iterates: a source's
+`authors[]` entries need a usable Person id because the author label is built
+from each of them, so an unusable row there is a crash rather than a cosmetic
+gap — while `first_name`/`last_name`/`credit_name` stay optional, since any of
+them may legitimately be empty. The same rule is why targets need a `type` and
+responses a valid `kind`.
+
 An Argument edit session gets one special case. A form mounted while online
 keeps its unsaved values when PRKS stops answering — only the controls that
 could submit or alter them go inert, with **Cancel deliberately left live** so
-the user can leave edit mode. A route freshly mounted from cache while already
+the user can leave edit mode. Known gap: a target/source picker already open
+when connectivity drops lives outside the form container and stays interactive.
+Picking there only edits the unsaved local draft — it cannot reach canonical
+data, and Save is still guarded — so it is a UX wrinkle, not a correctness hole;
+closing or disabling an active research picker when the editor goes offline
+would tidy it up. A route freshly mounted from cache while already
 offline starts read-only instead. `saveArgumentForm()` issues three canonical
 requests (`updateArgument`, `putArgumentTargets`, `putArgumentSources`); it
 guards before the first and re-checks before each subsequent one, but does not

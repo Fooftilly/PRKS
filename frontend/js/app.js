@@ -1604,10 +1604,21 @@ function prksIsArgumentTargetShape(row) {
     return row.type === 'position' || row.type === 'argument';
 }
 
+/**
+ * One Author row of a source Work. `_work_authors()` canonically supplies the
+ * Person id, and the renderer walks every row to build its author label, so a
+ * non-object row there is a crash rather than a cosmetic gap. The display
+ * fields (first_name, last_name, credit_name) stay optional: any of them may
+ * legitimately be empty or absent.
+ */
+function prksIsArgumentAuthorShape(row) {
+    return prksHasUsableRowId(row);
+}
+
 function prksIsArgumentSourceShape(row) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
     if (row.work_id == null || !String(row.work_id).trim()) return false;
-    return Array.isArray(row.authors);
+    return Array.isArray(row.authors) && row.authors.every(prksIsArgumentAuthorShape);
 }
 
 function prksIsArgumentMentionShape(row) {
@@ -1640,8 +1651,8 @@ function prksIsArgumentIndexShape(value) {
 }
 
 function prksIsArgumentShape(value, argumentId) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    if (value.id == null || String(value.id) !== String(argumentId)) return false;
+    if (!prksHasUsableRowId(value)) return false;
+    if (String(value.id) !== String(argumentId)) return false;
     if (!prksIsArgumentKind(value.kind)) return false;
     if (!Array.isArray(value.targets) || !value.targets.every(prksIsArgumentTargetShape)) return false;
     if (!Array.isArray(value.sources) || !value.sources.every(prksIsArgumentSourceShape)) return false;

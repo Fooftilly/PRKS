@@ -7,6 +7,7 @@ opened with service_workers="allow".
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 import unittest
@@ -4100,6 +4101,18 @@ class OfflineArgumentTests(unittest.TestCase):
                         { id: 'A-1', kind: 'argument', targets: [], sources: [{ authors: [] }] }]),
                     sourceAuthorsNotArray: prksIsArgumentIndexShape([
                         { id: 'A-1', kind: 'argument', targets: [], sources: [{ work_id: 'W-1' }] }]),
+                    authorNull: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument', targets: [],
+                          sources: [{ work_id: 'W-1', authors: [null] }] }]),
+                    authorString: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument', targets: [],
+                          sources: [{ work_id: 'W-1', authors: ['bad'] }] }]),
+                    authorMissingId: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument', targets: [],
+                          sources: [{ work_id: 'W-1', authors: [{}] }] }]),
+                    authorMinimalOk: prksIsArgumentIndexShape([
+                        { id: 'A-1', kind: 'argument', targets: [],
+                          sources: [{ work_id: 'W-1', authors: [{ id: 'P-1' }] }] }]),
                     optionalDisplayFieldsAbsent: prksIsArgumentIndexShape([
                         { id: 'A-1', kind: 'argument',
                           targets: [{ id: 'P-1', type: 'position' }],
@@ -4126,6 +4139,10 @@ class OfflineArgumentTests(unittest.TestCase):
                 "targetBadType": False,
                 "sourceMissingWorkId": False,
                 "sourceAuthorsNotArray": False,
+                "authorNull": False,
+                "authorString": False,
+                "authorMissingId": False,
+                "authorMinimalOk": True,
                 "optionalDisplayFieldsAbsent": True,
             },
         )
@@ -4149,6 +4166,17 @@ class OfflineArgumentTests(unittest.TestCase):
                         withField('targets', [{ type: 'argument' }]), 'A-1'),
                     sourceMissingWorkId: prksIsArgumentShape(
                         withField('sources', [{ authors: [] }]), 'A-1'),
+                    authorNull: prksIsArgumentShape(
+                        withField('sources', [{ work_id: 'W-1', authors: [null] }]), 'A-1'),
+                    authorString: prksIsArgumentShape(
+                        withField('sources', [{ work_id: 'W-1', authors: ['bad'] }]), 'A-1'),
+                    authorMissingId: prksIsArgumentShape(
+                        withField('sources', [{ work_id: 'W-1', authors: [{}] }]), 'A-1'),
+                    authorMinimalOk: prksIsArgumentShape(
+                        withField('sources', [{ work_id: 'W-1', authors: [{ id: 'P-1' }] }]), 'A-1'),
+                    blankId: prksIsArgumentShape(
+                        { id: '   ', kind: 'argument', targets: [], sources: [],
+                          responses: [], mentions: [], verdicts: [] }, '   '),
                     responseMissingId: prksIsArgumentShape(
                         withField('responses', [{ name: 'x' }]), 'A-1'),
                     responseBadKind: prksIsArgumentShape(
@@ -4167,6 +4195,10 @@ class OfflineArgumentTests(unittest.TestCase):
                         mentions: [{ work_id: 'W-2' }],
                         verdicts: [{ id: 'supports' }],
                     }, 'A-1'),
+                    authorDisplayFieldsAbsent: prksIsArgumentShape(
+                        withField('sources', [{ work_id: 'W-1', authors: [
+                            { id: 'P-1', first_name: '', last_name: '', credit_name: null },
+                        ] }]), 'A-1'),
                 };
             }"""
         )
@@ -4184,6 +4216,11 @@ class OfflineArgumentTests(unittest.TestCase):
                 "verdictsNotArray": False,
                 "targetMissingId": False,
                 "sourceMissingWorkId": False,
+                "authorNull": False,
+                "authorString": False,
+                "authorMissingId": False,
+                "authorMinimalOk": True,
+                "blankId": False,
                 "responseMissingId": False,
                 "responseBadKind": False,
                 "mentionMissingWorkId": False,
@@ -4191,8 +4228,115 @@ class OfflineArgumentTests(unittest.TestCase):
                 "errorBody": False,
                 "arrayBody": False,
                 "optionalDisplayFieldsAbsent": True,
+                "authorDisplayFieldsAbsent": True,
             },
         )
+
+    def test_malformed_author_row_in_a_200_never_replaces_a_good_cache(self):
+        """A reachable server answering 200 with an unusable author row is a
+        route error. Those rows are walked to build the author label, so letting
+        one into the cache would turn a bad response into a later crash."""
+        server, page, context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_entity_cached(page, "argument", argument_a)
+        good = _cached_entity(page, "argument", argument_a)
+        self.assertTrue(good["value"]["sources"][0]["authors"], "fixture should seed an author")
+
+        malformed = json.dumps(
+            {
+                "id": argument_a,
+                "name": ARGUMENT_A_NAME,
+                "kind": "argument",
+                "main_text": "",
+                "targets": [],
+                "sources": [{"work_id": work_a, "work_title": "T", "pages": "", "authors": [None]}],
+                "responses": [],
+                "mentions": [],
+                "verdicts": [{"id": "supports", "label": "Supports"}],
+            }
+        )
+
+        def bad_authors(route):
+            req = route.request
+            if req.method == "GET" and urlparse(req.url).path == "/api/arguments/" + argument_a:
+                route.fulfill(status=200, content_type="application/json", body=malformed)
+                return
+            route.fallback()
+
+        page.route("**/api/arguments/**", bad_authors)
+        try:
+            _open_argument_index(page)
+            _wait_content_contains(page, ARGUMENT_A_NAME)
+            _open_argument(page, argument_a)
+            page.wait_for_function(
+                "() => document.querySelector('#prks-route-retry') !== null", timeout=15000
+            )
+            body = _content_text(page)
+            self.assertNotIn("Argument not found", body)
+            self.assertNotIn("not available offline", body)
+            self.assertEqual(_connectivity_state(page), "online")
+            page.wait_for_timeout(500)
+            self.assertEqual(_cached_entity(page, "argument", argument_a)["value"], good["value"])
+        finally:
+            _safe_unroute(page, "**/api/arguments/**", bad_authors)
+
+        # The untouched snapshot is still what serves offline.
+        _open_argument_index(page)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        context.set_offline(True)
+        _open_argument(page, argument_a)
+        _wait_offline_banner(page)
+        _wait_content_contains(page, ARGUMENT_A_TEXT)
+
+    def test_malformed_cached_author_row_is_discarded_not_rendered(self):
+        """A cached entity that somehow holds an unusable author row must report
+        offline-unavailable and be discarded -- never reach the renderer, which
+        walks every author row to build its label."""
+        server, page, context, _collector = self._start()
+        argument_a = server.ids["argument_a"]
+
+        _wait_sw_active(page)
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, ARGUMENT_A_NAME)
+        _wait_entity_cached(page, "argument", argument_a)
+
+        # Corrupt the cached snapshot in place, the way a schema drift or a
+        # partially written row could.
+        page.evaluate(
+            """async (id) => {
+                const store = window.createPrksOfflineStore();
+                const row = await store.getEntity('argument', id);
+                const value = row.value;
+                value.sources = [{ work_id: 'W-1', work_title: 'T', pages: '', authors: [null] }];
+                await store.putEntity('argument', id, value, '');
+            }""",
+            argument_a,
+        )
+        page.wait_for_function(
+            """(id) => window.createPrksOfflineStore().getEntity('argument', id)
+                .then(row => !!row && row.value.sources[0].authors[0] === null)""",
+            arg=argument_a,
+            timeout=15000,
+        )
+
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("not available offline", body)
+        self.assertNotIn("Argument not found", body)
+        self.assertEqual(errors, [], "a malformed cached row must not reach the renderer")
+        # ... and the unusable snapshot is discarded rather than left to fail again.
+        _wait_entity_uncached(page, "argument", argument_a)
 
     # ---- HTTP errors --------------------------------------------------------
 
