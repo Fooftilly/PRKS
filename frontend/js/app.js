@@ -1513,6 +1513,17 @@ const PRKS_POSITIONS_LIST_KEY =
 const PRKS_POSITIONS_DOMAIN =
     typeof PRKS_OFFLINE_DOMAIN_POSITIONS === 'string' ? PRKS_OFFLINE_DOMAIN_POSITIONS : 'positions';
 
+/** A row that can actually be linked to: an object carrying a non-blank id. */
+function prksHasUsableRowId(row) {
+    return !!(
+        row &&
+        typeof row === 'object' &&
+        !Array.isArray(row) &&
+        row.id != null &&
+        String(row.id).trim()
+    );
+}
+
 /**
  * Shape guarantees the old fetchPositions()/fetchPosition() helpers provided,
  * applied as the runtime's `validate` callback so an authoritative response is
@@ -1523,20 +1534,17 @@ const PRKS_POSITIONS_DOMAIN =
  */
 function prksIsPositionIndexShape(value) {
     if (!Array.isArray(value)) return false;
-    return value.every(function (row) {
-        return !!(row && typeof row === 'object' && !Array.isArray(row) && row.id != null && String(row.id));
-    });
+    return value.every(prksHasUsableRowId);
 }
 
 function prksIsPositionShape(value, positionId) {
-    return !!(
-        value &&
-        typeof value === 'object' &&
-        !Array.isArray(value) &&
-        value.id != null &&
-        String(value.id) === String(positionId) &&
-        Array.isArray(value.arguments)
-    );
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    if (value.id == null || String(value.id) !== String(positionId)) return false;
+    if (!Array.isArray(value.arguments)) return false;
+    // Every embedded summary becomes an #/arguments/:id link, so each needs a
+    // usable id; the display fields (kind, verdict_label, ...) stay optional
+    // because the server does not promise them.
+    return value.arguments.every(prksHasUsableRowId);
 }
 
 /** Same server/cache split as Concepts: route error vs. unusable cache. */

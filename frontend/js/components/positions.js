@@ -120,20 +120,32 @@
         // runtime already left 'online' is never briefly mutable.
         applyPositionOfflineState(container);
         // Activation interception is delegated once per container and decides
-        // at click time, so it stays correct across rerenders and reconnects.
+        // at activation time, so it stays correct across rerenders and
+        // reconnects. Both real activation events are covered: plain and
+        // modified left clicks arrive as `click`, while a middle click arrives
+        // only as `auxclick` -- and each would otherwise open the uncached
+        // Argument route, in this tab or a new one.
         if (!container.__prksPositionArgumentGuardBound) {
             container.__prksPositionArgumentGuardBound = true;
-            container.addEventListener('click', function (ev) {
+            const guardActivation = function (ev) {
+                // Only the middle button opens a link; right/back/forward
+                // auxclicks keep their ordinary browser behavior.
+                if (ev.type === 'auxclick' && ev.button !== 1) return;
                 const link =
                     ev.target.closest &&
                     ev.target.closest('[data-prks-role="' + POSITION_ARGUMENT_LINK_ROLE + '"]');
                 if (!link) return;
                 if (positionRuntimeState() === 'online') return;
+                // Covers every default the browser would otherwise perform:
+                // same-tab hash navigation, and the new tab that a middle or
+                // ctrl/cmd click would open.
                 ev.preventDefault();
                 if (typeof root.prksAlertMessage === 'function') {
                     root.prksAlertMessage(ARGUMENTS_OFFLINE_MESSAGE, 'Offline');
                 }
-            });
+            };
+            container.addEventListener('click', guardActivation);
+            container.addEventListener('auxclick', guardActivation);
         }
         let unsubscribe = function () {};
         if (typeof root.prksOfflineRuntimeSubscribe === 'function') {

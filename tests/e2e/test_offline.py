@@ -2779,6 +2779,155 @@ class OfflinePositionTests(unittest.TestCase):
         page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=argument_id)
         _wait_content_contains(page, POSITION_ARGUMENT_NAME)
 
+    def test_position_argument_links_resist_every_activation_gesture_offline(self):
+        """Middle click and ctrl/alt click each open a link by a different
+        route -- a browser tab, a background PRKS tab, a tile -- so each has to
+        be refused with the same explanation, not just the ordinary click."""
+        server, page, context, _collector = self._start()
+        position_a = server.ids["position_a"]
+        argument_id = server.ids["position_argument"]
+
+        _wait_sw_active(page)
+        _open_position(page, position_a)
+        _wait_content_contains(page, POSITION_ARGUMENT_NAME)
+        _wait_entity_cached(page, "position", position_a)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_offline_banner(page)
+        page.wait_for_function(
+            "() => { const a = document.querySelector('[data-prks-role=\"position-argument-link\"]');"
+            " return !!a && a.getAttribute('aria-disabled') === 'true'; }",
+            timeout=20000,
+        )
+
+        seen = self._record_calls(page, "**/api/arguments**")
+        arg_link = page.locator('[data-prks-role="position-argument-link"]')
+        hash_before = page.evaluate("() => location.hash")
+        tabs_before = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length")
+        pages_before = len(context.pages)
+
+        # `force` throughout because aria-disabled already makes Playwright (like
+        # assistive tech) treat the row as inactive; these simulate the browser
+        # still dispatching the gesture, which is what the guard exists for.
+        for gesture in ("middle", "ctrl", "alt"):
+            if gesture == "middle":
+                arg_link.click(button="middle", force=True)
+            elif gesture == "ctrl":
+                arg_link.click(modifiers=["ControlOrMeta"], force=True)
+            else:
+                arg_link.click(modifiers=["Alt"], force=True)
+            dialog = page.locator("#prks-modal-confirm:not(.hidden)", has_text="not available offline yet")
+            dialog.wait_for(timeout=15000)
+            page.locator("#prks-modal-confirm-ok").click()
+            page.wait_for_function(
+                "() => document.getElementById('prks-modal-confirm').classList.contains('hidden')",
+                timeout=15000,
+            )
+
+            self.assertEqual(len(context.pages), pages_before, "%s click opened a browser tab" % gesture)
+            self.assertEqual(
+                page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length"),
+                tabs_before,
+                "%s click created a PRKS workspace tab" % gesture,
+            )
+            self.assertEqual(
+                page.evaluate("() => location.hash"), hash_before, "%s click left the Position route" % gesture
+            )
+
+        page.wait_for_timeout(300)
+        self.assertEqual(seen, [], "no offline Argument activation may reach the API")
+        self.assertNotIn("/arguments/", page.evaluate("() => location.hash"))
+        # The cached Position is still on screen and still shows the relationship.
+        self.assertIn(POSITION_ARGUMENT_NAME, _content_text(page))
+
+        # Reconnecting restores every gesture: middle click really does open a
+        # background PRKS tab again.
+        context.set_offline(False)
+        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+        page.wait_for_function(
+            "() => { const a = document.querySelector('[data-prks-role=\"position-argument-link\"]');"
+            " return !!a && a.getAttribute('aria-disabled') === null; }",
+            timeout=20000,
+        )
+        page.locator('[data-prks-role="position-argument-link"]').click(button="middle")
+        page.wait_for_function(
+            "([n, id]) => { const s = window.prksWorkspaceSnapshot();"
+            " return s.tabs.length === n + 1 && s.tabs.some(t => (t.route || '').indexOf(id) !== -1); }",
+            arg=[tabs_before, argument_id],
+            timeout=20000,
+        )
+        self.assertEqual(len(context.pages), pages_before, "internal routes never open a real browser tab")
+
+    def test_position_shape_validators_reject_unusable_rows(self):
+        """The validators gate cache publication, so they are checked directly
+        against the shapes a server could actually hand back."""
+        server, page, _context, _collector = self._start()
+        _wait_sw_active(page)
+        _open_position_index(page)
+        _wait_content_contains(page, POSITION_A_NAME)
+
+        index_cases = page.evaluate(
+            """() => ({
+                empty: prksIsPositionIndexShape([]),
+                ok: prksIsPositionIndexShape([{ id: 'P-1', name: 'A' }]),
+                notArray: prksIsPositionIndexShape({ error: 'boom' }),
+                nullValue: prksIsPositionIndexShape(null),
+                missingId: prksIsPositionIndexShape([{ name: 'A' }]),
+                blankId: prksIsPositionIndexShape([{ id: '   ', name: 'A' }]),
+                nestedArrayRow: prksIsPositionIndexShape([['P-1']]),
+                oneBadRow: prksIsPositionIndexShape([{ id: 'P-1' }, { id: '' }]),
+            })"""
+        )
+        self.assertEqual(
+            index_cases,
+            {
+                "empty": True,
+                "ok": True,
+                "notArray": False,
+                "nullValue": False,
+                "missingId": False,
+                "blankId": False,
+                "nestedArrayRow": False,
+                "oneBadRow": False,
+            },
+        )
+
+        detail_cases = page.evaluate(
+            """() => ({
+                ok: prksIsPositionShape({ id: 'P-1', arguments: [] }, 'P-1'),
+                okWithArgs: prksIsPositionShape(
+                    { id: 'P-1', arguments: [{ id: 'A-1', name: 'x', kind: 'stance' }] }, 'P-1'),
+                argsWithoutDisplayFields: prksIsPositionShape(
+                    { id: 'P-1', arguments: [{ id: 'A-1' }] }, 'P-1'),
+                wrongId: prksIsPositionShape({ id: 'P-2', arguments: [] }, 'P-1'),
+                missingArguments: prksIsPositionShape({ id: 'P-1' }, 'P-1'),
+                argumentsNotArray: prksIsPositionShape({ id: 'P-1', arguments: {} }, 'P-1'),
+                argumentMissingId: prksIsPositionShape(
+                    { id: 'P-1', arguments: [{ name: 'no id' }] }, 'P-1'),
+                argumentBlankId: prksIsPositionShape(
+                    { id: 'P-1', arguments: [{ id: '  ', name: 'blank' }] }, 'P-1'),
+                errorBody: prksIsPositionShape({ error: 'boom' }, 'P-1'),
+                arrayBody: prksIsPositionShape([], 'P-1'),
+            })"""
+        )
+        self.assertEqual(
+            detail_cases,
+            {
+                "ok": True,
+                "okWithArgs": True,
+                "argsWithoutDisplayFields": True,
+                "wrongId": False,
+                "missingArguments": False,
+                "argumentsNotArray": False,
+                "argumentMissingId": False,
+                "argumentBlankId": False,
+                "errorBody": False,
+                "arrayBody": False,
+            },
+        )
+
     def test_position_graph_action_requires_a_connection_offline(self):
         server, page, context, _collector = self._start()
         position_a = server.ids["position_a"]

@@ -358,6 +358,15 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertLess(body.index(skip), body.index("e.preventDefault();"))
         self.assertLess(body.index(skip), body.index("e.stopPropagation();"))
 
+        # Middle click goes through its own mousedown handler, which suppresses
+        # autoscroll for navigable elements; it has to bow out for the same
+        # disabled destinations, or middle click ends up silently inert instead
+        # of reaching the owning component's explanation.
+        mid_start = src.index("function onMiddleMouseDown(")
+        mid_body = src[mid_start : src.index("function bindNewTabButton(")]
+        self.assertIn(skip, mid_body)
+        self.assertLess(mid_body.index(skip), mid_body.index("e.preventDefault();"))
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for workspace tab tests")

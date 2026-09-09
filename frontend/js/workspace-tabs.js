@@ -2470,6 +2470,11 @@
         if (isPdfWikiLink(e.target)) return;
         const navEl = e.target.closest('[data-prks-route], a[href], [data-prks-middleclick-nav]');
         if (!navEl) return;
+        // Same bow-out as handleNavEvent: an explicitly disabled destination is
+        // left entirely to its owning component, including the autoscroll
+        // suppression this handler would otherwise apply. Anything less makes
+        // middle click silently inert instead of explained.
+        if (navEl.getAttribute && navEl.getAttribute('aria-disabled') === 'true') return;
         let hash = '';
         if (navEl.hasAttribute('data-prks-route')) hash = navEl.getAttribute('data-prks-route') || '';
         else if (navEl.tagName === 'A' || navEl.closest('a[href]')) {
