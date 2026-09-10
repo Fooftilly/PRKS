@@ -429,6 +429,46 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("id === 'playlist-modal'", ui)
         self.assertIn("Creating a Playlist requires a connection to PRKS.", ui)
 
+    def test_work_side_playlist_card_is_read_only_offline(self):
+        """The Work detail page's Playlist card is a Playlist mutation surface
+        on a *Work* route, so it needs its own owned policy -- it cannot ride on
+        the Playlist routes' binding, and an unguarded Edit would mount an
+        editor that fetches the Playlist catalog while offline."""
+        pl = _read(os.path.join(_FRONTEND, "js", "components", "playlists.js"))
+        start = pl.index("async function mountPlaylistAttachControls(")
+        body = pl[start:]
+        # Every Work-side control is settled by one owned helper...
+        for control in (
+            "#prks-work-playlist-search",
+            "#prks-work-playlist-set-btn",
+            "#prks-work-playlist-clear-btn",
+            "#prks-work-playlist-new-btn",
+        ):
+            self.assertIn(control, pl[: pl.index("function prksApplyPlaylistOfflineState(")], control)
+        self.assertIn("prksApplyWorkPlaylistOfflineState(ctx);", body)
+        # ... and Edit refuses to *start* a session offline while Done stays live.
+        self.assertIn("const leaving = !!(ctx && ctx.ui && ctx.ui.workPlaylistEditing);", body)
+        self.assertIn("if (!leaving && prksPlaylistMutationBlocked(", body)
+        self.assertIn("editBtn.disabled = !online && !editing;", pl)
+        # Neither Playlist read may reach the network while non-online: both are
+        # raw fetches, not offline read-throughs, and this function is invoked
+        # with `void` so a rejection would go unhandled.
+        self.assertIn("pid && prksPlaylistRuntimeOnline() && typeof fetchPlaylistDetails === 'function'", body)
+        self.assertIn("if (prksPlaylistRuntimeOnline()) {", body)
+        self.assertLess(body.index("if (prksPlaylistRuntimeOnline()) {"), body.index("await fetchPlaylists("))
+        # The pending attachment is global state, so the guard runs before it is
+        # written -- openModal()'s own guard refuses too late to prevent that.
+        new_at = body.index("newBtn.onclick = async () => {")
+        new_body = body[new_at : new_at + 900]
+        self.assertLess(
+            new_body.index("prksPlaylistMutationBlocked("),
+            new_body.index("window.__prksPendingPlaylistAttach = {"),
+        )
+        # A blocked mutation already explained itself; no second failure status.
+        for handler in ("setBtn.onclick", "clearBtn.onclick"):
+            at = body.index(handler)
+            self.assertIn("prksPlaylistWasBlocked(_e)", body[at : at + 2600], handler)
+
     def test_playlist_domain_dependencies_and_exclusions(self):
         """Playlist detail renders each item's title, author_text and
         published_date and nothing else from the Work summary the endpoint

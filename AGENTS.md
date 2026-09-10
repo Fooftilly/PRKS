@@ -1017,6 +1017,24 @@ keeps its unsaved draft with only its mutating controls inert — **Cancel, Clos
 and the inline rename's Cancel stay live** — and the right-panel half only runs
 when `prksRightPanelOwnedBy()` says this context owns that panel.
 
+The Work detail page's own Playlist card (Set playlist / Clear / New…) is a
+Playlist mutation surface living on a **Work** route, so it cannot ride on that
+binding and has its own `prksApplyWorkPlaylistOfflineState()` plus a
+live-tab-context subscription, in the same shape as the private-notes one. Two
+rules there are easy to get wrong. First, **Edit is refused only when it would
+*start* a session**: `Done` stays live so a user can always leave an editor they
+can no longer save, exactly like the Playlist detail editor. Second, mounting
+that editor calls `fetchPlaylists()`, and the Prev/Next block calls
+`fetchPlaylistDetails()` — both are *raw* reads, not offline read-throughs, so
+both are skipped entirely while non-online rather than left to fail. That is not
+only about wasted requests: `mountPlaylistAttachControls()` is invoked with
+`void`, so a rethrown transport failure would surface as an unhandled rejection.
+The catalog read is additionally wrapped, because the connection can drop
+*during* it. Finally, the `New…` handler guards **before** writing
+`window.__prksPendingPlaylistAttach`: `openModal()` guards too, but it refuses
+after that global has already been set, and the stale `workId` would then be
+picked up by the next Playlist creation from any surface.
+
 **Playlist membership removal is transactional.** `remove_work_from_playlist()`
 deletes the `playlist_items` row and bumps the Playlist timestamp in one
 transaction, matching `add_work_to_playlist()` and `reorder_playlist()`. Offline

@@ -108,6 +108,31 @@ class PlaylistsOfflineTests(unittest.TestCase):
                 if req.method in methods and fragment in urlparse(req.url).path else None)
         return seen
 
+    def create_video_work_through_the_modal(self, page, title, playlist_id=None):
+        """Drives the real New File modal, so the create handler's own hooks are
+        what is under test -- not a helper called by the test itself."""
+        # YouTube oEmbed is a real outbound request the handler makes for title/
+        # channel prefill; stub it so this stays offline-clean and deterministic.
+        def stub_oembed(route):
+            route.fulfill(status=200, content_type='application/json',
+                          body=json.dumps({'title': title, 'author_name': PLAYLIST_CHANNEL}))
+
+        page.route('**/youtube.com/oembed**', stub_oembed)
+        self.addCleanup(lambda: o._safe_unroute(page, '**/youtube.com/oembed**', stub_oembed))
+        page.locator('#prks-ribbon-new-file').click()
+        page.wait_for_selector('#work-modal:not(.hidden)')
+        page.locator('.prks-kind-toggle__btn[data-kind="video"]').click()
+        page.wait_for_selector('#work-video-url-row:not(.hidden)')
+        page.locator('#work-video-url').fill('https://www.youtube.com/watch?v=e2e0000009')
+        page.locator('#work-title').fill(title)
+        if playlist_id:
+            page.evaluate(
+                """id => { document.getElementById('work-video-playlist-id').value = id; }""",
+                playlist_id,
+            )
+        page.locator('#save-work-btn').click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
+
     def open_details_panel(self, page):
         o._open_details_drawer_if_tiled(page)
 
@@ -518,6 +543,85 @@ class PlaylistsOfflineTests(unittest.TestCase):
         titles = page.evaluate("() => fetchWorks().then(ws => ws.map(w => w.title))")
         self.assertNotIn('Renamed while connected', titles)
 
+    def test_cached_work_playlist_card_is_read_only_offline(self):
+        """A cached video Work still shows its Playlist card, but Phase 1 is
+        read-only: Edit cannot start a session, nothing reaches the Playlist
+        API, and no stale pending attachment is left behind."""
+        server, page, context = self.start()
+        ids = server.ids
+        errors = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        o._open_work_from_home(page, PLAYLIST_VIDEO_ONE_TITLE)
+        o._wait_entity_cached(page, 'work', ids['playlist_video_one'])
+
+        context.set_offline(True)
+        page.reload(wait_until='domcontentloaded')
+        o._wait_content_contains(page, PLAYLIST_VIDEO_ONE_TITLE)
+        self.open_details_panel(page)
+        page.wait_for_selector('#prks-work-playlist-edit-btn')
+
+        # Every Playlist request from here on -- including the Prev/Next nav
+        # prefetch, which is a raw read, not an offline read-through.
+        seen = self.watch(page, ('GET', 'POST', 'PATCH', 'DELETE'))
+        page.wait_for_timeout(600)
+        self.assertTrue(page.locator('#prks-work-playlist-edit-btn').is_disabled())
+        # The relationship itself is real cached data and stays on screen.
+        self.assertIn(PLAYLIST_A_TITLE, page.locator('#panel-content').inner_text())
+
+        # Invoking the handler directly proves the guard, not the attribute.
+        page.evaluate("() => { document.getElementById('prks-work-playlist-edit-btn').onclick(); }")
+        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_timeout(500)
+        self.assertEqual(page.locator('#prks-work-playlist-search').count(), 0)
+        self.assertEqual(seen, [])
+        self.assertEqual(errors, [])
+        self.assertIsNone(page.evaluate("() => window.__prksPendingPlaylistAttach || null"))
+
+    def test_open_work_playlist_editor_survives_disconnect(self):
+        server, page, context = self.start()
+        ids = server.ids
+        errors = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        o._open_work_from_home(page, PLAYLIST_VIDEO_ONE_TITLE)
+        self.open_details_panel(page)
+        page.locator('#prks-work-playlist-edit-btn').click()
+        page.wait_for_selector('#prks-work-playlist-search')
+        page.locator('#prks-work-playlist-search').fill('Unsaved playlist search')
+
+        self.offline(page, context)
+        seen = self.watch(page, ('GET', 'POST', 'PATCH', 'DELETE'))
+        for selector in ('#prks-work-playlist-search', '#prks-work-playlist-set-btn',
+                         '#prks-work-playlist-clear-btn', '#prks-work-playlist-new-btn'):
+            self.assertTrue(page.locator(selector).is_disabled(), selector)
+        # Done stays live so the user can leave an editor they cannot save.
+        self.assertFalse(page.locator('#prks-work-playlist-edit-btn').is_disabled())
+        self.assertEqual(page.locator('#prks-work-playlist-edit-btn').inner_text().strip(), 'Done')
+        self.assertEqual(page.locator('#prks-work-playlist-search').input_value(),
+                         'Unsaved playlist search')
+
+        # New... must not leave a pending attachment behind when it is refused.
+        page.evaluate("() => { void document.getElementById('prks-work-playlist-new-btn').onclick(); }")
+        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
+        page.locator('#prks-modal-confirm-ok').click()
+        self.assertEqual(page.locator('#playlist-modal:not(.hidden)').count(), 0)
+        self.assertIsNone(page.evaluate("() => window.__prksPendingPlaylistAttach || null"))
+
+        # Set and Clear reach no canonical request either, and neither leaves a
+        # misleading failure status after the offline explanation.
+        for btn in ('#prks-work-playlist-set-btn', '#prks-work-playlist-clear-btn'):
+            page.evaluate("sel => { void document.querySelector(sel).onclick(); }", btn)
+            page.wait_for_timeout(300)
+        self.assertEqual(seen, [])
+        self.assertNotIn('Could not', page.locator('#prks-work-playlist-status').inner_text())
+        self.assertEqual(errors, [])
+
+        # Reconnecting restores the controls with the draft intact.
+        self.online(page, context)
+        self.assertFalse(page.locator('#prks-work-playlist-set-btn').is_disabled())
+        self.assertEqual(page.locator('#prks-work-playlist-search').input_value(),
+                         'Unsaved playlist search')
+
     # ---- direct Playlist coherence -----------------------------------------
 
     def test_direct_playlist_operations_invalidate_exact_domains(self):
@@ -747,38 +851,33 @@ class PlaylistsOfflineTests(unittest.TestCase):
             o._safe_unroute(page, pattern, fail)
 
     def test_work_creation_invalidates_playlists_only_when_it_names_one(self):
+        """Driven through the real New File modal: the create endpoint can
+        attach a video to a Playlist in the same canonical request, bypassing
+        addWorkToPlaylist(), so that handler owes Playlists its own
+        invalidation -- and owes it nothing when no Playlist was named."""
         server, page, context = self.start()
         ids = server.ids
+
+        # A video created with no Playlist selected changes nothing.
         self.cache(page, ids)
         before = self.generations(page)
-        # No playlist_id: nothing about the Playlist read model changed.
-        page.evaluate(
-            """async () => {
-                await prksRequest('/api/works', { method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: 'Playlistless Work', doc_type: 'book' }) });
-            }"""
-        )
+        self.create_video_work_through_the_modal(page, 'Playlistless Video Work')
         page.wait_for_timeout(500)
         self.changed(page, before, set())
 
-        # The create endpoint can attach in the same canonical request.
+        # ... and one created straight into a Playlist stales the domain.
+        self.cache(page, ids)
         before = self.generations(page)
-        page.evaluate(
-            """async ids => {
-                const payload = { title: 'Attached Video Work', doc_type: 'online',
-                    source_kind: 'video', source_url: 'https://www.youtube.com/watch?v=e2e0000003',
-                    playlist_id: ids.playlist_a };
-                const res = await prksRequest('/api/works', { method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload) });
-                if (res.ok && String(payload.playlist_id || '').trim()) {
-                    prksMarkPlaylistsDomainChanged();
-                }
-            }""",
-            ids,
+        self.create_video_work_through_the_modal(
+            page, 'Attached Video Work', playlist_id=ids['playlist_a']
         )
         self.changed(page, before, {'playlists'})
+        # The attach really happened, so the invalidation was not vacuous.
+        titles = page.evaluate(
+            "id => fetchPlaylistDetails(id).then(pl => pl.items.map(i => i.title))",
+            ids['playlist_a'],
+        )
+        self.assertIn('Attached Video Work', titles)
 
     # ---- exclusions ---------------------------------------------------------
 

@@ -75,6 +75,61 @@ const PRKS_PLAYLIST_MUTATION_SELECTOR = [
     '.prks-playlist-item__rename-input',
 ].join(', ');
 
+/* The Work detail page's own Playlist card ("Set playlist" / Clear / New…)
+ * is a Playlist mutation surface living on a *Work* route, so it needs its own
+ * owned policy rather than riding on the Playlist routes' binding. Edit is
+ * disabled offline only while NOT already editing: an editor open when the
+ * connection drops keeps its draft and its Done button, exactly like the
+ * Playlist detail editor. */
+const PRKS_WORK_PLAYLIST_MUTATION_SELECTOR = [
+    '#prks-work-playlist-search',
+    '#prks-work-playlist-set-btn',
+    '#prks-work-playlist-clear-btn',
+    '#prks-work-playlist-new-btn',
+].join(', ');
+
+function prksPlaylistRuntimeOnline() {
+    return typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
+}
+
+function prksApplyWorkPlaylistOfflineState(ctx) {
+    const panel = document.getElementById('panel-content');
+    if (!panel) return;
+    if (typeof prksRightPanelOwnedBy === 'function' && !prksRightPanelOwnedBy(ctx, panel)) return;
+    const online = prksPlaylistRuntimeOnline();
+    const editing = !!(ctx && ctx.ui && ctx.ui.workPlaylistEditing);
+    panel.querySelectorAll(PRKS_WORK_PLAYLIST_MUTATION_SELECTOR).forEach(function (el) {
+        el.disabled = !online;
+        if (online) el.removeAttribute('aria-disabled');
+        else el.setAttribute('aria-disabled', 'true');
+    });
+    const editBtn = panel.querySelector('#prks-work-playlist-edit-btn');
+    if (editBtn) {
+        // Done must stay live so the user can always leave an editor they can
+        // no longer save; only *starting* a new session is refused offline.
+        editBtn.disabled = !online && !editing;
+        if (editBtn.disabled) editBtn.setAttribute('aria-disabled', 'true');
+        else editBtn.removeAttribute('aria-disabled');
+    }
+    const results = panel.querySelector('#prks-work-playlist-results');
+    if (results) {
+        results.inert = !online;
+        if (!online) results.classList.add('hidden');
+    }
+}
+
+/* Settles every mounted Work Playlist card live. The Work right panel is not
+ * owned by a Playlist route, so this mirrors the private-notes subscription
+ * rather than the TabContext-container binding used by the Playlist routes. */
+if (typeof prksOfflineRuntimeSubscribe === 'function') {
+    prksOfflineRuntimeSubscribe(function () {
+        if (typeof prksForEachLiveTabContext !== 'function') return;
+        prksForEachLiveTabContext(function (ctx) {
+            prksApplyWorkPlaylistOfflineState(ctx);
+        });
+    });
+}
+
 function prksApplyPlaylistOfflineState(container) {
     if (!container || !container.querySelectorAll) return;
     const online = typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
@@ -654,9 +709,17 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
         );
     };
     if (!ownsPanel(panel)) return;
+    // Reflect the current state immediately: a card mounted AFTER the runtime
+    // already left 'online' must never briefly expose live controls.
+    prksApplyWorkPlaylistOfflineState(ctx);
     if (editBtn && editBtn.dataset.bound !== '1') {
         editBtn.dataset.bound = '1';
         editBtn.onclick = () => {
+            const leaving = !!(ctx && ctx.ui && ctx.ui.workPlaylistEditing);
+            // Leaving an already-open editor is always allowed; starting a new
+            // one offline is refused, because mounting it would fetch the
+            // Playlist catalog and expose canonical mutation controls.
+            if (!leaving && prksPlaylistMutationBlocked('Editing a Work\u2019s playlist requires a connection to PRKS.')) return;
             if (ctx && ctx.ui) ctx.ui.workPlaylistEditing = !ctx.ui.workPlaylistEditing;
             const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
             if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
@@ -669,7 +732,10 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     if (navHost) {
         navHost.innerHTML = '';
         const pid = work && work.playlist_id ? String(work.playlist_id) : '';
-        if (pid && typeof fetchPlaylistDetails === 'function') {
+        // `fetchPlaylistDetails` is a raw read, not an offline read-through, so
+        // offline it could only fail. Skipping it leaves the same empty nav the
+        // catch below already produces, without the pointless request.
+        if (pid && prksPlaylistRuntimeOnline() && typeof fetchPlaylistDetails === 'function') {
             try {
                 const pl = await fetchPlaylistDetails(pid, {
                     signal: ctx && ctx.abortController && ctx.abortController.signal,
@@ -734,7 +800,24 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     const clearBtn = panel.querySelector('#prks-work-playlist-clear-btn');
     if (!input || !hidden || !results || !setBtn || !clearBtn || !newBtn) return;
 
-    const playlists = await fetchPlaylists({ signal: ctx && ctx.abortController && ctx.abortController.signal });
+    // An editor already open when the connection dropped keeps its markup and
+    // draft, but must not reach for the Playlist catalog: `fetchPlaylists()`
+    // rethrows non-abort transport failures, and this function is invoked with
+    // `void`, so that would surface as an unhandled rejection as well as
+    // breaking the Phase-1 read-only contract.
+    let playlists = [];
+    if (prksPlaylistRuntimeOnline()) {
+        try {
+            playlists = await fetchPlaylists({
+                signal: ctx && ctx.abortController && ctx.abortController.signal,
+            });
+        } catch (_e) {
+            // The connection can also drop *during* this read. Degrade to an
+            // empty catalog rather than rejecting: this function is invoked
+            // with `void`, so a throw would be an unhandled rejection.
+            playlists = [];
+        }
+    }
     if (!ownsPanel(panel)) return;
     const rows = Array.isArray(playlists) ? playlists : [];
 
@@ -804,6 +887,7 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                 }
             }
         } catch (_e) {
+            if (prksPlaylistWasBlocked(_e)) return;
             if (status && ownsPanel(status)) status.textContent = 'Could not set playlist.';
         }
     };
@@ -838,11 +922,17 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                 }
             }
         } catch (_e) {
+            if (prksPlaylistWasBlocked(_e)) return;
             if (status && ownsPanel(status)) status.textContent = 'Could not remove.';
         }
     };
 
     newBtn.onclick = async () => {
+        // Guard before touching the global pending attachment: openModal()
+        // guards too, but it refuses *after* this handler would already have
+        // left `__prksPendingPlaylistAttach` set, and that stale workId would
+        // then be picked up by the next Playlist creation from any surface.
+        if (prksPlaylistMutationBlocked('Creating a Playlist requires a connection to PRKS.')) return;
         const titleEl = document.getElementById('playlist-title');
         const descEl = document.getElementById('playlist-description');
         const errEl = document.getElementById('playlist-error');
@@ -869,3 +959,4 @@ window.prksRefreshPlaylistDetailMain = prksRefreshPlaylistDetailMain;
 window.prksClearPlaylistRenameState = prksClearPlaylistRenameState;
 window.renderPlaylistAttachControlsHtml = renderPlaylistAttachControlsHtml;
 window.mountPlaylistAttachControls = mountPlaylistAttachControls;
+window.prksApplyWorkPlaylistOfflineState = prksApplyWorkPlaylistOfflineState;
