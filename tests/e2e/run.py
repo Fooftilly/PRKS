@@ -51,6 +51,7 @@ def main() -> int:
             loader.loadTestsFromName("tests.e2e.test_app"),
             loader.loadTestsFromName("tests.e2e.test_offline"),
             loader.loadTestsFromName("tests.e2e.test_person_groups_offline"),
+            loader.loadTestsFromName("tests.e2e.test_playlists_offline"),
         ]
     )
     runner = unittest.TextTestRunner(verbosity=2)

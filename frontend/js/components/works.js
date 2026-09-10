@@ -812,6 +812,11 @@ async function deleteWork(w_id, ownerCtx) {
             prksOfflineMarkPeopleChanged();
         }
         if (typeof prksOfflineMarkPersonGroupsChanged === 'function') prksOfflineMarkPersonGroupsChanged();
+        if (typeof prksOfflineMarkPlaylistsChanged === 'function') {
+            // Canonical cleanup drops this Work's playlist_items row, so
+            // every cached Playlist's item_count and items are now stale.
+            prksOfflineMarkPlaylistsChanged();
+        }
         window.__prksRecentlyAddedDirty = true;
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&

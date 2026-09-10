@@ -2337,14 +2337,25 @@ class PRKSDatabase:
             conn.commit()
 
     def remove_work_from_playlist(self, playlist_id: str, work_id: str) -> None:
-        self.execute_query(
-            "DELETE FROM playlist_items WHERE playlist_id = ? AND work_id = ?",
-            (playlist_id, work_id),
-        )
-        self.execute_query(
-            "UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (playlist_id,),
-        )
+        """Membership removal and the Playlist timestamp bump are one write.
+
+        Offline coherence rests on "a failed canonical request keeps the
+        previous cache eligible", which is only sound if a failure really means
+        nothing changed. Two auto-committing statements could otherwise drop the
+        membership, fail the second write, and return an error the client would
+        (correctly, by contract) treat as a no-op. See `add_work_to_playlist`
+        and `reorder_playlist`, which are transactional for the same reason.
+        """
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "DELETE FROM playlist_items WHERE playlist_id = ? AND work_id = ?",
+                (playlist_id, work_id),
+            )
+            conn.execute(
+                "UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (playlist_id,),
+            )
 
     def reorder_playlist(self, playlist_id: str, work_ids: List[str]) -> None:
         if not work_ids:

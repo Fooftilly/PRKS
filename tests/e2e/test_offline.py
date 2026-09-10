@@ -2766,12 +2766,13 @@ class OfflinePositionTests(unittest.TestCase):
         _open_position(page, position_a)
         _wait_content_contains(page, POSITION_A_NAME)
 
-    # ---- online-only destinations ------------------------------------------
+    # ---- Argument/Stance destinations are ordinary routes -------------------
 
-    def test_position_argument_links_require_a_connection_offline(self):
-        """The relationship still renders from cached Position data, but the
-        Argument route is not offline-capable yet, so activation says so instead
-        of navigating into a route that cannot load."""
+    def test_cached_position_opens_a_cached_argument_offline(self):
+        """Arguments became offline-capable after Positions did, so a Position
+        no longer decides whether an Argument destination is reachable. The row
+        is an ordinary link and the Argument route resolves it from its own
+        cache."""
         server, page, context, _collector = self._start()
         position_a = server.ids["position_a"]
         argument_id = server.ids["position_argument"]
@@ -2780,66 +2781,73 @@ class OfflinePositionTests(unittest.TestCase):
         _open_position(page, position_a)
         _wait_content_contains(page, POSITION_ARGUMENT_NAME)
         _wait_entity_cached(page, "position", position_a)
+        _open_argument(page, argument_id)
+        _wait_content_contains(page, POSITION_ARGUMENT_NAME)
+        _wait_entity_cached(page, "argument", argument_id)
+
+        context.set_offline(True)
+        _open_position(page, position_a)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _wait_offline_banner(page)
+
         arg_link = page.locator('[data-prks-role="position-argument-link"]')
         self.assertEqual(arg_link.count(), 1)
+        # No Position-specific offline policy is applied to the row any more.
         self.assertIsNone(arg_link.get_attribute("aria-disabled"))
+        self.assertIsNone(arg_link.get_attribute("title"))
+        self.assertEqual(arg_link.get_attribute("href"), "#/arguments/" + argument_id)
+
+        arg_link.click()
+        page.wait_for_function(
+            "id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=argument_id, timeout=20000
+        )
+        _wait_offline_banner(page)
+        self.assertIn(POSITION_ARGUMENT_NAME, _content_text(page))
+
+    def test_cached_position_reports_an_uncached_argument_as_unavailable(self):
+        """The destination that was never opened online is the Argument route's
+        own "not available offline", not a Position-side refusal and not a
+        misleading "Argument not found"."""
+        server, page, context, _collector = self._start()
+        position_a = server.ids["position_a"]
+        argument_id = server.ids["position_argument"]
+
+        _wait_sw_active(page)
+        _open_position(page, position_a)
+        _wait_content_contains(page, POSITION_ARGUMENT_NAME)
+        _wait_entity_cached(page, "position", position_a)
+        # Deliberately never opened online, so its detail is not cached.
+        self.assertIsNone(_cached_entity(page, "argument", argument_id))
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
         page.wait_for_selector("#sidebar")
         _wait_offline_banner(page)
-        page.wait_for_function(
-            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
-            timeout=20000,
-        )
-
-        arg_link = page.locator('[data-prks-role="position-argument-link"]')
-        # The relationship is real cached data: still rendered, never hidden ...
-        self.assertEqual(arg_link.count(), 1)
-        self.assertIn(POSITION_ARGUMENT_NAME, _content_text(page))
-        # ... and its canonical destination stays inspectable/copyable.
-        self.assertEqual(arg_link.get_attribute("href"), "#/arguments/" + argument_id)
-        page.wait_for_function(
-            "() => { const a = document.querySelector('[data-prks-role=\"position-argument-link\"]');"
-            " return !!a && a.getAttribute('aria-disabled') === 'true'; }",
-            timeout=20000,
-        )
 
         seen = self._record_calls(page, "**/api/arguments**")
-        # `force` because aria-disabled already makes Playwright (like assistive
-        # tech) treat the row as inactive -- this simulates the determined user
-        # whose browser would still dispatch the click, which is exactly what the
-        # interception exists for.
-        arg_link.click(force=True)
-        page.locator("#prks-modal-confirm:not(.hidden)", has_text="not available offline yet").wait_for()
-        page.locator("#prks-modal-confirm-ok").click()
-        page.wait_for_timeout(300)
-        self.assertEqual(seen, [], "an offline Argument activation must not reach the API")
-        self.assertNotIn("/arguments/", page.evaluate("() => location.hash"))
-
-        # Reconnecting restores ordinary navigation.
-        context.set_offline(False)
-        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+        arg_link = page.locator('[data-prks-role="position-argument-link"]')
+        self.assertIsNone(arg_link.get_attribute("aria-disabled"))
+        arg_link.click()
         page.wait_for_function(
-            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
-            timeout=20000,
+            "id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=argument_id, timeout=20000
         )
-        page.wait_for_function(
-            "() => { const a = document.querySelector('[data-prks-role=\"position-argument-link\"]');"
-            " return !!a && a.getAttribute('aria-disabled') === null; }",
-            timeout=20000,
-        )
-        page.locator('[data-prks-role="position-argument-link"]').click()
-        page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=argument_id)
-        _wait_content_contains(page, POSITION_ARGUMENT_NAME)
+        _wait_offline_unavailable(page)
+        body = _content_text(page)
+        self.assertIn("not available offline", body)
+        self.assertNotIn("Argument not found", body)
+        self.assertNotIn("not available offline yet", body)
+        # The Argument route may attempt its own authoritative read; what must
+        # never happen is a Position-side alert instead of the route resolving.
+        self.assertTrue(page.locator("#prks-modal-confirm.hidden").count() >= 1)
+        del seen
 
-    def test_position_argument_links_resist_every_activation_gesture_offline(self):
-        """Middle click and ctrl/alt click each open a link by a different
-        route -- a browser tab, a background PRKS tab, a tile -- so each has to
-        be refused with the same explanation, not just the ordinary click."""
+    def test_position_code_no_longer_applies_its_own_argument_offline_policy(self):
+        """Structural guard for the cleanup: ordinary workspace navigation owns
+        every activation gesture, so Position code must not mark Argument rows
+        or attach its own activation interception."""
         server, page, context, _collector = self._start()
         position_a = server.ids["position_a"]
-        argument_id = server.ids["position_argument"]
 
         _wait_sw_active(page)
         _open_position(page, position_a)
@@ -2850,69 +2858,24 @@ class OfflinePositionTests(unittest.TestCase):
         page.reload(wait_until="domcontentloaded")
         page.wait_for_selector("#sidebar")
         _wait_offline_banner(page)
+        # The graph button is the one control the Position route still settles.
         page.wait_for_function(
-            "() => { const a = document.querySelector('[data-prks-role=\"position-argument-link\"]');"
-            " return !!a && a.getAttribute('aria-disabled') === 'true'; }",
-            timeout=20000,
+            "() => !!document.querySelector('#prks-position-view-graph[disabled]')", timeout=20000
         )
-
-        seen = self._record_calls(page, "**/api/arguments**")
-        arg_link = page.locator('[data-prks-role="position-argument-link"]')
-        hash_before = page.evaluate("() => location.hash")
-        tabs_before = page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length")
-        pages_before = len(context.pages)
-
-        # `force` throughout because aria-disabled already makes Playwright (like
-        # assistive tech) treat the row as inactive; these simulate the browser
-        # still dispatching the gesture, which is what the guard exists for.
-        for gesture in ("middle", "ctrl", "alt"):
-            if gesture == "middle":
-                arg_link.click(button="middle", force=True)
-            elif gesture == "ctrl":
-                arg_link.click(modifiers=["ControlOrMeta"], force=True)
-            else:
-                arg_link.click(modifiers=["Alt"], force=True)
-            dialog = page.locator("#prks-modal-confirm:not(.hidden)", has_text="not available offline yet")
-            dialog.wait_for(timeout=15000)
-            page.locator("#prks-modal-confirm-ok").click()
-            page.wait_for_function(
-                "() => document.getElementById('prks-modal-confirm').classList.contains('hidden')",
-                timeout=15000,
-            )
-
-            self.assertEqual(len(context.pages), pages_before, "%s click opened a browser tab" % gesture)
-            self.assertEqual(
-                page.evaluate("() => window.prksWorkspaceSnapshot().tabs.length"),
-                tabs_before,
-                "%s click created a PRKS workspace tab" % gesture,
-            )
-            self.assertEqual(
-                page.evaluate("() => location.hash"), hash_before, "%s click left the Position route" % gesture
-            )
-
-        page.wait_for_timeout(300)
-        self.assertEqual(seen, [], "no offline Argument activation may reach the API")
-        self.assertNotIn("/arguments/", page.evaluate("() => location.hash"))
-        # The cached Position is still on screen and still shows the relationship.
-        self.assertIn(POSITION_ARGUMENT_NAME, _content_text(page))
-
-        # Reconnecting restores every gesture: middle click really does open a
-        # background PRKS tab again.
-        context.set_offline(False)
-        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-        page.wait_for_function(
-            "() => { const a = document.querySelector('[data-prks-role=\"position-argument-link\"]');"
-            " return !!a && a.getAttribute('aria-disabled') === null; }",
-            timeout=20000,
+        state = page.evaluate(
+            """() => {
+                const a = document.querySelector('[data-prks-role="position-argument-link"]');
+                const hosts = [...document.querySelectorAll('*')]
+                    .filter(el => el.__prksPositionArgumentGuardBound).length;
+                return {
+                    ariaDisabled: a && a.getAttribute('aria-disabled'),
+                    title: a && a.getAttribute('title'),
+                    guardHosts: hosts,
+                };
+            }"""
         )
-        page.locator('[data-prks-role="position-argument-link"]').click(button="middle")
-        page.wait_for_function(
-            "([n, id]) => { const s = window.prksWorkspaceSnapshot();"
-            " return s.tabs.length === n + 1 && s.tabs.some(t => (t.route || '').indexOf(id) !== -1); }",
-            arg=[tabs_before, argument_id],
-            timeout=20000,
-        )
-        self.assertEqual(len(context.pages), pages_before, "internal routes never open a real browser tab")
+        self.assertEqual(state, {"ariaDisabled": None, "title": None, "guardHosts": 0})
+
 
     def test_position_shape_validators_reject_unusable_rows(self):
         """The validators gate cache publication, so they are checked directly
@@ -3137,10 +3100,10 @@ class OfflinePositionTests(unittest.TestCase):
             page.wait_for_function(
                 "() => !!document.querySelector('#prks-position-view-graph[disabled]')", timeout=20000
             )
-            page.wait_for_function(
-                "() => { const a = document.querySelector('[data-prks-role=\"position-argument-link\"]');"
-                " return !!a && a.getAttribute('aria-disabled') === 'true'; }",
-                timeout=20000,
+            # Argument/Stance rows never became disabled, so there is nothing
+            # for reconnect to restore -- the Argument route owns availability.
+            self.assertIsNone(
+                page.locator('[data-prks-role="position-argument-link"]').get_attribute("aria-disabled")
             )
             # Read-only Position content stays readable throughout.
             body = _content_text(page)
@@ -3153,10 +3116,8 @@ class OfflinePositionTests(unittest.TestCase):
         page.wait_for_function(
             "() => !document.querySelector('#prks-position-view-graph[disabled]')", timeout=20000
         )
-        page.wait_for_function(
-            "() => { const a = document.querySelector('[data-prks-role=\"position-argument-link\"]');"
-            " return !!a && a.getAttribute('aria-disabled') === null; }",
-            timeout=20000,
+        self.assertIsNone(
+            page.locator('[data-prks-role="position-argument-link"]').get_attribute("aria-disabled")
         )
 
     # ---- HTTP errors are never disguised as offline -------------------------

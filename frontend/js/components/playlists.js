@@ -51,7 +51,135 @@ async function fetchPlaylistDetails(id, options) {
     }
 }
 
+/* --- Offline policy for Playlist routes (AGENTS.md "Offline / PWA") -------
+ * Playlists are read-only offline in Phase 1: cached index/detail render, and
+ * every canonical mutation is blocked outright (never queued, never faked).
+ * Navigation is deliberately untouched -- a Playlist item is an ordinary
+ * `#/works/:id` link and "All playlists" an ordinary route, so each destination
+ * decides for itself whether it has cached data. `original_url` is an external
+ * link: PRKS being unreachable says nothing about the rest of the internet. */
+const PRKS_PLAYLIST_MUTATION_SELECTOR = [
+    '#prks-create-playlist-btn',
+    '#prks-playlist-edit-btn',
+    '#prks-playlist-edit-title',
+    '#prks-playlist-edit-desc',
+    '#prks-playlist-edit-original-url',
+    '#prks-playlist-edit-save',
+    '#prks-playlist-add-search',
+    '#prks-playlist-add-results button',
+    '[data-pl-up]',
+    '[data-pl-down]',
+    '[data-pl-remove]',
+    '[data-pl-rename]',
+    '[data-pl-rename-save]',
+    '.prks-playlist-item__rename-input',
+].join(', ');
+
+function prksApplyPlaylistOfflineState(container) {
+    if (!container || !container.querySelectorAll) return;
+    const online = typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
+    container.querySelectorAll(PRKS_PLAYLIST_MUTATION_SELECTOR).forEach(function (el) {
+        // Cancel/Close and the rename Cancel are deliberately absent from the
+        // selector: a user must always be able to leave an edit they can no
+        // longer save, and the draft itself stays on screen either way.
+        if ('disabled' in el) el.disabled = !online;
+        if (online) el.removeAttribute('aria-disabled');
+        else el.setAttribute('aria-disabled', 'true');
+    });
+    const results = container.querySelector('#prks-playlist-add-results');
+    if (results) {
+        results.inert = !online;
+        if (!online) results.classList.add('hidden');
+    }
+}
+
+/** The Playlist editor lives in the shared right panel, so it is only settled
+ *  when this context actually owns that panel -- a background Playlist tab must
+ *  never disable or rewrite the panel another tab owns. */
+function prksApplyPlaylistPanelOfflineState(ctx) {
+    const panel = document.getElementById('panel-content');
+    if (!panel) return;
+    if (typeof prksRightPanelOwnedBy === 'function' && !prksRightPanelOwnedBy(ctx, panel)) return;
+    prksApplyPlaylistOfflineState(panel);
+}
+
+/** Keeps a mounted Playlist route in step with connectivity. The subscription
+ *  belongs to the route's TabContext and each bind replaces the previous one on
+ *  the same container -- there is no global Playlist runtime singleton. */
+function prksBindPlaylistOfflineState(ctx, container) {
+    if (!container) return;
+    if (typeof container.__prksPlaylistOfflineDispose === 'function') {
+        try {
+            container.__prksPlaylistOfflineDispose();
+        } catch (_e) {
+            /* a stale disposer must not block the new binding */
+        }
+    }
+    const apply = function () {
+        prksApplyPlaylistOfflineState(container);
+        prksApplyPlaylistPanelOfflineState(ctx);
+    };
+    // Read current state immediately: a page rendered after the runtime already
+    // left 'online' is never briefly mutable.
+    apply();
+    const unsubscribe =
+        (typeof prksOfflineRuntimeSubscribe === 'function' &&
+            prksOfflineRuntimeSubscribe(function () {
+                if (container.__prksPlaylistOfflineDispose !== dispose) return;
+                apply();
+            })) ||
+        function () {};
+    let unregister = function () {};
+    function dispose() {
+        if (container.__prksPlaylistOfflineDispose === dispose) container.__prksPlaylistOfflineDispose = null;
+        unregister();
+        unsubscribe();
+    }
+    container.__prksPlaylistOfflineDispose = dispose;
+    if (ctx && typeof ctx.registerCleanup === 'function') unregister = ctx.registerCleanup(dispose) || function () {};
+}
+
+/* --- Canonical Playlist mutation helpers --------------------------------
+ * Every production Playlist write goes through these, so there is exactly one
+ * canonical-success boundary per operation and coherence cannot depend on each
+ * UI surface remembering a domain hook. Each one guards connectivity
+ * immediately before its request as defense in depth: controls are disabled
+ * offline, but the connection can drop between a dialog opening and Save, and
+ * a future caller may forget its own UI guard. See AGENTS.md, "Offline
+ * coherence domains".
+ *
+ * A guard refusal throws a tagged error rather than returning quietly, so the
+ * existing throw/catch call sites keep working -- and `prksPlaylistWasBlocked()`
+ * lets them skip their own error dialog, since the guard already showed one. */
+function prksPlaylistMutationBlocked(message) {
+    if (typeof prksOfflineGuardMutation !== 'function') return false;
+    return prksOfflineGuardMutation(message);
+}
+
+function prksPlaylistBlockedError() {
+    const err = new Error('Requires a connection to PRKS.');
+    err.prksOfflineBlocked = true;
+    return err;
+}
+
+function prksPlaylistWasBlocked(err) {
+    return !!(err && err.prksOfflineBlocked);
+}
+
+function prksPlaylistsChanged() {
+    return typeof prksMarkPlaylistsDomainChanged === 'function' ? prksMarkPlaylistsDomainChanged() : null;
+}
+
+function prksPlaylistWorkChanged(workId) {
+    return typeof prksOfflineMarkEntityChanged === 'function'
+        ? prksOfflineMarkEntityChanged('work', workId)
+        : null;
+}
+
 async function createPlaylist(title, description) {
+    if (prksPlaylistMutationBlocked('Creating a Playlist requires a connection to PRKS.')) {
+        throw prksPlaylistBlockedError();
+    }
     const res = await prksRequest('/api/playlists', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -59,10 +187,46 @@ async function createPlaylist(title, description) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'create failed');
+    // A brand-new Playlist has no members, so it cannot appear in any cached
+    // Work's playlist_id/playlist_title -- Playlists only.
+    prksPlaylistsChanged();
     return data.id;
 }
 
+/**
+ * Playlist metadata save.
+ *
+ * `options.previousTitle` and `options.memberWorkIds` exist because `get_work()`
+ * embeds `playlist_title`: renaming a Playlist stales the cached Work entity of
+ * every Work in it. The diff lives here rather than in UI code so no caller can
+ * forget it, and a description/original_url-only edit deliberately keeps those
+ * Works offline-available. Only the *current* members need eviction: a Work
+ * moved in or out elsewhere had its own snapshot evicted by that membership
+ * mutation.
+ */
+async function updatePlaylist(playlistId, fields, options) {
+    if (prksPlaylistMutationBlocked()) throw prksPlaylistBlockedError();
+    const res = await prksRequest('/api/playlists/' + encodeURIComponent(playlistId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'save failed');
+    prksPlaylistsChanged();
+    const opts = options && typeof options === 'object' ? options : {};
+    const nextTitle = fields && fields.title != null ? String(fields.title) : null;
+    const titleChanged = nextTitle !== null && String(opts.previousTitle == null ? '' : opts.previousTitle) !== nextTitle;
+    if (titleChanged && Array.isArray(opts.memberWorkIds)) {
+        opts.memberWorkIds.forEach(function (workId) {
+            if (workId) prksPlaylistWorkChanged(workId);
+        });
+    }
+    return data;
+}
+
 async function addWorkToPlaylist(playlistId, workId) {
+    if (prksPlaylistMutationBlocked()) throw prksPlaylistBlockedError();
     const res = await prksRequest(`/api/playlists/${encodeURIComponent(playlistId)}/items`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -70,23 +234,25 @@ async function addWorkToPlaylist(playlistId, workId) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'add failed');
-    return typeof prksOfflineMarkEntityChanged === 'function'
-        ? prksOfflineMarkEntityChanged('work', workId)
-        : null;
+    // One Playlist per Work: moving a Work from A to B changes both Playlists'
+    // item_count and items, which whole-domain invalidation already covers.
+    prksPlaylistsChanged();
+    return prksPlaylistWorkChanged(workId);
 }
 
 async function removeWorkFromPlaylist(playlistId, workId) {
+    if (prksPlaylistMutationBlocked()) throw prksPlaylistBlockedError();
     const res = await prksRequest(
         `/api/playlists/${encodeURIComponent(playlistId)}/items/${encodeURIComponent(workId)}`,
         { method: 'DELETE' }
     );
     if (!res.ok) throw new Error('remove failed');
-    return typeof prksOfflineMarkEntityChanged === 'function'
-        ? prksOfflineMarkEntityChanged('work', workId)
-        : null;
+    prksPlaylistsChanged();
+    return prksPlaylistWorkChanged(workId);
 }
 
 async function reorderPlaylist(playlistId, workIds) {
+    if (prksPlaylistMutationBlocked()) throw prksPlaylistBlockedError();
     const res = await prksRequest(`/api/playlists/${encodeURIComponent(playlistId)}/reorder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -94,6 +260,9 @@ async function reorderPlaylist(playlistId, workIds) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'reorder failed');
+    // Work detail carries no Playlist position, so no Work entity is stale --
+    // but reorder also bumps updated_at, which reorders the index.
+    prksPlaylistsChanged();
 }
 
 function prksOpenNewPlaylistModalFromPlaylistsPage() {
@@ -119,7 +288,7 @@ function prksBindPlaylistsIndexCreateBtn() {
     }
 }
 
-function renderPlaylistsIndex(playlists, container) {
+function renderPlaylistsIndex(playlists, container, ctx) {
     const list = Array.isArray(playlists) ? playlists : [];
     const rowsHtml = list.length
         ? list
@@ -151,6 +320,7 @@ function renderPlaylistsIndex(playlists, container) {
             </div>
         </div>
     `;
+    prksBindPlaylistOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
@@ -340,6 +510,10 @@ function renderPlaylistDetail(ctx, pl, container) {
             const inp = container.querySelector('#prks-pl-rename-input-' + wid);
             const nextTitle = inp ? String(inp.value || '').trim() : '';
             if (!wid || !nextTitle) return;
+            // The connection can drop while an inline rename input is open, so
+            // re-check immediately before the canonical Work PATCH rather than
+            // trusting the disabled Save button alone.
+            if (prksPlaylistMutationBlocked()) return;
             try {
                 const res = await prksRequest(`/api/works/${encodeURIComponent(wid)}`, {
                     method: 'PATCH',
@@ -348,8 +522,10 @@ function renderPlaylistDetail(ctx, pl, container) {
                 });
                 if (!res.ok) throw new Error('save failed');
                 // Same canonical Work-title change as the metadata editor, so
-                // it must invalidate the Concepts domain too -- a cached
-                // Concept detail shows this Work's old title in its mentions.
+                // the shared helper owns every domain it stales -- Concepts
+                // (mention titles), Arguments, People, and Playlists (this very
+                // list renders the title). Deliberately no Playlist-specific
+                // hook here: a second one would drift from the helper.
                 if (typeof prksMarkWorkTitleChanged === 'function') {
                     prksMarkWorkTitleChanged(wid);
                 } else if (typeof prksOfflineMarkEntityChanged === 'function') {
@@ -390,6 +566,7 @@ function renderPlaylistDetail(ctx, pl, container) {
                 });
                 applyFreshPlaylist(fresh);
             } catch (_e) {
+                if (prksPlaylistWasBlocked(_e)) return;
                 if (ownsPlaylist()) await prksAlertMessage('Could not remove item.', 'Error');
             }
             return;
@@ -402,11 +579,13 @@ function renderPlaylistDetail(ctx, pl, container) {
             });
             applyFreshPlaylist(fresh);
         } catch (_e) {
+            if (prksPlaylistWasBlocked(_e)) return;
             if (ownsPlaylist()) await prksAlertMessage('Could not reorder playlist.', 'Error');
         }
     };
 
     // Editing is done in the right panel (Details → Edit).
+    prksBindPlaylistOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
@@ -682,6 +861,9 @@ window.fetchPlaylists = fetchPlaylists;
 window.fetchPlaylistDetails = fetchPlaylistDetails;
 window.prksBindPlaylistsIndexCreateBtn = prksBindPlaylistsIndexCreateBtn;
 window.renderPlaylistsIndex = renderPlaylistsIndex;
+window.prksApplyPlaylistPanelOfflineState = prksApplyPlaylistPanelOfflineState;
+window.prksPlaylistWasBlocked = prksPlaylistWasBlocked;
+window.updatePlaylist = updatePlaylist;
 window.renderPlaylistDetail = renderPlaylistDetail;
 window.prksRefreshPlaylistDetailMain = prksRefreshPlaylistDetailMain;
 window.prksClearPlaylistRenameState = prksClearPlaylistRenameState;

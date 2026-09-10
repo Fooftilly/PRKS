@@ -38,18 +38,20 @@
     /* --- Offline policy for Position routes (AGENTS.md "Offline / PWA") ------
      * Positions are read-only offline in Phase 1: a cached index/detail
      * renders, every canonical mutation is blocked outright (never queued,
-     * never faked), and the two destinations that are not cached at all -- the
-     * Research Graph and Argument/Stance detail -- say so instead of navigating
-     * somewhere broken. Controls carry these roles so one helper can settle
-     * them all, including markup rerendered after the initial bind. */
+     * never faked), and the one destination that is not cached at all -- the
+     * Research Graph -- says so instead of navigating somewhere broken.
+     * Controls carry these roles so one helper can settle them all, including
+     * markup rerendered after the initial bind. */
     const POSITION_MUTATION_ROLE = 'position-mutation-control';
     const POSITION_ONLINE_ONLY_ROLE = 'position-online-only-control';
+    /* Argument/Stance rows keep this role for styling and test identification
+     * only. Since Arguments became offline-capable the Argument route owns its
+     * own availability, so this role is deliberately absent from
+     * POSITION_CONTROL_SELECTOR and carries no offline policy of its own. */
     const POSITION_ARGUMENT_LINK_ROLE = 'position-argument-link';
     const POSITION_CONTROL_SELECTOR =
         '[data-prks-role="' + POSITION_MUTATION_ROLE + '"], ' +
-        '[data-prks-role="' + POSITION_ONLINE_ONLY_ROLE + '"], ' +
-        '[data-prks-role="' + POSITION_ARGUMENT_LINK_ROLE + '"]';
-    const ARGUMENTS_OFFLINE_MESSAGE = 'Arguments and Stances are not available offline yet.';
+        '[data-prks-role="' + POSITION_ONLINE_ONLY_ROLE + '"]';
 
     function positionRuntimeState() {
         return typeof root.prksOfflineRuntimeState === 'function' ? root.prksOfflineRuntimeState() : 'online';
@@ -62,7 +64,7 @@
             : false;
     }
 
-    /** Read-only destinations that are still online-only (graph, Argument detail). */
+    /** The Research Graph is the one destination still online-only. */
     function positionConnectionRequired(message) {
         if (positionRuntimeState() === 'online') return false;
         if (typeof root.prksAlertMessage === 'function') {
@@ -77,22 +79,15 @@
         const nodes = container.querySelectorAll(POSITION_CONTROL_SELECTOR);
         for (let i = 0; i < nodes.length; i++) {
             const el = nodes[i];
-            const isArgumentLink = el.getAttribute('data-prks-role') === POSITION_ARGUMENT_LINK_ROLE;
             // Buttons take native `disabled` (blocks pointer AND keyboard, and
-            // carries the shared .prks-btn:disabled styling). An Argument row
-            // keeps its real anchor and canonical href so the destination stays
-            // inspectable and copyable -- it is marked, and its activation is
-            // intercepted below, rather than being neutered or hidden.
-            if (!isArgumentLink && 'disabled' in el) el.disabled = !online;
+            // carries the shared .prks-btn:disabled styling).
+            if ('disabled' in el) el.disabled = !online;
             if (online) {
                 el.removeAttribute('aria-disabled');
                 el.removeAttribute('title');
             } else {
                 el.setAttribute('aria-disabled', 'true');
-                el.setAttribute(
-                    'title',
-                    isArgumentLink ? ARGUMENTS_OFFLINE_MESSAGE : 'Requires a connection to PRKS'
-                );
+                el.setAttribute('title', 'Requires a connection to PRKS');
             }
         }
     }
@@ -119,34 +114,12 @@
         // Read current state immediately: a Position page rendered after the
         // runtime already left 'online' is never briefly mutable.
         applyPositionOfflineState(container);
-        // Activation interception is delegated once per container and decides
-        // at activation time, so it stays correct across rerenders and
-        // reconnects. Both real activation events are covered: plain and
-        // modified left clicks arrive as `click`, while a middle click arrives
-        // only as `auxclick` -- and each would otherwise open the uncached
-        // Argument route, in this tab or a new one.
-        if (!container.__prksPositionArgumentGuardBound) {
-            container.__prksPositionArgumentGuardBound = true;
-            const guardActivation = function (ev) {
-                // Only the middle button opens a link; right/back/forward
-                // auxclicks keep their ordinary browser behavior.
-                if (ev.type === 'auxclick' && ev.button !== 1) return;
-                const link =
-                    ev.target.closest &&
-                    ev.target.closest('[data-prks-role="' + POSITION_ARGUMENT_LINK_ROLE + '"]');
-                if (!link) return;
-                if (positionRuntimeState() === 'online') return;
-                // Covers every default the browser would otherwise perform:
-                // same-tab hash navigation, and the new tab that a middle or
-                // ctrl/cmd click would open.
-                ev.preventDefault();
-                if (typeof root.prksAlertMessage === 'function') {
-                    root.prksAlertMessage(ARGUMENTS_OFFLINE_MESSAGE, 'Offline');
-                }
-            };
-            container.addEventListener('click', guardActivation);
-            container.addEventListener('auxclick', guardActivation);
-        }
+        // No Argument-link activation guard lives here. Argument/Stance rows are
+        // ordinary PRKS links in every runtime state: the Argument route decides
+        // for itself whether it has cached data, exactly as a Work link does.
+        // Ordinary workspace navigation already handles plain/middle/modified
+        // clicks and route ownership -- a second Position-specific policy layer
+        // would only be able to get that wrong.
         let unsubscribe = function () {};
         if (typeof root.prksOfflineRuntimeSubscribe === 'function') {
             unsubscribe =
@@ -319,9 +292,10 @@
                   .map(function (a) {
                       const kindLabel = a.kind === 'stance' ? 'Stance' : 'Argument';
                       // Rendered from the cached Position detail even offline --
-                      // the relationship is real data. The destination is not
-                      // cached though, so the row keeps its canonical href and
-                      // is marked/intercepted rather than hidden. See §12.
+                      // the relationship is real data, and the row is an
+                      // ordinary link: the Argument route resolves the
+                      // destination from its own cache or reports it
+                      // unavailable.
                       return rowHtmlWithRole(
                           {
                               href: '#/arguments/' + encodeURIComponent(a.id),

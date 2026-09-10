@@ -493,13 +493,18 @@ Phase 1 is read-only offline support. It currently covers:
   Person detail (`#/people/:personId`)
 - the Person Groups hierarchy (`#/people/groups`) and Group detail
   (`#/people/groups/:groupId`)
+- the Playlist index (`#/playlists`) and Playlist detail
+  (`#/playlists/:playlistId`)
 
-Playlist routes and the Research Graph are not wrapped in the offline
-read-through path and must keep their ordinary online-only fetch/error
-behavior until their own mutation surfaces are explicitly hardened for offline
-use — do not add `prksOfflineDetailFetch`/`prksOfflineListFetch`/
-`prksOfflineGuardMutation` calls to those routes as an incidental part of
-unrelated work elsewhere. There is no offline mutation
+The Research Graph is the last major online-only read route. It is not wrapped
+in the offline read-through path and must keep its ordinary online-only
+fetch/error behavior — do not add `prksOfflineDetailFetch`/
+`prksOfflineListFetch`/`prksOfflineGuardMutation` calls to it as an incidental
+part of unrelated work elsewhere. Its payload is *derived* from several
+canonical domains at once rather than being one record family, so whether it
+should be cached as a snapshot, reconstructed locally from the already-cached
+domains, or cached incrementally is an open design question and needs its own
+pass — not an extension of a list/entity milestone. There is no offline mutation
 outbox, sync conflict resolution, background sync, or editable offline Research
 Notes/annotations in this phase — those are later-phase work.
 
@@ -549,16 +554,22 @@ shape guarantee is stricter than a Concept's: the authoritative body must carry
 an `arguments` array, while the per-Argument display fields (kind,
 verdict_label, …) stay optional, matching what the server actually promises.
 
-Two destinations reachable from a cached Position are **not** cached, and must
-say so rather than navigating somewhere broken: "View in graph" (the Research
-Graph stays online-only) and Argument/Stance detail (`#/arguments/:id` is the
-next offline slice, not this one). A cached Position's Arguments & Stances rows
-are real cached data and keep rendering offline with their canonical `href`
-intact so the destination stays inspectable and copyable — they are marked
-`aria-disabled` and their activation is intercepted with "Arguments and Stances
-are not available offline yet.", never hidden, and never treated as though the
-embedded summary meant the full Argument was cached. An embedded summary in one
-entity's read model is not a cache of the entity it summarises.
+One destination reachable from a cached Position is **not** cached and must say
+so rather than navigating somewhere broken: "View in graph" (the Research Graph
+stays online-only). A cached Position's Arguments & Stances rows are **ordinary
+PRKS routes** in every runtime state — each destination works offline if that
+Argument's own detail was previously cached, and otherwise reports the Argument
+route's own "not available offline". Positions gained offline support before
+Arguments did, and for that slice the rows were marked `aria-disabled` with an
+"Arguments and Stances are not available offline yet" activation guard; that is
+obsolete and `positions.js` must not reintroduce it. `POSITION_ARGUMENT_LINK_ROLE`
+survives for styling and test identification only and is deliberately absent
+from `POSITION_CONTROL_SELECTOR`. Ordinary workspace navigation already owns
+plain/middle/modified clicks and route ownership, so a second Position-specific
+policy layer could only get that wrong. What has not changed is the underlying
+rule: an embedded summary in one entity's read model is not a cache of the
+entity it summarises — a cached Position row is not a promise that the Argument
+detail behind it was cached.
 
 `prksBindPositionOfflineState()` settles all of that live, on the same
 TabContext-owned, one-binding-per-container contract as
@@ -919,6 +930,102 @@ async picker setup re-checks ctx generation, that the editor is still mounted,
 that this ctx still owns the panel, and that the same edit panel is still
 present — never "whichever context is focused when the callback happens to
 finish", which would mutate another tab's panel.
+
+Playlists are **read-only** offline. The index uses the `lists` store under
+`playlists:index` (`GET /api/playlists` already returns the complete catalog —
+there is deliberately no second per-Playlist or item-level list key); Playlist
+detail uses the `entities` store under `kind: 'playlist'`. The two caches are
+independent and the index does **not** prefetch Playlist details — seeing a
+Playlist in the cached list is not a promise its detail was cached, and an
+unopened one reports "Playlist not available offline" rather than "Playlist not
+found". A cached *empty* array is the ordinary "No playlists yet." state; only a
+missing or invalid cached list is offline-unavailable. The Playlist index has no
+user-facing search, and one must not be invented offline just because other
+domains have one — offline behavior matches the online UI.
+
+Navigation from a cached Playlist is deliberately untouched: each item is an
+ordinary `#/works/:id` link and "All playlists" an ordinary route, so every
+destination decides for itself whether it has cached data. `original_url` stays
+an ordinary external link — PRKS being unreachable says nothing about the rest
+of the internet.
+
+The Playlist validators (`prksIsPlaylistsIndexShape`, `prksIsPlaylistShape`)
+protect exactly what the renderers dereference, not the whole Work summary the
+detail endpoint joins in: `id`/`title`/`item_count` on index rows, and
+`id`/`title`/`description`/`original_url` plus each item's `id` (→
+`#/works/:id`), `title`, `author_text` and `published_date` on a detail. An
+item's `position` is `NOT NULL` in the schema and always selected by
+`get_playlist()`, so it is validated as a non-negative integer — a row without
+one is a malformed payload, not a sparse record. Do not extend these into a
+full Work-summary schema. The rule across every domain is the same:
+validation protects type/shape for what the renderer actually touches,
+not business completeness, so sparse-but-usable rows stay valid.
+
+The sixth domain is `playlists` (`entityKinds: ['playlist']`,
+`listKeys: ['playlists:index']`), defined once in
+`prksOfflineMarkPlaylistsChanged()`. Its dependency table:
+
+| Canonical change | Playlists | Work entity |
+| --- | --- | --- |
+| Playlist create | YES | — |
+| Playlist description / original URL edit | YES | — |
+| Playlist **title** edit | YES | every current member Work |
+| add / move a Work into a Playlist | YES | that Work |
+| remove a Work from a Playlist | YES | that Work |
+| reorder a Playlist | YES | — |
+| Work metadata/title save (via `prksMarkWorkTitleChanged`) | YES | existing behavior |
+| Work deletion | YES | existing behavior |
+| Work creation carrying a non-blank `playlist_id` | YES | — (nothing cached yet) |
+
+The Work-entity column exists because `get_work()` embeds `playlist_id` and
+`playlist_title`. Renaming a Playlist therefore stales the cached Work entity of
+every Work in it — `updatePlaylist()` takes `previousTitle` and `memberWorkIds`
+and does that diff **itself**, so no call site can forget, and a
+description-only edit deliberately keeps those Works offline-available. Only the
+*current* members need eviction: a Work moved in or out from elsewhere had its
+snapshot evicted by that membership mutation. In the other direction one
+Playlist per Work means moving a Work from A to B changes both, which
+whole-domain invalidation already covers without per-Playlist bookkeeping.
+Reorder is the one membership-shaped change that touches no Work field, but it
+still bumps `updated_at`, which is the index's sort key.
+
+Deliberately **not** invalidating Playlists: **any** Work-role mutation
+(Author/Editor/Reviewer/Mentioned, credit names) — the endpoint returns broad
+Work-summary person extras but the Playlist UI renders none of them; every
+Person and Person Group mutation, for the same reason; managed PDF saves,
+annotations and thumbnails (file-size metadata is in the row, not on screen);
+bulk `set_status`, folders, tags and progress (Playlist detail shows no Work
+status); and every Concept, Position, Argument/Stance and Research Notes
+mutation. If the Playlist UI later starts rendering role-derived authors or
+status, add that dependency **then** — not pre-emptively.
+
+Every production Playlist write goes through the canonical wrappers in
+`playlists.js` (`createPlaylist`, `updatePlaylist`, `addWorkToPlaylist`,
+`removeWorkFromPlaylist`, `reorderPlaylist`), so there is exactly one
+canonical-success boundary per operation. Each guards connectivity immediately
+before its request as defense in depth — controls are disabled offline, but the
+connection can drop between a dialog opening and Save. A guard refusal throws a
+tagged error (`prksPlaylistWasBlocked()`) so the existing throw/catch call sites
+keep working while skipping a second, redundant error dialog. The inline Work
+rename inside a Playlist re-checks connectivity itself and then goes through the
+shared `prksMarkWorkTitleChanged()` — it must **not** grow its own Playlist hook,
+which would drift from the helper. `openModal('playlist-modal')` is guarded
+centrally so the Playlists page, the Work detail panel and the New File flow are
+covered at once, and `prksBindPlaylistOfflineState()` settles the live half on
+the route's own TabContext (never a global Playlist singleton): a mounted editor
+keeps its unsaved draft with only its mutating controls inert — **Cancel, Close
+and the inline rename's Cancel stay live** — and the right-panel half only runs
+when `prksRightPanelOwnedBy()` says this context owns that panel.
+
+**Playlist membership removal is transactional.** `remove_work_from_playlist()`
+deletes the `playlist_items` row and bumps the Playlist timestamp in one
+transaction, matching `add_work_to_playlist()` and `reorder_playlist()`. Offline
+coherence rests on "a failed canonical request keeps the previous cache
+eligible", which is only sound if a failure really means nothing changed — two
+auto-committing statements could otherwise drop the membership, fail the second
+write, and return an error the client would correctly treat as a no-op. This is
+the same invariant as the Person profile PATCH and the Person Group mutations
+above.
 
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`

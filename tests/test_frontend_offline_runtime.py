@@ -219,18 +219,15 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             app,
         )
 
-    def test_graph_and_playlists_stay_online_only(self):
-        """Phase 1 covers Work, Concepts, Positions, Arguments/Stances, People
-        and Person Groups. Playlists and the Research Graph are the remaining
-        online-only read routes; neither may be wrapped in the offline
-        read-through path as a side effect of unrelated work."""
+    def test_the_research_graph_stays_online_only(self):
+        """Phase 1 covers Work, Concepts, Positions, Arguments/Stances, People,
+        Person Groups and Playlists. The Research Graph is the last major
+        online-only read route, and must not be wrapped in the offline
+        read-through path as a side effect of unrelated work -- its payload is
+        derived from several domains at once and needs its own design pass."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
-        for case in (
-            "case 'research-graph': {",
-            "case 'playlists': {",
-        ):
-            if case not in app:
-                continue
+        case = "case 'research-graph': {"
+        if case in app:
             start = app.index(case)
             # Bound the slice to this case only; the next one may legitimately
             # be an offline-capable route.
@@ -239,8 +236,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             for forbidden in ("prksOfflineListFetch", "prksOfflineDetailFetch"):
                 self.assertNotIn(forbidden, body, case)
         runtime = _read(_RUNTIME)
-        for forbidden in ("playlists:index", "graph:"):
-            self.assertNotIn(forbidden, runtime)
+        self.assertNotIn("graph:", runtime)
 
     def test_people_domain_shape_is_defined_once(self):
         src = _read(_RUNTIME)
@@ -386,6 +382,102 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
                      "async function putArgumentSources("):
             at = api.index(name)
             self.assertNotIn("PersonGroups", api[at : at + 1400], name)
+
+    def test_playlist_mutations_route_through_canonical_wrappers(self):
+        """Playlist writes are spread across playlists.js, ui.js and app.js, so
+        the wrappers -- not each surface -- own the guard and the coherence
+        hook. A raw endpoint call outside playlists.js is how that silently
+        breaks."""
+        pl = _read(os.path.join(_FRONTEND, "js", "components", "playlists.js"))
+        for fn, expect_work in (
+            ("async function createPlaylist(", False),
+            ("async function updatePlaylist(", True),
+            ("async function addWorkToPlaylist(", True),
+            ("async function removeWorkFromPlaylist(", True),
+            ("async function reorderPlaylist(", False),
+        ):
+            start = pl.index(fn)
+            end = pl.find("\nasync function ", start + 1)
+            body = pl[start : end if end != -1 else len(pl)]
+            # Guarded before the request, invalidated only after success.
+            self.assertIn("prksPlaylistMutationBlocked(", body, fn)
+            self.assertLess(body.index("prksPlaylistMutationBlocked("), body.index("prksRequest("), fn)
+            self.assertIn("prksPlaylistsChanged();", body, fn)
+            self.assertLess(body.index("if (!res.ok)"), body.index("prksPlaylistsChanged();"), fn)
+            if expect_work:
+                self.assertIn("prksPlaylistWorkChanged(", body, fn)
+            else:
+                # A new Playlist has no members; reorder changes no Work field.
+                self.assertNotIn("prksPlaylistWorkChanged(", body, fn)
+        # Playlist title is embedded in Work detail (playlist_title), so the
+        # rename -- and only the rename -- evicts member Work snapshots.
+        update = pl[pl.index("async function updatePlaylist(") : pl.index("async function addWorkToPlaylist(")]
+        self.assertIn("previousTitle", update)
+        self.assertIn("memberWorkIds", update)
+        self.assertIn("titleChanged", update)
+        # No other production file may issue a raw Playlist write.
+        for name in (
+            os.path.join(_FRONTEND, "js", "app.js"),
+            os.path.join(_FRONTEND, "js", "ui.js"),
+        ):
+            src = _read(name)
+            self.assertNotIn("prksRequest('/api/playlists'", src, name)
+            self.assertNotIn("/api/playlists/${encodeURIComponent", src, name)
+        # ... and the creation modal is guarded centrally, so every caller
+        # (Playlists page, Work panel, New File flow) is covered at once.
+        ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
+        self.assertIn("id === 'playlist-modal'", ui)
+        self.assertIn("Creating a Playlist requires a connection to PRKS.", ui)
+
+    def test_playlist_domain_dependencies_and_exclusions(self):
+        """Playlist detail renders each item's title, author_text and
+        published_date and nothing else from the Work summary the endpoint
+        joins in -- so the dependency set is deliberately narrow."""
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        # A Work metadata/title save stales the rendered item rows.
+        title_at = api.index("function prksMarkWorkTitleChanged(")
+        title_body = api[title_at : api.index("\nfunction prksMarkWorkAuthorDisplayChanged(", title_at)]
+        self.assertIn("prksMarkPlaylistsDomainChanged();", title_body)
+        # Roles are not rendered by the Playlist UI.
+        role_at = api.index("function prksMarkWorkRoleChanged(")
+        role_body = api[role_at : api.index("\nasync function ", role_at)]
+        self.assertNotIn("Playlists", role_body)
+        # Neither is Work status, nor folders/tags.
+        bulk_at = api.index("async function bulkUpdateWorks(")
+        self.assertNotIn("Playlists", api[bulk_at : bulk_at + 1600])
+        # Concept/Position/Argument mutations do not participate at all.
+        for name in (
+            "async function createConcept(", "async function updateConcept(",
+            "async function createPosition(", "async function updatePosition(",
+            "async function createArgument(", "async function updateArgument(",
+            "async function putArgumentTargets(", "async function putArgumentSources(",
+        ):
+            at = api.index(name)
+            self.assertNotIn("Playlists", api[at : at + 1400], name)
+        # Person and Group mutations do not display in a Playlist either.
+        for path in (
+            os.path.join(_FRONTEND, "js", "components", "people.js"),
+            os.path.join(_FRONTEND, "js", "components", "people-groups.js"),
+        ):
+            self.assertNotIn("Playlists", _read(path), path)
+        # Work deletion drops the playlist_items row.
+        works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
+        delete_at = works.index("async function deleteWork(")
+        self.assertIn("prksOfflineMarkPlaylistsChanged()", works[delete_at : delete_at + 3000])
+        # The managed PDF save does not: no rendered Playlist field changes.
+        pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
+        self.assertNotIn("Playlists", pdf)
+        # Work creation invalidates only when it actually requested an attach.
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        create_at = app.index("if (res.ok && String(payload.playlist_id || '').trim()) {")
+        self.assertIn("prksMarkPlaylistsDomainChanged();", app[create_at : create_at + 700])
+        # The Playlist inline Work rename inherits the dependency from the
+        # shared title helper rather than adding a second hook.
+        pl = _read(os.path.join(_FRONTEND, "js", "components", "playlists.js"))
+        rename_at = pl.index("if (renSave) {")
+        rename_body = pl[rename_at : rename_at + 2200]
+        self.assertIn("prksMarkWorkTitleChanged(wid);", rename_body)
+        self.assertNotIn("prksPlaylistsChanged()", rename_body)
 
     def test_group_mutations_invalidate_people_except_bare_creation(self):
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))

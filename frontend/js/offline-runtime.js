@@ -36,6 +36,8 @@
     const PEOPLE_LIST_KEY = 'people:index';
     const DOMAIN_PERSON_GROUPS = 'person-groups';
     const PERSON_GROUPS_LIST_KEY = 'person-groups:index';
+    const DOMAIN_PLAYLISTS = 'playlists';
+    const PLAYLISTS_LIST_KEY = 'playlists:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
     const PDF_CACHE_NAME = 'prks-pdf-v1';
 
@@ -756,6 +758,12 @@
             listKeys: [PERSON_GROUPS_LIST_KEY],
         });
     }
+    function prksOfflineMarkPlaylistsChanged() {
+        return production.markDomainChanged(DOMAIN_PLAYLISTS, {
+            entityKinds: ['playlist'],
+            listKeys: [PLAYLISTS_LIST_KEY],
+        });
+    }
     function prksOfflineGuardMutation(message) {
         return production.guardMutation(message);
     }
@@ -789,6 +797,7 @@
         prksOfflineMarkArgumentsChanged: prksOfflineMarkArgumentsChanged,
         prksOfflineMarkPeopleChanged: prksOfflineMarkPeopleChanged,
         prksOfflineMarkPersonGroupsChanged: prksOfflineMarkPersonGroupsChanged,
+        prksOfflineMarkPlaylistsChanged: prksOfflineMarkPlaylistsChanged,
         prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,
@@ -807,6 +816,8 @@
         PRKS_OFFLINE_PEOPLE_LIST_KEY: PEOPLE_LIST_KEY,
         PRKS_OFFLINE_DOMAIN_PERSON_GROUPS: DOMAIN_PERSON_GROUPS,
         PRKS_OFFLINE_PERSON_GROUPS_LIST_KEY: PERSON_GROUPS_LIST_KEY,
+        PRKS_OFFLINE_DOMAIN_PLAYLISTS: DOMAIN_PLAYLISTS,
+        PRKS_OFFLINE_PLAYLISTS_LIST_KEY: PLAYLISTS_LIST_KEY,
     };
 
     Object.keys(api).forEach(function (k) {

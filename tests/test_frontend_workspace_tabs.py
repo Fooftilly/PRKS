@@ -367,18 +367,25 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         mid_body = src[mid_start : src.index("function bindNewTabButton(")]
         self.assertNotIn("aria-disabled", mid_body)
 
-    def test_disabled_destination_refusal_belongs_to_the_owning_component(self):
-        """The shared layer only declines to navigate; the component that marked
-        the destination disabled is what tells the user why."""
-        positions = _read(os.path.join(_FRONTEND, "js", "components", "positions.js"))
-        start = positions.index("function bindPositionOfflineState(")
-        body = positions[start : positions.index("function renderPositionsIndexUnavailable(")]
-        # Both activation events: a modified left click arrives as `click`, a
-        # middle click only ever as `auxclick`.
-        self.assertIn("container.addEventListener('click', guardActivation);", body)
-        self.assertIn("container.addEventListener('auxclick', guardActivation);", body)
-        self.assertIn("if (ev.type === 'auxclick' && ev.button !== 1) return;", body)
-        self.assertIn("ev.preventDefault();", body)
+    def test_no_component_disables_a_navigable_destination(self):
+        """The shared bail-out above is a standing contract, but nothing uses it
+        today: every Phase-1 destination reachable from a cached page (Work,
+        Concept, Position, Argument/Stance, Person, Person Group, Playlist) is
+        offline-capable and owns its own availability, so no component marks a
+        *link* aria-disabled any more.
+
+        Position -> Argument and Person -> Group each carried such a guard while
+        their destination was still online-only, and each was removed once that
+        destination landed. If a future component reintroduces one it must also
+        explain the refusal itself -- the shared layer only declines to
+        navigate -- and this test should then assert both halves against it.
+        """
+        for name in ("positions.js", "people.js", "playlists.js", "arguments.js", "concepts.js"):
+            src = _read(os.path.join(_FRONTEND, "js", "components", name))
+            self.assertNotIn("auxclick", src, name)
+            # Buttons are settled with native `disabled`; aria-disabled on a
+            # component's own markup is the marker the nav layer bows out on.
+            self.assertNotIn("guardActivation", src, name)
 
     def test_node_selftest(self):
         node = shutil.which("node")

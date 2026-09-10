@@ -1839,6 +1839,68 @@ function prksResolveOfflinePersonGroup(result, groupId) {
     return { group: null, unavailable: true };
 }
 
+const PRKS_PLAYLISTS_LIST_KEY = 'playlists:index';
+const PRKS_PLAYLISTS_DOMAIN = 'playlists';
+
+/* Playlist validators gate cache publication, so they protect exactly what the
+ * Playlist renderers dereference -- not the whole Work summary the detail
+ * endpoint happens to join in. `renderPlaylistsIndex()` uses id/title/
+ * item_count; `renderPlaylistDetail()` and the right-panel editor use
+ * id/title/description/original_url plus each item's id (-> #/works/:id),
+ * title, author_text and published_date. See AGENTS.md, "Offline coherence
+ * domains". */
+function prksIsPlaylistItemCount(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function prksIsPlaylistScalarShape(row) {
+    return prksIsOptionalString(row.title) && prksIsOptionalString(row.description) &&
+        prksIsOptionalString(row.original_url);
+}
+
+function prksIsPlaylistIndexRowShape(row) {
+    return prksHasUsableRowId(row) && prksIsPlaylistScalarShape(row) &&
+        prksIsPlaylistItemCount(row.item_count);
+}
+
+function prksIsPlaylistsIndexShape(value) {
+    return Array.isArray(value) && value.every(prksIsPlaylistIndexRowShape);
+}
+
+/* `position` is NOT NULL in the schema and always selected by get_playlist(),
+ * so a row without a usable one is a malformed payload rather than a sparse
+ * record -- even though the renderer takes its order from the array itself. */
+function prksIsPlaylistItemShape(row) {
+    return prksHasUsableRowId(row) &&
+        prksIsOptionalString(row.title) && prksIsOptionalString(row.author_text) &&
+        prksIsOptionalString(row.published_date) &&
+        typeof row.position === 'number' && Number.isFinite(row.position) &&
+        row.position >= 0 && Number.isInteger(row.position);
+}
+
+function prksIsPlaylistShape(value, playlistId) {
+    if (!prksHasUsableRowId(value) || String(value.id) !== String(playlistId)) return false;
+    if (!prksIsPlaylistScalarShape(value)) return false;
+    return Array.isArray(value.items) && value.items.every(prksIsPlaylistItemShape);
+}
+
+function prksResolveOfflinePlaylistsIndex(result) {
+    if (!result || result.source === 'unavailable') return null;
+    if (prksIsPlaylistsIndexShape(result.value)) return result.value;
+    if (result.source === 'server') throw new Error('Received an unexpected Playlists response.');
+    if (typeof prksOfflineInvalidateList === 'function') void prksOfflineInvalidateList(PRKS_PLAYLISTS_LIST_KEY);
+    return null;
+}
+
+function prksResolveOfflinePlaylist(result, playlistId) {
+    if (!result || result.source === 'unavailable') return { playlist: null, unavailable: true };
+    if (result.source === 'server' && result.value === null) return { playlist: null, unavailable: false };
+    if (prksIsPlaylistShape(result.value, playlistId)) return { playlist: result.value, unavailable: false };
+    if (result.source === 'server') throw new Error('Received an unexpected Playlist response.');
+    if (typeof prksOfflineInvalidateEntity === 'function') void prksOfflineInvalidateEntity('playlist', playlistId);
+    return { playlist: null, unavailable: true };
+}
+
 /**
  * The complete People collection is cached under one key. Every role-filtered
  * view (`#/people/role/:role`) is a local projection of it, so visiting one
@@ -1914,7 +1976,7 @@ function prksOfflineMaybeRefreshFocusedRoute() {
     if (typeof prksGetFocusedTabContext !== 'function' || typeof prksRenderTabRoute !== 'function') return;
     const ctx = prksGetFocusedTabContext();
     if (!ctx || !ctx.root || ctx.destroyed || !ctx.lastResolvedRoute) return;
-    if (ctx.ui && (ctx.ui.workDetailsMode === 'metadata' || ctx.ui.personDetailEditing || ctx.ui.argumentEditing || ctx.ui.personGroupEditing || ctx.ui.personGroupMembersEditing)) return;
+    if (ctx.ui && (ctx.ui.workDetailsMode === 'metadata' || ctx.ui.personDetailEditing || ctx.ui.argumentEditing || ctx.ui.personGroupEditing || ctx.ui.personGroupMembersEditing || ctx.ui.playlistEditing)) return;
     const banner = ctx.root.querySelector('[data-prks-role="offline-provenance-banner"], [data-prks-role="offline-unavailable"]');
     if (!banner) return;
     void prksRenderTabRoute(ctx, ctx.lastResolvedRoute.canonicalHash, { leaveApproved: true });
@@ -2305,10 +2367,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'playlists': {
-                if (typeof fetchPlaylists === 'function' && typeof renderPlaylistsIndex === 'function') {
-                    const pls = await fetchPlaylists({ signal: routeSignal });
+                if (typeof renderPlaylistsIndex === 'function') {
+                    const offlinePlaylists = await prksOfflineListFetch(
+                        PRKS_PLAYLISTS_LIST_KEY, '/api/playlists', routeSignal,
+                        { domain: PRKS_PLAYLISTS_DOMAIN, validate: prksIsPlaylistsIndexShape }
+                    );
                     if (stale()) return;
-                    renderPlaylistsIndex(pls, contentDiv);
+                    const pls = prksResolveOfflinePlaylistsIndex(offlinePlaylists);
+                    if (!pls) {
+                        prksOfflineRenderUnavailable(contentDiv, 'Playlists not available offline');
+                        break;
+                    }
+                    renderPlaylistsIndex(pls, contentDiv, ctx);
+                    prksOfflinePrependBanner(contentDiv, offlinePlaylists);
                 } else {
                     contentDiv.innerHTML =
                         '<div class="prks-page-header page-header"><h2 class="prks-page-title">Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
@@ -2317,9 +2388,22 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'playlist-detail': {
                 const plId = route.params.playlistId;
-                if (typeof fetchPlaylistDetails === 'function' && typeof renderPlaylistDetail === 'function') {
-                    const pl = await fetchPlaylistDetails(plId, { signal: routeSignal });
+                if (typeof renderPlaylistDetail === 'function') {
+                    const offlinePlaylist = await prksOfflineDetailFetch(
+                        'playlist', plId, '/api/playlists/' + encodeURIComponent(plId), routeSignal,
+                        { domain: PRKS_PLAYLISTS_DOMAIN, validate: (value) => prksIsPlaylistShape(value, plId) }
+                    );
                     if (stale()) return;
+                    const resolvedPlaylist = prksResolveOfflinePlaylist(offlinePlaylist, plId);
+                    if (resolvedPlaylist.unavailable) {
+                        ctx.setEntity('playlist', null);
+                        ctx.ui.playlistEditing = false;
+                        ctx.ui.playlistRename = {};
+                        prksOfflineRenderUnavailable(contentDiv, 'Playlist not available offline');
+                        titleOpts = { notFound: true, notFoundTitle: 'Playlist not available offline' };
+                        break;
+                    }
+                    const pl = resolvedPlaylist.playlist;
                     ctx.setEntity('playlist', pl);
                     ctx.ui.playlistEditing = false;
                     ctx.ui.playlistRename = {};
@@ -2332,6 +2416,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                             : { playlistTitle: 'Playlist', itemCount: 0 }
                     );
                     renderPlaylistDetail(ctx, pl, contentDiv);
+                    prksOfflinePrependBanner(contentDiv, offlinePlaylist);
                     titleOpts = pl
                         ? { entityTitle: pl.title || 'Playlist' }
                         : { notFound: true, notFoundTitle: 'Playlist not found' };
@@ -3135,6 +3220,14 @@ function initForms() {
             return;
         }
         const data = await res.json().catch(() => ({}));
+        if (res.ok && String(payload.playlist_id || '').trim()) {
+            // The create endpoint can attach the new video to a Playlist in the
+            // same canonical request, bypassing addWorkToPlaylist(). The attach
+            // is best-effort server-side, so invalidate whenever one was asked
+            // for: if it succeeded the cache was stale, and if it did not this
+            // costs one refetch. The new Work has no cached entity to evict.
+            prksMarkPlaylistsDomainChanged();
+        }
         if (res.ok && Array.isArray(payload.roles) && payload.roles.length) {
             prksMarkPersonGroupsDomainChanged();
             // The Work-create endpoint can create role links in the same
@@ -3402,44 +3495,41 @@ function initForms() {
             const old = playlistBtn.textContent;
             playlistBtn.textContent = 'Creating…';
             try {
-                const res = await prksRequest('/api/playlists', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title, description }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || !data.id) {
-                    throw new Error(data.error || 'Could not create playlist');
-                }
+                // Canonical wrapper: it owns the Playlists-domain invalidation
+                // and re-guards connectivity, which can have dropped since the
+                // modal opened.
+                const newId = await createPlaylist(title, description);
+                if (!newId) throw new Error('Could not create playlist');
                 closeModals();
-                // If a work is waiting to be attached, attach it now.
+                // If a work is waiting to be attached, attach it now. The
+                // wrapper also invalidates that Work's cached entity, whose
+                // playlist_id/playlist_title just changed.
                 const pending = window.__prksPendingPlaylistAttach;
                 if (pending && pending.workId) {
                     try {
-                        await prksRequest(`/api/playlists/${encodeURIComponent(data.id)}/items`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ work_id: pending.workId }),
-                        });
+                        await addWorkToPlaylist(newId, pending.workId);
                     } catch (_e) {}
                     window.__prksPendingPlaylistAttach = null;
                 }
                 // Refresh select controls if mounted.
                 if (typeof window.__prksRefreshPlaylistSelects === 'function') {
-                    await window.__prksRefreshPlaylistSelects(data.id);
+                    await window.__prksRefreshPlaylistSelects(newId);
                 }
                 if (typeof window.__prksRefreshAllPlaylistSelects === 'function') {
-                    await window.__prksRefreshAllPlaylistSelects(data.id);
+                    await window.__prksRefreshAllPlaylistSelects(newId);
                 }
                 // Navigate only when playlist creation came from the playlists index (not from New File flow).
                 if (window.__prksReturnToWorkModalAfterPlaylist === true) {
                     // closeModals() will restore the New File modal.
                 } else if ((window.location.hash || '') === '#/playlists') {
                     if (typeof prksNavigate === 'function') {
-                        prksNavigate('#/playlists/' + encodeURIComponent(data.id));
+                        prksNavigate('#/playlists/' + encodeURIComponent(newId));
                     }
                 }
             } catch (e) {
+                // A blocked mutation already told the user why; a second
+                // "Could not create playlist." would only muddy it.
+                if (typeof prksPlaylistWasBlocked === 'function' && prksPlaylistWasBlocked(e)) return;
                 console.error(e);
                 if (errEl) {
                     errEl.textContent = 'Could not create playlist.';

@@ -170,6 +170,91 @@ async function run() {
         assertEq('Group list constant', mod.PRKS_OFFLINE_PERSON_GROUPS_LIST_KEY, 'person-groups:index');
         assert('Group canonical runtime helper exported', typeof mod.prksOfflineMarkPersonGroupsChanged === 'function');
     }
+    /* Sixth-domain cleanup is audited: no sweep may touch another domain. */
+    {
+        const domains = ['concepts', 'positions', 'arguments', 'people', 'person-groups', 'playlists'];
+        const kinds = ['concept', 'position', 'argument', 'person', 'person-group', 'playlist'];
+        const sweeps = [];
+        const store = makeFakeStore({
+            deleteEntitiesByKind: async kind => {
+                sweeps.push(kind);
+                if (kind !== 'playlist') throw Error('cross-domain entity sweep');
+                return false;
+            },
+            deleteList: async key => {
+                sweeps.push(key);
+                if (key !== 'playlists:index') throw Error('cross-domain list sweep');
+                return false;
+            },
+        });
+        for (const kind of [...kinds, 'work']) await store.putEntity(kind, '1', {id:'1'}, '');
+        for (const domain of domains) await store.putList(domain + ':index', [], '');
+        const runtime = mod.createPrksOfflineRuntime({
+            store, prksRequest: () => Promise.reject(Error('offline')),
+            setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.markDomainChanged('playlists', {
+            entityKinds:['playlist'], listKeys:['playlists:index'],
+        });
+        await runtime._domainCleanup('playlists');
+        assertEq('Playlist cleanup touches exactly its kind and key', sweeps.sort(), ['playlist','playlists:index']);
+        assertEq('six generations remain independent',
+            domains.map(d=>runtime.currentDomainGeneration(d)), [0,0,0,0,0,1]);
+        assertEq('only Playlists blocked after failed cleanup',
+            domains.map(d=>runtime.isDomainBlocked(d)), [false,false,false,false,false,true]);
+        for (let i=0; i<domains.length; i++) {
+            const result = await runtime.readThroughEntity(kinds[i], '1', '/api/test', {domain:domains[i]});
+            assertEq(domains[i] + ' fallback isolation', result.source, i===5 ? 'unavailable' : 'cache');
+        }
+        assertEq('Works unaffected by Playlist cleanup',
+            (await runtime.readThroughEntity('work','1','/api/test')).source, 'cache');
+        assertEq('Playlist constant', mod.PRKS_OFFLINE_DOMAIN_PLAYLISTS, 'playlists');
+        assertEq('Playlist list constant', mod.PRKS_OFFLINE_PLAYLISTS_LIST_KEY, 'playlists:index');
+        assert('Playlist canonical runtime helper exported',
+            typeof mod.prksOfflineMarkPlaylistsChanged === 'function');
+    }
+    /* A pre-mutation Playlist read -- list AND entity -- can still resolve and
+     * repaint, but must never become eligible cache data. */
+    {
+        const store = makeFakeStore();
+        let releaseEntity = null;
+        let releaseList = null;
+        let mode = 'entity';
+        const runtime = mod.createPrksOfflineRuntime({
+            prksRequest: function () {
+                if (mode === 'entity') {
+                    return new Promise(function (resolve) {
+                        releaseEntity = function () {
+                            resolve(okJsonResponse({ id: 'PL-1', title: 'pre-mutation', items: [] }));
+                        };
+                    });
+                }
+                return new Promise(function (resolve) {
+                    releaseList = function () { resolve(okJsonResponse([{ id: 'PL-1', item_count: 0 }])); };
+                });
+            },
+            store, setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        const pendingEntity = runtime.readThroughEntity('playlist', 'PL-1', '/api/playlists/PL-1', { domain: 'playlists' });
+        mode = 'list';
+        const pendingList = runtime.readThroughList('playlists:index', '/api/playlists', { domain: 'playlists' });
+        runtime.markDomainChanged('playlists', { entityKinds: ['playlist'], listKeys: ['playlists:index'] });
+        await runtime._domainCleanup('playlists');
+        releaseEntity();
+        releaseList();
+        const staleEntity = await pendingEntity;
+        const staleList = await pendingList;
+        assertEq('the pre-mutation Playlist response still resolves', staleEntity.source, 'server');
+        assertEq('the pre-mutation Playlists list response still resolves', staleList.source, 'server');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('a pre-mutation Playlist read never becomes eligible cache data',
+            store._entities.get('playlist:PL-1'), undefined);
+        assertEq('a pre-mutation Playlists list read never becomes eligible cache data',
+            store._lists.get('playlists:index'), undefined);
+    }
     /* The superseded-cleanup invariant is domain-generic, but each existing
      * case names an earlier domain, so one focused Group case keeps the fifth
      * domain covered without cloning the whole suite under a new name. */

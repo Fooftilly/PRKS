@@ -542,6 +542,40 @@ class TestDBManager(unittest.TestCase):
         self.assertIsNotNone(self.db.get_person_group(group))
         self.assertEqual(self.db.get_person_group(child)['parent_id'], group)
 
+    def test_playlist_membership_removal_rolls_back_on_a_failed_second_write(self):
+        """A failed canonical membership removal must not leave the membership
+        deleted. Offline coherence treats a failed request as a no-op, so a
+        partially committed removal would make a stale cache look eligible."""
+        import sqlite3
+        w_id = self.db.add_work(title="Playlist Rollback Work")
+        pl_id = self.db.add_playlist("Rollback Playlist")
+        self.db.add_work_to_playlist(pl_id, w_id)
+        self.assertEqual([i["id"] for i in self.db.get_playlist(pl_id)["items"]], [w_id])
+        before = self.db.get_playlist(pl_id)
+
+        with self.db.connection() as conn:
+            # The timestamp bump is the write that runs *after* the membership
+            # DELETE, so failing it is exactly the partial-commit window.
+            # A persistent trigger is needed because the operation owns its
+            # own connection.
+            conn.execute(
+                """CREATE TRIGGER reject_playlist_touch BEFORE UPDATE ON playlists
+                BEGIN SELECT RAISE(ABORT, 'forced timestamp failure'); END"""
+            )
+        try:
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.db.remove_work_from_playlist(pl_id, w_id)
+        finally:
+            with self.db.connection() as conn:
+                conn.execute("DROP TRIGGER reject_playlist_touch")
+
+        after = self.db.get_playlist(pl_id)
+        self.assertEqual([i["id"] for i in after["items"]], [w_id], "membership was partially removed")
+        self.assertEqual(after["updated_at"], before["updated_at"])
+        # And the ordinary path still works once the injected failure is gone.
+        self.db.remove_work_from_playlist(pl_id, w_id)
+        self.assertEqual(self.db.get_playlist(pl_id)["items"], [])
+
     def test_person_and_role_operations(self):
         p_id = self.db.add_person(first_name="Jane", last_name="Smith", aliases="J. Smith")
         w_id = self.db.add_work(title="Jane's Book")

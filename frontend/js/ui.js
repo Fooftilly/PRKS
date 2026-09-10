@@ -553,6 +553,12 @@ function openModal(id) {
     if (id === 'group-modal' && typeof prksOfflineGuardMutation === 'function') {
         if (prksOfflineGuardMutation('Creating a Person Group requires a connection to PRKS.')) return;
     }
+    // `playlist-modal` is creation-only, so guarding here covers every caller at
+    // once -- the Playlists page, the Work detail panel, the New File flow and
+    // anything added later -- instead of relying on each surface to remember.
+    if (id === 'playlist-modal' && typeof prksOfflineGuardMutation === 'function') {
+        if (prksOfflineGuardMutation('Creating a Playlist requires a connection to PRKS.')) return;
+    }
     // `person-modal` is creation-only, so guarding here covers every caller at
     // once -- the People page, the ribbon, the command palette and anything
     // added later -- instead of relying on each surface to remember.
@@ -2760,6 +2766,12 @@ function updatePanelContent(tabId) {
                 };
             }
         }
+        // The panel was just repainted, so re-settle its controls: a Playlist
+        // page mounted while online must not expose live mutation controls
+        // after the runtime has already left 'online'.
+        if (typeof prksApplyPlaylistPanelOfflineState === 'function') {
+            prksApplyPlaylistPanelOfflineState(focusedCtx);
+        }
     } else if (_cf) {
         if (tabId === 'details') {
             panel.innerHTML = prksFolderRightPanelStackHtml(_cf);
@@ -2838,6 +2850,9 @@ function updatePanelContent(tabId) {
             if (editing) {
                 void mountPlaylistEditSidebar(pl, focusedCtx);
             }
+            if (typeof prksApplyPlaylistPanelOfflineState === 'function') {
+                prksApplyPlaylistPanelOfflineState(focusedCtx);
+            }
             return;
         }
         const mode = inferRightPanelListMode(focusedHash);
@@ -2847,6 +2862,9 @@ function updatePanelContent(tabId) {
         }
         if (mode === 'playlists' && typeof window.prksBindPlaylistsIndexCreateBtn === 'function') {
             window.prksBindPlaylistsIndexCreateBtn();
+            if (typeof prksApplyPlaylistPanelOfflineState === 'function') {
+                prksApplyPlaylistPanelOfflineState(focusedCtx);
+            }
         }
     }
 
@@ -2936,6 +2954,7 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
     };
     if (!panel || !ownsPlaylistPanel(panel)) return;
     prksBindAutosizeTextareas(panel);
+    if (typeof prksApplyPlaylistPanelOfflineState === 'function') prksApplyPlaylistPanelOfflineState(ctx);
     const editBtn = panel.querySelector('#prks-playlist-edit-btn');
     if (editBtn && editBtn.dataset.bound !== '1') {
         editBtn.dataset.bound = '1';
@@ -2969,12 +2988,21 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
                 return;
             }
             try {
-                const res = await prksRequest('/api/playlists/' + encodeURIComponent(pl.id), {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title, description, original_url: originalUrl }),
-                });
-                if (!res.ok) throw new Error('save failed');
+                // Canonical success controls coherence, so the wrapper runs
+                // before any panel-ownership test. Renaming a Playlist stales
+                // the cached Work entity of every current member, because
+                // get_work() embeds playlist_title -- the wrapper diffs the
+                // title itself so this call site cannot forget.
+                await updatePlaylist(
+                    pl.id,
+                    { title, description, original_url: originalUrl },
+                    {
+                        previousTitle: pl.title || '',
+                        memberWorkIds: (Array.isArray(pl.items) ? pl.items : [])
+                            .map((w) => w && w.id)
+                            .filter(Boolean),
+                    }
+                );
                 if (!ownsPlaylistPanel(panel)) return;
                 const fresh =
                     typeof fetchPlaylistDetails === 'function'
@@ -2992,6 +3020,7 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
                 updatePanelContent('details');
                 if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
             } catch (_e) {
+                if (typeof prksPlaylistWasBlocked === 'function' && prksPlaylistWasBlocked(_e)) return;
                 if (statusEl && ownsPlaylistPanel(statusEl)) statusEl.textContent = 'Could not save.';
             }
         };
@@ -3008,6 +3037,7 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
             ? await fetchWorks({ signal: ctx && ctx.abortController && ctx.abortController.signal })
             : [];
     if (!ownsPlaylistPanel(panel)) return;
+    if (typeof prksApplyPlaylistPanelOfflineState === 'function') prksApplyPlaylistPanelOfflineState(ctx);
     const isVideo = (w) => {
         if (!w) return false;
         return typeof prksInferWorkSourceKind === 'function' && prksInferWorkSourceKind(w) === 'video';
@@ -3070,6 +3100,7 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
                             updatePanelContent('details');
                         }
                     } catch (_e) {
+                        if (typeof prksPlaylistWasBlocked === 'function' && prksPlaylistWasBlocked(_e)) return;
                         if (addStatus && ownsPlaylistPanel(addStatus)) addStatus.textContent = 'Could not add.';
                     }
                 };
@@ -5866,15 +5897,12 @@ function initUploadDragAndDrop() {
             async function quickCreate(title) {
                 const t = String(title || '').trim();
                 if (!t) return null;
-                const res = await prksRequest('/api/playlists', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: t, description: '' }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || !data.id) throw new Error(data.error || 'create failed');
+                // Canonical wrapper: guards connectivity and owns the
+                // Playlists-domain invalidation for this surface too.
+                const newId = await createPlaylist(t, '');
+                if (!newId) throw new Error('create failed');
                 playlists = await loadPlaylists();
-                return { id: data.id, title: t };
+                return { id: newId, title: t };
             }
 
             function openDropdown() {

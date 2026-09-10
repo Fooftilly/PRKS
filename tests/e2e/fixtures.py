@@ -352,3 +352,59 @@ def seed_people_library(storage_root: str) -> dict:
         }
     )
     return ids
+
+
+PLAYLIST_A_TITLE = "E2E Cached Playlist"
+PLAYLIST_A_DESCRIPTION = "Ordered lecture series used by the offline Playlist tests."
+PLAYLIST_A_URL = "https://example.com/playlist/e2e"
+PLAYLIST_B_TITLE = "E2E Unvisited Playlist"
+PLAYLIST_VIDEO_ONE_TITLE = "E2E Playlist Video One"
+PLAYLIST_VIDEO_TWO_TITLE = "E2E Playlist Video Two"
+PLAYLIST_CHANNEL = "E2E Lecture Channel"
+PLAYLIST_VIDEO_ONE_DATE = "2021-03-04"
+
+
+def seed_playlists_library(storage_root: str) -> dict:
+    """seed_people_library plus an ordered Playlist and an unvisited one.
+
+    Playlist A holds two videos in a deliberate order with channel/date
+    subtitles, so cached ordering and the rendered item fields are both
+    observable offline. Playlist B is never opened online so "cached index,
+    uncached detail" is testable, and `work_a` stays outside every Playlist so
+    the member-vs-non-member coherence boundary can be asserted.
+    """
+    ids = seed_people_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    video_one = db.add_work(
+        title=PLAYLIST_VIDEO_ONE_TITLE,
+        doc_type="online",
+        source_kind="video",
+        source_url="https://www.youtube.com/watch?v=e2e0000001",
+        provider="youtube",
+        author_text=PLAYLIST_CHANNEL,
+        published_date=PLAYLIST_VIDEO_ONE_DATE,
+    )
+    video_two = db.add_work(
+        title=PLAYLIST_VIDEO_TWO_TITLE,
+        doc_type="online",
+        source_kind="video",
+        source_url="https://www.youtube.com/watch?v=e2e0000002",
+        provider="youtube",
+        author_text=PLAYLIST_CHANNEL,
+    )
+    playlist_a = db.add_playlist(
+        PLAYLIST_A_TITLE, PLAYLIST_A_DESCRIPTION, PLAYLIST_A_URL
+    )
+    playlist_b = db.add_playlist(PLAYLIST_B_TITLE, "Never opened while online.")
+    db.add_work_to_playlist(playlist_a, video_one)
+    db.add_work_to_playlist(playlist_a, video_two)
+    ids.update(
+        {
+            "playlist_a": playlist_a,
+            "playlist_b": playlist_b,
+            "playlist_video_one": video_one,
+            "playlist_video_two": video_two,
+        }
+    )
+    return ids

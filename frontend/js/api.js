@@ -979,6 +979,11 @@ function prksMarkPersonGroupsDomainChanged() {
     return prksOfflineMarkPersonGroupsChanged();
 }
 
+function prksMarkPlaylistsDomainChanged() {
+    if (typeof prksOfflineMarkPlaylistsChanged !== 'function') return null;
+    return prksOfflineMarkPlaylistsChanged();
+}
+
 function prksMarkPeopleDomainChanged() {
     if (typeof prksOfflineMarkPeopleChanged !== 'function') return null;
     return prksOfflineMarkPeopleChanged();
@@ -998,6 +1003,12 @@ function prksMarkWorkTitleChanged(workId) {
     prksMarkConceptsDomainChanged();
     prksMarkArgumentsDomainChanged();
     prksMarkPeopleDomainChanged();
+    // A cached Playlist detail renders each item's title, author_text and
+    // published_date, so a metadata save can stale it. This helper is already
+    // deliberately conservative (a date-only edit invalidates Concepts too),
+    // and routing Playlists through it is what makes the Playlist inline Work
+    // rename inherit the dependency without its own hook.
+    prksMarkPlaylistsDomainChanged();
     return token;
 }
 
@@ -1302,6 +1313,7 @@ window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
 window.prksMarkArgumentsDomainChanged = prksMarkArgumentsDomainChanged;
 window.prksMarkPeopleDomainChanged = prksMarkPeopleDomainChanged;
 window.prksMarkPersonGroupsDomainChanged = prksMarkPersonGroupsDomainChanged;
+window.prksMarkPlaylistsDomainChanged = prksMarkPlaylistsDomainChanged;
 window.createPersonGroup = createPersonGroup;
 window.updatePersonGroup = updatePersonGroup;
 window.deletePersonGroup = deletePersonGroup;
