@@ -140,7 +140,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("[[concept:", readme)
         self.assertIn("read-only derived projection", agents)
         self.assertIn("namespaced by entity type", agents)
-        self.assertIn("Do not add graph persistence", agents)
+        self.assertIn("Do not add canonical graph persistence", agents)
 
     def test_css_graph_layout(self):
         css = _read(_CSS)

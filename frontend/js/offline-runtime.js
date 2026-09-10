@@ -36,6 +36,8 @@
     const PEOPLE_LIST_KEY = 'people:index';
     const DOMAIN_PERSON_GROUPS = 'person-groups';
     const PERSON_GROUPS_LIST_KEY = 'person-groups:index';
+    const DOMAIN_RESEARCH_GRAPH_CORE = 'research-graph-core';
+    const DOMAIN_RESEARCH_GRAPH_PEOPLE = 'research-graph-people';
     const DOMAIN_PLAYLISTS = 'playlists';
     const PLAYLISTS_LIST_KEY = 'playlists:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
@@ -764,6 +766,16 @@
             listKeys: [PLAYLISTS_LIST_KEY],
         });
     }
+    function prksOfflineMarkResearchGraphCoreChanged() {
+        return production.markDomainChanged(DOMAIN_RESEARCH_GRAPH_CORE, {
+            entityKinds: [DOMAIN_RESEARCH_GRAPH_CORE], listKeys: [],
+        });
+    }
+    function prksOfflineMarkResearchGraphPeopleChanged() {
+        return production.markDomainChanged(DOMAIN_RESEARCH_GRAPH_PEOPLE, {
+            entityKinds: [DOMAIN_RESEARCH_GRAPH_PEOPLE], listKeys: [],
+        });
+    }
     function prksOfflineGuardMutation(message) {
         return production.guardMutation(message);
     }
@@ -776,6 +788,10 @@
 
     const api = {
         createPrksOfflineRuntime: createPrksOfflineRuntime,
+        PRKS_OFFLINE_DOMAIN_RESEARCH_GRAPH_CORE: DOMAIN_RESEARCH_GRAPH_CORE,
+        PRKS_OFFLINE_DOMAIN_RESEARCH_GRAPH_PEOPLE: DOMAIN_RESEARCH_GRAPH_PEOPLE,
+        prksOfflineMarkResearchGraphCoreChanged: prksOfflineMarkResearchGraphCoreChanged,
+        prksOfflineMarkResearchGraphPeopleChanged: prksOfflineMarkResearchGraphPeopleChanged,
         prksOfflineFormatCachedAt: formatCachedAt,
         prksOfflineRuntimeInit: prksOfflineRuntimeInit,
         prksOfflineRuntimeState: prksOfflineRuntimeState,

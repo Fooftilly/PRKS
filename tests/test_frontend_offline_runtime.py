@@ -219,24 +219,13 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             app,
         )
 
-    def test_the_research_graph_stays_online_only(self):
-        """Phase 1 covers Work, Concepts, Positions, Arguments/Stances, People,
-        Person Groups and Playlists. The Research Graph is the last major
-        online-only read route, and must not be wrapped in the offline
-        read-through path as a side effect of unrelated work -- its payload is
-        derived from several domains at once and needs its own design pass."""
+    def test_research_graph_uses_snapshot_adapter(self):
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
-        case = "case 'research-graph': {"
-        if case in app:
-            start = app.index(case)
-            # Bound the slice to this case only; the next one may legitimately
-            # be an offline-capable route.
-            after = app.find("\n            case '", start + 1)
-            body = app[start : after if after != -1 else start + 1600]
-            for forbidden in ("prksOfflineListFetch", "prksOfflineDetailFetch"):
-                self.assertNotIn(forbidden, body, case)
-        runtime = _read(_RUNTIME)
-        self.assertNotIn("graph:", runtime)
+        self.assertIn("loadSnapshot: prksOfflineResearchGraphFetch", app)
+        self.assertIn("prksIsResearchGraphSnapshot", app)
+        graph = _read(os.path.join(_FRONTEND, "js", "components", "research-graph.js"))
+        self.assertNotIn("prksOfflineDetailFetch", graph)
+        self.assertNotIn("indexedDB", graph)
 
     def test_people_domain_shape_is_defined_once(self):
         src = _read(_RUNTIME)

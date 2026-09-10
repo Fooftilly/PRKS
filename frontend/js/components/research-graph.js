@@ -1,6 +1,7 @@
 /**
  * Research Graph: read-only Cytoscape projection of canonical research relations.
- * Graph state is never persisted. Edits happen on canonical record pages.
+ * Graph projection snapshot may be cached. Graph UI/layout state is never persisted.
+ * Canonical graph state is never written by the Graph; edits happen on record pages.
  */
 (function (root) {
     'use strict';
@@ -1280,6 +1281,10 @@
             if (tooLarge) {
                 body =
                     '<p class="prks-inline-message" role="status">This graph is too large to render as a single snapshot.</p>';
+            } else if (opts && opts.offlineUnavailable) {
+                body = '<div class="prks-inline-message" data-prks-role="offline-unavailable" role="status">' +
+                    '<p>' + (includePeople ? 'Research Graph variant unavailable offline' : 'Research Graph not available offline') + '</p>' +
+                    '<p>Open the Research Graph while connected to cache this snapshot.</p></div>';
             } else if (loadError) {
                 body = '<p class="prks-inline-message" role="status">Could not load Research Graph.</p>';
             } else {
@@ -1408,12 +1413,13 @@
             }
             const node = nodeById(snapshot, focus);
             if (!node) {
-                statusMessage = 'Requested node is not present in this graph.';
+                if (!statusMessage) statusMessage = 'Requested node is not present in this graph.';
                 renderStatusMessage();
                 renderInspector();
                 return;
             }
-            statusMessage = '';
+            // Layout may finish after a failed variant request. Keep its status
+            // while applying the original focus to the still-visible snapshot.
             renderStatusMessage();
             selectNode(focus);
         }
@@ -1485,6 +1491,22 @@
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
         }
 
+        async function loadSnapshot(people, signal) {
+            const result = typeof options.loadSnapshot === 'function'
+                ? await options.loadSnapshot(people, signal)
+                : { snapshot: await root.fetchResearchGraph({ people: people, signal: signal }), source: 'server', cachedAt: null };
+            if (result.source === 'unavailable') {
+                const err = new Error('Research Graph not available offline');
+                err.code = 'graph_offline_unavailable';
+                throw err;
+            }
+            return result;
+        }
+
+        function applyProvenance(result) {
+            if (typeof options.onSnapshot === 'function') options.onSnapshot(result);
+        }
+
         async function reloadGraph(nextPeople) {
             if (destroyed || !liveDom) return false;
             const wantPeople = nextPeople === undefined ? includePeople : !!nextPeople;
@@ -1494,7 +1516,8 @@
             const host = originDom.parentNode;
             const gen = (reloadGeneration += 1);
             try {
-                const data = await root.fetchResearchGraph({ people: wantPeople, signal: graphRouteSignal });
+                const result = await loadSnapshot(wantPeople, graphRouteSignal);
+                const data = result.snapshot;
                 if (graphReloadIsStale(gen, originDom)) return false;
                 includePeople = wantPeople;
                 filters.people = wantPeople;
@@ -1512,6 +1535,7 @@
                 bindShell(host);
                 syncPeopleCheckbox();
                 mountCytoscape(host);
+                applyProvenance(result);
                 if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
                 return true;
             } catch (e) {
@@ -1520,7 +1544,9 @@
                 includePeople = prevPeople;
                 filters.people = prevPeople;
                 syncPeopleCheckbox();
-                statusMessage = reloadGraphFailureMessage(e);
+                statusMessage = e && e.code === 'graph_offline_unavailable'
+                    ? (wantPeople ? 'People-inclusive graph' : 'Core graph') + ' is not available offline on this device.'
+                    : reloadGraphFailureMessage(e);
                 renderStatusMessage();
                 return false;
             }
@@ -1547,9 +1573,8 @@
             container.innerHTML = shellHtml({});
             bindShell(container);
             try {
-                const data = await (typeof root.fetchResearchGraph === 'function'
-                    ? root.fetchResearchGraph({ people: includePeople, signal: options.signal })
-                    : Promise.resolve({ nodes: [], edges: [], meta: {} }));
+                const result = await loadSnapshot(includePeople, options.signal);
+                const data = result.snapshot;
                 if (destroyed || gen !== reloadGeneration) return;
                 if (options.stale && options.stale()) return;
                 snapshot = data;
@@ -1557,12 +1582,13 @@
                     derivedOff: data.meta && data.meta.derived_note_edges_available === false,
                 });
                 mountCytoscape(originHost);
+                applyProvenance(result);
             } catch (e) {
                 if (destroyed || gen !== reloadGeneration) return;
                 if (options.stale && options.stale()) return;
                 if (typeof root.prksIsAbortError === 'function' && root.prksIsAbortError(e)) return;
                 const tooLarge = e && e.code === 'graph_too_large';
-                refreshHost(originHost, { tooLarge: tooLarge, loadError: !tooLarge });
+                refreshHost(originHost, { tooLarge: tooLarge, loadError: !tooLarge, offlineUnavailable: e && e.code === 'graph_offline_unavailable' });
             }
         }
 

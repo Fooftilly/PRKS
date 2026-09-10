@@ -432,8 +432,9 @@ text, tags or search similarity.
 Argument source edges and note-mention edges have different semantics and must
 remain distinguishable.
 
-Do not add graph persistence or a main-DB schema migration merely to render the
-Research Graph.
+Do not add canonical graph persistence or a main-DB schema migration merely to
+render the Research Graph. Disposable server projection snapshots may be cached
+by the offline runtime; graph UI/layout state is never persisted.
 
 The research graph and research-reference index are read-only projections. Their
 presence or absence must never authorize deletion or other canonical mutation.
@@ -496,18 +497,66 @@ Phase 1 is read-only offline support. It currently covers:
   (`#/people/groups/:groupId`)
 - the Playlist index (`#/playlists`) and Playlist detail
   (`#/playlists/:playlistId`)
+- Research Graph (`#/graph`, including `?focus=<type>:<id>`)
 
-The Research Graph is the last major online-only read route. It is not wrapped
-in the offline read-through path and must keep its ordinary online-only
-fetch/error behavior — do not add `prksOfflineDetailFetch`/
-`prksOfflineListFetch`/`prksOfflineGuardMutation` calls to it as an incidental
-part of unrelated work elsewhere. Its payload is *derived* from several
-canonical domains at once rather than being one record family, so whether it
-should be cached as a snapshot, reconstructed locally from the already-cached
-domains, or cached incrementally is an open design question and needs its own
-pass — not an extension of a list/entity milestone. There is no offline mutation
-outbox, sync conflict resolution, background sync, or editable offline Research
-Notes/annotations in this phase — those are later-phase work.
+Research Graph caches the **server-generated projection snapshot**, never a
+local reconstruction from partial entity/index caches. The existing `entities`
+store holds two independent fixed entities, `research-graph-core / snapshot`
+and `research-graph-people / snapshot`, in coherence domains of the same names.
+Neither domain contains list keys; no IndexedDB schema/version change is needed.
+Core uses `/api/research-graph` (`people_included: false`); People uses
+`/api/research-graph?people=1` (`people_included: true`). A Person focus requires
+the People snapshot; other initial focus types use core. No fallback across
+variants, no second-variant prefetch, no background rebuild after mutation, and
+no service-worker Graph JSON caching. Cache only `{nodes, edges, meta}`. Layout,
+positions, zoom/pan, selection/inspector, Find, filters and opened panels remain
+ephemeral in the owning TabContext; Graph remains non-tileable.
+
+`prksOfflineResearchGraphFetch()` in `app.js` delegates to
+`prksOfflineDetailFetch()` and passes strict validation before authoritative
+publication and before cached data reaches Cytoscape. Validate counts, bounds
+(2,500 nodes / 7,500 edges), types, unique IDs, canonical routes, endpoint
+existence/type compatibility and requested variant. A malformed 200 is a route
+error and leaves the previous good snapshot intact. A corrupt cached snapshot
+is discarded best-effort by exact kind/id and becomes offline-unavailable.
+HTTP 413 retains `graph_too_large` at this adapter boundary; fail-soft
+`derived_note_edges_available: false` remains authoritative/cacheable.
+
+The route injects the snapshot loader and a provenance callback into the Graph.
+Use the normal offline banner for every cache-served variant. Missing initial
+snapshots are explicitly unavailable offline; a failed People toggle preserves
+the current graph, restores its checkbox, and explains the missing variant.
+Local Find/filter/layout/inspector interactions stay enabled offline. Graph
+nodes and Concept/Position/Argument/Person "View in graph" actions are ordinary
+`prksNavigate` navigation: destination routes own cache availability. Mutation
+controls stay guarded.
+
+Graph coherence follows the projection's canonical inputs, independently from
+the entity-detail domains. `prksMarkResearchGraphCoreChanged()` synchronously
+starts both Graph-domain invalidations without awaiting either best-effort sweep;
+`prksMarkResearchGraphPeopleChanged()` invalidates only People Graph. Separate
+generations preserve core after a People-only edit. Stale in-flight GETs cannot
+repopulate invalidated snapshots; cleanup failure blocks only the affected domain.
+
+- Core + People: Concept create/update/delete/parents; Position
+  create/update/delete; Argument create/update/delete/sources/targets; every
+  successful Research Notes save (including stale UI completions); Work
+  metadata/display save through `prksMarkWorkTitleChanged()`; successful Work delete.
+- People only: Person canonical first/last-name changes; existing Work Author
+  role changes through `prksMarkWorkRoleChanged()` (credit-name edits may
+  conservatively invalidate too).
+- Neither: Concept aliases; non-name Person edits; ordinary Person creation;
+  non-Author roles; Person Groups/memberships; Playlists/reorder; Work
+  status/folders/tags/progress outside the conservative metadata-save helper;
+  managed PDF save/annotations; plain Work creation, including Author roles on
+  that new unreferenced Work. Playlist inline Work rename inherits the shared
+  Work-title hook. Failed canonical mutations retain eligibility.
+
+There is no offline mutation outbox, sync conflict resolution, background sync,
+or editable offline Research Notes/annotations in this phase. Phase 1 now
+covers the principal research-navigation surface; review remaining routes,
+storage growth, invalidation frequency and PWA install/update behavior before
+choosing any Phase 2 offline-mutation work.
 
 Concept routes are **read-only** offline. The Concept index uses the `lists`
 store under the stable key `concepts:index`; Concept detail uses the `entities`
@@ -521,8 +570,7 @@ found." Index search stays entirely client-side over the already-loaded array
 Work Research Notes — Rename, Delete, Definition, aliases, parents) is guarded
 before its dialog opens *and* re-checked immediately before the canonical
 request, because connectivity can change while a dialog is open. "View in
-graph" is blocked with a clear requires-a-connection message rather than
-navigating into a graph route that cannot load. A Concept page mounted while
+graph" navigates normally; the Graph route owns snapshot availability. A Concept page mounted while
 online becomes read-only in place via `prksBindConceptOfflineState()`, whose
 subscription belongs to the route's TabContext — never a global per-render
 listener, and never a global Concept runtime singleton.
@@ -555,9 +603,7 @@ shape guarantee is stricter than a Concept's: the authoritative body must carry
 an `arguments` array, while the per-Argument display fields (kind,
 verdict_label, …) stay optional, matching what the server actually promises.
 
-One destination reachable from a cached Position is **not** cached and must say
-so rather than navigating somewhere broken: "View in graph" (the Research Graph
-stays online-only). A cached Position's Arguments & Stances rows are **ordinary
+"View in graph" and a cached Position's Arguments & Stances rows are **ordinary
 PRKS routes** in every runtime state — each destination works offline if that
 Argument's own detail was previously cached, and otherwise reports the Argument
 route's own "not available offline". Positions gained offline support before
@@ -596,7 +642,7 @@ Cached relationship links are ordinary PRKS links, and every destination decides
 for itself whether it has cached data: a target Position, a target or response
 Argument, a source Work, and a note-mention Work each resolve through their own
 route and their own offline state. There is no Argument-specific navigation
-fallback. "View in graph" stays online-only like everywhere else.
+fallback. "View in graph" likewise delegates availability to the Graph route.
 
 Validators require what the renderer and the links actually walk, and nothing
 more. That includes every *nested* row a template iterates: a source's
@@ -642,8 +688,8 @@ strings when renderers/search operate on them as strings; linked Work `year` and
 `published_date` follow the same rule. Validation protects type/shape, not
 business completeness, so empty strings remain valid.
 
-One destination reachable from a cached Person is still not cached: the
-Research Graph. A Person's Group chips are now **ordinary PRKS links** — a
+A Person's "View in graph" uses the People-inclusive snapshot. A Person's Group
+chips are **ordinary PRKS links** — a
 cached Group detail opens offline, an uncached one reports "Group not available
 offline" — so `people.js` must not reintroduce the old `aria-disabled` /
 `click`+`auxclick` interception on `PERSON_GROUP_LINK_ROLE`; that role survives
@@ -799,7 +845,7 @@ Group memberships, so it is invalidated after canonical success by:
 | Group membership add/remove, Group update, Group delete | Group chips and memberships are embedded in both People read models |
 
 Role coherence is owned by one helper, `prksMarkWorkRoleChanged(workId,
-roleType)`: People unconditionally, Arguments only for `Author`. The former
+roleType)`: People unconditionally, Arguments and People Graph only for `Author`. The former
 `prksMarkWorkAuthorDisplayChanged` name survives purely as a delegate.
 
 Deliberately **not** invalidating People: creating an unassigned Group (it
@@ -1225,7 +1271,11 @@ python tests/e2e/run.py tests.e2e.test_playlists_offline.OfflinePlaylistTests.te
 `--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
 accidentally parallel.
 
-Agent inner loop. Do not run all 418 E2E tests after every edit. Run
+The E2E performance milestone is closed. Console suppression ignores only
+`blob:` resource failures containing `ERR_FILE_NOT_FOUND`; other blob errors
+remain failures. Do not broaden that teardown exception.
+
+Agent inner loop. Do not run the full E2E suite after every edit. Run
 `python run_tests.py`, the relevant Node/static selftests, and only the affected
 E2E class or module — a Playlist change runs `tests.e2e.test_playlists_offline`
 plus the specific Work/Playlist scenarios; a Concept change runs

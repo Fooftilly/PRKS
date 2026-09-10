@@ -795,6 +795,7 @@ async function deleteWork(w_id, ownerCtx) {
             // DELETE is canonical only after this acknowledged success.
             prksOfflineMarkEntityChanged('work', w_id);
         }
+        if (typeof prksMarkResearchGraphCoreChanged === 'function') prksMarkResearchGraphCoreChanged();
         if (typeof prksOfflineMarkConceptsChanged === 'function') {
             // Deleting a Work removes its Concept mentions from canonical
             // research data, so cached Concept details/counts are now stale.
@@ -1455,6 +1456,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 // Canonical success matters even when this editor token is stale.
                 prksOfflineMarkEntityChanged('work', id);
             }
+            if (ok && typeof prksMarkResearchGraphCoreChanged === 'function') prksMarkResearchGraphCoreChanged();
             if (ok && typeof prksOfflineMarkConceptsChanged === 'function') {
                 // Research Notes are the canonical source of Work -> Concept
                 // mentions, and unknown [[concept:...]] markup can create

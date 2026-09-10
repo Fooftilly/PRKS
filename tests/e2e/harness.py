@@ -289,8 +289,9 @@ class PageCollector:
         # ERR_FILE_NOT_FOUND for it. `_on_failed` already classifies blob:
         # request failures as teardown noise rather than signal; the very same
         # event also surfaces as a console error and gets the same treatment.
-        # Deliberately narrow: only blob:, and only resource-load failures.
-        if url.startswith("blob:") and "Failed to load resource" in msg.text:
+        # Only the known revoked-blob teardown error is benign.
+        if (url.startswith("blob:") and "Failed to load resource" in msg.text
+                and "ERR_FILE_NOT_FOUND" in msg.text):
             return
         self.console_errors.append(msg.text + (" (%s)" % url if url else ""))
 

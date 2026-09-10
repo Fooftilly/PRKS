@@ -2032,7 +2032,7 @@ class OfflineConceptTests(unittest.TestCase):
         finally:
             _safe_unroute(page, "**/api/concepts**", record_mutation)
 
-        self.assertTrue(page.locator("#prks-concept-view-graph").is_disabled())
+        self.assertFalse(page.locator("#prks-concept-view-graph").is_disabled())
 
     def test_disconnect_while_concept_prompt_open_blocks_the_save(self):
         """Connectivity can change while a dialog is open: the re-check before the
@@ -2112,9 +2112,9 @@ class OfflineConceptTests(unittest.TestCase):
                 "#prks-concept-edit-def",
                 "#prks-concept-edit-aliases",
                 "#prks-concept-edit-parents",
-                "#prks-concept-view-graph",
             ):
                 self.assertTrue(page.locator(selector).is_disabled(), selector)
+            self.assertFalse(page.locator("#prks-concept-view-graph").is_disabled())
             # Read/navigation links stay usable.
             self.assertEqual(page.locator('.prks-research-row[href$="%s"]' % server.ids["concept_parent"]).count(), 1)
         finally:
@@ -2866,9 +2866,9 @@ class OfflinePositionTests(unittest.TestCase):
         page.reload(wait_until="domcontentloaded")
         page.wait_for_selector("#sidebar")
         _wait_offline_banner(page)
-        # The graph button is the one control the Position route still settles.
+        # Graph navigation remains enabled; its destination owns availability.
         page.wait_for_function(
-            "() => !!document.querySelector('#prks-position-view-graph[disabled]')", timeout=20000
+            "() => !!document.querySelector('#prks-position-view-graph:not([disabled])')", timeout=20000
         )
         state = page.evaluate(
             """() => {
@@ -2953,7 +2953,7 @@ class OfflinePositionTests(unittest.TestCase):
             },
         )
 
-    def test_position_graph_action_requires_a_connection_offline(self):
+    def test_position_graph_action_navigates_to_uncached_graph_offline(self):
         server, page, context, _collector = self._start()
         position_a = server.ids["position_a"]
 
@@ -2967,20 +2967,10 @@ class OfflinePositionTests(unittest.TestCase):
         page.reload(wait_until="domcontentloaded")
         page.wait_for_selector("#sidebar")
         _wait_offline_banner(page)
-        page.wait_for_function(
-            "() => !!document.querySelector('#prks-position-view-graph[disabled]')", timeout=20000
-        )
-        page.locator("#prks-position-view-graph").click(force=True)
-        page.wait_for_timeout(300)
-        self.assertNotIn("/graph", page.evaluate("() => location.hash"))
-
-        context.set_offline(False)
-        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-        page.wait_for_function(
-            "() => !document.querySelector('#prks-position-view-graph[disabled]')", timeout=20000
-        )
-
-    # ---- mutation blocking --------------------------------------------------
+        self.assertFalse(page.locator("#prks-position-view-graph").is_disabled())
+        page.locator("#prks-position-view-graph").click()
+        _wait_offline_unavailable(page)
+        self.assertIn("#/graph?focus=position:", page.evaluate("decodeURIComponent(location.hash)"))
 
     def test_offline_position_create_is_blocked(self):
         server, page, context, _collector = self._start()
@@ -3092,7 +3082,7 @@ class OfflinePositionTests(unittest.TestCase):
             "() => !document.querySelector('#prks-position-new[disabled]')", timeout=20000
         )
 
-        # Now the detail page: graph + Argument destinations settle, content stays.
+        # Detail navigation remains enabled; content stays readable.
         _open_position(page, position_a)
         _wait_content_contains(page, POSITION_A_NAME)
         _wait_entity_cached(page, "position", position_a)
@@ -3106,7 +3096,7 @@ class OfflinePositionTests(unittest.TestCase):
                 timeout=20000,
             )
             page.wait_for_function(
-                "() => !!document.querySelector('#prks-position-view-graph[disabled]')", timeout=20000
+                "() => !!document.querySelector('#prks-position-view-graph:not([disabled])')", timeout=20000
             )
             # Argument/Stance rows never became disabled, so there is nothing
             # for reconnect to restore -- the Argument route owns availability.
@@ -3813,7 +3803,7 @@ class OfflineArgumentTests(unittest.TestCase):
         _wait_offline_unavailable(page)
         self.assertIn("not available offline", _content_text(page))
 
-    def test_argument_graph_action_requires_a_connection_offline(self):
+    def test_argument_graph_action_navigates_to_uncached_graph_offline(self):
         server, page, context, _collector = self._start()
         argument_a = server.ids["argument_a"]
 
@@ -3827,20 +3817,10 @@ class OfflineArgumentTests(unittest.TestCase):
         page.reload(wait_until="domcontentloaded")
         page.wait_for_selector("#sidebar")
         _wait_offline_banner(page)
-        page.wait_for_function(
-            "() => !!document.querySelector('#prks-arg-view-graph[disabled]')", timeout=20000
-        )
-        page.locator("#prks-arg-view-graph").click(force=True)
-        page.wait_for_timeout(300)
-        self.assertNotIn("/graph", page.evaluate("() => location.hash"))
-
-        context.set_offline(False)
-        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-        page.wait_for_function(
-            "() => !document.querySelector('#prks-arg-view-graph[disabled]')", timeout=20000
-        )
-
-    # ---- mutation blocking --------------------------------------------------
+        self.assertFalse(page.locator("#prks-arg-view-graph").is_disabled())
+        page.locator("#prks-arg-view-graph").click()
+        _wait_offline_unavailable(page)
+        self.assertIn("#/graph?focus=argument:", page.evaluate("decodeURIComponent(location.hash)"))
 
     def test_offline_argument_index_and_detail_cannot_mutate(self):
         server, page, context, _collector = self._start()
@@ -4047,8 +4027,9 @@ class OfflineArgumentTests(unittest.TestCase):
             page.wait_for_function(
                 "() => !!document.querySelector('#prks-arg-edit[disabled]')", timeout=20000
             )
-            for selector in ("#prks-arg-response", "#prks-arg-delete", "#prks-arg-view-graph"):
+            for selector in ("#prks-arg-response", "#prks-arg-delete"):
                 self.assertTrue(page.locator(selector).is_disabled(), selector)
+            self.assertFalse(page.locator("#prks-arg-view-graph").is_disabled())
             # Read-only content and relationship links stay usable.
             body = _content_text(page)
             self.assertIn(ARGUMENT_A_TEXT, body)
@@ -5542,7 +5523,7 @@ class OfflinePeopleMutationTests(unittest.TestCase):
             " [data-prks-role=\"person-mutation-control\"]'); return !!b && b.disabled; }",
             timeout=20000,
         )
-        self.assertTrue(page.locator("#prks-person-view-graph").is_disabled())
+        self.assertFalse(page.locator("#prks-person-view-graph").is_disabled())
         # Relationship editing cannot be entered ...
         page.evaluate("() => { try { prksTogglePersonWorksEdit(); } catch (_e) {} }")
         page.wait_for_timeout(200)
@@ -5570,7 +5551,7 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         _wait_offline_unavailable(page)
         self.assertEqual(page.evaluate("location.hash"), "#/people/groups/" + group_id)
         self.assertIn("Group not available offline", _content_text(page))
-    def test_person_graph_action_requires_a_connection_offline(self):
+    def test_person_graph_action_navigates_to_uncached_graph_offline(self):
         server, page, context, _collector = self._start()
         person_a = server.ids["person_a"]
 
@@ -5586,18 +5567,10 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         page.wait_for_selector("#sidebar")
         _wait_offline_banner(page)
         _open_details_drawer_if_tiled(page)
-        page.wait_for_function(
-            "() => !!document.querySelector('#prks-person-view-graph[disabled]')", timeout=20000
-        )
-        page.locator("#prks-person-view-graph").click(force=True)
-        page.wait_for_timeout(300)
-        self.assertNotIn("/graph", page.evaluate("() => location.hash"))
-
-        context.set_offline(False)
-        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-        page.wait_for_function(
-            "() => !document.querySelector('#prks-person-view-graph[disabled]')", timeout=20000
-        )
+        self.assertFalse(page.locator("#prks-person-view-graph").is_disabled())
+        page.locator("#prks-person-view-graph").click()
+        _wait_offline_unavailable(page)
+        self.assertIn("#/graph?focus=person:", page.evaluate("decodeURIComponent(location.hash)"))
 
     def test_open_profile_editor_survives_disconnect_without_losing_the_draft(self):
         server, page, _context, _collector = self._start()

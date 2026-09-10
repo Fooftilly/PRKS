@@ -38,20 +38,16 @@
     /* --- Offline policy for Position routes (AGENTS.md "Offline / PWA") ------
      * Positions are read-only offline in Phase 1: a cached index/detail
      * renders, every canonical mutation is blocked outright (never queued,
-     * never faked), and the one destination that is not cached at all -- the
-     * Research Graph -- says so instead of navigating somewhere broken.
+     * never faked). Graph navigation delegates availability to its route.
      * Controls carry these roles so one helper can settle them all, including
      * markup rerendered after the initial bind. */
     const POSITION_MUTATION_ROLE = 'position-mutation-control';
-    const POSITION_ONLINE_ONLY_ROLE = 'position-online-only-control';
     /* Argument/Stance rows keep this role for styling and test identification
      * only. Since Arguments became offline-capable the Argument route owns its
      * own availability, so this role is deliberately absent from
      * POSITION_CONTROL_SELECTOR and carries no offline policy of its own. */
     const POSITION_ARGUMENT_LINK_ROLE = 'position-argument-link';
-    const POSITION_CONTROL_SELECTOR =
-        '[data-prks-role="' + POSITION_MUTATION_ROLE + '"], ' +
-        '[data-prks-role="' + POSITION_ONLINE_ONLY_ROLE + '"]';
+    const POSITION_CONTROL_SELECTOR = '[data-prks-role="' + POSITION_MUTATION_ROLE + '"]';
 
     function positionRuntimeState() {
         return typeof root.prksOfflineRuntimeState === 'function' ? root.prksOfflineRuntimeState() : 'online';
@@ -62,15 +58,6 @@
         return typeof root.prksOfflineGuardMutation === 'function'
             ? root.prksOfflineGuardMutation(message)
             : false;
-    }
-
-    /** The Research Graph is the one destination still online-only. */
-    function positionConnectionRequired(message) {
-        if (positionRuntimeState() === 'online') return false;
-        if (typeof root.prksAlertMessage === 'function') {
-            root.prksAlertMessage(message || 'This action requires a connection to PRKS.', 'Offline');
-        }
-        return true;
     }
 
     function applyPositionOfflineState(container) {
@@ -314,9 +301,7 @@
             '<p class="saved-view-detail__kicker">Position</p><h2 class="prks-page-title">' +
             esc(p.name || 'Position') +
             '</h2></div><div class="page-header__actions">' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-view-graph" data-prks-role="' +
-            POSITION_ONLINE_ONLY_ROLE +
-            '">View in graph</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-view-graph">View in graph</button>' +
             '</div></div></div>' +
             '<div class="research-entity">' +
             '<section class="research-entity__section" aria-labelledby="prks-position-desc-h">' +
@@ -332,9 +317,6 @@
         const viewGraph = container.querySelector('#prks-position-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
-                // The Research Graph is online-only in Phase 1: say so plainly
-                // rather than navigating into a route that cannot load its data.
-                if (positionConnectionRequired('The Research Graph requires a connection to PRKS.')) return;
                 const hash =
                     typeof root.prksGraphFocusHash === 'function'
                         ? root.prksGraphFocusHash('position', p.id)

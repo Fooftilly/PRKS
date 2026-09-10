@@ -128,20 +128,17 @@ function safeHttpUrl(url) {
 /* --- Offline policy for People routes (AGENTS.md "Offline / PWA") ------------
  * People are read-only offline in Phase 1: cached index/role views and Person
  * profiles render, every canonical mutation is blocked outright (never queued,
- * never faked), and the one destination that is not cached at all -- the
- * Research Graph -- says so instead of navigating somewhere broken. Linked Work
+ * never faked). Graph navigation delegates availability to its route. Linked Work
  * cards and Group chips stay ordinary PRKS links so the Work and Group routes
  * decide for themselves. Controls carry these roles so one helper can settle
  * them all, including markup rerendered after the initial bind. */
 const PERSON_MUTATION_ROLE = 'person-mutation-control';
-const PERSON_ONLINE_ONLY_ROLE = 'person-online-only-control';
+
 /* Group chips keep this role for styling/test identification only: since Person
  * Groups became offline-capable they are ordinary links and are deliberately
  * absent from PERSON_CONTROL_SELECTOR. */
 const PERSON_GROUP_LINK_ROLE = 'person-group-link';
-const PERSON_CONTROL_SELECTOR =
-    '[data-prks-role="' + PERSON_MUTATION_ROLE + '"], ' +
-    '[data-prks-role="' + PERSON_ONLINE_ONLY_ROLE + '"]';
+const PERSON_CONTROL_SELECTOR = '[data-prks-role="' + PERSON_MUTATION_ROLE + '"]';
 /* The profile editor's own inputs: disabled while offline so a draft is held
  * rather than silently discarded. Cancel is deliberately excluded so the user
  * can always leave edit mode. */
@@ -1126,7 +1123,7 @@ function renderPersonProfileDetailsSidebarHtml(person) {
                 <li>${nRefs} reference${nRefs === 1 ? '' : 's'}</li>
             </ul>
             <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_MUTATION_ROLE}" onclick="openPersonProfileEdit()">Edit profile</button>
-            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" data-prks-role="${PERSON_ONLINE_ONLY_ROLE}" onclick="prksPersonViewInGraph()">View in graph</button>
+            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
             <details class="person-sidebar__advanced" onkeydown="prksPersonAdvancedKeydown(event)">
                 <summary>More</summary>
                 <div class="person-sidebar__advanced-actions">
@@ -1281,6 +1278,7 @@ async function savePersonProfile(personId) {
         // profile field is part of the People read model, so People always
         // goes; Arguments only when the displayed author name changed.
         if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
+        if (_personNameChanged && typeof prksMarkResearchGraphPeopleChanged === 'function') prksMarkResearchGraphPeopleChanged();
         if (_personNameChanged && typeof prksMarkArgumentsDomainChanged === 'function') {
             prksMarkArgumentsDomainChanged();
         }

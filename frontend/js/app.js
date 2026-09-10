@@ -1439,6 +1439,82 @@ async function prksOfflineListFetch(listKey, path, signal, options) {
     });
 }
 
+// Server projection bounds; keep aligned with backend/research_graph.py.
+const PRKS_RESEARCH_GRAPH_MAX_NODES = 2500;
+const PRKS_RESEARCH_GRAPH_MAX_EDGES = 7500;
+const PRKS_RESEARCH_GRAPH_ROUTES = Object.freeze({
+    concept: 'concepts', position: 'positions', argument: 'arguments', work: 'works', person: 'people',
+});
+const PRKS_RESEARCH_GRAPH_ENDPOINTS = Object.freeze({
+    concept_parent: ['concept', 'concept'], argument_position: ['argument', 'position'],
+    argument_argument: ['argument', 'argument'], argument_source: ['argument', 'work'],
+    mentions_concept: ['work', 'concept'], mentions_argument: ['work', 'argument'],
+    work_author: ['person', 'work'],
+});
+
+/** Validate both authoritative and cached snapshots before graph code sees them. */
+function prksIsResearchGraphSnapshot(value, includePeople) {
+    const object = v => !!v && typeof v === 'object' && !Array.isArray(v);
+    const nonblank = v => typeof v === 'string' && v.trim().length > 0;
+    const optionalString = (v, key) => !Object.prototype.hasOwnProperty.call(v, key) || typeof v[key] === 'string';
+    if (!object(value) || !Array.isArray(value.nodes) || !Array.isArray(value.edges) || !object(value.meta)) return false;
+    const { nodes, edges, meta } = value;
+    if (nodes.length > PRKS_RESEARCH_GRAPH_MAX_NODES || edges.length > PRKS_RESEARCH_GRAPH_MAX_EDGES ||
+        !Number.isInteger(meta.node_count) || meta.node_count < 0 || meta.node_count !== nodes.length ||
+        !Number.isInteger(meta.edge_count) || meta.edge_count < 0 || meta.edge_count !== edges.length ||
+        typeof meta.derived_note_edges_available !== 'boolean' ||
+        typeof meta.people_included !== 'boolean' || meta.people_included !== includePeople) return false;
+    const nodeTypes = new Map();
+    for (const n of nodes) {
+        if (!object(n) || !nonblank(n.id) || !nonblank(n.record_id) || typeof n.type !== 'string' ||
+            !Object.prototype.hasOwnProperty.call(PRKS_RESEARCH_GRAPH_ROUTES, n.type) ||
+            typeof n.label !== 'string' || !nonblank(n.route) ||
+            !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(n.record_id) ||
+            n.id !== n.type + ':' + n.record_id ||
+            n.route !== '#/' + PRKS_RESEARCH_GRAPH_ROUTES[n.type] + '/' + n.record_id ||
+            nodeTypes.has(n.id) || (!includePeople && n.type === 'person')) return false;
+        if (n.type === 'argument' && n.kind !== 'argument' && n.kind !== 'stance') return false;
+        if (n.type === 'work' && !optionalString(n, 'doc_type')) return false;
+        nodeTypes.set(n.id, n.type);
+    }
+    const edgeIds = new Set();
+    for (const e of edges) {
+        if (!object(e) || !nonblank(e.id) || !nonblank(e.source) || !nonblank(e.target) || typeof e.type !== 'string' ||
+            !Object.prototype.hasOwnProperty.call(PRKS_RESEARCH_GRAPH_ENDPOINTS, e.type) ||
+            e.id !== e.type + ':' + e.source + '>' + e.target || edgeIds.has(e.id) ||
+            (!includePeople && e.type === 'work_author')) return false;
+        const pair = PRKS_RESEARCH_GRAPH_ENDPOINTS[e.type];
+        if (nodeTypes.get(e.source) !== pair[0] || nodeTypes.get(e.target) !== pair[1]) return false;
+        if ((e.type === 'argument_position' || e.type === 'argument_argument') &&
+            (!optionalString(e, 'verdict_id') || !optionalString(e, 'verdict_label'))) return false;
+        if (e.type === 'argument_source' && !optionalString(e, 'pages')) return false;
+        // Canonical aggregates count actual mentions, so count is required and positive.
+        if ((e.type === 'mentions_concept' || e.type === 'mentions_argument') &&
+            (!Number.isInteger(e.count) || e.count < 1)) return false;
+        edgeIds.add(e.id);
+    }
+    return true;
+}
+
+async function prksOfflineResearchGraphFetch(includePeople, signal) {
+    const kind = includePeople ? PRKS_OFFLINE_DOMAIN_RESEARCH_GRAPH_PEOPLE : PRKS_OFFLINE_DOMAIN_RESEARCH_GRAPH_CORE;
+    const validate = value => prksIsResearchGraphSnapshot(value, includePeople);
+    let result;
+    try {
+        result = await prksOfflineDetailFetch(kind, 'snapshot',
+            '/api/research-graph' + (includePeople ? '?people=1' : ''), signal, { domain: kind, validate });
+    } catch (err) {
+        if (err && err.status === 413) err.code = 'graph_too_large';
+        throw err;
+    }
+    if (result.source !== 'unavailable' && !validate(result.value)) {
+        if (result.source === 'server') throw new Error('Received an unexpected Research Graph response.');
+        if (typeof prksOfflineInvalidateEntity === 'function') void prksOfflineInvalidateEntity(kind, 'snapshot');
+        return { snapshot: null, source: 'unavailable', cachedAt: null };
+    }
+    return { snapshot: result.value, source: result.source, cachedAt: result.cachedAt };
+}
+
 const PRKS_CONCEPTS_LIST_KEY =
     typeof PRKS_OFFLINE_CONCEPTS_LIST_KEY === 'string' ? PRKS_OFFLINE_CONCEPTS_LIST_KEY : 'concepts:index';
 const PRKS_CONCEPTS_DOMAIN =
@@ -2839,6 +2915,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     await renderResearchGraph(contentDiv, {
                         ctx: ctx,
                         focus: route.params.focus || '',
+                        loadSnapshot: prksOfflineResearchGraphFetch,
+                        onSnapshot: function (result) {
+                            contentDiv.querySelectorAll('[data-prks-role="offline-provenance-banner"]').forEach(el => el.remove());
+                            prksOfflinePrependBanner(contentDiv, result);
+                        },
                         routeGen: generation,
                         stale: stale,
                         signal: routeSignal,

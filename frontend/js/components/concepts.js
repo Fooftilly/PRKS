@@ -183,9 +183,7 @@
      * Controls carry these roles so one helper can disable them all, including
      * markup rerendered after the initial bind. */
     const CONCEPT_MUTATION_ROLE = 'concept-mutation-control';
-    const CONCEPT_ONLINE_ONLY_ROLE = 'concept-online-only-control';
-    const CONCEPT_CONTROL_SELECTOR =
-        '[data-prks-role="' + CONCEPT_MUTATION_ROLE + '"], [data-prks-role="' + CONCEPT_ONLINE_ONLY_ROLE + '"]';
+    const CONCEPT_CONTROL_SELECTOR = '[data-prks-role="' + CONCEPT_MUTATION_ROLE + '"]';
 
     function conceptRuntimeState() {
         return typeof root.prksOfflineRuntimeState === 'function' ? root.prksOfflineRuntimeState() : 'online';
@@ -196,15 +194,6 @@
         return typeof root.prksOfflineGuardMutation === 'function'
             ? root.prksOfflineGuardMutation(message)
             : false;
-    }
-
-    /** Read-only actions that still need the server (the Research Graph is not cached). */
-    function conceptConnectionRequired(message) {
-        if (conceptRuntimeState() === 'online') return false;
-        if (typeof root.prksAlertMessage === 'function') {
-            root.prksAlertMessage(message || 'This action requires a connection to PRKS.', 'Offline');
-        }
-        return true;
     }
 
     function applyConceptOfflineState(container) {
@@ -513,9 +502,7 @@
             '<p class="saved-view-detail__kicker">Concept</p><h2 class="prks-page-title">' +
             esc(c.name || 'Concept') +
             '</h2></div><div class="page-header__actions">' +
-            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-view-graph" data-prks-role="' +
-            CONCEPT_ONLINE_ONLY_ROLE +
-            '">View in graph</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-view-graph">View in graph</button>' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-rename" data-prks-role="' +
             CONCEPT_MUTATION_ROLE +
             '">Rename</button>' +
@@ -563,9 +550,6 @@
         const viewGraph = container.querySelector('#prks-concept-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
-                // The Research Graph is online-only in Phase 1: say so plainly
-                // rather than navigating into a route that cannot load its data.
-                if (conceptConnectionRequired('The Research Graph requires a connection to PRKS.')) return;
                 const hash =
                     typeof root.prksGraphFocusHash === 'function'
                         ? root.prksGraphFocusHash('concept', c.id)

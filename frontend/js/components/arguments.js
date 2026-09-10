@@ -26,16 +26,12 @@
     /* --- Offline policy for Argument/Stance routes (AGENTS.md "Offline / PWA")
      * Arguments are read-only offline in Phase 1: a cached index/detail renders,
      * every canonical mutation is blocked outright (never queued, never faked),
-     * and the Research Graph -- which is not cached at all -- says so instead of
-     * navigating somewhere broken. Relationship links are ordinary PRKS links:
+     * Graph and relationship links are ordinary PRKS navigation:
      * each destination decides for itself whether it has cached data.
      * Controls carry these roles so one helper can settle them all, including
      * markup rerendered after the initial bind. */
     const ARGUMENT_MUTATION_ROLE = 'argument-mutation-control';
-    const ARGUMENT_ONLINE_ONLY_ROLE = 'argument-online-only-control';
-    const ARGUMENT_CONTROL_SELECTOR =
-        '[data-prks-role="' + ARGUMENT_MUTATION_ROLE + '"], ' +
-        '[data-prks-role="' + ARGUMENT_ONLINE_ONLY_ROLE + '"]';
+    const ARGUMENT_CONTROL_SELECTOR = '[data-prks-role="' + ARGUMENT_MUTATION_ROLE + '"]';
     /* The edit form's own inputs: disabled while offline so a draft is held
      * rather than silently discarded, with Cancel deliberately excluded so the
      * user can always leave edit mode. */
@@ -51,15 +47,6 @@
         return typeof root.prksOfflineGuardMutation === 'function'
             ? root.prksOfflineGuardMutation(message)
             : false;
-    }
-
-    /** Read-only destinations that are still online-only (the Research Graph). */
-    function argumentConnectionRequired(message) {
-        if (argumentRuntimeState() === 'online') return false;
-        if (typeof root.prksAlertMessage === 'function') {
-            root.prksAlertMessage(message || 'This action requires a connection to PRKS.', 'Offline');
-        }
-        return true;
     }
 
     function applyArgumentOfflineState(container) {
@@ -420,9 +407,7 @@
                 ? // Cancel is deliberately not role-tagged: leaving edit mode must
                   // stay possible while offline.
                   '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-cancel">Cancel</button>'
-                : '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-view-graph" data-prks-role="' +
-                  ARGUMENT_ONLINE_ONLY_ROLE +
-                  '">View in graph</button>' +
+                : '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-view-graph">View in graph</button>' +
                   '<button type="button" class="prks-btn prks-btn--secondary" id="prks-arg-edit" data-prks-role="' +
                   ARGUMENT_MUTATION_ROLE +
                   '">Edit</button>' +
@@ -626,9 +611,6 @@
         const viewGraph = container.querySelector('#prks-arg-view-graph');
         if (viewGraph) {
             viewGraph.addEventListener('click', function () {
-                // The Research Graph is online-only in Phase 1: say so plainly
-                // rather than navigating into a route that cannot load its data.
-                if (argumentConnectionRequired('The Research Graph requires a connection to PRKS.')) return;
                 if (typeof root.prksNavigate === 'function') {
                     root.prksNavigate(graphHash(), { tabId: ctx && ctx.tabId });
                 }

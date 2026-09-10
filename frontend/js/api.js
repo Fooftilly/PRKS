@@ -967,6 +967,20 @@ function prksMarkArgumentsDomainChanged() {
     return prksOfflineMarkArgumentsChanged();
 }
 
+/** Graph dependencies are separate from the entity-detail coherence domains. */
+function prksMarkResearchGraphCoreChanged() {
+    // Start both invalidations synchronously; never await the first sweep.
+    const core = typeof prksOfflineMarkResearchGraphCoreChanged === 'function'
+        ? prksOfflineMarkResearchGraphCoreChanged() : null;
+    prksMarkResearchGraphPeopleChanged();
+    return core;
+}
+
+function prksMarkResearchGraphPeopleChanged() {
+    return typeof prksOfflineMarkResearchGraphPeopleChanged === 'function'
+        ? prksOfflineMarkResearchGraphPeopleChanged() : null;
+}
+
 /**
  * Coherence hook for a canonical change to the People read model. A cached
  * Person carries full Work-card summaries for every Work it is linked to, the
@@ -993,7 +1007,8 @@ function prksMarkPeopleDomainChanged() {
  * Every canonical change to a Work's *displayed* metadata. A Work title shows
  * in cached Concept mentions and cached Argument sources/mentions, and a cached
  * Person embeds whole Work cards (title, status, doc type, year, author text,
- * thumbnail metadata, file size), so one metadata save stales three domains.
+ * thumbnail metadata, file size). Graph Work nodes also consume title/doc_type,
+ * so the same conservative save hook invalidates both projection snapshots.
  */
 function prksMarkWorkTitleChanged(workId) {
     const token =
@@ -1009,6 +1024,7 @@ function prksMarkWorkTitleChanged(workId) {
     // and routing Playlists through it is what makes the Playlist inline Work
     // rename inherit the dependency without its own hook.
     prksMarkPlaylistsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return token;
 }
 
@@ -1031,6 +1047,7 @@ function prksMarkWorkRoleChanged(workId, roleType) {
             : null;
     prksMarkPeopleDomainChanged();
     if (String(roleType || '').trim() === 'Author') {
+        prksMarkResearchGraphPeopleChanged();
         prksMarkArgumentsDomainChanged();
     }
     return token;
@@ -1049,6 +1066,7 @@ async function createConcept(payload) {
     });
     const data = await prksResearchJson(res, 'Could not create Concept.', 'concepts.create');
     prksMarkConceptsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1060,6 +1078,7 @@ async function updateConcept(id, payload) {
     });
     const data = await prksResearchJson(res, 'Could not update Concept.', 'concepts.update');
     prksMarkConceptsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1067,6 +1086,7 @@ async function deleteConcept(id) {
     const res = await prksRequest('/api/concepts/' + encodeURIComponent(id), { method: 'DELETE' });
     const data = await prksResearchJson(res, 'Could not delete Concept.', 'concepts.delete');
     prksMarkConceptsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1078,6 +1098,7 @@ async function putConceptParents(id, parentIds) {
     });
     const data = await prksResearchJson(res, 'Could not update Concept parents.', 'concepts.parents');
     prksMarkConceptsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1087,6 +1108,7 @@ async function putConceptAliases(id, aliases) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ aliases: aliases || [] }),
     });
+    // Aliases affect note resolution, not Graph labels or explicit hierarchy.
     const data = await prksResearchJson(res, 'Could not update Concept aliases.', 'concepts.aliases');
     prksMarkConceptsDomainChanged();
     return data;
@@ -1129,6 +1151,7 @@ async function createPosition(payload) {
     });
     const data = await prksResearchJson(res, 'Could not create Position.', 'positions.create');
     prksMarkPositionsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1144,6 +1167,7 @@ async function updatePosition(id, payload) {
     // Arguments too. Create/delete do not: a brand-new Position cannot already
     // be targeted, and a targeted Position cannot be deleted.
     prksMarkArgumentsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1151,6 +1175,7 @@ async function deletePosition(id) {
     const res = await prksRequest('/api/positions/' + encodeURIComponent(id), { method: 'DELETE' });
     const data = await prksResearchJson(res, 'Could not delete Position.', 'positions.delete');
     prksMarkPositionsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1213,6 +1238,7 @@ async function createArgument(payload) {
     const data = await prksResearchJson(res, 'Could not create Argument.', 'arguments.create');
     prksMarkArgumentsDomainChanged();
     prksMarkPositionsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1228,6 +1254,7 @@ async function updateArgument(id, payload) {
     const data = await prksResearchJson(res, 'Could not update Argument.', 'arguments.update');
     prksMarkArgumentsDomainChanged();
     prksMarkPositionsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1238,6 +1265,7 @@ async function deleteArgument(id) {
     const data = await prksResearchJson(res, 'Could not delete Argument.', 'arguments.delete');
     prksMarkArgumentsDomainChanged();
     prksMarkPositionsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1251,6 +1279,7 @@ async function putArgumentSources(id, sources) {
     // read model, and deliberately NOT of the Position one.
     const data = await prksResearchJson(res, 'Could not update Argument sources.', 'arguments.sources');
     prksMarkArgumentsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1265,6 +1294,7 @@ async function putArgumentTargets(id, targets) {
     const data = await prksResearchJson(res, 'Could not update Argument targets.', 'arguments.targets');
     prksMarkArgumentsDomainChanged();
     prksMarkPositionsDomainChanged();
+    prksMarkResearchGraphCoreChanged();
     return data;
 }
 
@@ -1307,6 +1337,8 @@ window.fetchSavedView = fetchSavedView;
 window.createSavedView = createSavedView;
 window.updateSavedView = updateSavedView;
 window.deleteSavedView = deleteSavedView;
+window.prksMarkResearchGraphCoreChanged = prksMarkResearchGraphCoreChanged;
+window.prksMarkResearchGraphPeopleChanged = prksMarkResearchGraphPeopleChanged;
 window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;
 window.prksMarkWorkTitleChanged = prksMarkWorkTitleChanged;
 window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
