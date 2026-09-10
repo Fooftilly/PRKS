@@ -587,6 +587,17 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.open_details_panel(page)
         page.locator('#prks-work-playlist-edit-btn').click()
         page.wait_for_selector('#prks-work-playlist-search')
+        # The editor's markup renders synchronously but its current-playlist
+        # pre-fill only lands after `fetchPlaylists()` resolves. Typing into the
+        # field before then races that assignment, so wait for the pre-filled
+        # value rather than for the element alone.
+        page.wait_for_function(
+            """title => {
+                const input = document.getElementById('prks-work-playlist-search');
+                return !!input && input.value === title;
+            }""",
+            arg=PLAYLIST_A_TITLE,
+        )
         page.locator('#prks-work-playlist-search').fill('Unsaved playlist search')
 
         self.offline(page, context)

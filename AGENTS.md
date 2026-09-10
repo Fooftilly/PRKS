@@ -5,6 +5,7 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 ## Commands
 
 - Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`. UX Interaction Tour (separate, opt-in, artifact-producing): `python run_tests.py --ux-tour`.
+- Full E2E gate: `python tests/e2e/run.py --jobs 4`. Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow".
 - App, default for agents: `python prks_app.py --testing`
 - Real app or Compose: only with run-real authorization from the user
 
@@ -1208,6 +1209,116 @@ shared busy-button helper for async mutations with meaningful latency. It
 snapshots and restores exact button contents (icon markup included), so
 callers must restore it from a `finally` rather than only on the success or
 failure path.
+
+## E2E test workflow
+
+`tests/e2e/run.py` is the only entry point for the real-Chromium suite.
+
+```
+python tests/e2e/run.py                 # serial, deterministic (debugging)
+python tests/e2e/run.py --jobs 4        # sharded across 4 worker processes
+PRKS_E2E_JOBS=4 python run_tests.py --e2e
+python tests/e2e/run.py --jobs 4 --fail-fast
+python tests/e2e/run.py tests.e2e.test_playlists_offline.OfflinePlaylistTests.test_x
+```
+
+`--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
+accidentally parallel.
+
+Agent inner loop. Do not run all 418 E2E tests after every edit. Run
+`python run_tests.py`, the relevant Node/static selftests, and only the affected
+E2E class or module — a Playlist change runs `tests.e2e.test_playlists_offline`
+plus the specific Work/Playlist scenarios; a Concept change runs
+`OfflineConceptTests`.
+
+Milestone completion. The full parallel suite is mandatory before declaring a
+milestone complete, alongside the ordinary unit/selftest gates:
+
+```
+python run_tests.py
+python tests/e2e/run.py --jobs 4
+```
+
+The optimization is faster execution, not less verification.
+
+Worker count, measured on a 12-core development machine over the full 418-test
+suite: serial 1131s; `--jobs 2` 652s; `--jobs 3` 422s; `--jobs 4` 315-370s
+across three consecutive green runs. **4 is the recommended gate.** More workers
+are not automatically better -- Chromium plus a PRKS server per test is memory-
+and CPU-hungry, and the per-worker overhead was already ~35% at 4 -- so re-
+benchmark rather than raising it on a different machine. Drop to `--jobs 3` if a
+machine shows contention-driven flakiness.
+
+Debugging. `--jobs 1` is the mode for reproducing a flake, reading one clean
+traceback, or checking that the suite still passes serially. It does not need to
+run after every milestone once the parallel suite is reliable. A test that fails
+only under `--jobs > 1` is a real defect — investigate port collisions, shared
+filesystem paths, hardcoded ports, singleton temp files, CPU-sensitive timing
+assumptions, or unowned browser/server processes. Never paper over it with a
+retry: there is deliberately no blanket retry mechanism, because retrying
+conceals races.
+
+Sharding. Workers receive individual test IDs, not whole modules, balanced
+longest-processing-time-first from `.tests/e2e-timings.json` (gitignored runner
+metadata, written after each run). That history is an optimisation hint and
+never required state: absent, corrupt, or full of renamed tests, the runner
+still works and unknown tests take a default estimate. Each shard keeps one
+module's tests contiguous, because these modules launch Chromium in
+`setUpModule` and unittest re-runs a module fixture whenever the module changes.
+The scheduling and aggregation logic lives in `tests/e2e/sharding.py` as pure
+functions covered by `tests/test_e2e_sharding.py` — no Chromium needed.
+
+The parent fails the gate if any worker fails, errors, crashes, or exits without
+writing a result document; a vanished worker is never read as a pass. Pointer
+capture (`tests/browser/pointer_capture.py`) runs exactly once, in the parent,
+after every shard has passed — never once per worker.
+
+## E2E isolation invariant
+
+Parallel execution relies on each E2E test keeping independent PRKS
+storage/database and browser-context state: a fresh `TemporaryDirectory`, a
+fresh database, a fresh port, and a fresh browser context. Do not introduce
+fixed ports, shared writable temp files, shared test databases, a shared browser
+context, or cross-worker mutable globals.
+
+Ports come from `find_free_port()`, which binds and closes before the server
+subprocess binds for real. Each worker gets a disjoint port window below the
+Linux ephemeral range via `PRKS_E2E_PORT_BASE`/`PRKS_E2E_PORT_SPAN`, and
+`AppServer.start()` retries a bounded number of times on a genuine bind
+conflict only — other startup failures are reported as themselves, never
+disguised as port conflicts.
+
+Server reuse across tests (one persistent PRKS process, database rollback
+between tests, a shared IndexedDB or service-worker profile) is deliberately
+**not** implemented. It trades a large correctness risk for time that
+parallelism already recovered.
+
+## No arbitrary sleeps in E2E
+
+E2E tests prefer observable application/browser state over fixed delays. Wait on
+the request, the API response, the domain generation, the IndexedDB row, the
+route, the DOM state, the right-panel owner, or the button state — not
+`page.wait_for_timeout(500)` after a mutation.
+
+A fixed delay is appropriate only when elapsed time itself is under test:
+debounce, backoff, probe intervals, and the settle windows that prove an action
+issues *no* request. Those must stay — absence of behavior cannot be observed
+without a window. Do not "optimize" them away, and do not lower Playwright's
+default timeouts for speed: a shorter timeout does not make a passing test
+faster, only a slow one fail sooner.
+
+One measured exception, which looks like an arbitrary sleep and is not: the
+250 ms settle delay in `_wait_entity_cached()` / `_wait_list_cached()`
+(`tests/e2e/test_offline.py`). An IndexedDB row that a separate read
+transaction can already observe is still lost when the page is torn down (go
+offline + reload) immediately afterwards — `getEntity` returns null after the
+reload and the route renders "not available offline". `offline-store.js`
+resolving `readwrite` from `tx.oncomplete` does **not** make that safe.
+Measured on the Concept-detail transition with
+`tests/e2e/stress_cache_offline.py`: 20/20 iterations pass with the delay,
+6–9/20 fail without it. There is no page-observable "durable across teardown"
+signal to wait on instead, so the delay stays. Re-run that script before
+believing any claim to the contrary.
 
 ## UX Interaction Tour
 

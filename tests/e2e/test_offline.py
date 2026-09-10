@@ -111,9 +111,15 @@ def _wait_entity_cached(page, kind, entity_id, timeout=15000):
         arg=[kind, entity_id],
         timeout=timeout,
     )
-    # Reading the row back through a separate connection does not guarantee the
-    # writing transaction is finished with the page; tearing the page down (go
-    # offline + reload) immediately after can still lose it. Let it settle.
+    # Do NOT remove this settle delay, and do not shrink it, without new
+    # evidence. `offline-store.js` resolving readwrite from `tx.oncomplete` is
+    # NOT sufficient: a row this read transaction can observe is still lost if
+    # the page is torn down (go offline + reload) immediately afterwards, and
+    # the route then renders "not available offline". Measured with
+    # tests/e2e/stress_cache_offline.py on the Concept-detail transition:
+    # 20/20 iterations pass with this delay, 6-9/20 FAIL without it. There is no
+    # page-observable signal for "the write is durable across teardown", so
+    # there is no state condition to wait on instead.
     page.wait_for_timeout(250)
 
 
@@ -136,6 +142,8 @@ def _wait_list_cached(page, list_key, timeout=15000):
         arg=list_key,
         timeout=timeout,
     )
+    # Same measured teardown-durability reason as _wait_entity_cached(); see
+    # the comment there before touching this.
     page.wait_for_timeout(250)
 
 

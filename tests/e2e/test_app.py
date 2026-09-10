@@ -113,6 +113,30 @@ def _expand_research(page):
     page.locator("#prks-nav-research-children").wait_for(state="visible")
 
 
+def _focused_back_href(page, timeout=30000):
+    """Contextual-back href of the *focused* tab.
+
+    A bare `.prks-nav-back` locator is ambiguous while a tab switch is in
+    flight: the outgoing and incoming tabs both have one in the DOM for a
+    moment, which is a strict-mode violation rather than a wrong answer. Scope
+    to the focused TabContext, the way the workspace tests elsewhere do.
+    """
+    page.wait_for_function(
+        """() => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            return !!(ctx && ctx.root && ctx.root.querySelector('.prks-nav-back'));
+        }""",
+        timeout=timeout,
+    )
+    return page.evaluate(
+        """() => {
+            const ctx = window.prksGetFocusedTabContext();
+            const back = ctx.root.querySelector('.prks-nav-back');
+            return back ? back.getAttribute('href') : null;
+        }"""
+    )
+
+
 def _open_work_from_home(page, title):
     page.locator('#sidebar a.nav-link[href="#/folders"]').click()
     page.wait_for_function("() => location.hash === '#/folders'")
@@ -3442,8 +3466,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         server, page, _collector = self._start_app()
         person_id = server.ids["person"]
         _open_work_from_home(page, WORK_A_TITLE)
-        page.wait_for_selector(".prks-nav-back")
-        work_back = page.locator(".prks-nav-back").get_attribute("href")
+        work_back = _focused_back_href(page)
         page.evaluate(
             """async (pid) => {
                 await window.prksNavigate('#/people', { target: 'new-tab', activate: true });
@@ -3452,16 +3475,13 @@ class WorkspaceTabsTests(_BrowserE2E):
             arg=person_id,
         )
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
-        page.wait_for_selector(".prks-nav-back")
-        person_back = page.locator(".prks-nav-back").get_attribute("href")
+        person_back = _focused_back_href(page)
         page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
-        page.wait_for_selector(".prks-nav-back")
-        self.assertEqual(page.locator(".prks-nav-back").get_attribute("href"), work_back)
+        self.assertEqual(_focused_back_href(page), work_back)
         page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
-        page.wait_for_selector(".prks-nav-back")
-        self.assertEqual(page.locator(".prks-nav-back").get_attribute("href"), person_back)
+        self.assertEqual(_focused_back_href(page), person_back)
 
     def test_browser_back_forward_keeps_parked_tab(self):
         server, page, _collector = self._start_app()

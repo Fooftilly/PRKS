@@ -7,6 +7,7 @@ assertions fail.
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import socket
 import subprocess
@@ -129,11 +130,76 @@ def require_chromium():
     return pw, browser
 
 
+# Ports handed out by find_free_port() in this process. A port is discovered by
+# binding and closing, and only bound for real once the server subprocess starts,
+# so nothing stops this process from rediscovering a port it has already promised
+# to a server that has not finished starting. Remembering them closes that gap
+# within a worker; PRKS_E2E_PORT_BASE closes it across workers.
+_CLAIMED_PORTS: set[int] = set()
+
+PORT_ATTEMPTS = 40
+SERVER_START_ATTEMPTS = 4
+
+_ADDRESS_IN_USE_MARKERS = (
+    "Address already in use",
+    "EADDRINUSE",
+    "[Errno 98]",
+    "WinError 10048",
+)
+
+
+def _port_window():
+    """(start, span) when the parent runner assigned this worker a port range.
+
+    Parallel workers each get a disjoint window below the Linux ephemeral range,
+    so two workers cannot discover the same free port, and the kernel will not
+    hand the same port to an unrelated socket via bind(0) either.
+    """
+    base = os.environ.get("PRKS_E2E_PORT_BASE")
+    span = os.environ.get("PRKS_E2E_PORT_SPAN")
+    if not base:
+        return None
+    try:
+        start = int(base)
+        width = int(span) if span else 1000
+    except ValueError:
+        return None
+    if start < 1024 or width < 1 or start + width - 1 > 65535:
+        return None
+    return start, width
+
+
+def _bindable(port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((HOST, port))
+        return True
+    except OSError:
+        return False
+
+
 def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind((HOST, 0))
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return sock.getsockname()[1]
+    window = _port_window()
+    if window is None:
+        for _ in range(PORT_ATTEMPTS):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind((HOST, 0))
+                port = sock.getsockname()[1]
+            if port not in _CLAIMED_PORTS:
+                _CLAIMED_PORTS.add(port)
+                return port
+        raise RuntimeError("could not find an unclaimed ephemeral port")
+    start, width = window
+    for offset in random.sample(range(width), min(width, PORT_ATTEMPTS)):
+        port = start + offset
+        if port in _CLAIMED_PORTS:
+            continue
+        if _bindable(port):
+            _CLAIMED_PORTS.add(port)
+            return port
+    raise RuntimeError(
+        "no free port in worker range %d-%d" % (start, start + width - 1)
+    )
 
 
 def wait_http(url: str, timeout: float = READY_TIMEOUT_S) -> None:
@@ -162,6 +228,30 @@ def _terminate(proc: subprocess.Popen) -> None:
         proc.wait(timeout=STOP_TIMEOUT_S)
 
 
+# Every AppServer that has started and not yet stopped, in this process. A
+# worker terminated by the parent (--fail-fast, Ctrl-C) would otherwise leave
+# its PRKS subprocess and TemporaryDirectory behind, because a signal does not
+# run unittest cleanups. tests/e2e/run.py drains this on SIGTERM/SIGINT.
+_LIVE_SERVERS = []
+
+
+def stop_all_servers() -> int:
+    """Stop every still-running AppServer. Never raises. Returns how many."""
+    stopped = 0
+    for server in list(_LIVE_SERVERS):
+        try:
+            server.stop()
+            stopped += 1
+        except Exception:
+            pass
+    return stopped
+
+
+def _address_in_use(text: str) -> bool:
+    """True only for a real bind conflict, so other startup failures still surface."""
+    return any(marker in text for marker in _ADDRESS_IN_USE_MARKERS)
+
+
 class PageCollector:
     """Fail the scenario on unexpected page errors, console errors, 5xx, and off-origin HTTP."""
 
@@ -182,8 +272,27 @@ class PageCollector:
         page.route("**/*", self._on_route)
 
     def _on_console(self, msg):
-        if msg.type == "error":
-            self.console_errors.append(msg.text)
+        if msg.type != "error":
+            return
+        # "Failed to load resource: net::ERR_*" carries no URL in its text, so a
+        # resource failure would otherwise be unattributable. The location is
+        # what makes such a report actionable.
+        url = ""
+        try:
+            location = msg.location or {}
+            if isinstance(location, dict):
+                url = location.get("url") or ""
+        except Exception:
+            url = ""
+        # A blob: URL is revoked when the document that owns it goes away, so a
+        # reload or teardown racing an in-flight blob load logs
+        # ERR_FILE_NOT_FOUND for it. `_on_failed` already classifies blob:
+        # request failures as teardown noise rather than signal; the very same
+        # event also surfaces as a console error and gets the same treatment.
+        # Deliberately narrow: only blob:, and only resource-load failures.
+        if url.startswith("blob:") and "Failed to load resource" in msg.text:
+            return
+        self.console_errors.append(msg.text + (" (%s)" % url if url else ""))
 
     def _on_failed(self, req):
         url = req.url
@@ -332,6 +441,36 @@ class AppServer:
         env["PYTHONUNBUFFERED"] = "1"
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(apply_playwright_browser_env())
         env.update(self._extra_env)
+        for attempt in range(SERVER_START_ATTEMPTS):
+            self._spawn(env)
+            try:
+                wait_http(self.origin + "/api/works")
+                return self
+            except Exception:
+                # Read the captured output *before* teardown: the log files live
+                # inside storage_root, which cleanup deletes.
+                out = _read_file(self._stdout_path)
+                err = _read_file(self._stderr_path)
+                self._release_process()
+                retryable = attempt + 1 < SERVER_START_ATTEMPTS and _address_in_use(out + err)
+                if retryable:
+                    # Only a genuine bind conflict earns another port. Any other
+                    # startup failure is reported as itself.
+                    self.port = find_free_port()
+                    self.origin = "http://%s:%s" % (HOST, self.port)
+                    continue
+                self._tmpdir.cleanup()
+                raise RuntimeError(
+                    "PRKS E2E server failed to start on %s\nstdout:\n%s\nstderr:\n%s"
+                    % (self.origin, out[-4000:], err[-4000:])
+                ) from None
+        raise RuntimeError("PRKS E2E server could not obtain a free port")
+
+    def _spawn(self, env):
+        # Registered before the readiness probe, so a shutdown that lands while
+        # the server is still starting still tears it down.
+        if self not in _LIVE_SERVERS:
+            _LIVE_SERVERS.append(self)
         self._stdout = open(self._stdout_path, "w", encoding="utf-8")
         self._stderr = open(self._stderr_path, "w", encoding="utf-8")
         self.proc = subprocess.Popen(
@@ -349,17 +488,26 @@ class AppServer:
             stdout=self._stdout,
             stderr=self._stderr,
         )
+
+    def _release_process(self):
+        """Terminate the subprocess and close its log handles, keeping storage."""
         try:
-            wait_http(self.origin + "/api/works")
-        except Exception:
-            self.stop()
-            out = _read_file(self._stdout_path)
-            err = _read_file(self._stderr_path)
-            raise RuntimeError(
-                "PRKS E2E server failed to start on %s\nstdout:\n%s\nstderr:\n%s"
-                % (self.origin, out[-4000:], err[-4000:])
-            ) from None
-        return self
+            _LIVE_SERVERS.remove(self)
+        except ValueError:
+            pass
+        try:
+            if self.proc is not None:
+                _terminate(self.proc)
+        finally:
+            for handle in (self._stdout, self._stderr):
+                if handle is not None:
+                    try:
+                        handle.close()
+                    except OSError:
+                        pass
+            self._stdout = None
+            self._stderr = None
+            self.proc = None
 
     def captured_output(self) -> str:
         return "stdout:\n%s\nstderr:\n%s" % (
@@ -383,6 +531,10 @@ class AppServer:
             self._stdout = None
             self._stderr = None
             self.proc = None
+            try:
+                _LIVE_SERVERS.remove(self)
+            except ValueError:
+                pass
             self._tmpdir.cleanup()
 
 

@@ -34,6 +34,8 @@ pip-wheel-metadata/
 .playwright-browsers/
 
 # --- Testing / coverage ---
+# E2E per-test timing history (runner metadata; machine-specific)
+/.tests/
 .pytest_cache/
 .coverage
 .coverage.*
