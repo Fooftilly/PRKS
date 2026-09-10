@@ -1221,12 +1221,13 @@ async function fetchArgumentVerdicts(options = {}) {
     }
 }
 
-/* Argument mutations below invalidate the POSITIONS domain, not an Arguments
- * one: Arguments are not offline-capable in this phase. A cached Position
- * detail simply embeds their name/kind/verdict and targeting membership, so
- * these are pure coherence hooks for cached Position data. `putArgumentSources`
- * is deliberately absent -- source Works are not part of the Position read
- * model. */
+/* Argument mutations below additionally invalidate the POSITIONS domain: a
+ * cached Position detail embeds its targeting Arguments/Stances by name, kind
+ * and verdict, so those cached Positions go stale whenever an Argument is
+ * created, edited, retargeted or deleted. The Arguments domain itself is
+ * invalidated alongside it in each mutation below. `putArgumentSources` marks
+ * Arguments but deliberately NOT Positions -- source Works are not part of the
+ * Position read model. */
 
 async function createArgument(payload) {
     const res = await prksRequest('/api/arguments', {
