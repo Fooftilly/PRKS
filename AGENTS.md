@@ -1277,12 +1277,13 @@ Works catalog:
 | `recent:index` | `recent` | `GET /api/recent` | `#/recent` |
 | `recently-added:index` | `recently-added` | `GET /api/recently-added` | Home -> Recently added |
 
-The split exists because **opening a Work is a canonical mutation**:
-`get_work()` stamps `last_opened_at`. A single catalog carrying that field
-would mean reading one file invalidates Progress, Types and Recently added
-too -- a read dropping four unrelated offline surfaces. So the stable catalog
-carries no `last_opened_at` at all, and the Work route marks `recent` alone
-(and only for an authoritative read, never a cache hit).
+The split exists because **opening a Work is a canonical mutation** -- an
+explicit one: `POST /api/works/:id/opened` stamps `last_opened_at`, and
+`GET /api/works/:id` is a pure read (detailed below). A single
+catalog carrying that field would mean opening one file invalidates Progress,
+Types and Recently added too -- one surface dropping four unrelated ones. So
+the stable catalog carries no `last_opened_at` at all, and only the explicit
+open event marks `recent`.
 
 `?projection=browse` is an **additive** contract: the default `/api/works`
 response is unchanged for its seven other callers (pickers, the wiki title map,
@@ -1389,6 +1390,65 @@ local-first future:
   Work's folder) and delete-vs-edit are real conflicts.
 - Phase-1 read-only caching is **not** the future mutation synchronization
   model, and cache invalidation will not stay the only coherence mechanism.
+
+#### Open design questions for the synchronization milestone
+
+Recorded here so they are settled deliberately rather than ad hoc. None is a
+blocker for the current read-only behavior.
+
+1. **Durable storage boundary.** Separate IndexedDB stores for disposable
+   cache vs. unsynchronized user data, such that **Clear offline cache** is
+   *physically incapable* of deleting the outbox.
+2. **Operation envelope.** `op_id`, operation type, entity id, payload, base
+   revision, created-at, dependencies, status, retry metadata, device id.
+   Stable UUIDs generated before the first send.
+3. **Server idempotency.** The same `op_id` applied twice must take effect
+   once. Needs durable server-side knowledge of acknowledged operations, not
+   client-side duplicate suppression.
+4. **Revision model.** What carries a revision. Not a column on every table:
+   a PRKS logical entity spans several (a Work touches `works`,
+   `folder_files`, roles, tags). Revisions must describe the logical
+   synchronization aggregate.
+5. **Operation taxonomy.** Classify existing mutations as semantic operations
+   (`ADD_TAG`, `REMOVE_TAG`, `MOVE_WORK_TO_FOLDER`, `ADD_PLAYLIST_MEMBER`,
+   `REMOVE_PLAYLIST_MEMBER`, `UPDATE_WORK_METADATA`, `UPDATE_CONCEPT`,
+   `DELETE_WORK`, `MARK_WORK_OPENED`) rather than "replace entity JSON".
+6. **Conflict policy per operation.** Tag adds merge; competing Folder moves
+   do not; delete-vs-edit is explicit; Playlist reorder needs its own later
+   policy. No global last-writer-wins.
+7. **Optimistic read-model overlay.** How pending operations combine with
+   cached snapshots into effective UI state, without mutating disposable
+   snapshots in ways that make rollback impossible.
+8. **Offline creation / client-generated ids.** Whether PRKS ids can be
+   generated client-side and stay canonical. If so, an offline-created Concept
+   can be referenced by a later offline operation with no temporary-id
+   remapping. Audit `generate_id()` before deciding.
+9. **Sync coordinator state machine.** `pending -> syncing -> acknowledged`,
+   `pending -> syncing -> retryable-failure -> pending`,
+   `pending -> syncing -> conflict`, plus ordering and dependency rules. One
+   coordinator; components must not run their own sync loops.
+10. **`MARK_WORK_OPENED` policy — and what "recently opened" means across
+    devices.** `last_opened_at` is `CURRENT_TIMESTAMP`, i.e. **one-second**
+    resolution, so opening A at `17:00:00.100` and B at `17:00:00.800` lands
+    in the same second and is then ordered by the `id` tie-break rather than
+    by actual open order. That is deterministic and adequate for a
+    single-writer read-only cache, but once offline opens synchronize the
+    ordering key has to mean something: client event time, server receive
+    time, or a logical ordering mechanism. Also decide whether offline opens
+    coalesce to the latest event per Work. Do NOT patch this ad hoc — it is a
+    small, low-risk case that is worth using to exercise the general operation
+    model.
+11. **Crash/reload guarantees.** Once the UI says "saved locally", closing the
+    tab, crashing the browser, restarting the machine, or clearing disposable
+    caches must not lose the change.
+12. **First implementation candidate.** Only after the architecture is agreed,
+    and something merge-friendly: Work **Tags**, not metadata, deletes,
+    Playlist reorder or Research Notes.
+
+Automerge stays **out** of that milestone. Structured synchronization —
+semantic operations, revisions, idempotency, durable local storage, conflict
+handling — must be reliable first; Research Notes is then the first serious
+CRDT experiment.
 
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`

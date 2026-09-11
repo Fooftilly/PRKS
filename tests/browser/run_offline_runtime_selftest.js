@@ -285,7 +285,7 @@ async function run() {
             setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
             window: null, caches: null, navigator: null,
         });
-        // Opening a Work stamps last_opened_at -> Recent only.
+        // The explicit open event stamps last_opened_at -> Recent only.
         runtime.markDomainChanged('recent', { entityKinds: [], listKeys: ['recent:index'] });
         await runtime._domainCleanup('recent');
         assertEq('Recent cleanup touches exactly its own key', sweeps.sort(), ['recent:index']);

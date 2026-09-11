@@ -2,10 +2,11 @@
 Home -> Recently added.
 
 Three INDEPENDENT projections back these routes. The central thing under test
-is that independence: merely *opening* a Work is a canonical mutation (it
-stamps `last_opened_at`) and must cost the Recent cache alone, never the
-Progress/Types/Recently-added caches. A single `works:index` carrying
-`last_opened_at` would have made reading a file drop four offline surfaces.
+is that independence: opening a Work is a canonical mutation -- an explicit
+one, `POST /api/works/:id/opened`, since `GET /api/works/:id` is a pure read --
+and it must cost the Recent cache alone, never the Progress/Types/
+Recently-added caches. A single `works:index` carrying `last_opened_at` would
+have made one open drop four offline surfaces.
 """
 import json
 import os
