@@ -1391,10 +1391,59 @@ local-first future:
 - Phase-1 read-only caching is **not** the future mutation synchronization
   model, and cache invalidation will not stay the only coherence mechanism.
 
+#### Durable local state (`prks-local-v1`)
+
+**Milestone 2A shipped the storage foundation only. PRKS is still read-only
+while the server is unreachable** -- nothing enqueues operations yet.
+
+`frontend/js/local-store.js` owns a **second, separate** IndexedDB database,
+`prks-local-v1`, holding durable user-owned state: an `operations` store of
+semantic operation envelopes and a `metadata` store (device id, monotonic
+sequence). It is not the cache and must never be merged into it:
+
+| | `prks-offline-v1` (`offline-store.js`) | `prks-local-v1` (`local-store.js`) |
+| --- | --- | --- |
+| Holds | downloaded server data | unsynchronized user work |
+| Lifecycle | disposable; "Clear offline cache" empties it | durable; explicit reset only |
+| Write failure | degrades silently to "unavailable" | **rejects** -- nothing may claim "Saved locally" |
+| Commit | `oncomplete` for writes | `oncomplete`, always |
+
+The separation is **physical**: a bug in `offline-store.clearAll()` operates on
+a different database and cannot reach pending work.
+`tests/test_frontend_local_store.py` fails the build if either module names the
+other's database in code, or if the offline runtime learns about
+`createPrksLocalStore` / `resetDurableLocalState`;
+`tests/browser/run_local_store_selftest.js` proves operations and the device id
+survive both `clearAll()` and deletion of the cache database, and
+`tests/e2e/test_local_store_durability.py` proves the same in a real browser
+across a reload and the real Settings control.
+
+Three rules that are easy to get wrong:
+
+* **Envelopes are semantic, never serialized requests.** `{method, url, body}`
+  would make synchronization an HTTP replay queue -- unmergeable and
+  unversionable. Operation types come from an allow-list; the server owns the
+  mapping to SQL.
+* **The semantic envelope is immutable once persisted.** Only `status`,
+  `attempt_count`, `last_attempt_at`, `last_error`, `acknowledged_at` and
+  `server_revision` may change. Coalescing must write new rows in an explicit
+  transaction, never rewrite history in place.
+* **`device_id` is a synchronization and diagnostics identity only** -- never
+  trust, login or authorization, and never derived from any browser or hardware
+  characteristic.
+
+`docs/local-first-sync.md` is the authoritative design document for the whole
+transition: storage boundary, operation envelope, server idempotency ledger,
+revision-scope recommendation, conflict matrix, Work Tags design,
+`MARK_WORK_OPENED` timestamp semantics, overlay model, coordinator state
+machine, and the offline entity-id recommendation. Read it before touching
+synchronization.
+
 #### Open design questions for the synchronization milestone
 
 Recorded here so they are settled deliberately rather than ad hoc. None is a
-blocker for the current read-only behavior.
+blocker for the current read-only behavior. **`docs/local-first-sync.md` now
+carries a decision or an explicit deferral for each.**
 
 1. **Durable storage boundary.** Separate IndexedDB stores for disposable
    cache vs. unsynchronized user data, such that **Clear offline cache** is
