@@ -303,7 +303,7 @@ atomic by SQLite autocommit.
 
 | Operation | Aggregate | Category | Transactional | Offline priority |
 | --- | --- | --- | --- | --- |
-| `ADD_WORK_TAG` / `REMOVE_WORK_TAG` | work-tag | A/B | yes (remove) | **1st** |
+| `ADD_WORK_TAG` / `REMOVE_WORK_TAG` | work-tag | A/B | yes | **1st** |
 | `MARK_WORK_OPENED` | — | A | yes | 1st (protocol exercise) |
 | `UPDATE_WORK_METADATA` (title, status, doc type) | work-metadata | C | yes | 2nd |
 | `MOVE_WORK_TO_FOLDER` | work-folder | C (exclusive) | yes | 3rd |
@@ -360,6 +360,68 @@ observed-state rule (remove only wins over adds it causally observed) is the
 principled answer — but it requires causality metadata the protocol does not
 have yet. Explicit conflict is honest, rare in practice, and does not foreclose
 a better rule later. **Do not leave this implicit.**
+
+## 9a. Tag identity is persistent — **DECIDED, implemented (2A.2)**
+
+Only `delete_tag()` and `merge_tags_into()` may destroy or transform a Tag.
+Relationship edits change relationships and nothing else:
+
+| Operation | Effect |
+| --- | --- |
+| `ADD/REMOVE` a Work or Folder tag | the relationship only |
+| Delete a Work | its `work_tags` rows cascade; Tag survives |
+| Delete a Folder | its `folder_tags` rows cascade; Tag survives |
+| bulk `remove_tags` | relationships only |
+| **`delete_tag()`** | the Tag, relationships cascade |
+| **`merge_tags_into()`** | the source Tag; target survives |
+
+PRKS previously garbage-collected an "unused" Tag inside all five of the
+ordinary paths above. That was wrong for three independent reasons:
+
+1. **Product semantics.** Tags became temporary values whose existence
+   depended on current usage, rather than a reusable vocabulary. Removing the
+   last use of "Security" deleted the concept of "Security".
+2. **Data loss, present-tense.** The `unused` test consulted `work_tags` and
+   `folder_tags` but never **`processing_file_tags`**, so a Tag still attached
+   to a staged Processing File could be deleted by an unrelated Work edit —
+   and the FK cascade then destroyed that staged relationship. Reproduced
+   before the fix; now covered by a regression.
+3. **Hostile to synchronization.** An offline device holding a Tag id would
+   find it gone because another device merely removed the last relationship:
+
+   ```
+   A caches Tag T, revision W:T = 4       B removes T from its last Work
+   A offline: ADD_WORK_TAG(W2, T)         → PRKS deletes Tag T entirely
+   A reconnects → ENTITY_NOT_FOUND, from an edit nobody framed as a deletion
+   ```
+
+This is why the §10 revision model is now clean: **Tag entity lifecycle is
+explicit, Work-Tag relationship lifecycle is independent, and the
+`(work_id, tag_id)` tombstone is stable across add/remove cycles.**
+
+Cleanup, if ever wanted, must be an explicit user action — an "unused tags"
+list with its own delete — never collection during an unrelated operation.
+
+The obsolete prune-atomicity tests were **removed rather than preserved**:
+they asserted that a relationship delete and a tag prune committed together,
+and there is no longer a second write. `tests/test_folder_atomicity.py` now
+installs a trigger that forbids *any* delete from `tags` during those paths,
+which is a stronger statement than checking the row survived.
+
+### Tag lifecycle events vs. pending operations — **DECIDED (design)**
+
+Explicit Tag deletion and merge are entity-lifecycle events relative to a
+queued Work-Tag operation. First implementation:
+
+| Pending operation references | Result |
+| --- | --- |
+| an explicitly **deleted** Tag | `ENTITY_NOT_FOUND` / `TAG_DELETED` → surface as a conflict. **Never recreate the Tag.** |
+| a **merged** source Tag | `TAG_MERGED`, returning the canonical `target_tag_id` |
+
+The operation is **not** automatically rewritten onto the merge target in the
+first version. Automatic rebasing is a reasonable later feature once the
+protocol is established; doing it before then would silently redirect a user's
+intent to an entity they never chose.
 
 ## 10a. Revision visibility — **REQUIREMENT for 2B**
 
@@ -596,6 +658,7 @@ size is bounded.
 | --- | --- | --- |
 | 2A | Durable local store, device identity, operation envelope, this document | **done** |
 | 2A.1 | `enqueueOperation` owns device identity; UTF-8 byte limit; reset closes its own connection; tighter envelope invariants; §10a–§10d | **done** |
+| 2A.2 | Stable Tag identity: no automatic pruning; `processing_file_tags` lifetime fixed; §9a | **done** |
 | 2B | Server sync protocol: `sync_operations` ledger, revision table (incl. tombstones), revision advancement in canonical boundaries, `tags:index`, tag-options projection, Work Tags offline | next, review first |
 | 2C | Optimistic overlay + Settings "unsynchronized changes" surface | after 2B |
 | 2D | More operation families in the §9 priority order | — |

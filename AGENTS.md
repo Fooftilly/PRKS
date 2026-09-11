@@ -1440,6 +1440,19 @@ CJK by ~2.1x), and a durable reset **closes this store's own connection before
 `deleteDatabase()`** -- IndexedDB blocks a delete on every open connection,
 including the deleting page's own. `offline-store.js` carries the same close.
 
+**Tag identity is persistent.** Only `delete_tag()` and `merge_tags_into()`
+may destroy or transform a Tag. Removing a tag from a Work or Folder, deleting
+a Work or Folder, and bulk tag removal all touch **relationships only** --
+PRKS used to garbage-collect "unused" Tags inside every one of those paths.
+That made Tags temporary values rather than a reusable vocabulary; it silently
+destroyed `processing_file_tags` rows, because the "unused" test consulted
+`work_tags` and `folder_tags` and never that third table; and it would have
+turned ordinary edits into `ENTITY_NOT_FOUND` sync conflicts for any offline
+device holding the Tag id. Unused Tags now simply stay in the catalog. Cleanup,
+if ever added, must be an explicit user action -- never collection during an
+unrelated operation. `tests/test_folder_atomicity.py` installs a trigger
+forbidding any delete from `tags` during those paths.
+
 **Before Work Tags can go offline (Milestone 2B)** the design document records
 three requirements worth knowing here: `sync_entity_revisions` must keep a
 `work-tag / W:T` row as a **tombstone** after the relationship is deleted (an

@@ -216,13 +216,18 @@ class TestWorkDeletion(unittest.TestCase):
         self.assertTrue(os.path.isfile(thumb))
         self.assertTrue(os.path.isfile(pdf_abs))
 
-    def test_tag_used_only_by_deleted_work_is_pruned(self):
+    def test_tag_used_only_by_deleted_work_survives_in_the_catalog(self):
+        """Work deletion removes relationships, never Tag identity. Only an
+        explicit Delete Tag / Merge Tag may destroy a Tag."""
         w_id = self.db.add_work(title="TaggedGone")
         tid = self.db.add_tag("OnlyHere", "#333")["id"]
         self.db.add_tag_to_work(w_id, tid)
         self.db.delete_work_record(w_id)
         rows = self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
-        self.assertEqual(len(rows), 0)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            self.db.execute_query("SELECT 1 FROM work_tags WHERE tag_id = ?", (tid,)), []
+        )
 
     def test_tag_shared_with_another_work_is_kept(self):
         w1 = self.db.add_work(title="A")
@@ -245,21 +250,24 @@ class TestWorkDeletion(unittest.TestCase):
         rows = self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
         self.assertEqual(len(rows), 1)
 
-    def test_tag_prune_abort_rolls_back_work_and_links(self):
-        w_id = self.db.add_work(title="PruneAbort")
+    def test_work_deletion_never_writes_to_the_tags_table(self):
+        """Replaces an obsolete prune-rollback test. Deletion no longer touches
+        Tag identity at all, so a trigger that forbids deleting any `tags` row
+        must not affect it -- there is no longer a second write to roll back."""
+        w_id = self.db.add_work(title="PruneFree")
         tid = self.db.add_tag("DoNotDrop", "#444")["id"]
         self.db.add_tag_to_work(w_id, tid)
         _install_abort_trigger(self.db, _ABORT_TAGS, "tags")
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.db.delete_work_record(w_id)
-        self.assertIsNotNone(self.db.get_work(w_id))
-        links = self.db.execute_query(
-            "SELECT 1 FROM work_tags WHERE work_id = ? AND tag_id = ?",
-            (w_id, tid),
+
+        self.db.delete_work_record(w_id)
+
+        self.assertIsNone(self.db.get_work(w_id))
+        self.assertEqual(
+            self.db.execute_query("SELECT 1 FROM work_tags WHERE tag_id = ?", (tid,)), []
         )
-        self.assertTrue(links)
-        tags = self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
-        self.assertEqual(len(tags), 1)
+        self.assertEqual(
+            len(self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))), 1
+        )
 
     def test_import_rollback_removes_work_and_destination_when_db_delete_succeeds(self):
         processing_root = self.storage.processing_dir

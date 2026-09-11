@@ -907,13 +907,17 @@ class TestDBManager(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.db.merge_tags_into("T-BADBADBA", tgt)
 
-    def test_remove_last_work_tag_deletes_unused_tag_row(self):
+    def test_remove_last_work_tag_keeps_the_tag_in_the_catalog(self):
+        """Tag identity is persistent: removing the last relationship is not a
+        request to delete the Tag. PRKS used to garbage-collect it here."""
         w = self.db.add_work(title="T")
         tid = self.db.add_tag("Lonely", "#111")["id"]
         self.db.add_tag_to_work(w, tid)
         self.db.remove_tag_from_work(w, tid)
         rows = self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
-        self.assertEqual(len(rows), 0)
+        self.assertEqual(len(rows), 1)
+        # ... and the relationship really is gone.
+        self.assertEqual(self.db.get_work_tags(w), [])
 
     def test_remove_tag_keeps_tag_when_still_on_another_work(self):
         w1 = self.db.add_work(title="A")
@@ -925,13 +929,18 @@ class TestDBManager(unittest.TestCase):
         rows = self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
         self.assertEqual(len(rows), 1)
 
-    def test_delete_work_prunes_tags_only_linked_to_that_work(self):
+    def test_delete_work_keeps_tags_that_were_only_linked_to_it(self):
+        """Deleting a Work removes its relationships, never Tag identity."""
         w = self.db.add_work(title="Gone")
         tid = self.db.add_tag("OnlyHere", "#333")["id"]
         self.db.add_tag_to_work(w, tid)
         self.db.delete_work_record(w)
         rows = self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
-        self.assertEqual(len(rows), 0)
+        self.assertEqual(len(rows), 1)
+        links = self.db.execute_query(
+            "SELECT 1 FROM work_tags WHERE tag_id = ?", (tid,)
+        )
+        self.assertEqual(links, [])
 
     def test_get_recently_added_works_order(self):
         w_old = self.db.add_work(title="Older added")

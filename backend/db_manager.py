@@ -1890,29 +1890,10 @@ class PRKSDatabase:
                 return None
             file_path = "" if row["file_path"] is None else str(row["file_path"])
             deleted_filename = managed_pdf_filename(file_path)
-            tag_ids = [
-                r["tag_id"]
-                for r in conn.execute(
-                    "SELECT DISTINCT tag_id FROM work_tags WHERE work_id = ?",
-                    (work_id,),
-                ).fetchall()
-            ]
+            # Deleting a Work removes its work_tags rows (via ON DELETE
+            # CASCADE) and nothing more: Tag identity is persistent -- see
+            # delete_tag().
             conn.execute("DELETE FROM works WHERE id = ?", (work_id,))
-            for tid in tag_ids:
-                if not tid:
-                    continue
-                in_use = conn.execute(
-                    """
-                    SELECT (
-                        EXISTS(SELECT 1 FROM work_tags WHERE tag_id = ?)
-                        OR EXISTS(SELECT 1 FROM folder_tags WHERE tag_id = ?)
-                    ) AS in_use
-                    """,
-                    (tid, tid),
-                ).fetchone()
-                if in_use and in_use["in_use"]:
-                    continue
-                conn.execute("DELETE FROM tags WHERE id = ?", (tid,))
             still_referenced = False
             if deleted_filename is not None:
                 survivors = conn.execute(
@@ -1958,21 +1939,10 @@ class PRKSDatabase:
         )
         if child_count and child_count[0]["c"] > 0:
             raise ValueError("Cannot delete folder: Folder has subfolders. Please move or delete them first.")
-        tag_ids = [
-            r["tag_id"]
-            for r in self.execute_query(
-                "SELECT DISTINCT tag_id FROM folder_tags WHERE folder_id = ?", (folder_id,)
-            )
-        ]
-        # One transaction: the folder row, its folder_tags rows (via ON DELETE
-        # CASCADE) and the newly-unused tag rows commit together or not at all.
-        # A partial commit here would report failure to the client while the
-        # folder was already gone, which offline coherence reads as "nothing
-        # changed" and would leave a permanently stale cache.
-        with self.connection() as conn:
-            conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
-            for tid in tag_ids:
-                self._prune_tag_if_unused_on_conn(conn, tid)
+        # Deleting a folder removes the folder and its folder_tags rows (via
+        # ON DELETE CASCADE). It deliberately does NOT touch Tag identity --
+        # see delete_tag(). One statement, so atomic by autocommit.
+        self.execute_query("DELETE FROM folders WHERE id = ?", (folder_id,))
 
     def _search_works_fts_tokens(self, tokens: List[str]) -> List[dict]:
         clause = _prks_fts_prefix_clause(tokens)
@@ -2954,22 +2924,6 @@ class PRKSDatabase:
         found = {row["id"] for row in rows}
         return found == set(ids)
 
-    def _prune_tag_if_unused_on_conn(self, conn, tag_id: str) -> None:
-        if not tag_id:
-            return
-        row = conn.execute(
-            """
-            SELECT (
-                EXISTS(SELECT 1 FROM work_tags WHERE tag_id = ?)
-                OR EXISTS(SELECT 1 FROM folder_tags WHERE tag_id = ?)
-            ) AS in_use
-            """,
-            (tag_id, tag_id),
-        ).fetchone()
-        if row and row["in_use"]:
-            return
-        conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
-
     def bulk_update_works(self, data: dict) -> Dict[str, Any]:
         """Atomic organization of many works. One connection, one transaction.
 
@@ -3047,12 +3001,11 @@ class PRKSDatabase:
                 )
             else:
                 pairs = [(wid, tid) for wid in work_ids for tid in tag_ids]
+                # Relationships only; Tag identity is persistent.
                 conn.executemany(
                     "DELETE FROM work_tags WHERE work_id = ? AND tag_id = ?",
                     pairs,
                 )
-                for tid in tag_ids:
-                    self._prune_tag_if_unused_on_conn(conn, tid)
 
             conn.commit()
         except Exception:
@@ -4028,6 +3981,31 @@ class PRKSDatabase:
         return {"affected_work_ids": works, "affected_folder_ids": folders}
 
     def delete_tag(self, tag_id: str) -> Dict[str, Any]:
+        """Explicitly destroy a Tag. Relationships cascade.
+
+        **Tag identity is persistent.** This method and merge_tags_into() are
+        the ONLY operations that may destroy or transform it. PRKS used to
+        garbage-collect an "unused" Tag during ordinary relationship edits --
+        removing a tag from a Work or Folder, deleting a Work or Folder, or a
+        bulk tag removal -- which meant a Tag vanished because of an edit the
+        user never framed as deleting it.
+
+        That was wrong for two independent reasons. It made Tags temporary
+        values whose existence depended on current usage, rather than a
+        reusable vocabulary; and the "unused" test only consulted `work_tags`
+        and `folder_tags`, never `processing_file_tags`, so a Tag still
+        attached to a staged Processing File could be deleted and that
+        relationship silently destroyed by the FK cascade.
+
+        It is also hostile to synchronization: an offline device holding a Tag
+        id would find it gone after another device merely removed the last
+        relationship, turning ordinary edits into ENTITY_NOT_FOUND conflicts.
+
+        Unused Tags now simply remain in the catalog. If cleanup is ever
+        wanted it must be an explicit, user-initiated action (an "unused tags"
+        list with its own delete), never garbage collection during an
+        unrelated operation.
+        """
         tid = (tag_id or "").strip()
         if not tid:
             raise ValueError("tag_id is required")
@@ -4041,46 +4019,24 @@ class PRKSDatabase:
             conn.execute("DELETE FROM tags WHERE id = ?", (tid,))
         return {"status": "deleted", **affected}
 
-    def _prune_tag_if_unused(self, tag_id: str) -> None:
-        """Remove tag row (and aliases via FK) when nothing links to it."""
-        if not tag_id:
-            return
-        row = self.execute_query(
-            """
-            SELECT (
-                EXISTS(SELECT 1 FROM work_tags WHERE tag_id = ?)
-                OR EXISTS(SELECT 1 FROM folder_tags WHERE tag_id = ?)
-            ) AS in_use
-            """,
-            (tag_id, tag_id),
-        )
-        if row and row[0].get("in_use"):
-            return
-        self.delete_tag(tag_id)
-
     def add_tag_to_work(self, work_id: str, tag_id: str):
         self.execute_query("INSERT INTO work_tags (work_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", (work_id, tag_id))
 
     def remove_tag_from_work(self, work_id: str, tag_id: str):
-        # Same multi-write shape as remove_tag_from_folder, same fix.
-        with self.connection() as conn:
-            conn.execute(
-                "DELETE FROM work_tags WHERE work_id = ? AND tag_id = ?", (work_id, tag_id)
-            )
-            self._prune_tag_if_unused_on_conn(conn, tag_id)
+        # Relationship only. Tag identity is persistent -- see the note on
+        # delete_tag(). One statement, so atomic by autocommit.
+        self.execute_query(
+            "DELETE FROM work_tags WHERE work_id = ? AND tag_id = ?", (work_id, tag_id)
+        )
 
     def add_tag_to_folder(self, folder_id: str, tag_id: str):
         self.execute_query("INSERT INTO folder_tags (folder_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", (folder_id, tag_id))
 
     def remove_tag_from_folder(self, folder_id: str, tag_id: str):
-        # Membership removal and the unused-tag prune are one transaction: a
-        # failed prune must not leave the membership already deleted while the
-        # request reports failure.
-        with self.connection() as conn:
-            conn.execute(
-                "DELETE FROM folder_tags WHERE folder_id = ? AND tag_id = ?", (folder_id, tag_id)
-            )
-            self._prune_tag_if_unused_on_conn(conn, tag_id)
+        # Relationship only; see remove_tag_from_work.
+        self.execute_query(
+            "DELETE FROM folder_tags WHERE folder_id = ? AND tag_id = ?", (folder_id, tag_id)
+        )
 
     def get_work_tags(self, work_id: str) -> List[dict]:
         query = """
