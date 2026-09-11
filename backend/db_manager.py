@@ -3768,6 +3768,18 @@ class PRKSDatabase:
             )
             conn.execute("DELETE FROM folder_tags WHERE tag_id = ?", (source,))
 
+            # Staged Processing Files reference Tags too. A merge means
+            # "replace S with T everywhere", so these links move like the
+            # others -- without this the source row is deleted below and
+            # `processing_file_tags.tag_id ON DELETE CASCADE` destroys the
+            # relationship, leaving the staged file with neither tag.
+            conn.execute(
+                "INSERT OR IGNORE INTO processing_file_tags (processing_file_id, tag_id) "
+                "SELECT processing_file_id, ? FROM processing_file_tags WHERE tag_id = ?",
+                (target, source),
+            )
+            conn.execute("DELETE FROM processing_file_tags WHERE tag_id = ?", (source,))
+
             alias_rows = conn.execute(
                 "SELECT id, alias FROM tag_aliases WHERE tag_id = ?", (source,)
             ).fetchall()

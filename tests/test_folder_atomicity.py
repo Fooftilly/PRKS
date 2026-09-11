@@ -71,6 +71,24 @@ class TestFolderAtomicity(unittest.TestCase):
     def _folder_exists(self, folder_id: str) -> bool:
         return bool(self.db.execute_query("SELECT 1 FROM folders WHERE id = ?", (folder_id,)))
 
+    def _stage_processing_file(self, name: str) -> str:
+        path = os.path.join(self.storage.processing_dir, name)
+        with open(path, "wb") as fh:
+            fh.write(b"%PDF-1.4\n%STAGED\n%%EOF\n")
+        staged = self.db.scan_processing_files()
+        row = next((r for r in staged if r.get("filename") == name), None)
+        self.assertIsNotNone(row, name)
+        return row["id"]
+
+    def _processing_tag_ids(self, processing_id: str):
+        return sorted(
+            r["tag_id"]
+            for r in self.db.execute_query(
+                "SELECT tag_id FROM processing_file_tags WHERE processing_file_id = ?",
+                (processing_id,),
+            )
+        )
+
     # -- Tag identity is persistent -------------------------------------
     #
     # These replace the prune-atomicity tests this module used to carry.
@@ -146,29 +164,65 @@ class TestFolderAtomicity(unittest.TestCase):
         never processing_file_tags, so removing an unrelated Work relationship
         could delete a Tag a staged file still referenced -- destroying that
         relationship through the FK cascade."""
-        pdf_path = os.path.join(self.storage.processing_dir, "tag-identity.pdf")
-        with open(pdf_path, "wb") as fh:
-            fh.write(b"%PDF-1.4\n%TAGID\n%%EOF\n")
-        staged = self.db.scan_processing_files()
-        self.assertTrue(staged)
-        processing_id = staged[0]["id"]
-
+        processing_id = self._stage_processing_file("tag-identity.pdf")
         tag_id = self.db.add_tag("StagedOnly", "#333")["id"]
         work_id = self.db.add_work(title="Unrelated")
         self.db.add_tag_to_work(work_id, tag_id)
         self.db._set_processing_tags(processing_id, [{"id": tag_id}])
 
+        _forbid_tag_deletion(self.db)
         self.db.remove_tag_from_work(work_id, tag_id)
 
         self.assertEqual(
             len(self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tag_id,))), 1
         )
+        self.assertEqual(self._processing_tag_ids(processing_id), [tag_id])
+
+    # -- Merge moves relationships in ALL THREE tables --------------------
+
+    def test_merge_moves_a_processing_file_relationship_to_the_target(self):
+        """A merge means "replace S with T everywhere". Without migrating
+        processing_file_tags the source row is deleted and the FK cascade
+        leaves the staged file with neither tag."""
+        processing_id = self._stage_processing_file("merge-move.pdf")
+        source = self.db.add_tag("MergeSource", "#333")["id"]
+        target = self.db.add_tag("MergeTarget", "#444")["id"]
+        self.db._set_processing_tags(processing_id, [{"id": source}])
+
+        self.db.merge_tags_into(source, target)
+
+        self.assertEqual(self._processing_tag_ids(processing_id), [target])
+
+    def test_merge_deduplicates_when_the_file_already_had_both(self):
+        processing_id = self._stage_processing_file("merge-both.pdf")
+        source = self.db.add_tag("BothSource", "#333")["id"]
+        target = self.db.add_tag("BothTarget", "#444")["id"]
+        self.db._set_processing_tags(processing_id, [{"id": source}, {"id": target}])
+
+        self.db.merge_tags_into(source, target)
+
+        # Exactly one relationship, not a duplicate and not a lost row.
+        self.assertEqual(self._processing_tag_ids(processing_id), [target])
         self.assertEqual(
             len(self.db.execute_query(
-                "SELECT 1 FROM processing_file_tags WHERE tag_id = ?", (tag_id,)
+                "SELECT 1 FROM processing_file_tags "
+                "WHERE processing_file_id = ? AND tag_id = ?",
+                (processing_id, target),
             )),
             1,
         )
+
+    def test_explicit_delete_tag_still_cascades_a_processing_file_link(self):
+        """Explicit deletion really is destructive -- that is the difference
+        between it and a merge."""
+        processing_id = self._stage_processing_file("delete-cascade.pdf")
+        tag_id = self.db.add_tag("DoomedStaged", "#333")["id"]
+        self.db._set_processing_tags(processing_id, [{"id": tag_id}])
+
+        self.db.delete_tag(tag_id)
+
+        self.assertEqual(self.db.execute_query("SELECT id FROM tags WHERE id = ?", (tag_id,)), [])
+        self.assertEqual(self._processing_tag_ids(processing_id), [])
 
     def test_explicit_delete_tag_still_destroys_it_and_cascades(self):
         """The one remaining destructive path, alongside merge."""

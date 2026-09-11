@@ -373,7 +373,7 @@ Relationship edits change relationships and nothing else:
 | Delete a Folder | its `folder_tags` rows cascade; Tag survives |
 | bulk `remove_tags` | relationships only |
 | **`delete_tag()`** | the Tag, relationships cascade |
-| **`merge_tags_into()`** | the source Tag; target survives |
+| **`merge_tags_into()`** | the source Tag; target survives. Relationships move in **all three** tables: `work_tags`, `folder_tags`, `processing_file_tags`. |
 
 PRKS previously garbage-collected an "unused" Tag inside all five of the
 ordinary paths above. That was wrong for three independent reasons:
@@ -408,20 +408,62 @@ and there is no longer a second write. `tests/test_folder_atomicity.py` now
 installs a trigger that forbids *any* delete from `tags` during those paths,
 which is a stronger statement than checking the row survived.
 
-### Tag lifecycle events vs. pending operations — **DECIDED (design)**
+### Tag lifecycle events vs. pending operations — **REQUIREMENT for 2B**
 
 Explicit Tag deletion and merge are entity-lifecycle events relative to a
-queued Work-Tag operation. First implementation:
+queued Work-Tag operation:
 
 | Pending operation references | Result |
 | --- | --- |
-| an explicitly **deleted** Tag | `ENTITY_NOT_FOUND` / `TAG_DELETED` → surface as a conflict. **Never recreate the Tag.** |
+| an **active** Tag | normal processing |
 | a **merged** source Tag | `TAG_MERGED`, returning the canonical `target_tag_id` |
+| an explicitly **deleted** Tag | `TAG_DELETED` → surface as a conflict. **Never recreate the Tag.** |
+| an **unknown** id | `ENTITY_NOT_FOUND` |
 
 The operation is **not** automatically rewritten onto the merge target in the
 first version. Automatic rebasing is a reasonable later feature once the
 protocol is established; doing it before then would silently redirect a user's
 intent to an entity they never chose.
+
+**This needs a durable lifecycle record, which does not exist today.** After
+`merge_tags_into()` completes the source id is gone from `tags` entirely.
+PRKS preserves the source *name* as an alias of the target, but an alias does
+not preserve `old source tag id → canonical target tag id`. So when an offline
+device sends `ADD_WORK_TAG(W, old_source_id)` hours later, the server cannot
+tell "merged into T" from "never existed" from "explicitly deleted" — the
+three rows above collapse into one indistinguishable `ENTITY_NOT_FOUND`.
+
+Conceptually:
+
+```
+sync_tag_lifecycle
+  tag_id         PRIMARY KEY
+  state          active | merged | deleted
+  target_tag_id  nullable (set only for `merged`)
+  changed_at
+```
+
+Written inside the same transaction as the merge or delete, so the lifecycle
+record cannot disagree with the `tags` table. A narrower pair of
+tombstone/redirect structures would do equally well; what matters is that the
+three outcomes stay distinguishable durably.
+
+**Merge chains must resolve to the end.** Given `A → B` then `B → C`, an
+operation referencing `A` must return `TAG_MERGED → C`, never stranding the
+client on another obsolete id. Two viable implementations:
+
+- **resolve at request time** — follow `target_tag_id` until `active`,
+  `deleted`, or a cycle guard trips; or
+- **path-compress on merge** — when merging `B → C`, transactionally rewrite
+  every lifecycle row already pointing at `B` to point at `C`.
+
+Path compression keeps request handling O(1) and is preferred, but either is
+acceptable provided the resolver is bounded against cycles.
+
+**A chain ending in deletion resolves to deletion.** For `A → B → C` where `C`
+is later explicitly deleted, an old operation against `A` resolves to
+`TAG_DELETED` — it must **not** recreate `C`, and must not report a merge to a
+target that no longer exists.
 
 ## 10a. Revision visibility — **REQUIREMENT for 2B**
 
@@ -523,11 +565,24 @@ Work-tag relationships:
   Every affected `work-tag / W:T` scope must advance. The canonical boundary
   already collects the affected work ids (for cache coherence), so the same
   transaction has what it needs.
-- `merge_tags_into()` — moves relationships from source to target. Both
-  `W:source` and `W:target` scopes change for every affected Work.
+- `merge_tags_into()` — moves relationships from source to target. **The two
+  scopes do not advance symmetrically.** For every Work holding the source:
+
+  | Scope | Transition | Advance? |
+  | --- | --- | --- |
+  | `W:source` | `true → false` | **always** |
+  | `W:target` | `false → true` | **yes** |
+  | `W:target` | `true → true` (the Work already had both) | **no** |
+
+  Advancing `W:target` when the Work already had the target would manufacture
+  a synchronization change where no logical relationship changed, and would
+  make another device holding a perfectly current `W:target = true`
+  observation appear stale. This is the same no-op rule as §10d: **a
+  transition that does not change state does not advance a revision.**
 
 `bulk_update_works()` with `add_tags` / `remove_tags` is the same requirement
-at scale.
+at scale, with the same no-op rule — a Work that already had the tag being
+added must not advance.
 
 ## 10c. The offline tag picker needs a tag catalog — **REQUIREMENT for 2B**
 
@@ -658,7 +713,7 @@ size is bounded.
 | --- | --- | --- |
 | 2A | Durable local store, device identity, operation envelope, this document | **done** |
 | 2A.1 | `enqueueOperation` owns device identity; UTF-8 byte limit; reset closes its own connection; tighter envelope invariants; §10a–§10d | **done** |
-| 2A.2 | Stable Tag identity: no automatic pruning; `processing_file_tags` lifetime fixed; §9a | **done** |
+| 2A.2 | Stable Tag identity: no automatic pruning; `processing_file_tags` preserved on prune **and merge**; §9a | **done** |
 | 2B | Server sync protocol: `sync_operations` ledger, revision table (incl. tombstones), revision advancement in canonical boundaries, `tags:index`, tag-options projection, Work Tags offline | next, review first |
 | 2C | Optimistic overlay + Settings "unsynchronized changes" surface | after 2B |
 | 2D | More operation families in the §9 priority order | — |
@@ -676,6 +731,7 @@ from the relational model and from the disposable cache.
 | Question | Status | Reason |
 | --- | --- | --- |
 | Offline tag *creation* | **DEFERRED** | Needs client-generated entity ids (§5). 2B attaches/detaches existing tags only. |
+| Durable Tag lifecycle / merge-redirect table | **REQUIRED in 2B (§9a)** | Without it a merged source id is indistinguishable from a deleted or unknown one, so `TAG_MERGED` cannot be returned at all. |
 | Whether tag-options rides on Work detail or its own endpoint | **RECOMMENDED (§10a)** | Dedicated projection preferred; confirm the schema during 2B implementation. |
 | Offline entity ids / longer id format | **DEFERRED** | Recommendation in §5; needs an export/import and wiki-link audit, and no offline creation exists to need it. |
 | `protocol_version` negotiation | **DEFERRED** | Single-client-per-server today; add when the first incompatible envelope change is real, not speculatively. |

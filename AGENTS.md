@@ -1453,6 +1453,13 @@ if ever added, must be an explicit user action -- never collection during an
 unrelated operation. `tests/test_folder_atomicity.py` installs a trigger
 forbidding any delete from `tags` during those paths.
 
+`merge_tags_into()` moves relationships in **all three** tables --
+`work_tags`, `folder_tags` and `processing_file_tags`. The third was missing
+and had the same effect as the prune bug: the source row was deleted and the
+FK cascade left a staged Processing File holding neither tag. A merge means
+"replace S with T everywhere"; explicit `delete_tag()` is the one path where
+cascading the relationship away is correct.
+
 **Before Work Tags can go offline (Milestone 2B)** the design document records
 three requirements worth knowing here: `sync_entity_revisions` must keep a
 `work-tag / W:T` row as a **tombstone** after the relationship is deleted (an
