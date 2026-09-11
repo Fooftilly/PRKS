@@ -1210,6 +1210,48 @@ is refused only when it would *start* a session (**Done stays live**), and
 `mountFolderAttachControlsForWork()` skips its raw `fetchFolders()` catalog read
 entirely while non-online rather than letting it fail under `void`.
 
+**The `/api/folders` ETag is derived from the serialized catalog.** The
+invariant is one-directional but absolute: if the body can change, the ETag
+must change. A revision probe built from row *counts* plus `MAX(updated_at)`
+could not satisfy it, and shipped two real holes — moving a Work from folder A
+to B leaves the `folder_files` row count identical while both rows'
+`work_count` change, and `CURRENT_TIMESTAMP` has one-second granularity so
+`MAX(updated_at)` does not reliably move for a change made inside the same
+second. Either hole lets a stale catalog revalidate as `304` and be
+republished into `folders:index` *after* the offline domain was correctly
+invalidated — a client-side invalidation cannot defend against a server that
+says "unchanged" when the representation changed. `etag_folders_catalog(rows)`
+now hashes the payload, so the invariant holds by construction and cannot
+drift when a field is added to `get_all_folders()`; the handler builds the
+catalog once and passes it in. `tests/test_server_api.py` asserts a direct
+move, a bulk `move_folder`, and every index field mutated back-to-back inside
+one second, all against a real `If-None-Match`.
+
+**Tag delete and merge report what they staled.** A cached Work detail embeds
+`work.tags[]` and a cached Folder detail `folder.tags[]`, so
+`DELETE /api/tags/:id` and `POST /api/tags/merge` stale both read models.
+Both collect the linked entities **before** the write (the FK cascade and the
+link move respectively destroy the evidence) and return `affected_work_ids` /
+`affected_folder_ids`; `deleteTag()` and `mergeTags()` in `api.js` publish
+Folder-domain invalidation and per-Work eviction from that answer through
+`prksPublishTagCoherence()`. Server-reported IDs are what make this correct
+regardless of the active route, the focused tab, which surface initiated the
+mutation, or whether this client had ever loaded those relationships. For a
+merge the affected set is everything linked to the **source**: its name
+disappears from the rendered list whether or not the target was already
+present. Tag **alias** mutations deliberately publish nothing — aliases live in
+`tag_aliases` and never appear in a cached `tags[]`. Only acknowledged
+canonical success publishes: a transport failure, HTTP error, validation error
+or abort leaves every snapshot eligible, because nothing canonical changed.
+
+**`parent_id` must be present, not merely nullish.** `get_all_folders()`
+selects `f.*`, `get_folder()` selects `*`, and the children query names the
+column, so the canonical API always carries it and spells a root folder as an
+explicit `null`. The validator requires the own property: accepting `undefined`
+would let a truncated HTTP-200 row silently reparent a folder to the top level
+of someone's hierarchy. The `parent` summary is exempt — it selects only
+`id`/`title`.
+
 **Folder deletion and folder-tag removal are transactional.**
 `delete_empty_folder()` deletes the folder row and prunes its newly-unused tags
 in one transaction via `_prune_tag_if_unused_on_conn()`, and

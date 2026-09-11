@@ -923,6 +923,43 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertIn("member_work_ids", body)
         self.assertIn("prksOfflineMarkEntityChanged('work', workId)", body)
 
+    def test_folder_parent_id_must_be_present_not_merely_nullish(self):
+        """A truncated HTTP-200 row must not be read as a root folder."""
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        body = _fn_body(app, "function prksIsFolderParentId(")
+        self.assertIn("hasOwnProperty.call(row, 'parent_id')", body)
+        # `undefined` must NOT be accepted as equivalent to canonical null.
+        self.assertNotIn("value === undefined", body)
+        # Both index rows and detail must go through it.
+        self.assertIn("prksIsFolderParentId(row) &&", app)
+        self.assertIn("!prksIsFolderParentId(value)", app)
+
+    def test_tag_mutations_publish_coherence_from_the_server_answer(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        for fn in ("async function deleteTag(", "async function mergeTags("):
+            body = _fn_body(api, fn)
+            with self.subTest(fn=fn):
+                self.assertIn("prksGuardFolderMutation(", body)
+                self.assertIn("prksPublishTagCoherence(data)", body)
+                # Coherence only after acknowledged success.
+                self.assertLess(body.index("if (!res.ok)"), body.index("prksPublishTagCoherence"))
+        publish = _fn_body(api, "function prksPublishTagCoherence(")
+        self.assertIn("affected_folder_ids", publish)
+        self.assertIn("affected_work_ids", publish)
+        self.assertIn("prksMarkFoldersDomainChanged()", publish)
+        self.assertIn("prksOfflineMarkEntityChanged('work', workId)", publish)
+
+    def test_tags_component_has_no_raw_delete_or_merge(self):
+        tags = _read(os.path.join(_FRONTEND, "js", "components", "tags.js"))
+        self.assertNotIn("'/api/tags/merge'", tags)
+        # Alias endpoints stay raw on purpose: aliases live in `tag_aliases`
+        # and never appear in a cached work.tags[] / folder.tags[].
+        for chunk in tags.split("/api/tags/")[1:]:
+            window = chunk[:200]
+            if "aliases" in window:
+                continue
+            self.assertNotIn("'DELETE'", window, "raw Tag delete in tags.js")
+
     def test_work_display_hooks_reach_folders(self):
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
         title_at = api.index("function prksMarkWorkTitleChanged(")

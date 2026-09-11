@@ -669,6 +669,135 @@ class FoldersOfflineTests(unittest.TestCase):
         self.assertEqual(o._domain_generation(page, 'folders'), before)
         self.assertIsNotNone(o._cached_list(page, 'folders:index'))
 
+    # ---- Tag delete / merge coherence ---------------------------------------
+
+    def test_tag_delete_invalidates_folders_and_exactly_its_linked_works(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        # work_a carries the tag; work_b must survive untouched.
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        o._open_work_from_home(page, WORK_B_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_b'])
+        page.evaluate(
+            """async ([wid, tid]) => {
+                await prksRequest('/api/works/' + encodeURIComponent(wid) + '/tags', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tag_id: tid }),
+                });
+            }""",
+            [ids['work_a'], ids['folder_tag']],
+        )
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+
+        before = self.generations(page)
+        page.evaluate("async (tid) => { await deleteTag(tid); }", ids['folder_tag'])
+
+        self.changed(page, before, {'folders'})
+        o._wait_entity_uncached(page, 'work', ids['work_a'])
+        self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_b']))
+
+    def test_tag_merge_invalidates_folders_and_source_linked_works(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        target = page.evaluate(
+            """async () => {
+                const res = await prksRequest('/api/tags', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: 'E2E Merge Target' }),
+                });
+                return (await res.json()).id;
+            }"""
+        )
+        page.evaluate(
+            """async ([wid, tid]) => {
+                await prksRequest('/api/works/' + encodeURIComponent(wid) + '/tags', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tag_id: tid }),
+                });
+            }""",
+            [ids['work_a'], ids['folder_tag']],
+        )
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        o._open_work_from_home(page, WORK_B_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_b'])
+
+        before = self.generations(page)
+        page.evaluate("async ([src, dst]) => { await mergeTags(src, dst); }",
+                      [ids['folder_tag'], target])
+
+        self.changed(page, before, {'folders'})
+        o._wait_entity_uncached(page, 'work', ids['work_a'])
+        self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_b']))
+
+    def test_failed_tag_mutation_keeps_every_cache_eligible(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+
+        before = self.generations(page)
+        failed = page.evaluate(
+            """async (tid) => {
+                const out = [];
+                try { await deleteTag('T-does-not-exist'); } catch (e) { out.push('delete'); }
+                try { await mergeTags(tid, 'T-does-not-exist'); } catch (e) { out.push('merge'); }
+                return out;
+            }""",
+            ids['folder_tag'],
+        )
+        self.assertEqual(failed, ['delete', 'merge'])
+        # Nothing canonical changed, so every cached snapshot stays eligible.
+        self.changed(page, before, set())
+        self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_a']))
+
+    def test_tag_delete_through_the_real_tags_page_publishes_coherence(self):
+        """Drives the actual Tags page affordance, so the wrapper wiring is
+        proven non-vacuous rather than only called directly by a test."""
+        server, page, context, _c = self.start()
+        ids = server.ids
+        # Tag a Work too, so both halves of the coherence are observable.
+        page.evaluate(
+            """async ([wid, tid]) => {
+                await prksRequest('/api/works/' + encodeURIComponent(wid) + '/tags', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tag_id: tid }),
+                });
+            }""",
+            [ids['work_a'], ids['folder_tag']],
+        )
+        self.cache(page, ids, all_domains=True)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        before = o._domain_generation(page, 'folders')
+
+        page.evaluate("() => prksNavigate('#/tags')")
+        page.wait_for_selector('#tags-page-cloud')
+        page.locator('[data-tag-alias-edit="%s"]' % ids['folder_tag']).click()
+        page.wait_for_selector('#tags-page-alias-delete-btn')
+        page.locator('#tags-page-alias-delete-btn').click()
+        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
+        page.locator('#prks-modal-confirm-ok').click()
+
+        page.wait_for_function(
+            "(g) => window.prksOfflineDomainGeneration('folders') > g", arg=before, timeout=20000
+        )
+        self.assertGreater(o._domain_generation(page, 'folders'), before)
+        o._wait_entity_uncached(page, 'work', ids['work_a'])
+
     # ---- cache safety -------------------------------------------------------
 
     def test_malformed_authoritative_payloads_never_poison_the_cache(self):
@@ -700,6 +829,67 @@ class FoldersOfflineTests(unittest.TestCase):
         self.detail(page, ids['folder_parent'])
         page.wait_for_timeout(800)
         self.assertEqual(o._cached_entity(page, 'folder', ids['folder_parent']), good_detail)
+
+    def test_missing_parent_id_is_rejected_and_never_poisons_the_cache(self):
+        """A row without `parent_id` must not be cached as a root folder."""
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        good_index = o._cached_list(page, 'folders:index')
+        self.assertIsNotNone(good_index)
+
+        def truncated_index(route):
+            route.fulfill(status=200, content_type='application/json',
+                          body=json.dumps([{'id': 'F-truncated', 'title': 'No Parent Field',
+                                            'description': '', 'work_count': 0, 'child_count': 0}]))
+
+        page.route('**/api/folders', truncated_index)
+        self.addCleanup(lambda: o._safe_unroute(page, '**/api/folders', truncated_index))
+        self.index(page)
+        page.wait_for_timeout(800)
+        self.assertNotIn('No Parent Field', o._content_text(page))
+        # The good copy already on this device is untouched.
+        self.assertEqual(o._cached_list(page, 'folders:index'), good_index)
+        o._safe_unroute(page, '**/api/folders', truncated_index)
+
+        def truncated_detail(route):
+            route.fulfill(status=200, content_type='application/json',
+                          body=json.dumps({'id': ids['folder_parent'], 'title': 'No Parent Field',
+                                           'description': '', 'private_notes': '',
+                                           'parent': None, 'children': [], 'works': [], 'tags': []}))
+
+        page.route('**/api/folders/*', truncated_detail)
+        self.addCleanup(lambda: o._safe_unroute(page, '**/api/folders/*', truncated_detail))
+        good_detail = o._cached_entity(page, 'folder', ids['folder_parent'])
+        self.detail(page, ids['folder_parent'])
+        page.wait_for_timeout(800)
+        self.assertEqual(o._cached_entity(page, 'folder', ids['folder_parent']), good_detail)
+
+        # ... and the untouched snapshot still serves offline.
+        o._safe_unroute(page, '**/api/folders/*', truncated_detail)
+        self.offline(page, context)
+        self.index(page)
+        o._wait_offline_banner(page)
+        self.assertIn(FOLDER_PARENT_TITLE, o._content_text(page))
+
+    def test_cached_row_without_parent_id_is_discarded_not_rendered_as_root(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        page.evaluate(
+            """() => window.createPrksOfflineStore().putList('folders:index', [
+                { id: 'F-cached-bad', title: 'Orphan Row', description: '',
+                  work_count: 0, child_count: 0 }
+            ])"""
+        )
+        page.wait_for_timeout(250)
+        self.offline(page, context)
+        self.index(page)
+        o._wait_offline_unavailable(page)
+        text = o._content_text(page)
+        self.assertIn('Folders not available offline', text)
+        self.assertNotIn('Orphan Row', text)
+        o._wait_list_uncached(page, 'folders:index')
 
     def test_corrupted_cached_payloads_are_discarded_before_rendering(self):
         server, page, context, _c = self.start()

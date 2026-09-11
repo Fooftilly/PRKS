@@ -733,6 +733,55 @@ async function patchFolder(folderId, updates) {
     }
 }
 
+/* Canonical Tag boundaries. A cached Work detail embeds `work.tags[]` and a
+ * cached Folder detail `folder.tags[]`, so deleting or merging a Tag stales
+ * both read models. The server reports exactly which entities were linked, so
+ * coherence never depends on the active route, the focused tab, or whether
+ * this client had ever loaded those relationships. Only acknowledged canonical
+ * success publishes anything: a transport failure, HTTP error, validation
+ * error or abort leaves every cached snapshot eligible, because nothing
+ * canonical changed. */
+function prksPublishTagCoherence(data) {
+    const payload = data && typeof data === 'object' ? data : {};
+    const folders = Array.isArray(payload.affected_folder_ids) ? payload.affected_folder_ids : [];
+    const works = Array.isArray(payload.affected_work_ids) ? payload.affected_work_ids : [];
+    if (folders.length) prksMarkFoldersDomainChanged();
+    if (works.length && typeof prksOfflineMarkEntityChanged === 'function') {
+        works.forEach(function (workId) {
+            prksOfflineMarkEntityChanged('work', workId);
+        });
+    }
+    return payload;
+}
+
+async function deleteTag(tagId) {
+    prksGuardFolderMutation('Deleting a tag requires a connection to PRKS.');
+    const res = await prksRequest('/api/tags/' + encodeURIComponent(tagId), { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const err = new Error(data.error || 'Could not delete tag.');
+        err.httpStatus = res.status;
+        throw err;
+    }
+    return prksPublishTagCoherence(data);
+}
+
+async function mergeTags(sourceTagId, targetTagId) {
+    prksGuardFolderMutation('Merging tags requires a connection to PRKS.');
+    const res = await prksRequest('/api/tags/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_tag_id: sourceTagId, target_tag_id: targetTagId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const err = new Error(data.error || 'Could not merge tags.');
+        err.httpStatus = res.status;
+        throw err;
+    }
+    return prksPublishTagCoherence(data);
+}
+
 /** Canonical Folder deletion boundary (empty folders only, server-enforced). */
 async function deleteFolderCanonical(folderId) {
     prksGuardFolderMutation('Deleting a folder requires a connection to PRKS.');
@@ -1465,6 +1514,8 @@ window.prksOfflineWasGuardRefusal = prksOfflineWasGuardRefusal;
 window.deleteFolderCanonical = deleteFolderCanonical;
 window.addTagToFolder = addTagToFolder;
 window.removeTagFromFolder = removeTagFromFolder;
+window.deleteTag = deleteTag;
+window.mergeTags = mergeTags;
 window.createPersonGroup = createPersonGroup;
 window.updatePersonGroup = updatePersonGroup;
 window.deletePersonGroup = deletePersonGroup;

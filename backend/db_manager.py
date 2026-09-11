@@ -1670,14 +1670,30 @@ class PRKSDatabase:
         rc = (rr[0] if rr else {"c": 0})["c"]
         return f'W/"prks-works-{row["c"]}-{row["m"]}-ff{ffc}-r{rc}"'
 
-    def etag_folders_catalog(self) -> str:
-        r = self.execute_query("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM folders")
-        ff = self.execute_query("SELECT COUNT(*) AS c FROM folder_files")
-        ft = self.execute_query("SELECT COUNT(*) AS c FROM folder_tags")
-        row = r[0] if r else {"c": 0, "m": ""}
-        f1 = ff[0] if ff else {"c": 0}
-        f2 = ft[0] if ft else {"c": 0}
-        return f'W/"prks-folders-{row["c"]}-{row["m"]}-{f1["c"]}-{f2["c"]}"'
+    def etag_folders_catalog(self, rows: Optional[List[dict]] = None) -> str:
+        """Weak ETag derived from the serialized catalog itself.
+
+        The invariant this must satisfy is one-directional but absolute: if the
+        `/api/folders` body can change, this value must change. A revision
+        probe built from row *counts* plus MAX(updated_at) could not satisfy it:
+
+        * moving a Work from folder A to B leaves the `folder_files` row count
+          identical while both rows' `work_count` change, and
+        * `CURRENT_TIMESTAMP` has one-second granularity, so MAX(updated_at)
+          does not reliably move for a change made within the same second as
+          the previous one.
+
+        Either hole lets a stale catalog be revalidated as 304 and republished
+        into the client's `folders:index` *after* its offline coherence domain
+        was correctly invalidated. Hashing the payload makes the invariant true
+        by construction, and cannot silently drift when a field is added to
+        `get_all_folders()`. The catalog is one small query, so callers pass
+        the rows they already built rather than running it twice.
+        """
+        data = self.get_all_folders() if rows is None else rows
+        blob = json.dumps(data, sort_keys=True, default=str, separators=(",", ":"))
+        digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+        return f'W/"prks-folders-{len(data)}-{digest}"'
 
     def etag_persons_catalog(self) -> str:
         r = self.execute_query("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM persons")
@@ -3636,6 +3652,11 @@ class PRKSDatabase:
             source_name = (srow["name"] or "").strip()
             target_name = (trow["name"] or "").strip()
 
+            # Everything linked to the SOURCE has its rendered tag list change:
+            # the source name disappears, whether or not the target was already
+            # present. Entities linked only to the target are untouched.
+            affected = self._entities_linked_to_tag_on_conn(conn, source)
+
             conn.execute(
                 "INSERT OR IGNORE INTO work_tags (work_id, tag_id) "
                 "SELECT work_id, ? FROM work_tags WHERE tag_id = ?",
@@ -3697,7 +3718,7 @@ class PRKSDatabase:
 
             conn.commit()
 
-        return {"canonical_tag_id": target, "canonical_name": target_name}
+        return {"canonical_tag_id": target, "canonical_name": target_name, **affected}
 
     def delete_tag_alias(self, tag_id: str, alias: str) -> bool:
         al = (alias or "").strip()
@@ -3836,15 +3857,45 @@ class PRKSDatabase:
         self._enrich_tag_rows_with_aliases(rows)
         return rows
 
+    def _entities_linked_to_tag_on_conn(self, conn, tag_id: str) -> Dict[str, List[str]]:
+        """Works and folders whose rendered tag list contains this tag.
+
+        Offline coherence needs these from the canonical boundary: a cached
+        Work detail embeds `work.tags[]` and a cached Folder detail
+        `folder.tags[]`, so deleting or merging a tag stales exactly these
+        entities. Collected from the server so the answer is right regardless
+        of which route, tab or UI initiated the mutation -- and right even
+        when the client never loaded those relationships.
+        """
+        works = [
+            r["work_id"]
+            for r in conn.execute(
+                "SELECT work_id FROM work_tags WHERE tag_id = ?", (tag_id,)
+            ).fetchall()
+            if r["work_id"]
+        ]
+        folders = [
+            r["folder_id"]
+            for r in conn.execute(
+                "SELECT folder_id FROM folder_tags WHERE tag_id = ?", (tag_id,)
+            ).fetchall()
+            if r["folder_id"]
+        ]
+        return {"affected_work_ids": works, "affected_folder_ids": folders}
+
     def delete_tag(self, tag_id: str) -> Dict[str, Any]:
         tid = (tag_id or "").strip()
         if not tid:
             raise ValueError("tag_id is required")
-        row = self.execute_query("SELECT id FROM tags WHERE id = ?", (tid,))
-        if not row:
-            raise ValueError("tag not found")
-        self.execute_query("DELETE FROM tags WHERE id = ?", (tid,))
-        return {"status": "deleted"}
+        # Collect BEFORE the delete: the FK cascade removes the link rows, so
+        # afterwards there is nothing left to report.
+        with self.connection() as conn:
+            row = conn.execute("SELECT id FROM tags WHERE id = ?", (tid,)).fetchone()
+            if not row:
+                raise ValueError("tag not found")
+            affected = self._entities_linked_to_tag_on_conn(conn, tid)
+            conn.execute("DELETE FROM tags WHERE id = ?", (tid,))
+        return {"status": "deleted", **affected}
 
     def _prune_tag_if_unused(self, tag_id: str) -> None:
         """Remove tag row (and aliases via FK) when nothing links to it."""

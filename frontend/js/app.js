@@ -1929,16 +1929,23 @@ function prksIsFolderCount(value) {
     return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0;
 }
 
-/** `parent_id` is either NULL (a root folder) or a usable folder id. */
-function prksIsFolderParentId(value) {
-    return value === null || value === undefined ||
-        (typeof value === 'string' && !!value.trim());
+/* `parent_id` must be PRESENT: `get_all_folders()` selects `f.*`, `get_folder()`
+ * selects `*`, and the children query names the column explicitly, so the
+ * canonical API always carries it and represents a root folder as an explicit
+ * `null`. Treating an absent field as root-like would let a truncated payload
+ * silently reparent someone's hierarchy to the top level. The `parent` summary
+ * is deliberately exempt -- it selects only id/title. */
+function prksIsFolderParentId(row) {
+    if (!row || typeof row !== 'object') return false;
+    if (!Object.prototype.hasOwnProperty.call(row, 'parent_id')) return false;
+    const value = row.parent_id;
+    return value === null || (typeof value === 'string' && !!value.trim());
 }
 
 function prksIsFolderSummaryShape(row) {
     return prksHasUsableRowId(row) &&
         prksIsOptionalString(row.title) && prksIsOptionalString(row.description) &&
-        prksIsFolderParentId(row.parent_id) &&
+        prksIsFolderParentId(row) &&
         prksIsFolderCount(row.work_count) && prksIsFolderCount(row.child_count);
 }
 
@@ -1970,7 +1977,7 @@ function prksIsFolderTagRowShape(row) {
 function prksIsFolderShape(value, folderId) {
     if (!prksHasUsableRowId(value) || String(value.id) !== String(folderId)) return false;
     if (!prksIsOptionalString(value.title) || !prksIsOptionalString(value.description) ||
-        !prksIsOptionalString(value.private_notes) || !prksIsFolderParentId(value.parent_id)) return false;
+        !prksIsOptionalString(value.private_notes) || !prksIsFolderParentId(value)) return false;
     // `parent` is null for a root folder; when present it becomes a link.
     if (value.parent !== null && value.parent !== undefined) {
         if (!prksHasUsableRowId(value.parent) || !prksIsOptionalString(value.parent.title)) return false;

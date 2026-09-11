@@ -2026,11 +2026,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     self.send_error(404, "API endpoint not found")
             elif path == '/api/folders':
-                etag = db.etag_folders_catalog()
+                # The catalog IS the revision source (see etag_folders_catalog),
+                # so build it once and derive the ETag from it.
+                data = db.get_all_folders()
+                etag = db.etag_folders_catalog(data)
                 if self._prks_if_none_match(etag):
                     self._send_json_not_modified(etag)
                     return
-                data = db.get_all_folders()
                 self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/folders/') and len(path.split('/')) == 4:
                 f_id = path.split('/')[-1]

@@ -3347,5 +3347,247 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(folder_row.get("title"), "Uncategorized")
 
 
+    # -- Catalog freshness: an ETag must change whenever the body can ------
+
+    def _conditional_get(self, path, etag=None):
+        """Returns (status, etag, parsed_body). 304 bodies are empty."""
+        req = urllib.request.Request(f"{self._base_url}{path}")
+        if etag:
+            req.add_header("If-None-Match", etag)
+        try:
+            with urllib.request.urlopen(req) as res:
+                raw = res.read().decode()
+                return res.status, res.headers.get("ETag"), (json.loads(raw) if raw else None)
+        except urllib.error.HTTPError as exc:
+            exc.read()
+            return exc.code, exc.headers.get("ETag"), None
+
+    def test_folders_etag_changes_when_a_work_moves_between_folders(self):
+        """Moving a Work changes both folders' work_count, so the cached
+        catalog is stale -- a 304 here would republish stale counts into the
+        client's folders:index after its offline domain was invalidated.
+
+        The total folder_files row count is IDENTICAL across a move, which is
+        exactly why a count-based ETag missed it.
+        """
+        status, src = self._sv_json("POST", "/api/folders", {"title": "ETag Move Source"})
+        self.assertEqual(status, 200)
+        status, dst = self._sv_json("POST", "/api/folders", {"title": "ETag Move Dest"})
+        self.assertEqual(status, 200)
+        status, work = self._sv_json(
+            "POST", "/api/works", {"title": "ETag Move Work", "folder_id": src["id"]}
+        )
+        self.assertEqual(status, 200)
+
+        status, etag1, body1 = self._conditional_get("/api/folders")
+        self.assertEqual(status, 200)
+        self.assertTrue(etag1)
+
+        def count_for(body, folder_id):
+            row = next((f for f in body if f.get("id") == folder_id), None)
+            self.assertIsNotNone(row, folder_id)
+            return row.get("work_count")
+
+        self.assertEqual(count_for(body1, src["id"]), 1)
+        self.assertEqual(count_for(body1, dst["id"]), 0)
+
+        status, _ = self._sv_json(
+            "PATCH", f"/api/works/{work['id']}", {"folder_id": dst["id"]}
+        )
+        self.assertEqual(status, 200)
+
+        status, etag2, body2 = self._conditional_get("/api/folders", etag=etag1)
+        self.assertNotEqual(status, 304, "stale folder catalog served as Not Modified")
+        self.assertEqual(status, 200)
+        self.assertNotEqual(etag2, etag1)
+        self.assertEqual(count_for(body2, src["id"]), 0)
+        self.assertEqual(count_for(body2, dst["id"]), 1)
+
+    def test_folders_etag_changes_on_bulk_move_folder(self):
+        """bulk move_folder writes folder_files on its own path."""
+        status, src = self._sv_json("POST", "/api/folders", {"title": "ETag Bulk Source"})
+        self.assertEqual(status, 200)
+        status, dst = self._sv_json("POST", "/api/folders", {"title": "ETag Bulk Dest"})
+        self.assertEqual(status, 200)
+        status, work = self._sv_json(
+            "POST", "/api/works", {"title": "ETag Bulk Work", "folder_id": src["id"]}
+        )
+        self.assertEqual(status, 200)
+
+        status, etag1, _ = self._conditional_get("/api/folders")
+        self.assertEqual(status, 200)
+
+        status, _ = self._sv_json(
+            "POST",
+            "/api/works/bulk",
+            {"action": "move_folder", "work_ids": [work["id"]], "folder_id": dst["id"]},
+        )
+        self.assertEqual(status, 200)
+
+        status, etag2, body2 = self._conditional_get("/api/folders", etag=etag1)
+        self.assertNotEqual(status, 304, "stale folder catalog served after bulk move")
+        self.assertEqual(status, 200)
+        self.assertNotEqual(etag2, etag1)
+        dst_row = next(f for f in body2 if f.get("id") == dst["id"])
+        self.assertEqual(dst_row.get("work_count"), 1)
+
+    def test_folders_etag_follows_every_index_field_within_one_second(self):
+        """CURRENT_TIMESTAMP has one-second resolution, so a revision probe
+        built on MAX(updated_at) cannot see a change made in the same second
+        as the previous one. Each mutation here runs back-to-back."""
+        status, parent = self._sv_json("POST", "/api/folders", {"title": "ETag Fields Parent"})
+        self.assertEqual(status, 200)
+        # A weak ETag identifies the representation, so an operation that
+        # restores an earlier body legitimately restores its ETag. What must
+        # never happen is the ETag standing still across a body change, so
+        # each step is compared against the one immediately before it.
+        state = {"etag": None}
+
+        def snapshot(label):
+            status, etag, _ = self._conditional_get("/api/folders")
+            self.assertEqual(status, 200, label)
+            self.assertNotEqual(etag, state["etag"], "ETag did not change after %s" % label)
+            state["etag"] = etag
+            return etag
+
+        snapshot("baseline")
+        # title
+        status, _ = self._sv_json("PATCH", f"/api/folders/{parent['id']}", {"title": "ETag Fields Renamed"})
+        self.assertEqual(status, 200)
+        snapshot("title change")
+        # description
+        status, _ = self._sv_json("PATCH", f"/api/folders/{parent['id']}", {"description": "desc"})
+        self.assertEqual(status, 200)
+        snapshot("description change")
+        # child_count (a new subfolder changes the parent's rendered count)
+        status, child = self._sv_json(
+            "POST", "/api/folders", {"title": "ETag Fields Child", "parent_id": parent["id"]}
+        )
+        self.assertEqual(status, 200)
+        snapshot("subfolder created")
+        # parent_id / child_count (reparent to root)
+        status, _ = self._sv_json("PATCH", f"/api/folders/{child['id']}", {"parent_id": None})
+        self.assertEqual(status, 200)
+        snapshot("reparent")
+        # work_count via creation into the folder
+        status, work = self._sv_json(
+            "POST", "/api/works", {"title": "ETag Fields Work", "folder_id": parent["id"]}
+        )
+        self.assertEqual(status, 200)
+        snapshot("work filed")
+        # work_count via deletion
+        status, _ = self._sv_json("DELETE", f"/api/works/{work['id']}")
+        self.assertEqual(status, 200)
+        snapshot("work deleted")
+        # folder delete
+        status, _ = self._sv_json("DELETE", f"/api/folders/{child['id']}")
+        self.assertEqual(status, 200)
+        snapshot("folder deleted")
+
+    # -- Tag mutations report what they staled ----------------------------
+
+    def test_tag_delete_reports_affected_works_and_folders(self):
+        status, folder = self._sv_json("POST", "/api/folders", {"title": "Tag Del Folder"})
+        self.assertEqual(status, 200)
+        status, work = self._sv_json("POST", "/api/works", {"title": "Tag Del Work"})
+        self.assertEqual(status, 200)
+        status, other = self._sv_json("POST", "/api/works", {"title": "Tag Del Untouched"})
+        self.assertEqual(status, 200)
+        status, tag = self._sv_json("POST", "/api/tags", {"name": "TagDelSubject"})
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            self._sv_json("POST", f"/api/works/{work['id']}/tags", {"tag_id": tag["id"]})[0], 200
+        )
+        self.assertEqual(
+            self._sv_json("POST", f"/api/folders/{folder['id']}/tags", {"tag_id": tag["id"]})[0], 200
+        )
+
+        status, out = self._sv_json("DELETE", f"/api/tags/{tag['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(out.get("affected_work_ids"), [work["id"]])
+        self.assertEqual(out.get("affected_folder_ids"), [folder["id"]])
+        self.assertNotIn(other["id"], out.get("affected_work_ids") or [])
+
+    def test_tag_merge_reports_source_linked_works_and_folders(self):
+        status, folder = self._sv_json("POST", "/api/folders", {"title": "Tag Merge Folder"})
+        self.assertEqual(status, 200)
+        status, work = self._sv_json("POST", "/api/works", {"title": "Tag Merge Work"})
+        self.assertEqual(status, 200)
+        status, target_only = self._sv_json("POST", "/api/works", {"title": "Tag Merge TargetOnly"})
+        self.assertEqual(status, 200)
+        status, source = self._sv_json("POST", "/api/tags", {"name": "MergeSource"})
+        self.assertEqual(status, 200)
+        status, target = self._sv_json("POST", "/api/tags", {"name": "MergeTarget"})
+        self.assertEqual(status, 200)
+        for path in (f"/api/works/{work['id']}/tags", f"/api/folders/{folder['id']}/tags"):
+            self.assertEqual(self._sv_json("POST", path, {"tag_id": source["id"]})[0], 200)
+        # A Work carrying ONLY the target is not affected by the merge.
+        self.assertEqual(
+            self._sv_json("POST", f"/api/works/{target_only['id']}/tags", {"tag_id": target["id"]})[0], 200
+        )
+
+        status, out = self._sv_json(
+            "POST", "/api/tags/merge",
+            {"source_tag_id": source["id"], "target_tag_id": target["id"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(out.get("affected_work_ids"), [work["id"]])
+        self.assertEqual(out.get("affected_folder_ids"), [folder["id"]])
+        self.assertNotIn(target_only["id"], out.get("affected_work_ids") or [])
+
+    def test_tag_merge_reports_entities_that_already_carry_both(self):
+        """Dedupe case: the source link is dropped, so the rendered tag list
+        changes even though the target was already present."""
+        status, work = self._sv_json("POST", "/api/works", {"title": "Tag Merge Both"})
+        self.assertEqual(status, 200)
+        status, source = self._sv_json("POST", "/api/tags", {"name": "BothSource"})
+        self.assertEqual(status, 200)
+        status, target = self._sv_json("POST", "/api/tags", {"name": "BothTarget"})
+        self.assertEqual(status, 200)
+        for tid in (source["id"], target["id"]):
+            self.assertEqual(
+                self._sv_json("POST", f"/api/works/{work['id']}/tags", {"tag_id": tid})[0], 200
+            )
+
+        status, out = self._sv_json(
+            "POST", "/api/tags/merge",
+            {"source_tag_id": source["id"], "target_tag_id": target["id"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn(work["id"], out.get("affected_work_ids") or [])
+        status, detail = self._sv_json("GET", f"/api/works/{work['id']}")
+        self.assertEqual(status, 200)
+        names = sorted((t.get("name") or "") for t in (detail.get("tags") or []))
+        self.assertEqual(names, ["BothTarget"])
+
+    def test_failed_tag_merge_changes_no_canonical_relationship(self):
+        status, work = self._sv_json("POST", "/api/works", {"title": "Tag Merge Fail"})
+        self.assertEqual(status, 200)
+        status, source = self._sv_json("POST", "/api/tags", {"name": "FailSource"})
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            self._sv_json("POST", f"/api/works/{work['id']}/tags", {"tag_id": source["id"]})[0], 200
+        )
+
+        status, out = self._sv_json(
+            "POST", "/api/tags/merge",
+            {"source_tag_id": source["id"], "target_tag_id": "T-does-not-exist"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(out.get("affected_work_ids"), None)
+        # Nothing canonical moved, so the client's caches stay eligible.
+        status, detail = self._sv_json("GET", f"/api/works/{work['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual([t.get("name") for t in (detail.get("tags") or [])], ["FailSource"])
+
+    def test_folders_etag_is_stable_when_nothing_changed(self):
+        """The invariant is one-directional: revalidation must still work."""
+        self._sv_json("POST", "/api/folders", {"title": "ETag Stable Folder"})
+        status, etag1, _ = self._conditional_get("/api/folders")
+        self.assertEqual(status, 200)
+        status, _etag2, _ = self._conditional_get("/api/folders", etag=etag1)
+        self.assertEqual(status, 304)
+
+
 if __name__ == '__main__':
     unittest.main()

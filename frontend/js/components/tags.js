@@ -290,16 +290,9 @@ function prksWireTagsPageMergePanel() {
             const target = prksTagMergeTarget();
             if (!source || !target) return;
             try {
-                const res = await prksRequest('/api/tags/merge', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        source_tag_id: source.id,
-                        target_tag_id: target.id,
-                    }),
-                });
-                const errData = await res.json().catch(() => ({}));
-                if (!res.ok) throw new Error(errData.error || 'Merge failed');
+                // Canonical boundary owns the offline guard and publishes the
+                // Work/Folder cache coherence from the server's own answer.
+                await mergeTags(source.id, target.id);
                 window.__prksAllTagsCache = null;
                 prksCloseTagsMergeModal();
                 const wrap = prksTagsPageCtx.containerEl;
@@ -307,6 +300,7 @@ function prksWireTagsPageMergePanel() {
                     await renderTagsPage(wrap);
                 }
             } catch (err) {
+                if (prksOfflineWasGuardRefusal(err)) return;
                 console.error(err);
                 await prksAlertMessage(err.message || 'Could not merge tags.', 'Error');
             }
@@ -355,9 +349,7 @@ function prksWireTagsPageAliasPanel(container) {
             });
             if (!confirmed) return;
             try {
-                const res = await prksRequest(`/api/tags/${encodeURIComponent(tag.id)}`, { method: 'DELETE' });
-                const errData = await res.json().catch(() => ({}));
-                if (!res.ok) throw new Error(errData.error || 'Delete failed');
+                await deleteTag(tag.id);
                 window.__prksAllTagsCache = null;
                 prksCloseTagsAliasModal();
                 const container = prksTagsPageCtx.containerEl;
@@ -365,6 +357,7 @@ function prksWireTagsPageAliasPanel(container) {
                     await renderTagsPage(container);
                 }
             } catch (err) {
+                if (prksOfflineWasGuardRefusal(err)) return;
                 console.error(err);
                 await prksAlertMessage(err.message || 'Could not delete tag.', 'Error');
             }
