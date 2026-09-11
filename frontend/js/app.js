@@ -2331,6 +2331,13 @@ async function prksLoadOfflineCacheStatus() {
             '. Approx. PRKS browser storage on this device: ' +
             (diag.approxBytes != null ? prksFormatBytesApprox(diag.approxBytes) : '—') +
             '.';
+        if (typeof prksSyncDiagnostics === 'function') {
+            const sync = await prksSyncDiagnostics();
+            summaryEl.textContent += ' Unsynchronized Tag changes: ' + sync.pendingTotal +
+                ' (waiting: ' + sync.byStatus.pending + ', syncing: ' + sync.byStatus.syncing +
+                ', conflicts: ' + sync.byStatus.conflict + '). Clearing the cache preserves these changes.';
+            if (typeof prksRenderSyncDiagnostics === 'function') await prksRenderSyncDiagnostics(summaryEl);
+        }
     } catch (e) {
         if (summaryEl) summaryEl.textContent = (e && e.message) || 'Could not load offline cache status.';
     }

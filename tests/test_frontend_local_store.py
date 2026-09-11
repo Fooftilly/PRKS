@@ -103,11 +103,11 @@ class FrontendLocalStoreTests(unittest.TestCase):
                 self.assertNotIn("createPrksLocalStore", src)
                 self.assertNotIn("enqueueOperation", src)
 
-    def test_local_store_is_not_loaded_into_the_app_shell_yet(self):
-        """Nothing consumes it, so it must not be in the shell manifest --
-        adding it there would put an unused module on the offline boot path."""
+    def test_local_store_and_sync_are_loaded_into_the_app_shell(self):
         html = _read(_INDEX)
-        self.assertNotIn("local-store.js", html)
+        self.assertIn("local-store.js", html)
+        self.assertIn("sync-runtime.js", html)
+        self.assertLess(html.index("local-store.js"), html.index("sync-runtime.js"))
 
     def test_device_id_is_random_not_derived(self):
         """A synchronization identity, never a fingerprint."""

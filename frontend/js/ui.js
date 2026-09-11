@@ -2377,7 +2377,7 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     panel.innerHTML = prksWorkRightPanelStackHtml(work, mode, ctx);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
     if (typeof initPrksPrivateNotesEditor === 'function') initPrksPrivateNotesEditor('work', work.id, ctx);
-    if (mode === 'tags' && typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id, ctx);
+    if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id, ctx);
     if (mode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
         void mountPlaylistAttachControls(work, ctx);
     }
@@ -2744,7 +2744,7 @@ function updatePanelContent(tabId) {
             if (mode !== 'metadata' && typeof mountFolderAttachControlsForWork === 'function') {
                 void mountFolderAttachControlsForWork(_cw, focusedCtx);
             }
-            if (mode === 'tags') initWorkTagCombobox(_cw.id, focusedCtx);
+            initWorkTagCombobox(_cw.id, focusedCtx);
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(_cw, focusedCtx);
             }
@@ -3274,7 +3274,7 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
         if (panel) {
             panel.innerHTML = prksWorkRightPanelStackHtml(_cw, ownerCtx.ui.workDetailsMode, ownerCtx);
             if (!isEditing) initPrksPrivateNotesEditor('work', _cw.id, ownerCtx);
-            if (ownerCtx.ui.workDetailsMode === 'tags') initWorkTagCombobox(_cw.id, ownerCtx);
+            initWorkTagCombobox(_cw.id, ownerCtx);
             if (!isEditing && typeof mountPlaylistAttachControls === 'function') {
                 void mountPlaylistAttachControls(_cw, ownerCtx);
             }
@@ -4058,6 +4058,11 @@ function prksWorkTagOwnerLive(ownerCtx, generation, workId, input) {
 }
 
 async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, triggerInput) {
+    if (entityType === 'work') {
+        await prksWorkTagEdit(ownerCtx, tagId, true);
+        if (triggerInput) { triggerInput.disabled = false; triggerInput.removeAttribute('aria-busy'); }
+        return;
+    }
     if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const owner = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const generation = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
@@ -4066,22 +4071,8 @@ async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, trig
         triggerInput.setAttribute('aria-busy', 'true');
     }
     try {
-        if (entityType === 'work') {
-            const res = await prksRequest(`/api/works/${entityId}/tags`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tag_id: tagId }),
-            });
-            if (!res.ok) throw new Error('attach failed');
-        } else {
-            // Canonical boundary owns the offline guard and Folder coherence.
-            await addTagToFolder(entityId, tagId);
-        }
-        const coherenceToken =
-            entityType === 'work' && typeof prksOfflineMarkEntityChanged === 'function'
-                ? prksOfflineMarkEntityChanged('work', entityId)
-                : null;
-        window.__prksAllTagsCache = null;
+        await addTagToFolder(entityId, tagId);
+        const coherenceToken = null;
         if (entityType === 'work') {
             const input = document.getElementById('work-tag-search');
             if (prksWorkTagOwnerLive(owner, generation, entityId, input)) input.value = '';
@@ -4143,7 +4134,7 @@ async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInp
         });
         const data = await res.json();
         if (!res.ok || !data.id) throw new Error(data.error || 'No tag id');
-        window.__prksAllTagsCache = null;
+        if (typeof prksOfflineMarkTagsChanged === 'function') prksOfflineMarkTagsChanged();
         await prksAttachExistingTag(entityType, entityId, data.id, ownerCtx, triggerInput);
     } catch (e) {
         console.error(e);
@@ -4180,11 +4171,9 @@ function initTagComboboxForEntity(entityType, entityId, inputId, resultsId, owne
 
     async function renderDropdown() {
         if (!liveWorkInput()) return;
-        if (!window.__prksAllTagsCache) {
-            window.__prksAllTagsCache = await fetchTags({ used: false });
-        }
+        const all = await fetchTags({ used: false });
         if (!liveWorkInput()) return;
-        const all = window.__prksAllTagsCache;
+
         const val = input.value.trim();
         const valLower = val.toLowerCase();
         const attached = getAttachedIds();
@@ -4236,7 +4225,7 @@ function initWorkTagCombobox(workId, ownerCtx) {
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const _cw = ctx && ctx.getEntity ? ctx.getEntity('work') : (typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null);
     if (!_cw || _cw.id !== workId) return;
-    initTagComboboxForEntity('work', workId, 'work-tag-search', 'work-tag-search-results', ctx);
+    if (typeof prksMountWorkTags === 'function') prksMountWorkTags(ctx, workId);
 }
 
 function initFolderTagCombobox(folderId) {
@@ -4479,25 +4468,10 @@ async function mountFolderLibraryAttachControls(folder) {
 }
 
 async function prksRemoveWorkTag(workId, tagId, btn) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
-    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    try {
-        const res = await prksRequest(
-            `/api/works/${encodeURIComponent(workId)}/tags/${encodeURIComponent(tagId)}`,
-            { method: 'DELETE' }
-        );
-        if (!res.ok) throw new Error('remove failed');
-        const coherenceToken =
-            typeof prksOfflineMarkEntityChanged === 'function'
-                ? prksOfflineMarkEntityChanged('work', workId)
-                : null;
-        window.__prksAllTagsCache = null;
-        await prksReloadEntityTagsUI('work', workId, ownerCtx, coherenceToken);
-    } catch (e) {
-        console.error(e);
-        if (btn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
-        await prksAlertMessage('Could not remove tag.', 'Error');
-    }
+    const panel = document.getElementById('panel-content');
+    const ownerCtx = panel && typeof prksGetTabContext === 'function' ? prksGetTabContext(panel.dataset.prksOwnerTabId) : null;
+    try { await prksWorkTagEdit(ownerCtx, tagId, false); }
+    finally { if (btn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false); }
 }
 
 function renderWorkMetaEditTab(work, draft) {
@@ -4707,10 +4681,8 @@ function initUploadTagCombobox() {
     const attachedIds = () => new Set(uploadTagsSelected.map((t) => t.id));
 
     async function renderDropdown() {
-        if (!window.__prksAllTagsCache) {
-            window.__prksAllTagsCache = await fetchTags({ used: false });
-        }
-        const all = window.__prksAllTagsCache;
+        const all = await fetchTags({ used: false });
+
         const val = input.value.trim();
         const valLower = val.toLowerCase();
         const attached = attachedIds();
@@ -4736,7 +4708,7 @@ function initUploadTagCombobox() {
                         });
                         const data = await res.json();
                         if (!res.ok || !data.id) throw new Error(data.error || 'no id');
-                        window.__prksAllTagsCache = null;
+                        if (typeof prksOfflineMarkTagsChanged === 'function') prksOfflineMarkTagsChanged();
                         if (!attachedIds().has(data.id)) {
                             uploadTagsSelected.push({ id: data.id, name: data.name || val });
                             renderUploadTagsChips();
@@ -4774,7 +4746,7 @@ function initUploadTagCombobox() {
     }
 
     input.onfocus = async () => {
-        window.__prksAllTagsCache = await fetchTags({ used: false });
+        await fetchTags({ used: false });
         renderDropdown();
     };
     input.oninput = () => renderDropdown();

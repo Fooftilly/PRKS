@@ -1,3 +1,4 @@
+from backend.work_tag_sync import process_operation
 import http.server
 import socketserver
 import json
@@ -1994,6 +1995,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.wfile.write(generated_bytes)
                 except Exception as exc:
                     self._send_internal_error(exc)
+            elif path.startswith('/api/works/') and path.endswith('/tag-options') and len(path.split('/')) == 5:
+                data = db.get_work_tag_options(path.split('/')[3])
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    self.send_json(200, data, etag=db.etag_for_representation("work-tag-options", data))
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 data = db.get_work(w_id)
@@ -2234,11 +2241,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     data = db.get_tags_in_use()
                     self.send_json(200, data)
                 else:
-                    etag = db.etag_tags_all()
+                    data = db.get_all_tags()
+                    etag = db.etag_for_representation("tags", data)
                     if self._prks_if_none_match(etag):
                         self._send_json_not_modified(etag)
                         return
-                    data = db.get_all_tags()
                     self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path == '/api/publishers':
                 used_only = query.get('used', [''])[0] in ('1', 'true', 'yes')
@@ -2300,6 +2307,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 data = self._read_json_body()
                 if data is None:
                     return
+            if path == '/api/sync/operations':
+                status, result = process_operation(db, data)
+                self.send_json(status, result)
+                return
             if path == '/api/backups/progress':
                 self._handle_backup_progress()
                 return

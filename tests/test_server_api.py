@@ -3370,6 +3370,51 @@ class TestServerAPI(unittest.TestCase):
             exc.read()
             return exc.code, exc.headers.get("ETag"), None
 
+    def test_work_tag_sync_http_replay_and_options_etag(self):
+        import uuid
+        db = server_module.db
+        work = db.add_work("HTTP Sync")
+        tag = db.add_tag("HTTP Sync")["id"]
+        path = f"/api/works/{work}/tag-options"
+        status, etag, before = self._conditional_get(path)
+        self.assertEqual(status, 200)
+        op = dict(op_id=str(uuid.uuid4()), device_id=str(uuid.uuid4()), operation="ADD_WORK_TAG",
+                  entity_type="work", entity_id=work, payload={"tag_id": tag}, base_revision=0,
+                  occurred_at="2026-09-11T00:00:00Z", created_at="2026-09-11T00:00:00Z", depends_on=[])
+        result = self._sv_json("POST", "/api/sync/operations", op)
+        self.assertEqual(result[0], 200)
+        self.assertEqual(self._sv_json("POST", "/api/sync/operations", op), result)
+        self.assertEqual(self._conditional_get(path, etag)[0], 200)
+        op.update(op_id=str(uuid.uuid4()), operation="REMOVE_WORK_TAG")
+        result = self._sv_json("POST", "/api/sync/operations", op)
+        self.assertEqual(result[0], 409)
+        self.assertEqual(self._sv_json("POST", "/api/sync/operations", op), result)
+
+    def test_tags_etag_representation_contract(self):
+        db = server_module.db
+        tag = db.add_tag("ETag ABCD")["id"]
+        target = db.add_tag("ETag Target")["id"]
+        work = db.add_work("ETag relationship")
+        def check(mutate, changes=True):
+            status, before, body = self._conditional_get("/api/tags")
+            self.assertEqual(status, 200)
+            mutate()
+            status, after, result = self._conditional_get("/api/tags", before)
+            self.assertEqual(status, 200 if changes else 304)
+            if changes:
+                self.assertNotEqual(before, after)
+                self.assertNotEqual(body, result)
+        check(lambda: db.execute_query("UPDATE tags SET name = ? WHERE id = ?", ("ETag WXYZ", tag)))
+        check(lambda: db.execute_query("UPDATE tags SET color = ? WHERE id = ?", ("#abcdef", tag)))
+        check(lambda: db.add_tag_alias(tag, "ETag FOUR"))
+        check(lambda: db.execute_query("UPDATE tag_aliases SET alias = ? WHERE tag_id = ?", ("ETag FIVE", tag)))
+        check(lambda: db.delete_tag_alias(tag, "ETag FIVE"))
+        check(lambda: db.add_tag("ETag Created"))
+        check(lambda: db.add_tag_to_work(work, tag), False)
+        check(lambda: db.remove_tag_from_work(work, tag), False)
+        check(lambda: db.merge_tags_into(tag, target))
+        check(lambda: db.delete_tag(target))
+
     def test_folders_etag_changes_when_a_work_moves_between_folders(self):
         """Moving a Work changes both folders' work_count, so the cached
         catalog is stale -- a 304 here would republish stale counts into the

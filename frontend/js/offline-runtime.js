@@ -364,6 +364,50 @@
             }
         }
 
+        /* Reconcile an authoritative relationship response without inventing a
+         * complete Work/options snapshot when the disposable base is missing.
+         * Publication generations fence pre-ACK GETs. The caller retains its
+         * durable operation unless every required cache write commits. */
+        async function reconcileWorkTag(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.work_id;
+            const kinds = ['work', 'work-tag-options'];
+            const tokens = kinds.map(kind => {
+                const key = entityKey(kind, id);
+                const token = currentEntityGeneration(kind, id) + 1;
+                entityCoherence.set(key, token);
+                return token;
+            });
+            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
+            const work = snapshots[0] && snapshots[0].value;
+            const options = snapshots[1] && snapshots[1].value;
+            if (options && typeof root.prksIsWorkTagOptionsShape === 'function' && !root.prksIsWorkTagOptionsShape(options, id)) {
+                return false;
+            }
+            let revision = 0;
+            if (options) {
+                const assigned = options.assigned.find(r => r.tag_id === result.tag_id);
+                revision = assigned ? assigned.relation_revision : (options.known_absent[result.tag_id] || 0);
+            }
+            if (revision > result.server_revision) return true;
+            if (work) {
+                if (!Array.isArray(work.tags)) return false;
+                work.tags = work.tags.filter(t => t.id !== result.tag_id);
+                if (result.present) work.tags.push(result.tag);
+            }
+            if (options) {
+                options.assigned = options.assigned.filter(t => t.tag_id !== result.tag_id);
+                delete options.known_absent[result.tag_id];
+                if (result.present) options.assigned.push({ tag_id: result.tag_id, relation_revision: result.server_revision });
+                else if (result.server_revision) options.known_absent[result.tag_id] = result.server_revision;
+            }
+            const values = [work, options];
+            for (let i = 0; i < kinds.length; i++) {
+                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
+            }
+            return true;
+        }
+
         /** Remove a disposable entity snapshot. Never changes connectivity or server state. */
         function invalidateEntity(kind, id) {
             if (!store || typeof store.deleteEntity !== 'function') return Promise.resolve(false);
@@ -633,6 +677,7 @@
             noteRequestFailure: noteRequestFailure,
             readThroughEntity: readThroughEntity,
             readThroughList: readThroughList,
+            reconcileWorkTag,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
             invalidateEntity: invalidateEntity,
@@ -833,6 +878,8 @@
         prksOfflineReadEntity: prksOfflineReadEntity,
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
+        prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
+        prksOfflineMarkTagsChanged: () => production.markDomainChanged('tags', { entityKinds: [], listKeys: ['tags:index'] }),
         prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,
         prksOfflineInvalidateEntity: prksOfflineInvalidateEntity,
         prksOfflineInvalidateList: prksOfflineInvalidateList,

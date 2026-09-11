@@ -206,12 +206,6 @@ function prksProcessingRenderTagList(card) {
         .join('');
 }
 
-function prksProcessingGetTags() {
-    if (Array.isArray(window.__prksProcessingTagsCache)) return window.__prksProcessingTagsCache;
-    if (Array.isArray(window.__prksAllTagsCache)) return window.__prksAllTagsCache;
-    return [];
-}
-
 function prksProcessingAttachTagCombobox(card) {
     const input = card.querySelector('[data-role="tag-search"]');
     const results = card.querySelector('[data-role="tag-results"]');
@@ -220,8 +214,9 @@ function prksProcessingAttachTagCombobox(card) {
 
     const attachedIds = () => new Set((card.__processingTags || []).map((t) => String(t.id || '')));
 
-    const render = () => {
-        const all = prksProcessingGetTags();
+    const render = async () => {
+        const all = await fetchTags({ used: false });
+        if (!input.isConnected) return;
         const val = input.value.trim();
         const valLower = val.toLowerCase();
         const attached = attachedIds();
@@ -248,8 +243,7 @@ function prksProcessingAttachTagCombobox(card) {
                         });
                         const data = await res.json();
                         if (!res.ok || !data.id) throw new Error(data.error || 'no id');
-                        window.__prksAllTagsCache = null;
-                        window.__prksProcessingTagsCache = null;
+                        if (typeof prksOfflineMarkTagsChanged === 'function') prksOfflineMarkTagsChanged();
                         card.__processingTags = Array.isArray(card.__processingTags) ? card.__processingTags : [];
                         if (!attachedIds().has(String(data.id))) {
                             card.__processingTags.push({ id: data.id, name: data.name || val });
@@ -696,8 +690,6 @@ async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
     }
     window.__prksProcessingPeople = Array.isArray(people) ? people : [];
     window.__prksProcessingFolders = Array.isArray(folders) ? folders : [];
-    window.__prksProcessingTagsCache = Array.isArray(tags) ? tags : [];
-    window.__prksAllTagsCache = window.__prksProcessingTagsCache;
     try {
         allFolders = window.__prksProcessingFolders;
         window.allFolders = allFolders;

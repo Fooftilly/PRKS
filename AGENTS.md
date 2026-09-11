@@ -1350,8 +1350,7 @@ This is also the local-first shape: `MARK_WORK_OPENED(workId)` is a semantic
 operation that can be queued, coalesced and synchronized independently of
 `UPDATE_WORK_METADATA` / `ADD_TAG` / `MOVE_FOLDER`, which a mutation hidden
 inside a GET could never be. Opening a cached Work offline currently records
-nothing -- there is no durable outbox to hold the event yet, and dropping it is
-honest where faking a local reorder would not be.
+nothing -- the Work Tag coordinator deliberately does not synchronize open events.
 
 Components must go through the semantic helpers
 `prksMarkWorksBrowseChanged()`, `prksMarkRecentChanged()`,
@@ -1366,79 +1365,44 @@ The Recently-added tab additionally records the coherence generation alongside
 its in-memory copy, so an invalidation cannot leave that tab rendering
 pre-mutation rows while the cache is already right.
 
-### Local-first direction (intent, not current behavior)
+### Local-first Work Tags (Milestone 2B)
 
-PRKS does **not** support offline mutations today; everything above is
-read-only caching, and every mutation is refused while the server is
-unreachable. The architecture is nevertheless being kept compatible with a
-local-first future:
+Existing Work Tag add/remove uses one durable-first path online and offline.
+Other mutations remain server-required. The implementation contract is in
+[docs/local-first-sync.md](docs/local-first-sync.md).
 
-- The IndexedDB structured stores are a **disposable cache**. Unsynchronized
-  user changes will live in separate durable storage, and **Clear offline
-  cache** must never be able to destroy them. Do not mix pending local edits
-  into cache records.
-- Structured entities are expected to synchronize through **semantic
-  operations** (`ADD_TAG`, `moveWorkToFolder`) plus idempotent operation ids
-  and explicit revisions -- not whole-record replacement, which cannot merge.
-  This is why mutations keep migrating toward canonical API wrappers: those
-  wrappers are where "guard if offline" would become "persist an operation and
-  apply optimistic state".
-- CRDTs may later be used **selectively** for long-form text (Research Notes
-  first). The relational model stays in SQLite; do not turn folder membership,
-  tags, Work metadata or graph relationships into CRDT documents.
-- Last-writer-wins is not the universal answer. Exclusive relationships (a
-  Work's folder) and delete-vs-edit are real conflicts.
-- Phase-1 read-only caching is **not** the future mutation synchronization
-  model, and cache invalidation will not stay the only coherence mechanism.
-
-#### Durable local state (`prks-local-v1`)
-
-**Milestone 2A shipped the storage foundation only. PRKS is still read-only
-while the server is unreachable** -- nothing enqueues operations yet.
-
-`frontend/js/local-store.js` owns a **second, separate** IndexedDB database,
-`prks-local-v1`, holding durable user-owned state: an `operations` store of
-semantic operation envelopes and a `metadata` store (device id, monotonic
-sequence). It is not the cache and must never be merged into it:
-
-| | `prks-offline-v1` (`offline-store.js`) | `prks-local-v1` (`local-store.js`) |
-| --- | --- | --- |
-| Holds | downloaded server data | unsynchronized user work |
-| Lifecycle | disposable; "Clear offline cache" empties it | durable; explicit reset only |
-| Write failure | degrades silently to "unavailable" | **rejects** -- nothing may claim "Saved locally" |
-| Commit | `oncomplete` for writes | `oncomplete`, always |
-
-The separation is **physical**: a bug in `offline-store.clearAll()` operates on
-a different database and cannot reach pending work.
-`tests/test_frontend_local_store.py` fails the build if either module names the
-other's database in code, or if the offline runtime learns about
-`createPrksLocalStore` / `resetDurableLocalState`;
-`tests/browser/run_local_store_selftest.js` proves operations and the device id
-survive both `clearAll()` and deletion of the cache database, and
-`tests/e2e/test_local_store_durability.py` proves the same in a real browser
-across a reload and the real Settings control.
-
-Three rules that are easy to get wrong:
-
-* **Envelopes are semantic, never serialized requests.** `{method, url, body}`
-  would make synchronization an HTTP replay queue -- unmergeable and
-  unversionable. Operation types come from an allow-list; the server owns the
-  mapping to SQL.
-* **The semantic envelope is immutable once persisted.** Only `status`,
-  `attempt_count`, `last_attempt_at`, `last_error`, `acknowledged_at` and
-  `server_revision` may change. Coalescing must write new rows in an explicit
-  transaction, never rewrite history in place.
-* **`device_id` is a synchronization and diagnostics identity only** -- never
-  trust, login or authorization, and never derived from any browser or hardware
-  characteristic. The **store owns it**: `enqueueOperation(envelope)` takes no
-  device id and resolves one in the same transaction as the row, so a stored
-  operation can never carry a null one.
-
-Two smaller invariants that are easy to reintroduce: the payload limit is
-measured in **UTF-8 bytes** (`.length` counts UTF-16 code units and undercounts
-CJK by ~2.1x), and a durable reset **closes this store's own connection before
-`deleteDatabase()`** -- IndexedDB blocks a delete on every open connection,
-including the deleting page's own. `offline-store.js` carries the same close.
+- `local-store.js` owns `prks-local-v1`, physically separate from the disposable
+  `prks-offline-v1`. Clear offline cache must never touch durable operations.
+  Writes request strict durability, resolve on transaction completion, and reject
+  on failure. Never optimistically claim success before that commit.
+- `work-tag-state.js` owns strict Tag catalog/tag-options validators and the pure
+  overlay. `work-tag-editor.js` owns TabContext-local editing and conflict UI.
+  `sync-runtime.js` alone owns semantic transport, one in-flight operation and
+  bounded retry. Never queue arbitrary URLs/methods/request bodies.
+- The server accepts only ADD_WORK_TAG/REMOVE_WORK_TAG at
+  POST /api/sync/operations. `backend/work_tag_sync.py` shares connection-aware
+  canonical relationship helpers with direct add/remove, bulk, merge and delete.
+  Domain writes, revision advancement and ledger insertion commit together.
+- Schema 14 sync_operations, sync_entity_revisions and sync_tag_lifecycle are
+  canonical main-DB backup state. No ledger pruning. Missing revision means 0;
+  removed relationships retain tombstones. Scope keys are JSON arrays of IDs.
+  Lifecycle history survives Tag deletion and resolves guarded merge chains.
+- Idempotency replay precedes lifecycle/revision evaluation and preserves the
+  original HTTP status and result. Reusing an op ID with a changed envelope
+  never executes. Future revisions are protocol errors, not stale conflicts.
+- At most one active operation per Work/Tag. Coalesce only never-sent pending
+  rows; retries might already have reached the server. Never edit an immutable
+  envelope. Syncing/retrying controls disable only that relationship. Explicit
+  conflict reapplication creates a new ID against the reported server revision.
+- ACK reconciliation must complete before retiring the durable operation.
+  Cache-write failure leaves it retryable; no mandatory extra GET. Missing cache
+  bases remain missing. Pending/conflicted overlays never enter cache records.
+- `tags:index` hashes/validates the actual catalog representation; no global RAM
+  Tag catalog copy. Catalog edits invalidate tags, relationship edits do not.
+  `work-tag-options` is per Work and contains no catalog ETag. Only affected
+  Work projections invalidate, including absent tombstones on delete/merge.
+- No offline Tag creation, Folder or metadata edits, open events, Playlists,
+  research-note editing, CRDTs, multi-user sync or server push in this milestone.
 
 **Tag identity is persistent.** Only `delete_tag()` and `merge_tags_into()`
 may destroy or transform a Tag. Removing a tag from a Work or Folder, deleting
@@ -1460,222 +1424,6 @@ FK cascade left a staged Processing File holding neither tag. A merge means
 "replace S with T everywhere"; explicit `delete_tag()` is the one path where
 cascading the relationship away is correct.
 
-**Before Work Tags can go offline (Milestone 2B)** the design document records
-three requirements worth knowing here: `sync_entity_revisions` must keep a
-`work-tag / W:T` row as a **tombstone** after the relationship is deleted (an
-absent relationship is not revision 0); revision advancement must live in
-`add_tag_to_work()` / `remove_tag_from_work()` -- **not** in the sync endpoint,
-or an ordinary online edit would be invisible to offline clients; and the tag
-picker needs a cached `tags:index`, since a user cannot attach a tag they
-cannot select.
-
-`docs/local-first-sync.md` is the authoritative design document for the whole
-transition: storage boundary, operation envelope, server idempotency ledger,
-revision-scope recommendation, conflict matrix, Work Tags design,
-`MARK_WORK_OPENED` timestamp semantics, overlay model, coordinator state
-machine, and the offline entity-id recommendation. Read it before touching
-synchronization.
-
-#### Open design questions for the synchronization milestone
-
-Recorded here so they are settled deliberately rather than ad hoc. None is a
-blocker for the current read-only behavior. **`docs/local-first-sync.md` now
-carries a decision or an explicit deferral for each.**
-
-1. **Durable storage boundary.** Separate IndexedDB stores for disposable
-   cache vs. unsynchronized user data, such that **Clear offline cache** is
-   *physically incapable* of deleting the outbox.
-2. **Operation envelope.** `op_id`, operation type, entity id, payload, base
-   revision, created-at, dependencies, status, retry metadata, device id.
-   Stable UUIDs generated before the first send.
-3. **Server idempotency.** The same `op_id` applied twice must take effect
-   once. Needs durable server-side knowledge of acknowledged operations, not
-   client-side duplicate suppression.
-4. **Revision model.** What carries a revision. Not a column on every table:
-   a PRKS logical entity spans several (a Work touches `works`,
-   `folder_files`, roles, tags). Revisions must describe the logical
-   synchronization aggregate.
-5. **Operation taxonomy.** Classify existing mutations as semantic operations
-   (`ADD_TAG`, `REMOVE_TAG`, `MOVE_WORK_TO_FOLDER`, `ADD_PLAYLIST_MEMBER`,
-   `REMOVE_PLAYLIST_MEMBER`, `UPDATE_WORK_METADATA`, `UPDATE_CONCEPT`,
-   `DELETE_WORK`, `MARK_WORK_OPENED`) rather than "replace entity JSON".
-6. **Conflict policy per operation.** Tag adds merge; competing Folder moves
-   do not; delete-vs-edit is explicit; Playlist reorder needs its own later
-   policy. No global last-writer-wins.
-7. **Optimistic read-model overlay.** How pending operations combine with
-   cached snapshots into effective UI state, without mutating disposable
-   snapshots in ways that make rollback impossible.
-8. **Offline creation / client-generated ids.** Whether PRKS ids can be
-   generated client-side and stay canonical. If so, an offline-created Concept
-   can be referenced by a later offline operation with no temporary-id
-   remapping. Audit `generate_id()` before deciding.
-9. **Sync coordinator state machine.** `pending -> syncing -> acknowledged`,
-   `pending -> syncing -> retryable-failure -> pending`,
-   `pending -> syncing -> conflict`, plus ordering and dependency rules. One
-   coordinator; components must not run their own sync loops.
-10. **`MARK_WORK_OPENED` policy — and what "recently opened" means across
-    devices.** `last_opened_at` is `CURRENT_TIMESTAMP`, i.e. **one-second**
-    resolution, so opening A at `17:00:00.100` and B at `17:00:00.800` lands
-    in the same second and is then ordered by the `id` tie-break rather than
-    by actual open order. That is deterministic and adequate for a
-    single-writer read-only cache, but once offline opens synchronize the
-    ordering key has to mean something: client event time, server receive
-    time, or a logical ordering mechanism. Also decide whether offline opens
-    coalesce to the latest event per Work. Do NOT patch this ad hoc — it is a
-    small, low-risk case that is worth using to exercise the general operation
-    model.
-11. **Crash/reload guarantees.** Once the UI says "saved locally", closing the
-    tab, crashing the browser, restarting the machine, or clearing disposable
-    caches must not lose the change.
-12. **First implementation candidate.** Only after the architecture is agreed,
-    and something merge-friendly: Work **Tags**, not metadata, deletes,
-    Playlist reorder or Research Notes.
-
-Automerge stays **out** of that milestone. Structured synchronization —
-semantic operations, revisions, idempotency, durable local storage, conflict
-handling — must be reliable first; Research Notes is then the first serious
-CRDT experiment.
-
-The PRKS server (SQLite + managed files) remains the sole source of truth.
-`frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`
-(Cache Storage) are a disposable client-side cache, never another canonical
-database, sync authority, backup, or conflict resolver. Deleting either must
-never affect server data, and a corrupt/incompatible offline schema may be
-discarded and recreated — canonical `prks_data.db` must never receive that
-treatment.
-
-Responsibilities stay separated:
-
-- `offline-store.js`: IndexedDB persistence only (`entities`, `lists`,
-  `metadata` object stores). No DOM, no routing, no connectivity policy. Every
-  public method resolves (never rejects/throws) and degrades to a safe
-  unavailable result if IndexedDB is missing, blocked, corrupt, or over quota.
-  `deleteEntitiesByKind(kind)` sweeps one whole entity kind for domain-level
-  coherence using a bounded range over the existing `["kind", "id"]` compound
-  key — no schema/version bump — and resolves true only when the physical
-  cleanup actually completed, so its caller can stay conservative when it did
-  not. "Completed" means the *transaction committed*, not that individual
-  requests fired `onsuccess`: IndexedDB can still abort a transaction whose
-  requests all succeeded, and a coherence domain unblocked on that basis would
-  republish rows that still exist. Every `readwrite` transaction therefore
-  resolves from `oncomplete` and reports false on `onerror`/`onabort`; reads
-  have no commit to wait for and resolve on the request result.
-- `offline-runtime.js`: online/offline/reconnecting state, the
-  read-through/mutation-guard policy, and operational UI state. Holds no
-  canonical domain data itself; delegates all persistence to `offline-store.js`.
-- `sw.js`: app-shell/static-asset availability plus a focused whole-file
-  managed-PDF cache. Every core same-origin CSS/JS/font/icon file the ordinary
-  shell needs to boot is precached eagerly on install from an explicit
-  manifest (`STATIC_PRECACHE_PATHS`/`SHELL_PRECACHE_PATHS`), not cached
-  as-you-go — the shell must launch offline after a single earlier install,
-  with no second online page load required to warm the cache. A regression
-  test (`tests/test_frontend_service_worker.py`) compares that manifest
-  against `index.html`'s actual `<script>`/`<link>`/`<img>` dependencies so
-  the two cannot silently drift; the heavy PDF-viewer bundle is deliberately
-  excluded from eager precache and stays cache-on-first-PDF-use, since it is
-  not needed to launch the shell itself. `sw.js` never generically caches
-  `/api/...` JSON and never queues API mutations. Eligibility rules
-  (same-origin GET only, no Range response cached as a whole file, no
-  4xx/5xx/redirected/cross-origin) live in small pure functions so they can be
-  tested without a real `ServiceWorkerGlobalScope`
-  (`tests/browser/run_sw_selftest.js`).
-
-Connectivity reflects real PRKS server reachability, not `navigator.onLine`
-and not application-level health. `navigator.onLine`/the browser's
-`online`/`offline` events are early hints only: either one moves straight to
-`reconnecting` and kicks off a real probe rather than being trusted directly.
-The probe itself treats *any* resolved HTTP response — 2xx, 4xx, or 5xx — as
-"PRKS answered" (→ online); only a rejected request with no transport response
-at all means the server is unreachable (→ offline, with bounded/backoff
-retry). Ordinary `prksRequest()` traffic feeds the same state: a real fetch
-`Response` (including 404/409/500/503) calls `noteRequestSuccess()`, and a
-non-abort transport failure after GET retries are exhausted (or a mutation
-transport rejection) calls `noteRequestFailure()`. A domain-level error
-(e.g. a 500) must never flip the shell into "Offline." The runtime begins a
-real probe immediately on `init()`, so a runtime that starts up while PRKS is
-already unreachable reaches `offline` on its own, without needing a failed
-Work request first. Once `noteRequestFailure()` has moved state to offline,
-the existing bounded/backoff probe owns recovery; a later ordinary request
-that receives a real HTTP response may also restore online immediately.
-
-An offline-capable read must distinguish a 404 (normal "not found," server is
-reachable) from every other domain/parse failure (400/403/409/500, invalid
-JSON — must propagate to the caller's normal error handling, never become a
-cached fallback or a false "not found") from an actual transport/network
-failure (the only case that falls back to the offline store, or reports
-`unavailable` with no cache).
-
-Do not let IndexedDB values enter the request coordinator's memory cache as if
-they were fresh server responses, and do not turn `api.js` fetchers themselves
-into persistent-caching functions — an offline-capable route goes through
-`prksOfflineReadEntity`/`readList` (online success → render + async cache write
-that never fails the online read; network/server-unreachable failure → offline
-store lookup). A real HTTP domain response (404/400/etc.) is never treated as
-an offline condition and never falls back to cache.
-
-Cached values always carry explicit provenance (`source: 'server' | 'cache' |
-'unavailable'`, plus `cachedAt`) — never hidden, never presented as current.
-
-A successful canonical Work mutation must immediately invalidate its offline
-snapshot independent of UI ownership, focus, route generation, or panel state.
-(Where the affected read model spans several canonical records, invalidate the
-whole offline coherence domain instead — see "Offline coherence domains".)
-Only a complete authoritative replacement from that same/current coherence
-generation may make the entity cache-eligible again; an older post-mutation GET
-must never undo a later invalidation. Stale UI callbacks may not repaint, but
-they still acknowledge canonical mutation success for cache coherence. When a
-mutation fails, retain its previous cache entry. Cache-maintenance failures are
-non-fatal and never change canonical server state.
-
-Every canonical Work mutation (metadata Save, delete, role/person links,
-folder/playlist/tag attach-or-remove, PDF annotation create/edit/delete) must
-call `prksOfflineGuardMutation()` first and stop when it returns `true`. Never
-discard a submitted change, fake success, write it only to IndexedDB, or queue
-it. Research notes and private notes follow the same rule via explicit
-read-only editor state while offline, not autosave-through-cache — and that
-read-only state must apply the moment the editor is constructed (read
-`prksOfflineRuntimeState()` directly at init), never only via a later
-`prksOfflineRuntimeSubscribe()` callback, so an editor built after the runtime
-already left `online` is never briefly editable.
-
-A previously cached PDF reopened while not online mounts the vendor viewer in
-its own `mode: 'preview'` (render/scroll/zoom/navigate only — no
-highlight/underline/delete/comment/save, and no annotation-sync persistence
-worker installed), chosen via `prksPdfDesiredMode()` at mount time — never
-`mode: 'work'` hardcoded and then locked down after the fact. Connectivity
-changing while a Work PDF viewer is already mounted never destroys/recreates
-the viewer or document; `prksReconcilePdfMutationMode()` flips the same
-`'work'`/`'preview'` interaction boundary live via
-`PrksPdfViewerHandle.setMutationEnabled()` in place, pausing/resuming (never
-tearing down) the same annotation-sync worker so pendingChanges/unsaved state
-survives the transition. Going offline must stop annotation tools
-immediately, not merely disable them: `setMutationEnabled(false)`
-synchronously clears any already-active markup tool
-(`annotation.setActiveTool(null)` via `clearActiveTool()`) and returns the
-plugin to pointer mode before the render that hides the markup toolbar —
-never relying solely on the toolbar button disappearing a frame later. Every
-mutating viewer API (`activateMarkupTool`, `createAnnotation`,
-`updateAnnotation`, `deleteAnnotation`, `undo`, `redo`) requires
-`mode === 'work'`; `selectAnnotation`/jump/zoom/page navigation stay
-read-only in either mode. An async annotation-persistence setup started while
-`'work'`/online must re-check current viewer identity, `runtime.mode`, and
-connectivity (`prksPdfPersistenceSetupEligible()`) after every await boundary
-and immediately before installing a worker — if any changed underneath it,
-abandon without installing and reset `runtime._persistenceSetupStarted` so a
-later online reconcile can retry, without destroying the viewer. An
-already-installed worker uses the weaker `prksPdfPersistenceStillLive()` and
-stays live (paused) while offline; its save-confirmation poll
-(`confirmPersistedToken()`) stops issuing `save-confirm` requests the moment
-the worker is `paused`, resuming only once reconnected.
-
-Offline cache contents are private research data: never log cached entity
-bodies, note text, titles, search text, or PDF contents. Diagnostics
-(`prksOfflineDiagnostics()`, Settings → Offline storage) may expose only
-aggregate counts/approximate bytes/availability/last-sync timestamp.
-
-Reconnect refreshes only the focused, previously cache-served route — never
-every mounted tile at once (no request storm), and reconnect never performs
-writes (no outbox exists yet).
 
 ## Interaction feedback
 

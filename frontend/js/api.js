@@ -397,6 +397,10 @@ async function fetchPublishersInUse(options = {}) {
 }
 
 async function fetchTags(options = {}) {
+    if (!options.used && typeof prksReadTagsIndex === 'function') {
+        try { const result = await prksReadTagsIndex(options); return result.value || []; }
+        catch (_) { return []; }
+    }
     const errorOwner = prksApiErrorOwner(options);
     const params = new URLSearchParams();
     if (options.used) {
@@ -754,6 +758,7 @@ async function patchFolder(folderId, updates) {
  * error or abort leaves every cached snapshot eligible, because nothing
  * canonical changed. */
 function prksPublishTagCoherence(data) {
+    if (typeof prksOfflineMarkTagsChanged === 'function') prksOfflineMarkTagsChanged();
     const payload = data && typeof data === 'object' ? data : {};
     const folders = Array.isArray(payload.affected_folder_ids) ? payload.affected_folder_ids : [];
     const works = Array.isArray(payload.affected_work_ids) ? payload.affected_work_ids : [];
@@ -762,6 +767,9 @@ function prksPublishTagCoherence(data) {
         works.forEach(function (workId) {
             prksOfflineMarkEntityChanged('work', workId);
         });
+    }
+    if (typeof prksOfflineMarkEntityChanged === 'function') {
+        (payload.affected_tag_options_work_ids || works).forEach(workId => prksOfflineMarkEntityChanged('work-tag-options', workId));
     }
     return payload;
 }
@@ -854,6 +862,7 @@ async function bulkUpdateWorks(payload) {
     if (typeof prksOfflineMarkEntityChanged === 'function' && Array.isArray(payload && payload.work_ids)) {
         payload.work_ids.forEach(function (workId) {
             prksOfflineMarkEntityChanged('work', workId);
+            if (['add_tags', 'remove_tags'].includes(payload.action)) prksOfflineMarkEntityChanged('work-tag-options', workId);
         });
     }
     // A cached Person's Work cards display status, so a bulk status change

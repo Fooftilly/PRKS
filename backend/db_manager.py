@@ -14,6 +14,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
+from backend import work_tag_sync
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_annotations import (
@@ -1840,29 +1841,7 @@ class PRKSDatabase:
         return f'W/"prks-playlists-{row["c"]}-{row["m"]}-{ir["c"]}"'
 
     def etag_tags_all(self) -> str:
-        r = self.execute_query(
-            """
-            SELECT COUNT(*) AS c,
-                   COALESCE(SUM(LENGTH(name)), 0) AS ln,
-                   COALESCE(SUM(LENGTH(COALESCE(color, ''))), 0) AS lc
-            FROM tags
-            """
-        )
-        al = self.execute_query(
-            """
-            SELECT COUNT(*) AS c,
-                   COALESCE(SUM(LENGTH(COALESCE(alias, ''))), 0) AS sla
-            FROM tag_aliases
-            """
-        )
-        wt = self.execute_query("SELECT COUNT(*) AS c FROM work_tags")
-        row = r[0] if r else {"c": 0, "ln": 0, "lc": 0}
-        ar = al[0] if al else {"c": 0, "sla": 0}
-        tr = wt[0] if wt else {"c": 0}
-        return (
-            f'W/"prks-tags-{row["c"]}-{row["ln"]}-{row["lc"]}-{tr["c"]}-'
-            f'{ar["c"]}-{ar["sla"]}"'
-        )
+        return self.etag_for_representation("tags", self.get_all_tags())
 
     def etag_recent_works(self) -> str:
         """Revision for /api/recent (last_opened ordering can change without works.updated_at)."""
@@ -2993,19 +2972,10 @@ class PRKSDatabase:
                         "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?)",
                         [(folder_id, wid) for wid in work_ids],
                     )
-            elif action == "add_tags":
-                pairs = [(wid, tid) for wid in work_ids for tid in tag_ids]
-                conn.executemany(
-                    "INSERT INTO work_tags (work_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-                    pairs,
-                )
             else:
-                pairs = [(wid, tid) for wid in work_ids for tid in tag_ids]
-                # Relationships only; Tag identity is persistent.
-                conn.executemany(
-                    "DELETE FROM work_tags WHERE work_id = ? AND tag_id = ?",
-                    pairs,
-                )
+                for wid in work_ids:
+                    for tid in tag_ids:
+                        work_tag_sync.set_state(conn, wid, tid, action == "add_tags")
 
             conn.commit()
         except Exception:
@@ -3696,9 +3666,9 @@ class PRKSDatabase:
                 "existed": True,
             }
         tag_id = self.generate_id("T")
-        self.execute_query(
-            "INSERT INTO tags (id, name, color) VALUES (?, ?, ?)", (tag_id, raw, color)
-        )
+        with self.connection() as conn:
+            conn.execute("INSERT INTO tags (id, name, color) VALUES (?, ?, ?)", (tag_id, raw, color))
+            conn.execute("INSERT INTO sync_tag_lifecycle (tag_id, state) VALUES (?, 'active')", (tag_id,))
         return {"id": tag_id, "name": raw, "color": color, "existed": False}
 
     def add_tag_alias(self, tag_id: str, alias: str) -> None:
@@ -3741,6 +3711,7 @@ class PRKSDatabase:
             raise ValueError("cannot merge a tag into itself")
 
         with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             srow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (source,)).fetchone()
             trow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (target,)).fetchone()
             if not srow or not trow:
@@ -3754,12 +3725,10 @@ class PRKSDatabase:
             # present. Entities linked only to the target are untouched.
             affected = self._entities_linked_to_tag_on_conn(conn, source)
 
-            conn.execute(
-                "INSERT OR IGNORE INTO work_tags (work_id, tag_id) "
-                "SELECT work_id, ? FROM work_tags WHERE tag_id = ?",
-                (target, source),
-            )
-            conn.execute("DELETE FROM work_tags WHERE tag_id = ?", (source,))
+            for wid in affected["affected_work_ids"]:
+                work_tag_sync.set_state(conn, wid, target, True)
+                work_tag_sync.set_state(conn, wid, source, False)
+            conn.execute("UPDATE sync_tag_lifecycle SET state = 'merged', target_tag_id = ?, changed_at = CURRENT_TIMESTAMP WHERE tag_id = ? OR (state = 'merged' AND target_tag_id = ?)", (target, source, source))
 
             conn.execute(
                 "INSERT OR IGNORE INTO folder_tags (folder_id, tag_id) "
@@ -3990,7 +3959,13 @@ class PRKSDatabase:
             ).fetchall()
             if r["folder_id"]
         ]
-        return {"affected_work_ids": works, "affected_folder_ids": folders}
+        option_works = set(works)
+        for row in conn.execute("SELECT scope_id FROM sync_entity_revisions WHERE scope_type = 'work-tag'"):
+            pair = json.loads(row["scope_id"])
+            if pair[1] == tag_id:
+                option_works.add(pair[0])
+        return {"affected_work_ids": works, "affected_folder_ids": folders,
+                "affected_tag_options_work_ids": sorted(option_works)}
 
     def delete_tag(self, tag_id: str) -> Dict[str, Any]:
         """Explicitly destroy a Tag. Relationships cascade.
@@ -4024,22 +3999,29 @@ class PRKSDatabase:
         # Collect BEFORE the delete: the FK cascade removes the link rows, so
         # afterwards there is nothing left to report.
         with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT id FROM tags WHERE id = ?", (tid,)).fetchone()
             if not row:
                 raise ValueError("tag not found")
             affected = self._entities_linked_to_tag_on_conn(conn, tid)
+            for wid in affected["affected_work_ids"]:
+                work_tag_sync.set_state(conn, wid, tid, False)
+            conn.execute("UPDATE sync_tag_lifecycle SET state = 'deleted', target_tag_id = NULL, changed_at = CURRENT_TIMESTAMP WHERE tag_id = ?", (tid,))
             conn.execute("DELETE FROM tags WHERE id = ?", (tid,))
         return {"status": "deleted", **affected}
 
     def add_tag_to_work(self, work_id: str, tag_id: str):
-        self.execute_query("INSERT INTO work_tags (work_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", (work_id, tag_id))
+        with self.connection() as conn:
+            work_tag_sync.set_state(conn, work_id, tag_id, True)
 
     def remove_tag_from_work(self, work_id: str, tag_id: str):
-        # Relationship only. Tag identity is persistent -- see the note on
-        # delete_tag(). One statement, so atomic by autocommit.
-        self.execute_query(
-            "DELETE FROM work_tags WHERE work_id = ? AND tag_id = ?", (work_id, tag_id)
-        )
+        with self.connection() as conn:
+            work_tag_sync.set_state(conn, work_id, tag_id, False)
+
+    def get_work_tag_options(self, work_id: str):
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return work_tag_sync.tag_options(conn, work_id)
 
     def add_tag_to_folder(self, folder_id: str, tag_id: str):
         self.execute_query("INSERT INTO folder_tags (folder_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", (folder_id, tag_id))

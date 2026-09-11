@@ -293,7 +293,6 @@ function prksWireTagsPageMergePanel() {
                 // Canonical boundary owns the offline guard and publishes the
                 // Work/Folder cache coherence from the server's own answer.
                 await mergeTags(source.id, target.id);
-                window.__prksAllTagsCache = null;
                 prksCloseTagsMergeModal();
                 const wrap = prksTagsPageCtx.containerEl;
                 if (wrap && typeof renderTagsPage === 'function') {
@@ -350,7 +349,6 @@ function prksWireTagsPageAliasPanel(container) {
             if (!confirmed) return;
             try {
                 await deleteTag(tag.id);
-                window.__prksAllTagsCache = null;
                 prksCloseTagsAliasModal();
                 const container = prksTagsPageCtx.containerEl;
                 if (container && typeof renderTagsPage === 'function') {
@@ -380,7 +378,7 @@ function prksWireTagsPageAliasPanel(container) {
                 });
                 const errData = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(errData.error || 'Failed to add alias');
-                window.__prksAllTagsCache = null;
+                if (typeof prksOfflineMarkTagsChanged === 'function') prksOfflineMarkTagsChanged();
                 const tags = await fetchTags({ used: true });
                 prksTagsPageCtx.tags = tags;
                 prksRenderTagsPageAliasModal();
@@ -407,7 +405,7 @@ function prksWireTagsPageAliasPanel(container) {
                 );
                 const errData = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(errData.error || 'Failed to remove alias');
-                window.__prksAllTagsCache = null;
+                if (typeof prksOfflineMarkTagsChanged === 'function') prksOfflineMarkTagsChanged();
                 const tags = await fetchTags({ used: true });
                 prksTagsPageCtx.tags = tags;
                 prksRenderTagsPageAliasModal();

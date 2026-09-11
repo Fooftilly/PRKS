@@ -975,7 +975,6 @@ async function prksRemoveFolderTag(folderId, tagId, btn) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
         await removeTagFromFolder(folderId, tagId);
-        window.__prksAllTagsCache = null;
         await prksReloadEntityTagsUI('folder', folderId, ownerCtx);
     } catch (e) {
         if (btn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);

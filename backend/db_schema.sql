@@ -465,3 +465,32 @@ CREATE INDEX IF NOT EXISTS idx_roles_person_id ON roles(person_id);
 CREATE INDEX IF NOT EXISTS idx_annotations_work_id ON annotations(work_id);
 CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist_id ON playlist_items(playlist_id);
 CREATE INDEX IF NOT EXISTS idx_works_last_opened_at ON works(last_opened_at);
+
+CREATE TABLE sync_operations (
+    op_id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    status TEXT NOT NULL,
+    http_status INTEGER NOT NULL,
+    result_json TEXT NOT NULL,
+    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE sync_entity_revisions (
+    scope_type TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (scope_type, scope_id)
+);
+-- Lifecycle and redirects survive deletion; intentionally no Tag foreign keys.
+CREATE TABLE sync_tag_lifecycle (
+    tag_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK (state IN ('active', 'merged', 'deleted')),
+    target_tag_id TEXT,
+    changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((state = 'merged' AND target_tag_id IS NOT NULL) OR
+           (state != 'merged' AND target_tag_id IS NULL))
+);

@@ -24,7 +24,7 @@ from backend.log_safety import safe_error_type, safe_log_label
 
 LOGGER = logging.getLogger("prks.db")
 
-LATEST_SCHEMA_VERSION = 13
+LATEST_SCHEMA_VERSION = 14
 LEGACY_BASELINE_VERSION = 9
 
 # Unversioned files count as PRKS only with works plus another established table.
@@ -107,9 +107,15 @@ REQUIRED_TABLES = (
     "person_groups",
     "person_group_members",
     "saved_views",
+    "sync_operations",
+    "sync_entity_revisions",
+    "sync_tag_lifecycle",
 )
 
 REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
+    "sync_operations": ("op_id", "device_id", "operation_type", "entity_type", "entity_id", "request_hash", "status", "http_status", "result_json", "applied_at"),
+    "sync_entity_revisions": ("scope_type", "scope_id", "revision", "updated_at"),
+    "sync_tag_lifecycle": ("tag_id", "state", "target_tag_id", "changed_at"),
     "works": (
         "id",
         "title",
@@ -571,6 +577,7 @@ _TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
     ),
 }
 
+_POST_V13_TABLES = frozenset({"sync_operations", "sync_entity_revisions", "sync_tag_lifecycle"})
 _POST_V10_TABLES = frozenset({"saved_views"})
 _POST_V11_TABLES = frozenset(
     {
@@ -596,6 +603,9 @@ CREATE TABLE arguments (
 
 # PKs/FKs enforced on the current (v12) schema. Pre-v10 reconcile uses _TABLE_PKS/_TABLE_FKS only.
 _CURRENT_TABLE_PKS: Dict[str, Tuple[str, ...]] = {
+    "sync_operations": ("op_id",),
+    "sync_entity_revisions": ("scope_type", "scope_id"),
+    "sync_tag_lifecycle": ("tag_id",),
     "concepts": ("id",),
     "concept_aliases": ("concept_id", "normalized_alias"),
     "concept_parents": ("child_concept_id", "parent_concept_id"),
@@ -608,6 +618,7 @@ _CURRENT_TABLE_PKS: Dict[str, Tuple[str, ...]] = {
 }
 
 _CURRENT_TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
+    "sync_operations": (), "sync_entity_revisions": (), "sync_tag_lifecycle": (),
     "concept_aliases": (("concept_id", "concepts", "id", "CASCADE"),),
     "concept_parents": (
         ("child_concept_id", "concepts", "id", "CASCADE"),
@@ -1350,7 +1361,7 @@ def _ensure_missing_tables(conn: sqlite3.Connection, schema_sql: str) -> None:
             continue
         if name == "works_fts":
             continue
-        if name in _POST_V10_TABLES or name in _POST_V11_TABLES:
+        if name in _POST_V10_TABLES or name in _POST_V11_TABLES or name in _POST_V13_TABLES:
             continue
         if name == "arguments":
             if not table_exists(conn, "arguments"):
@@ -1963,6 +1974,43 @@ def iter_sql_statements(script: str) -> List[str]:
     return statements
 
 
+def migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE sync_operations (
+            op_id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL,
+            operation_type TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            http_status INTEGER NOT NULL,
+            result_json TEXT NOT NULL,
+            applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE sync_entity_revisions (
+            scope_type TEXT NOT NULL,
+            scope_id TEXT NOT NULL,
+            revision INTEGER NOT NULL CHECK (revision >= 0),
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (scope_type, scope_id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE sync_tag_lifecycle (
+            tag_id TEXT PRIMARY KEY,
+            state TEXT NOT NULL CHECK (state IN ('active', 'merged', 'deleted')),
+            target_tag_id TEXT,
+            changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK ((state = 'merged' AND target_tag_id IS NOT NULL) OR
+                   (state != 'merged' AND target_tag_id IS NULL))
+        )
+    """)
+    conn.execute("INSERT INTO sync_tag_lifecycle (tag_id, state) SELECT id, 'active' FROM tags")
+
+
 MIGRATIONS: Tuple[Migration, ...] = (
     Migration(
         target_version=10,
@@ -1984,6 +2032,7 @@ MIGRATIONS: Tuple[Migration, ...] = (
         name="remove_legacy_work_annotations",
         apply=migrate_v12_to_v13,
     ),
+    Migration(target_version=14, name="work_tag_sync", apply=migrate_v13_to_v14),
 )
 
 validate_migration_registry()

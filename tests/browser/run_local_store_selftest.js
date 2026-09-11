@@ -470,6 +470,35 @@ async function run() {
             [dep]);
     }
 
+    /* Real transactional coalescing, including a new store after reload. */
+    {
+        const factory = createFakeIndexedDBFactory();
+        const opts = { indexedDB: factory, uuid: seqUuid };
+        let store = mod.createPrksLocalStore(opts);
+        const tag = { id: 'T-C', name: 'Coalesce', color: '#112233', aliases: [] };
+        for (const base of [false, true]) {
+            const first = await store.coalesceWorkTag('W-C', tag.id, !base, base, 8, tag);
+            await store.coalesceWorkTag('W-C', tag.id, !base, base, 8, tag);
+            assertEq('repeated intent has one operation', (await store.listOperations()).length, 1);
+            store = mod.createPrksLocalStore(opts);
+            await store.coalesceWorkTag('W-C', tag.id, base, base, 8, tag);
+            assertEq('opposite intent cancels across reload', (await store.listOperations()).length, 0);
+        }
+        const op = await store.coalesceWorkTag('W-C', tag.id, true, false, 0, tag);
+        await store.claimOperation(op.op_id);
+        await assertRejects('syncing cannot coalesce', store.coalesceWorkTag('W-C', tag.id, false, false, 0, tag), 'scope_busy');
+        await store.updateOperationSyncState(op.op_id, { status: 'pending' });
+        await assertRejects('lost-response pending cannot coalesce', store.coalesceWorkTag('W-C', tag.id, false, false, 0, tag), 'scope_busy');
+        await store.updateOperationSyncState(op.op_id, { status: 'conflict', server_result: {
+            code: 'REVISION_CONFLICT', current_revision: 3, current_state: false, requested_state: true,
+        } });
+        await assertRejects('structured result rejects arbitrary fields', store.updateOperationSyncState(op.op_id, { server_result: { raw: 'body' } }), 'invalid_result');
+        const replacement = await store.resolveConflict(op.op_id, true);
+        assert('explicit reapply creates new id', replacement.op_id !== op.op_id);
+        assertEq('explicit reapply uses current server base', replacement.base_revision, 3);
+        assertEq('retired conflict removed atomically', await store.getOperation(op.op_id), null);
+    }
+
     /* ---- module hygiene: persistence only ---- */
     {
         const src = fs.readFileSync(path.join(rootDir, 'frontend/js/local-store.js'), 'utf8');

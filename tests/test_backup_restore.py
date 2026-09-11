@@ -249,6 +249,17 @@ class TestBackupInventory(BackupRestoreTestCase):
 class TestBackupRoundTrip(BackupRestoreTestCase):
     def test_round_trip_to_empty_storage(self):
         source = self._bind_library(extra_pdf_name="orphan.pdf")
+        from backend.work_tag_sync import process_operation
+        import uuid
+        sync_db = server_module.db
+        sync_tag = sync_db.add_tag("Sync backup")["id"]
+        sync_op = dict(op_id=str(uuid.uuid4()), device_id=str(uuid.uuid4()), operation="ADD_WORK_TAG",
+                       entity_type="work", entity_id=source["work_id"], payload={"tag_id": sync_tag},
+                       base_revision=0, occurred_at="2026-09-11T00:00:00Z", created_at="2026-09-11T00:00:00Z", depends_on=[])
+        self.assertEqual(process_operation(sync_db, sync_op)[0], 200)
+        sync_db.delete_tag(sync_tag)
+        sync_tables = ("sync_operations", "sync_entity_revisions", "sync_tag_lifecycle")
+        sync_before = {table: sync_db.execute_query("SELECT * FROM " + table) for table in sync_tables}
         backup = create_backup(source["cfg"])
         self.assertTrue(backup.verified)
         names = _zip_namelist(backup.archive_path)
@@ -278,6 +289,8 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         out = apply_restore(dest, staged.token, "RESTORE", rebind=bind_storage)
         self.assertTrue(out["restored"])
         live = server_module.db
+        for table in sync_tables:
+            self.assertEqual(live.execute_query("SELECT * FROM " + table), sync_before[table])
         rows = live.execute_query("SELECT title FROM works")
         self.assertEqual([r["title"] for r in rows], [source["title"]])
         restored_pdf = os.path.join(dest.pdfs_dir, source["pdf_name"])
@@ -566,7 +579,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         live = server_module.db
         versions = live.execute_query("SELECT version FROM schema_version")
         self.assertEqual([row["version"] for row in versions], [PRKS_SCHEMA_VERSION])
-        self.assertEqual(PRKS_SCHEMA_VERSION, 13)
+        self.assertEqual(PRKS_SCHEMA_VERSION, 14)
         titles = [row["title"] for row in live.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["Incoming V12"])
         canonical = live.execute_query(

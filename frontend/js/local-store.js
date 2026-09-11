@@ -368,7 +368,7 @@
                     const names = Array.isArray(storeNames) ? storeNames : [storeNames];
                     let tx;
                     try {
-                        tx = db.transaction(names, mode);
+                        tx = db.transaction(names, mode, { durability: 'strict' });
                     } catch (e) {
                         reject(localStoreError('transaction_failed', 'Could not start a local transaction.'));
                         return;
@@ -576,6 +576,86 @@
             );
         }
 
+        async function insertEnvelopeIn(request, envelope, localContext) {
+            const deviceId = await resolveDeviceIdIn(request);
+            const row = await request(STORE_METADATA, s => s.get(META_SEQUENCE));
+            const sequence = (row ? row.value : 0) + 1;
+            const prepared = normalizeOperationEnvelope(envelope, {
+                opId: uuid(), deviceId, sequence, createdAt: nowIso(),
+            });
+            if (localContext != null) {
+                if (jsonByteLength(localContext) > 4096) throw localStoreError('invalid_context', 'Local context too large.');
+                prepared.local_context = JSON.parse(JSON.stringify(localContext));
+            }
+            await request(STORE_METADATA, s => s.put({ key: META_SEQUENCE, value: sequence }));
+            if (await request(STORE_OPERATIONS, s => s.get(prepared.op_id))) throw localStoreError('duplicate_op_id', 'Duplicate operation id.');
+            await request(STORE_OPERATIONS, s => s.put(prepared));
+            return prepared;
+        }
+
+        /* One desired state per relationship, checked and changed atomically.
+         * Only NEVER SENT pending rows may be canceled. A pending retry may
+         * already be ledgered by the server after a lost response; keep its id.
+         * No immutable envelope is ever rewritten. */
+        function coalesceWorkTag(workId, tagId, present, baseState, baseRevision, tag) {
+            if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
+                !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
+                return Promise.reject(localStoreError('invalid_base', 'Invalid relationship base.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                const existing = rows.find(r => r.entity_type === 'work' && r.entity_id === workId &&
+                    r.payload.tag_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
+                if (existing) {
+                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                        throw localStoreError('scope_busy', 'This Tag change is syncing or needs resolution.');
+                    }
+                    if ((existing.operation === 'ADD_WORK_TAG') === present) { setResult(existing); return; }
+                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    setResult(null);
+                    return;
+                }
+                if (present === baseState) { setResult(null); return; }
+                setResult(await insertEnvelopeIn(request, {
+                    operation: present ? 'ADD_WORK_TAG' : 'REMOVE_WORK_TAG', entity_type: 'work',
+                    entity_id: workId, payload: { tag_id: tagId }, base_revision: baseRevision,
+                }, { tag }));
+            });
+        }
+
+        /* Explicit user resolution, atomically retires the conflict and, when
+         * requested, creates a NEW envelope against the observed server base. */
+        function resolveConflict(opId, apply) {
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const row = await request(STORE_OPERATIONS, s => s.get(opId));
+                if (!row || row.status !== STATUS_CONFLICT) throw localStoreError('not_conflict', 'Conflict no longer available.');
+                let replacement = null;
+                if (apply) {
+                    if (!row.server_result || row.server_result.code !== 'REVISION_CONFLICT') {
+                        throw localStoreError('invalid_resolution', 'This conflict cannot be reapplied.');
+                    }
+                    replacement = await insertEnvelopeIn(request, {
+                        operation: row.operation, entity_type: row.entity_type, entity_id: row.entity_id,
+                        payload: row.payload, base_revision: row.server_result.current_revision,
+                    }, row.local_context);
+                }
+                await request(STORE_OPERATIONS, s => s.delete(opId));
+                setResult(replacement);
+            });
+        }
+
+        function claimOperation(opId) {
+            return runTransaction(STORE_OPERATIONS, 'readwrite', async (request, setResult) => {
+                const row = await request(STORE_OPERATIONS, s => s.get(opId));
+                if (!row || row.status !== STATUS_PENDING) { setResult(null); return; }
+                row.status = STATUS_SYNCING;
+                row.attempt_count += 1;
+                row.last_attempt_at = nowIso();
+                await request(STORE_OPERATIONS, s => s.put(row));
+                setResult(row);
+            });
+        }
+
         function getOperation(opId) {
             return runTransaction(STORE_OPERATIONS, 'readonly', function (request, setResult) {
                 return request(STORE_OPERATIONS, function (store) {
@@ -659,6 +739,14 @@
                         next.server_revision = Number.isInteger(changes.server_revision)
                             ? changes.server_revision
                             : null;
+                    }
+                    if (Object.prototype.hasOwnProperty.call(changes, 'server_result')) {
+                        const value = changes.server_result;
+                        const allowed = ['code', 'current_revision', 'current_state', 'requested_state', 'target_tag_id'];
+                        if (value !== null && (!isPlainObject(value) || Object.keys(value).some(k => !allowed.includes(k)) || jsonByteLength(value) > 2048)) {
+                            throw localStoreError('invalid_result', 'Invalid structured server result.');
+                        }
+                        next.server_result = value == null ? null : JSON.parse(JSON.stringify(value));
                     }
                     if (changes.status === STATUS_ACKNOWLEDGED) {
                         next.acknowledged_at = nowIso();
@@ -789,6 +877,7 @@
         return {
             getOrCreateDeviceId: getOrCreateDeviceId,
             enqueueOperation: enqueueOperation,
+            coalesceWorkTag, resolveConflict, claimOperation,
             getOperation: getOperation,
             listOperations: listOperations,
             updateOperationSyncState: updateOperationSyncState,
