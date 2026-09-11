@@ -2319,12 +2319,33 @@ class PRKSDatabase:
             work["folder_title"] = None
         if work.get('text_content'):
             work['html_content'] = self.resolve_wiki_links(work['text_content'])
-        # Touch last_opened_at for Recent page
-        self.execute_query(
-            "UPDATE works SET last_opened_at = CURRENT_TIMESTAMP WHERE id = ?", (work_id,)
-        )
+        # NOTE: this read is PURE. `last_opened_at` used to be stamped here,
+        # which made GET /api/works/:id a hidden mutation -- every internal
+        # refresh (tag edit, folder move, playlist change, role edit, metadata
+        # save, notes save) silently reordered Recent, and left `recent:index`
+        # eligible while the server representation had changed. Marking a Work
+        # opened is now the explicit `mark_work_opened()` operation below.
         enrich_work_rows_pdf_file_size([work], self.storage.pdfs_dir)
         return work
+
+    def mark_work_opened(self, work_id: str) -> bool:
+        """Record that the user actually opened this Work.
+
+        An explicit canonical operation rather than a side effect of reading,
+        so that only genuine foreground navigation reorders Recent. This is
+        also the shape a local-first outbox needs: MARK_WORK_OPENED(workId)
+        can be queued, coalesced and synchronized independently of the
+        metadata/tag/folder operations it used to be entangled with.
+        """
+        wid = (work_id or "").strip()
+        if not wid:
+            raise ValueError("work_id is required")
+        if not self.execute_query("SELECT 1 FROM works WHERE id = ?", (wid,)):
+            return False
+        self.execute_query(
+            "UPDATE works SET last_opened_at = CURRENT_TIMESTAMP WHERE id = ?", (wid,)
+        )
+        return True
 
     def get_recent_works(self, limit: int = 30) -> List[dict]:
         sel = _prks_work_summary_select("works")

@@ -1163,6 +1163,38 @@ function prksMarkPlaylistsDomainChanged() {
  * See AGENTS.md, "Offline browse catalogs".
  * ------------------------------------------------------------------------ */
 
+/**
+ * Canonical "the user opened this Work" event.
+ *
+ * `GET /api/works/:id` is a pure read, so this is the ONLY thing that
+ * reorders Recent. Call it for genuine foreground Work navigation and never
+ * for an internal refresh -- a post-save reload, a folder/playlist/tag/role
+ * refresh or a cache revalidation must not make a Work look "recently
+ * opened" to the user, nor stale `recent:index` behind their back.
+ *
+ * Best-effort by design: failing to record an open must never break opening
+ * the Work. Recent coherence is published only on acknowledged success.
+ */
+async function markWorkOpened(workId) {
+    const id = String(workId || '').trim();
+    if (!id) return false;
+    let res;
+    try {
+        // The POST dispatcher requires a JSON content type (CSRF posture), so
+        // send an empty object even though the event carries no payload.
+        res = await prksRequest('/api/works/' + encodeURIComponent(id) + '/opened', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+    } catch (e) {
+        return false;
+    }
+    if (!res || !res.ok) return false;
+    prksMarkRecentChanged();
+    return true;
+}
+
 /** The stable Work catalog behind #/progress, #/types and #/types/:type. */
 function prksMarkWorksBrowseChanged() {
     if (typeof prksOfflineMarkWorksBrowseChanged !== 'function') return null;
@@ -1575,6 +1607,7 @@ window.prksMarkPlaylistsDomainChanged = prksMarkPlaylistsDomainChanged;
 window.prksMarkFoldersDomainChanged = prksMarkFoldersDomainChanged;
 window.prksMarkWorksBrowseChanged = prksMarkWorksBrowseChanged;
 window.prksMarkRecentChanged = prksMarkRecentChanged;
+window.markWorkOpened = markWorkOpened;
 window.prksMarkRecentlyAddedChanged = prksMarkRecentlyAddedChanged;
 window.prksMarkWorkBrowseDisplayChanged = prksMarkWorkBrowseDisplayChanged;
 window.prksOfflineWasGuardRefusal = prksOfflineWasGuardRefusal;

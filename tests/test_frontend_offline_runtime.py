@@ -1040,16 +1040,43 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertIn("PRKS_RECENT_LIST_KEY", body)
         self.assertNotIn("PRKS_WORKS_BROWSE_LIST_KEY", body)
 
-    def test_opening_a_work_marks_recent_only(self):
+    def test_opening_a_work_records_an_explicit_open_event_only(self):
+        """The Work route is the ONLY genuine foreground open. It records an
+        explicit event rather than relying on a side effect of reading, and it
+        touches no other browse projection."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("case 'work': {")
         body = app[at: at + 1800]
-        self.assertIn("prksMarkRecentChanged()", body)
+        self.assertIn("markWorkOpened(workId)", body)
         for forbidden in ("prksMarkWorksBrowseChanged", "prksMarkRecentlyAddedChanged",
                           "prksMarkWorkBrowseDisplayChanged"):
             self.assertNotIn(forbidden, body, forbidden)
-        # Only an authoritative read stamps last_opened_at.
+        # A cache hit is not an open.
         self.assertIn("offlineWork.source === 'server'", body)
+
+    def test_only_the_work_route_records_an_open_event(self):
+        """Every other fetchWorkDetails() call site is an INTERNAL refresh --
+        a post-save reload, or a folder/playlist/tag/role/notes refresh. None
+        may make a Work look recently opened, nor stale recent:index."""
+        for name in ("ui.js", "components/folders.js", "components/playlists.js",
+                     "components/works.js", "components/works-pdf.js",
+                     "components/people.js", "components/tags.js"):
+            src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
+            with self.subTest(module=name):
+                self.assertNotIn("markWorkOpened", src)
+                self.assertNotIn("/opened", src)
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        self.assertEqual(app.count("markWorkOpened("), 1)
+
+    def test_mark_work_opened_publishes_recent_only_on_success(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        body = _fn_body(api, "async function markWorkOpened(")
+        self.assertIn("prksMarkRecentChanged();", body)
+        # Best-effort: a failure must not break opening the Work, and must not
+        # publish coherence for a mutation that did not happen.
+        self.assertLess(body.index("if (!res || !res.ok) return false;"),
+                        body.index("prksMarkRecentChanged();"))
+        self.assertIn("catch (e)", body)
 
     def test_semantic_helpers_are_the_only_invalidation_path(self):
         """A future sync coordinator needs ONE place to turn "discard" into

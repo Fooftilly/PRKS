@@ -249,6 +249,104 @@ class BrowseOfflineTests(unittest.TestCase):
         o._wait_offline_banner(page)
         self.assertIn(WORK_A_TITLE, o._content_text(page))
 
+    def test_internal_refreshes_never_record_an_open(self):
+        """The regression this milestone exists for.
+
+        `GET /api/works/:id` used to stamp `last_opened_at`, so every internal
+        refresh after a save silently reordered Recent -- while the UI left
+        `recent:index` eligible, because it correctly believed a tag or folder
+        edit had nothing to do with Recent. Each case below drives the REAL UI
+        path, refresh read included.
+        """
+        server, page, context, _c = self.start()
+        ids = server.ids
+        tag_id = page.evaluate(
+            """async () => {
+                const res = await prksRequest('/api/tags', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: 'Browse Open Probe Tag' }),
+                });
+                return (await res.json()).id;
+            }"""
+        )
+        cases = (
+            ('folder move', """async ([wid, fid]) => {
+                    await patchWorkFolder(wid, fid);
+                    await fetchWorkDetails(wid);
+                }""", ['work_a', 'folder_child']),
+            ('tag add', """async ([wid, tid]) => {
+                    await prksRequest('/api/works/' + encodeURIComponent(wid) + '/tags', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tag_id: tid }),
+                    });
+                    await fetchWorkDetails(wid);
+                }""", ['work_a', None]),
+            # Patch `status`, not `title`: renaming would break the
+            # title-based card lookup the next iteration uses.
+            ('metadata save', """async ([wid]) => {
+                    await prksRequest('/api/works/' + encodeURIComponent(wid), {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'Paused' }),
+                    });
+                    await fetchWorkDetails(wid);
+                }""", ['work_a', None]),
+            ('playlist set', """async ([wid, plid]) => {
+                    try { await addWorkToPlaylist(plid, wid); } catch (_) {}
+                    await fetchWorkDetails(wid);
+                }""", ['work_b', 'playlist_b']),
+        )
+        for label, script, keys in cases:
+            with self.subTest(case=label):
+                self.cache_all(page, ids)
+                before = self.generations(page)
+                arg = [ids.get(keys[0]), tag_id if keys[1] is None else ids.get(keys[1])]
+                page.evaluate(script, arg)
+                page.wait_for_timeout(400)
+
+                # Asserting only on the client generation cannot detect this
+                # bug: the defect IS that the client stays unaware while the
+                # server representation moves. The real invariant is that the
+                # snapshot the device still considers eligible matches what
+                # the server would serve right now.
+                envelope = o._cached_list(page, 'recent:index')
+                self.assertIsNotNone(envelope, label)
+                cached = envelope['value']
+                fresh = page.evaluate(
+                    """async () => {
+                        const res = await prksRequest('/api/recent');
+                        return await res.json();
+                    }"""
+                )
+                self.assertEqual(
+                    [(r['id'], r['last_opened_at']) for r in cached],
+                    [(r['id'], r['last_opened_at']) for r in fresh],
+                    "%s changed the server's Recent while recent:index stayed eligible" % label,
+                )
+                self.assertEqual(
+                    o._domain_generation(page, 'recent'), before['recent'],
+                    "%s recorded an open" % label,
+                )
+
+    def test_a_genuine_foreground_open_does_record_one(self):
+        """The other half: the explicit event must still fire for real opens."""
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache_all(page, ids)
+        before = self.generations(page)
+        seen = []
+        page.on('request', lambda req: seen.append(urlparse(req.url).path)
+                if req.method == 'POST' else None)
+
+        o._open_work_from_home(page, WORK_B_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_b'])
+        page.wait_for_function(
+            "(g) => window.prksOfflineDomainGeneration('recent') > g",
+            arg=before['recent'], timeout=20000,
+        )
+        self.assertIn('/api/works/%s/opened' % ids['work_b'], seen)
+        # ... and still only Recent.
+        self.changed(page, before, {'recent'})
+
     def test_work_creation_stales_the_catalog_and_recently_added_but_not_recent(self):
         server, page, context, _c = self.start()
         ids = server.ids

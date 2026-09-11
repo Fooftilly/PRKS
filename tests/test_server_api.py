@@ -1242,9 +1242,17 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/works/{w_id}")) as rg:
             self.assertEqual(rg.status, 200)
 
+        # A GET is a PURE read: it must not put the Work in Recent.
         with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/recent")) as rr:
             recent = json.loads(rr.read().decode())
         self.assertIsInstance(recent, list)
+        self.assertFalse(any(r.get("id") == w_id for r in recent),
+                         "GET /api/works/:id must not record an open")
+
+        # Only the explicit open event does.
+        self.assertEqual(self._sv_json("POST", f"/api/works/{w_id}/opened", {})[0], 200)
+        with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/recent")) as rr:
+            recent = json.loads(rr.read().decode())
         self.assertTrue(any(r.get("id") == w_id for r in recent))
 
         with urllib.request.urlopen(urllib.request.Request(f"{self._base_url}/api/recently-added")) as ra:
@@ -3677,10 +3685,10 @@ class TestServerAPI(unittest.TestCase):
     def test_recent_etag_follows_opening_a_work(self):
         first = self._make_browse_work("Recent ETag One")
         second = self._make_browse_work("Recent ETag Two")
-        # Opening stamps last_opened_at; GET /api/works/:id is that boundary.
-        self._sv_json("GET", f"/api/works/{first}")
+        # Opening is the explicit event, never the GET.
+        self._sv_json("POST", f"/api/works/{first}/opened", {})
         self._assert_browse_etag_follows(
-            "recent", lambda: self._sv_json("GET", f"/api/works/{second}")
+            "recent", lambda: self._sv_json("POST", f"/api/works/{second}/opened", {})
         )
         # Re-opening the one already at the top still reorders nothing but does
         # change its timestamp; the representation decides, not a count.
@@ -3690,7 +3698,7 @@ class TestServerAPI(unittest.TestCase):
 
     def test_recent_etag_follows_display_change_of_a_listed_work(self):
         wid = self._make_browse_work("Recent Display Work")
-        self._sv_json("GET", f"/api/works/{wid}")
+        self._sv_json("POST", f"/api/works/{wid}/opened", {})
         self._assert_browse_etag_follows(
             "recent",
             lambda: self._sv_json("PATCH", f"/api/works/{wid}", {"title": "Recent Display Renamed"}),
@@ -3718,7 +3726,7 @@ class TestServerAPI(unittest.TestCase):
         read agree even when several rows share a one-second timestamp."""
         ids = [self._make_browse_work(f"Order Probe {i}") for i in range(5)]
         for wid in ids:
-            self._sv_json("GET", f"/api/works/{wid}")
+            self._sv_json("POST", f"/api/works/{wid}/opened", {})
         for path in ("/api/recent", "/api/recently-added", "/api/works?projection=browse"):
             first = self._conditional_get(path)[2]
             second = self._conditional_get(path)[2]
@@ -3737,6 +3745,72 @@ class TestServerAPI(unittest.TestCase):
         full_row = next(r for r in full if r["id"] == wid)
         self.assertIn("abstract", full_row)
         self.assertEqual(len(full_row["abstract"]), 5000)
+
+    # -- Pure reads / explicit open event -----------------------------------
+
+    def test_get_work_never_mutates_last_opened_at(self):
+        """A GET must be pure. It used to stamp last_opened_at, which made
+        every internal refresh (tag, folder, playlist, role, metadata, notes)
+        silently reorder Recent behind the UI's back."""
+        wid = self._make_browse_work("Pure Read Work")
+        status, _etag, before = self._conditional_get("/api/recent")
+        self.assertEqual(status, 200)
+
+        for _ in range(3):
+            self.assertEqual(self._sv_json("GET", f"/api/works/{wid}")[0], 200)
+
+        status, etag, after = self._conditional_get("/api/recent")
+        self.assertEqual(status, 200)
+        self.assertEqual([r["id"] for r in after], [r["id"] for r in before])
+        self.assertFalse(any(r.get("id") == wid for r in after))
+
+    def test_internal_refresh_shaped_mutations_do_not_record_an_open(self):
+        """Everything the UI does after a save reads the Work back. None of it
+        may make the Work look "recently opened"."""
+        wid = self._make_browse_work("Refresh Shape Work")
+        status, folder = self._sv_json("POST", "/api/folders", {"title": "Refresh Shape Folder"})
+        self.assertEqual(status, 200)
+        status, tag = self._sv_json("POST", "/api/tags", {"name": "RefreshShapeTag"})
+        self.assertEqual(status, 200)
+        status, person = self._sv_json(
+            "POST", "/api/persons", {"first_name": "Ref", "last_name": "Shape"}
+        )
+        self.assertEqual(status, 200)
+
+        # Each pair is "canonical mutation, then the refresh read the UI does".
+        for label, mutate in (
+            ("tag add", lambda: self._sv_json(
+                "POST", f"/api/works/{wid}/tags", {"tag_id": tag["id"]})),
+            ("folder move", lambda: self._sv_json(
+                "PATCH", f"/api/works/{wid}", {"folder_id": folder["id"]})),
+            ("role add", lambda: self._sv_json(
+                "POST", "/api/roles",
+                {"person_id": person["id"], "work_id": wid, "role_type": "Author"})),
+            ("metadata save", lambda: self._sv_json(
+                "PATCH", f"/api/works/{wid}", {"title": "Refresh Shape Renamed"})),
+            ("tag remove", lambda: self._sv_json(
+                "DELETE", f"/api/works/{wid}/tags/{tag['id']}")),
+        ):
+            with self.subTest(step=label):
+                mutate()
+                self._sv_json("GET", f"/api/works/{wid}")   # the refresh read
+                status, _etag, recent = self._conditional_get("/api/recent")
+                self.assertEqual(status, 200)
+                self.assertFalse(
+                    any(r.get("id") == wid for r in recent),
+                    "%s made the Work look recently opened" % label,
+                )
+
+    def test_open_event_is_idempotent_in_membership_and_404s_for_unknown(self):
+        wid = self._make_browse_work("Open Event Work")
+        self.assertEqual(self._sv_json("POST", f"/api/works/{wid}/opened", {})[0], 200)
+        status, _etag, first = self._conditional_get("/api/recent")
+        self.assertEqual(status, 200)
+        self.assertEqual(len([r for r in first if r["id"] == wid]), 1)
+        self.assertEqual(self._sv_json("POST", f"/api/works/{wid}/opened", {})[0], 200)
+        status, _etag, second = self._conditional_get("/api/recent")
+        self.assertEqual(len([r for r in second if r["id"] == wid]), 1)
+        self.assertEqual(self._sv_json("POST", "/api/works/W-nope/opened", {})[0], 404)
 
     def test_folders_etag_is_stable_when_nothing_changed(self):
         """The invariant is one-directional: revalidation must still work."""

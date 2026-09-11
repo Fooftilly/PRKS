@@ -3012,14 +3012,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     routeSignal
                 );
                 if (stale()) return;
-                // An authoritative Work read is ALSO a canonical mutation:
-                // get_work() stamps last_opened_at, which reorders #/recent.
-                // Recent alone -- this is precisely why the browse catalog does
-                // not carry last_opened_at, so reading a file cannot cost the
-                // Progress/Types/Recently-added caches.
+                // This route IS the genuine foreground open, so it is the only
+                // place that records one. The read itself is pure; the explicit
+                // event is what reorders #/recent, and it publishes Recent
+                // coherence on acknowledged success. Fire-and-forget: failing
+                // to record an open must never break opening the Work.
+                // Opening a CACHED Work offline deliberately records nothing
+                // today: there is no durable outbox to hold the event, and
+                // silently dropping it is honest where faking a local reorder
+                // would not be. When the outbox lands this becomes a queued
+                // MARK_WORK_OPENED plus an optimistic recent:index update.
                 if (offlineWork.source === 'server' && offlineWork.value &&
-                    typeof prksMarkRecentChanged === 'function') {
-                    prksMarkRecentChanged();
+                    typeof markWorkOpened === 'function') {
+                    void markWorkOpened(workId);
                 }
                 const work = offlineWork.value;
                 if (!work && offlineWork.source === 'unavailable') {

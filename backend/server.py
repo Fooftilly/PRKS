@@ -2805,6 +2805,24 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, {'status': 'added'})
                 else:
                     self.send_error(404, "API endpoint not found")
+            elif path.startswith('/api/works/') and path.endswith('/opened'):
+                # Explicit "the user opened this Work" event. GET
+                # /api/works/:id is a pure read, so only genuine foreground
+                # navigation reaches here -- internal refreshes after a tag,
+                # folder, playlist, role, metadata or notes change must not.
+                parts = path.split('/')
+                if len(parts) != 5:
+                    self.send_error(404, "API endpoint not found")
+                    return
+                try:
+                    marked = db.mark_work_opened(parts[3])
+                except ValueError as e:
+                    self.send_json(400, {'error': str(e)})
+                    return
+                if not marked:
+                    self.send_error(404, "Work not found")
+                    return
+                self.send_json(200, {'status': 'opened'})
             elif path.startswith('/api/works/') and path.endswith('/tags'):
                 w_id = path.split('/')[3]
                 db.add_tag_to_work(w_id, data.get('tag_id'))

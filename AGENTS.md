@@ -1310,7 +1310,8 @@ success):
 
 | Canonical change | works-browse | recent | recently-added |
 | --- | --- | --- | --- |
-| Open a Work (`last_opened_at`) | — | YES | — |
+| **Explicit open event** (`POST /api/works/:id/opened`) | — | YES | — |
+| `GET /api/works/:id` (a pure read, incl. every internal refresh) | — | — | — |
 | Work create | YES | — | YES |
 | Work delete | YES | YES | YES |
 | Work metadata / title / status / doc type | YES | YES | YES |
@@ -1325,6 +1326,31 @@ Folder membership reaches **only** Recently added, because it is the one
 projection carrying `folder_id` (it filters locally over the folder title);
 Progress and Types never render a folder. Work creation reaches the catalog and
 Recently added but **not** Recent -- a new Work's `last_opened_at` is NULL.
+
+**`GET /api/works/:id` is a pure read.** It used to stamp `last_opened_at`,
+which made opening a Work a side effect of *any* detail read. Twelve
+`fetchWorkDetails()` call sites are internal refreshes -- after a tag edit, a
+folder move, a playlist change, a role edit, a metadata save, a notes save --
+and every one of them silently reordered the server's Recent while the UI
+correctly left `recent:index` eligible, because a tag edit genuinely has
+nothing to do with Recent. That is both a cache-coherence bug (`recent:index`
+stale with no invalidation) and a product bug (changing a tag made a file look
+"recently opened").
+
+Recording an open is now the explicit operation `POST /api/works/:id/opened`
+-> `db.mark_work_opened()`, reached only through `markWorkOpened()` in
+`api.js`, and called from exactly one place: the `case 'work'` route, which is
+the genuine foreground navigation. It is best-effort (a failed open event must
+never break opening the Work) and publishes `prksMarkRecentChanged()` only on
+acknowledged success. `tests/test_frontend_offline_runtime.py` asserts that no
+other module mentions `markWorkOpened` or `/opened`.
+
+This is also the local-first shape: `MARK_WORK_OPENED(workId)` is a semantic
+operation that can be queued, coalesced and synchronized independently of
+`UPDATE_WORK_METADATA` / `ADD_TAG` / `MOVE_FOLDER`, which a mutation hidden
+inside a GET could never be. Opening a cached Work offline currently records
+nothing -- there is no durable outbox to hold the event yet, and dropping it is
+honest where faking a local reorder would not be.
 
 Components must go through the semantic helpers
 `prksMarkWorksBrowseChanged()`, `prksMarkRecentChanged()`,
