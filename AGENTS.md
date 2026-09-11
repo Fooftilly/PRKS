@@ -484,7 +484,10 @@ Do not add another probe timer in the coordinator — recovery stays in
 
 ## Offline / PWA
 
-Phase 1 is read-only offline support. It currently covers:
+Phase 1 is the read-only offline layer. Existing Work Tags are the one
+mutation that crosses it, through a separate durable store and sync
+coordinator (see *Local-first Work Tags*), never through this cache.
+The read layer currently covers:
 
 - Work detail pages and their managed PDFs
 - the Concept index (`#/concepts`) and Concept detail (`#/concepts/:conceptId`)
@@ -552,11 +555,13 @@ repopulate invalidated snapshots; cleanup failure blocks only the affected domai
   that new unreferenced Work. Playlist inline Work rename inherits the shared
   Work-title hook. Failed canonical mutations retain eligibility.
 
-There is no offline mutation outbox, sync conflict resolution, background sync,
-or editable offline Research Notes/annotations in this phase. Phase 1 now
-covers the principal research-navigation surface; review remaining routes,
-storage growth, invalidation frequency and PWA install/update behavior before
-choosing any Phase 2 offline-mutation work.
+Apart from existing Work Tags (see *Local-first Work Tags* below), there is no
+offline mutation outbox, sync conflict resolution, background sync, or editable
+offline Research Notes/annotations. This read layer must never grow one: durable
+user intent belongs in `local-store.js` and the sync coordinator, never in the
+disposable cache. Phase 1 covers the principal research-navigation surface;
+review remaining routes, storage growth, invalidation frequency and PWA
+install/update behavior before choosing further offline-mutation work.
 
 Concept routes are **read-only** offline. The Concept index uses the `lists`
 store under the stable key `concepts:index`; Concept detail uses the `entities`

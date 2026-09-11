@@ -1,5 +1,7 @@
 """Canonical sync boundaries, rollback, lifecycle and revision protocol."""
 import json
+import pathlib
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -119,6 +121,7 @@ class WorkTagSyncTests(unittest.TestCase):
             op = self.op(); op[field] = value
             self.assertEqual(sync.process_operation(self.db, op)[0], 400)
         self.assertEqual(self.revision(), 0)
+        self.assertEqual(self.db.get_work_tags(self.work), [])
         self.assertEqual(self.db.execute_query("SELECT * FROM sync_operations"), [])
 
     def test_atomic_rollback_before_and_during_ledger_insert(self):
@@ -152,6 +155,59 @@ class WorkTagSyncTests(unittest.TestCase):
         self.db.merge_tags_into(self.tag, untouched); changed()
         self.db.delete_tag(untouched); changed()
 
+    def against(self, **overrides):
+        op = self.op()
+        op.update(overrides)
+        return op
+
+    def _domain_snapshot(self):
+        return (sorted(map(tuple, (r.values() for r in self.db.execute_query("SELECT work_id, tag_id FROM work_tags")))),
+                sorted(map(tuple, (r.values() for r in self.db.execute_query(
+                    "SELECT scope_type, scope_id, revision FROM sync_entity_revisions")))),
+                sorted(map(tuple, (r.values() for r in self.db.execute_query(
+                    "SELECT tag_id, state, target_tag_id FROM sync_tag_lifecycle")))))
+
+    def test_ledger_replay_is_exact_after_unrelated_state_changes(self):
+        """A replayed op_id returns the outcome the LEDGER recorded, not the
+        one today's server would produce. Without that, a device whose response
+        was lost re-derives a different answer from a world that has moved on
+        -- and a semantic outcome the user already saw resolved changes under
+        them."""
+        merged = self.db.add_tag("Merged away")["id"]
+        target = self.db.add_tag("Merge target")["id"]
+        doomed = self.db.add_tag("Doomed")["id"]
+        originals = {}
+
+        def record(code, op):
+            result = sync.process_operation(self.db, op)
+            self.assertEqual(result[1]["code"], code)
+            originals[code] = (op, result)
+
+        record("ACKNOWLEDGED", self.op())
+        # Stale base against a relationship the server has since moved.
+        record("REVISION_CONFLICT", self.op(present=False, base=0))
+        record("ENTITY_NOT_FOUND", self.against(entity_id="W-does-not-exist"))
+        self.db.merge_tags_into(merged, target)
+        record("TAG_MERGED", self.against(payload={"tag_id": merged}))
+        self.db.delete_tag(doomed)
+        record("TAG_DELETED", self.against(payload={"tag_id": doomed}))
+        record("FUTURE_REVISION", self.op(base=99))
+
+        # The world moves on in every way that could re-derive a new answer:
+        # the relationship flips, the merge target is destroyed (so the merge
+        # chain now ends in a deleted Tag), and a fresh Tag appears.
+        self.db.remove_tag_from_work(self.work, self.tag)
+        self.db.add_tag_to_work(self.work, self.tag)
+        self.db.delete_tag(target)
+        self.db.add_tag("Newcomer")
+        before = self._domain_snapshot()
+        ledger = self.db.execute_query("SELECT * FROM sync_operations ORDER BY op_id")
+
+        for code, (op, result) in originals.items():
+            self.assertEqual(sync.process_operation(self.db, op), result, code)
+        self.assertEqual(self._domain_snapshot(), before, "replay performed a domain mutation")
+        self.assertEqual(self.db.execute_query("SELECT * FROM sync_operations ORDER BY op_id"), ledger)
+
     def test_structural_scope_key(self):
         self.assertNotEqual(sync.scope_key("a:b", "c"), sync.scope_key("a", "b:c"))
 
@@ -173,3 +229,31 @@ class SyncMigrationTests(MigrationTestCase):
         with db.connection() as conn:
             self.assertEqual(application_schema_signature(conn), signature)
             self.assertEqual(sync.resolve_lifecycle(conn, tag), {"state": "ACTIVE"})
+
+
+class WorkTagWriterAuditTests(unittest.TestCase):
+    """Every canonical relationship write goes through the revision-aware
+    boundary. A direct INSERT or DELETE would change state without advancing
+    the revision, and every offline device's conflict detection is built on
+    that counter: a silent write is a change another device can overwrite
+    without ever being told there was a conflict."""
+
+    # db_migrations.py predates the counter -- its case-dedupe runs while
+    # upgrading a library that has no revisions yet, and migration 14 starts
+    # every existing relationship at zero regardless.
+    ALLOWED = frozenset({"backend/work_tag_sync.py", "backend/db_migrations.py"})
+    WRITE = re.compile(r"(INSERT\s+(OR\s+\w+\s+)?INTO\s+work_tags"
+                       r"|DELETE\s+FROM\s+work_tags"
+                       r"|UPDATE\s+work_tags)", re.IGNORECASE)
+
+    def test_only_the_revision_aware_boundary_writes_work_tags(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        offenders = []
+        for path in sorted((root / "backend").rglob("*.py")):
+            relative = path.relative_to(root).as_posix()
+            if relative in self.ALLOWED:
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if self.WRITE.search(line):
+                    offenders.append("%s:%d" % (relative, number))
+        self.assertEqual(offenders, [], "use work_tag_sync.set_state() instead")

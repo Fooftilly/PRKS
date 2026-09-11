@@ -105,8 +105,8 @@ class ResearchGraphTests(unittest.TestCase):
         }
 
     def test_schema_version_unchanged(self):
-        self.assertEqual(PRKS_SCHEMA_VERSION, 13)
-        self.assertEqual(LATEST_SCHEMA_VERSION, 13)
+        self.assertEqual(PRKS_SCHEMA_VERSION, 14)
+        self.assertEqual(LATEST_SCHEMA_VERSION, 14)
 
     def test_representative_network(self):
         n = self._network()

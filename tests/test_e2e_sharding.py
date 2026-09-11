@@ -337,6 +337,17 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
 
 
 class RunnerDiscoveryTests(unittest.TestCase):
+    def test_manifest_covers_every_e2e_module_on_disk(self):
+        """The gate runs the manifest, not the directory. A module missing from
+        it is not "not yet wired up" -- it is a suite nobody runs, which is
+        indistinguishable from having no coverage at all."""
+        with _import_runner() as runner:
+            listed = set(runner.E2E_MODULES)
+        directory = Path(__file__).resolve().parents[1] / "tests" / "e2e"
+        on_disk = {"tests.e2e." + path.stem for path in sorted(directory.glob("test_*.py"))}
+        self.assertEqual(on_disk - listed, set(), "add these to run.py's E2E_MODULES")
+        self.assertEqual(listed - on_disk, set(), "these E2E modules no longer exist")
+
     def test_discovery_yields_individual_test_ids_for_every_e2e_module(self):
         with _import_runner() as runner:
             ids = runner.discover_test_ids()

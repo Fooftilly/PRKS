@@ -84,6 +84,15 @@ class OfflineWorkTagTests(unittest.TestCase):
             throw new Error('Sync state did not settle');
         }""", count)
 
+    def clear_offline_cache(self, page):
+        """Clear the disposable cache through the real Settings surface,
+        leaving Diagnostics open where the durable changes are listed."""
+        page.locator('button.settings-btn').click()
+        page.locator('#prks-settings-tab-diagnostics').click()
+        page.locator('#prks-offline-cache-clear-btn').click()
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_function("() => document.getElementById('prks-offline-cache-status').textContent === 'Offline cache cleared.'")
+
     def reconnect(self, page, context):
         context.set_offline(False)
         page.evaluate("() => window.dispatchEvent(new Event('online'))")
@@ -130,9 +139,14 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
         page.get_by_role('button', name='Apply my change', exact=True).click()
         self.pending(page, 0)
-        rows = page.evaluate('() => prksSync.store.listOperations()')
-        self.assertNotEqual(rows[0]['op_id'], original)
+        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [],
+                         'the completed operation is retired locally')
         self.assertIn(t, [r['id'] for r in db.get_work_tags(w)])
+        # The ledger proves a NEW operation carried the reapplied intent: the
+        # original id kept its recorded conflict and was never reused.
+        ledger = {r['op_id']: r['status'] for r in db.execute_query('SELECT op_id, status FROM sync_operations')}
+        self.assertEqual(ledger.pop(original), 'REVISION_CONFLICT')
+        self.assertEqual(list(ledger.values()), ['ACKNOWLEDGED'])
 
     def test_lost_response_replays_once(self):
         server, page, context = self.start()
@@ -156,11 +170,7 @@ class OfflineWorkTagTests(unittest.TestCase):
     def test_cache_clear_keeps_intent_and_syncs_without_base(self):
         server, page, context = self.start(); self.offline(page, context)
         self.add(page); self.pending(page, 1)
-        page.locator('button.settings-btn').click()
-        page.locator('#prks-settings-tab-diagnostics').click()
-        page.locator('#prks-offline-cache-clear-btn').click()
-        page.locator('#prks-modal-confirm-ok').click()
-        page.wait_for_function("() => document.getElementById('prks-offline-cache-status').textContent === 'Offline cache cleared.'")
+        self.clear_offline_cache(page)
         self.pending(page, 1)
         page.reload()
         page.locator('[data-prks-role=offline-unavailable]').wait_for()
@@ -168,3 +178,232 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.reconnect(page, context); self.pending(page, 0)
         db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
         self.assertIn(server.ids['tag'], [t['id'] for t in db.get_work_tags(server.ids['work_a'])])
+
+    # ---- helpers for the degraded and conflicted paths ----
+
+    def manage_degraded(self, page):
+        """Enter Manage tags without requiring the picker to become usable."""
+        page.locator('#panel-content button', has_text='Manage tags').click()
+        page.locator('#work-tag-search').wait_for()
+        page.wait_for_function(
+            "() => document.getElementById('work-tag-search').placeholder === 'Tags unavailable'")
+
+    def record_requests(self, page):
+        seen = []
+        page.on('request', lambda request: seen.append((request.method, request.url)))
+        return seen
+
+    def db_for(self, server):
+        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+
+    def sole_conflict(self, page):
+        """The single durable operation, once it has reached a terminal
+        semantic result. Waiting on `status` alone would also match the instant
+        before the structured result is readable."""
+        return page.evaluate("""async () => {
+            const deadline = Date.now() + 20000;
+            for (;;) {
+                const rows = await prksSync.store.listOperations();
+                if (rows.length === 1 && rows[0].status === 'conflict' && rows[0].server_result) return rows[0];
+                if (Date.now() > deadline) throw new Error('No conflict settled: ' + JSON.stringify(rows));
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }""")
+
+    def conflict_text(self, page):
+        return page.locator('[data-work-tag-sync]').inner_text()
+
+    # ---- Phase G: what the editor may and may not offer offline ----
+
+    def test_offline_add_requires_the_tag_catalog_and_invents_nothing(self):
+        """Without a cached Tag catalog there is no honest way to offer an
+        existing Tag. An enabled picker over an empty list would read as "this
+        library has no Tags", which is a different and false statement."""
+        server, page, context = self.start()
+        o._clear_cached_list(page, 'tags:index')
+        self.offline(page, context)
+        page.reload()
+        seen = self.record_requests(page)
+        self.manage_degraded(page)
+        picker = page.locator('#work-tag-search')
+        self.assertTrue(picker.is_disabled())
+        self.assertEqual(picker.get_attribute('placeholder'), 'Tags unavailable')
+        # Focusing it offers nothing at all -- not an empty library.
+        page.evaluate("() => document.getElementById('work-tag-search').dispatchEvent(new Event('focus'))")
+        page.wait_for_timeout(200)
+        self.assertEqual(page.locator('#work-tag-search-results .result-item').count(), 0)
+        self.assertEqual([url for method, url in seen if method != 'GET'], [])
+        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [])
+
+    def test_offline_remove_does_not_need_the_tag_catalog(self):
+        """Removing an assigned Tag needs only what the Work and its
+        tag-options already carry: the id, a display snapshot and a base
+        revision. Requiring the whole catalog for that would be an artificial
+        dependency."""
+        server, page, context = self.start()
+        o._clear_cached_list(page, 'tags:index')
+        self.offline(page, context)
+        page.reload()
+        self.manage_degraded(page)
+        self.remove(page)
+        self.pending(page, 1)
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.db_for(server).get_work_tags(server.ids['work_a']), [])
+
+    def test_offline_tag_creation_is_explained_not_offered(self):
+        server, page, context = self.start()
+        self.offline(page, context)
+        seen = self.record_requests(page)
+        page.locator('#work-tag-search').fill('Brand New Offline Tag')
+        row = page.locator('#work-tag-search-results .result-item',
+                           has_text='Creating new Tags requires a connection.')
+        row.wait_for()
+        self.assertEqual(row.get_attribute('aria-disabled'), 'true')
+        row.click()
+        page.wait_for_timeout(300)
+        self.assertEqual(page.locator('#work-tags-list .work-tag-chip',
+                                      has_text='Brand New Offline Tag').count(), 0)
+        self.assertEqual([url for method, url in seen if method != 'GET'], [])
+        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [])
+
+    # ---- Phase H: one durable-first path, online and offline ----
+
+    def test_online_manage_tags_uses_the_durable_queue(self):
+        """Online and offline must travel the same road. If the editor called
+        the canonical Work-Tag endpoints when connected, the offline path would
+        be a separate, less-exercised implementation and the two would drift."""
+        server, page, context = self.start()
+        seen = self.record_requests(page)
+        self.add(page)
+        self.pending(page, 0)
+        self.remove(page)
+        self.pending(page, 0)
+        writes = [(method, url) for method, url in seen if method in ('POST', 'PUT', 'PATCH', 'DELETE')]
+        self.assertTrue([1 for _, url in writes if url.endswith('/api/sync/operations')], writes)
+        self.assertEqual([(m, u) for m, u in writes if '/tags' in u], [], writes)
+        db = self.db_for(server)
+        self.assertEqual([t['id'] for t in db.get_work_tags(server.ids['work_a'])], [server.ids['tag']])
+        self.assertEqual(
+            sorted(r['status'] for r in db.execute_query('SELECT status FROM sync_operations')),
+            ['ACKNOWLEDGED', 'ACKNOWLEDGED'])
+
+    # ---- Phase E: the conflict branches the browser run had not covered ----
+
+    def test_revision_conflict_use_server_state(self):
+        server, page, context = self.start()
+        self.offline(page, context)
+        self.add(page)
+        self.pending(page, 1)
+        db = self.db_for(server)
+        w, t = server.ids['work_a'], server.ids['tag']
+        db.add_tag_to_work(w, t)
+        db.remove_tag_from_work(w, t)
+        self.reconnect(page, context)
+        page.get_by_role('button', name='Use server state', exact=True).click()
+        self.pending(page, 0)
+        page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for(state='detached')
+        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [],
+                         'resolving with server state creates no replacement operation')
+        self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
+        # The conflict itself was ledgered; resolving it mutated nothing more.
+        rows = db.execute_query('SELECT status FROM sync_operations')
+        self.assertEqual([r['status'] for r in rows], ['REVISION_CONFLICT'])
+        options = page.evaluate(
+            """id => window.createPrksOfflineStore().getEntity('work-tag-options', id)
+                .then(row => row.value)""", w)
+        self.assertEqual(options['known_absent'][t], 2,
+                         'the cached base advances to the server current_revision')
+
+    def test_tag_merged_conflict_retains_intent_and_never_retargets(self):
+        """A merge is a decision about Tag identity that the offline device did
+        not participate in. Silently redirecting the pending intent to the
+        merge target would apply a Tag the user never chose."""
+        server, page, context = self.start()
+        self.offline(page, context)
+        self.add(page)
+        self.pending(page, 1)
+        db = self.db_for(server)
+        w, source, target = server.ids['work_a'], server.ids['tag'], server.ids['assigned']
+        db.merge_tags_into(source, target)
+        self.reconnect(page, context)
+        operation = self.sole_conflict(page)
+        self.assertEqual(operation['server_result']['code'], 'TAG_MERGED')
+        self.assertEqual(operation['server_result']['target_tag_id'], target)
+        self.assertIn('was merged into', self.conflict_text(page))
+        # The local intent is still visible and the server was not touched.
+        page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
+        self.assertEqual([t['id'] for t in db.get_work_tags(w)], [target])
+
+        page.get_by_role('button', name='Discard local change', exact=True).click()
+        self.pending(page, 0)
+        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [])
+        self.assertEqual([t['id'] for t in db.get_work_tags(w)], [target],
+                         'discarding a merge conflict retargets nothing')
+        self.assertNotIn(source, [r['id'] for r in db.execute_query('SELECT id FROM tags')])
+
+    def test_tag_deleted_conflict_never_recreates_the_tag(self):
+        server, page, context = self.start()
+        self.offline(page, context)
+        self.add(page)
+        self.pending(page, 1)
+        db = self.db_for(server)
+        w, t = server.ids['work_a'], server.ids['tag']
+        db.delete_tag(t)
+        self.reconnect(page, context)
+        operation = self.sole_conflict(page)
+        self.assertEqual(operation['server_result']['code'], 'TAG_DELETED')
+        self.assertIn('was deleted on the server', self.conflict_text(page))
+        page.get_by_role('button', name='Discard local change', exact=True).click()
+        self.pending(page, 0)
+        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [])
+        self.assertNotIn(t, [r['id'] for r in db.execute_query('SELECT id FROM tags')])
+        self.assertEqual([r['id'] for r in db.get_work_tags(w)], [server.ids['assigned']])
+
+    def test_missing_work_is_terminal_and_stays_discoverable(self):
+        server, page, context = self.start()
+        self.offline(page, context)
+        self.add(page)
+        self.pending(page, 1)
+        db = self.db_for(server)
+        db.delete_work_record(server.ids['work_a'])
+        self.reconnect(page, context)
+        operation = self.sole_conflict(page)
+        self.assertEqual(operation['server_result']['code'], 'ENTITY_NOT_FOUND')
+        self.assertEqual(operation['attempt_count'], 1)
+        # No retry loop: the attempt count is still 1 a while later, and the
+        # change is still there for the user to decide about.
+        page.wait_for_timeout(2500)
+        after = page.evaluate('() => prksSync.store.listOperations().then(rows => rows[0])')
+        self.assertEqual((after['attempt_count'], after['status']), (1, 'conflict'))
+        self.assertEqual(len(db.execute_query('SELECT * FROM sync_operations')), 1)
+
+    # ---- Phase F: conflicts survive the loss of the Work they belong to ----
+
+    def test_conflict_is_discardable_from_diagnostics_without_the_work(self):
+        """The disposable cache can be cleared while a conflict is pending, so
+        the Work editor that normally resolves it may simply not exist. The
+        durable change must still be reachable and removable."""
+        server, page, context = self.start()
+        self.offline(page, context)
+        self.add(page)
+        self.pending(page, 1)
+        db = self.db_for(server)
+        w, t = server.ids['work_a'], server.ids['tag']
+        db.add_tag_to_work(w, t)
+        db.remove_tag_from_work(w, t)
+        self.clear_offline_cache(page)
+        self.reconnect(page, context)
+        self.assertEqual(self.sole_conflict(page)['server_result']['code'], 'REVISION_CONFLICT')
+
+        # Settings is still open on Diagnostics; Refresh is the surface a user
+        # reaches for. No navigation back to the Work is possible or needed.
+        panel = page.locator('#prks-settings-panel-diagnostics')
+        panel.locator('#prks-offline-cache-refresh-btn').click()
+        discard = panel.get_by_role('button', name='Discard local change', exact=True)
+        discard.wait_for()
+        discard.click()
+        page.wait_for_function("() => prksSync.store.listOperations().then(rows => rows.length === 0)")
+        self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
+        self.assertEqual([r['status'] for r in db.execute_query('SELECT status FROM sync_operations')],
+                         ['REVISION_CONFLICT'])

@@ -278,7 +278,7 @@ class MigrationTestCase(unittest.TestCase):
 
 class TestRegistry(unittest.TestCase):
     def test_production_registry_is_contiguous(self):
-        self.assertEqual(LATEST_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
+        self.assertEqual(LATEST_SCHEMA_VERSION, 14)
         self.assertEqual(PRKS_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
         self.assertEqual(LEGACY_BASELINE_VERSION, 9)
         validate_migration_registry()

@@ -120,7 +120,7 @@ class FrontendCommandPaletteTests(unittest.TestCase):
 
     def test_no_schema_bump(self):
         schema = _read(_SCHEMA)
-        self.assertIn("LATEST_SCHEMA_VERSION = 13", schema)
+        self.assertIn("LATEST_SCHEMA_VERSION = 14", schema)
 
     def test_docs(self):
         readme = _read(_README)

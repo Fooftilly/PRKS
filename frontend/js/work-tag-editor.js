@@ -52,7 +52,8 @@
             else if (result.code === 'TAG_MERGED') {
                 const target = (state.catalog || []).find(t => t.id === result.target_tag_id);
                 message = 'Tag ' + name + ' was merged into ' + (target ? target.name : result.target_tag_id) + '.';
-            } else if (['TAG_DELETED', 'ENTITY_NOT_FOUND'].includes(result.code)) message = 'This Tag or Work no longer exists on the server.';
+            } else if (result.code === 'TAG_DELETED') message = 'Tag ' + name + ' was deleted on the server.';
+            else if (result.code === 'ENTITY_NOT_FOUND') message = 'This Work or Tag no longer exists on the server.';
             else message = 'This change could not synchronize (' + (result.code || 'protocol error') + ').';
             item.textContent = message + ' ';
             function action(label, apply) {
@@ -134,15 +135,21 @@
             const assigned = new Set(tags.map(t => t.id));
             results.innerHTML = '';
             const available = state.catalog.filter(t => !assigned.has(t.id));
-            function item(text, action, disabled) {
-                const div = document.createElement('div'); div.className = 'result-item'; div.textContent = text;
+            function item(text, action, disabled, modifier) {
+                const div = document.createElement('div');
+                div.className = 'result-item' + (modifier ? ' ' + modifier : ''); div.textContent = text;
                 if (disabled) div.setAttribute('aria-disabled', 'true');
                 else div.onmousedown = ev => { ev.preventDefault(); void action(); };
                 results.appendChild(div);
             }
             if (value && !state.catalog.some(t => root.prksTagExactMatch(t, query))) {
+                // The shared create affordance every other PRKS combobox uses.
+                // The offline row is an explanation, not an action, so it is
+                // deliberately not styled as one.
                 if (root.prksOfflineRuntimeState() === 'online') {
-                    item('Create tag "' + value + '"', () => root.prksSubmitNewTag('work', state.workId, value, ctx, input));
+                    item('Create tag "' + value + '"',
+                        () => root.prksSubmitNewTag('work', state.workId, value, ctx, input),
+                        false, 'result-item--create');
                 } else item('Creating new Tags requires a connection.', null, true);
             }
             available.filter(t => root.prksTagMatchesQuery(t, query)).slice(0, 40).forEach(tag => {

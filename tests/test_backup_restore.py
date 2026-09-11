@@ -525,6 +525,9 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         conn.execute("DROP TABLE IF EXISTS positions")
         conn.execute("DROP TABLE IF EXISTS concept_parents")
         conn.execute("DROP TABLE IF EXISTS concept_aliases")
+        # A synthetic pre-v14 library: the sync tables are what migration 14 adds.
+        for table in ("sync_operations", "sync_entity_revisions", "sync_tag_lifecycle"):
+            conn.execute("DROP TABLE IF EXISTS " + table)
         conn.execute("UPDATE schema_version SET version = 9")
         conn.commit()
         conn.close()
@@ -566,6 +569,9 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
             "INSERT INTO work_annotations (work_id, annotations_json) VALUES (?, ?)",
             (work_id, json.dumps([{"id": "ann-stale", "contents": "OLD-C"}])),
         )
+        # A synthetic pre-v14 library: the sync tables are what migration 14 adds.
+        for table in ("sync_operations", "sync_entity_revisions", "sync_tag_lifecycle"):
+            conn.execute("DROP TABLE IF EXISTS " + table)
         conn.execute("UPDATE schema_version SET version = 12")
         conn.commit()
         conn.close()
@@ -631,6 +637,9 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         conn.execute("DROP TABLE IF EXISTS positions")
         conn.execute("DROP TABLE IF EXISTS concept_parents")
         conn.execute("DROP TABLE IF EXISTS concept_aliases")
+        # A synthetic pre-v14 library: the sync tables are what migration 14 adds.
+        for table in ("sync_operations", "sync_entity_revisions", "sync_tag_lifecycle"):
+            conn.execute("DROP TABLE IF EXISTS " + table)
         conn.execute("UPDATE schema_version SET version = 10")
         conn.commit()
         conn.close()

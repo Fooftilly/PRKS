@@ -144,15 +144,27 @@ operations. Unsynchronized state is never baked into cache records. A bounded
 local display snapshot preserves the intent's label after catalog changes.
 
 Startup recovers interrupted `syncing` rows to pending under the coordinator
-lock, then retries the same ID. Sending waits for observed server connectivity,
-not the offline runtime's provisional startup state. Transient failures use
-bounded exponential backoff with jitter; components own no retry loops.
+lock, then retries the same ID, and clears `acknowledged` residue a crash left
+behind rather than resending it. Sending waits for an **observed** connectivity
+result. The offline runtime starts in a provisional `online` state and
+`navigator.onLine` reports link state, not PRKS reachability; claiming on
+either would move a never-sent operation's attempt count off zero, and a
+possibly-sent operation can no longer be coalesced or canceled locally. So the
+queue stays shut until the first real reachability result arrives. Transient
+failures use bounded exponential backoff with jitter; components own no retry
+loops. Transport faults, malformed bodies and unexpected 2xx payloads all
+return the row to retryable pending under its original ID; only recognized
+protocol errors are terminal.
 
 On ACK, the coordinator first reconciles existing Work and tag-options cache
 snapshots, fencing older in-flight reads with coherence generations. Only after
 cache writes succeed is the operation marked acknowledged. A failure retains
 it as pending; replay repeats reconciliation safely. Missing cache bases stay
-missing, and reconciliation needs no second mandatory server request.
+missing, and reconciliation needs no second mandatory server request. Once the
+live UI has seen the ACK, the local operation is **retired**: `sync_operations`
+on the server is the durable idempotency history, so the browser keeps no
+growing record of completed work. Retirement is strictly last, so a crash
+anywhere earlier leaves a replayable row rather than a lost edit.
 
 ## User controls
 

@@ -38,13 +38,28 @@
             clearTimeout(timer);
             timer = setTimeout(wake, ms);
         }
-        async function drain() {
-            if (!recovered) {
-                for (const op of await store.listOperations({ status: 'syncing' })) {
-                    if (supported(op)) await store.updateOperationSyncState(op.op_id, { status: 'pending' });
-                }
-                recovered = true;
+        /* One startup pass over rows an interrupted process left behind.
+         * `syncing` resumes under its ORIGINAL op_id -- the server ledger
+         * decides whether that envelope already applied, so minting a
+         * replacement would be the one way to apply it twice. `acknowledged`
+         * means reconciliation had already committed before the crash, so the
+         * row is pure residue and is retired. */
+        async function recover() {
+            for (const op of await store.listOperations()) {
+                if (!supported(op)) continue;
+                if (op.status === 'syncing') await store.updateOperationSyncState(op.op_id, { status: 'pending' });
+                else if (op.status === 'acknowledged') await retire(op.op_id);
             }
+            recovered = true;
+        }
+        /* The server's `sync_operations` ledger is the durable idempotency
+         * history; the browser keeps no record of completed operations. A
+         * failed retirement is harmless residue the next startup clears. */
+        async function retire(opId) {
+            try { await store.deleteAcknowledgedOperation(opId); } catch (_) { /* cleared on next startup */ }
+        }
+        async function drain() {
+            if (!recovered) await recover();
             while (deps.online()) {
                 const pending = (await store.listOperations({ status: 'pending' })).filter(supported);
                 if (!pending.length) break;
@@ -78,6 +93,9 @@
                         if (!await deps.reconcile(data)) throw new Error('cache_write_failed');
                         await store.updateOperationSyncState(op.op_id, { status: 'acknowledged', last_error: null, server_revision: data.server_revision });
                         emit({ acknowledged: data });
+                        // Only now: the cache is reconciled and the live UI has
+                        // seen the ACK, so nothing still needs this row.
+                        await retire(op.op_id);
                     } else {
                         await store.updateOperationSyncState(op.op_id, { status: 'conflict', server_result: structuredResult(data), last_error: null });
                         emit();
@@ -108,18 +126,32 @@
         return { wake, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
             store, changed() { emit(); void wake(); }, stop() { clearTimeout(timer); } };
     }
+    /* Reachability is OBSERVED, never assumed. The offline runtime starts in a
+     * provisional `online` state before any probe has answered, and
+     * navigator.onLine reports link state rather than PRKS reachability.
+     * Sending on either would claim a never-sent operation -- moving its
+     * attempt_count off 0 -- and the client would then have to assume the
+     * server may already hold it, permanently forfeiting the local right to
+     * coalesce or cancel it. So the gate stays shut until the offline runtime
+     * publishes its first real connectivity result. */
+    function createConnectivityGate(subscribe, getState, onObserved) {
+        let observed = false;
+        subscribe(() => { observed = true; if (onObserved) onObserved(); });
+        return () => observed && getState() === 'online';
+    }
     root.createPrksSyncRuntime = createRuntime;
+    root.createPrksConnectivityGate = createConnectivityGate;
     if (!root.document) return;
     const store = root.createPrksLocalStore();
-    let connectivityObserved = false;
-    const runtime = createRuntime({ store,
-        online: () => connectivityObserved && root.prksOfflineRuntimeState() === 'online',
+    let runtime = null;
+    const online = createConnectivityGate(root.prksOfflineRuntimeSubscribe,
+        root.prksOfflineRuntimeState, () => { if (runtime) runtime.changed(); });
+    runtime = createRuntime({ store, online,
         request: (...args) => root.prksRequest(...args),
         reconcile: result => root.prksOfflineReconcileWorkTag(result),
         lock: root.navigator.locks ? fn => root.navigator.locks.request('prks-work-tag-sync', { ifAvailable: true }, lock => lock ? fn() : undefined) : null,
     });
     root.prksSync = runtime;
-    root.prksOfflineRuntimeSubscribe(() => { connectivityObserved = true; runtime.changed(); });
     root.addEventListener('focus', () => runtime.changed());
     // Durable rows, including conflicts, are discoverable after cache clearing.
     root.prksSyncDiagnostics = () => store.stats();
