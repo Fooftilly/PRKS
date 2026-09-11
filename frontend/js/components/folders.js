@@ -294,17 +294,6 @@ function prksApplyFolderOfflineState(container) {
         if (online) el.removeAttribute('aria-disabled');
         else el.setAttribute('aria-disabled', 'true');
     });
-    const recentTab = container.querySelector('.prks-folder-library__tab-btn[data-tab="recently-added"]');
-    if (recentTab) {
-        recentTab.disabled = !online;
-        if (online) {
-            recentTab.removeAttribute('aria-disabled');
-            recentTab.removeAttribute('title');
-        } else {
-            recentTab.setAttribute('aria-disabled', 'true');
-            recentTab.setAttribute('title', 'Recently added requires a connection to PRKS');
-        }
-    }
 }
 
 /** The Folder detail's tag editor and delete button live in the shared right
@@ -691,10 +680,13 @@ function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
     const list = q ? all.filter((w) => prksRecentlyAddedWorkMatchesQuery(w, q, foldersById)) : all;
     let html = '';
     if (list.length > 0) {
+        const cached = !!(st && st.recentlyAddedCached);
         list.forEach((w) => {
             const dateLabel = prksRecentlyAddedDateLabel(w.created_at);
             const subtitle = dateLabel ? `Added ${dateLabel}` : '';
-            html += typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { subtitle }) : '';
+            html += typeof prksWorkCardHtml === 'function'
+                ? prksWorkCardHtml(w, cached ? { subtitle, suppressThumbnail: true } : { subtitle })
+                : '';
         });
     } else if (q) {
         html = '<p class="prks-inline-message">No files match your search.</p>';
@@ -713,29 +705,53 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
     if (!st || !st.container) return;
     const pane = st.container.querySelector('#prks-folder-library-recently-added');
     if (!pane) return;
-    // Belt-and-braces with the disabled tab: a stale timer, a restored session
-    // tab, or a disconnect mid-load must not reach the network either.
-    if (!prksFolderRuntimeOnline()) {
-        pane.innerHTML =
-            '<p class="prks-inline-message">Recently added requires a connection to PRKS.</p>';
-        return;
-    }
-    const shouldForce = !!force || window.__prksRecentlyAddedDirty === true;
+    // The in-memory copy is only usable while the Recently-added coherence
+    // generation is unchanged. Without this a mutation would invalidate the
+    // IndexedDB snapshot while this tab happily kept rendering pre-mutation
+    // rows -- the cache would be right and the screen wrong.
+    const generation =
+        typeof prksOfflineDomainGeneration === 'function'
+            ? prksOfflineDomainGeneration('recently-added')
+            : null;
+    const memoryStale = st.recentlyAddedGeneration !== generation;
+    const shouldForce = !!force || window.__prksRecentlyAddedDirty === true || memoryStale;
     if (st.recentlyAddedLoading) return;
     if (!shouldForce && Array.isArray(st.recentlyAddedWorks)) {
         prksRenderFolderLibraryRecentlyAdded(st.recentlyAddedWorks, pane);
-        if (typeof window.prksInitLazyWorkThumbs === 'function') {
+        if (!st.recentlyAddedCached && typeof window.prksInitLazyWorkThumbs === 'function') {
             window.prksInitLazyWorkThumbs(pane);
         }
         return;
     }
     st.recentlyAddedLoading = true;
-    const works = typeof fetchRecentlyAdded === 'function' ? await fetchRecentlyAdded() : [];
-    st.recentlyAddedWorks = works;
-    window.__prksRecentlyAddedDirty = false;
+    // Its own snapshot, never derived from the Folder hierarchy or the stable
+    // Work catalog: the canonical order is top-N by created_at with an id
+    // tie-break, which neither of those carries.
+    const offlineRecentlyAdded =
+        typeof prksOfflineRecentlyAddedFetch === 'function'
+            ? await prksOfflineRecentlyAddedFetch()
+            : null;
+    const works =
+        typeof prksResolveOfflineRecentlyAdded === 'function'
+            ? prksResolveOfflineRecentlyAdded(offlineRecentlyAdded)
+            : null;
     st.recentlyAddedLoading = false;
+    if (!works) {
+        st.recentlyAddedWorks = null;
+        st.recentlyAddedGeneration = null;
+        pane.innerHTML =
+            '<p class="prks-inline-message">Recently added is not available offline.</p>';
+        return;
+    }
+    st.recentlyAddedWorks = works;
+    st.recentlyAddedCached = !!(offlineRecentlyAdded && offlineRecentlyAdded.source === 'cache');
+    st.recentlyAddedGeneration =
+        typeof prksOfflineDomainGeneration === 'function'
+            ? prksOfflineDomainGeneration('recently-added')
+            : null;
+    window.__prksRecentlyAddedDirty = false;
     prksRenderFolderLibraryRecentlyAdded(works, pane);
-    if (typeof window.prksInitLazyWorkThumbs === 'function') {
+    if (!st.recentlyAddedCached && typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(pane);
     }
 }
@@ -774,7 +790,6 @@ function prksApplyFolderLibraryTabUi(root, tab) {
 }
 
 function prksSwitchFolderLibraryTab(tab) {
-    if (tab === 'recently-added' && !prksFolderRuntimeOnline()) return;
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
     const want = tab === 'recently-added' ? 'recently-added' : 'folders';
@@ -794,13 +809,10 @@ function prksSwitchFolderLibraryTab(tab) {
 function renderDashboard(folders, container, options = {}) {
     const prev = window.__prksFolderDashboardState || {};
     const list = Array.isArray(folders) ? folders : [];
-    const storedTab = prev.activeTab || prksFolderLibraryActiveTabFromStorage();
-    // Recently Added is server-backed. Restoring it while PRKS is unreachable
-    // would fire a doomed /api/recently-added read on mount, so fall back to
-    // the Folders tab instead; the stored preference is left untouched and
-    // comes back on reconnect.
-    const activeTab =
-        storedTab === 'recently-added' && !prksFolderRuntimeOnline() ? 'folders' : storedTab;
+    // Recently added has its own offline snapshot now, so a restored
+    // `recently-added` tab is honoured offline: it renders from cache, or
+    // reports its own unavailable state when nothing was cached.
+    const activeTab = prev.activeTab || prksFolderLibraryActiveTabFromStorage();
     const filterQuery =
         prev.filterQuery != null ? String(prev.filterQuery) : prksFolderLibraryFilterFromStorage();
     const recentlyAddedFilterQuery =
@@ -867,6 +879,8 @@ function renderDashboard(folders, container, options = {}) {
         filterQuery,
         recentlyAddedFilterQuery,
         recentlyAddedWorks: prev.recentlyAddedWorks,
+        recentlyAddedGeneration: prev.recentlyAddedGeneration,
+        recentlyAddedCached: prev.recentlyAddedCached,
         recentlyAddedLoading: false,
     };
     const root = container.querySelector('.prks-folder-library');

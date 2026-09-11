@@ -262,6 +262,44 @@ _PRKS_WORK_SUMMARY_COLUMNS: Tuple[str, ...] = (
 )
 
 
+# Compact browse projection. Deliberately NOT the full work summary: the browse
+# routes (#/progress, #/types, #/types/:type, #/recent, Recently Added) render
+# shared Work cards plus a short per-route subtitle, and nothing there needs the
+# whole abstract, the bibliographic block (journal/volume/issue/pages/isbn/doi),
+# or the timestamps a card never shows. Carrying the full abstract measured at
+# ~59.5% of the /api/works payload while only #/progress reads it -- and only
+# its first 100 characters. See AGENTS.md, "Offline browse catalogs".
+_PRKS_WORK_BROWSE_COLUMNS: Tuple[str, ...] = (
+    "id",
+    "title",
+    "status",
+    "doc_type",
+    "file_path",
+    "source_kind",
+    "source_url",
+    "thumb_url",
+    "thumb_page",
+    "author_text",
+    "year",
+    "published_date",
+)
+
+# Length of the excerpt #/progress renders under each card.
+_PRKS_ABSTRACT_EXCERPT_LEN = 100
+
+
+def _prks_work_browse_select(alias: str, *, abstract_excerpt: bool = True) -> str:
+    """Browse columns, with `abstract` replaced by a bounded excerpt."""
+    cols = [f"{alias}.{c}" for c in _PRKS_WORK_BROWSE_COLUMNS]
+    if abstract_excerpt:
+        # SUBSTR is bounded server-side so the excerpt cannot carry the whole
+        # abstract to a client that only renders 100 characters of it.
+        cols.append(
+            f"SUBSTR(COALESCE({alias}.abstract, ''), 1, {_PRKS_ABSTRACT_EXCERPT_LEN}) AS abstract_excerpt"
+        )
+    return ", ".join(cols)
+
+
 def _prks_work_summary_select(alias: str) -> str:
     return ", ".join(f"{alias}.{c}" for c in _PRKS_WORK_SUMMARY_COLUMNS)
 
@@ -1669,6 +1707,91 @@ class PRKSDatabase:
         rr = self.execute_query("SELECT COUNT(*) AS c FROM roles")
         rc = (rr[0] if rr else {"c": 0})["c"]
         return f'W/"prks-works-{row["c"]}-{row["m"]}-ff{ffc}-r{rc}"'
+
+    # ---- Browse projections ------------------------------------------------
+    #
+    # Three INDEPENDENT projections, deliberately not one catalog. A single
+    # catalog carrying `last_opened_at` would mean that merely *opening* a Work
+    # invalidates the browse cache for Progress, Types and Recently Added too --
+    # a read invalidating unrelated read models. Splitting them keeps each
+    # coherence domain proportional to what actually changed.
+
+    def get_works_browse_catalog(self) -> List[dict]:
+        """Complete Work catalog in the compact browse projection.
+
+        Ordered deterministically so a cached copy and a fresh read agree:
+        `title` is what every browse route sorts by locally, and `id` breaks
+        ties that a title collation alone would leave unspecified.
+        """
+        sel = _prks_work_browse_select("works")
+        pex = _prks_sql_work_summary_person_extras("works")
+        rows = list(
+            self.execute_query(
+                f"SELECT {sel}, {pex} FROM works "
+                "ORDER BY works.title COLLATE NOCASE ASC, works.id ASC"
+            )
+        )
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        return rows
+
+    def get_recent_browse(self, limit: int = 30) -> List[dict]:
+        """Top-N by `last_opened_at`, with an explicit tie-break.
+
+        `last_opened_at` has one-second resolution, so ties are ordinary (a
+        session that opens several files quickly). Without a secondary key the
+        order is unspecified, which an offline projection could not reproduce
+        faithfully -- so `id` is the canonical tie-break here and everywhere
+        the same list is derived.
+        """
+        sel = _prks_work_browse_select("works", abstract_excerpt=False)
+        pex = _prks_sql_work_summary_person_extras("works")
+        rows = list(
+            self.execute_query(
+                f"SELECT {sel}, works.last_opened_at, {pex} FROM works "
+                "WHERE works.last_opened_at IS NOT NULL "
+                "ORDER BY works.last_opened_at DESC, works.id ASC LIMIT ?",
+                (limit,),
+            )
+        )
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        return rows
+
+    def get_recently_added_browse(self, limit: int = 50) -> List[dict]:
+        """Top-N by `created_at`, same deterministic tie-break as Recent.
+
+        Carries `folder_id` and `publisher` because the Recently-added tab
+        filters locally over them (and over the folder title it resolves from
+        the cached hierarchy).
+        """
+        sel = _prks_work_browse_select("works", abstract_excerpt=False)
+        pex = _prks_sql_work_summary_person_extras("works")
+        folder = (
+            "(SELECT folder_id FROM folder_files WHERE work_id = works.id LIMIT 1) AS folder_id"
+        )
+        rows = list(
+            self.execute_query(
+                f"SELECT {sel}, works.created_at, works.publisher, {folder}, {pex} FROM works "
+                "ORDER BY works.created_at DESC, works.id ASC LIMIT ?",
+                (limit,),
+            )
+        )
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        return rows
+
+    @staticmethod
+    def etag_for_representation(label: str, rows: List[dict]) -> str:
+        """Weak ETag derived from the serialized response itself.
+
+        The invariant is absolute: if the body can change, the ETag must
+        change. Hand-maintained table-count/MAX(updated_at) probes have already
+        shipped two classes of defect here -- a count that a *move* leaves
+        identical, and `CURRENT_TIMESTAMP`'s one-second granularity hiding a
+        same-second edit. Hashing the representation makes the invariant true
+        by construction and cannot drift when a projection gains a field.
+        """
+        blob = json.dumps(rows, sort_keys=True, default=str, separators=(",", ":"))
+        digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+        return f'W/"prks-{label}-{len(rows)}-{digest}"'
 
     def etag_folders_catalog(self, rows: Optional[List[dict]] = None) -> str:
         """Weak ETag derived from the serialized catalog itself.

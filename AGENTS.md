@@ -1265,6 +1265,105 @@ a permanently stale cache. `tests/test_folder_atomicity.py` forces the prune to
 fail and asserts the first write rolled back; those tests fail against the
 pre-fix implementations.
 
+### Offline browse catalogs
+
+`#/progress`, `#/types`, `#/types/:type`, `#/recent` and Home -> **Recently
+added** are backed by **three independent projections**, deliberately not one
+Works catalog:
+
+| List key | Domain | Endpoint | Routes |
+| --- | --- | --- | --- |
+| `works-browse:index` | `works-browse` | `GET /api/works?projection=browse` | Progress, Types, Type detail |
+| `recent:index` | `recent` | `GET /api/recent` | `#/recent` |
+| `recently-added:index` | `recently-added` | `GET /api/recently-added` | Home -> Recently added |
+
+The split exists because **opening a Work is a canonical mutation**:
+`get_work()` stamps `last_opened_at`. A single catalog carrying that field
+would mean reading one file invalidates Progress, Types and Recently added
+too -- a read dropping four unrelated offline surfaces. So the stable catalog
+carries no `last_opened_at` at all, and the Work route marks `recent` alone
+(and only for an authoritative read, never a cache hit).
+
+`?projection=browse` is an **additive** contract: the default `/api/works`
+response is unchanged for its seven other callers (pickers, the wiki title map,
+the role modal, the Playlist panel). The projection drops the whole `abstract`
+in favour of a server-bounded `abstract_excerpt` (100 chars, the only thing
+`#/progress` renders) plus the bibliographic block no card shows -- measured at
+**70.8% smaller, 82.6% gzipped**. Recent and Recently added are single-consumer
+endpoints and were moved onto the same compact projection outright.
+
+**Ordering is canonical, not approximated.** `last_opened_at` and `created_at`
+have one-second resolution, so ties are ordinary; both projections order by
+`<timestamp> DESC, id ASC` and the stable catalog by `title COLLATE NOCASE ASC,
+id ASC`. Without an explicit tie-break the server order is unspecified and no
+local projection could reproduce it. Recent and Recently added are **never**
+recomputed from the stable catalog -- it carries neither ordering key.
+
+All three ETags come from `etag_for_representation()`, which hashes the
+serialized response. Two classes of defect had already shipped from
+hand-maintained probes (a count a *move* leaves identical; `CURRENT_TIMESTAMP`
+granularity hiding a same-second edit), and `file_size_bytes` is read from disk
+at serialization time, so no SQL revision could ever see it change.
+
+Dependency matrix (every entry is `YES` only after acknowledged canonical
+success):
+
+| Canonical change | works-browse | recent | recently-added |
+| --- | --- | --- | --- |
+| Open a Work (`last_opened_at`) | — | YES | — |
+| Work create | YES | — | YES |
+| Work delete | YES | YES | YES |
+| Work metadata / title / status / doc type | YES | YES | YES |
+| Author **or Editor** role change | YES | YES | YES |
+| Person canonical first/last-name change | YES | YES | YES |
+| managed PDF save (`file_size_bytes`) | YES | YES | YES |
+| Folder membership (single or bulk) | — | — | YES |
+| bulk `set_status` | YES | YES | YES |
+| Research Notes, Playlists, Concepts, Positions, Arguments, Work tags, Person Groups | — | — | — |
+
+Folder membership reaches **only** Recently added, because it is the one
+projection carrying `folder_id` (it filters locally over the folder title);
+Progress and Types never render a folder. Work creation reaches the catalog and
+Recently added but **not** Recent -- a new Work's `last_opened_at` is NULL.
+
+Components must go through the semantic helpers
+`prksMarkWorksBrowseChanged()`, `prksMarkRecentChanged()`,
+`prksMarkRecentlyAddedChanged()` and the shared
+`prksMarkWorkBrowseDisplayChanged()` -- never a direct
+`deleteList('works-browse:index')`. That is enforced by
+`tests/test_frontend_offline_runtime.py` and matters for the local-first
+direction below: a future sync coordinator needs one place to turn "discard the
+projection" into "apply the pending operation to it optimistically".
+
+The Recently-added tab additionally records the coherence generation alongside
+its in-memory copy, so an invalidation cannot leave that tab rendering
+pre-mutation rows while the cache is already right.
+
+### Local-first direction (intent, not current behavior)
+
+PRKS does **not** support offline mutations today; everything above is
+read-only caching, and every mutation is refused while the server is
+unreachable. The architecture is nevertheless being kept compatible with a
+local-first future:
+
+- The IndexedDB structured stores are a **disposable cache**. Unsynchronized
+  user changes will live in separate durable storage, and **Clear offline
+  cache** must never be able to destroy them. Do not mix pending local edits
+  into cache records.
+- Structured entities are expected to synchronize through **semantic
+  operations** (`ADD_TAG`, `moveWorkToFolder`) plus idempotent operation ids
+  and explicit revisions -- not whole-record replacement, which cannot merge.
+  This is why mutations keep migrating toward canonical API wrappers: those
+  wrappers are where "guard if offline" would become "persist an operation and
+  apply optimistic state".
+- CRDTs may later be used **selectively** for long-form text (Research Notes
+  first). The relational model stays in SQLite; do not turn folder membership,
+  tags, Work metadata or graph relationships into CRDT documents.
+- Last-writer-wins is not the universal answer. Exclusive relationships (a
+  Work's folder) and delete-vs-edit are real conflicts.
+- Phase-1 read-only caching is **not** the future mutation synchronization
+  model, and cache invalidation will not stay the only coherence mechanism.
+
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`
 (Cache Storage) are a disposable client-side cache, never another canonical

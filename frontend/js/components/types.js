@@ -77,7 +77,8 @@ function renderTypesIndex(works, container) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
-function renderWorksByDocType(works, docType, container) {
+function renderWorksByDocType(works, docType, container, options = {}) {
+    const offlineCached = !!(options && options.offlineCached);
     const dt = typeof prksNormalizeDocType === 'function' ? prksNormalizeDocType(docType) : (docType || 'misc');
     const label = prksDocTypeLabel(dt);
     const all = Array.isArray(works) ? works : [];
@@ -103,7 +104,9 @@ function renderWorksByDocType(works, docType, container) {
                 filtered.length
                     ? filtered
                           .map((w) => {
-                              return typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { hideDocTypeBadge: true }) : '';
+                              const cardOpts = { hideDocTypeBadge: true };
+                              if (offlineCached) cardOpts.suppressThumbnail = true;
+                              return typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, cardOpts) : '';
                           })
                           .join('')
                     : `<p class="tags-page__empty types-page__empty">No files in this type yet.</p>`
@@ -111,7 +114,7 @@ function renderWorksByDocType(works, docType, container) {
         </div>
         </div>
     `;
-    if (typeof prksInitLazyWorkThumbs === 'function') prksInitLazyWorkThumbs(container);
+    if (!offlineCached && typeof prksInitLazyWorkThumbs === 'function') prksInitLazyWorkThumbs(container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 

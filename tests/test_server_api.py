@@ -3580,6 +3580,164 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([t.get("name") for t in (detail.get("tags") or [])], ["FailSource"])
 
+    # -- Browse projection freshness --------------------------------------
+
+    def _browse_paths(self):
+        return {
+            "works-browse": "/api/works?projection=browse",
+            "recent": "/api/recent",
+            "recently-added": "/api/recently-added",
+        }
+
+    def _assert_browse_etag_follows(self, label, mutate, *, expect_change=True):
+        """Assert the named projection's ETag tracks its own representation."""
+        path = self._browse_paths()[label]
+        status, etag1, body1 = self._conditional_get(path)
+        self.assertEqual(status, 200, label)
+        mutate()
+        status, etag2, body2 = self._conditional_get(path, etag=etag1)
+        if expect_change:
+            self.assertNotEqual(status, 304, "%s served stale as Not Modified" % label)
+            self.assertEqual(status, 200, label)
+            self.assertNotEqual(etag2, etag1, label)
+            self.assertNotEqual(body1, body2, label)
+        else:
+            self.assertEqual(status, 304, "%s changed when it should not have" % label)
+
+    def _make_browse_work(self, title, **extra):
+        payload = {"title": title}
+        payload.update(extra)
+        status, work = self._sv_json("POST", "/api/works", payload)
+        self.assertEqual(status, 200)
+        return work["id"]
+
+    def test_works_browse_etag_follows_every_rendered_field(self):
+        wid = self._make_browse_work("Browse ETag Work", status="Not Started")
+        status, person = self._sv_json(
+            "POST", "/api/persons", {"first_name": "Bro", "last_name": "Wser"}
+        )
+        self.assertEqual(status, 200)
+        status, folder = self._sv_json("POST", "/api/folders", {"title": "Browse ETag Folder"})
+        self.assertEqual(status, 200)
+
+        self._assert_browse_etag_follows(
+            "works-browse",
+            lambda: self._sv_json("PATCH", f"/api/works/{wid}", {"title": "Browse ETag Retitled"}),
+        )
+        self._assert_browse_etag_follows(
+            "works-browse",
+            lambda: self._sv_json("PATCH", f"/api/works/{wid}", {"status": "Completed"}),
+        )
+        self._assert_browse_etag_follows(
+            "works-browse",
+            # (the default doc_type is already "article", so use another one)
+            lambda: self._sv_json("PATCH", f"/api/works/{wid}", {"doc_type": "book"}),
+        )
+        self._assert_browse_etag_follows(
+            "works-browse",
+            lambda: self._sv_json(
+                "POST", "/api/roles",
+                {"person_id": person["id"], "work_id": wid, "role_type": "Author"},
+            ),
+        )
+        # A Person rename changes the rendered credit line with no Work write.
+        self._assert_browse_etag_follows(
+            "works-browse",
+            lambda: self._sv_json(
+                "PATCH", f"/api/persons/{person['id']}",
+                {"first_name": "Bro", "last_name": "Renamed"},
+            ),
+        )
+        # The browse catalog deliberately carries no folder_id, so a move is
+        # correctly invisible to it -- and must therefore NOT bust its ETag.
+        self._assert_browse_etag_follows(
+            "works-browse",
+            lambda: self._sv_json("PATCH", f"/api/works/{wid}", {"folder_id": folder["id"]}),
+            expect_change=False,
+        )
+
+    def test_works_browse_etag_follows_managed_pdf_file_size(self):
+        import backend.server as _sm
+
+        pdfs_dir = _sm.db.storage.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        name = "browse-etag-size.pdf"
+        with open(os.path.join(pdfs_dir, name), "wb") as f:
+            f.write(b"%PDF-1.4\n" + b"a" * 100)
+        self._make_browse_work("Browse Size Work", file_path=f"/api/pdfs/{name}")
+
+        def grow():
+            with open(os.path.join(pdfs_dir, name), "ab") as f:
+                f.write(b"b" * 5000)
+
+        # file_size_bytes is read from disk at serialization time, so no SQL
+        # row changes at all -- a table-revision ETag could never see this.
+        self._assert_browse_etag_follows("works-browse", grow)
+
+    def test_recent_etag_follows_opening_a_work(self):
+        first = self._make_browse_work("Recent ETag One")
+        second = self._make_browse_work("Recent ETag Two")
+        # Opening stamps last_opened_at; GET /api/works/:id is that boundary.
+        self._sv_json("GET", f"/api/works/{first}")
+        self._assert_browse_etag_follows(
+            "recent", lambda: self._sv_json("GET", f"/api/works/{second}")
+        )
+        # Re-opening the one already at the top still reorders nothing but does
+        # change its timestamp; the representation decides, not a count.
+        status, etag1, body1 = self._conditional_get("/api/recent")
+        self.assertEqual(status, 200)
+        self.assertTrue(any(r.get("id") == second for r in body1))
+
+    def test_recent_etag_follows_display_change_of_a_listed_work(self):
+        wid = self._make_browse_work("Recent Display Work")
+        self._sv_json("GET", f"/api/works/{wid}")
+        self._assert_browse_etag_follows(
+            "recent",
+            lambda: self._sv_json("PATCH", f"/api/works/{wid}", {"title": "Recent Display Renamed"}),
+        )
+
+    def test_recently_added_etag_follows_create_and_member_edit(self):
+        self._assert_browse_etag_follows(
+            "recently-added", lambda: self._make_browse_work("Recently Added ETag New")
+        )
+        wid = self._make_browse_work("Recently Added Member")
+        self._assert_browse_etag_follows(
+            "recently-added",
+            lambda: self._sv_json("PATCH", f"/api/works/{wid}", {"status": "Paused"}),
+        )
+        # It carries folder_id for local search, so a move IS visible here.
+        status, folder = self._sv_json("POST", "/api/folders", {"title": "RA ETag Folder"})
+        self.assertEqual(status, 200)
+        self._assert_browse_etag_follows(
+            "recently-added",
+            lambda: self._sv_json("PATCH", f"/api/works/{wid}", {"folder_id": folder["id"]}),
+        )
+
+    def test_browse_projections_are_deterministically_ordered(self):
+        """Recent/Recently-added tie-break on id, so a cached copy and a fresh
+        read agree even when several rows share a one-second timestamp."""
+        ids = [self._make_browse_work(f"Order Probe {i}") for i in range(5)]
+        for wid in ids:
+            self._sv_json("GET", f"/api/works/{wid}")
+        for path in ("/api/recent", "/api/recently-added", "/api/works?projection=browse"):
+            first = self._conditional_get(path)[2]
+            second = self._conditional_get(path)[2]
+            self.assertEqual([r["id"] for r in first], [r["id"] for r in second], path)
+
+    def test_browse_projection_is_compact(self):
+        wid = self._make_browse_work("Compact Probe", abstract="x" * 5000)
+        status, browse, _ = 200, self._conditional_get("/api/works?projection=browse")[2], None
+        row = next(r for r in browse if r["id"] == wid)
+        # The full abstract must never ship to a client that renders 100 chars.
+        self.assertNotIn("abstract", row)
+        self.assertIn("abstract_excerpt", row)
+        self.assertLessEqual(len(row["abstract_excerpt"]), 100)
+        # The default /api/works contract is untouched for its other callers.
+        status, full, _ = 200, self._conditional_get("/api/works")[2], None
+        full_row = next(r for r in full if r["id"] == wid)
+        self.assertIn("abstract", full_row)
+        self.assertEqual(len(full_row["abstract"]), 5000)
+
     def test_folders_etag_is_stable_when_nothing_changed(self):
         """The invariant is one-directional: revalidation must still work."""
         self._sv_json("POST", "/api/folders", {"title": "ETag Stable Folder"})

@@ -28,6 +28,15 @@
     const PROBE_PATH = '/api/settings';
     const DOMAIN_FOLDERS = 'folders';
     const FOLDERS_LIST_KEY = 'folders:index';
+    /* Three INDEPENDENT browse projections, deliberately not one catalog:
+     * a single one carrying `last_opened_at` would make merely OPENING a Work
+     * invalidate Progress/Types/Recently-added too. */
+    const DOMAIN_WORKS_BROWSE = 'works-browse';
+    const WORKS_BROWSE_LIST_KEY = 'works-browse:index';
+    const DOMAIN_RECENT = 'recent';
+    const RECENT_LIST_KEY = 'recent:index';
+    const DOMAIN_RECENTLY_ADDED = 'recently-added';
+    const RECENTLY_ADDED_LIST_KEY = 'recently-added:index';
     const DOMAIN_CONCEPTS = 'concepts';
     const CONCEPTS_LIST_KEY = 'concepts:index';
     const DOMAIN_POSITIONS = 'positions';
@@ -768,6 +777,21 @@
             listKeys: [FOLDERS_LIST_KEY],
         });
     }
+    function prksOfflineMarkWorksBrowseChanged() {
+        return production.markDomainChanged(DOMAIN_WORKS_BROWSE, {
+            entityKinds: [], listKeys: [WORKS_BROWSE_LIST_KEY],
+        });
+    }
+    function prksOfflineMarkRecentChanged() {
+        return production.markDomainChanged(DOMAIN_RECENT, {
+            entityKinds: [], listKeys: [RECENT_LIST_KEY],
+        });
+    }
+    function prksOfflineMarkRecentlyAddedChanged() {
+        return production.markDomainChanged(DOMAIN_RECENTLY_ADDED, {
+            entityKinds: [], listKeys: [RECENTLY_ADDED_LIST_KEY],
+        });
+    }
     function prksOfflineMarkPlaylistsChanged() {
         return production.markDomainChanged(DOMAIN_PLAYLISTS, {
             entityKinds: ['playlist'],
@@ -845,6 +869,15 @@
         PRKS_OFFLINE_DOMAIN_FOLDERS: DOMAIN_FOLDERS,
         PRKS_OFFLINE_FOLDERS_LIST_KEY: FOLDERS_LIST_KEY,
         prksOfflineMarkFoldersChanged: prksOfflineMarkFoldersChanged,
+        PRKS_OFFLINE_DOMAIN_WORKS_BROWSE: DOMAIN_WORKS_BROWSE,
+        PRKS_OFFLINE_WORKS_BROWSE_LIST_KEY: WORKS_BROWSE_LIST_KEY,
+        prksOfflineMarkWorksBrowseChanged: prksOfflineMarkWorksBrowseChanged,
+        PRKS_OFFLINE_DOMAIN_RECENT: DOMAIN_RECENT,
+        PRKS_OFFLINE_RECENT_LIST_KEY: RECENT_LIST_KEY,
+        prksOfflineMarkRecentChanged: prksOfflineMarkRecentChanged,
+        PRKS_OFFLINE_DOMAIN_RECENTLY_ADDED: DOMAIN_RECENTLY_ADDED,
+        PRKS_OFFLINE_RECENTLY_ADDED_LIST_KEY: RECENTLY_ADDED_LIST_KEY,
+        prksOfflineMarkRecentlyAddedChanged: prksOfflineMarkRecentlyAddedChanged,
     };
 
     Object.keys(api).forEach(function (k) {

@@ -467,6 +467,10 @@ async function importProcessingFile(processingFileId) {
     prksMarkFoldersDomainChanged();
     prksMarkPeopleDomainChanged();
     prksMarkPersonGroupsDomainChanged();
+    // A new Work enters the stable catalog and the top of Recently added, but
+    // NOT Recent -- its last_opened_at is still NULL.
+    prksMarkWorksBrowseChanged();
+    prksMarkRecentlyAddedChanged();
     return data;
 }
 
@@ -662,6 +666,10 @@ async function addWorkToFolder(folderId, workId) {
         throw new Error(data.error || 'Could not add file to folder.');
     }
     prksMarkFoldersDomainChanged();
+    // Only the Recently-added projection carries `folder_id` (it filters
+    // locally over the folder title); the stable catalog deliberately does
+    // not, because #/progress and #/types never render a folder.
+    prksMarkRecentlyAddedChanged();
     return typeof prksOfflineMarkEntityChanged === 'function'
         ? prksOfflineMarkEntityChanged('work', workId)
         : null;
@@ -679,6 +687,10 @@ async function patchWorkFolder(workId, folderIdOrNull) {
         throw new Error(data.error || 'Could not update folder.');
     }
     prksMarkFoldersDomainChanged();
+    // Only the Recently-added projection carries `folder_id` (it filters
+    // locally over the folder title); the stable catalog deliberately does
+    // not, because #/progress and #/types never render a folder.
+    prksMarkRecentlyAddedChanged();
     return typeof prksOfflineMarkEntityChanged === 'function'
         ? prksOfflineMarkEntityChanged('work', workId)
         : null;
@@ -852,10 +864,12 @@ async function bulkUpdateWorks(payload) {
         prksMarkPeopleDomainChanged();
         // Folder Work cards render status too.
         prksMarkFoldersDomainChanged();
+        prksMarkWorkBrowseDisplayChanged();
     }
     // Moving files changes both Folder details and every folders:index count.
     if (payload && payload.action === 'move_folder') {
         prksMarkFoldersDomainChanged();
+        prksMarkRecentlyAddedChanged();
     }
     return data;
 }
@@ -1138,6 +1152,48 @@ function prksMarkPlaylistsDomainChanged() {
     return prksOfflineMarkPlaylistsChanged();
 }
 
+/* ---------------------------------------------------------------------------
+ * Browse-projection coherence.
+ *
+ * Three independent domains, one semantic helper each. Components must call
+ * these rather than touching list keys directly: when offline mutations land,
+ * the sync coordinator needs ONE place to change "discard the projection" into
+ * "apply the pending operation to it optimistically". A scattered
+ * deleteList('works-browse:index') would have to be rewritten everywhere.
+ * See AGENTS.md, "Offline browse catalogs".
+ * ------------------------------------------------------------------------ */
+
+/** The stable Work catalog behind #/progress, #/types and #/types/:type. */
+function prksMarkWorksBrowseChanged() {
+    if (typeof prksOfflineMarkWorksBrowseChanged !== 'function') return null;
+    return prksOfflineMarkWorksBrowseChanged();
+}
+
+/** #/recent -- top-N by last_opened_at. Deliberately separate so that merely
+ *  OPENING a Work does not cost the other browse caches. */
+function prksMarkRecentChanged() {
+    if (typeof prksOfflineMarkRecentChanged !== 'function') return null;
+    return prksOfflineMarkRecentChanged();
+}
+
+/** Home -> Recently added -- top-N by created_at. */
+function prksMarkRecentlyAddedChanged() {
+    if (typeof prksOfflineMarkRecentlyAddedChanged !== 'function') return null;
+    return prksOfflineMarkRecentlyAddedChanged();
+}
+
+/**
+ * Every browse projection that embeds a Work's rendered card fields. Work
+ * cards in all three show title, status, doc type, credit line, year and file
+ * size, so a display change stales all three -- but an *open* (Recent only) and
+ * a *create* (Recently added + catalog) deliberately do not come through here.
+ */
+function prksMarkWorkBrowseDisplayChanged() {
+    prksMarkWorksBrowseChanged();
+    prksMarkRecentChanged();
+    prksMarkRecentlyAddedChanged();
+}
+
 /**
  * Coherence hook for the Folders read model. Both cached Folder surfaces live
  * in one domain because Folder relationships are never local to a single
@@ -1181,6 +1237,10 @@ function prksMarkWorkTitleChanged(workId) {
     // type, year, credit line, file size), so this conservative hook covers
     // Folders for exactly the same reason it covers Playlists.
     prksMarkFoldersDomainChanged();
+    // Every browse projection embeds the same Work card (title, status, doc
+    // type, credit line, year, file size), so a display change stales all
+    // three. An *open* and a *create* deliberately do not come through here.
+    prksMarkWorkBrowseDisplayChanged();
     prksMarkResearchGraphCoreChanged();
     return token;
 }
@@ -1211,7 +1271,10 @@ function prksMarkWorkRoleChanged(workId, roleType) {
     // A Folder Work card's credit line is linked_authors -> author_text ->
     // primary_editor, so Editor changes stale Folders even though they touch
     // neither Arguments nor the Graph. Other roles are not rendered there.
-    if (role === 'Author' || role === 'Editor') prksMarkFoldersDomainChanged();
+    if (role === 'Author' || role === 'Editor') {
+        prksMarkFoldersDomainChanged();
+        prksMarkWorkBrowseDisplayChanged();
+    }
     return token;
 }
 
@@ -1510,6 +1573,10 @@ window.prksMarkPeopleDomainChanged = prksMarkPeopleDomainChanged;
 window.prksMarkPersonGroupsDomainChanged = prksMarkPersonGroupsDomainChanged;
 window.prksMarkPlaylistsDomainChanged = prksMarkPlaylistsDomainChanged;
 window.prksMarkFoldersDomainChanged = prksMarkFoldersDomainChanged;
+window.prksMarkWorksBrowseChanged = prksMarkWorksBrowseChanged;
+window.prksMarkRecentChanged = prksMarkRecentChanged;
+window.prksMarkRecentlyAddedChanged = prksMarkRecentlyAddedChanged;
+window.prksMarkWorkBrowseDisplayChanged = prksMarkWorkBrowseDisplayChanged;
 window.prksOfflineWasGuardRefusal = prksOfflineWasGuardRefusal;
 window.deleteFolderCanonical = deleteFolderCanonical;
 window.addTagToFolder = addTagToFolder;

@@ -31,7 +31,8 @@ function parseProgressStatusFromHash(hash) {
     return normalizeProgressStatusParam(params.get('status'));
 }
 
-function renderProgressByStatus(works, status, container) {
+function renderProgressByStatus(works, status, container, options = {}) {
+    const offlineCached = !!(options && options.offlineCached);
     const title = `Files · ${progressEscapeHtml(status)}`;
     const list = (works || [])
         .filter((w) => w && w.status === status)
@@ -40,8 +41,14 @@ function renderProgressByStatus(works, status, container) {
     let html = `<div class="prks-page-header page-header"><h2 class="prks-page-title">${title}</h2></div><div class="card-grid">`;
     if (list.length > 0) {
         list.forEach((w) => {
-            const subtitle = w.abstract ? w.abstract.substring(0, 100) + '…' : '';
-            html += typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { subtitle }) : '';
+            // The browse projection ships a bounded `abstract_excerpt`; the
+            // full `abstract` is only present on the older full summary.
+            const excerptSource = w.abstract_excerpt != null ? w.abstract_excerpt : w.abstract;
+            const excerpt = excerptSource ? String(excerptSource).substring(0, 100) : '';
+            const subtitle = excerpt ? excerpt + '…' : '';
+            html += typeof prksWorkCardHtml === 'function'
+                ? prksWorkCardHtml(w, offlineCached ? { subtitle, suppressThumbnail: true } : { subtitle })
+                : '';
         });
     } else {
         html += `<p class="progress-empty-msg">No files with this progress status yet.</p>`;

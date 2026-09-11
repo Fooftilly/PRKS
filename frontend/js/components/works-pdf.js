@@ -1107,6 +1107,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             prksOfflineMarkPeopleChanged();
         }
         if (typeof prksOfflineMarkPersonGroupsChanged === 'function') prksOfflineMarkPersonGroupsChanged();
+        if (typeof prksMarkWorkBrowseDisplayChanged === 'function') {
+            // Browse Work cards render file_size_bytes from the same managed
+            // PDF, so this boundary stales all three projections.
+            prksMarkWorkBrowseDisplayChanged();
+        }
         if (typeof prksMarkFoldersDomainChanged === 'function') {
             // A cached Folder detail's Work cards render file_size_bytes from
             // the same managed PDF, so this boundary stales Folders too. The

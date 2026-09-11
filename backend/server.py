@@ -1794,12 +1794,23 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if path == '/api/diagnostics/performance':
                 self.send_json(200, performance_snapshot())
             elif path == '/api/works':
-                etag = db.etag_works_catalog()
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                data = db.get_all_works()
-                self.send_json(200, data, etag=etag, precondition_checked=True)
+                # `?projection=browse` is an explicit, additive contract: the
+                # compact catalog the browse routes cache. The default response
+                # keeps its existing semantics for every other caller.
+                if (query.get('projection') or [''])[0] == 'browse':
+                    data = db.get_works_browse_catalog()
+                    etag = db.etag_for_representation('works-browse', data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
+                else:
+                    etag = db.etag_works_catalog()
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    data = db.get_all_works()
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path == '/api/playlists':
                 etag = db.etag_playlists_catalog()
                 if self._prks_if_none_match(etag):
@@ -2154,18 +2165,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     self.send_error(404, "Person not found")
             elif path == '/api/recent':
-                etag = db.etag_recent_works()
+                # Representation-derived ETag: the old probe keyed on
+                # COUNT + MAX(last_opened_at), which cannot see a re-open of a
+                # Work that was already the most recent, nor a display field
+                # changing on a row already in the result.
+                data = db.get_recent_browse()
+                etag = db.etag_for_representation('recent', data)
                 if self._prks_if_none_match(etag):
                     self._send_json_not_modified(etag)
                     return
-                data = db.get_recent_works()
                 self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path == '/api/recently-added':
-                etag = db.etag_recently_added_works()
+                data = db.get_recently_added_browse()
+                etag = db.etag_for_representation('recently-added', data)
                 if self._prks_if_none_match(etag):
                     self._send_json_not_modified(etag)
                     return
-                data = db.get_recently_added_works()
                 self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path == '/api/search':
                 q = query.get('q', [''])[0]

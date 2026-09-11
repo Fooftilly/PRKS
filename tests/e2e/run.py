@@ -54,6 +54,7 @@ from tests.e2e.sharding import (
 E2E_MODULES = (
     "tests.e2e.test_app",
     "tests.e2e.test_offline",
+    "tests.e2e.test_browse_offline",
     "tests.e2e.test_folders_offline",
     "tests.e2e.test_person_groups_offline",
     "tests.e2e.test_playlists_offline",

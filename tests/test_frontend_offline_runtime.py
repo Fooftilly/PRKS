@@ -503,7 +503,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # Work deletion drops the playlist_items row.
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         delete_at = works.index("async function deleteWork(")
-        self.assertIn("prksOfflineMarkPlaylistsChanged()", works[delete_at : delete_at + 3000])
+        self.assertIn("prksOfflineMarkPlaylistsChanged()", works[delete_at : delete_at + 3800])
         # The managed PDF save does not: no rendered Playlist field changes.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         self.assertNotIn("Playlists", pdf)
@@ -975,12 +975,19 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         # Lazy hydration must be skipped too, not just the src.
         self.assertIn("if (!offlineCached && typeof window.prksInitLazyWorkThumbs", folders)
 
-    def test_recently_added_never_requests_while_offline(self):
+    def test_recently_added_reads_through_its_own_offline_snapshot(self):
+        """Recently added is cached now, so it is no longer connectivity-gated:
+        it must go through the read-through rather than a raw fetch, and must
+        never be recomputed from the Folder hierarchy or the stable catalog."""
         folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
         body = _fn_body(folders, "async function prksLoadFolderLibraryRecentlyAdded(")
-        guard_at = body.index("if (!prksFolderRuntimeOnline())")
-        fetch_at = body.index("fetchRecentlyAdded")
-        self.assertLess(guard_at, fetch_at, "the connectivity guard must precede the read")
+        self.assertIn("prksOfflineRecentlyAddedFetch", body)
+        self.assertIn("prksResolveOfflineRecentlyAdded", body)
+        self.assertNotIn("fetchRecentlyAdded", body)
+        # A missing snapshot is an explicit unavailable state, not an empty tab.
+        self.assertIn("not available offline", body)
+        # The tab must no longer be disabled while offline.
+        self.assertNotIn("Recently added requires a connection", folders)
 
     def test_work_folder_card_does_not_fetch_the_catalog_offline(self):
         folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
@@ -988,3 +995,123 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         guard_at = body.index("if (!prksFolderRuntimeOnline())")
         fetch_at = body.index("await fetchFolders()")
         self.assertLess(guard_at, fetch_at)
+
+
+class FrontendBrowseProjectionTests(unittest.TestCase):
+    """Static contracts for the three browse projections.
+
+    The invariant these guard is independence: opening a Work must cost the
+    Recent cache and nothing else, which only holds while the three keys stay
+    separate and every component goes through the semantic helpers.
+    """
+
+    def test_three_independent_keys_and_domains(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        for const, value in (
+            ("PRKS_WORKS_BROWSE_LIST_KEY", "'works-browse:index'"),
+            ("PRKS_RECENT_LIST_KEY", "'recent:index'"),
+            ("PRKS_RECENTLY_ADDED_LIST_KEY", "'recently-added:index'"),
+        ):
+            self.assertIn("const %s = %s;" % (const, value), app)
+        # One catalog carrying last_opened_at is exactly what this design avoids.
+        browse = _fn_body(app, "async function prksOfflineWorksBrowseFetch(")
+        self.assertIn("projection=browse", browse)
+        self.assertNotIn("last_opened_at", browse)
+
+    def test_browse_routes_use_the_read_through_not_raw_fetches(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        for case, key in (("case 'progress': {", "PRKS_WORKS_BROWSE"),
+                          ("case 'types': {", "PRKS_WORKS_BROWSE"),
+                          ("case 'type-detail': {", "PRKS_WORKS_BROWSE"),
+                          ("case 'recent': {", "PRKS_RECENT_LIST_KEY")):
+            at = app.index(case)
+            body = app[at: at + 1400]
+            with self.subTest(case=case):
+                self.assertNotIn("fetchWorks(", body)
+                self.assertNotIn("fetchRecent(", body)
+                self.assertIn("prksOffline", body)
+
+    def test_recent_is_never_recomputed_from_the_stable_catalog(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        at = app.index("case 'recent': {")
+        body = app[at: at + 1400]
+        # Its canonical order (last_opened_at + id tie-break) is not derivable
+        # from a catalog that does not carry last_opened_at at all.
+        self.assertIn("PRKS_RECENT_LIST_KEY", body)
+        self.assertNotIn("PRKS_WORKS_BROWSE_LIST_KEY", body)
+
+    def test_opening_a_work_marks_recent_only(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        at = app.index("case 'work': {")
+        body = app[at: at + 1800]
+        self.assertIn("prksMarkRecentChanged()", body)
+        for forbidden in ("prksMarkWorksBrowseChanged", "prksMarkRecentlyAddedChanged",
+                          "prksMarkWorkBrowseDisplayChanged"):
+            self.assertNotIn(forbidden, body, forbidden)
+        # Only an authoritative read stamps last_opened_at.
+        self.assertIn("offlineWork.source === 'server'", body)
+
+    def test_semantic_helpers_are_the_only_invalidation_path(self):
+        """A future sync coordinator needs ONE place to turn "discard" into
+        "apply the pending operation optimistically"."""
+        for name in ("app.js", "ui.js", "components/folders.js", "components/works.js",
+                     "components/progress.js", "components/types.js", "components/search.js"):
+            src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
+            with self.subTest(module=name):
+                for key in ("works-browse:index", "recent:index", "recently-added:index"):
+                    self.assertNotIn("deleteList('%s')" % key, src)
+                    self.assertNotIn('deleteList("%s")' % key, src)
+
+    def test_work_create_marks_catalog_and_recently_added_but_not_recent(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        at = app.index("if (res.ok && typeof prksMarkWorksBrowseChanged === 'function')")
+        body = app[at: at + 600]
+        self.assertIn("prksMarkWorksBrowseChanged();", body)
+        self.assertIn("prksMarkRecentlyAddedChanged();", body)
+        # A new Work has last_opened_at NULL, so it cannot be in Recent.
+        self.assertNotIn("prksMarkRecentChanged();", body)
+
+    def test_folder_membership_marks_recently_added_only(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        for fn in ("async function addWorkToFolder(", "async function patchWorkFolder("):
+            body = _fn_body(api, fn)
+            with self.subTest(fn=fn):
+                self.assertIn("prksMarkRecentlyAddedChanged();", body)
+                # The stable catalog carries no folder_id at all.
+                self.assertNotIn("prksMarkWorksBrowseChanged();", body)
+
+    def test_display_hooks_reach_all_three_projections(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        display = _fn_body(api, "function prksMarkWorkBrowseDisplayChanged(")
+        for helper in ("prksMarkWorksBrowseChanged()", "prksMarkRecentChanged()",
+                       "prksMarkRecentlyAddedChanged()"):
+            self.assertIn(helper, display)
+        title = _fn_body(api, "function prksMarkWorkTitleChanged(")
+        self.assertIn("prksMarkWorkBrowseDisplayChanged();", title)
+
+    def test_projection_validators_require_each_routes_own_field(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        browse = _fn_body(app, "function prksIsWorksBrowseRowShape(")
+        self.assertIn("hasOwnProperty.call(row, 'abstract_excerpt')", browse)
+        recent = _fn_body(app, "function prksIsRecentRowShape(")
+        self.assertIn("row.last_opened_at", recent)
+        added = _fn_body(app, "function prksIsRecentlyAddedRowShape(")
+        self.assertIn("row.created_at", added)
+        self.assertIn("prksIsBrowseFolderId(row)", added)
+        # folder_id must be present, not merely nullish -- same rule as parent_id.
+        folder_id = _fn_body(app, "function prksIsBrowseFolderId(")
+        self.assertIn("hasOwnProperty.call(row, 'folder_id')", folder_id)
+
+    def test_cached_browse_renders_suppress_thumbnails(self):
+        for name, fn in (("components/progress.js", "function renderProgressByStatus("),
+                         ("components/search.js", "function renderRecent("),
+                         ("components/types.js", "function renderWorksByDocType(")):
+            src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
+            with self.subTest(module=name):
+                self.assertIn("offlineCached", src)
+                self.assertIn("suppressThumbnail", src)
+
+    def test_progress_reads_the_bounded_excerpt(self):
+        src = _read(os.path.join(_FRONTEND, "js", "components", "progress.js"))
+        body = _fn_body(src, "function renderProgressByStatus(")
+        self.assertIn("abstract_excerpt", body)

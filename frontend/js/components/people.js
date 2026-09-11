@@ -1282,6 +1282,11 @@ async function savePersonProfile(personId) {
         if (_personNameChanged && typeof prksMarkArgumentsDomainChanged === 'function') {
             prksMarkArgumentsDomainChanged();
         }
+        if (_personNameChanged && typeof prksMarkWorkBrowseDisplayChanged === 'function') {
+            // Browse Work cards fall back to the canonical Person name for
+            // their credit line, exactly as Folder cards do.
+            prksMarkWorkBrowseDisplayChanged();
+        }
         if (_personNameChanged && typeof prksMarkFoldersDomainChanged === 'function') {
             // A Folder Work card's credit line falls back to the canonical
             // Person name, so a rename stales cached Folder details. Biography,

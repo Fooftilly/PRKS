@@ -4,13 +4,16 @@ function searchEscapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function renderRecent(works, container) {
+function renderRecent(works, container, options = {}) {
+    const offlineCached = !!(options && options.offlineCached);
     let html = `<div class="prks-page-header page-header"><h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('clock') : ''} Recently Opened</h2></div><div class="card-grid">`;
     if (works && works.length > 0) {
         works.forEach(w => {
             let dateStr = w.last_opened_at ? new Date(w.last_opened_at).toLocaleString() : 'Unknown';
             const subtitle = `Last opened: ${dateStr}`;
-            html += typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w, { subtitle }) : '';
+            html += typeof prksWorkCardHtml === 'function'
+                ? prksWorkCardHtml(w, offlineCached ? { subtitle, suppressThumbnail: true } : { subtitle })
+                : '';
         });
     } else {
         html += '<p class="prks-inline-message">No recently opened documents found.</p>';

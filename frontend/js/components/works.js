@@ -819,6 +819,11 @@ async function deleteWork(w_id, ownerCtx) {
             // stale.
             prksMarkFoldersDomainChanged();
         }
+        if (typeof prksMarkWorkBrowseDisplayChanged === 'function') {
+            // A deleted Work disappears from every browse projection it could
+            // have appeared in -- catalog, Recent and Recently added alike.
+            prksMarkWorkBrowseDisplayChanged();
+        }
         if (typeof prksOfflineMarkPlaylistsChanged === 'function') {
             // Canonical cleanup drops this Work's playlist_items row, so
             // every cached Playlist's item_count and items are now stale.

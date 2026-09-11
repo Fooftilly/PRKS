@@ -261,6 +261,76 @@ async function run() {
         assert('Folder canonical runtime helper exported',
             typeof mod.prksOfflineMarkFoldersChanged === 'function');
     }
+    /* The three browse projections are LIST-ONLY domains and must be mutually
+     * independent: opening a Work may cost `recent` and nothing else. */
+    {
+        const domains = ['works-browse', 'recent', 'recently-added', 'folders'];
+        const keys = ['works-browse:index', 'recent:index', 'recently-added:index', 'folders:index'];
+        const sweeps = [];
+        const store = makeFakeStore({
+            deleteEntitiesByKind: async kind => {
+                sweeps.push('KIND:' + kind);
+                throw Error('a list-only domain must sweep no entity kind');
+            },
+            deleteList: async key => {
+                sweeps.push(key);
+                if (key !== 'recent:index') throw Error('cross-domain list sweep');
+                return false;
+            },
+        });
+        for (const kind of ['work', 'folder', 'concept']) await store.putEntity(kind, '1', {id:'1'}, '');
+        for (const key of keys) await store.putList(key, [], '');
+        const runtime = mod.createPrksOfflineRuntime({
+            store, prksRequest: () => Promise.reject(Error('offline')),
+            setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        // Opening a Work stamps last_opened_at -> Recent only.
+        runtime.markDomainChanged('recent', { entityKinds: [], listKeys: ['recent:index'] });
+        await runtime._domainCleanup('recent');
+        assertEq('Recent cleanup touches exactly its own key', sweeps.sort(), ['recent:index']);
+        assertEq('browse generations stay independent',
+            domains.map(d => runtime.currentDomainGeneration(d)), [0, 1, 0, 0]);
+        assertEq('only Recent blocked after a failed sweep',
+            domains.map(d => runtime.isDomainBlocked(d)), [false, true, false, false]);
+        for (let i = 0; i < keys.length; i++) {
+            const result = await runtime.readThroughList(keys[i], '/api/test', { domain: domains[i] });
+            assertEq(domains[i] + ' fallback isolation', result.source, i === 1 ? 'unavailable' : 'cache');
+        }
+        assertEq('a Work entity is untouched by a Recent sweep',
+            (await runtime.readThroughEntity('work', '1', '/api/test')).source, 'cache');
+        assertEq('works-browse constant', mod.PRKS_OFFLINE_DOMAIN_WORKS_BROWSE, 'works-browse');
+        assertEq('works-browse list constant', mod.PRKS_OFFLINE_WORKS_BROWSE_LIST_KEY, 'works-browse:index');
+        assertEq('recent constant', mod.PRKS_OFFLINE_DOMAIN_RECENT, 'recent');
+        assertEq('recent list constant', mod.PRKS_OFFLINE_RECENT_LIST_KEY, 'recent:index');
+        assertEq('recently-added constant', mod.PRKS_OFFLINE_DOMAIN_RECENTLY_ADDED, 'recently-added');
+        assertEq('recently-added list constant', mod.PRKS_OFFLINE_RECENTLY_ADDED_LIST_KEY, 'recently-added:index');
+        for (const fn of ['prksOfflineMarkWorksBrowseChanged', 'prksOfflineMarkRecentChanged',
+                          'prksOfflineMarkRecentlyAddedChanged']) {
+            assert(fn + ' exported', typeof mod[fn] === 'function');
+        }
+    }
+    /* A pre-mutation browse read must not repopulate an invalidated list. */
+    {
+        const store = makeFakeStore();
+        const gate = {};
+        gate.promise = new Promise(resolve => { gate.resolve = resolve; });
+        const runtime = mod.createPrksOfflineRuntime({
+            store,
+            prksRequest: async () => { await gate.promise; return jsonResponse(200, [{id:'W-1'}]); },
+            setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        const pending = runtime.readThroughList(
+            'works-browse:index', '/api/works?projection=browse', { domain: 'works-browse' });
+        runtime.markDomainChanged('works-browse', {
+            entityKinds: [], listKeys: ['works-browse:index'],
+        });
+        gate.resolve();
+        await pending;
+        assertEq('stale browse GET does not repopulate',
+            await store.getList('works-browse:index'), null);
+    }
     /* A pre-mutation Folder read -- list AND entity -- can still resolve and
      * repaint, but must never become eligible cache data. */
     {

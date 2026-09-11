@@ -196,9 +196,10 @@ class FoldersOfflineTests(unittest.TestCase):
         self.assertNotIn('Folders not available offline', text)
         self.assertNotIn(FOLDER_PARENT_TITLE, text)
         # Still read-only: an empty cached library is not a licence to create.
-        self.assertTrue(page.evaluate(
-            "() => { const b = document.querySelector('.prks-folder-library__tab-btn[data-tab=\"recently-added\"]');"
-            " return !!b && b.disabled; }"))
+        posts = self.watch(page, {'POST'})
+        page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Nope')")
+        page.wait_for_timeout(400)
+        self.assertEqual(posts, [])
 
     def test_default_offline_launch_lands_on_the_cached_hierarchy(self):
         """The milestone's motivating regression: boot at `/` while offline."""
@@ -299,43 +300,32 @@ class FoldersOfflineTests(unittest.TestCase):
 
     # ---- Recently Added (deliberately still server-backed) -------------------
 
-    def test_recently_added_never_leaks_a_request_offline(self):
+    def test_recently_added_restores_offline_from_its_own_cache(self):
+        """It used to be disabled offline; it now has its own snapshot, so a
+        restored `recently-added` tab must render from cache rather than
+        firing a doomed /api/recently-added read."""
         server, page, context, _c = self.start()
         self.index(page)
         o._wait_list_cached(page, 'folders:index')
-        # Make Recently Added the restored tab, exactly as a returning user has.
-        page.evaluate("() => { try { localStorage.setItem('prks.folderLibrary.tab', 'recently-added'); } catch (_) {} }")
+        page.evaluate("() => prksSwitchFolderLibraryTab('recently-added')")
+        o._wait_list_cached(page, 'recently-added:index')
+        # Switching above already persisted the tab preference; drop the
+        # in-memory dashboard state so this is a genuine restore.
         page.evaluate("() => { window.__prksFolderDashboardState = null; }")
 
         self.offline(page, context)
-        seen = self.all_paths(page)
         self.index(page)
         o._wait_offline_banner(page)
-        page.wait_for_timeout(600)
 
-        self.assertEqual([p for p in seen if 'recently-added' in p], [])
-        # Falls back to a usable Folders tab rather than a doomed request.
-        self.assertIn(FOLDER_PARENT_TITLE, o._content_text(page))
-        self.assertTrue(page.evaluate(
-            "() => { const b = document.querySelector('.prks-folder-library__tab-btn[data-tab=\"recently-added\"]');"
-            " return !!b && b.disabled; }"))
-
-        # Clicking the disabled tab still issues nothing.
-        page.evaluate("() => prksSwitchFolderLibraryTab('recently-added')")
-        page.wait_for_timeout(400)
-        self.assertEqual([p for p in seen if 'recently-added' in p], [])
-
-    def test_recently_added_control_returns_on_reconnect(self):
-        server, page, context, _c = self.start()
-        self.index(page)
-        o._wait_list_cached(page, 'folders:index')
-        self.offline(page, context)
-        self.index(page)
-        o._wait_offline_banner(page)
-        self.online(page, context)
+        tab = page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]')
+        self.assertFalse(tab.is_disabled(), 'Recently added is cached now')
+        # The read-through attempts the network first, so wait on the render.
         page.wait_for_function(
-            """() => { const b = document.querySelector('.prks-folder-library__tab-btn[data-tab="recently-added"]');
-                return !!b && !b.disabled; }""",
+            """(title) => {
+                const p = document.querySelector('#prks-folder-library-recently-added');
+                return !!p && p.textContent.indexOf(title) !== -1;
+            }""",
+            arg=WORK_A_TITLE,
             timeout=20000,
         )
 

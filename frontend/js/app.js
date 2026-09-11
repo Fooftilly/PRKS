@@ -1427,6 +1427,13 @@ async function prksOfflineDetailFetch(kind, id, path, signal, options) {
  * connectivity policy and the network-vs-domain distinction stay owned by the
  * offline runtime, never re-implemented here.
  */
+/** Loads one browse projection through the ordinary offline read-through. */
+async function prksOfflineBrowseFetch(listKey, domain, path, validate, signal) {
+    return await prksOfflineListFetch(listKey, path, signal, {
+        domain: domain, validate: validate,
+    });
+}
+
 async function prksOfflineListFetch(listKey, path, signal, options) {
     if (typeof prksOfflineReadList !== 'function') {
         return { value: null, source: 'unavailable', cachedAt: null };
@@ -1913,6 +1920,125 @@ function prksResolveOfflinePersonGroup(result, groupId) {
     if (result.source === 'server') throw new Error('Received an unexpected Person Group response.');
     if (typeof prksOfflineInvalidateEntity === 'function') void prksOfflineInvalidateEntity('person-group', groupId);
     return { group: null, unavailable: true };
+}
+
+/* ---------------------------------------------------------------------------
+ * Browse projections. Three independent caches, NOT one catalog: a single one
+ * carrying `last_opened_at` would let merely opening a Work invalidate the
+ * Progress/Types/Recently-added caches too. Each is a compact server
+ * projection -- not the full Work summary -- so these validators protect the
+ * browse card contract and each route's own extra field, nothing more.
+ * ------------------------------------------------------------------------ */
+const PRKS_WORKS_BROWSE_LIST_KEY = 'works-browse:index';
+const PRKS_WORKS_BROWSE_DOMAIN = 'works-browse';
+const PRKS_RECENT_LIST_KEY = 'recent:index';
+const PRKS_RECENT_DOMAIN = 'recent';
+const PRKS_RECENTLY_ADDED_LIST_KEY = 'recently-added:index';
+const PRKS_RECENTLY_ADDED_DOMAIN = 'recently-added';
+
+/** Non-negative integer, or absent/null. Used for byte and page counts. */
+function prksIsOptionalNonNegativeInteger(value) {
+    return value == null ||
+        (typeof value === 'number' && Number.isFinite(value) &&
+         Number.isInteger(value) && value >= 0);
+}
+
+/** `folder_id` must be PRESENT on a Recently-added row: the projection always
+ *  selects it and spells "no folder" as an explicit null, so an absent field
+ *  would silently read as unfiled. Same rule as Folder `parent_id`. */
+function prksIsBrowseFolderId(row) {
+    if (!Object.prototype.hasOwnProperty.call(row, 'folder_id')) return false;
+    const value = row.folder_id;
+    return value === null || (typeof value === 'string' && !!value.trim());
+}
+
+/* Shared by all three: exactly what prksWorkCardHtml() dereferences, plus the
+ * source fields prksInferWorkSourceKind() reads. `file_size_bytes` is fed to
+ * Number(), so a wrong type there renders "NaN MB" from cache. */
+function prksIsBrowseCardRowShape(row) {
+    if (!prksHasUsableRowId(row)) return false;
+    return prksIsOptionalString(row.title) && prksIsOptionalString(row.status) &&
+        prksIsOptionalString(row.doc_type) && prksIsOptionalString(row.file_path) &&
+        prksIsOptionalString(row.source_kind) && prksIsOptionalString(row.source_url) &&
+        prksIsOptionalString(row.thumb_url) && prksIsOptionalString(row.author_text) &&
+        prksIsOptionalString(row.year) && prksIsOptionalString(row.published_date) &&
+        prksIsOptionalString(row.linked_authors) && prksIsOptionalString(row.primary_author) &&
+        prksIsOptionalString(row.primary_editor) &&
+        prksIsOptionalNonNegativeInteger(row.thumb_page) &&
+        prksIsOptionalNonNegativeInteger(row.file_size_bytes);
+}
+
+/* #/progress renders `abstract_excerpt` under each card, so it must be present
+ * and a string -- the server always projects it (COALESCE + SUBSTR). */
+function prksIsWorksBrowseRowShape(row) {
+    if (!prksIsBrowseCardRowShape(row)) return false;
+    if (!Object.prototype.hasOwnProperty.call(row, 'abstract_excerpt')) return false;
+    return typeof row.abstract_excerpt === 'string';
+}
+
+function prksIsWorksBrowseIndexShape(value) {
+    return Array.isArray(value) && value.every(prksIsWorksBrowseRowShape);
+}
+
+/* #/recent renders `Last opened: <date>` from this field and the canonical
+ * projection selects only rows where it is NOT NULL, so a row without a usable
+ * one is a malformed payload rather than a sparse record. */
+function prksIsRecentRowShape(row) {
+    return prksIsBrowseCardRowShape(row) &&
+        typeof row.last_opened_at === 'string' && !!row.last_opened_at.trim();
+}
+
+function prksIsRecentIndexShape(value) {
+    return Array.isArray(value) && value.every(prksIsRecentRowShape);
+}
+
+/* Recently added renders `Added <date>` from created_at and filters locally
+ * over publisher and the folder title it resolves through folder_id. */
+function prksIsRecentlyAddedRowShape(row) {
+    return prksIsBrowseCardRowShape(row) &&
+        typeof row.created_at === 'string' && !!row.created_at.trim() &&
+        prksIsOptionalString(row.publisher) && prksIsBrowseFolderId(row);
+}
+
+function prksIsRecentlyAddedIndexShape(value) {
+    return Array.isArray(value) && value.every(prksIsRecentlyAddedRowShape);
+}
+
+/** The stable catalog behind #/progress, #/types and #/types/:type. */
+async function prksOfflineWorksBrowseFetch(signal) {
+    return await prksOfflineBrowseFetch(
+        PRKS_WORKS_BROWSE_LIST_KEY, PRKS_WORKS_BROWSE_DOMAIN,
+        '/api/works?projection=browse', prksIsWorksBrowseIndexShape, signal
+    );
+}
+
+function prksResolveOfflineWorksBrowse(result) {
+    return prksResolveOfflineBrowseList(
+        result, PRKS_WORKS_BROWSE_LIST_KEY, prksIsWorksBrowseIndexShape, 'Works browse'
+    );
+}
+
+/** Home -> Recently added. Its own snapshot for the same reason as Recent. */
+async function prksOfflineRecentlyAddedFetch(signal) {
+    return await prksOfflineBrowseFetch(
+        PRKS_RECENTLY_ADDED_LIST_KEY, PRKS_RECENTLY_ADDED_DOMAIN, '/api/recently-added',
+        prksIsRecentlyAddedIndexShape, signal
+    );
+}
+
+function prksResolveOfflineRecentlyAdded(result) {
+    return prksResolveOfflineBrowseList(
+        result, PRKS_RECENTLY_ADDED_LIST_KEY, prksIsRecentlyAddedIndexShape, 'Recently added'
+    );
+}
+
+/** Shared resolver: null means "no usable snapshot", never "empty library". */
+function prksResolveOfflineBrowseList(result, listKey, validate, label) {
+    if (!result || result.source === 'unavailable') return null;
+    if (validate(result.value)) return result.value;
+    if (result.source === 'server') throw new Error('Received an unexpected ' + label + ' response.');
+    if (typeof prksOfflineInvalidateList === 'function') void prksOfflineInvalidateList(listKey);
+    return null;
 }
 
 const PRKS_FOLDERS_LIST_KEY = 'folders:index';
@@ -2724,10 +2850,26 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'recent': {
-                const works = await fetchRecent({ signal: routeSignal });
+                // Served from its OWN snapshot, never recomputed from the
+                // stable catalog: the canonical order is top-N by
+                // last_opened_at with an id tie-break, and the catalog does
+                // not carry last_opened_at at all.
+                const offlineRecent = await prksOfflineBrowseFetch(
+                    PRKS_RECENT_LIST_KEY, PRKS_RECENT_DOMAIN, '/api/recent',
+                    prksIsRecentIndexShape, routeSignal
+                );
                 if (stale()) return;
+                const works = prksResolveOfflineBrowseList(
+                    offlineRecent, PRKS_RECENT_LIST_KEY, prksIsRecentIndexShape, 'Recent'
+                );
+                if (!works) {
+                    prksOfflineRenderUnavailable(contentDiv, 'Recently opened not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Recently opened not available offline' };
+                    break;
+                }
                 publishSidebar({ workCount: works.length });
-                renderRecent(works, contentDiv);
+                renderRecent(works, contentDiv, { offlineCached: offlineRecent.source === 'cache' });
+                prksOfflinePrependBanner(contentDiv, offlineRecent);
                 break;
             }
             case 'saved-views': {
@@ -2770,10 +2912,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'progress': {
                 const status = route.params.status;
-                const works = await fetchWorks({ signal: routeSignal });
+                const offlineBrowse = await prksOfflineWorksBrowseFetch(routeSignal);
                 if (stale()) return;
+                const works = prksResolveOfflineWorksBrowse(offlineBrowse);
+                if (!works) {
+                    prksOfflineRenderUnavailable(contentDiv, 'Progress not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Progress not available offline' };
+                    break;
+                }
                 publishSidebar({ status });
-                renderProgressByStatus(works, status, contentDiv);
+                // Pure local projection of the cached catalog -- no request.
+                renderProgressByStatus(works, status, contentDiv,
+                    { offlineCached: offlineBrowse.source === 'cache' });
+                prksOfflinePrependBanner(contentDiv, offlineBrowse);
                 break;
             }
             case 'processing-files': {
@@ -2826,15 +2977,30 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'types': {
-                const works = await fetchWorks({ signal: routeSignal });
+                const offlineBrowse = await prksOfflineWorksBrowseFetch(routeSignal);
                 if (stale()) return;
+                const works = prksResolveOfflineWorksBrowse(offlineBrowse);
+                if (!works) {
+                    prksOfflineRenderUnavailable(contentDiv, 'Types not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Types not available offline' };
+                    break;
+                }
                 renderTypesIndex(works, contentDiv);
+                prksOfflinePrependBanner(contentDiv, offlineBrowse);
                 break;
             }
             case 'type-detail': {
-                const works = await fetchWorks({ signal: routeSignal });
+                const offlineBrowse = await prksOfflineWorksBrowseFetch(routeSignal);
                 if (stale()) return;
-                renderWorksByDocType(works, route.params.docType, contentDiv);
+                const works = prksResolveOfflineWorksBrowse(offlineBrowse);
+                if (!works) {
+                    prksOfflineRenderUnavailable(contentDiv, 'Types not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Types not available offline' };
+                    break;
+                }
+                renderWorksByDocType(works, route.params.docType, contentDiv,
+                    { offlineCached: offlineBrowse.source === 'cache' });
+                prksOfflinePrependBanner(contentDiv, offlineBrowse);
                 break;
             }
             case 'work': {
@@ -2846,6 +3012,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     routeSignal
                 );
                 if (stale()) return;
+                // An authoritative Work read is ALSO a canonical mutation:
+                // get_work() stamps last_opened_at, which reorders #/recent.
+                // Recent alone -- this is precisely why the browse catalog does
+                // not carry last_opened_at, so reading a file cannot cost the
+                // Progress/Types/Recently-added caches.
+                if (offlineWork.source === 'server' && offlineWork.value &&
+                    typeof prksMarkRecentChanged === 'function') {
+                    prksMarkRecentChanged();
+                }
                 const work = offlineWork.value;
                 if (!work && offlineWork.source === 'unavailable') {
                     prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
@@ -3435,6 +3610,13 @@ function initForms() {
             // canonical request, bypassing POST /api/roles entirely -- so this
             // path owes People its own invalidation.
             if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
+        }
+        if (res.ok && typeof prksMarkWorksBrowseChanged === 'function') {
+            // A new Work enters the stable catalog and the top of Recently
+            // added. It does NOT enter Recent: last_opened_at is still NULL,
+            // which is one reason these are three independent projections.
+            prksMarkWorksBrowseChanged();
+            prksMarkRecentlyAddedChanged();
         }
         if (res.ok && typeof prksMarkFoldersDomainChanged === 'function') {
             // Unlike Playlists, folder membership is NOT optional: the create
