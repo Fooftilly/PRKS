@@ -122,6 +122,47 @@ class FrontendLocalStoreTests(unittest.TestCase):
         self.assertIn("payload_too_large", src)
         self.assertIn("MAX_ERROR_CHARS", src)
 
+    def test_the_byte_limit_is_measured_in_utf8_bytes(self):
+        """String .length counts UTF-16 code units and undercounts every
+        non-ASCII character, so a byte limit enforced on .length does not
+        exist for the users most likely to reach it."""
+        src = _read(_LOCAL)
+        at = src.index("function jsonByteLength(")
+        body = src[at: src.index("\n    }", src.index("return bytes;", at))]
+        self.assertIn("TextEncoder", body)
+        # The naive form must not be the measurement.
+        self.assertNotIn("return s ? s.length : 0;", body)
+
+    def test_the_store_owns_device_identity(self):
+        """Components must not be responsible for remembering it, and a
+        stored operation must never carry a null device_id."""
+        src = _read(_LOCAL)
+        self.assertIn("function enqueueOperation(envelope) {", src)
+        self.assertNotIn("function enqueueOperation(envelope, deviceId)", src)
+        self.assertIn("resolveDeviceIdIn(request)", src)
+        self.assertNotIn("ctx.deviceId || null", src)
+        self.assertIn("device_id is required.", src)
+
+    def test_durable_reset_closes_its_own_connection_first(self):
+        """IndexedDB blocks deleteDatabase() on every open connection,
+        including this store's own."""
+        src = _read(_LOCAL)
+        at = src.index("function resetDurableLocalState(")
+        body = src[at: at + 1600]
+        self.assertIn("openDbHandle.close()", body)
+        self.assertLess(body.index("openDbHandle.close()"), body.index("deleteDatabase(dbName)"))
+        # The disposable cache has the same requirement.
+        offline = _read(_OFFLINE)
+        off_at = offline.index("function deleteDatabase(")
+        off_body = offline[off_at: off_at + 1200]
+        self.assertIn("openDbHandle.close()", off_body)
+
+    def test_envelope_invariants_are_tight(self):
+        src = _read(_LOCAL)
+        self.assertIn("baseRevision < 0", src)
+        self.assertIn("isParsableTimestamp(occurredAt)", src)
+        self.assertIn("dependsOn.every(isOperationId)", src)
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for local store tests")

@@ -106,6 +106,16 @@
 
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+    function isOperationId(v) {
+        return typeof v === 'string' && UUID_RE.test(v);
+    }
+
+    /** An ISO-8601 string that names a real instant. */
+    function isParsableTimestamp(v) {
+        if (typeof v !== 'string' || !v.trim()) return false;
+        return Number.isFinite(Date.parse(v));
+    }
+
     function isNonBlankString(v) {
         return typeof v === 'string' && v.trim().length > 0;
     }
@@ -114,9 +124,42 @@
         return !!v && typeof v === 'object' && !Array.isArray(v);
     }
 
+    /**
+     * UTF-8 byte length of the serialized value.
+     *
+     * String `.length` counts UTF-16 code units, which undercounts every
+     * non-ASCII character -- a CJK payload measures ~2.1x larger on the wire
+     * than `.length` reports. A limit documented in bytes has to be enforced
+     * in bytes, or it silently does not exist for the users most likely to hit
+     * it.
+     */
     function jsonByteLength(value) {
-        const s = JSON.stringify(value);
-        return s ? s.length : 0;
+        const json = JSON.stringify(value);
+        if (!json) return 0;
+        if (typeof TextEncoder !== 'undefined') {
+            return new TextEncoder().encode(json).length;
+        }
+        if (typeof Buffer !== 'undefined' && typeof Buffer.byteLength === 'function') {
+            return Buffer.byteLength(json, 'utf8');
+        }
+        // Exact manual fallback: count UTF-8 bytes per code point, pairing
+        // surrogates so astral characters are 4 bytes rather than 2 x 3.
+        let bytes = 0;
+        for (let i = 0; i < json.length; i++) {
+            const code = json.charCodeAt(i);
+            if (code < 0x80) bytes += 1;
+            else if (code < 0x800) bytes += 2;
+            else if (code >= 0xd800 && code <= 0xdbff && i + 1 < json.length) {
+                const next = json.charCodeAt(i + 1);
+                if (next >= 0xdc00 && next <= 0xdfff) {
+                    bytes += 4;
+                    i += 1;
+                    continue;
+                }
+                bytes += 3;
+            } else bytes += 3;
+        }
+        return bytes;
     }
 
     /** Thrown for anything the caller could have prevented; carries a code. */
@@ -170,29 +213,45 @@
         const dependsOn = Object.prototype.hasOwnProperty.call(input, 'depends_on')
             ? input.depends_on
             : [];
-        if (!Array.isArray(dependsOn) || !dependsOn.every(isNonBlankString)) {
+        // Dependencies name other operations, so they must look like op ids.
+        // An arbitrary string here would silently never resolve, blocking its
+        // dependent forever.
+        if (!Array.isArray(dependsOn) || !dependsOn.every(isOperationId)) {
             throw localStoreError('invalid_envelope', 'depends_on must be an array of op ids.');
         }
         const opId = Object.prototype.hasOwnProperty.call(input, 'op_id') ? input.op_id : ctx.opId;
-        if (!isNonBlankString(opId) || !UUID_RE.test(opId)) {
+        if (!isOperationId(opId)) {
             throw localStoreError('invalid_envelope', 'op_id must be a UUID.');
+        }
+        // Durable state must never carry an anonymous operation: the store
+        // supplies this, so its absence is an internal error, not user input.
+        if (!isNonBlankString(ctx.deviceId)) {
+            throw localStoreError('invalid_envelope', 'device_id is required.');
         }
         const baseRevision = Object.prototype.hasOwnProperty.call(input, 'base_revision')
             ? input.base_revision
             : null;
-        if (baseRevision !== null && !Number.isInteger(baseRevision)) {
-            throw localStoreError('invalid_envelope', 'base_revision must be an integer or null.');
+        // Revisions are monotonic counters starting at 0; a negative one is a
+        // client bug, and sending it would make the server's staleness check
+        // meaningless.
+        if (baseRevision !== null && (!Number.isInteger(baseRevision) || baseRevision < 0)) {
+            throw localStoreError(
+                'invalid_envelope',
+                'base_revision must be a non-negative integer or null.'
+            );
         }
         const occurredAt = Object.prototype.hasOwnProperty.call(input, 'occurred_at')
             ? input.occurred_at
             : ctx.createdAt;
-        if (occurredAt != null && !isNonBlankString(occurredAt)) {
-            throw localStoreError('invalid_envelope', 'occurred_at must be an ISO string.');
+        // This becomes the ordering key for Recent once open events
+        // synchronize, so it must be a real instant -- not merely non-blank.
+        if (occurredAt != null && !isParsableTimestamp(occurredAt)) {
+            throw localStoreError('invalid_envelope', 'occurred_at must be an ISO timestamp.');
         }
         return {
             // --- immutable semantic envelope ---
             op_id: opId,
-            device_id: ctx.deviceId || null,
+            device_id: ctx.deviceId,
             operation: operation,
             entity_type: input.entity_type.trim(),
             entity_id: input.entity_id.trim(),
@@ -223,6 +282,10 @@
         const dbVersion = options.dbVersion || DB_VERSION;
 
         let dbPromise = null;
+        // The live connection, so a durable reset can close OUR handle before
+        // deleting. IndexedDB blocks a delete on any open connection --
+        // including this store's own.
+        let openDbHandle = null;
 
         function ensureStores(db) {
             if (!db.objectStoreNames.contains(STORE_OPERATIONS)) {
@@ -265,12 +328,14 @@
                         reject(localStoreError('unavailable', 'Could not open local storage.'));
                         return;
                     }
+                    openDbHandle = db;
                     db.onversionchange = function () {
                         try {
                             db.close();
                         } catch (_e) {
                             /* ignore */
                         }
+                        if (openDbHandle === db) openDbHandle = null;
                         dbPromise = null;
                     };
                     resolve(db);
@@ -412,18 +477,8 @@
          */
         function getOrCreateDeviceId() {
             return runTransaction(STORE_METADATA, 'readwrite', function (request, setResult) {
-                return request(STORE_METADATA, function (store) {
-                    return store.get(META_DEVICE_ID);
-                }).then(function (row) {
-                    if (row && isNonBlankString(row.value)) {
-                        setResult(row.value);
-                        return null;
-                    }
-                    const value = uuid();
+                return resolveDeviceIdIn(request).then(function (value) {
                     setResult(value);
-                    return request(STORE_METADATA, function (store) {
-                        return store.put({ key: META_DEVICE_ID, value: value, created_at: nowIso() });
-                    });
                 });
             });
         }
@@ -441,54 +496,84 @@
          * counter is advanced in the SAME transaction as the operation row, so
          * a crash cannot hand two operations the same sequence.
          */
-        function enqueueOperation(envelope, deviceId) {
+        /**
+         * Reads the durable device id inside an existing transaction,
+         * creating it if this is the first write on this device. Sharing the
+         * caller's transaction is what makes `device_id` unconditional: it
+         * cannot be missing, and it cannot be half-written relative to the
+         * operation that carries it.
+         */
+        function resolveDeviceIdIn(request) {
+            return request(STORE_METADATA, function (store) {
+                return store.get(META_DEVICE_ID);
+            }).then(function (row) {
+                if (row && isNonBlankString(row.value)) return row.value;
+                const value = uuid();
+                return request(STORE_METADATA, function (store) {
+                    return store.put({ key: META_DEVICE_ID, value: value, created_at: nowIso() });
+                }).then(function () {
+                    return value;
+                });
+            });
+        }
+
+        /**
+         * Persists one semantic operation. Resolves with the stored envelope
+         * only after the transaction COMMITTED; rejects otherwise. A caller may
+         * show "Saved locally" only on the resolved path.
+         *
+         * The store owns device identity and sequence allocation -- callers
+         * pass neither. Both are resolved in the SAME transaction as the
+         * operation row, so a stored operation can never carry a null
+         * `device_id`, and a crash cannot hand two operations one sequence.
+         */
+        function enqueueOperation(envelope) {
             let prepared;
-            return Promise.resolve()
-                .then(function () {
-                    const opId =
-                        isPlainObject(envelope) && isNonBlankString(envelope.op_id)
-                            ? envelope.op_id
-                            : uuid();
-                    return runTransaction(
-                        [STORE_OPERATIONS, STORE_METADATA],
-                        'readwrite',
-                        function (request, setResult) {
+            const opId =
+                isPlainObject(envelope) && isNonBlankString(envelope.op_id)
+                    ? envelope.op_id
+                    : uuid();
+            return runTransaction(
+                [STORE_OPERATIONS, STORE_METADATA],
+                'readwrite',
+                function (request, setResult) {
+                    return resolveDeviceIdIn(request)
+                        .then(function (deviceId) {
                             return request(STORE_METADATA, function (store) {
                                 return store.get(META_SEQUENCE);
-                            })
-                                .then(function (row) {
-                                    const next = (row && Number.isInteger(row.value) ? row.value : 0) + 1;
-                                    prepared = normalizeOperationEnvelope(envelope, {
-                                        opId: opId,
-                                        deviceId: deviceId || null,
-                                        createdAt: nowIso(),
-                                        sequence: next,
-                                    });
-                                    return request(STORE_OPERATIONS, function (store) {
-                                        return store.get(prepared.op_id);
-                                    }).then(function (existing) {
-                                        if (existing) {
-                                            throw localStoreError(
-                                                'duplicate_op_id',
-                                                'An operation with this op_id already exists.'
-                                            );
-                                        }
-                                        return request(STORE_METADATA, function (store) {
-                                            return store.put({ key: META_SEQUENCE, value: next });
-                                        });
-                                    });
-                                })
-                                .then(function () {
-                                    return request(STORE_OPERATIONS, function (store) {
-                                        return store.put(prepared);
-                                    });
-                                })
-                                .then(function () {
-                                    setResult(prepared);
+                            }).then(function (row) {
+                                const next = (row && Number.isInteger(row.value) ? row.value : 0) + 1;
+                                prepared = normalizeOperationEnvelope(envelope, {
+                                    opId: opId,
+                                    deviceId: deviceId,
+                                    createdAt: nowIso(),
+                                    sequence: next,
                                 });
-                        }
-                    );
-                });
+                                return request(STORE_OPERATIONS, function (store) {
+                                    return store.get(prepared.op_id);
+                                }).then(function (existing) {
+                                    if (existing) {
+                                        throw localStoreError(
+                                            'duplicate_op_id',
+                                            'An operation with this op_id already exists.'
+                                        );
+                                    }
+                                    return request(STORE_METADATA, function (store) {
+                                        return store.put({ key: META_SEQUENCE, value: next });
+                                    });
+                                });
+                            });
+                        })
+                        .then(function () {
+                            return request(STORE_OPERATIONS, function (store) {
+                                return store.put(prepared);
+                            });
+                        })
+                        .then(function () {
+                            setResult(prepared);
+                        });
+                }
+            );
         }
 
         function getOperation(opId) {
@@ -666,6 +751,20 @@
                 if (!idbFactory) {
                     reject(localStoreError('unavailable', 'IndexedDB is unavailable.'));
                     return;
+                }
+                // Close this store's own connection FIRST. IndexedDB blocks a
+                // deleteDatabase() on every open connection, and PRKS's own is
+                // the one connection we can be sure exists -- leaving it open
+                // means the delete hangs or reports `blocked` against
+                // ourselves. A connection in ANOTHER tab is still a legitimate
+                // `blocked`, which the caller must handle.
+                if (openDbHandle) {
+                    try {
+                        openDbHandle.close();
+                    } catch (_e) {
+                        /* a close failure must not stop the delete attempt */
+                    }
+                    openDbHandle = null;
                 }
                 dbPromise = null;
                 let req;

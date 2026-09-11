@@ -1430,7 +1430,24 @@ Three rules that are easy to get wrong:
   transaction, never rewrite history in place.
 * **`device_id` is a synchronization and diagnostics identity only** -- never
   trust, login or authorization, and never derived from any browser or hardware
-  characteristic.
+  characteristic. The **store owns it**: `enqueueOperation(envelope)` takes no
+  device id and resolves one in the same transaction as the row, so a stored
+  operation can never carry a null one.
+
+Two smaller invariants that are easy to reintroduce: the payload limit is
+measured in **UTF-8 bytes** (`.length` counts UTF-16 code units and undercounts
+CJK by ~2.1x), and a durable reset **closes this store's own connection before
+`deleteDatabase()`** -- IndexedDB blocks a delete on every open connection,
+including the deleting page's own. `offline-store.js` carries the same close.
+
+**Before Work Tags can go offline (Milestone 2B)** the design document records
+three requirements worth knowing here: `sync_entity_revisions` must keep a
+`work-tag / W:T` row as a **tombstone** after the relationship is deleted (an
+absent relationship is not revision 0); revision advancement must live in
+`add_tag_to_work()` / `remove_tag_from_work()` -- **not** in the sync endpoint,
+or an ordinary online edit would be invisible to offline clients; and the tag
+picker needs a cached `tags:index`, since a user cannot attach a tag they
+cannot select.
 
 `docs/local-first-sync.md` is the authoritative design document for the whole
 transition: storage boundary, operation envelope, server idempotency ledger,

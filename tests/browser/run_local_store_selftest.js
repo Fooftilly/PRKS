@@ -99,10 +99,10 @@ async function run() {
         const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
         const deviceId = await store.getOrCreateDeviceId();
 
-        const a = await store.enqueueOperation(tagOp('W-1', 'T-1'), deviceId);
-        const b = await store.enqueueOperation(tagOp('W-1', 'T-2'), deviceId);
+        const a = await store.enqueueOperation(tagOp('W-1', 'T-1'));
+        const b = await store.enqueueOperation(tagOp('W-1', 'T-2'));
         const c = await store.enqueueOperation(
-            { operation: 'MARK_WORK_OPENED', entity_type: 'work', entity_id: 'W-2' }, deviceId);
+            { operation: 'MARK_WORK_OPENED', entity_type: 'work', entity_id: 'W-2' });
 
         assert('enqueue returns the stored envelope', !!a.op_id && a.status === 'pending');
         assertEq('device id is recorded on the operation', a.device_id, deviceId);
@@ -126,7 +126,7 @@ async function run() {
         assertEq('operations survive a new store instance',
             afterReload.map((r) => r.op_id), [a.op_id, b.op_id, c.op_id]);
         assertEq('sequence continues after reload',
-            (await reopened.enqueueOperation(tagOp('W-3', 'T-9'), deviceId)).sequence, 4);
+            (await reopened.enqueueOperation(tagOp('W-3', 'T-9'))).sequence, 4);
     }
 
     /* ---- envelope validation ---- */
@@ -324,7 +324,7 @@ async function run() {
         const local = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
 
         const deviceId = await local.getOrCreateDeviceId();
-        const op = await local.enqueueOperation(tagOp('W-1', 'T-1'), deviceId);
+        const op = await local.enqueueOperation(tagOp('W-1', 'T-1'));
         await cache.putEntity('work', 'W-1', { id: 'W-1', title: 'Cached' }, '');
         assert('cache holds the work snapshot', !!(await cache.getEntity('work', 'W-1')));
 
@@ -345,15 +345,129 @@ async function run() {
             await reopened.getOrCreateDeviceId(), deviceId);
     }
 
-    /* ---- explicit durable reset is the ONLY way to drop local state ---- */
+    /* ---- explicit durable reset: the ONLY way to drop local state ----
+     * It must also close THIS store's own connection first. IndexedDB blocks
+     * deleteDatabase() on every open connection, including the deleting
+     * page's own, so a store that never closed its handle blocks itself. The
+     * fake models that; a connection in another tab is still a legitimate
+     * `blocked` the caller has to handle. */
     {
         const idb = createFakeIndexedDBFactory();
         const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
         await store.enqueueOperation(tagOp('W-1', 'T-1'));
-        assertEq('reset succeeds', await store.resetDurableLocalState(), true);
-        const fresh = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
-        assertEq('operations are gone after an explicit reset',
-            (await fresh.listOperations()).length, 0);
+        const db = idb.__databases.get('prks-local-v1');
+        assert('the store holds an open connection', db._openConnections > 0);
+
+        // Recorded rather than awaited bare: a store that failed to close its
+        // own handle rejects with `blocked`, and that must surface as a FAIL
+        // rather than aborting the run.
+        let outcome;
+        try {
+            outcome = { ok: await store.resetDurableLocalState() };
+        } catch (e) {
+            outcome = { ok: false, code: e && e.prksLocalStoreCode };
+        }
+        assert('reset succeeds despite our own open connection', outcome.ok === true,
+            outcome.code ? 'rejected with code=' + outcome.code : '');
+
+        if (outcome.ok === true) {
+            assert('the database is really gone', !idb.__databases.has('prks-local-v1'));
+            const fresh = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            assertEq('operations are gone after an explicit reset',
+                (await fresh.listOperations()).length, 0);
+            assertEq('the store reopens cleanly after a reset',
+                (await store.enqueueOperation(tagOp('W-9', 'T-9'))).sequence, 1);
+        }
+    }
+
+    /* ---- the store OWNS device identity: null is unrepresentable ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+
+        // Enqueue FIRST, with no prior getOrCreateDeviceId() call: the store
+        // must mint and attach one itself, in the same transaction.
+        const op = await store.enqueueOperation(tagOp('W-1', 'T-1'));
+        assert('device_id is attached without the caller supplying one',
+            typeof op.device_id === 'string' && op.device_id.length > 0);
+        assertEq('the attached id is the durable device id',
+            op.device_id, await store.getOrCreateDeviceId());
+        assertEq('the stored row carries it too',
+            (await store.getOperation(op.op_id)).device_id, op.device_id);
+
+        // The public API takes no device id at all any more.
+        assertEq('enqueueOperation accepts exactly one argument',
+            store.enqueueOperation.length, 1);
+
+        // A second operation reuses the same identity rather than minting one.
+        const second = await store.enqueueOperation(tagOp('W-2', 'T-2'));
+        assertEq('device identity is stable across operations', second.device_id, op.device_id);
+
+        // Every persisted row has one -- no null is reachable.
+        const rows = await store.listOperations();
+        assert('no stored operation has a null device_id',
+            rows.every((r) => typeof r.device_id === 'string' && r.device_id.length > 0));
+    }
+
+    /* ---- the payload limit is measured in UTF-8 BYTES ----
+     * String .length counts UTF-16 code units, so a CJK payload is ~2.1x
+     * larger on the wire than .length reports. A limit documented in bytes
+     * that is enforced in code units does not exist for the users most
+     * likely to reach it. */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const limit = mod.PRKS_LOCAL_MAX_PAYLOAD_BYTES;
+
+        // Three UTF-8 bytes per character: a string whose .length is well
+        // under the limit but whose byte length is well over it.
+        const cjkChars = Math.ceil(limit / 3) + 100;
+        const cjk = { note: '\u65e5'.repeat(cjkChars) };
+        assert('the multibyte payload would have passed a .length check',
+            JSON.stringify(cjk).length < limit);
+        assert('... but genuinely exceeds the byte limit',
+            Buffer.byteLength(JSON.stringify(cjk), 'utf8') > limit);
+        await assertRejects('an oversized multibyte payload is refused',
+            store.enqueueOperation(tagOp('W-1', 'T-1', { payload: cjk })), 'payload_too_large');
+
+        // A multibyte payload that genuinely fits is still accepted.
+        const small = { note: '\u65e5'.repeat(10) };
+        const ok = await store.enqueueOperation(tagOp('W-2', 'T-2', { payload: small }));
+        assertEq('a small multibyte payload round-trips intact', ok.payload, small);
+
+        // Astral characters (surrogate pairs) are 4 bytes, not 2 x 3.
+        const astral = { note: '\ud83d\ude80'.repeat(Math.ceil(limit / 4) + 100) };
+        await assertRejects('an oversized astral payload is refused',
+            store.enqueueOperation(tagOp('W-3', 'T-3', { payload: astral })), 'payload_too_large');
+    }
+
+    /* ---- tightened envelope invariants ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+
+        await assertRejects('a negative base_revision is refused',
+            store.enqueueOperation(tagOp('W-1', 'T-1', { base_revision: -1 })), 'invalid_envelope');
+        assertEq('base_revision 0 is legitimate',
+            (await store.enqueueOperation(tagOp('W-1', 'T-1', { base_revision: 0 }))).base_revision, 0);
+
+        await assertRejects('a non-timestamp occurred_at is refused',
+            store.enqueueOperation(tagOp('W-2', 'T-2', { occurred_at: 'yesterday-ish' })),
+            'invalid_envelope');
+        await assertRejects('an empty occurred_at is refused',
+            store.enqueueOperation(tagOp('W-2', 'T-2', { occurred_at: '   ' })), 'invalid_envelope');
+        const dated = await store.enqueueOperation(
+            tagOp('W-2', 'T-2', { occurred_at: '2026-09-11T16:04:05.123Z' }));
+        assertEq('a real ISO timestamp is accepted',
+            dated.occurred_at, '2026-09-11T16:04:05.123Z');
+
+        await assertRejects('a non-UUID dependency is refused',
+            store.enqueueOperation(tagOp('W-3', 'T-3', { depends_on: ['not-an-op-id'] })),
+            'invalid_envelope');
+        const dep = '22222222-3333-4444-8555-666666666666';
+        assertEq('a UUID dependency is accepted',
+            (await store.enqueueOperation(tagOp('W-3', 'T-3', { depends_on: [dep] }))).depends_on,
+            [dep]);
     }
 
     /* ---- module hygiene: persistence only ---- */

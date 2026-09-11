@@ -361,6 +361,156 @@ principled answer — but it requires causality metadata the protocol does not
 have yet. Explicit conflict is honest, rare in practice, and does not foreclose
 a better rule later. **Do not leave this implicit.**
 
+## 10a. Revision visibility — **REQUIREMENT for 2B**
+
+The per-relationship scope in §10 is only usable if an offline client can
+learn the base revision of a relationship that **does not currently exist**.
+
+```
+Work W does not have Tag T.
+Server:  work-tag / W:T  =  8      (T was added and removed before)
+
+Device caches W while T is absent.
+Later, offline:  ADD_WORK_TAG(W, T)   →  base_revision = ?
+```
+
+Seeing that `T` is absent does **not** imply revision `0` — the relationship
+may have been toggled many times. Without the real value the client either
+invents one (and the server's staleness check becomes meaningless) or omits it
+(and every add is unconditional), which defeats the whole point:
+
+```
+Device A holds stale absence state
+        → another device changes W:T
+        → A goes offline and performs ADD/REMOVE
+        → A has no correct base revision → the conflict slips through
+```
+
+**Requirements:**
+
+1. **`sync_entity_revisions` keeps the `work-tag / W:T` row after the
+   relationship is deleted.** The revision is a durable tombstone; only the
+   `work_tags` row goes away. A scope row is small and bounded by *relationships
+   ever touched*, not by current ones.
+2. **Absent-but-known relationships must be observable.** A client persists the
+   revision it actually observed, for present *and* absent relationships.
+3. **Never-touched relationships are revision `0`** by definition. A scope with
+   no row has never changed, so `base_revision = 0` is correct and the server
+   treats a missing row as `0`.
+
+### Delivering it — **RECOMMENDED: a dedicated projection**
+
+Two candidate carriers were considered:
+
+**A. Extend the Work detail payload.** `get_work()` already returns `tags[]`,
+so relationship revisions could ride along plus a map of tombstones. Rejected
+as the primary mechanism: Work detail is a large, widely-cached read model
+consumed by many surfaces that do not edit tags, and the tombstone map grows
+with *every tag ever attached and removed* from that Work. It would bloat a hot
+payload for a rare editing case, and would entangle the Work entity cache with
+sync bookkeeping.
+
+**B. A dedicated Work-tag-options projection** — **recommended**:
+
+```
+GET /api/works/:id/tag-options
+{
+  "work_id": "W-A1B2C3D4",
+  "assigned":  [ { "tag_id": "T-A", "relation_revision": 7 } ],
+  "known_absent": { "T-B": 4, "T-C": 9 },
+  "catalog_etag": "W/\"prks-tags-…\""
+}
+```
+
+Reasons it is the better carrier:
+
+- It is fetched **only when the tag editor opens**, so the hot Work payload is
+  untouched and the Work entity cache keeps meaning "the Work read model".
+- `assigned` and `known_absent` together are exactly the client's observed
+  base state — nothing else has to be inferred.
+- A tag not listed in either is revision `0` (never touched), which is both
+  correct and keeps the payload proportional to history rather than to the
+  catalog.
+- It gives a natural place for the catalog ETag so the picker can revalidate
+  cheaply.
+
+Cached offline under its own key (`work-tag-options:<work_id>`) in the
+**disposable** cache — it is downloaded server state, not user work. Investigate
+during 2B whether it should instead be folded into the existing Work entity
+envelope for cache-coherence simplicity; the recommendation above is the
+starting point, not a settled schema.
+
+## 10b. Revision advancement belongs to the canonical mutation boundary — **DECIDED**
+
+**Critical, and easy to get wrong.** If only `POST /api/sync` advanced
+revisions, an ordinary *online* tag change through the existing UI would move
+the data without moving `work-tag / W:T`. An offline client could then hold
+`base_revision = 8`, the server could already be at a different state, and the
+client's operation would be accepted as current. The conflict system would be
+silently blind to every change made through the normal app.
+
+Therefore revision advancement lives in the **database mutation methods** —
+`add_tag_to_work()`, `remove_tag_from_work()` — not in the sync endpoint, and
+the relationship change plus its revision bump are **one transaction**. The
+sync endpoint is then just another caller of the same canonical boundary.
+
+Two existing paths need the same treatment, because they destroy or transform
+Work-tag relationships:
+
+- `delete_tag()` — removes every `work_tags` row for that tag via cascade.
+  Every affected `work-tag / W:T` scope must advance. The canonical boundary
+  already collects the affected work ids (for cache coherence), so the same
+  transaction has what it needs.
+- `merge_tags_into()` — moves relationships from source to target. Both
+  `W:source` and `W:target` scopes change for every affected Work.
+
+`bulk_update_works()` with `add_tags` / `remove_tags` is the same requirement
+at scale.
+
+## 10c. The offline tag picker needs a tag catalog — **REQUIREMENT for 2B**
+
+Work Tags cannot honestly be the first offline mutation if the user cannot pick
+a tag offline. The Work tag combobox calls `fetchTags({ used: false })` against
+`/api/tags`, which has no cache today.
+
+**Recommended:** a small read-only `tags:index` cache in the disposable store,
+backed by the existing `GET /api/tags`, with its own coherence domain advanced
+by tag create/rename/delete/merge. The catalog is genuinely small — `tags` is
+`id`, `name`, `color`, `created_at` plus aliases — so no compact projection is
+needed, unlike the Works catalog.
+
+This explicitly does **not** require making the `#/tags` management page
+offline-capable. That page is mutation-heavy (rename, merge, delete, aliases)
+and stays online-only; only the picker's catalog is cached.
+
+Creating a *new* tag offline is a separate, harder problem (it needs offline
+entity ids, §5). **2B should support attaching and detaching existing tags
+only**, and refuse offline tag creation with the ordinary
+requires-a-connection message.
+
+## 10d. The first synchronization rule, precisely — **DECIDED**
+
+For `ADD_WORK_TAG` / `REMOVE_WORK_TAG` against scope `work-tag / W:T`:
+
+| Client base revision | Server state vs. requested | Result |
+| --- | --- | --- |
+| current | differs | apply, advance revision, `ACKNOWLEDGED` |
+| current | already the requested state | `ACKNOWLEDGED` (no-op, no advance) |
+| **stale** | already the requested final state | `ACKNOWLEDGED` — convergent; return current revision |
+| **stale** | opposite final state | **`CONFLICT`** |
+
+This yields exactly the behavior wanted, with no CRDT:
+
+- `ADD X` + `ADD X` from two devices → the second is stale but convergent →
+  automatic.
+- `REMOVE X` + `REMOVE X` → same.
+- `ADD X` vs `REMOVE X` across different observed revisions → **conflict**,
+  surfaced rather than silently resolved.
+
+The no-op-at-current-revision row matters: an operation that asks for a state
+already true must not advance the revision, or every replayed intent would
+manufacture staleness for other devices.
+
 ## 11. Optimistic read-model overlay — **RECOMMENDATION**
 
 The cache holds *last acknowledged server state*. The UI needs *effective
@@ -445,7 +595,8 @@ size is bounded.
 | Milestone | Contents | Status |
 | --- | --- | --- |
 | 2A | Durable local store, device identity, operation envelope, this document | **done** |
-| 2B | Server sync protocol: `sync_operations` ledger, revision table, one operation end-to-end, Work Tags offline | next, review first |
+| 2A.1 | `enqueueOperation` owns device identity; UTF-8 byte limit; reset closes its own connection; tighter envelope invariants; §10a–§10d | **done** |
+| 2B | Server sync protocol: `sync_operations` ledger, revision table (incl. tombstones), revision advancement in canonical boundaries, `tags:index`, tag-options projection, Work Tags offline | next, review first |
 | 2C | Optimistic overlay + Settings "unsynchronized changes" surface | after 2B |
 | 2D | More operation families in the §9 priority order | — |
 | 3 | Conflict UX | — |
@@ -461,6 +612,8 @@ from the relational model and from the disposable cache.
 
 | Question | Status | Reason |
 | --- | --- | --- |
+| Offline tag *creation* | **DEFERRED** | Needs client-generated entity ids (§5). 2B attaches/detaches existing tags only. |
+| Whether tag-options rides on Work detail or its own endpoint | **RECOMMENDED (§10a)** | Dedicated projection preferred; confirm the schema during 2B implementation. |
 | Offline entity ids / longer id format | **DEFERRED** | Recommendation in §5; needs an export/import and wiki-link audit, and no offline creation exists to need it. |
 | `protocol_version` negotiation | **DEFERRED** | Single-client-per-server today; add when the first incompatible envelope change is real, not speculatively. |
 | Add-vs-remove causal rule | **DEFERRED** | §10 recommends explicit conflict first; a causal rule needs metadata the protocol lacks. |

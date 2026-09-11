@@ -45,17 +45,18 @@ _LOAD_LOCAL_STORE = """
     }
 """
 
+# The store owns device identity: callers pass no device id, and a stored
+# operation can never carry a null one.
 _ENQUEUE = """
     async (tagId) => {
         const store = window.createPrksLocalStore();
-        const deviceId = await store.getOrCreateDeviceId();
         const op = await store.enqueueOperation({
             operation: 'ADD_WORK_TAG',
             entity_type: 'work',
             entity_id: 'W-DURABILITY',
             payload: { tag_id: tagId },
-        }, deviceId);
-        return { op_id: op.op_id, device_id: deviceId, status: op.status };
+        });
+        return { op_id: op.op_id, device_id: op.device_id, status: op.status };
     }
 """
 
@@ -91,6 +92,8 @@ class LocalStoreDurabilityTests(unittest.TestCase):
         server, page, context = self.start()
         created = page.evaluate(_ENQUEUE, 'T-RELOAD')
         self.assertEqual(created['status'], 'pending')
+        # The store attached its own durable identity without being asked.
+        self.assertTrue(created['device_id'])
 
         self.reload(page, server)
 
@@ -171,6 +174,36 @@ class LocalStoreDurabilityTests(unittest.TestCase):
             self.skipTest('indexedDB.databases() unsupported in this browser')
         self.assertIn('prks-offline-v1', names)
         self.assertIn('prks-local-v1', names)
+
+    def test_a_real_browser_enforces_the_byte_limit_on_multibyte_payloads(self):
+        """String .length undercounts UTF-8; a limit documented in bytes has
+        to hold for the users most likely to reach it."""
+        server, page, context = self.start()
+        outcome = page.evaluate(
+            """async (limit) => {
+                const store = window.createPrksLocalStore();
+                const payload = { note: '\u65e5'.repeat(Math.ceil(limit / 3) + 100) };
+                const codeUnits = JSON.stringify(payload).length;
+                const bytes = new TextEncoder().encode(JSON.stringify(payload)).length;
+                try {
+                    await store.enqueueOperation({
+                        operation: 'ADD_WORK_TAG', entity_type: 'work',
+                        entity_id: 'W-1', payload: payload,
+                    });
+                    return { rejected: false, codeUnits, bytes };
+                } catch (e) {
+                    return { rejected: true, code: e && e.prksLocalStoreCode, codeUnits, bytes };
+                }
+            }""",
+            page.evaluate("() => window.PRKS_LOCAL_MAX_PAYLOAD_BYTES"),
+        )
+        limit = page.evaluate("() => window.PRKS_LOCAL_MAX_PAYLOAD_BYTES")
+        # The payload would have passed a naive .length check ...
+        self.assertLess(outcome['codeUnits'], limit)
+        self.assertGreater(outcome['bytes'], limit)
+        # ... and is correctly refused on real bytes.
+        self.assertTrue(outcome['rejected'])
+        self.assertEqual(outcome['code'], 'payload_too_large')
 
     def test_a_failed_enqueue_is_reported_rather_than_silently_dropped(self):
         """Durable writes must never degrade the way the cache does."""

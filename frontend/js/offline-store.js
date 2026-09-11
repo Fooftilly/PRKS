@@ -60,6 +60,7 @@
                 : null;
 
         let dbPromise = null;
+        let openDbHandle = null;
         let unavailable = !idbFactory;
 
         function ensureStores(db) {
@@ -105,12 +106,14 @@
                         resolve(null);
                         return;
                     }
+                    openDbHandle = db;
                     db.onversionchange = function () {
                         try {
                             db.close();
                         } catch (_e) {
                             /* ignore */
                         }
+                        if (openDbHandle === db) openDbHandle = null;
                         dbPromise = null;
                     };
                     resolve(db);
@@ -444,6 +447,17 @@
 
         /** Discards only the disposable offline cache. Canonical PRKS data is never touched. */
         function deleteDatabase() {
+            // Close this store's own connection first: IndexedDB blocks a
+            // delete on every open connection, including ours. Another tab's
+            // connection is still a legitimate `blocked`.
+            if (openDbHandle) {
+                try {
+                    openDbHandle.close();
+                } catch (_e) {
+                    /* a close failure must not stop the delete attempt */
+                }
+                openDbHandle = null;
+            }
             dbPromise = null;
             return new Promise(function (resolve) {
                 if (!idbFactory) {

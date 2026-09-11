@@ -87,6 +87,10 @@ class FakeDatabase {
         this.version = 0;
         this._stores = new Map();
         this.onversionchange = null;
+        // Real IndexedDB blocks deleteDatabase() on every OPEN connection --
+        // including the deleting page's own. Modelling that is what makes a
+        // "close your handle before deleting" regression meaningful.
+        this._openConnections = 0;
         this.objectStoreNames = {
             contains: (n) => this._stores.has(n),
         };
@@ -166,7 +170,9 @@ class FakeDatabase {
         });
         return tx;
     }
-    close() {}
+    close() {
+        if (this._openConnections > 0) this._openConnections -= 1;
+    }
 }
 
 function makeRequest() {
@@ -325,6 +331,7 @@ function createFakeIndexedDBFactory() {
                     if (req.onupgradeneeded) req.onupgradeneeded({ target: req });
                 }
                 req.result = db;
+                db._openConnections += 1;
                 if (req.onsuccess) req.onsuccess({ target: req });
             });
             return req;
@@ -332,6 +339,12 @@ function createFakeIndexedDBFactory() {
         deleteDatabase: function (name) {
             const req = makeRequest();
             fireAsync(function () {
+                const db = databases.get(name);
+                if (db && db._openConnections > 0) {
+                    // A caller that never closed its own handle blocks itself.
+                    req.onblocked ? req.onblocked({ target: req }) : null;
+                    return;
+                }
                 databases.delete(name);
                 if (req.onsuccess) req.onsuccess({ target: req });
             });
