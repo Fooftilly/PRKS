@@ -1282,6 +1282,12 @@ async function savePersonProfile(personId) {
         if (_personNameChanged && typeof prksMarkArgumentsDomainChanged === 'function') {
             prksMarkArgumentsDomainChanged();
         }
+        if (_personNameChanged && typeof prksMarkFoldersDomainChanged === 'function') {
+            // A Folder Work card's credit line falls back to the canonical
+            // Person name, so a rename stales cached Folder details. Biography,
+            // links, dates and groups are absent from that read model.
+            prksMarkFoldersDomainChanged();
+        }
         if (typeof prksMarkPersonGroupsDomainChanged === 'function') prksMarkPersonGroupsDomainChanged();
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&

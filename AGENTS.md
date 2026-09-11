@@ -1092,6 +1092,137 @@ write, and return an error the client would correctly treat as a no-op. This is
 the same invariant as the Person profile PATCH and the Person Group mutations
 above.
 
+Folders/Home are **read-only** offline. `#/folders` is PRKS's default route, so
+this is what makes an offline launch land somewhere useful rather than on an
+empty library. The hierarchy uses the `lists` store under `folders:index`
+(`GET /api/folders` already returns the complete catalog — there is deliberately
+no per-parent or `folder-children:<id>` key); Folder detail uses the `entities`
+store under `kind: 'folder'`. The two caches are independent and the index does
+**not** prefetch Folder details — an unopened Folder reports "Folder not
+available offline", never "Folder not found". A cached *empty* array is a
+legitimately empty library; only a missing or invalid cached list is
+offline-unavailable, and the two must not be collapsed. Folder search and
+expand/collapse are local projections of the cached list and issue zero
+requests offline.
+
+The Folder Library's **Recently added** tab is deliberately *not* part of this
+milestone: it reads `/api/recently-added`, which has no cache to fall back on.
+Offline it is disabled, a restored `recently-added` session tab falls back to
+Folders rather than firing a doomed request, and
+`prksLoadFolderLibraryRecentlyAdded()` re-checks connectivity itself so a stale
+timer or a mid-load disconnect cannot leak one either. The stored tab
+preference is left untouched and the control returns on reconnect. Do not let
+this imply that every Home dashboard tab is cached.
+
+The Folder validators (`prksIsFoldersIndexShape`, `prksIsFolderShape`) protect
+what the renderers dereference: `id`/`title`/`description`/`parent_id` plus
+non-negative integer `work_count`/`child_count` on hierarchy rows, and on a
+detail additionally `private_notes`, a null-or-valid `parent` summary, and
+`children`/`works`/`tags` arrays. Because Folder detail feeds `folder.works[]`
+straight to `prksWorkCardHtml()`, `prksIsWorkCardRowShape()` validates that
+card's row contract — `title`, `year`, `published_date`, `status`, `doc_type`,
+`file_path`, `author_text`, `linked_authors`, `primary_author`,
+`primary_editor`, `thumb_url` and a non-negative `file_size_bytes`. Validating
+`id` alone would let a cached row render "NaN MB". This is still the card's
+contract, not the whole Work detail schema. Backend hierarchy rules (cycle
+detection, parent existence, unique titles, count correctness) stay canonical
+and must not be re-implemented in the validator.
+
+A cached Folder detail renders its Work cards with `suppressThumbnail: true`
+and skips `prksInitLazyWorkThumbs()` entirely — a thumbnail is a PRKS-server
+request that cannot succeed from IndexedDB, and a broken image is worse than
+none. Online appearance is unchanged. Navigation is deliberately untouched:
+parent/subfolder links are ordinary Folder routes and each Work card an
+ordinary `#/works/:id` link, so every destination owns its own availability.
+
+The seventh domain is `folders` (`entityKinds: ['folder']`,
+`listKeys: ['folders:index']`), defined once in
+`prksOfflineMarkFoldersChanged()`. Whole-domain invalidation is required rather
+than per-Folder: moving a Work from A to B changes both details *and* both
+`work_count`s in the index, and a reparent changes the hierarchy for every
+ancestor. Its dependency table:
+
+| Canonical change | Folders | Work entity |
+| --- | --- | --- |
+| Folder create | YES | — |
+| Folder description / private-notes / parent edit | YES | — |
+| Folder **title** edit | YES | every current member Work |
+| Folder delete | YES | — |
+| add / move / clear a Work's Folder | YES | that Work |
+| bulk `move_folder` | YES | those Works |
+| bulk `set_status` | YES | those Works |
+| Folder tag add / remove | YES | — |
+| **any** Work creation (incl. no folder chosen) | YES | — (nothing cached yet) |
+| Work deletion | YES | existing behavior |
+| Work metadata/title save (via `prksMarkWorkTitleChanged`) | YES | existing behavior |
+| Author **or Editor** role change (via `prksMarkWorkRoleChanged`) | YES | existing behavior |
+| Person canonical first/last-name change | YES | — |
+| managed PDF save (changes `file_size_bytes`) | YES | existing behavior |
+
+Two entries differ from Playlists and are easy to get wrong. First, **every**
+successful Work creation invalidates Folders, unconditionally: unlike Playlist
+membership, folder membership is not optional — the create endpoint files every
+new Work into the requested folder or into the default "Uncategorized" one, so
+a `work_count` always changes. Do not make this conditional on an explicit
+`folder_id`. `importProcessingFile()` is the same canonical shape and owes the
+same hooks. Second, **Editor** counts alongside Author, because a Work card's
+credit line is `linked_authors` → `author_text` → `primary_editor`; other roles
+(Reviewer, Translator, Mentioned) are not rendered there and deliberately leave
+Folders eligible.
+
+Folder **title** is the only Folder field embedded in a cached Work detail
+(`folder_title`), so only a rename evicts member Work snapshots. The narrow
+boundary is canonical, not UI-derived: `PATCH /api/folders/:id` collects the
+members **before** the write (membership cannot change in that request) and
+returns them as `member_work_ids`, which `patchFolder()` evicts. That is why a
+description-, private-notes- or parent-only edit costs no Work cache and why
+this does not depend on which page happened to be focused.
+
+Deliberately **not** invalidating Folders: Playlist mutations, Research Notes
+saves, Concept/Position/Argument/Stance changes, Work **tag**-only mutations,
+Person Group changes, non-name Person edits, ordinary Person creation, and
+non-Author/non-Editor role changes. If the Folder UI later renders one of
+those, add the dependency **then**.
+
+Every production Folder write goes through the canonical `api.js` wrappers
+(`createFolder`, `patchFolder`, `deleteFolderCanonical`, `addWorkToFolder`,
+`patchWorkFolder`, `addTagToFolder`, `removeTagFromFolder`), so there is exactly
+one canonical-success boundary per operation. Each calls
+`prksGuardFolderMutation()` immediately before its request as defense in depth
+— controls are disabled offline, but the connection can drop between a dialog
+opening and Save. A refusal throws an error tagged `prksOfflineRefused`, which
+`prksOfflineWasGuardRefusal()` detects so existing call sites skip a second,
+redundant dialog. The three former quick-create surfaces (the Folder modal in
+`app.js`, `quickCreateFolder()` in `ui.js`, and the processing inbox) all route
+through `createFolder()` rather than posting raw. The one documented exception
+is the coalesced private-notes autosave in `ui.js`, which is gated by its own
+runtime check and publishes Folder coherence on success;
+`tests/test_frontend_offline_runtime.py` fails the build if any other module
+pairs an `/api/folders` URL with a mutating method.
+
+`prksOpenFolderModalFromLibrarySearch()` is guarded centrally so the dashboard
+and the create-from-search empty state are covered at once, and
+`prksBindFolderOfflineState()` settles the live half on the route's own
+TabContext. The Work detail page's own Folder card is a Folder mutation surface
+living on a **Work** route, so — exactly like the Playlist card — it has its own
+`prksApplyWorkFolderOfflineState()` plus a live-tab-context subscription, Edit
+is refused only when it would *start* a session (**Done stays live**), and
+`mountFolderAttachControlsForWork()` skips its raw `fetchFolders()` catalog read
+entirely while non-online rather than letting it fail under `void`.
+
+**Folder deletion and folder-tag removal are transactional.**
+`delete_empty_folder()` deletes the folder row and prunes its newly-unused tags
+in one transaction via `_prune_tag_if_unused_on_conn()`, and
+`remove_tag_from_folder()` does the same for the membership row plus its prune.
+`remove_tag_from_work()` had the identical defect and was fixed in the same
+pass. Offline coherence rests on "a failed canonical request keeps the previous
+cache eligible", which is only sound if a failure really means nothing changed
+— two auto-committing statements could otherwise delete the folder, fail the
+prune, and return an error the client would correctly treat as a no-op, leaving
+a permanently stale cache. `tests/test_folder_atomicity.py` forces the prune to
+fail and asserts the first write rolled back; those tests fail against the
+pre-fix implementations.
+
 The PRKS server (SQLite + managed files) remains the sole source of truth.
 `frontend/js/offline-store.js` (IndexedDB, `prks-offline-v1`) and `frontend/sw.js`
 (Cache Storage) are a disposable client-side cache, never another canonical

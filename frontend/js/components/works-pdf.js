@@ -1107,6 +1107,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             prksOfflineMarkPeopleChanged();
         }
         if (typeof prksOfflineMarkPersonGroupsChanged === 'function') prksOfflineMarkPersonGroupsChanged();
+        if (typeof prksMarkFoldersDomainChanged === 'function') {
+            // A cached Folder detail's Work cards render file_size_bytes from
+            // the same managed PDF, so this boundary stales Folders too. The
+            // separate annotations-JSON save below does not touch the file and
+            // deliberately stays out of it.
+            prksMarkFoldersDomainChanged();
+        }
     }
 
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {

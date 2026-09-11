@@ -1825,9 +1825,15 @@ class PRKSDatabase:
                 "SELECT DISTINCT tag_id FROM folder_tags WHERE folder_id = ?", (folder_id,)
             )
         ]
-        self.execute_query("DELETE FROM folders WHERE id = ?", (folder_id,))
-        for tid in tag_ids:
-            self._prune_tag_if_unused(tid)
+        # One transaction: the folder row, its folder_tags rows (via ON DELETE
+        # CASCADE) and the newly-unused tag rows commit together or not at all.
+        # A partial commit here would report failure to the client while the
+        # folder was already gone, which offline coherence reads as "nothing
+        # changed" and would leave a permanently stale cache.
+        with self.connection() as conn:
+            conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+            for tid in tag_ids:
+                self._prune_tag_if_unused_on_conn(conn, tid)
 
     def _search_works_fts_tokens(self, tokens: List[str]) -> List[dict]:
         clause = _prks_fts_prefix_clause(tokens)
@@ -2656,6 +2662,19 @@ class PRKSDatabase:
         enrich_work_rows_pdf_file_size(folder["works"], self.storage.pdfs_dir)
         folder['tags'] = self.get_folder_tags(folder_id)
         return folder
+
+    def get_folder_work_ids(self, folder_id: str) -> List[str]:
+        """IDs of the Works filed in this folder.
+
+        Offline coherence uses this: a cached Work detail embeds `folder_title`,
+        so renaming a folder stales exactly its members' Work snapshots. The
+        canonical PATCH boundary reports them rather than making the client
+        guess from whatever page happened to be focused.
+        """
+        rows = self.execute_query(
+            "SELECT work_id FROM folder_files WHERE folder_id = ?", (folder_id,)
+        )
+        return [r["work_id"] for r in rows if r["work_id"]]
 
     def update_folder_metadata(self, folder_id: str, fields: dict):
         """Update editable folder fields including hierarchy metadata."""
@@ -3848,15 +3867,25 @@ class PRKSDatabase:
         self.execute_query("INSERT INTO work_tags (work_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", (work_id, tag_id))
 
     def remove_tag_from_work(self, work_id: str, tag_id: str):
-        self.execute_query("DELETE FROM work_tags WHERE work_id = ? AND tag_id = ?", (work_id, tag_id))
-        self._prune_tag_if_unused(tag_id)
+        # Same multi-write shape as remove_tag_from_folder, same fix.
+        with self.connection() as conn:
+            conn.execute(
+                "DELETE FROM work_tags WHERE work_id = ? AND tag_id = ?", (work_id, tag_id)
+            )
+            self._prune_tag_if_unused_on_conn(conn, tag_id)
 
     def add_tag_to_folder(self, folder_id: str, tag_id: str):
         self.execute_query("INSERT INTO folder_tags (folder_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", (folder_id, tag_id))
 
     def remove_tag_from_folder(self, folder_id: str, tag_id: str):
-        self.execute_query("DELETE FROM folder_tags WHERE folder_id = ? AND tag_id = ?", (folder_id, tag_id))
-        self._prune_tag_if_unused(tag_id)
+        # Membership removal and the unused-tag prune are one transaction: a
+        # failed prune must not leave the membership already deleted while the
+        # request reports failure.
+        with self.connection() as conn:
+            conn.execute(
+                "DELETE FROM folder_tags WHERE folder_id = ? AND tag_id = ?", (folder_id, tag_id)
+            )
+            self._prune_tag_if_unused_on_conn(conn, tag_id)
 
     def get_work_tags(self, work_id: str) -> List[dict]:
         query = """

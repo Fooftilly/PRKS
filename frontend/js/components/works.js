@@ -813,6 +813,12 @@ async function deleteWork(w_id, ownerCtx) {
             prksOfflineMarkPeopleChanged();
         }
         if (typeof prksOfflineMarkPersonGroupsChanged === 'function') prksOfflineMarkPersonGroupsChanged();
+        if (typeof prksMarkFoldersDomainChanged === 'function') {
+            // Canonical cleanup drops this Work's folder_files row, so its
+            // Folder's cached detail and every folders:index work_count are
+            // stale.
+            prksMarkFoldersDomainChanged();
+        }
         if (typeof prksOfflineMarkPlaylistsChanged === 'function') {
             // Canonical cleanup drops this Work's playlist_items row, so
             // every cached Playlist's item_count and items are now stale.

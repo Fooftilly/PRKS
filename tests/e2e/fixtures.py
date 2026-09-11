@@ -408,3 +408,42 @@ def seed_playlists_library(storage_root: str) -> dict:
         }
     )
     return ids
+
+
+FOLDER_PARENT_TITLE = "E2E Parent Folder"
+FOLDER_CHILD_TITLE = "E2E Child Folder"
+FOLDER_UNVISITED_TITLE = "E2E Unvisited Folder"
+FOLDER_PARENT_DESCRIPTION = "Parent folder used for cached hierarchy assertions."
+FOLDER_TAG_NAME = "E2E Folder Tag"
+
+
+def seed_folders_library(storage_root: str) -> dict:
+    """seed_playlists_library plus a real Folder hierarchy.
+
+    The parent holds `work_a` (a PDF Work with an Author role, a status and a
+    doc type, so a cached Folder detail's Work card has every field the card
+    renderer reads) and has one child folder, so parent<->child navigation is
+    observable offline. The child holds `work_b`. A third folder is never
+    opened online, giving the "cached index, uncached detail" case. The parent
+    also carries a tag so the right-panel tag list is part of the cached
+    payload.
+    """
+    ids = seed_playlists_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    parent = db.add_folder(FOLDER_PARENT_TITLE, FOLDER_PARENT_DESCRIPTION, None)
+    child = db.add_folder(FOLDER_CHILD_TITLE, "Child folder.", parent)
+    unvisited = db.add_folder(FOLDER_UNVISITED_TITLE, "Never opened while online.", None)
+    db.add_work_to_folder(parent, ids["work_a"])
+    db.add_work_to_folder(child, ids["work_b"])
+    tag_id = db.add_tag(FOLDER_TAG_NAME, "#556677")["id"]
+    db.add_tag_to_folder(parent, tag_id)
+    ids.update(
+        {
+            "folder_parent": parent,
+            "folder_child": child,
+            "folder_unvisited": unvisited,
+            "folder_tag": tag_id,
+        }
+    )
+    return ids

@@ -164,16 +164,16 @@ async function prksProcessingQuickCreateFolder(card) {
         return;
     }
     try {
-        const res = await prksRequest('/api/folders', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, description: 'Quick-created from processing inbox' }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            await prksAlertMessage(data.error || 'Could not create folder.', 'Could not save');
+        let newFolderId;
+        try {
+            newFolderId = await createFolder(title, 'Quick-created from processing inbox');
+        } catch (e) {
+            if (!prksOfflineWasGuardRefusal(e)) {
+                await prksAlertMessage((e && e.message) || 'Could not create folder.', 'Could not save');
+            }
             return;
         }
+        const data = { id: newFolderId };
         const folders = await fetchFolders();
         window.__prksProcessingFolders = Array.isArray(folders) ? folders : [];
         try {

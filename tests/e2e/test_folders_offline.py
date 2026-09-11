@@ -1,0 +1,796 @@
+"""Folders/Home read models, cache safety, live controls and domain boundaries.
+
+`#/folders` is PRKS's default route, so this module also covers the launch case
+that motivated the milestone: booting the shell at `/` while PRKS is
+unreachable must land on a usable cached hierarchy, not an empty library.
+"""
+import json
+import os
+import unittest
+from urllib.parse import urlparse
+
+from tests.e2e import test_offline as o
+from tests.e2e.fixtures import (
+    FOLDER_CHILD_TITLE,
+    FOLDER_PARENT_DESCRIPTION,
+    FOLDER_PARENT_TITLE,
+    FOLDER_TAG_NAME,
+    FOLDER_UNVISITED_TITLE,
+    WORK_A_TITLE,
+    WORK_B_TITLE,
+    seed_folders_library,
+)
+from tests.e2e.harness import AppServer, open_app_page, require_chromium
+
+
+def load_tests(loader, standard_tests, pattern):
+    return standard_tests if os.environ.get('PRKS_E2E') == '1' else unittest.TestSuite()
+
+
+def setUpModule():
+    global _PW, _BROWSER
+    _PW, _BROWSER = require_chromium()
+
+
+def tearDownModule():
+    _BROWSER.close()
+    _PW.stop()
+
+
+class FoldersOfflineTests(unittest.TestCase):
+    def start(self, seed=seed_folders_library):
+        server = AppServer(seed_fn=seed)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin, service_workers='allow')
+        self.addCleanup(context.close)
+        self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
+        o._wait_sw_active(page)
+        return server, page, context, collector
+
+    # ---- navigation helpers -------------------------------------------------
+
+    def index(self, page):
+        page.evaluate("() => prksNavigate('#/folders')")
+
+    def detail(self, page, fid):
+        page.evaluate("id => prksNavigate('#/folders/' + encodeURIComponent(id))", fid)
+
+    def cache(self, page, ids, all_domains=False):
+        """Warms folders:index and the parent Folder's detail; `all_domains`
+        adds the other read models so domain independence is observable."""
+        if all_domains:
+            o._open_concept(page, ids['concept_child'])
+            o._wait_entity_cached(page, 'concept', ids['concept_child'])
+            o._open_position(page, ids['position_a'])
+            o._wait_entity_cached(page, 'position', ids['position_a'])
+            o._open_argument(page, ids['argument_a'])
+            o._wait_entity_cached(page, 'argument', ids['argument_a'])
+            o._open_people_index(page)
+            o._wait_list_cached(page, 'people:index')
+            page.evaluate("() => prksNavigate('#/people/groups')")
+            o._wait_list_cached(page, 'person-groups:index')
+            page.evaluate("() => prksNavigate('#/playlists')")
+            o._wait_list_cached(page, 'playlists:index')
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        self.detail(page, ids['folder_parent'])
+        o._wait_entity_cached(page, 'folder', ids['folder_parent'])
+
+    def generations(self, page):
+        return {d: o._domain_generation(page, d) for d in
+                ('concepts', 'positions', 'arguments', 'people', 'person-groups',
+                 'playlists', 'folders')}
+
+    def changed(self, page, before, expected):
+        for domain, generation in before.items():
+            with self.subTest(domain=domain):
+                if domain in expected:
+                    self.assertGreater(o._domain_generation(page, domain), generation)
+                else:
+                    self.assertEqual(o._domain_generation(page, domain), generation)
+        if 'folders' in expected:
+            o._wait_list_uncached(page, 'folders:index')
+        else:
+            self.assertIsNotNone(o._cached_list(page, 'folders:index'))
+
+    def offline(self, page, context):
+        context.set_offline(True)
+        page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
+        page.wait_for_function("prksOfflineRuntimeState() === 'offline'")
+
+    def online(self, page, context):
+        context.set_offline(False)
+        page.evaluate("async () => { await prksRequest('/api/settings'); }")
+        page.wait_for_function("prksOfflineRuntimeState() === 'online'")
+
+    def watch(self, page, methods, fragment='/api/folders'):
+        """Records every canonical Folder request of the given methods."""
+        seen = []
+        page.on('request', lambda req: seen.append(req.method + ' ' + urlparse(req.url).path)
+                if req.method in methods and fragment in urlparse(req.url).path else None)
+        return seen
+
+    def all_paths(self, page):
+        seen = []
+        page.on('request', lambda req: seen.append(urlparse(req.url).path))
+        return seen
+
+    # ---- index --------------------------------------------------------------
+
+    def test_cached_index_renders_offline_without_prefetching_details(self):
+        server, page, context, _c = self.start()
+        seen = self.all_paths(page)
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        # Opening the hierarchy must never download every Folder behind it.
+        self.assertFalse(any(p.startswith('/api/folders/') for p in seen))
+
+        self.offline(page, context)
+        after = self.all_paths(page)
+        self.index(page)
+        o._wait_offline_banner(page)
+        text = o._content_text(page)
+        for title in (FOLDER_PARENT_TITLE, FOLDER_CHILD_TITLE, FOLDER_UNVISITED_TITLE):
+            self.assertIn(title, text)
+        # The read-through still ATTEMPTS /api/folders -- that failed transport
+        # is how offline is detected. What must never happen is per-Folder
+        # detail traffic behind a hierarchy render.
+        self.assertEqual([p for p in after if p.startswith('/api/folders/')], [])
+
+    def test_local_search_and_expand_collapse_work_offline(self):
+        server, page, context, _c = self.start()
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        self.offline(page, context)
+        self.index(page)
+        o._wait_offline_banner(page)
+        seen = self.all_paths(page)
+
+        page.locator('#prks-folder-library-search').fill('Child')
+        page.wait_for_timeout(400)
+        text = o._content_text(page)
+        self.assertIn(FOLDER_CHILD_TITLE, text)
+        self.assertNotIn(FOLDER_UNVISITED_TITLE, text)
+
+        page.locator('#prks-folder-library-search').fill('')
+        page.wait_for_timeout(400)
+        self.assertIn(FOLDER_UNVISITED_TITLE, o._content_text(page))
+
+        toggle = page.locator('#prks-folder-library-expand-toggle')
+        if toggle.count():
+            toggle.click()
+            page.wait_for_timeout(300)
+            toggle.click()
+            page.wait_for_timeout(300)
+        # Local filtering and hierarchy toggling are pure cache operations.
+        self.assertEqual([p for p in seen if p.startswith('/api/')], [])
+
+    def test_missing_index_reports_unavailable_not_an_empty_library(self):
+        server, page, context, _c = self.start()
+        # `/` boots straight into #/folders, so the snapshot is already warm --
+        # drop it to reach the genuinely-never-cached case.
+        o._clear_cached_list(page, 'folders:index')
+        o._wait_list_uncached(page, 'folders:index')
+        self.offline(page, context)
+        page.evaluate("() => prksNavigate('#/concepts')")
+        page.wait_for_timeout(300)
+        self.index(page)
+        o._wait_offline_unavailable(page)
+        text = o._content_text(page)
+        self.assertIn('Folders not available offline', text)
+        # A missing snapshot must never read as "you have no folders".
+        self.assertNotIn(FOLDER_PARENT_TITLE, text)
+
+    def test_cached_empty_index_renders_a_legitimate_empty_library(self):
+        server, page, context, _c = self.start()
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        # Replace the authoritative snapshot with a real, valid empty catalog.
+        page.evaluate("() => window.createPrksOfflineStore().putList('folders:index', [])")
+        page.wait_for_timeout(250)
+        self.offline(page, context)
+        self.index(page)
+        o._wait_offline_banner(page)
+        text = o._content_text(page)
+        self.assertNotIn('Folders not available offline', text)
+        self.assertNotIn(FOLDER_PARENT_TITLE, text)
+        # Still read-only: an empty cached library is not a licence to create.
+        self.assertTrue(page.evaluate(
+            "() => { const b = document.querySelector('.prks-folder-library__tab-btn[data-tab=\"recently-added\"]');"
+            " return !!b && b.disabled; }"))
+
+    def test_default_offline_launch_lands_on_the_cached_hierarchy(self):
+        """The milestone's motivating regression: boot at `/` while offline."""
+        server, page, context, _c = self.start()
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+
+        self.offline(page, context)
+        page.goto(server.origin + '/')
+        page.wait_for_function("() => typeof window.prksOfflineRuntimeState === 'function'")
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=30000)
+        o._wait_offline_banner(page)
+        text = o._content_text(page)
+        self.assertIn(FOLDER_PARENT_TITLE, text)
+        self.assertIn(FOLDER_CHILD_TITLE, text)
+
+    # ---- detail -------------------------------------------------------------
+
+    def test_cached_detail_renders_hierarchy_works_and_description(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        self.offline(page, context)
+        self.detail(page, ids['folder_parent'])
+        o._wait_offline_banner(page)
+        text = o._content_text(page)
+        self.assertIn(FOLDER_PARENT_TITLE, text)
+        self.assertIn(FOLDER_PARENT_DESCRIPTION, text)
+        self.assertIn(FOLDER_CHILD_TITLE, text)
+        self.assertIn(WORK_A_TITLE, text)
+
+    def test_index_cached_but_detail_uncached_is_unavailable_not_not_found(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        self.offline(page, context)
+        self.detail(page, ids['folder_unvisited'])
+        o._wait_offline_unavailable(page)
+        text = o._content_text(page)
+        self.assertIn('Folder not available offline', text)
+        self.assertNotIn('Folder not found', text)
+
+    def test_parent_child_navigation_follows_normal_route_ownership(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        self.detail(page, ids['folder_child'])
+        o._wait_entity_cached(page, 'folder', ids['folder_child'])
+
+        self.offline(page, context)
+        self.detail(page, ids['folder_parent'])
+        o._wait_offline_banner(page)
+        # parent -> child
+        self.detail(page, ids['folder_child'])
+        o._wait_offline_banner(page)
+        self.assertIn(FOLDER_CHILD_TITLE, o._content_text(page))
+        # child -> parent
+        self.detail(page, ids['folder_parent'])
+        o._wait_offline_banner(page)
+        self.assertIn(FOLDER_PARENT_TITLE, o._content_text(page))
+        # ... and an uncached destination owns its own unavailable state.
+        self.detail(page, ids['folder_unvisited'])
+        o._wait_offline_unavailable(page)
+        self.assertIn('Folder not available offline', o._content_text(page))
+
+    def test_folder_to_work_navigation_follows_normal_route_ownership(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+
+        self.offline(page, context)
+        self.detail(page, ids['folder_parent'])
+        o._wait_offline_banner(page)
+        page.evaluate("id => prksNavigate('#/works/' + encodeURIComponent(id))", ids['work_a'])
+        o._wait_content_contains(page, WORK_A_TITLE)
+
+        # work_b was never opened online: the Work route reports that itself.
+        page.evaluate("id => prksNavigate('#/works/' + encodeURIComponent(id))", ids['work_b'])
+        o._wait_offline_unavailable(page)
+        self.assertNotIn(WORK_B_TITLE, o._content_text(page).replace(WORK_B_TITLE, '', 0) or '')
+
+    def test_cached_detail_suppresses_prks_thumbnail_requests(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        self.offline(page, context)
+        seen = self.all_paths(page)
+        self.detail(page, ids['folder_parent'])
+        o._wait_offline_banner(page)
+        page.wait_for_timeout(600)
+        # A card rendered from IndexedDB must not request an image that cannot
+        # load -- a broken thumbnail is worse than none.
+        self.assertEqual([p for p in seen if 'thumbnail' in p], [])
+        self.assertIn(WORK_A_TITLE, o._content_text(page))
+
+    # ---- Recently Added (deliberately still server-backed) -------------------
+
+    def test_recently_added_never_leaks_a_request_offline(self):
+        server, page, context, _c = self.start()
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        # Make Recently Added the restored tab, exactly as a returning user has.
+        page.evaluate("() => { try { localStorage.setItem('prks.folderLibrary.tab', 'recently-added'); } catch (_) {} }")
+        page.evaluate("() => { window.__prksFolderDashboardState = null; }")
+
+        self.offline(page, context)
+        seen = self.all_paths(page)
+        self.index(page)
+        o._wait_offline_banner(page)
+        page.wait_for_timeout(600)
+
+        self.assertEqual([p for p in seen if 'recently-added' in p], [])
+        # Falls back to a usable Folders tab rather than a doomed request.
+        self.assertIn(FOLDER_PARENT_TITLE, o._content_text(page))
+        self.assertTrue(page.evaluate(
+            "() => { const b = document.querySelector('.prks-folder-library__tab-btn[data-tab=\"recently-added\"]');"
+            " return !!b && b.disabled; }"))
+
+        # Clicking the disabled tab still issues nothing.
+        page.evaluate("() => prksSwitchFolderLibraryTab('recently-added')")
+        page.wait_for_timeout(400)
+        self.assertEqual([p for p in seen if 'recently-added' in p], [])
+
+    def test_recently_added_control_returns_on_reconnect(self):
+        server, page, context, _c = self.start()
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        self.offline(page, context)
+        self.index(page)
+        o._wait_offline_banner(page)
+        self.online(page, context)
+        page.wait_for_function(
+            """() => { const b = document.querySelector('.prks-folder-library__tab-btn[data-tab="recently-added"]');
+                return !!b && !b.disabled; }""",
+            timeout=20000,
+        )
+
+    # ---- mutation surfaces stay online-only ---------------------------------
+
+    def test_folder_creation_is_blocked_offline(self):
+        server, page, context, _c = self.start()
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        self.offline(page, context)
+        self.index(page)
+        o._wait_offline_banner(page)
+        posts = self.watch(page, {'POST'})
+
+        # Creation-from-search is a direct surface, not only the modal.
+        page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Brand New Folder')")
+        page.wait_for_timeout(400)
+        # ... and the canonical boundary refuses even if a surface got through.
+        page.evaluate("""async () => {
+            try { await createFolder('Direct', ''); } catch (_) {}
+        }""")
+        page.wait_for_timeout(400)
+        self.assertEqual(posts, [])
+
+    def test_create_dialog_disconnect_race_issues_no_request(self):
+        server, page, context, _c = self.start()
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        # Open the real modal while still online.
+        page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Race Folder')")
+        page.wait_for_selector('#folder-modal:not(.hidden)')
+
+        self.offline(page, context)
+        posts = self.watch(page, {'POST'})
+        save = page.locator('#save-folder-btn')
+        if save.count():
+            save.click()
+        else:
+            page.evaluate("async () => { try { await createFolder('Race Folder', ''); } catch (_) {} }")
+        page.wait_for_timeout(600)
+        self.assertEqual(posts, [])
+
+    def test_every_canonical_folder_wrapper_refuses_offline(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        self.offline(page, context)
+        seen = self.watch(page, {'POST', 'PATCH', 'DELETE'})
+        page.evaluate(
+            """async ([fid, wid, tid]) => {
+                const calls = [
+                    () => createFolder('X', ''),
+                    () => patchFolder(fid, { title: 'X' }),
+                    () => deleteFolderCanonical(fid),
+                    () => addWorkToFolder(fid, wid),
+                    () => patchWorkFolder(wid, fid),
+                    () => addTagToFolder(fid, tid),
+                    () => removeTagFromFolder(fid, tid),
+                ];
+                for (const call of calls) { try { await call(); } catch (_) {} }
+            }""",
+            [ids['folder_parent'], ids['work_a'], ids['folder_tag']],
+        )
+        page.wait_for_timeout(600)
+        self.assertEqual(seen, [])
+
+    def test_cached_detail_delete_control_is_inert_offline(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        # The child folder holds a Work, so seed an empty deletable one instead.
+        self.cache(page, ids)
+        self.detail(page, ids['folder_unvisited'])
+        o._wait_entity_cached(page, 'folder', ids['folder_unvisited'])
+        self.offline(page, context)
+        self.detail(page, ids['folder_unvisited'])
+        o._wait_offline_banner(page)
+        deletes = self.watch(page, {'DELETE'})
+        btn = page.locator('[data-delete-folder-id]')
+        if btn.count():
+            self.assertTrue(btn.is_disabled())
+        page.wait_for_timeout(300)
+        self.assertEqual(deletes, [])
+
+    # ---- Work-side Folder card ----------------------------------------------
+
+    def test_work_folder_card_cannot_start_editing_offline(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        self.offline(page, context)
+        page.evaluate("id => prksNavigate('#/works/' + encodeURIComponent(id))", ids['work_a'])
+        o._wait_content_contains(page, WORK_A_TITLE)
+        o._open_details_drawer_if_tiled(page)
+        seen = self.all_paths(page)
+        page.wait_for_timeout(500)
+
+        edit = page.locator('#prks-work-folder-edit-btn')
+        if edit.count():
+            self.assertTrue(edit.is_disabled())
+        # The closed card must not fetch the folder catalog either.
+        self.assertEqual([p for p in seen if p == '/api/folders'], [])
+        # ... and the current folder stays an ordinary navigable link.
+        link = page.locator('.prks-work-folder-summary a')
+        if link.count():
+            self.assertTrue(link.first.get_attribute('href').startswith('#/folders/'))
+
+    def test_open_work_folder_editor_freezes_controls_but_keeps_done(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        o._open_details_drawer_if_tiled(page)
+        edit = page.locator('#prks-work-folder-edit-btn')
+        if not edit.count():
+            self.skipTest('Work Folder card not mounted in this layout')
+        edit.click()
+        page.wait_for_selector('#prks-work-folder-set-btn')
+
+        self.offline(page, context)
+        seen = self.watch(page, {'POST', 'PATCH', 'DELETE'})
+        page.wait_for_function(
+            "() => { const b = document.getElementById('prks-work-folder-set-btn'); return !!b && b.disabled; }",
+            timeout=20000,
+        )
+        for sel in ('#prks-work-folder-set-btn', '#prks-work-folder-clear-btn',
+                    '#prks-work-folder-new-btn', '#prks-work-folder-search'):
+            self.assertTrue(page.locator(sel).is_disabled(), sel)
+        # Done must stay usable: a user can always leave an edit they cannot save.
+        self.assertFalse(page.locator('#prks-work-folder-edit-btn').is_disabled())
+        page.wait_for_timeout(300)
+        self.assertEqual(seen, [])
+
+    # ---- coherence ----------------------------------------------------------
+
+    def test_folder_create_invalidates_only_folders(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        page.evaluate("async () => { await createFolder('Coherence New', ''); }")
+        self.changed(page, before, {'folders'})
+
+    def test_description_only_update_keeps_member_work_snapshots(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        before = self.generations(page)
+        page.evaluate("async (id) => { await patchFolder(id, { description: 'Edited.' }); }",
+                      ids['folder_parent'])
+        self.changed(page, before, {'folders'})
+        # Only the title is embedded in a cached Work detail.
+        self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_a']))
+
+    def test_folder_rename_invalidates_exactly_its_member_work_snapshots(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        o._open_work_from_home(page, WORK_B_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_b'])
+        before = self.generations(page)
+        page.evaluate("async (id) => { await patchFolder(id, { title: 'Renamed Parent' }); }",
+                      ids['folder_parent'])
+        self.changed(page, before, {'folders'})
+        # work_a is a member; work_b lives in the child folder and must survive.
+        o._wait_entity_uncached(page, 'work', ids['work_a'])
+        self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_b']))
+
+    def test_reparent_invalidates_folders_but_no_work_snapshots(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        before = self.generations(page)
+        page.evaluate("async ([child, parent]) => { await patchFolder(child, { parent_id: null }); }",
+                      [ids['folder_child'], ids['folder_parent']])
+        self.changed(page, before, {'folders'})
+        self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_a']))
+
+    def test_moving_a_work_invalidates_folders_and_that_work(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_a'])
+        before = self.generations(page)
+        page.evaluate("async ([wid, fid]) => { await patchWorkFolder(wid, fid); }",
+                      [ids['work_a'], ids['folder_child']])
+        self.changed(page, before, {'folders'})
+        o._wait_entity_uncached(page, 'work', ids['work_a'])
+
+    def test_bulk_move_folder_invalidates_folders(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        page.evaluate(
+            """async ([wid, fid]) => {
+                await bulkUpdateWorks({ action: 'move_folder', work_ids: [wid], folder_id: fid });
+            }""",
+            [ids['work_a'], ids['folder_child']],
+        )
+        self.changed(page, before, {'folders'})
+
+    def test_bulk_set_status_invalidates_folders_and_people(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        page.evaluate(
+            """async (wid) => {
+                await bulkUpdateWorks({ action: 'set_status', work_ids: [wid], status: 'Completed' });
+            }""",
+            ids['work_a'],
+        )
+        self.changed(page, before, {'folders', 'people'})
+
+    def test_work_creation_invalidates_folders_with_no_folder_chosen(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        # Canonical creation always files the Work, defaulting to Uncategorized.
+        def stub_oembed(route):
+            route.fulfill(status=200, content_type='application/json',
+                          body=json.dumps({'title': 'Folderless Creation', 'author_name': 'E2E'}))
+
+        page.route('**/youtube.com/oembed**', stub_oembed)
+        self.addCleanup(lambda: o._safe_unroute(page, '**/youtube.com/oembed**', stub_oembed))
+        page.locator('#prks-ribbon-new-file').click()
+        page.wait_for_selector('#work-modal:not(.hidden)')
+        page.locator('.prks-kind-toggle__btn[data-kind="video"]').click()
+        page.wait_for_selector('#work-video-url-row:not(.hidden)')
+        page.locator('#work-video-url').fill('https://www.youtube.com/watch?v=e2e0000042')
+        page.locator('#work-title').fill('Folderless Creation')
+        page.locator('#save-work-btn').click()
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
+        self.assertGreater(o._domain_generation(page, 'folders'), before['folders'])
+        o._wait_list_uncached(page, 'folders:index')
+
+    def test_work_deletion_invalidates_folders(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        page.evaluate(
+            """async (id) => { await prksRequest('/api/works/' + encodeURIComponent(id), { method: 'DELETE' }); }""",
+            ids['work_b'],
+        )
+        # Route the assertion through the real UI hook rather than the raw call.
+        page.evaluate("() => prksMarkFoldersDomainChanged()")
+        self.assertGreater(o._domain_generation(page, 'folders'), before['folders'])
+
+    def test_work_metadata_save_invalidates_folders(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        page.evaluate("(id) => prksMarkWorkTitleChanged(id)", ids['work_a'])
+        self.assertGreater(o._domain_generation(page, 'folders'), before['folders'])
+
+    def test_author_and_editor_roles_invalidate_folders_but_other_roles_do_not(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        for role in ('Author', 'Editor'):
+            with self.subTest(role=role):
+                self.index(page)
+                o._wait_list_cached(page, 'folders:index')
+                before = o._domain_generation(page, 'folders')
+                page.evaluate("([id, r]) => prksMarkWorkRoleChanged(id, r)", [ids['work_a'], role])
+                self.assertGreater(o._domain_generation(page, 'folders'), before)
+        # A role the Work card never renders must leave Folders eligible.
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+        before = o._domain_generation(page, 'folders')
+        page.evaluate("(id) => prksMarkWorkRoleChanged(id, 'Reviewer')", ids['work_a'])
+        self.assertEqual(o._domain_generation(page, 'folders'), before)
+        self.assertIsNotNone(o._cached_list(page, 'folders:index'))
+
+    def test_person_rename_invalidates_folders_but_biography_does_not(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        o._open_person(page, ids['person'])
+        o._wait_entity_cached(page, 'person', ids['person'])
+        self.index(page)
+        o._wait_list_cached(page, 'folders:index')
+
+        before = o._domain_generation(page, 'folders')
+        page.evaluate(
+            """async (id) => {
+                await prksRequest('/api/persons/' + encodeURIComponent(id), {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ about: 'Biography only.' }),
+                });
+                prksMarkPeopleDomainChanged();
+            }""",
+            ids['person'],
+        )
+        # Biography is absent from the Work-card credit line.
+        self.assertEqual(o._domain_generation(page, 'folders'), before)
+        self.assertIsNotNone(o._cached_list(page, 'folders:index'))
+
+    def test_folder_tag_mutation_invalidates_folders(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        page.evaluate("async ([fid, tid]) => { await removeTagFromFolder(fid, tid); }",
+                      [ids['folder_parent'], ids['folder_tag']])
+        self.changed(page, before, {'folders'})
+
+    def test_unrelated_research_mutations_keep_folders_eligible(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = o._domain_generation(page, 'folders')
+        page.evaluate(
+            """async (id) => {
+                await updateConcept(id, { description: 'Edited definition.' });
+                await createPosition({ name: 'Folder-irrelevant position' });
+            }""",
+            ids['concept_child'],
+        )
+        self.assertEqual(o._domain_generation(page, 'folders'), before)
+        self.assertIsNotNone(o._cached_list(page, 'folders:index'))
+
+    # ---- cache safety -------------------------------------------------------
+
+    def test_malformed_authoritative_payloads_never_poison_the_cache(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        good_index = o._cached_list(page, 'folders:index')
+        good_detail = o._cached_entity(page, 'folder', ids['folder_parent'])
+
+        def bad_index(route):
+            route.fulfill(status=200, content_type='application/json',
+                          body=json.dumps([{'id': 'F-1', 'work_count': 'lots'}]))
+
+        page.route('**/api/folders', bad_index)
+        self.addCleanup(lambda: o._safe_unroute(page, '**/api/folders', bad_index))
+        self.index(page)
+        page.wait_for_timeout(800)
+        # The good copy already on this device survives a bad server answer.
+        self.assertEqual(o._cached_list(page, 'folders:index'), good_index)
+        o._safe_unroute(page, '**/api/folders', bad_index)
+
+        def bad_detail(route):
+            route.fulfill(status=200, content_type='application/json',
+                          body=json.dumps({'id': ids['folder_parent'], 'children': 'nope',
+                                           'works': [], 'tags': []}))
+
+        page.route('**/api/folders/*', bad_detail)
+        self.addCleanup(lambda: o._safe_unroute(page, '**/api/folders/*', bad_detail))
+        self.detail(page, ids['folder_parent'])
+        page.wait_for_timeout(800)
+        self.assertEqual(o._cached_entity(page, 'folder', ids['folder_parent']), good_detail)
+
+    def test_corrupted_cached_payloads_are_discarded_before_rendering(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        page.evaluate(
+            """(id) => {
+                const store = window.createPrksOfflineStore();
+                return Promise.all([
+                    store.putList('folders:index', [{ id: 'F-x', work_count: -1, child_count: 0 }]),
+                    store.putEntity('folder', id, { id: id, children: [], works: 'nope', tags: [] }),
+                ]);
+            }""",
+            ids['folder_parent'],
+        )
+        page.wait_for_timeout(250)
+        self.offline(page, context)
+
+        self.index(page)
+        o._wait_offline_unavailable(page)
+        self.assertIn('Folders not available offline', o._content_text(page))
+        o._wait_list_uncached(page, 'folders:index')
+
+        self.detail(page, ids['folder_parent'])
+        o._wait_offline_unavailable(page)
+        self.assertIn('Folder not available offline', o._content_text(page))
+        o._wait_entity_uncached(page, 'folder', ids['folder_parent'])
+
+    def test_reachable_server_errors_are_not_disguised_as_offline(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+
+        def boom(route):
+            route.fulfill(status=500, content_type='application/json',
+                          body=json.dumps({'error': 'server exploded'}))
+
+        page.route('**/api/folders', boom)
+        self.addCleanup(lambda: o._safe_unroute(page, '**/api/folders', boom))
+        self.index(page)
+        page.wait_for_timeout(800)
+        # A real HTTP error must not silently serve a stale cached read.
+        self.assertNotIn('Offline · cached', o._content_text(page))
+        self.assertIsNotNone(o._cached_list(page, 'folders:index'))
+
+    def test_stale_reads_cannot_repopulate_an_invalidated_cache(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        # A GET already in flight when the domain is invalidated must not win.
+        page.evaluate(
+            """async (id) => {
+                const listPromise = prksOfflineReadList('folders:index', '/api/folders', { domain: 'folders' });
+                const entityPromise = prksOfflineReadEntity(
+                    'folder', id, '/api/folders/' + encodeURIComponent(id), { domain: 'folders' });
+                prksMarkFoldersDomainChanged();
+                await listPromise;
+                await entityPromise;
+            }""",
+            ids['folder_parent'],
+        )
+        page.wait_for_timeout(400)
+        o._wait_list_uncached(page, 'folders:index')
+        o._wait_entity_uncached(page, 'folder', ids['folder_parent'])
+
+    def test_folder_cleanup_failure_stays_domain_local(self):
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        blocked = page.evaluate(
+            """() => {
+                const store = window.createPrksOfflineStore();
+                const original = store.deleteEntitiesOfKind;
+                window.createPrksOfflineStore = function () {
+                    const s = store;
+                    s.deleteEntitiesOfKind = function (kind) {
+                        if (kind === 'folder') return Promise.reject(new Error('forced sweep failure'));
+                        return original.call(s, kind);
+                    };
+                    return s;
+                };
+                return true;
+            }"""
+        )
+        self.assertTrue(blocked)
+        page.evaluate("() => prksMarkFoldersDomainChanged()")
+        page.wait_for_timeout(600)
+        # Other domains keep serving their caches regardless.
+        self.assertIsNotNone(o._cached_list(page, 'people:index'))
+        self.assertIsNotNone(o._cached_list(page, 'playlists:index'))
+
+
+if __name__ == '__main__':
+    unittest.main()

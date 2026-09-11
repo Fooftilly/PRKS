@@ -305,8 +305,19 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # a Person's Work cards.
         self.assertIn("if (payload && payload.action === 'set_status') {", bulk_body)
         self.assertIn("prksMarkPeopleDomainChanged();", bulk_body)
+        # Other bulk actions may carry their own domains (move_folder stales
+        # Folders), but People must be reachable ONLY from the status branch.
+        people_hooks = bulk_body.count("prksMarkPeopleDomainChanged();")
+        self.assertEqual(people_hooks, 1, "People must be hooked exactly once in bulkUpdateWorks")
+        status_at = bulk_body.index("if (payload && payload.action === 'set_status') {")
+        status_branch = bulk_body[status_at : bulk_body.index("}", bulk_body.index("prksMarkPeopleDomainChanged();", status_at))]
+        self.assertIn("prksMarkPeopleDomainChanged();", status_branch)
         for forbidden in ("move_folder'", "add_tags'", "remove_tags'"):
-            self.assertNotIn("payload.action === '" + forbidden, bulk_body)
+            self.assertNotIn(
+                "payload.action === '" + forbidden,
+                status_branch,
+                "a non-status action must not sit inside the People branch",
+            )
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         delete_at = works.index("async function deleteWork(")
         self.assertIn("prksOfflineMarkPeopleChanged()", works[delete_at : delete_at + 3000])
@@ -361,7 +372,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         people = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
         for fn in ("async function savePersonProfile(", "async function deletePerson("):
             at = people.index(fn)
-            self.assertIn("prksMarkPersonGroupsDomainChanged", people[at : at + 4600], fn)
+            self.assertIn("prksMarkPersonGroupsDomainChanged", people[at : at + 5200], fn)
         # Concept, Position and Argument mutations never touch it. (Research
         # Notes saves are covered behaviourally by the Person Groups E2Es.)
         for name in ("async function createConcept(",
@@ -828,3 +839,115 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _fn_body(src, signature):
+    """Source of one top-level function, from its signature to its closing brace."""
+    at = src.index(signature)
+    end = src.index("\n}\n", at)
+    return src[at:end]
+
+
+class FrontendFoldersOfflineTests(unittest.TestCase):
+    """Static contracts for the Folders/Home offline surface.
+
+    These guard the boundaries an E2E cannot cheaply prove for every call
+    site: that no production surface writes Folders outside the canonical
+    wrappers, and that each wrapper carries both its guard and its coherence
+    hook.
+    """
+
+    def test_folder_routes_use_the_offline_read_through(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        # The plain online-only helpers must no longer be the routes' read path.
+        folders_at = app.index("case 'folders': {")
+        folders_body = app[folders_at : folders_at + 1200]
+        self.assertIn("prksOfflineListFetch(", folders_body)
+        self.assertIn("PRKS_FOLDERS_LIST_KEY", folders_body)
+        self.assertNotIn("fetchFolders(", folders_body)
+        detail_at = app.index("case 'folder-detail': {")
+        detail_body = app[detail_at : detail_at + 1400]
+        self.assertIn("prksOfflineDetailFetch(", detail_body)
+        self.assertNotIn("fetchFolderDetails(", detail_body)
+
+    def test_missing_snapshot_is_distinct_from_a_cached_empty_library(self):
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        folders_at = app.index("case 'folders': {")
+        body = app[folders_at : folders_at + 1200]
+        self.assertIn("Folders not available offline", body)
+        # A cached [] resolves truthy through the resolver, so the unavailable
+        # branch must be gated on the resolver's null, never on list length.
+        self.assertNotIn(".length === 0", body)
+
+    def test_canonical_folder_wrappers_guard_and_publish_coherence(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        for fn in ("async function createFolder(", "async function patchFolder(",
+                   "async function deleteFolderCanonical(", "async function addWorkToFolder(",
+                   "async function patchWorkFolder(", "async function addTagToFolder(",
+                   "async function removeTagFromFolder("):
+            at = api.index(fn)
+            body = api[at : at + 1400]
+            with self.subTest(fn=fn):
+                self.assertIn("prksGuardFolderMutation(", body)
+                self.assertIn("prksMarkFoldersDomainChanged()", body)
+
+    def test_no_production_surface_writes_folders_outside_the_wrappers(self):
+        """A raw Folder write anywhere else silently reopens the guard gap.
+
+        api.js holds the canonical wrappers. ui.js keeps one documented
+        exception: the coalesced private-notes autosave, gated by the runtime
+        check at the top of its own function, which publishes Folder coherence
+        on success. Everywhere else must go through a wrapper.
+        """
+        for name in ("app.js", "components/folders.js", "components/processing-files.js",
+                     "components/works.js"):
+            src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
+            with self.subTest(module=name):
+                # A write is a /api/folders URL paired with a mutating method.
+                for chunk in src.split("/api/folders")[1:]:
+                    window = chunk[:240]
+                    for method in ("'POST'", "'PATCH'", "'DELETE'", "'PUT'"):
+                        self.assertNotIn(method, window,
+                                         "%s writes /api/folders directly" % name)
+        ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
+        # The one exception must still be the private-notes autosave, and must
+        # still publish Folder coherence.
+        self.assertIn("prksMarkFoldersDomainChanged", ui)
+        self.assertIn("Documented exception to the canonical-Folder-wrapper rule", ui)
+
+    def test_folder_title_rename_evicts_member_work_snapshots(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        at = api.index("async function patchFolder(")
+        body = api[at : at + 1400]
+        # Narrow, canonical, and independent of which page is focused.
+        self.assertIn("member_work_ids", body)
+        self.assertIn("prksOfflineMarkEntityChanged('work', workId)", body)
+
+    def test_work_display_hooks_reach_folders(self):
+        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
+        title_at = api.index("function prksMarkWorkTitleChanged(")
+        self.assertIn("prksMarkFoldersDomainChanged();", api[title_at : title_at + 1200])
+        role_at = api.index("function prksMarkWorkRoleChanged(")
+        role_body = api[role_at : role_at + 1200]
+        # Author AND Editor -- the card credit line falls back to primary_editor.
+        self.assertIn("role === 'Author' || role === 'Editor'", role_body)
+
+    def test_cached_folder_detail_suppresses_thumbnails(self):
+        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
+        self.assertIn("suppressThumbnail: true", folders)
+        # Lazy hydration must be skipped too, not just the src.
+        self.assertIn("if (!offlineCached && typeof window.prksInitLazyWorkThumbs", folders)
+
+    def test_recently_added_never_requests_while_offline(self):
+        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
+        body = _fn_body(folders, "async function prksLoadFolderLibraryRecentlyAdded(")
+        guard_at = body.index("if (!prksFolderRuntimeOnline())")
+        fetch_at = body.index("fetchRecentlyAdded")
+        self.assertLess(guard_at, fetch_at, "the connectivity guard must precede the read")
+
+    def test_work_folder_card_does_not_fetch_the_catalog_offline(self):
+        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
+        body = _fn_body(folders, "async function mountFolderAttachControlsForWork(")
+        guard_at = body.index("if (!prksFolderRuntimeOnline())")
+        fetch_at = body.index("await fetchFolders()")
+        self.assertLess(guard_at, fetch_at)

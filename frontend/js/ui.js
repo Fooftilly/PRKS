@@ -2493,6 +2493,10 @@ function prksEnqueuePrivateNotesSave(editor) {
     entry.saveError = false;
     entry.updatedAt = Date.now();
     prksPrivateNotesSetStatus(editor, 'Saving…');
+    // Documented exception to the canonical-Folder-wrapper rule: this is a
+    // coalesced autosave with its own draft lifecycle, and it is already gated
+    // by the runtime check at the top of this function. Its success branch
+    // publishes the same Folder coherence a wrapper would.
     const url = editor.entityType === 'work' ? `/api/works/${editor.entityId}` : `/api/folders/${editor.entityId}`;
     const promise = prksRequest(
         url,
@@ -2510,6 +2514,10 @@ function prksEnqueuePrivateNotesSave(editor) {
             if (ok && editor.entityType === 'work' && typeof prksOfflineMarkEntityChanged === 'function') {
                 // Canonical success matters even when this UI save is stale.
                 prksOfflineMarkEntityChanged('work', editor.entityId);
+            }
+            if (ok && editor.entityType === 'folder' && typeof prksMarkFoldersDomainChanged === 'function') {
+                // private_notes is part of the cached Folder detail payload.
+                prksMarkFoldersDomainChanged();
             }
             if (token !== entry.latestSaveToken) return;
             const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
@@ -4058,14 +4066,17 @@ async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, trig
         triggerInput.setAttribute('aria-busy', 'true');
     }
     try {
-        const url =
-            entityType === 'work' ? `/api/works/${entityId}/tags` : `/api/folders/${entityId}/tags`;
-        const res = await prksRequest(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tag_id: tagId }),
-        });
-        if (!res.ok) throw new Error('attach failed');
+        if (entityType === 'work') {
+            const res = await prksRequest(`/api/works/${entityId}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tag_id: tagId }),
+            });
+            if (!res.ok) throw new Error('attach failed');
+        } else {
+            // Canonical boundary owns the offline guard and Folder coherence.
+            await addTagToFolder(entityId, tagId);
+        }
         const coherenceToken =
             entityType === 'work' && typeof prksOfflineMarkEntityChanged === 'function'
                 ? prksOfflineMarkEntityChanged('work', entityId)
@@ -4080,11 +4091,12 @@ async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, trig
         }
         await prksReloadEntityTagsUI(entityType, entityId, owner, coherenceToken);
     } catch (e) {
-        console.error(e);
         if (triggerInput) {
             triggerInput.disabled = false;
             triggerInput.removeAttribute('aria-busy');
         }
+        if (prksOfflineWasGuardRefusal(e)) return;
+        console.error(e);
         await prksAlertMessage('Could not add tag.', 'Error');
     }
 }
@@ -5484,20 +5496,20 @@ async function quickCreateFolder() {
         return;
     }
     
-    const payload = { title: title, description: "Quick created via upload" };
-    const res = await prksRequest('/api/folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        await prksAlertMessage(data.error || 'Could not create folder', 'Could not save');
+    // Canonical create boundary: it owns the offline guard and the Folder
+    // coherence hook, so this surface cannot silently reopen either gap.
+    let newFolderId;
+    try {
+        newFolderId = await createFolder(title, 'Quick created via upload');
+    } catch (e) {
+        if (!prksOfflineWasGuardRefusal(e)) {
+            await prksAlertMessage((e && e.message) || 'Could not create folder', 'Could not save');
+        }
         return;
     }
 
     allFolders = await fetchFolders(); // Refresh cache
-    document.getElementById('work-folder-id').value = data.id;
+    document.getElementById('work-folder-id').value = newFolderId;
     document.getElementById('work-folder-search').value = title;
     delete document.getElementById('work-folder-search').dataset.prksFolderDefault;
     prksHideInlineComboboxResults(document.getElementById('folder-results'));

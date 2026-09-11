@@ -265,7 +265,134 @@ function prksFolderTreeRowHtml(node, depth, options = {}) {
             </div>`;
 }
 
+/* ---------------------------------------------------------------------------
+ * Offline connectivity policy for the Folder surfaces.
+ *
+ * Reads (hierarchy, local search, expand/collapse, navigation) stay fully
+ * usable from cache; every canonical write control settles live. The Folders
+ * routes bind through their own TabContext, while the Work-side Folder card
+ * lives in the shared right panel and mirrors the Playlist card's subscription.
+ * ------------------------------------------------------------------------ */
+const PRKS_FOLDER_MUTATION_SELECTOR = [
+    '#prks-folder-library-create-btn',
+    '[data-prks-create-folder-query]',
+    '[data-delete-folder-id]',
+    '#folder-tag-search',
+].join(', ');
+
+function prksFolderRuntimeOnline() {
+    return typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
+}
+
+/** Recently Added is server-backed in this milestone: it has no cache to fall
+ *  back to, so it is disabled rather than allowed to issue a doomed request. */
+function prksApplyFolderOfflineState(container) {
+    if (!container || !container.querySelectorAll) return;
+    const online = prksFolderRuntimeOnline();
+    container.querySelectorAll(PRKS_FOLDER_MUTATION_SELECTOR).forEach(function (el) {
+        if ('disabled' in el) el.disabled = !online;
+        if (online) el.removeAttribute('aria-disabled');
+        else el.setAttribute('aria-disabled', 'true');
+    });
+    const recentTab = container.querySelector('.prks-folder-library__tab-btn[data-tab="recently-added"]');
+    if (recentTab) {
+        recentTab.disabled = !online;
+        if (online) {
+            recentTab.removeAttribute('aria-disabled');
+            recentTab.removeAttribute('title');
+        } else {
+            recentTab.setAttribute('aria-disabled', 'true');
+            recentTab.setAttribute('title', 'Recently added requires a connection to PRKS');
+        }
+    }
+}
+
+/** The Folder detail's tag editor and delete button live in the shared right
+ *  panel / page body, so only settle them for the context that owns them. */
+function prksBindFolderOfflineState(ctx, container) {
+    if (!container) return;
+    if (typeof container.__prksFolderOfflineDispose === 'function') {
+        try {
+            container.__prksFolderOfflineDispose();
+        } catch (_e) {
+            /* a stale disposer must not block the new binding */
+        }
+    }
+    const apply = function () {
+        prksApplyFolderOfflineState(container);
+        const panel = document.getElementById('panel-content');
+        if (panel && (typeof prksRightPanelOwnedBy !== 'function' || prksRightPanelOwnedBy(ctx, panel))) {
+            prksApplyFolderOfflineState(panel);
+        }
+    };
+    // Read current state immediately: a page rendered after the runtime already
+    // left 'online' is never briefly mutable.
+    apply();
+    const unsubscribe =
+        (typeof prksOfflineRuntimeSubscribe === 'function' &&
+            prksOfflineRuntimeSubscribe(function () {
+                if (container.__prksFolderOfflineDispose !== dispose) return;
+                apply();
+            })) ||
+        function () {};
+    let unregister = function () {};
+    function dispose() {
+        if (container.__prksFolderOfflineDispose === dispose) container.__prksFolderOfflineDispose = null;
+        unregister();
+        unsubscribe();
+    }
+    container.__prksFolderOfflineDispose = dispose;
+    if (ctx && typeof ctx.registerCleanup === 'function') unregister = ctx.registerCleanup(dispose) || function () {};
+}
+
+/* Settles every mounted Work Folder card live -- same shape as the Work
+ * Playlist card, because the Work right panel is not owned by a Folder route.
+ * An already-open editor keeps its typed draft and selection on screen; only
+ * the canonical controls freeze. Done stays usable so a user can always leave
+ * an edit they can no longer save. */
+function prksApplyWorkFolderOfflineState(ctx) {
+    const panel = document.getElementById('panel-content');
+    if (!panel) return;
+    if (typeof prksRightPanelOwnedBy === 'function' && !prksRightPanelOwnedBy(ctx, panel)) return;
+    const online = prksFolderRuntimeOnline();
+    const editing = !!(ctx && ctx.ui && ctx.ui.workFolderEditing);
+    const editBtn = panel.querySelector('#prks-work-folder-edit-btn');
+    if (editBtn) {
+        // Closed card: Edit cannot start a new edit offline. Open card: the
+        // same button is "Done" and must keep working.
+        editBtn.disabled = !online && !editing;
+        if (editBtn.disabled) editBtn.setAttribute('aria-disabled', 'true');
+        else editBtn.removeAttribute('aria-disabled');
+    }
+    ['#prks-work-folder-search', '#prks-work-folder-set-btn',
+     '#prks-work-folder-clear-btn', '#prks-work-folder-new-btn'].forEach(function (sel) {
+        const el = panel.querySelector(sel);
+        if (!el) return;
+        el.disabled = !online;
+        if (online) el.removeAttribute('aria-disabled');
+        else el.setAttribute('aria-disabled', 'true');
+    });
+    const results = panel.querySelector('#prks-work-folder-results');
+    if (results) {
+        results.inert = !online;
+        if (!online) results.classList.add('hidden');
+    }
+}
+
+if (typeof prksOfflineRuntimeSubscribe === 'function') {
+    prksOfflineRuntimeSubscribe(function () {
+        if (typeof prksForEachLiveTabContext !== 'function') return;
+        prksForEachLiveTabContext(function (ctx) {
+            prksApplyWorkFolderOfflineState(ctx);
+        });
+    });
+}
+
 function prksOpenFolderModalFromLibrarySearch(query) {
+    // Central guard for the creation modal; createFolder() guards again at the
+    // canonical boundary so a disconnect while the dialog is open still refuses.
+    if (typeof prksOfflineGuardMutation === 'function' &&
+        prksOfflineGuardMutation('Creating a folder requires a connection to PRKS.')) return;
     const pre = String(query || '').trim();
     const titleEl = document.getElementById('folder-title');
     const descEl = document.getElementById('folder-description');
@@ -586,6 +713,13 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
     if (!st || !st.container) return;
     const pane = st.container.querySelector('#prks-folder-library-recently-added');
     if (!pane) return;
+    // Belt-and-braces with the disabled tab: a stale timer, a restored session
+    // tab, or a disconnect mid-load must not reach the network either.
+    if (!prksFolderRuntimeOnline()) {
+        pane.innerHTML =
+            '<p class="prks-inline-message">Recently added requires a connection to PRKS.</p>';
+        return;
+    }
     const shouldForce = !!force || window.__prksRecentlyAddedDirty === true;
     if (st.recentlyAddedLoading) return;
     if (!shouldForce && Array.isArray(st.recentlyAddedWorks)) {
@@ -640,6 +774,7 @@ function prksApplyFolderLibraryTabUi(root, tab) {
 }
 
 function prksSwitchFolderLibraryTab(tab) {
+    if (tab === 'recently-added' && !prksFolderRuntimeOnline()) return;
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
     const want = tab === 'recently-added' ? 'recently-added' : 'folders';
@@ -656,10 +791,16 @@ function prksSwitchFolderLibraryTab(tab) {
     }
 }
 
-function renderDashboard(folders, container) {
+function renderDashboard(folders, container, options = {}) {
     const prev = window.__prksFolderDashboardState || {};
     const list = Array.isArray(folders) ? folders : [];
-    const activeTab = prev.activeTab || prksFolderLibraryActiveTabFromStorage();
+    const storedTab = prev.activeTab || prksFolderLibraryActiveTabFromStorage();
+    // Recently Added is server-backed. Restoring it while PRKS is unreachable
+    // would fire a doomed /api/recently-added read on mount, so fall back to
+    // the Folders tab instead; the stored preference is left untouched and
+    // comes back on reconnect.
+    const activeTab =
+        storedTab === 'recently-added' && !prksFolderRuntimeOnline() ? 'folders' : storedTab;
     const filterQuery =
         prev.filterQuery != null ? String(prev.filterQuery) : prksFolderLibraryFilterFromStorage();
     const recentlyAddedFilterQuery =
@@ -747,11 +888,13 @@ function renderDashboard(folders, container) {
     if (activeTab === 'recently-added') {
         void prksLoadFolderLibraryRecentlyAdded(false);
     }
+    prksBindFolderOfflineState(options && options.ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
-function renderFolderDetails(ctx, folder, container) {
+function renderFolderDetails(ctx, folder, container, options = {}) {
     if (!container) return;
+    const offlineCached = !!(options && options.offlineCached);
     if (!folder) {
         container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">Folder not found.</p>';
         return;
@@ -763,7 +906,11 @@ function renderFolderDetails(ctx, folder, container) {
     let worksHtml = `<div class="card-grid">`;
     if (folder.works && folder.works.length > 0) {
         folder.works.forEach((w) => {
-            worksHtml += typeof prksWorkCardHtml === 'function' ? prksWorkCardHtml(w) : '';
+            // A card rendered from IndexedDB must not request a PRKS thumbnail
+            // that cannot succeed; a broken image is worse than none.
+            worksHtml += typeof prksWorkCardHtml === 'function'
+                ? prksWorkCardHtml(w, offlineCached ? { suppressThumbnail: true } : {})
+                : '';
         });
     }
     worksHtml += `</div>`;
@@ -792,7 +939,7 @@ function renderFolderDetails(ctx, folder, container) {
         <div class="prks-page-header page-header"><h3>Files</h3></div>
         ${worksHtml}
     `;
-    if (typeof window.prksInitLazyWorkThumbs === 'function') {
+    if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(container);
     }
     const delBtn = container.querySelector('[data-delete-folder-id]');
@@ -806,22 +953,20 @@ function renderFolderDetails(ctx, folder, container) {
         const select = document.getElementById('work-folder-id');
         if (select) select.value = folder.id;
     }, 100);
+    prksBindFolderOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
 async function prksRemoveFolderTag(folderId, tagId, btn) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
-        const res = await prksRequest(
-            `/api/folders/${encodeURIComponent(folderId)}/tags/${encodeURIComponent(tagId)}`,
-            { method: 'DELETE' }
-        );
-        if (!res.ok) throw new Error(`Server error ${res.status}`);
+        await removeTagFromFolder(folderId, tagId);
         window.__prksAllTagsCache = null;
         await prksReloadEntityTagsUI('folder', folderId, ownerCtx);
     } catch (e) {
-        console.error(e);
         if (btn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
+        if (prksOfflineWasGuardRefusal(e)) return;
+        console.error(e);
         await prksAlertMessage('Could not remove tag.', 'Error');
     }
 }
@@ -834,15 +979,11 @@ async function deleteFolder(f_id) {
     });
     if (!confirmed) return;
     try {
-        const res = await prksRequest('/api/folders/' + encodeURIComponent(f_id), { method: 'DELETE' });
-        if (res.ok) {
-            if (typeof prksNavigate === 'function') prksNavigate('#/folders');
-        } else {
-            const text = await res.text();
-            await prksAlertMessage('Error deleting folder: ' + text, 'Error');
-        }
+        await deleteFolderCanonical(f_id);
+        if (typeof prksNavigate === 'function') prksNavigate('#/folders');
     } catch (e) {
-        await prksAlertMessage('Error deleting folder!', 'Error');
+        if (prksOfflineWasGuardRefusal(e)) return;
+        await prksAlertMessage('Error deleting folder: ' + ((e && e.message) || 'unknown error'), 'Error');
     }
 }
 
@@ -937,7 +1078,16 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     }
 
     const editing = !!(ctx && ctx.ui && ctx.ui.workFolderEditing);
+    // Settle the closed card too: Edit must already be inert when a cached Work
+    // page mounts offline, not only after the next connectivity event.
+    prksApplyWorkFolderOfflineState(ctx);
     if (!editing) return;
+    // An editor left open across a disconnect keeps its draft on screen, but it
+    // must not go to the network for the folder catalog.
+    if (!prksFolderRuntimeOnline()) {
+        prksApplyWorkFolderOfflineState(ctx);
+        return;
+    }
 
     const input = document.getElementById('prks-work-folder-search');
     const hidden = document.getElementById('prks-work-folder-id');
@@ -950,6 +1100,8 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     let folderRows = await fetchFolders();
     if (typeof prksApplyOwnedWorkEntity === 'function' && !prksApplyOwnedWorkEntity(ctx, wid)) return;
     if (!Array.isArray(folderRows)) folderRows = [];
+    // The catalog read can straddle a disconnect; settle again on the result.
+    prksApplyWorkFolderOfflineState(ctx);
 
     if (work && work.folder_id && work.folder_title && !String(input.value || '').trim()) {
         input.value = String(work.folder_title);

@@ -1915,6 +1915,88 @@ function prksResolveOfflinePersonGroup(result, groupId) {
     return { group: null, unavailable: true };
 }
 
+const PRKS_FOLDERS_LIST_KEY = 'folders:index';
+const PRKS_FOLDERS_DOMAIN = 'folders';
+
+/* Folder validators gate cache publication, so they protect exactly what the
+ * Folder renderers dereference. The index feeds the hierarchy tree (title,
+ * parent_id, work_count, child_count); the detail additionally feeds whole
+ * Work cards through prksWorkCardHtml() and the right-panel tag list. Backend
+ * hierarchy rules (cycles, unique titles, count correctness) stay canonical --
+ * this only stops a malformed payload from being cached or rendered. See
+ * AGENTS.md, "Offline coherence domains". */
+function prksIsFolderCount(value) {
+    return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0;
+}
+
+/** `parent_id` is either NULL (a root folder) or a usable folder id. */
+function prksIsFolderParentId(value) {
+    return value === null || value === undefined ||
+        (typeof value === 'string' && !!value.trim());
+}
+
+function prksIsFolderSummaryShape(row) {
+    return prksHasUsableRowId(row) &&
+        prksIsOptionalString(row.title) && prksIsOptionalString(row.description) &&
+        prksIsFolderParentId(row.parent_id) &&
+        prksIsFolderCount(row.work_count) && prksIsFolderCount(row.child_count);
+}
+
+function prksIsFoldersIndexShape(value) {
+    return Array.isArray(value) && value.every(prksIsFolderSummaryShape);
+}
+
+/* A Folder detail's Work rows are rendered by prksWorkCardHtml(), which reads
+ * these fields. Most coerce safely, but `year`/`published_date` take direct
+ * string operations and `file_size_bytes` is fed to Number() -- so a wrong
+ * type there would render "NaN MB" from cache. Validated as the card's row
+ * contract rather than the whole Work detail schema. */
+function prksIsWorkCardRowShape(row) {
+    if (!prksHasUsableRowId(row)) return false;
+    return prksIsOptionalString(row.title) && prksIsOptionalString(row.year) &&
+        prksIsOptionalString(row.published_date) && prksIsOptionalString(row.status) &&
+        prksIsOptionalString(row.doc_type) && prksIsOptionalString(row.file_path) &&
+        prksIsOptionalString(row.author_text) && prksIsOptionalString(row.linked_authors) &&
+        prksIsOptionalString(row.primary_author) && prksIsOptionalString(row.primary_editor) &&
+        prksIsOptionalString(row.thumb_url) &&
+        (row.file_size_bytes == null || prksIsFolderCount(row.file_size_bytes));
+}
+
+/** Folder tag chips render id + name; unused columns are not the cache's business. */
+function prksIsFolderTagRowShape(row) {
+    return prksHasUsableRowId(row) && prksIsOptionalString(row.name);
+}
+
+function prksIsFolderShape(value, folderId) {
+    if (!prksHasUsableRowId(value) || String(value.id) !== String(folderId)) return false;
+    if (!prksIsOptionalString(value.title) || !prksIsOptionalString(value.description) ||
+        !prksIsOptionalString(value.private_notes) || !prksIsFolderParentId(value.parent_id)) return false;
+    // `parent` is null for a root folder; when present it becomes a link.
+    if (value.parent !== null && value.parent !== undefined) {
+        if (!prksHasUsableRowId(value.parent) || !prksIsOptionalString(value.parent.title)) return false;
+    }
+    if (!Array.isArray(value.children) || !value.children.every(prksIsFolderSummaryShape)) return false;
+    if (!Array.isArray(value.works) || !value.works.every(prksIsWorkCardRowShape)) return false;
+    return Array.isArray(value.tags) && value.tags.every(prksIsFolderTagRowShape);
+}
+
+function prksResolveOfflineFoldersIndex(result) {
+    if (!result || result.source === 'unavailable') return null;
+    if (prksIsFoldersIndexShape(result.value)) return result.value;
+    if (result.source === 'server') throw new Error('Received an unexpected Folders response.');
+    if (typeof prksOfflineInvalidateList === 'function') void prksOfflineInvalidateList(PRKS_FOLDERS_LIST_KEY);
+    return null;
+}
+
+function prksResolveOfflineFolder(result, folderId) {
+    if (!result || result.source === 'unavailable') return { folder: null, unavailable: true };
+    if (result.source === 'server' && result.value === null) return { folder: null, unavailable: false };
+    if (prksIsFolderShape(result.value, folderId)) return { folder: result.value, unavailable: false };
+    if (result.source === 'server') throw new Error('Received an unexpected Folder response.');
+    if (typeof prksOfflineInvalidateEntity === 'function') void prksOfflineInvalidateEntity('folder', folderId);
+    return { folder: null, unavailable: true };
+}
+
 const PRKS_PLAYLISTS_LIST_KEY = 'playlists:index';
 const PRKS_PLAYLISTS_DOMAIN = 'playlists';
 
@@ -2109,7 +2191,11 @@ async function prksLoadOfflineCacheStatus() {
             String((diag.entityCount || 0) + (diag.listCount || 0)) +
             '. Cached PDFs: ' +
             String(diag.pdfCount || 0) +
-            '. Approx. size: ' +
+            // navigator.storage.estimate() reports usage for the WHOLE origin
+            // -- the precached app shell and anything else this browser stores
+            // for PRKS, not only the rows and PDFs counted above. Labelling it
+            // as the size of those items would overstate what Clear removes.
+            '. Approx. PRKS browser storage on this device: ' +
             (diag.approxBytes != null ? prksFormatBytesApprox(diag.approxBytes) : '—') +
             '.';
     } catch (e) {
@@ -2436,10 +2522,22 @@ async function prksRenderTabRoute(ctx, hash, options) {
     try {
         switch (route.name) {
             case 'folders': {
-                const folders = await fetchFolders({ signal: routeSignal });
+                const offlineFolders = await prksOfflineListFetch(
+                    PRKS_FOLDERS_LIST_KEY, '/api/folders', routeSignal,
+                    { domain: PRKS_FOLDERS_DOMAIN, validate: prksIsFoldersIndexShape }
+                );
                 if (stale()) return;
+                const folders = prksResolveOfflineFoldersIndex(offlineFolders);
+                if (!folders) {
+                    // A cached [] is a real empty library; only a MISSING
+                    // snapshot is an unavailable state.
+                    prksOfflineRenderUnavailable(contentDiv, 'Folders not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Folders not available offline' };
+                    break;
+                }
                 publishSidebar({ folderCount: folders.length });
-                renderDashboard(folders, contentDiv);
+                renderDashboard(folders, contentDiv, { offlineCached: offlineFolders.source === 'cache', ctx: ctx });
+                prksOfflinePrependBanner(contentDiv, offlineFolders);
                 break;
             }
             case 'playlists': {
@@ -2503,10 +2601,25 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'folder-detail': {
-                const folder = await fetchFolderDetails(route.params.folderId, { signal: routeSignal });
+                const folderId = route.params.folderId;
+                const offlineFolder = await prksOfflineDetailFetch(
+                    'folder', folderId, '/api/folders/' + encodeURIComponent(folderId), routeSignal,
+                    { domain: PRKS_FOLDERS_DOMAIN, validate: (value) => prksIsFolderShape(value, folderId) }
+                );
                 if (stale()) return;
+                const resolvedFolder = prksResolveOfflineFolder(offlineFolder, folderId);
+                if (resolvedFolder.unavailable) {
+                    ctx.setEntity('folder', null);
+                    prksOfflineRenderUnavailable(contentDiv, 'Folder not available offline');
+                    titleOpts = { notFound: true, notFoundTitle: 'Folder not available offline' };
+                    break;
+                }
+                const folder = resolvedFolder.folder;
                 ctx.setEntity('folder', folder);
-                renderFolderDetails(ctx, folder, contentDiv);
+                renderFolderDetails(ctx, folder, contentDiv, {
+                    offlineCached: offlineFolder.source === 'cache',
+                });
+                prksOfflinePrependBanner(contentDiv, offlineFolder);
                 titleOpts = folder
                     ? { entityTitle: folder.title || 'Folder' }
                     : { notFound: true, notFoundTitle: 'Folder not found' };
@@ -3316,6 +3429,13 @@ function initForms() {
             // path owes People its own invalidation.
             if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
         }
+        if (res.ok && typeof prksMarkFoldersDomainChanged === 'function') {
+            // Unlike Playlists, folder membership is NOT optional: the create
+            // endpoint files every new Work into the requested folder or into
+            // the default "Uncategorized" one, so a folders:index work_count
+            // (and possibly a cached Folder detail) always changes.
+            prksMarkFoldersDomainChanged();
+        }
         if (!res.ok) {
             const errText = data.error || 'Could not create the file.';
             if (statusMsg) {
@@ -3496,16 +3616,18 @@ function initForms() {
                     return raw || null;
                 })()
             };
-            const res = await prksRequest('/api/folders', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                await prksAlertMessage(data.error || 'Could not create folder', 'Could not save');
+            let newFolderId;
+            try {
+                newFolderId = await createFolder(payload.title, payload.description, {
+                    parent_id: payload.parent_id,
+                });
+            } catch (e) {
+                if (!prksOfflineWasGuardRefusal(e)) {
+                    await prksAlertMessage((e && e.message) || 'Could not create folder', 'Could not save');
+                }
                 return;
             }
+            const data = { id: newFolderId };
             const pending = window.__prksPendingWorkFolderAttach;
             if (pending && pending.workId && typeof patchWorkFolder === 'function') {
                 const attachWid = String(pending.workId);

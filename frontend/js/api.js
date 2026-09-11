@@ -460,6 +460,13 @@ async function importProcessingFile(processingFileId) {
     if (!res.ok) {
         throw new Error(data.error || 'Could not import file.');
     }
+    // Importing commits a brand-new canonical Work in one request: it is always
+    // filed into a folder (the requested one, else "Uncategorized") and can
+    // carry staged Author/Editor roles, so this boundary owes the same
+    // coherence the /api/works create path publishes.
+    prksMarkFoldersDomainChanged();
+    prksMarkPeopleDomainChanged();
+    prksMarkPersonGroupsDomainChanged();
     return data;
 }
 
@@ -625,7 +632,26 @@ function prksInferWorkSourceKind(work) {
     return sk;
 }
 
+/**
+ * Shared refusal boundary for the canonical Folder wrappers. The guard itself
+ * tells the user why, so the thrown error carries a marker letting call sites
+ * skip a second, duplicate alert.
+ */
+function prksGuardFolderMutation(message) {
+    if (typeof prksOfflineGuardMutation !== 'function') return;
+    if (!prksOfflineGuardMutation(message)) return;
+    const err = new Error('Requires a connection to PRKS.');
+    err.prksOfflineRefused = true;
+    throw err;
+}
+
+/** True for an error thrown by prksGuardFolderMutation (already surfaced). */
+function prksOfflineWasGuardRefusal(err) {
+    return !!(err && err.prksOfflineRefused === true);
+}
+
 async function addWorkToFolder(folderId, workId) {
+    prksGuardFolderMutation('Changing a file\'s folder requires a connection to PRKS.');
     const res = await prksRequest('/api/folders/' + encodeURIComponent(folderId) + '/works', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -635,12 +661,14 @@ async function addWorkToFolder(folderId, workId) {
     if (!res.ok) {
         throw new Error(data.error || 'Could not add file to folder.');
     }
+    prksMarkFoldersDomainChanged();
     return typeof prksOfflineMarkEntityChanged === 'function'
         ? prksOfflineMarkEntityChanged('work', workId)
         : null;
 }
 
 async function patchWorkFolder(workId, folderIdOrNull) {
+    prksGuardFolderMutation('Changing a file\'s folder requires a connection to PRKS.');
     const res = await prksRequest('/api/works/' + encodeURIComponent(workId), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -650,6 +678,7 @@ async function patchWorkFolder(workId, folderIdOrNull) {
     if (!res.ok) {
         throw new Error(data.error || 'Could not update folder.');
     }
+    prksMarkFoldersDomainChanged();
     return typeof prksOfflineMarkEntityChanged === 'function'
         ? prksOfflineMarkEntityChanged('work', workId)
         : null;
@@ -660,6 +689,7 @@ async function createFolder(title, description = '', options = {}) {
         ? options.parent_id
         : '';
     const parentId = parentIdRaw == null ? null : String(parentIdRaw).trim();
+    prksGuardFolderMutation('Creating a folder requires a connection to PRKS.');
     const res = await prksRequest('/api/folders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -676,10 +706,12 @@ async function createFolder(title, description = '', options = {}) {
     if (!data.id) {
         throw new Error('Could not create folder.');
     }
+    prksMarkFoldersDomainChanged();
     return data.id;
 }
 
 async function patchFolder(folderId, updates) {
+    prksGuardFolderMutation('Editing a folder requires a connection to PRKS.');
     const res = await prksRequest('/api/folders/' + encodeURIComponent(folderId), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -689,6 +721,59 @@ async function patchFolder(folderId, updates) {
     if (!res.ok) {
         throw new Error(data.error || 'Could not update folder.');
     }
+    prksMarkFoldersDomainChanged();
+    // Only a rename can stale a member Work's own cached detail (it embeds
+    // folder_title). The canonical response reports exactly those members, so
+    // description/private-notes/parent-only edits evict nothing extra and this
+    // never depends on which page happened to be focused.
+    if (typeof prksOfflineMarkEntityChanged === 'function' && Array.isArray(data.member_work_ids)) {
+        data.member_work_ids.forEach(function (workId) {
+            prksOfflineMarkEntityChanged('work', workId);
+        });
+    }
+}
+
+/** Canonical Folder deletion boundary (empty folders only, server-enforced). */
+async function deleteFolderCanonical(folderId) {
+    prksGuardFolderMutation('Deleting a folder requires a connection to PRKS.');
+    const res = await prksRequest('/api/folders/' + encodeURIComponent(folderId), {
+        method: 'DELETE',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const err = new Error(data.error || 'Could not delete folder.');
+        err.httpStatus = res.status;
+        throw err;
+    }
+    prksMarkFoldersDomainChanged();
+    return data;
+}
+
+/* Folder tag membership is rendered by the Folder detail right panel, so both
+ * directions are Folder-domain coherence boundaries. */
+async function addTagToFolder(folderId, tagId) {
+    prksGuardFolderMutation('Editing folder tags requires a connection to PRKS.');
+    const res = await prksRequest('/api/folders/' + encodeURIComponent(folderId) + '/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag_id: tagId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not add tag.');
+    prksMarkFoldersDomainChanged();
+    return data;
+}
+
+async function removeTagFromFolder(folderId, tagId) {
+    prksGuardFolderMutation('Editing folder tags requires a connection to PRKS.');
+    const res = await prksRequest(
+        '/api/folders/' + encodeURIComponent(folderId) + '/tags/' + encodeURIComponent(tagId),
+        { method: 'DELETE' }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not remove tag.');
+    prksMarkFoldersDomainChanged();
+    return data;
 }
 
 async function bulkUpdateWorks(payload) {
@@ -716,6 +801,12 @@ async function bulkUpdateWorks(payload) {
     // cache alone.
     if (payload && payload.action === 'set_status') {
         prksMarkPeopleDomainChanged();
+        // Folder Work cards render status too.
+        prksMarkFoldersDomainChanged();
+    }
+    // Moving files changes both Folder details and every folders:index count.
+    if (payload && payload.action === 'move_folder') {
+        prksMarkFoldersDomainChanged();
     }
     return data;
 }
@@ -998,6 +1089,19 @@ function prksMarkPlaylistsDomainChanged() {
     return prksOfflineMarkPlaylistsChanged();
 }
 
+/**
+ * Coherence hook for the Folders read model. Both cached Folder surfaces live
+ * in one domain because Folder relationships are never local to a single
+ * Folder: moving a Work changes two Folder details AND both `work_count`s in
+ * `folders:index`, and reparenting changes the hierarchy for every ancestor.
+ * A cached Folder detail also embeds whole Work cards, so Work display changes
+ * stale it too -- see AGENTS.md, "Offline coherence domains".
+ */
+function prksMarkFoldersDomainChanged() {
+    if (typeof prksOfflineMarkFoldersChanged !== 'function') return null;
+    return prksOfflineMarkFoldersChanged();
+}
+
 function prksMarkPeopleDomainChanged() {
     if (typeof prksOfflineMarkPeopleChanged !== 'function') return null;
     return prksOfflineMarkPeopleChanged();
@@ -1024,6 +1128,10 @@ function prksMarkWorkTitleChanged(workId) {
     // and routing Playlists through it is what makes the Playlist inline Work
     // rename inherit the dependency without its own hook.
     prksMarkPlaylistsDomainChanged();
+    // A cached Folder detail renders the same Work cards (title, status, doc
+    // type, year, credit line, file size), so this conservative hook covers
+    // Folders for exactly the same reason it covers Playlists.
+    prksMarkFoldersDomainChanged();
     prksMarkResearchGraphCoreChanged();
     return token;
 }
@@ -1046,10 +1154,15 @@ function prksMarkWorkRoleChanged(workId, roleType) {
             ? prksOfflineMarkEntityChanged('work', workId)
             : null;
     prksMarkPeopleDomainChanged();
-    if (String(roleType || '').trim() === 'Author') {
+    const role = String(roleType || '').trim();
+    if (role === 'Author') {
         prksMarkResearchGraphPeopleChanged();
         prksMarkArgumentsDomainChanged();
     }
+    // A Folder Work card's credit line is linked_authors -> author_text ->
+    // primary_editor, so Editor changes stale Folders even though they touch
+    // neither Arguments nor the Graph. Other roles are not rendered there.
+    if (role === 'Author' || role === 'Editor') prksMarkFoldersDomainChanged();
     return token;
 }
 
@@ -1347,6 +1460,11 @@ window.prksMarkArgumentsDomainChanged = prksMarkArgumentsDomainChanged;
 window.prksMarkPeopleDomainChanged = prksMarkPeopleDomainChanged;
 window.prksMarkPersonGroupsDomainChanged = prksMarkPersonGroupsDomainChanged;
 window.prksMarkPlaylistsDomainChanged = prksMarkPlaylistsDomainChanged;
+window.prksMarkFoldersDomainChanged = prksMarkFoldersDomainChanged;
+window.prksOfflineWasGuardRefusal = prksOfflineWasGuardRefusal;
+window.deleteFolderCanonical = deleteFolderCanonical;
+window.addTagToFolder = addTagToFolder;
+window.removeTagFromFolder = removeTagFromFolder;
 window.createPersonGroup = createPersonGroup;
 window.updatePersonGroup = updatePersonGroup;
 window.deletePersonGroup = deletePersonGroup;

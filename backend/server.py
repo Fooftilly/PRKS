@@ -1150,12 +1150,17 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, {'status': 'updated'})
             elif path.startswith('/api/folders/') and len(path.split('/')) == 4:
                 f_id = path.split('/')[-1]
+                # A rename stales every member Work's cached detail (it embeds
+                # folder_title), so collect the members BEFORE the write and
+                # report them -- membership cannot change in this request.
+                renames = isinstance(data, dict) and 'title' in data
+                member_ids = db.get_folder_work_ids(f_id) if renames else []
                 try:
                     db.update_folder_metadata(f_id, data)
                 except ValueError as e:
                     self.send_json(400, {'error': str(e)})
                     return
-                self.send_json(200, {'status': 'updated'})
+                self.send_json(200, {'status': 'updated', 'member_work_ids': member_ids})
             elif path == '/api/settings':
                 if not isinstance(data, dict):
                     self.send_json(400, {'error': 'JSON object body required'})

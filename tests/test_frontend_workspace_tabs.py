@@ -370,9 +370,9 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
     def test_no_component_disables_a_navigable_destination(self):
         """The shared bail-out above is a standing contract, but nothing uses it
         today: every Phase-1 destination reachable from a cached page (Work,
-        Concept, Position, Argument/Stance, Person, Person Group, Playlist) is
-        offline-capable and owns its own availability, so no component marks a
-        *link* aria-disabled any more.
+        Folder, Concept, Position, Argument/Stance, Person, Person Group,
+        Playlist, Research Graph) is offline-capable and owns its own
+        availability, so no component marks a *link* aria-disabled any more.
 
         Position -> Argument and Person -> Group each carried such a guard while
         their destination was still online-only, and each was removed once that

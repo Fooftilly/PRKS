@@ -26,6 +26,8 @@
     const STATE_RECONNECTING = 'reconnecting';
 
     const PROBE_PATH = '/api/settings';
+    const DOMAIN_FOLDERS = 'folders';
+    const FOLDERS_LIST_KEY = 'folders:index';
     const DOMAIN_CONCEPTS = 'concepts';
     const CONCEPTS_LIST_KEY = 'concepts:index';
     const DOMAIN_POSITIONS = 'positions';
@@ -760,6 +762,12 @@
             listKeys: [PERSON_GROUPS_LIST_KEY],
         });
     }
+    function prksOfflineMarkFoldersChanged() {
+        return production.markDomainChanged(DOMAIN_FOLDERS, {
+            entityKinds: ['folder'],
+            listKeys: [FOLDERS_LIST_KEY],
+        });
+    }
     function prksOfflineMarkPlaylistsChanged() {
         return production.markDomainChanged(DOMAIN_PLAYLISTS, {
             entityKinds: ['playlist'],
@@ -834,6 +842,9 @@
         PRKS_OFFLINE_PERSON_GROUPS_LIST_KEY: PERSON_GROUPS_LIST_KEY,
         PRKS_OFFLINE_DOMAIN_PLAYLISTS: DOMAIN_PLAYLISTS,
         PRKS_OFFLINE_PLAYLISTS_LIST_KEY: PLAYLISTS_LIST_KEY,
+        PRKS_OFFLINE_DOMAIN_FOLDERS: DOMAIN_FOLDERS,
+        PRKS_OFFLINE_FOLDERS_LIST_KEY: FOLDERS_LIST_KEY,
+        prksOfflineMarkFoldersChanged: prksOfflineMarkFoldersChanged,
     };
 
     Object.keys(api).forEach(function (k) {

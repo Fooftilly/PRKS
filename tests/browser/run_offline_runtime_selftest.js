@@ -214,6 +214,76 @@ async function run() {
         assert('Playlist canonical runtime helper exported',
             typeof mod.prksOfflineMarkPlaylistsChanged === 'function');
     }
+    /* Folders is the ninth domain (Graph contributes two). Same audit: its
+     * sweep must be kind-exact and every other domain must stay usable. */
+    {
+        const domains = ['concepts', 'positions', 'arguments', 'people', 'person-groups',
+                         'playlists', 'folders'];
+        const kinds = ['concept', 'position', 'argument', 'person', 'person-group',
+                       'playlist', 'folder'];
+        const sweeps = [];
+        const store = makeFakeStore({
+            deleteEntitiesByKind: async kind => {
+                sweeps.push(kind);
+                if (kind !== 'folder') throw Error('cross-domain entity sweep');
+                return false;
+            },
+            deleteList: async key => {
+                sweeps.push(key);
+                if (key !== 'folders:index') throw Error('cross-domain list sweep');
+                return false;
+            },
+        });
+        for (const kind of [...kinds, 'work']) await store.putEntity(kind, '1', {id:'1'}, '');
+        for (const domain of domains) await store.putList(domain + ':index', [], '');
+        const runtime = mod.createPrksOfflineRuntime({
+            store, prksRequest: () => Promise.reject(Error('offline')),
+            setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        runtime.markDomainChanged('folders', {
+            entityKinds:['folder'], listKeys:['folders:index'],
+        });
+        await runtime._domainCleanup('folders');
+        assertEq('Folder cleanup touches exactly its kind and key', sweeps.sort(), ['folder','folders:index']);
+        assertEq('Folder generation is independent',
+            domains.map(d=>runtime.currentDomainGeneration(d)), [0,0,0,0,0,0,1]);
+        assertEq('only Folders blocked after failed cleanup',
+            domains.map(d=>runtime.isDomainBlocked(d)), [false,false,false,false,false,false,true]);
+        for (let i=0; i<domains.length; i++) {
+            const result = await runtime.readThroughEntity(kinds[i], '1', '/api/test', {domain:domains[i]});
+            assertEq(domains[i] + ' fallback isolation', result.source, i===6 ? 'unavailable' : 'cache');
+        }
+        assertEq('Works unaffected by Folder cleanup',
+            (await runtime.readThroughEntity('work','1','/api/test')).source, 'cache');
+        assertEq('Folder constant', mod.PRKS_OFFLINE_DOMAIN_FOLDERS, 'folders');
+        assertEq('Folder list constant', mod.PRKS_OFFLINE_FOLDERS_LIST_KEY, 'folders:index');
+        assert('Folder canonical runtime helper exported',
+            typeof mod.prksOfflineMarkFoldersChanged === 'function');
+    }
+    /* A pre-mutation Folder read -- list AND entity -- can still resolve and
+     * repaint, but must never become eligible cache data. */
+    {
+        const store = makeFakeStore();
+        const gate = {};
+        gate.promise = new Promise(resolve => { gate.resolve = resolve; });
+        const runtime = mod.createPrksOfflineRuntime({
+            store,
+            prksRequest: async () => { await gate.promise; return jsonResponse(200, {id:'F-1'}); },
+            setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        const pendingList = runtime.readThroughList('folders:index', '/api/folders', { domain: 'folders' });
+        const pendingEntity = runtime.readThroughEntity('folder', 'F-1', '/api/folders/F-1', { domain: 'folders' });
+        runtime.markDomainChanged('folders', {
+            entityKinds:['folder'], listKeys:['folders:index'],
+        });
+        gate.resolve();
+        await pendingList;
+        await pendingEntity;
+        assertEq('stale Folder list GET does not repopulate', await store.getList('folders:index'), null);
+        assertEq('stale Folder entity GET does not repopulate', await store.getEntity('folder','F-1'), null);
+    }
     /* A pre-mutation Playlist read -- list AND entity -- can still resolve and
      * repaint, but must never become eligible cache data. */
     {
