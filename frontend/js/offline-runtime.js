@@ -444,7 +444,14 @@
                 state.fields[result.field] = root.prksMetadataStateAckPatch(
                     result.field, result.server_revision, result.value);
             }
-            if (work) work[result.field] = result.value;
+            /* The acknowledgement carries the WIRE value; a Work record
+             * carries the ENTITY one. Identical for every field but
+             * `thumb_page`, where writing the wire string would put "3" where
+             * the row's shape validator, and every renderer, expect the
+             * integer 3. `prksProjectionFieldPatch` performs the same
+             * conversion for browse rows through the projection transform;
+             * this is it for the record itself. */
+            if (work) work[result.field] = root.prksWorkFieldToEntity(result.field, result.value);
             const values = [work, state];
             for (let i = 0; i < kinds.length; i++) {
                 if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
@@ -494,7 +501,8 @@
                 let touched = false;
                 summaries.forEach(function (summary, index) {
                     if (!summary || summary.id !== result.work_id) return;
-                    summaries[index] = Object.assign({}, summary, { [result.field]: result.value });
+                    summaries[index] = Object.assign({}, summary,
+                        { [result.field]: root.prksWorkFieldToEntity(result.field, result.value) });
                     touched = true;
                 });
                 if (!touched) continue;

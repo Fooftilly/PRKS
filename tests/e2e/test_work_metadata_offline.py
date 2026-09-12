@@ -1251,6 +1251,251 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 0)
         self.assertEqual(self.server_value(server, work, 'author_text'), 'My Author')
 
+    # ---- thumb_page: a typed value and a derived resource (2J) -------------
+
+    def thumb_requests(self, page_obj):
+        """Every thumbnail request the page makes, with its page query."""
+        seen = []
+        page_obj.on('request', lambda r: seen.append(r.url)
+                    if '/thumbnail' in r.url else None)
+        return seen
+
+    def thumb_src(self, page_obj, work_id):
+        """The thumbnail resource this card points at.
+
+        The lazy loader promotes `data-prks-thumb-src` into `src` once the
+        image is in view, so both have to be read -- checking only the data
+        attribute would report "no thumbnail" for every card that had
+        successfully loaded one."""
+        return page_obj.evaluate("""id => {
+            const img = document.querySelector('[data-work-id="' + id + '"] .work-card__thumb img');
+            if (!img) return '';
+            const pending = img.getAttribute('data-prks-thumb-src') || '';
+            if (pending) return pending;
+            const src = img.getAttribute('src') || '';
+            return src.indexOf('data:') === 0 ? '' : src;
+        }""", work_id)
+
+    def test_a_pending_thumb_page_is_typed_everywhere_and_survives_a_reload(self):
+        """The wire carries "5"; every cached row must carry the integer 5.
+        A string there does not merely look wrong -- the row fails its own
+        shape validator and the whole catalog is discarded as corrupt."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'thumb_page': 2})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.warm_all_catalogs(page, work)
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'thumb_page', '5')
+        self.save(page)
+        self.pending(page, 1)
+        self.assertEqual(self.operations(page)[0]['payload'],
+                         {'field': 'thumb_page', 'value': '5'},
+                         'the WIRE value is a string')
+
+        types = page.evaluate("""id => {
+            const out = {};
+            return Promise.all(['works-browse:index', 'recent:index', 'recently-added:index']
+                .map(key => window.createPrksOfflineStore().getList(key).then(row => {
+                    const found = row && row.value.find(w => w.id === id);
+                    const eff = prksEffectiveProjectionRows(row.value, key.split(':')[0])
+                        .find(w => w.id === id);
+                    out[key] = [found ? typeof found.thumb_page : null,
+                                eff ? eff.thumb_page : null,
+                                eff ? typeof eff.thumb_page : null];
+                }))).then(() => out);
+        }""", work)
+        for key, (cached_type, effective, effective_type) in types.items():
+            self.assertEqual(cached_type, 'number', '%s snapshot stays typed' % key)
+            self.assertEqual(effective, 5, '%s carries the pending page' % key)
+            self.assertEqual(effective_type, 'number', '%s carries it as a NUMBER' % key)
+
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.assertEqual(page.locator('[data-prks-work-field="thumb_page"]').input_value(), '5',
+                         'the pending page survives a reload')
+        self.pending(page, 1)
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 5)
+        self.assertEqual(self.server_fields(server, work)['thumb_page'],
+                         {'value': '5', 'revision': 2},
+                         'metadata-state keeps the wire form; the Work record is typed')
+
+    def test_a_pending_clear_requests_page_one_not_the_page_still_stored(self):
+        """The highest-value 2J regression. The server holds page 5 and a clear
+        is pending, so the effective value is null -- which MEANS page 1. A URL
+        with no page would still render page 5 until the server heard about it.
+
+        Deliberately ONLINE: an offline card suppresses thumbnails entirely, so
+        the offline case cannot show this at all. Synchronization is held with
+        a route gate rather than a delay, so the pending window is
+        deterministic rather than a race with the coordinator."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'thumb_page': 5})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertIn('page=5', self.thumb_src(page, work),
+                      'the acknowledged page is stated explicitly')
+
+        # The gate: the operation is saved durably and can never be sent.
+        blocked = []
+
+        def hold(route):
+            blocked.append(route.request.url)
+            route.abort('failed')
+
+        page.route('**/api/sync/operations', hold)
+        try:
+            o._open_work_from_home(page, WORK_A_TITLE)
+            self.edit(page)
+            self.field(page, 'thumb_page', '')
+            self.save(page)
+            page.wait_for_function(
+                "() => prksSync.store.listOperations().then(r => r.length === 1)")
+
+            page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+            page.wait_for_selector('[data-work-id="%s"]' % work)
+            src = self.thumb_src(page, work)
+            self.assertIn('page=1', src, 'a pending clear means page 1, immediately')
+            self.assertNotIn('page=5', src, 'not the page the server still stores')
+            self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 5,
+                             'and the server has not been told anything yet')
+            self.assertTrue(blocked, 'the gate actually held a send')
+        finally:
+            page.unroute('**/api/sync/operations', hold)
+
+        self.pending(page, 0)
+        self.assertIsNone(self.db_for(server).get_work(work)['thumb_page'])
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertIn('page=1', self.thumb_src(page, work),
+                      'and nothing changes visibly at acknowledgement')
+
+    def test_an_online_pending_page_renders_before_the_server_is_told(self):
+        """The endpoint already accepts an explicit page, so a pending value
+        needs nothing from the column to be rendered."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'thumb_page': 2})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+
+        def hold(route):
+            route.abort('failed')
+
+        page.route('**/api/sync/operations', hold)
+        try:
+            o._open_work_from_home(page, WORK_A_TITLE)
+            self.edit(page)
+            self.field(page, 'thumb_page', '5')
+            self.save(page)
+            page.wait_for_function(
+                "() => prksSync.store.listOperations().then(r => r.length === 1)")
+            page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+            page.wait_for_selector('[data-work-id="%s"]' % work)
+            self.assertIn('page=5', self.thumb_src(page, work))
+            self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 2,
+                             'the column still says 2')
+        finally:
+            page.unroute('**/api/sync/operations', hold)
+        self.pending(page, 0)
+        self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 5)
+
+    def test_a_cached_card_makes_no_thumbnail_request_for_a_pending_page(self):
+        """Offline suppression is absolute and decided before any URL exists.
+        This counts actual requests to the endpoint rather than checking that
+        an image is hidden -- a hidden image that was still fetched is exactly
+        the failure being excluded."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'thumb_page': 2})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.warm_all_catalogs(page, work)
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'thumb_page', '4')
+        self.save(page)
+        self.pending(page, 1)
+
+        seen = self.thumb_requests(page)
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        page.wait_for_timeout(400)   # a settle window: absence needs one
+        self.assertEqual(seen, [], 'a cached card requested no thumbnail at all')
+        self.assertEqual(self.thumb_src(page, work), '',
+                         'and emitted no source to request later')
+
+    def test_an_unreadable_thumb_page_is_refused_rather_than_cleared(self):
+        """PATCH used to turn 0, -1 and junk into NULL silently -- a client
+        asking for an impossible page was told the field had been emptied on
+        purpose. Refusing is not clearing."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'thumb_page': 3})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        # Only values the control can actually hold: it is `type="number"`, so
+        # the browser itself refuses "abc" before the codec is ever consulted.
+        # That is a first line of defence, not the contract -- the codec's
+        # refusal of non-numeric text is covered by the unit and Node tests.
+        for bad in ('0', '-1'):
+            with self.subTest(value=bad):
+                self.field(page, 'thumb_page', bad)
+                self.save(page)
+                page.wait_for_function("""() => {
+                    const el = document.getElementById('meta-thumb-page-error');
+                    return !!el && el.textContent.trim().length > 0;
+                }""")
+                self.assertEqual(self.operations(page), [],
+                                 'nothing was enqueued for %r' % bad)
+                self.assertEqual(
+                    page.locator('[data-prks-work-field="thumb_page"]').input_value(), bad,
+                    'the draft is preserved')
+        self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 3,
+                         'and the stored page is untouched')
+
+    def test_a_thumb_page_conflict_uses_the_existing_field_level_ux(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'thumb_page': 2})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'thumb_page', '7')
+        self.save(page)
+        self.pending(page, 1)
+
+        self.db_for(server).update_work_metadata(work, {'thumb_page': 4})
+        self.reconnect(page, context)
+        self.settled_conflicts(page, 1)
+        result = self.operations(page)[0]['server_result']
+        self.assertEqual(result['code'], 'REVISION_CONFLICT')
+        self.assertEqual(result['current_value'], '4', 'reported in the wire form')
+        self.assertEqual(result['requested_value'], '7')
+
+        page.get_by_role('button', name='Apply my value', exact=True).click()
+        self.pending(page, 0)
+        self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 7)
+
     def test_recently_added_filters_on_the_pending_author_text(self):
         """That filter indexes the RAW field, which is deliberately not the
         same as the displayed credit -- 2I preserves that rather than

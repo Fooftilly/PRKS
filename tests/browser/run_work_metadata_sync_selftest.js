@@ -21,6 +21,37 @@ globalThis.window = globalThis;   // the file ends by exporting onto `window`
     require('path').join(__dirname, '../../frontend/js/components/work-cards.js'), 'utf8'));
 const creditLine = globalThis.prksWorkCardCreditLine;
 
+/* The REAL browse-row shape validators. `thumb_page` is the first synchronized
+ * field whose read models are TYPE-checked, so "does a pending value keep the
+ * cached row valid?" has to be asked of the actual validator rather than of a
+ * restatement of it. app.js is a large browser script; only the shape helpers
+ * are needed, so they are extracted and evaluated on their own. */
+const appSource = require('fs').readFileSync(
+    require('path').join(__dirname, '../../frontend/js/app.js'), 'utf8');
+for (const name of ['prksHasUsableRowId', 'prksIsOptionalString',
+    'prksIsOptionalNonNegativeInteger', 'prksIsBrowseCardRowShape',
+    'prksIsWorksBrowseRowShape', 'prksIsRecentRowShape',
+    'prksIsRecentlyAddedRowShape', 'prksIsBrowseFolderId']) {
+    const at = appSource.indexOf('function ' + name + '(');
+    if (at === -1) throw new Error('shape helper not found in app.js: ' + name);
+    // To the closing brace in column 0 -- these are top-level declarations.
+    const end = appSource.indexOf('\n}', at);
+    (0, eval)(appSource.slice(at, end + 2));
+}
+/* The card asks this which KIND of Work it is rendering, and a video takes a
+ * different thumbnail branch entirely -- no page, just the provider's image. */
+{
+    const api = require('fs').readFileSync(
+        require('path').join(__dirname, '../../frontend/js/api.js'), 'utf8');
+    const at = api.indexOf('function prksInferWorkSourceKind(');
+    (0, eval)(api.slice(at, api.indexOf('\n}', at) + 2));
+}
+const ROW_SHAPES = {
+    'works-browse': globalThis.prksIsWorksBrowseRowShape,
+    'recent': globalThis.prksIsRecentRowShape,
+    'recently-added': globalThis.prksIsRecentlyAddedRowShape,
+};
+
 let sequence = 0;
 const uuid = () => '00000000-0000-4000-8000-' + (++sequence).toString(16).padStart(12, '0');
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
@@ -510,6 +541,173 @@ async function projectionReconciliation() {
     await cache.deleteList('recently-added:index');
     assert.equal(await offline.reconcileWorkField({ ...acknowledgement, server_revision: 4 }), true);
     assert.equal(await cache.getList('recently-added:index'), null);
+}
+
+/* ---- thumb_page: the wire value is not the entity value ----
+ *
+ * Every synchronized field before this one was a string in the editor, on the
+ * wire and in the column, so those could be the same value without anyone
+ * having to say so. Here they genuinely differ: the wire carries "3", the
+ * column is INTEGER NULL, and the read models are TYPE-checked. A wire string
+ * reaching a cached row does not merely look odd -- it makes the row fail its
+ * own shape validator and be discarded as corrupt.
+ */
+function thumbPageCodec() {
+    const canonical = v => globalThis.prksWorkFieldToCanonical('thumb_page', v);
+    const entity = v => globalThis.prksWorkFieldToEntity('thumb_page', v);
+
+    // Editor -> wire. "" is the one spelling of "no explicit page".
+    for (const [draft, wire] of [['', ''], ['1', '1'], ['3', '3'], ['003', '3'],
+        [' 3 ', '3'], ['  ', ''], [null, '']]) {
+        assert.equal(canonical(draft), wire, JSON.stringify(draft));
+    }
+    /* Anything else is REFUSED, never read as "clear the field". That
+     * conflation is the bug an uninterpretable Published Date used to have,
+     * and the one the ordinary PATCH had for this very field: it silently
+     * turned page 0 into NULL. */
+    for (const bad of ['0', '-1', '1.5', 'abc', '3abc', '+3', '１', '1e3']) {
+        assert.equal(canonical(bad), null, bad);
+    }
+
+    // Wire -> entity, and back for display.
+    assert.equal(entity('3'), 3);
+    assert.equal(entity(''), null);
+    assert.equal(entity('0'), null);
+    assert.equal(globalThis.prksWorkFieldToDisplay('thumb_page', 3), '3');
+    assert.equal(globalThis.prksWorkFieldToDisplay('thumb_page', null), '');
+    // A field without a codec is the same string everywhere.
+    assert.equal(globalThis.prksWorkFieldToEntity('doi', '10.1/x'), '10.1/x');
+
+    /* Dirty comparison happens on CANONICAL WIRE values, so a draft that
+     * merely SPELLS the stored page differently is not an edit. */
+    const observed = { fields: base({ thumb_page: { value: '3', revision: 2 } }) };
+    for (const same of ['3', '003', ' 3 ']) {
+        assert.deepEqual(globalThis.prksDirtyWorkMetadataFields({ thumb_page: same }, observed),
+            {}, same + ' is the page already stored');
+    }
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields({ thumb_page: '4' }, observed),
+        { thumb_page: '4' });
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields({ thumb_page: '' }, observed),
+        { thumb_page: '' }, 'clearing is a real change');
+    const cleared = { fields: base({ thumb_page: { value: '', revision: 2 } }) };
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields({ thumb_page: '' }, cleared), {},
+        'and an untouched empty page is not dirty');
+}
+
+/* THE MANDATORY REGRESSION: a pending value must leave every cached row
+ * satisfying its own shape validator. These are the app's real validators, not
+ * a restatement -- a string reaching `thumb_page` makes the row invalid and
+ * the whole cached catalog is then discarded as corrupt. */
+function thumbPageKeepsRowsValid() {
+    globalThis.prksSetPendingWorkMetadata([{ operation: 'SET_WORK_METADATA_FIELD',
+        entity_type: 'work', entity_id: 'W-T', status: 'pending',
+        payload: { field: 'thumb_page', value: '3' } }]);
+
+    const row = () => ({
+        id: 'W-T', title: 'Paper', status: 'Planned', doc_type: 'book',
+        file_path: '/api/pdfs/x.pdf', source_kind: 'pdf', source_url: null,
+        thumb_url: null, thumb_page: 9, author_text: 'A', year: '1999',
+        published_date: '1999-01-01', abstract_excerpt: '', publisher: 'P',
+        last_opened_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z',
+        folder_id: null,
+    });
+    for (const [projection, isShape] of Object.entries(ROW_SHAPES)) {
+        const acknowledged = [row()];
+        assert.equal(isShape(acknowledged[0]), true, projection + ' fixture is valid to begin with');
+        const effective = globalThis.prksEffectiveProjectionRows(acknowledged, projection)[0];
+        assert.equal(effective.thumb_page, 3, projection + ' carries the pending page');
+        assert.equal(typeof effective.thumb_page, 'number', projection + ' as a NUMBER');
+        assert.equal(isShape(effective), true,
+            projection + ' row is still valid with a pending page');
+        assert.equal(acknowledged[0].thumb_page, 9, 'the snapshot is untouched');
+    }
+
+    // A pending CLEAR must be null, not "" -- and null is still valid.
+    globalThis.prksSetPendingWorkMetadata([{ operation: 'SET_WORK_METADATA_FIELD',
+        entity_type: 'work', entity_id: 'W-T', status: 'pending',
+        payload: { field: 'thumb_page', value: '' } }]);
+    for (const [projection, isShape] of Object.entries(ROW_SHAPES)) {
+        const effective = globalThis.prksEffectiveProjectionRows([row()], projection)[0];
+        assert.equal(effective.thumb_page, null, projection + ' clears to null');
+        assert.equal(isShape(effective), true, projection + ' row is still valid when cleared');
+    }
+    // And the string the overlay must never produce would indeed be rejected,
+    // so the assertions above are not passing for a trivial reason.
+    const poisoned = Object.assign(row(), { thumb_page: '3' });
+    assert.equal(globalThis.prksIsWorksBrowseRowShape(poisoned), false,
+        'a wire string in a cached row IS invalid -- that is what this prevents');
+
+    // Embedded Folder/Person/Playlist summaries get the same treatment.
+    const summary = globalThis.prksEffectiveWorkSummaries([{ id: 'W-T', thumb_page: 9 }])[0];
+    assert.equal(summary.thumb_page, null);
+    assert.equal(globalThis.prksEffectiveWorkSync({ id: 'W-T', thumb_page: 9 }).thumb_page, null);
+
+    globalThis.prksSetPendingWorkMetadata([]);
+}
+
+/* ---- thumbnail resource identity comes from the EFFECTIVE Work ----
+ *
+ * A URL with no page means "whatever page the server currently has stored",
+ * which is not an identity the client can reason about and is wrong the moment
+ * an edit is pending: with page 5 stored and a clear pending, the effective
+ * value is null -- page 1 -- but a page-less URL still renders page 5 until
+ * the server hears about it. So the page is always stated.
+ */
+function thumbnailResourceIdentity() {
+    const pending = value => globalThis.prksSetPendingWorkMetadata([{
+        operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-P',
+        status: 'pending', payload: { field: 'thumb_page', value } }]);
+    const card = (work, options) => globalThis.prksWorkCardHtml(
+        globalThis.prksEffectiveWorkSync(work), options || {});
+    const pdf = { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 5 };
+    const srcOf = html => {
+        const m = /data-prks-thumb-src="([^"]*)"/.exec(html);
+        return m ? m[1] : '';
+    };
+
+    // Acknowledged: the stored page, stated.
+    globalThis.prksSetPendingWorkMetadata([]);
+    assert.equal(srcOf(card(pdf)), '/api/works/W-P/thumbnail?page=5');
+    // Acknowledged null is page 1 EXPLICITLY, not an absent page.
+    assert.equal(srcOf(card({ id: 'W-P', file_path: '/api/pdfs/x.pdf', thumb_page: null })),
+        '/api/works/W-P/thumbnail?page=1');
+
+    // Pending page: the new page, before the server knows anything.
+    pending('3');
+    assert.equal(srcOf(card(pdf)), '/api/works/W-P/thumbnail?page=3');
+
+    /* THE REGRESSION: a pending CLEAR while the server still stores page 5.
+     * A page-less URL would render 5; the effective value is null, so the
+     * resource is page 1 -- the same page the server will choose once the
+     * clear is acknowledged. */
+    pending('');
+    assert.equal(srcOf(card(pdf)), '/api/works/W-P/thumbnail?page=1',
+        'a pending clear requests page 1, not the page still stored');
+
+    /* OFFLINE SUPPRESSION IS ABSOLUTE and happens BEFORE any URL exists. A
+     * cached card must not ask PRKS for bytes it cannot obtain, and a pending
+     * metadata edit is not a reason to start. */
+    pending('4');
+    const suppressed = card(pdf, { suppressThumbnail: true });
+    assert.equal(suppressed.indexOf('thumbnail'), -1,
+        'no thumbnail URL at all is emitted for a cached card');
+    assert.equal(suppressed.indexOf('page=4'), -1);
+    pending('');
+    const clearedOffline = card(pdf, { suppressThumbnail: true });
+    assert.equal(clearedOffline.indexOf('page=1'), -1,
+        'and a pending clear does not emit one either');
+    assert.equal(clearedOffline.indexOf('work-card__thumb--empty') !== -1, true,
+        'the layout is unchanged -- only the source is removed');
+
+    // A non-PDF Work has no page resource at all.
+    globalThis.prksSetPendingWorkMetadata([]);
+    assert.equal(srcOf(card({ id: 'W-V', source_kind: 'video', source_url: 'https://x/v',
+        thumb_url: 'https://img/1.jpg' })), 'https://img/1.jpg');
+
+    /* The request coordinator classifies by PATHNAME, so the added query
+     * cannot change how a thumbnail request is treated. */
+    assert.equal(new URL('/api/works/W-P/thumbnail?page=3', 'http://x').pathname,
+        '/api/works/W-P/thumbnail');
 }
 
 /* ---- author_text: a stored value that is not necessarily the displayed one ----
@@ -1040,6 +1238,52 @@ async function abstracts() {
             changed: true, value_omitted: true }, doiOp), false,
         'only byte-limited fields may omit their value');
 
+    /* ---- a conflict result is ONE shape, never a mixture ----
+     *
+     * The shape is decided by what the result CARRIES, not by the field's
+     * type: a small scalar arrives bounded when the full form would not fit
+     * the durable result limit. But a result carrying members of both shapes
+     * leaves which one to trust undecided, so each refuses the other's
+     * members outright rather than quietly preferring one.
+     */
+    const doiConflictOp = { operation: 'SET_WORK_METADATA_FIELD', entity_id: 'W-A',
+        payload: { field: 'doi', value: 'mine' } };
+    const isResultOf = data => globalThis.prksWorkMetadataSyncHandler.isResult(data, doiConflictOp);
+    const fullShape = { code: 'REVISION_CONFLICT', work_id: 'W-A', field: 'doi',
+        current_revision: 4, current_value: 'theirs', requested_value: 'mine' };
+    const boundedShape = { code: 'REVISION_CONFLICT', work_id: 'W-A', field: 'doi',
+        current_revision: 4, current_preview: 'theirs',
+        current_bytes: 6, requested_bytes: 4 };
+    assert.equal(isResultOf(fullShape), true, 'the full shape is well formed');
+    assert.equal(isResultOf(boundedShape), true,
+        'and so is the bounded one, for a small scalar the server had to degrade');
+    for (const [label, extra] of [
+        ['current_value', { current_value: 'theirs' }],
+        ['requested_value', { requested_value: 'mine' }],
+    ]) {
+        assert.equal(isResultOf(Object.assign({}, boundedShape, extra)), false,
+            'a bounded result carrying ' + label + ' is a mixture');
+    }
+    for (const [label, extra] of [
+        ['current_preview', { current_preview: 'theirs' }],
+        ['current_bytes', { current_bytes: 6 }],
+        ['requested_bytes', { requested_bytes: 4 }],
+    ]) {
+        assert.equal(isResultOf(Object.assign({}, fullShape, extra)), false,
+            'a full result carrying ' + label + ' is a mixture');
+    }
+    // A byte-limited field is bounded ALWAYS -- accepting the full shape there
+    // would admit a megabyte into the durable row.
+    const bigOp = { operation: 'SET_WORK_METADATA_FIELD', entity_id: 'W-A',
+        payload: { field: 'abstract', value: 'mine' } };
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(
+        Object.assign({}, fullShape, { field: 'abstract' }), bigOp), false);
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(
+        Object.assign({}, boundedShape, { field: 'abstract' }), bigOp), true);
+    // Neither shape at all is not a result either.
+    assert.equal(isResultOf({ code: 'REVISION_CONFLICT', work_id: 'W-A', field: 'doi',
+        current_revision: 4 }), false);
+
     /* ---- the metadata-state projection keeps its shape ---- */
     assert.deepEqual(globalThis.prksMetadataStateAckPatch('abstract', 7, pendingText),
         { revision: 7 }, 'a byte-limited field carries its revision only');
@@ -1169,7 +1413,7 @@ async function highFanOut() {
     assert.equal(effectiveSummaries[0].publisher, 'Elsevier', 'untouched fields survive');
     assert.deepEqual(summaries, frozenSummaries, 'the cached entity is never mutated');
     assert.deepEqual(globalThis.PRKS_WORK_SUMMARY_FIELDS,
-        ['status', 'author_text', 'year', 'published_date', 'publisher']);
+        ['status', 'thumb_page', 'author_text', 'year', 'published_date', 'publisher']);
 
     /* The Published Date codec: the editor spells it dd/mm/yyyy, the wire and
      * the column are ISO, and comparing the spellings would make an untouched
@@ -1220,6 +1464,9 @@ async function main() {
     await highFanOut();
     statusMembership();
     authorTextComposition();
+    thumbPageCodec();
+    thumbPageKeepsRowsValid();
+    thumbnailResourceIdentity();
     await embeddedReconciliation();
     await unreadableSummariesBlockRetirement();
     await staleEmbeddedRead();

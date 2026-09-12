@@ -35,6 +35,12 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """A value this field will actually accept. Status is validated by
         ALLOWLIST, not by length, so the free-text sample every other field
         takes is a refusal for it."""
+        if field in meta.FIELD_CODECS:
+            # A codec field accepts only what its codec accepts: free text is
+            # a refusal, not a long value.
+            current = meta.database_to_wire(field, self.value(field))
+            page = (int(current) if current else 0) + 1 + index
+            return str(page)
         if field in meta.FIELD_ALLOWLISTS:
             # Deliberately a value the Work does NOT already hold: an
             # allowlist is small, so an index-chosen sample can silently
@@ -46,8 +52,16 @@ class WorkMetadataSyncTests(unittest.TestCase):
         return "value-%d" % index
 
     def value(self, field):
+        """The raw column. For `thumb_page` that is an INTEGER or NULL, not a
+        string -- see `wire_value()`."""
         return self.db.execute_query(
             "SELECT %s AS v FROM works WHERE id = ?" % field, (self.work,))[0]["v"]
+
+    def wire_value(self, field):
+        """The column in the representation the protocol uses. Identical to the
+        column for every field but `thumb_page`, where the column is typed and
+        the wire is its decimal string."""
+        return meta.database_to_wire(field, self.value(field))
 
     # ---- the field registry ----
 
@@ -55,14 +69,14 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertEqual(sorted(meta.SYNCED_FIELDS),
                          ["abstract", "author_text", "doi", "edition", "isbn", "issue",
                           "journal", "location", "pages", "published_date", "publisher",
-                          "status", "volume", "year"])
+                          "status", "thumb_page", "volume", "year"])
         for index, field in enumerate(sorted(meta.SYNCED_FIELDS)):
             with self.subTest(field=field):
                 wanted = self.sample(field, index + 1)
                 code, result = self.send(field, wanted)
                 self.assertEqual((code, result["code"], result["changed"]), (200, "ACKNOWLEDGED", True))
                 self.assertEqual(result["server_revision"], 1)
-                self.assertEqual(self.value(field), wanted)
+                self.assertEqual(self.wire_value(field), wanted)
 
     def test_an_unsupported_field_never_reaches_the_column(self):
         """An arbitrary column name from a client is both an injection surface
@@ -210,7 +224,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
                 after = self.state()[field]
                 self.assertEqual(after["revision"], before + 1,
                                  "%s did not advance through update_work_metadata" % field)
-                self.assertEqual(self.value(field), wanted)
+                self.assertEqual(self.wire_value(field), wanted)
                 # A device holding the pre-PATCH value must now be told so.
                 self.assertEqual(self.send(field, self.sample(field, index + 2), base=before)[1]["code"],
                                  "REVISION_CONFLICT", field)
@@ -431,6 +445,125 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertLessEqual(len(result["current_preview"]), meta.CONFLICT_PREVIEW_CHARS)
         self.assertLessEqual(len(_json.dumps(result).encode("utf-8")), 2048,
                              "the whole result must fit the durable bound")
+
+    # ---- thumb_page: the wire is not the column (2J) ----
+
+    def column_type(self, field):
+        return self.db.execute_query(
+            "SELECT typeof(%s) AS t FROM works WHERE id = ?" % field, (self.work,))[0]["t"]
+
+    def test_the_thumb_page_codec_accepts_only_page_numbers(self):
+        """Rejecting a value is not the same as clearing it. `""` is the one
+        spelling of "no explicit page"; everything else either parses as a page
+        or is refused outright -- the bug an uninterpretable Published Date
+        used to have, where refusing to guess was indistinguishable from being
+        told to delete."""
+        codec = meta.codec_for("thumb_page")
+        for good, expected in (("", None), ("1", 1), ("3", 3), ("003", 3),
+                               (" 3 ", 3), ("10", 10), ("  ", None)):
+            with self.subTest(wire=good):
+                self.assertTrue(codec.is_valid_wire(good))
+                self.assertEqual(codec.to_database(good), expected)
+        for bad in ("0", "-1", "1.5", "abc", "3abc", "+3", "\uff13", "1_0", "٣", "1e3"):
+            with self.subTest(wire=bad):
+                self.assertFalse(codec.is_valid_wire(bad), bad)
+                # The validator and the converter are ONE rule: a spelling the
+                # validator refuses must not be quietly converted by the other.
+                self.assertIsNone(codec.to_database(bad), bad)
+        # Column/entity -> wire.
+        self.assertEqual(codec.to_wire(None), "")
+        self.assertEqual(codec.to_wire(3), "3")
+        self.assertEqual(codec.to_wire(0), "")
+        self.assertEqual(codec.to_wire(True), "", "a bool is not a page number")
+
+    def test_an_invalid_thumb_page_never_reaches_the_column(self):
+        for bad in ("0", "-1", "1.5", "abc", "+3"):
+            with self.subTest(wire=bad):
+                self.assertEqual(sync_protocol.process_operation(
+                    self.db, self.op("thumb_page", bad)), (400, {"code": "INVALID_ENVELOPE"}))
+                with self.assertRaises(ValueError):
+                    self.db.update_work_metadata(self.work, {"thumb_page": bad})
+        self.assertIsNone(self.value("thumb_page"))
+        self.assertEqual(self.db.execute_query("SELECT * FROM sync_operations"), [])
+
+    def test_the_column_stays_typed_whichever_path_writes_it(self):
+        """The column is INTEGER NULL and every read model is validated as
+        `integer | null`. A wire string stored there would not merely look
+        odd -- it would make each cached row fail its own shape validator."""
+        self.assertEqual(self.send("thumb_page", "4")[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual((self.value("thumb_page"), self.column_type("thumb_page")),
+                         (4, "integer"))
+        self.db.update_work_metadata(self.work, {"thumb_page": 7})
+        self.assertEqual((self.value("thumb_page"), self.column_type("thumb_page")),
+                         (7, "integer"))
+        # PATCH accepts the native form and the wire form identically.
+        self.db.update_work_metadata(self.work, {"thumb_page": "9"})
+        self.assertEqual((self.value("thumb_page"), self.column_type("thumb_page")),
+                         (9, "integer"))
+        # Clearing stores NULL, never "".
+        self.db.update_work_metadata(self.work, {"thumb_page": None})
+        self.assertEqual((self.value("thumb_page"), self.column_type("thumb_page")),
+                         (None, "null"))
+
+    def test_representation_differences_are_not_changes(self):
+        """A revision records a change of STATE. Column 3, wire "3" and wire
+        "003" are one state, and advancing for a difference in spelling would
+        manufacture staleness for every device already holding the value."""
+        self.db.update_work_metadata(self.work, {"thumb_page": 3})
+        after_first = self.state()["thumb_page"]["revision"]
+        self.assertEqual(after_first, 1)
+        for same in ("3", "003", " 3 ", 3):
+            with self.subTest(value=repr(same)):
+                if isinstance(same, str):
+                    code, result = self.send("thumb_page", same, base=after_first)
+                    self.assertEqual((code, result["changed"]), (200, False))
+                else:
+                    self.db.update_work_metadata(self.work, {"thumb_page": same})
+                self.assertEqual(self.state()["thumb_page"]["revision"], after_first)
+        # NULL and "" are likewise one state.
+        self.db.update_work_metadata(self.work, {"thumb_page": None})
+        cleared = self.state()["thumb_page"]["revision"]
+        self.assertEqual(self.send("thumb_page", "", base=cleared)[1]["changed"], False)
+        self.assertEqual(self.state()["thumb_page"]["revision"], cleared)
+
+    def test_a_stale_but_convergent_typed_value_is_not_a_conflict(self):
+        """Two devices that chose the same page have not disagreed, whichever
+        spelling each of them used to say so."""
+        self.db.update_work_metadata(self.work, {"thumb_page": 2})
+        base = self.state()["thumb_page"]["revision"]
+        self.db.update_work_metadata(self.work, {"thumb_page": 5})   # someone else
+        for spelling in ("5", "005", " 5 "):
+            with self.subTest(wire=spelling):
+                code, result = self.send("thumb_page", spelling, base=base)
+                self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+                self.assertEqual(result["changed"], False)
+        # A genuinely different page still conflicts.
+        code, result = self.send("thumb_page", "7", base=base)
+        self.assertEqual((code, result["code"]), (409, "REVISION_CONFLICT"))
+        self.assertEqual(result["current_value"], "5", "reported in the WIRE form")
+        self.assertEqual(result["requested_value"], "7")
+        # ...including a clear against a stored page.
+        self.assertEqual(self.send("thumb_page", "", base=base)[1]["code"],
+                         "REVISION_CONFLICT")
+
+    def test_metadata_state_reports_the_wire_form_and_the_work_the_typed_one(self):
+        """The two projections describe different things. `metadata-state` is
+        synchronization bookkeeping: its `value` is what a base revision was
+        observed against, in the representation the protocol uses. The Work
+        record is the entity. `thumb_page` is where that distinction stops
+        being invisible."""
+        self.send("thumb_page", "6")
+        self.assertEqual(self.state()["thumb_page"], {"value": "6", "revision": 1})
+        self.assertEqual(self.db.get_work(self.work)["thumb_page"], 6)
+        self.send("thumb_page", "", base=1)
+        self.assertEqual(self.state()["thumb_page"], {"value": "", "revision": 2})
+        self.assertIsNone(self.db.get_work(self.work)["thumb_page"])
+
+    def test_creation_does_not_manufacture_a_thumb_page_revision(self):
+        created = self.db.add_work("Fresh", thumb_page=4)
+        state = self.db.get_work_metadata_state(created)["fields"]["thumb_page"]
+        self.assertEqual(state, {"value": "4", "revision": 0})
+        self.assertEqual(self.db.get_work(created)["thumb_page"], 4)
 
     # ---- the durable result bound (2I.2) ----
 
@@ -755,18 +888,18 @@ class WorkMetadataSyncTests(unittest.TestCase):
         on every Work card and so reach all three."""
         self.assertEqual(sorted(meta.FIELD_PROJECTIONS),
                          ["abstract", "author_text", "published_date", "publisher",
-                          "status", "year"])
+                          "status", "thumb_page", "year"])
         self.assertEqual(meta.FIELD_PROJECTIONS["abstract"], ("works-browse",))
         self.assertEqual(meta.FIELD_PROJECTIONS["publisher"], ("recently-added",))
         # Status is the strongest case for reaching all three: it does not only
         # change what a card SAYS, it changes which Progress group the card
         # belongs to, and Progress reads `works-browse:index`.
-        for field in ("year", "published_date", "status", "author_text"):
+        for field in ("year", "published_date", "status", "author_text", "thumb_page"):
             self.assertEqual(meta.FIELD_PROJECTIONS[field],
                              ("works-browse", "recent", "recently-added"), field)
         for field in meta.SYNCED_FIELDS:
             if field in ("publisher", "abstract", "year", "published_date", "status",
-                         "author_text"):
+                         "author_text", "thumb_page"):
                 continue
             self.assertNotIn(field, meta.FIELD_PROJECTIONS, field)
 
@@ -774,7 +907,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """Folder, Person and Playlist details embed Work summaries. A field
         those rows carry has to reach them too -- rendering AND local search."""
         self.assertEqual(sorted(meta.SUMMARY_FIELDS),
-                         ["author_text", "published_date", "publisher", "status", "year"])
+                         ["author_text", "published_date", "publisher", "status",
+                          "thumb_page", "year"])
         self.assertEqual(meta.SUMMARY_ENTITY_KINDS, ("folder", "person", "playlist"))
         for field in meta.SUMMARY_FIELDS:
             self.assertIn(field, meta.SYNCED_FIELDS, field)

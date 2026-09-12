@@ -105,6 +105,9 @@ FIELD_ALLOWLISTS = {
 # and asking a five-value enumeration how long it may be is meaningless.
 SYNCED_FIELDS = {
     "status": None,
+    # Validated by its CODEC rather than by size or allowlist: a page number
+    # is not long or short, it is a page number or it is not one.
+    "thumb_page": None,
     "author_text": MAX_AUTHOR_TEXT_UTF8_BYTES,
     "abstract": MAX_ABSTRACT_UTF8_BYTES,
     "year": 50,
@@ -124,13 +127,14 @@ SYNCED_FIELDS = {
 # reconciled when it is acknowledged. Absent means "the Work detail only".
 # `recently-added:index` selects `publisher` for its local filter, so this is a
 # real dependency even though no Work card renders the value.
-# Abstract's limit is measured in UTF-8 BYTES; the other size-limited fields
-# keep the code-point limits they have had since 2D. The distinction is deliberate, not
-# an oversight. Abstract's bound exists to keep a durable operation and every
-# read of it cheap, which is a storage and transport concern and therefore a
-# byte concern. The others bound how much text a one-line field may hold, which
-# is a display concern -- and switching them to bytes would quietly shorten
-# every one of them by a factor of three for anyone writing CJK.
+# A field in BYTE_LIMITS is measured in UTF-8 BYTES; every other size-limited
+# field keeps the code-point limit it has had since 2D. The distinction is
+# deliberate, not an oversight. A byte bound exists to keep a durable
+# operation and every read of it cheap, which is a storage and transport
+# concern and therefore a byte concern. A code-point bound says how much TEXT
+# a one-line field may hold, which is a display concern -- and switching those
+# to bytes would quietly shorten every one by a factor of three for anyone
+# writing CJK.
 BROWSE_LISTS = ("works-browse", "recent", "recently-added")
 
 BYTE_LIMITED_FIELDS = frozenset(BYTE_LIMITS)
@@ -171,12 +175,16 @@ FIELD_PROJECTIONS = {
     # Status therefore has to reach these rows before the route filters them,
     # or the Work stays in the group the server last knew about.
     "status": BROWSE_LISTS,
+    # Every Work card derives its thumbnail URL from this, so a pending page
+    # has to reach the cached rows those cards are rendered from.
+    "thumb_page": BROWSE_LISTS,
 }
 
 # Fields that cached ENTITY snapshots embed as part of a Work summary:
 # `folder.works[]`, `person.works[]`, `playlist.items[]`. A pending value has to
 # reach those rows too, and an acknowledgement has to patch them.
-SUMMARY_FIELDS = frozenset({"status", "author_text", "year", "published_date", "publisher"})
+SUMMARY_FIELDS = frozenset({"status", "thumb_page", "author_text", "year",
+                           "published_date", "publisher"})
 SUMMARY_ENTITY_KINDS = ("folder", "person", "playlist")
 
 
@@ -199,6 +207,12 @@ def is_valid_field_value(field, value):
     allowed = FIELD_ALLOWLISTS.get(field)
     if allowed is not None:
         return canonical(value) in allowed
+    if field in FIELD_CODECS:
+        codec = codec_for(field)
+        # A codec field is validated by its codec: a page number is not long
+        # or short, it is a page number or it is not one.
+        return (codec.is_valid_input(value) if hasattr(codec, "is_valid_input")
+                else codec.is_valid_wire(value))
     if SYNCED_FIELDS[field] is None:
         return True
     return within_limit(field, value)
@@ -228,6 +242,149 @@ def canonical(value):
     what the user typed, and the column has never been normalized that way.
     """
     return "" if value is None else str(value)
+
+
+# ---- field codecs: the wire is not the column ------------------------------
+#
+# Every synchronized field so far has been a string in the editor, a string on
+# the wire and a string in the column, so those three could be the same value
+# without anyone having to say so. `thumb_page` is the first field where they
+# genuinely differ: the column is INTEGER NULL, and the read models -- the Work
+# record, the three browse catalogs, the embedded Folder/Person/Playlist
+# summaries -- carry `integer | null` and are validated as such by the client.
+# A wire string reaching one of those rows does not merely look odd; it makes
+# the row fail its own shape validator and be discarded as corrupt.
+#
+# The wire stays a STRING regardless. The operation envelope is validated,
+# hashed, compared and replayed as a string on both sides, and widening
+# `payload.value` to a union type would mean touching every one of those for a
+# single field. So the boundary converts, and the codec owns the conversion:
+#
+#     editor "3"  <-> wire "3"  <-> column 3   <-> entity 3
+#     editor ""   <-> wire ""   <-> column NULL <-> entity null
+#
+# A field with no codec is a string everywhere, which is what `identity` says.
+
+
+class _IdentityCodec:
+    """Wire, column and entity are the same string."""
+
+    @staticmethod
+    def to_wire(value):
+        return canonical(value)
+
+    @staticmethod
+    def to_database(wire):
+        return canonical(wire)
+
+    @staticmethod
+    def is_valid_wire(wire):
+        return isinstance(wire, str)
+
+
+class _ThumbPageCodec:
+    """A 1-based page number, or nothing at all.
+
+    The wire form is the DECIMAL STRING of the page, or "" for "no explicit
+    page". `""` is the only spelling of absence: a client cannot send null,
+    because the envelope carries strings.
+    """
+
+    @staticmethod
+    def _parse(text):
+        """ONE strict rule, shared by validation and conversion.
+
+        A validator that refuses a spelling while the converter quietly
+        accepts it is two rules, and the second one only runs where the first
+        was bypassed -- which is exactly where being surprising is worst.
+
+        Digits only. `int()` alone would accept "+3", "３" (fullwidth), "3_0"
+        and assorted Unicode spaces; none is a page number anyone typed on
+        purpose, and accepting them would let two devices hold different
+        spellings of the same page and disagree about having converged.
+        """
+        if not isinstance(text, str):
+            return None
+        stripped = text.strip()
+        if not stripped.isascii() or not stripped.isdigit():
+            return None
+        page = int(stripped)
+        return page if page >= 1 else None
+
+    @classmethod
+    def is_valid_wire(cls, wire):
+        if not isinstance(wire, str):
+            return False
+        # "" is the only spelling of absence; everything else must parse.
+        return wire.strip() == "" or cls._parse(wire) is not None
+
+    @classmethod
+    def is_valid_input(cls, value):
+        """Accepts the wire form AND the native one.
+
+        The synchronization envelope carries strings, so the sync path only
+        ever offers `is_valid_wire`. An ordinary PATCH is a JSON API where a
+        page is naturally an integer and absence is naturally null. Those are
+        two SPELLINGS of one rule, not two rules: both are converted by this
+        same codec to one canonical value before anything is compared or
+        written, which is what stops the paths from drifting.
+        """
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, int):
+            return value >= 1
+        return cls.is_valid_wire(value)
+
+    @classmethod
+    def to_wire(cls, value):
+        """Column or entity value -> wire. NULL, and anything unusable,
+        becomes "" -- which is what the thumbnail endpoint already treats a
+        missing page as."""
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return ""
+        if isinstance(value, int):
+            return str(value) if value >= 1 else ""
+        page = cls._parse(value)
+        return str(page) if page is not None else ""
+
+    @classmethod
+    def to_database(cls, wire):
+        """Wire -> column. Never a string: the column is INTEGER NULL."""
+        if isinstance(wire, bool):
+            return None
+        if isinstance(wire, int):
+            return wire if wire >= 1 else None
+        return cls._parse(wire)
+
+
+FIELD_CODECS = {
+    "thumb_page": _ThumbPageCodec,
+}
+
+
+def codec_for(field):
+    return FIELD_CODECS.get(field, _IdentityCodec)
+
+
+def canonical_wire(field, value):
+    """The wire spelling of a value, whatever representation it arrives in.
+
+    Canonicalizing here is what makes "003" and "3" the same state rather than
+    two devices disagreeing about a page they both chose.
+    """
+    return codec_for(field).to_wire(value)
+
+
+def wire_to_database(field, wire):
+    return codec_for(field).to_database(wire)
+
+
+def database_to_wire(field, value):
+    return codec_for(field).to_wire(value)
 
 
 def get_field_state_on_conn(conn, work_id):
@@ -267,7 +424,12 @@ def get_field_state_on_conn(conn, work_id):
     for field in sorted(SYNCED_FIELDS):
         entry = {"revision": revisions.get(field, 0)}
         if field not in BYTE_LIMITED_FIELDS:
-            entry["value"] = canonical(row[field])
+            # The WIRE representation, deliberately: this projection describes
+            # synchronization state, and its `value` is what a base revision
+            # was observed against. The Work record is where the ENTITY
+            # representation lives -- `thumb_page` is "3" here and 3 there, and
+            # that difference is the point rather than an inconsistency.
+            entry["value"] = database_to_wire(field, row[field])
         fields[field] = entry
     return {"work_id": work_id, "fields": fields}
 
@@ -289,12 +451,16 @@ def set_field_on_conn(conn, work_id, field, value):
     """
     if field not in SYNCED_FIELDS:
         raise ValueError("unsupported synchronized field: %s" % field)
-    desired = canonical(value)
+    # Comparison happens on CANONICAL DATABASE meaning, never on the spelling.
+    # Wire "3" and column 3 are the same state, and so are wire "" and NULL --
+    # advancing a revision for a representation difference would manufacture
+    # staleness for every device that already holds the value.
+    desired = wire_to_database(field, value)
     row = conn.execute("SELECT %s FROM works WHERE id = ?" % field, (work_id,)).fetchone()
     if row is None:
         return False, 0
     revision = get_revision(conn, work_id, field)
-    if canonical(row[0]) == desired:
+    if wire_to_database(field, row[0]) == desired:
         return False, revision
     conn.execute(
         "UPDATE works SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?" % field,
@@ -425,7 +591,12 @@ def apply(db, conn, op, received_at):
     if row is None:
         result["code"] = "ENTITY_NOT_FOUND"
         return 404, result
-    current = canonical(row[0])
+    # Both sides in CANONICAL WIRE form. For every field but `thumb_page` that
+    # is the value unchanged; for `thumb_page` it is what makes column 3, wire
+    # "3" and wire "003" one state rather than three, so two devices that chose
+    # the same page are never told they disagreed.
+    current = database_to_wire(field, row[0])
+    desired = canonical_wire(field, desired)
     revision = get_revision(conn, work_id, field)
     base = op["base_revision"]
     if base > revision:
@@ -450,7 +621,7 @@ def apply(db, conn, op, received_at):
         # request is needed and replay stays exact.
         result["value_omitted"] = True
     else:
-        result["value"] = desired
+        result["value"] = canonical_wire(field, desired)
     return 200, result
 
 

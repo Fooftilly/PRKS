@@ -168,19 +168,35 @@
         return paint(ctx, state).catch(() => {});
     }
 
+    /* What to say when a codec refuses a value. A refusal has to name the
+     * shape the field wants, because "invalid" tells the user nothing they can
+     * act on -- and silence is worse still: the save would appear to do
+     * nothing at all. Each message belongs to the field whose codec can
+     * produce the refusal. */
+    const FIELD_ERRORS = Object.freeze({
+        published_date: 'Use dd/mm/yyyy.',
+        thumb_page: 'Enter a page number of 1 or more, or leave it empty for page 1.',
+    });
+
+    /** The error element that belongs to one field's control, by convention. */
+    function fieldErrorElement(input) {
+        return input && input.id ? document.getElementById(input.id + '-error') : null;
+    }
+
     /** Inline, field-local feedback for a value the codec rejected. */
     function showFieldError(field) {
         const input = document.querySelector('[data-prks-work-field="' + field + '"]');
-        const error = document.getElementById('meta-date-error');
         if (input) { input.setAttribute('aria-invalid', 'true'); input.focus(); }
-        if (error && field === 'published_date') error.textContent = 'Use dd/mm/yyyy.';
+        const error = fieldErrorElement(input);
+        if (error) error.textContent = FIELD_ERRORS[field] || 'That value cannot be saved.';
     }
 
     function clearFieldErrors() {
-        document.querySelectorAll('[data-prks-work-field][aria-invalid]').forEach(
-            input => input.removeAttribute('aria-invalid'));
-        const error = document.getElementById('meta-date-error');
-        if (error) error.textContent = '';
+        document.querySelectorAll('[data-prks-work-field]').forEach(input => {
+            input.removeAttribute('aria-invalid');
+            const error = fieldErrorElement(input);
+            if (error) error.textContent = '';
+        });
     }
 
     const PREVIEW_CHARS = 160;

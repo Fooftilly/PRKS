@@ -3403,15 +3403,13 @@ async function submitWorkMetaEdit(workId) {
     const payload = {
         title: draft.title,
         doc_type: draft.doc_type || 'article',
-        thumb_page: (() => {
-            const raw = String(draft.thumb_page || '').trim();
-            if (!raw) return null;
-            const n = Number(raw);
-            if (!Number.isFinite(n)) return null;
-            const i = Math.floor(n);
-            return i >= 1 ? i : null;
-        })(),
     };
+    // Thumbnail page is deliberately absent: it takes the durable semantic
+    // queue through the synchronized section, online and offline. It also has
+    // its own wire representation -- a decimal string, "" for the default
+    // page -- which the field codec owns; this payload used to convert it to
+    // an integer here, which is precisely the second implementation the codec
+    // exists to remove.
     // Status is deliberately absent: it takes the durable semantic queue
     // through "Save status", online and offline, because a pending Status has
     // to move the Work between Progress groups before the server has heard
@@ -4649,18 +4647,20 @@ function renderWorkMetaEditTab(work, draft) {
                 <label for="meta-abstract">Abstract</label>
                 <textarea id="meta-abstract" class="textarea-md" data-prks-work-field="abstract">${safeStr(work.abstract)}</textarea>
 
+                <label for="meta-thumb-page">Thumbnail page</label>
+                <input type="number" id="meta-thumb-page" data-prks-work-field="thumb_page" min="1" step="1" inputmode="numeric" placeholder="1" value="${safeStr(thumbPage)}" aria-describedby="meta-thumb-page-error">
+                <p id="meta-thumb-page-error" class="field-error" aria-live="polite"></p>
+                <p class="meta-row meta-row--hint">Which page of the PDF to use as the card image. Leave empty for page 1.</p>
+
                 <div class="prks-form-actions form-actions">
                     <button type="button" id="save-work-bib-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}')">Save bibliographic details</button>
                 </div>
                 <div class="meta-row" data-prks-role="work-bib-sync" aria-live="polite"></div>
             </section>
         `;
-    const thumbField = isVideo
-        ? ''
-        : `
-            <label for="meta-thumb-page">Thumbnail page</label>
-            <input type="number" id="meta-thumb-page" min="1" step="1" inputmode="numeric" placeholder="1" value="${safeStr(thumbPage)}">
-        `;
+    // Rendered INSIDE the synchronized section below, never here: a second
+    // control for one field would be a second mutation path for it.
+    const thumbField = '';
 
     return `
         <div class="doc-meta-card form-pane doc-meta-card--editing work-meta-editor">

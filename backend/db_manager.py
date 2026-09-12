@@ -2362,16 +2362,13 @@ class PRKSDatabase:
                 updates['hide_pdf_link_annotations'] = 0
         if 'doc_type' in updates:
             updates['doc_type'] = normalize_doc_type(updates['doc_type'])
-        if 'thumb_page' in updates:
-            raw = updates.get('thumb_page')
-            if raw is None or raw == '':
-                updates['thumb_page'] = None
-            else:
-                try:
-                    n = int(raw)
-                    updates['thumb_page'] = n if n >= 1 else None
-                except Exception:
-                    updates['thumb_page'] = None
+        # `thumb_page` used to be normalized here, and that normalization
+        # SILENTLY CLEARED anything it could not read: 0, -1, "abc" and a
+        # fraction all became NULL, so a client asking for an impossible page
+        # was told the field had been emptied on purpose. Its field codec now
+        # owns the conversion for every path, and refuses what it cannot read
+        # instead of guessing -- the same rule an uninterpretable Published
+        # Date follows. See work_metadata_sync.FIELD_CODECS.
         if not updates:
             return
         # Revisions record CANONICAL history, not sync-endpoint history. An
@@ -2383,15 +2380,32 @@ class PRKSDatabase:
         # transaction so a value can never be stored without its revision.
         synced = {k: v for k, v in updates.items() if k in work_metadata_sync.SYNCED_FIELDS}
         plain = {k: v for k, v in updates.items() if k not in synced}
-        # One canonical limit, whichever path a value arrives by. If PATCH
-        # accepted an Abstract the durable queue would refuse, the same edit
-        # would be savable online and impossible offline -- exactly the split
-        # contract moving a field to local-first is supposed to remove.
+        # PATCH and the synchronization handler converge on ONE representation
+        # before either validates or writes. A caller may hand this method a
+        # native value -- an int for `thumb_page`, or None -- while the sync
+        # path always carries the wire string; converting here means the two
+        # paths run the same validator over the same spelling and reach the
+        # same revision decision, instead of being two implementations that
+        # agree until they do not.
+        # VALIDATE FIRST, then canonicalize. The other order silently repairs
+        # what it should refuse: `canonical_wire` maps an unreadable page to
+        # "", so validating afterwards would see a well-formed clear and a
+        # request for page 0 would be answered by emptying the field -- which
+        # is the defect this path had before the codec existed.
+        #
+        # One rule, whichever path a value arrives by. If PATCH accepted an
+        # Abstract the durable queue would refuse, the same edit would be
+        # savable online and impossible offline -- exactly the split contract
+        # moving a field to local-first is supposed to remove.
         for field, value in synced.items():
             if not work_metadata_sync.is_valid_field_value(field, value):
                 raise ValueError("%s is not a valid value for %s" % (value, field)
                                  if field in work_metadata_sync.FIELD_ALLOWLISTS
+                                    or field in work_metadata_sync.FIELD_CODECS
                                  else "%s exceeds the maximum supported length" % field)
+        # Now that every value is known-good, put PATCH and the synchronization
+        # handler on ONE representation before either writes.
+        synced = {k: work_metadata_sync.canonical_wire(k, v) for k, v in synced.items()}
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if plain:

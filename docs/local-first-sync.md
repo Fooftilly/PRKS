@@ -414,7 +414,7 @@ a byte-limited field reports `current_preview`, `current_bytes` and
 store is a conflict the user never sees. Taking the server's version therefore
 discards the local intent and invalidates the cached Work rather than trusting
 a truncated copy. Diagnostics shows bounded previews and sizes, never a whole
-Abstract.
+value.
 
 ## Projection transforms
 
@@ -429,6 +429,7 @@ Abstract.
 | `published_date` | `works-browse`, `recent`, `recently-added` | `published_date` | copied |
 | `status` | `works-browse`, `recent`, `recently-added` | `status` | copied |
 | `author_text` | `works-browse`, `recent`, `recently-added` | `author_text` | copied |
+| `thumb_page` | `works-browse`, `recent`, `recently-added` | `thumb_page` | **converted** (wire string → `integer \| null`) |
 
 A declared projection the runtime cannot address is a wiring error, not
 something to step over: `reconcileFieldProjections` returns false rather than
@@ -706,6 +707,108 @@ Because a small scalar's conflict may now arrive in either shape, the client
 validates **what it received** rather than what the field's type implies. A
 byte-limited field is still always bounded: accepting the full shape there
 would admit a megabyte into the durable row.
+
+## `thumb_page`: the wire value is not the column value
+
+Every synchronized field before this one was a string in the editor, a string
+on the wire and a string in the column, so those could be the same value
+without anyone having to say so. `thumb_page` is where that stops being true,
+and it needs four representations named explicitly:
+
+| Boundary | Representation | Examples |
+| --- | --- | --- |
+| Editor control | string | `""`, `"3"` |
+| Sync wire | canonical decimal string; `""` means "no explicit page" | `""`, `"3"` |
+| SQLite column | `INTEGER NULL` | `NULL`, `3` |
+| Work / browse row / embedded summary | `integer \| null` | `null`, `3` |
+
+**The wire stays a string.** The operation envelope is validated, hashed,
+compared and replayed as a string on both sides; widening `payload.value` to a
+union type would mean touching every one of those for one field. So the
+boundary converts, and `FIELD_CODECS` owns the conversion. A field with no
+codec is the same string everywhere, which is why this looked like a copy for
+four milestones — `copy()` in `PROJECTION_COLUMNS` was always a *conversion*
+that happened to be the identity.
+
+**A wire string in a cached row is not a cosmetic problem.** Every browse row
+is validated with `prksIsOptionalNonNegativeInteger(row.thumb_page)`, so `"3"`
+makes the row fail its own shape check and the whole cached catalog is
+discarded as corrupt. The conversion therefore runs everywhere a value is
+written into a Work-like object: the effective-Work overlay, the three
+projection overlays, the embedded summaries, and acknowledgement
+reconciliation. A selftest asserts the *real* validators still accept the rows
+a pending value produces, and that the string it must never produce would
+indeed be rejected — so the assertion cannot pass for a trivial reason.
+
+**`metadata-state` keeps the wire form on purpose.** It is synchronization
+bookkeeping: its `value` is what a base revision was observed against, in the
+representation the protocol uses. The Work record is the entity. So the same
+page is `"3"` in one projection and `3` in the other, and that difference is
+the point rather than an inconsistency.
+
+### Comparison happens on canonical meaning
+
+Column `3`, wire `"3"` and wire `"003"` are one state; `NULL` and `""` are
+another. Revisions record a change of STATE, so a difference in spelling
+advances nothing — otherwise two devices that chose the same page would be told
+they had collided, and every device holding the value would be handed
+manufactured staleness.
+
+### Refusing is not clearing
+
+`0`, `-1`, `1.5`, `abc` and `+3` are refused, visibly, with the draft intact
+and nothing enqueued. The ordinary PATCH used to *silently clear* every one of
+them — a client asking for an impossible page was told the field had been
+emptied on purpose — and that normalization was removed when the codec took
+over. It is the same conflation an uninterpretable Published Date used to have.
+
+### Thumbnail resource identity
+
+A thumbnail URL with no `?page=` means "whatever page the server currently has
+stored". That is not an identity the client can reason about, and it is wrong
+the moment an edit is pending: with page 5 stored and a clear pending, the
+effective value is `null` — page 1 — but a page-less URL would still render
+page 5 until the server heard about it.
+
+So **the page is always stated**, including `?page=1` for `null`:
+
+```
+effective 3    ->  /api/works/W/thumbnail?page=3
+effective null ->  /api/works/W/thumbnail?page=1
+```
+
+`?page=1` and a stored `NULL` select the same page and the same cached artifact
+— `prks_thumb_cache_stem()` normalizes `None` and any value below 1 to 1 — so
+this is the acknowledged behaviour written down rather than a change to it.
+Stating it always means pending and acknowledged rendering run one code path.
+The cost is one browser-cache miss per card the first time, because
+`/thumbnail` and `/thumbnail?page=1` are different URLs to the browser while
+being the same bytes to the server. The request coordinator classifies by
+`URL.pathname`, so the query does not affect it.
+
+Online, this also means a pending page renders immediately: the endpoint
+already accepts an explicit page, so nothing waits for the column to change.
+A thumbnail that fails to load is not a failed save — the durable operation and
+the image request are separate, and a local edit is never rolled back because
+an image fetch failed.
+
+**Offline suppression still wins, absolutely.** `suppressThumbnail` is decided
+*before* any URL is derived, so a cached card emits no thumbnail source at all
+— a pending metadata edit is not a reason to start asking for bytes that cannot
+arrive. Only the source is removed; the layout is untouched.
+
+### Where `thumb_page` is written
+
+| Path | Revision-aware | Note |
+| --- | --- | --- |
+| `SET_WORK_METADATA_FIELD` | yes | the only path the editor uses, online and offline |
+| `PATCH /api/works/:id` | yes | validated, then canonicalized through the same codec |
+| `add_work()` | n/a | creation starts at revision 0 |
+| `update_processing_file()` | n/a | a *draft* on the `processing_files` staging table, which becomes a Work's value at import — never a mutation of an existing Work |
+
+The audit found no other writer. `prune_orphan_pdf_thumbnails()` reads
+`thumb_page`, but runs once at startup before the server accepts connections,
+so it cannot race a pending client request.
 
 ## Every canonical mutation advances revisions
 

@@ -30,8 +30,9 @@
  */
 (function (root) {
     'use strict';
-    const FIELDS = Object.freeze(['status', 'author_text', 'year', 'published_date', 'abstract',
-        'publisher', 'location', 'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi']);
+    const FIELDS = Object.freeze(['status', 'thumb_page', 'author_text', 'year',
+        'published_date', 'abstract', 'publisher', 'location', 'edition', 'journal',
+        'volume', 'issue', 'pages', 'isbn', 'doi']);
     const FIELD_SET = new Set(FIELDS);
     /* Mirrors `work_metadata_sync.WORK_STATUSES`. Status is the first
      * synchronized field validated by an ALLOWLIST rather than a length: a
@@ -40,7 +41,7 @@
         ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused']);
     const FIELD_ALLOWLISTS = Object.freeze({ status: new Set(WORK_STATUSES) });
     const LABELS = Object.freeze({
-        status: 'Progress', author_text: 'Author', year: 'Year',
+        status: 'Progress', thumb_page: 'Thumbnail page', author_text: 'Author', year: 'Year',
         published_date: 'Published date', abstract: 'Abstract',
         publisher: 'Publisher', location: 'Location', edition: 'Edition',
         journal: 'Journal', volume: 'Volume', issue: 'Issue',
@@ -68,6 +69,9 @@
          * when it is empty. The overlay produces the FIELD; composition stays
          * where it already lives. */
         author_text: BROWSE_LISTS,
+        /* Every Work card builds its thumbnail URL from this, so a pending
+         * page has to reach the cached rows the cards are rendered from. */
+        thumb_page: BROWSE_LISTS,
     });
 
     /* Fields that cached ENTITY snapshots embed verbatim as part of a Work
@@ -76,7 +80,7 @@
      * has to reach them. `abstract` is deliberately absent: summaries carry it,
      * but nothing there renders or searches it. */
     const SUMMARY_FIELDS = Object.freeze(
-        ['status', 'author_text', 'year', 'published_date', 'publisher']);
+        ['status', 'thumb_page', 'author_text', 'year', 'published_date', 'publisher']);
 
     /* Mirrors `backend/work_metadata_sync.BYTE_LIMITS`: fields whose bound is a
      * storage limit rather than a display one, measured in UTF-8 BYTES because
@@ -104,15 +108,21 @@
      * adding a third field here is a table entry rather than an `if` inside
      * whichever component happens to render it.
      */
-    const copy = field => ({ field, column: field, derive: value => value });
+    /* A "copy" is still a CONVERSION: the pending value is a wire string and
+     * the projection row carries the entity representation. For every field
+     * but `thumb_page` those are the same string, which is why this looked
+     * like a copy for four milestones. */
+    const copy = field => ({ field, column: field, derive: value => toEntityValue(field, value) });
     const PROJECTION_COLUMNS = Object.freeze({
-        'recently-added': [copy('status'), copy('author_text'), copy('publisher'),
-            copy('year'), copy('published_date')],
+        'recently-added': [copy('status'), copy('thumb_page'), copy('author_text'),
+            copy('publisher'), copy('year'), copy('published_date')],
         'works-browse': [
             { field: 'abstract', column: 'abstract_excerpt', derive: text => abstractExcerpt(text) },
-            copy('status'), copy('author_text'), copy('year'), copy('published_date'),
+            copy('status'), copy('thumb_page'), copy('author_text'),
+            copy('year'), copy('published_date'),
         ],
-        'recent': [copy('status'), copy('author_text'), copy('year'), copy('published_date')],
+        'recent': [copy('status'), copy('thumb_page'), copy('author_text'),
+            copy('year'), copy('published_date')],
     });
 
     /* The excerpt Progress shows under each Work card.
@@ -142,16 +152,33 @@
             : points.slice(0, EXCERPT_CODE_POINTS).join('');
     }
 
-    /* ---- field codec ----
+    /* ---- field codecs: four representations, named ----
      *
-     * Published Date is the first synchronized field whose editor spelling is
-     * not its canonical one: the form shows `dd/mm/yyyy`, the column and the
-     * wire hold `yyyy-mm-dd`. That conversion belongs here, beside the field
-     * registry -- not in the durable store, which stores whatever it is handed
-     * and must never learn what a date is.
+     * A synchronized field can be spelled differently at each boundary it
+     * crosses, and the codec owns every conversion so no consumer has to know
+     * which spelling it is holding:
      *
-     * Comparing the two spellings directly would make an untouched Published
-     * Date look dirty on every save, so the draft is canonicalized first.
+     *   toDisplay   entity value -> what the editor's control shows
+     *   toCanonical editor draft -> the WIRE value, or null to refuse it
+     *   toEntity    wire value   -> what a Work / browse row / summary carries
+     *
+     * Published Date was the first field whose editor spelling differed from
+     * its canonical one (`dd/mm/yyyy` in the form, `yyyy-mm-dd` on the wire
+     * and in the column). `thumb_page` is the first whose ENTITY spelling
+     * differs too: the wire carries "3", the column is INTEGER NULL, and every
+     * read model is validated as `integer | null`. A wire string reaching one
+     * of those rows does not merely look odd -- it makes the row fail its own
+     * shape validator and be discarded as corrupt.
+     *
+     * `toEntity` therefore runs wherever a pending or acknowledged value is
+     * written into a Work-like object: the effective-Work overlay, the three
+     * projection overlays, the embedded summaries and acknowledgement
+     * reconciliation. A field without a codec is the same string everywhere,
+     * which is what `identityEntity` below says.
+     *
+     * Comparing spellings directly would make an untouched field look dirty on
+     * every save, so a draft is canonicalized to the wire form before any
+     * comparison.
      */
     const CODECS = {
         /* The editor has always trimmed this before sending it to the ordinary
@@ -165,6 +192,32 @@
         author_text: {
             toDisplay: value => canonical(value),
             toCanonical: draft => canonical(draft).trim(),
+        },
+        /* A 1-based page number, or nothing. Mirrors
+         * `backend/work_metadata_sync._ThumbPageCodec`, including its refusal
+         * to accept "+3", fullwidth digits or "1_0": a page number nobody
+         * typed on purpose is not a page number, and two devices holding
+         * different spellings of the same page would disagree about having
+         * converged. */
+        thumb_page: {
+            toDisplay: value => (value == null ? '' : String(value)),
+            toCanonical: draft => {
+                const text = canonical(draft).trim();
+                if (!text) return '';
+                // Digits only, and at least one page. Anything else is
+                // REFUSED -- never quietly read as "clear the field", which is
+                // the bug an uninterpretable Published Date used to have.
+                if (!/^[0-9]+$/.test(text)) return null;
+                const page = Number(text);
+                return Number.isSafeInteger(page) && page >= 1 ? String(page) : null;
+            },
+            // "3" -> 3 and "" -> null, so a read model never holds a string.
+            toEntity: wire => {
+                const text = canonical(wire).trim();
+                if (!/^[0-9]+$/.test(text)) return null;
+                const page = Number(text);
+                return Number.isSafeInteger(page) && page >= 1 ? page : null;
+            },
         },
         published_date: {
             toDisplay: value => (typeof root.prksIsoToDdMmYyyy === 'function'
@@ -188,6 +241,15 @@
     function toDisplayValue(field, value) {
         const codec = CODECS[field];
         return codec ? codec.toDisplay(value) : canonical(value);
+    }
+
+    /**
+     * Wire value -> the representation a Work, a browse row or an embedded
+     * summary carries. Identity for every field but `thumb_page`.
+     */
+    function toEntityValue(field, wire) {
+        const codec = CODECS[field];
+        return codec && codec.toEntity ? codec.toEntity(wire) : canonical(wire);
     }
 
     /** The canonical value for a draft, or null when it is not interpretable. */
@@ -387,12 +449,15 @@
             case 'REVISION_CONFLICT': case 'FUTURE_REVISION': {
                 if (!revision(data.current_revision)) return false;
                 const has = key => Object.prototype.hasOwnProperty.call(data, key);
-                /* Bounded previews and sizes instead of the values themselves.
-                 * Exactly one of the two shapes, never a mixture: a result
-                 * carrying both would leave which one to trust undecided. */
+                /* Exactly ONE of the two shapes, never a mixture. A result
+                 * carrying members of both would leave which one to trust
+                 * undecided -- and "whichever the reader checks first" is not a
+                 * contract. Each shape names the members the other owns and
+                 * refuses them outright. */
                 const bounded = typeof data.current_preview === 'string' &&
                     Number.isSafeInteger(data.current_bytes) &&
-                    Number.isSafeInteger(data.requested_bytes) && !has('current_value');
+                    Number.isSafeInteger(data.requested_bytes) &&
+                    !has('current_value') && !has('requested_value');
                 // A byte-limited field is ALWAYS bounded -- accepting the full
                 // shape would admit a megabyte into the durable row.
                 if (BYTE_LIMITED_FIELDS.has(data.field)) return bounded;
@@ -404,7 +469,9 @@
                  * would turn a storable conflict into a protocol error and
                  * strand the operation in retry. */
                 return bounded || (typeof data.current_value === 'string' &&
-                    data.requested_value === op.payload.value && !has('current_preview'));
+                    data.requested_value === op.payload.value &&
+                    !has('current_preview') && !has('current_bytes') &&
+                    !has('requested_bytes'));
             }
             case 'ENTITY_NOT_FOUND': return true;
             default: return false;
@@ -551,8 +618,13 @@
      */
     function effectiveRows(rows, fields) {
         const wanted = (fields || FIELDS).filter(field => FIELD_SET.has(field));
+        /* The pending map holds WIRE values -- that is what the operation
+         * carries -- and these rows are Work-like objects, so each value is
+         * converted to its entity representation on the way in. Without this a
+         * pending `thumb_page` of "3" would put the string "3" where every
+         * consumer, and every shape validator, expects the integer 3. */
         return applyPending(rows, wanted.map(
-            field => ({ field, column: field, derive: value => value })));
+            field => ({ field, column: field, derive: value => toEntityValue(field, value) })));
     }
 
     /**
@@ -596,6 +668,7 @@
         PRKS_WORK_STATUSES: WORK_STATUSES,
         prksWorkFieldToDisplay: toDisplayValue,
         prksWorkFieldToCanonical: toCanonicalValue,
+        prksWorkFieldToEntity: toEntityValue,
         prksEffectiveProjectionRows: effectiveProjectionRows,
         /* Cached Folder/Person/Playlist details embed Work summaries. One
          * helper serves all three so no component learns to read the durable

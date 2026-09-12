@@ -18,14 +18,31 @@ function prksWorkFileSizeMbHtml(w) {
     return `<span class="work-card__file-size">${prksWorkCardsEscapeHtml(s)} MB</span>`;
 }
 
+/**
+ * The thumbnail resource for one PDF Work, with the page ALWAYS stated.
+ *
+ * Omitting the page used to mean "whatever page the server currently has
+ * stored", which is not a resource identity the client can reason about --
+ * and is wrong the moment a local edit is pending. If the server holds page 5
+ * and the user clears the field offline, the effective value is null, meaning
+ * page 1; a URL with no page would still render page 5 until the server heard
+ * about it. So a null page is requested EXPLICITLY as page 1, which is the
+ * same page the server picks for a stored NULL and the same cache artifact it
+ * builds -- `prks_thumb_cache_stem()` normalizes None and any value below 1
+ * to 1.
+ *
+ * Stating it always, rather than only while an edit is pending, means pending
+ * and acknowledged rendering run the same code path, and the URL alone says
+ * which page is on screen. The cost is one browser-cache miss per card the
+ * first time, because `/thumbnail` and `/thumbnail?page=1` are different URLs
+ * to the browser while being the same bytes to the server.
+ */
 function prksWorkThumbUrl(workId, page) {
     const wid = encodeURIComponent(String(workId || '').trim());
     if (!wid) return '';
     const p = page != null && String(page).trim() !== '' ? Number(page) : null;
-    if (p && Number.isFinite(p) && p > 0) {
-        return `/api/works/${wid}/thumbnail?page=${encodeURIComponent(String(p))}`;
-    }
-    return `/api/works/${wid}/thumbnail`;
+    const resolved = p && Number.isFinite(p) && p > 0 ? Math.floor(p) : 1;
+    return `/api/works/${wid}/thumbnail?page=${encodeURIComponent(String(resolved))}`;
 }
 
 const PRKS_WORK_THUMB_PLACEHOLDER =
@@ -140,6 +157,9 @@ function prksWorkCardHtml(w, options = {}) {
     // thumbnail is a PRKS-server request that cannot succeed there, and a
     // broken image is worse than none. Normal card appearance is untouched.
     const suppressThumbnail = options.suppressThumbnail === true;
+    /* `w` is already the EFFECTIVE Work here -- its caller overlays pending
+     * metadata before rendering -- so a pending page reaches the URL without
+     * this file learning anything about durable operations. */
     const thumbPage = options.thumbPage != null ? options.thumbPage : w.thumb_page;
     const isVideoKind = !hasPdf && inferredKind === 'video';
     const thumbKindClass = isVideoKind ? 'work-card__thumb--video' : 'work-card__thumb--pdf';

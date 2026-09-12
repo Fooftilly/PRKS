@@ -4,9 +4,10 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
-SYNCED = ('status', 'author_text', 'year', 'published_date', 'abstract', 'publisher',
-          'location', 'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi')
-DEFERRED = ('title', 'doc_type', 'source_url', 'thumb_page')
+SYNCED = ('status', 'thumb_page', 'author_text', 'year', 'published_date', 'abstract',
+          'publisher', 'location', 'edition', 'journal', 'volume', 'issue', 'pages',
+          'isbn', 'doi')
+DEFERRED = ('title', 'doc_type', 'source_url')
 
 _REGISTRY_JS = """
 require(process.argv[1] + '/frontend/js/date-format.js');
@@ -129,12 +130,12 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         # Every Work card shows a year, a Status badge and a credit line, and
         # Status additionally decides Progress group membership -- so all four
         # reach every browse catalog.
-        for field in ('year', 'published_date', 'status', 'author_text'):
+        for field in ('year', 'published_date', 'status', 'author_text', 'thumb_page'):
             self.assertEqual(server[field], ('works-browse', 'recent', 'recently-added'), field)
         # And nothing else claims a projection on either side.
         for field in SYNCED:
             if field not in ('publisher', 'abstract', 'year', 'published_date',
-                             'status', 'author_text'):
+                             'status', 'author_text', 'thumb_page'):
                 self.assertNotIn(field, client['projections'], field)
                 self.assertNotIn(field, server, field)
 
@@ -268,6 +269,106 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertLess(credit_fn.index('linked_authors'), credit_fn.index('author_text'))
         self.assertLess(credit_fn.index('author_text'), credit_fn.index('primary_editor'))
 
+    def test_thumb_page_left_the_legacy_save_and_has_one_control(self):
+        ui = (FRONTEND / 'ui.js').read_text()
+        at = ui.index('async function submitWorkMetaEdit(')
+        body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]
+        self.assertNotIn('thumb_page', body)
+        self.assertEqual(ui.count('id="meta-thumb-page"'), 1)
+        self.assertIn('id="meta-thumb-page" data-prks-work-field="thumb_page"', ui)
+
+    def test_the_thumbnail_url_always_states_its_page(self):
+        """A URL with no page means "whatever the server currently stores",
+        which is not a resource identity the client can reason about -- and is
+        wrong while a clear is pending. Behaviour is pinned by the selftest;
+        this pins that the page-less form cannot come back."""
+        cards = (FRONTEND / 'components' / 'work-cards.js').read_text()
+        at = cards.index('function prksWorkThumbUrl(')
+        body = cards[at: cards.index('\n}', at)]
+        self.assertIn('?page=', body)
+        self.assertNotIn('/thumbnail`', body,
+                         'a page-less thumbnail URL is reachable again')
+        # Suppression decides BEFORE any URL exists, never after.
+        self.assertIn('const thumbSrc = suppressThumbnail', cards)
+        suppression = cards.index('const suppressThumbnail =')
+        self.assertLess(suppression, cards.index('const thumbSrc ='))
+        # And the card never learns what a durable operation is.
+        for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'prksSync',
+                          'prksEffective', 'payload.field'):
+            self.assertNotIn(forbidden, cards, forbidden)
+
+    def test_the_request_coordinator_classifies_by_pathname(self):
+        """The added `?page=` must not change how a thumbnail request is
+        treated; it does not, because classification uses `URL.pathname`."""
+        coordinator = (FRONTEND / 'request-coordinator.js').read_text()
+        self.assertIn('function isWorkThumbnailPath(pathname)', coordinator)
+        self.assertIn('const pathname = parsed.pathname;', coordinator)
+        self.assertIn('new URL(raw, origin)', coordinator)
+
+    def test_wire_and_entity_conversions_run_where_values_cross_boundaries(self):
+        """`thumb_page` is the first field whose wire and entity spellings
+        differ, so every place a value is written into a Work-like object has
+        to convert. A missed one puts a string where a shape validator
+        requires an integer, and the cached row is discarded as corrupt."""
+        runtime = (FRONTEND / 'offline-runtime.js').read_text()
+        # The two sites that write an acknowledged value into entity-shaped rows.
+        self.assertIn("work[result.field] = root.prksWorkFieldToEntity(result.field, result.value)",
+                      runtime)
+        self.assertIn('root.prksWorkFieldToEntity(result.field, result.value) }', runtime)
+        self.assertNotIn('work[result.field] = result.value;', runtime)
+        # Projection rows convert through the transform, not by assignment.
+        self.assertIn('root.prksProjectionFieldPatch(domain, result.field, result.value)', runtime)
+        state = (FRONTEND / 'work-metadata-state.js').read_text()
+        self.assertIn('derive: value => toEntityValue(field, value)', state)
+        # metadata-state deliberately keeps the WIRE value; it is
+        # synchronization bookkeeping, not an entity.
+        self.assertIn('function metadataStateAckPatch', state)
+
+    def test_thumb_page_codecs_agree_across_the_boundary(self):
+        """The client and the server decide separately what a page number is.
+        If they disagree, one of them accepts a value the other refuses --
+        which is the split contract the whole architecture removes."""
+        import json
+        from backend import work_metadata_sync
+        server = work_metadata_sync.codec_for('thumb_page')
+        cases = ['', '1', '3', '003', ' 3 ', '  ', '0', '-1', '1.5', 'abc',
+                 '3abc', '+3', '\uff13', '1_0', '1e3', '٣']
+        js = """
+        require(process.argv[1] + '/frontend/js/date-format.js');
+        require(process.argv[1] + '/frontend/js/work-metadata-state.js');
+        const out = {};
+        for (const v of JSON.parse(process.argv[2])) {
+            out[v] = [globalThis.prksWorkFieldToCanonical('thumb_page', v),
+                      globalThis.prksWorkFieldToEntity('thumb_page', v)];
+        }
+        process.stdout.write(JSON.stringify(out));
+        """
+        proc = subprocess.run(['node', '-e', js, str(ROOT), json.dumps(cases)],
+                              cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        client = json.loads(proc.stdout)
+        for value in cases:
+            with self.subTest(value=value):
+                accepted = server.is_valid_wire(value)
+                canonical, entity = client[value]
+                self.assertEqual(canonical is not None, accepted,
+                                 '%r: client accepts=%s server accepts=%s'
+                                 % (value, canonical is not None, accepted))
+                if accepted:
+                    self.assertEqual(canonical, server.to_wire(server.to_database(value)))
+                    self.assertEqual(entity, server.to_database(value))
+
+    def test_source_url_is_deliberately_not_synchronized(self):
+        """Left out of 2J on purpose: `prksYoutubeEmbedUrl` short-circuits on
+        `provider_id`, so changing the URL alone would change the stored value
+        while the video that plays stays the same. That is an identity
+        aggregate (`source_url` + `provider` + `provider_id` + `source_kind`),
+        not another scalar field."""
+        from backend import work_metadata_sync
+        for field in ('source_url', 'provider', 'provider_id', 'source_kind', 'doc_type', 'title'):
+            self.assertNotIn(field, work_metadata_sync.SYNCED_FIELDS, field)
+        self.assertNotIn('source_url', client_registries()['fields'])
+
     def test_recently_added_search_filters_the_effective_rows(self):
         """Rendering the overlay but filtering the acknowledged array is a real
         and easy mistake: the card would show the pending Year while a search
@@ -378,7 +479,8 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertEqual(sorted(client_registries()['summary']),
                          sorted(work_metadata_sync.SUMMARY_FIELDS))
         self.assertEqual(sorted(work_metadata_sync.SUMMARY_FIELDS),
-                         ['author_text', 'published_date', 'publisher', 'status', 'year'])
+                         ['author_text', 'published_date', 'publisher', 'status',
+                          'thumb_page', 'year'])
         for field in work_metadata_sync.SUMMARY_FIELDS:
             self.assertIn(field, work_metadata_sync.SYNCED_FIELDS, field)
 

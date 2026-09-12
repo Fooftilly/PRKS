@@ -1603,6 +1603,42 @@ The families are deliberately different in kind, and that is the point:
   (`{field, value}` exactly, field in the registry, value a string) so it
   cannot be used to smuggle an unbounded payload.
 
+### Typed fields and derived resources (Milestone 2J)
+
+- **The wire is not the column.** `thumb_page` has four representations --
+  editor string, wire string (`""` = no explicit page), `INTEGER NULL` column,
+  and `integer | null` in every read model -- and `FIELD_CODECS` owns every
+  conversion. The wire stays a STRING because the envelope is validated,
+  hashed, compared and replayed as one; widening `payload.value` to a union
+  type would mean changing all of that for one field.
+- **A wire string in a cached row is corruption, not a cosmetic bug.** Browse
+  rows are validated with `prksIsOptionalNonNegativeInteger(row.thumb_page)`,
+  so `"3"` makes the row fail its own shape check and the catalog is discarded.
+  Convert wherever a value enters a Work-like object: the effective-Work
+  overlay, the three projection overlays, embedded summaries, and ACK
+  reconciliation. `copy()` in `PROJECTION_COLUMNS` is a CONVERSION that was
+  the identity for four milestones, not a copy.
+- **`metadata-state` keeps the WIRE form deliberately** -- it is
+  synchronization bookkeeping, and its `value` is what a base revision was
+  observed against. The Work record is the entity. `"3"` there, `3` here.
+- **Compare canonical MEANING.** Column `3`, wire `"3"` and `"003"` are one
+  state; `NULL` and `""` are another. A spelling difference must never advance
+  a revision or raise a conflict.
+- **Refusing is not clearing.** `0`, `-1`, `1.5`, `abc` are refused visibly
+  with the draft intact. PATCH used to silently clear all of them; that
+  normalization was removed when the codec took over.
+- **State the thumbnail page ALWAYS**, `?page=1` for null included. A page-less
+  URL means "whatever the server stores", which is wrong while a clear is
+  pending -- the card would keep rendering the old page. `?page=1` and a stored
+  NULL are the same page and the same cache artifact.
+- **Offline suppression is decided BEFORE any URL is derived.** A cached card
+  emits no source at all; a pending edit is never a reason to request bytes
+  that cannot arrive.
+- `source_url` is deliberately NOT synchronized: `prksYoutubeEmbedUrl()`
+  short-circuits on `provider_id`, so changing the URL alone would move the
+  stored value while the video that plays stays the same. It is an identity
+  aggregate, not a scalar.
+
 ### Local-first Work opens (Milestone 2C)
 
 - `last_opened_at` is a **max-register over event time**, not last-writer-wins.
