@@ -240,9 +240,20 @@ function makeStoreHandle(store, tx) {
                 return store.rows.length;
             });
         },
-        getAll: function () {
+        getAll: function (range, count) {
+            // Real `getAll` filters by the key range and yields rows in key
+            // order. A fake that returned everything unfiltered would let a
+            // broken range pass -- and code that relies on the range would
+            // then only fail in a real browser.
             return op(function () {
-                return store.rows.slice();
+                const rows = store.rows
+                    .filter(function (r) {
+                        return !range || range.includes(keyOf(store.keyPath, r));
+                    })
+                    .sort(function (a, b) {
+                        return compareKeys(keyOf(store.keyPath, a), keyOf(store.keyPath, b));
+                    });
+                return typeof count === 'number' ? rows.slice(0, count) : rows;
             });
         },
         openCursor: function (range) {

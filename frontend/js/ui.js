@@ -3134,7 +3134,9 @@ function prksWorkMetaDraftFromWork(rawWork) {
      * text. The draft guard protects unsaved typing, not saved work. */
     const work = typeof prksEffectiveWorkSync === 'function' ? prksEffectiveWorkSync(rawWork) : rawWork;
     const inferredKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
-    const published = typeof prksIsoToDdMmYyyy === 'function' ? prksIsoToDdMmYyyy(work.published_date) : work.published_date;
+    const published = typeof prksWorkFieldToDisplay === 'function'
+        ? prksWorkFieldToDisplay('published_date', work.published_date)
+        : work.published_date;
     return {
         title: work.title || '', status: work.status || '', doc_type: work.doc_type || 'article',
         year: work.year || '', published_date: published || '', publisher: work.publisher || '',
@@ -3394,23 +3396,6 @@ async function submitWorkMetaEdit(workId) {
     const draft = ownerCtx && ownerCtx.ui && ownerCtx.ui.workMetaDraftWorkId === String(workId)
         ? ownerCtx.ui.workMetaDraft : null;
     if (!draft) return;
-    const metaDateRaw = String(draft.published_date || '').trim();
-    const metaDateIso =
-        typeof prksParsePublishedDateInput === 'function'
-            ? prksParsePublishedDateInput(metaDateRaw)
-            : metaDateRaw;
-    if (metaDateRaw && !metaDateIso) {
-        // Invalid-date feedback mutates the shared panel -- still gated on ownsWorkPanel().
-        if (!ownsWorkPanel()) return;
-        const dateEl = panel ? panel.querySelector('#meta-date') : null;
-        const errorEl = panel ? panel.querySelector('#meta-date-error') : null;
-        if (dateEl) {
-            dateEl.setAttribute('aria-invalid', 'true');
-            dateEl.focus();
-        }
-        if (errorEl) errorEl.textContent = 'Use dd/mm/yyyy.';
-        return;
-    }
     const payload = {
         title: draft.title,
         status: draft.status,
@@ -3423,9 +3408,12 @@ async function submitWorkMetaEdit(workId) {
             const i = Math.floor(n);
             return i >= 1 ? i : null;
         })(),
-        year: draft.year,
-        published_date: metaDateIso || null,
     };
+    // Year and Published Date are deliberately absent: they take the durable
+    // semantic queue through "Save bibliographic details", online and offline.
+    // Sending them here as well would give the same fields two mutation paths,
+    // and the one that is not revision-aware would overwrite the other's
+    // conflicts.
     // Publisher, Location, edition, journal, volume, issue, pages, ISBN and
     // DOI are deliberately absent: they take the durable semantic queue
     // through "Save bibliographic details", online and offline. Sending them
@@ -4580,6 +4568,12 @@ function renderWorkMetaEditTab(work, draft) {
         : `
             <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
                 <h4>Bibliographic details</h4>
+                <div class="form-grid-2 form-grid-2--compact">
+                    <div><label for="meta-year">Year</label><input type="text" id="meta-year" data-prks-work-field="year" value="${safeStr(work.year)}"></div>
+                    <div><label for="meta-date">${dateLabel}</label><input type="text" id="meta-date" data-prks-work-field="published_date" value="${safeStr(publishedDateValue)}" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-describedby="meta-date-error"></div>
+                </div>
+                <p id="meta-date-error" class="field-error" aria-live="polite"></p>
+
                 <label for="meta-publisher">Publisher</label>
                 <input type="text" id="meta-publisher" data-prks-work-field="publisher" value="${safeStr(work.publisher)}">
 
@@ -4641,20 +4635,15 @@ function renderWorkMetaEditTab(work, draft) {
             ${metaDocMenu}
             </section>
             
-            <section class="work-meta-editor__section"><h4>Publication</h4><div class="form-grid-2 form-grid-2--compact">
-                <div><label for="meta-year">Year</label><input type="text" id="meta-year" value="${safeStr(work.year)}"></div>
-                <div><label for="meta-date">${dateLabel}</label><input type="text" id="meta-date" value="${safeStr(publishedDateValue)}" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-describedby="meta-date-error"></div>
-            </div>
+            <section class="work-meta-editor__section"><h4>Publication</h4>
             ${channelField}
-            
+
             ${bibFields}
             </section>
             ${syncedBibSection}
             <section class="work-meta-editor__section"><h4>Presentation</h4>
             ${thumbField}
             </section>
-            <p id="meta-date-error" class="field-error" aria-live="polite"></p>
-            
             <div class="prks-form-actions prks-form-actions--split form-actions work-meta-editor__sticky-actions">
                 <button type="button" class="prks-btn prks-btn--secondary" onclick="void prksCancelWorkMetaEdit()">Cancel</button>
                 <button id="inline-save-metadata-btn" class="prks-btn prks-btn--primary" onclick="submitWorkMetaEdit('${work.id}')">Save Changes</button>

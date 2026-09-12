@@ -467,6 +467,290 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertIn(work, self.filter_recently_added(page, 'Springer'),
                       'the value survives the overlay being retired')
 
+    # ---- the high fan-out case (2G) ----------------------------------------
+
+    # Progress renders one status at a time; Work A is seeded "In Progress".
+    PROGRESS = '#/progress?status=In%20Progress'
+
+    def seed_dates(self, server, page, year='1970', published='1954-06-07'):
+        """Give Work A an acknowledged Year and Published Date, then reload so
+        every cached projection holds them."""
+        self.db_for(server).update_work_metadata(
+            server.ids['work_a'], {'year': year, 'published_date': published})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+
+    def warm_browse(self, page):
+        """Visit the three browse catalogs so all three snapshots are cached."""
+        for route, key in ((self.PROGRESS, 'works-browse:index'),
+                           ('#/recent', 'recent:index')):
+            page.evaluate("r => prksNavigate(r)", route)
+            page.wait_for_selector('[data-work-id]')
+            o._wait_list_cached(page, key)
+        self.recently_added(page)
+        o._wait_list_cached(page, 'recently-added:index')
+
+    def card_meta(self, page, route, work_id):
+        """The meta row of one Work card on a browse route."""
+        page.evaluate("r => prksNavigate(r)", route)
+        page.wait_for_selector('[data-work-id="%s"]' % work_id)
+        return page.evaluate("""id => {
+            const el = document.querySelector('[data-work-id="' + id + '"] .work-card__meta');
+            return el ? el.textContent : '';
+        }""", work_id)
+
+    def cached_list_field(self, page, list_key, work_id, field):
+        return page.evaluate("""([key, id, field]) =>
+            window.createPrksOfflineStore().getList(key).then(row => {
+                if (!row) return null;
+                const found = row.value.find(w => w.id === id);
+                return found ? found[field] : null;
+            })""", [list_key, work_id, field])
+
+    def cached_person_work_field(self, page, person_id, work_id, field):
+        return page.evaluate("""([pid, wid, field]) =>
+            window.createPrksOfflineStore().getEntity('person', pid).then(row => {
+                if (!row) return null;
+                const works = (row.value && row.value.works) || [];
+                const found = works.find(w => w.id === wid);
+                return found ? found[field] : null;
+            })""", [person_id, work_id, field])
+
+    def test_a_pending_year_reaches_every_surface_that_shows_one(self):
+        """The reason 2G is its own milestone. Publisher reached ONE cached
+        list; a Year is on every Work card, so one offline edit has to be seen
+        by all three browse catalogs and by the Work summaries embedded in
+        cached Person, Folder and Playlist details -- while every acknowledged
+        snapshot on disk still says exactly what the server said."""
+        server, page, context = self.start()
+        work, person = server.ids['work_a'], server.ids['person']
+        self.seed_dates(server, page)
+        self.warm_browse(page)
+        o._open_person(page, person)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        o._wait_entity_cached(page, 'person', person)
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'year', '2026')
+        self.save(page)
+        self.pending(page, 1)
+
+        for route in (self.PROGRESS, '#/recent'):
+            self.assertIn('2026', self.card_meta(page, route, work), route)
+            self.assertNotIn('1970', self.card_meta(page, route, work), route)
+        self.recently_added(page)
+        self.assertIn('2026', page.evaluate("""id => {
+            const el = document.querySelector('#prks-folder-library-recently-added [data-work-id="'
+                + id + '"] .work-card__meta');
+            return el ? el.textContent : '';
+        }""", work), 'Recently Added shows the pending year')
+
+        o._open_person(page, person)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertIn('2026', page.evaluate("""id => {
+            const el = document.querySelector('[data-work-id="' + id + '"] .work-card__meta');
+            return el ? el.textContent : '';
+        }""", work), 'the embedded Person summary shows it too')
+
+        for key in ('works-browse:index', 'recent:index', 'recently-added:index'):
+            self.assertEqual(self.cached_list_field(page, key, work, 'year'), '1970',
+                             '%s must still hold the acknowledged value' % key)
+        self.assertEqual(self.cached_person_work_field(page, person, work, 'year'), '1970',
+                         'the cached Person detail is never rewritten with a pending value')
+
+    def test_a_pending_year_is_searchable_in_recently_added(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.seed_dates(server, page)
+        self.recently_added(page)
+        o._wait_list_cached(page, 'recently-added:index')
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'year', '2026')
+        self.save(page)
+        self.pending(page, 1)
+
+        self.recently_added(page)
+        self.assertIn(work, self.filter_recently_added(page, '2026'),
+                      'the pending year is searchable immediately')
+        self.assertNotIn(work, self.filter_recently_added(page, '1970'),
+                         'the value it replaced stops matching')
+
+    def test_the_year_overlay_survives_a_reload_on_an_embedded_summary(self):
+        """A reload empties the in-page overlay map. Opening a cached Person
+        profile directly then has to hydrate it from durable storage BEFORE
+        rendering -- otherwise the card shows the value the user replaced and
+        silently corrects itself only when some other surface reads the
+        queue."""
+        server, page, context = self.start()
+        work, person = server.ids['work_a'], server.ids['person']
+        self.seed_dates(server, page)
+        o._open_person(page, person)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        o._wait_entity_cached(page, 'person', person)
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'year', '2026')
+        self.save(page)
+        self.pending(page, 1)
+
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        o._open_person(page, person)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        page.wait_for_function("""id => {
+            const el = document.querySelector('[data-work-id="' + id + '"] .work-card__meta');
+            return !!el && el.textContent.indexOf('2026') !== -1;
+        }""", arg=work)
+        self.pending(page, 1)
+
+    def test_acknowledgement_patches_every_cached_representation(self):
+        """Patched, not invalidated: dropping three whole domains for a
+        one-field edit would cost the user every cached Folder, profile and
+        playlist for a change whose exact shape is already known."""
+        server, page, context = self.start()
+        work, person = server.ids['work_a'], server.ids['person']
+        self.seed_dates(server, page)
+        self.warm_browse(page)
+        o._open_person(page, person)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        o._wait_entity_cached(page, 'person', person)
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'year', '2026')
+        self.save(page)
+        self.pending(page, 1)
+        self.reconnect(page, context)
+        self.pending(page, 0)
+
+        self.assertEqual(self.server_fields(server, work)['year'],
+                         {'value': '2026', 'revision': 2})
+        for key in ('works-browse:index', 'recent:index', 'recently-added:index'):
+            self.assertEqual(self.cached_list_field(page, key, work, 'year'), '2026',
+                             '%s was patched, not dropped' % key)
+        self.assertEqual(self.cached_person_work_field(page, person, work, 'year'), '2026',
+                         'the embedded Person summary was patched in place')
+        self.assertIn('2026', self.card_meta(page, self.PROGRESS, work),
+                      'the value survives the overlay being retired')
+
+    def test_a_cleared_year_falls_back_to_the_pending_published_date(self):
+        """The displayed year is DERIVED: an explicit Year wins, and the
+        Published Date supplies it otherwise. Both are synchronized precisely
+        because an edit to either moves what every card shows."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.seed_dates(server, page)
+        self.warm_browse(page)
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'year', '')
+        self.save(page)
+        self.pending(page, 1)
+        self.assertIn('1954', self.card_meta(page, self.PROGRESS, work),
+                      'with no Year the Published Date supplies it')
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.field(page, 'published_date', '09/09/1999')
+        self.save(page)
+        self.pending(page, 2)
+        self.assertIn('1999', self.card_meta(page, self.PROGRESS, work),
+                      'and a pending Published Date moves it again')
+
+    def test_an_uninterpretable_date_is_refused_before_anything_is_stored(self):
+        server, page, context = self.start()
+        self.seed_dates(server, page)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'published_date', '31/02/2026')
+        self.save(page)
+        # textContent, not visibility: the editor group lives inside a
+        # collapsed <details>, so the message is attached but not rendered.
+        page.wait_for_function("""() => {
+            const el = document.getElementById('meta-date-error');
+            return !!el && el.textContent.trim().length > 0;
+        }""")
+        self.assertEqual(self.operations(page), [],
+                         'nothing is enqueued for a date PRKS would have to guess at')
+
+    def test_a_pending_published_date_reaches_a_cached_playlist_subtitle(self):
+        """A Playlist item's subtitle is built from the Published Date, so the
+        edit has to reach the Work summaries embedded in the cached Playlist --
+        a third cached representation, in a third shape (`items`, not
+        `works`)."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.seed_dates(server, page)
+        playlist = page.evaluate("""async workId => {
+            const id = await createPlaylist('E2E Year Playlist', '');
+            await addWorkToPlaylist(id, workId);
+            return id;
+        }""", work)
+        page.evaluate("id => prksNavigate('#/playlists/' + encodeURIComponent(id))", playlist)
+        page.wait_for_selector('.prks-playlist-detail')
+        page.wait_for_selector('[data-pl-nav="%s"]' % work)
+        o._wait_entity_cached(page, 'playlist', playlist)
+        self.assertIn('07/06/1954', page.evaluate("""id => {
+            const el = document.querySelector('[data-pl-nav="' + id + '"] .meta-row');
+            return el ? el.textContent : '';
+        }""", work), 'the acknowledged date is shown first')
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'published_date', '09/09/1999')
+        self.save(page)
+        self.pending(page, 1)
+
+        page.evaluate("id => prksNavigate('#/playlists/' + encodeURIComponent(id))", playlist)
+        page.wait_for_selector('[data-pl-nav="%s"]' % work)
+        page.wait_for_function("""id => {
+            const el = document.querySelector('[data-pl-nav="' + id + '"] .meta-row');
+            return !!el && el.textContent.indexOf('09/09/1999') !== -1;
+        }""", arg=work)
+        self.assertEqual(page.evaluate("""([pid, wid]) =>
+            window.createPrksOfflineStore().getEntity('playlist', pid).then(row => {
+                const items = (row && row.value && row.value.items) || [];
+                const found = items.find(w => w.id === wid);
+                return found ? found.published_date : null;
+            })""", [playlist, work]), '1954-06-07',
+            'the cached Playlist still holds exactly what the server said')
+
+    def test_year_and_published_date_synchronize_independently(self):
+        """They are rendered by the same derived value, which is exactly why a
+        conflict on one must not block the other: they are still two fields and
+        two people can change them without disagreeing."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.seed_dates(server, page)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'year', '2026')
+        self.field(page, 'published_date', '09/09/1999')
+        self.save(page)
+        self.pending(page, 2)
+
+        # Someone else changes only the Year while this device is away.
+        self.db_for(server).update_work_metadata(work, {'year': '1988'})
+        self.reconnect(page, context)
+        self.settled_conflicts(page, 1)
+        fields = self.server_fields(server, work)
+        self.assertEqual(fields['published_date']['value'], '1999-09-09',
+                         'the Published Date synchronized while the Year conflicted')
+        self.assertEqual(fields['year']['value'], '1988', 'and the Year was not overwritten')
+
     def test_location_is_detail_only_and_leaves_recently_added_alone(self):
         """The control case: expanding the field family must not make every
         field invalidate every projection."""

@@ -1323,7 +1323,8 @@ success):
 | Work create | YES | — | YES |
 | Work delete | YES | YES | YES |
 | Work metadata (title / status / doc type / year / author) | YES | YES | YES |
-| The ten synchronized bibliographic fields (`abstract` reaches works-browse only) | — | — | — |
+| The ten detail-only synchronized fields (`abstract` reaches works-browse only) | — | — | — |
+| Synchronized `year` / `published_date` | YES | YES | YES |
 | Author **or Editor** role change | YES | YES | YES |
 | Person canonical first/last-name change | YES | YES | YES |
 | managed PDF save (`file_size_bytes`) | YES | YES | YES |
@@ -1424,8 +1425,9 @@ The families are deliberately different in kind, and that is the point:
   revision would demand a resolution for a collision that never happened. Scope
   is `work-field / ["<work id>", "<field>"]` in the existing
   `sync_entity_revisions` table -- no schema change.
-- Ten fields synchronize: `abstract`, `publisher`, `location`, `edition`,
-  `journal`, `volume`, `issue`, `pages`, `isbn`, `doi`.
+- Twelve fields synchronize: `year`, `published_date` (2G), `abstract`,
+  `publisher`, `location`, `edition`, `journal`, `volume`, `issue`, `pages`,
+  `isbn`, `doi`.
   `backend/work_metadata_sync.SYNCED_FIELDS` is the authority and the client
   list is pinned against it by `tests/test_frontend_work_metadata_sync.py`.
   Never accept a column name from a client.
@@ -1435,7 +1437,7 @@ The families are deliberately different in kind, and that is the point:
   truncated. It is in `BYTE_LIMITED_FIELDS`, so `metadata-state` carries its
   revision only (the Work record has the value) and a conflict reports bounded
   previews plus sizes rather than two megabyte values the 2 KB structured-result
-  bound could not store. The nine small scalars keep code-point limits.
+  bound could not store. The eleven small scalars keep code-point limits.
 - `prksAbstractExcerpt()` is the canonical excerpt rule: first 100 Unicode CODE
   POINTS, matching SQLite's `SUBSTR`, not UTF-16 units and not graphemes.
   `tests/test_abstract_excerpt.py` pins equality against the real engine. Never
@@ -1475,6 +1477,35 @@ The families are deliberately different in kind, and that is the point:
 - On acknowledgement a projection row is patched in place, not invalidated:
   dropping the snapshot costs offline availability for a change whose exact
   shape is already known.
+
+### High fan-out fields (Milestone 2G)
+
+- `year` and `published_date` are read by far more than the Work detail: every
+  Work card shows a year, so both reach `works-browse:index`, `recent:index`
+  and `recently-added:index`, AND the Work summaries embedded in every cached
+  Folder, Person and Playlist detail.
+- **Embedded summaries are patched, never invalidated.** Dropping three whole
+  domains for a one-field edit would cost the user every cached Folder, profile
+  and playlist -- and the exact new value is known, so there is nothing to
+  re-fetch. `SUMMARY_FIELDS` says which fields those rows carry;
+  `store.getEntitiesByKind()` finds them. A field no summary carries never
+  touches those domains.
+- Each domain's generation advances **before** its rows are read, so a GET that
+  began earlier cannot publish its pre-acknowledgement body afterwards. The
+  domain is not blocked: rows are being corrected, not invalidated.
+- **A declared projection the runtime cannot address is a failure, not a skip.**
+  `recent` shipped declared-but-unmapped in `FIELD_PROJECTION_LISTS`, so
+  acknowledgements silently skipped `recent:index` and it kept serving a value
+  the server no longer held. `reconcileFieldProjections` now returns false, and
+  a test pins that every declared domain has a key.
+- **The displayed year is derived**, not stored: an explicit `year` wins,
+  `published_date` supplies it otherwise. A pending edit to either field can
+  move what a card shows, so both are registry entries.
+- The UI shows dates as `dd/mm/yyyy` and the column stores `yyyy-mm-dd`. That
+  conversion lives in the field CODEC in `work-metadata-state.js` -- one place,
+  used by the draft, the save and the dirty diff. An uninterpretable date is
+  `null` and the save is refused before enqueueing; never enqueue a value the
+  server would have to guess at.
 
 ### Local-first Work opens (Milestone 2C)
 
@@ -1541,7 +1572,11 @@ Other mutations remain server-required. The implementation contract is in
   Work projections invalidate, including absent tombstones on delete/merge.
 - No offline Tag creation, Folder edits, Playlists, research-note editing,
   CRDTs, multi-user sync or server push. Open events joined the protocol in 2C
-  and ten bibliographic fields in 2D/2E/2F; nothing else has.
+  and twelve bibliographic fields in 2D/2E/2F/2G; nothing else has. `year` and
+  `published_date` (2G) are the high fan-out case: they reach all three browse
+  catalogs AND the Work summaries embedded in cached Folder, Person and
+  Playlist details, which are patched -- never invalidated -- under a
+  generation advanced before the read.
 
 **Tag identity is persistent.** Only `delete_tag()` and `merge_tags_into()`
 may destroy or transform a Tag. Removing a tag from a Work or Folder, deleting
@@ -1724,6 +1759,55 @@ Server reuse across tests (one persistent PRKS process, database rollback
 between tests, a shared IndexedDB or service-worker profile) is deliberately
 **not** implemented. It trades a large correctness risk for time that
 parallelism already recovered.
+
+## Never return a live object from `page.evaluate`
+
+`page.evaluate` serializes whatever its expression evaluates to. Handing back a
+live application object -- a cytoscape instance, a store, anything with a deep
+internal graph -- makes Playwright walk all of it across the protocol. Measured
+on `prksGetResearchGraphDebug().cy`: **7-10 seconds per call**, enough
+allocation to crash the renderer (`Target crashed`) under `--jobs 4`, and the
+value arrives as `None` regardless.
+
+Two defects had shipped from this, in the same file:
+
+- `page.evaluate('window.__x = prksGetResearchGraphDebug().cy')` is an
+  assignment EXPRESSION, so it returns the instance. Use a block body:
+  `page.evaluate('() => { window.__x = ...; }')`.
+- `assertIsNone(page.evaluate('prksGetResearchGraphDebug().cy'))` passed whether
+  or not a graph was mounted, because a live instance serializes to `None` too.
+  That assertion could not fail. Ask the page for a **boolean**:
+  `page.evaluate('() => !!prksGetResearchGraphDebug().cy')`.
+
+Return scalars, booleans, ids, counts and small plain data. Compare identity
+inside the page (`a === b`), never by shipping both objects out.
+
+## Scope a "nothing is showing" assertion to where it must not show
+
+A page-wide `page.locator('.work-detail').count() == 0` is not the claim
+"the Folders tab shows no Work detail". A tab whose PDF resource has mounted is
+**warm-parked** when you switch away (`prksWarmParkTabContext`): its DOM is
+moved into the hidden `#prks-tab-warm-parking` host and deliberately kept alive
+so returning to it is instant. The node still matches a page-wide selector.
+
+Whether it survives depends on whether the PDF finished mounting before the
+switch, so the page-wide count passed when the test ran alone and failed under
+`--jobs 4` -- which looks exactly like a render race and is not one. Measuring
+it settled the question: the two views stayed co-mounted for the whole 2.5 s
+sample window with no transition, so nothing was waiting to finish.
+
+Scope to the visible surface (`.prks-tile--main .work-detail`), assert the
+scope itself is non-empty so it cannot pass vacuously, and where a survivor is
+legitimate, pin WHERE it survives:
+
+    self.assertEqual(page.locator(".prks-tile--main").count(), 1)
+    self.assertEqual(page.locator(".prks-tile--main .work-detail").count(), 0)
+    self.assertEqual(page.locator(".work-detail").count(),
+                     page.locator("#prks-tab-warm-parking .work-detail").count())
+
+Cold-parked routes (anything without a PDF resource) are destroyed on switch,
+so their page-wide counts are safe -- that asymmetry is why only the Work
+detail flaked.
 
 ## No arbitrary sleeps in E2E
 

@@ -502,6 +502,102 @@ async function projectionReconciliation() {
     assert.equal(await cache.getList('recently-added:index'), null);
 }
 
+/* ---- acknowledgement reaches every cached representation ---- */
+async function embeddedReconciliation() {
+    const factory = createFakeIndexedDBFactory();
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const summary = extra => Object.assign({ id: 'W-Y', title: 'Paper', year: '2020' }, extra || {});
+    await cache.putEntity('work', 'W-Y', { id: 'W-Y', title: 'Paper', year: '2020' });
+    await cache.putEntity('work-metadata-state', 'W-Y', { work_id: 'W-Y', fields: base() });
+    await cache.putEntity('folder', 'F1', { id: 'F1', works: [summary(), { id: 'W-OTHER', year: '1990' }] });
+    await cache.putEntity('folder', 'F2', { id: 'F2', works: [{ id: 'W-OTHER', year: '1990' }] });
+    await cache.putEntity('person', 'P1', { id: 'P1', works: [summary()] });
+    await cache.putEntity('playlist', 'PL1', { id: 'PL1', items: [summary()] });
+    await cache.putList('works-browse:index', [summary()], '');
+    await cache.putList('recent:index', [summary()], '');
+    await cache.putList('recently-added:index', [summary()], '');
+    const offline = createPrksOfflineRuntime({ store: cache, window: null,
+        prksRequest: async () => { throw new Error('no reads in this scenario'); } });
+
+    const ack = { code: 'ACKNOWLEDGED', work_id: 'W-Y', field: 'year',
+        value: '1998', server_revision: 1, changed: true };
+    assert.equal(await offline.reconcileWorkField(ack), true);
+
+    assert.equal((await cache.getEntity('work', 'W-Y')).value.year, '1998');
+    assert.deepEqual((await cache.getEntity('work-metadata-state', 'W-Y')).value.fields.year,
+        { value: '1998', revision: 1 });
+    for (const key of ['works-browse:index', 'recent:index', 'recently-added:index']) {
+        assert.equal((await cache.getList(key)).value[0].year, '1998', key + ' was patched');
+    }
+    const folder = (await cache.getEntity('folder', 'F1')).value;
+    assert.equal(folder.works[0].year, '1998', 'the embedded Folder summary was patched');
+    assert.equal(folder.works[1].year, '1990', 'other Works in that Folder are untouched');
+    assert.equal((await cache.getEntity('folder', 'F2')).value.works[0].year, '1990',
+        'a Folder that does not contain the Work is left alone');
+    assert.equal((await cache.getEntity('person', 'P1')).value.works[0].year, '1998');
+    assert.equal((await cache.getEntity('playlist', 'PL1')).value.items[0].year, '1998');
+
+    /* A field no summary carries must not drag those domains into its
+     * reconciliation -- DOI is the control case. */
+    const before = ['folders', 'people', 'playlists'].map(d => offline.currentDomainGeneration(d));
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-Y',
+        field: 'doi', value: '10.1/x', server_revision: 1, changed: true }), true);
+    assert.deepEqual(['folders', 'people', 'playlists'].map(d => offline.currentDomainGeneration(d)),
+        before, 'a detail-only field leaves embedded domains completely alone');
+
+    // Nothing cached of a kind is nothing to reconcile, not a failure.
+    await cache.deleteEntity('person', 'P1');
+    assert.equal(await offline.reconcileWorkField(
+        Object.assign({}, ack, { value: '1997', server_revision: 2 })), true);
+    assert.equal(await cache.getEntity('person', 'P1'), null, 'and nothing is fabricated');
+}
+
+/* An acknowledgement cannot retire while a cached representation of it is
+ * unreadable: the durable operation stays, and the next attempt reconciles. */
+async function unreadableSummariesBlockRetirement() {
+    const factory = createFakeIndexedDBFactory();
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    await cache.putEntity('work', 'W-Y', { id: 'W-Y', year: '2020' });
+    await cache.putEntity('folder', 'F1', { id: 'F1', works: [{ id: 'W-Y', year: '2020' }] });
+    const unreadable = Object.assign(Object.create(Object.getPrototypeOf(cache)), cache, {
+        // What the store reports when the read itself failed -- NOT the empty
+        // array it reports for a kind that simply has nothing cached.
+        getEntitiesByKind: async () => null,
+    });
+    const offline = createPrksOfflineRuntime({ store: unreadable, window: null,
+        prksRequest: async () => { throw new Error('no reads in this scenario'); } });
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-Y',
+        field: 'year', value: '1998', server_revision: 1, changed: true }), false,
+        'reconciliation reports failure, so the caller keeps the operation');
+    assert.equal((await cache.getEntity('folder', 'F1')).value.works[0].year, '2020',
+        'and nothing was half-written');
+}
+
+/* An embedded-entity GET that began before the acknowledgement must lose. */
+async function staleEmbeddedRead() {
+    const factory = createFakeIndexedDBFactory();
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const stale = { id: 'F1', works: [{ id: 'W-Y', title: 'Paper', year: '2020' }] };
+    await cache.putEntity('folder', 'F1', JSON.parse(JSON.stringify(stale)));
+    await cache.putEntity('work', 'W-Y', { id: 'W-Y', year: '2020' });
+    let release = null;
+    const inFlight = new Promise(resolve => { release = resolve; });
+    const offline = createPrksOfflineRuntime({ store: cache, window: null, prksRequest: async () => {
+        await inFlight;
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(stale)) };
+    } });
+
+    const reading = offline.readThroughEntity('folder', 'F1', '/api/folders/F1', { domain: 'folders' });
+    await settle();
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-Y',
+        field: 'year', value: '1998', server_revision: 1, changed: true }), true);
+    release();
+    await reading;
+    await settle();
+    assert.equal((await cache.getEntity('folder', 'F1')).value.works[0].year, '1998',
+        'a stale Folder response cannot beat the acknowledgement');
+}
+
 /* A GET that began before the acknowledgement cannot publish over it. */
 async function staleProjectionRead() {
     const factory = createFakeIndexedDBFactory();
@@ -732,6 +828,107 @@ async function abstracts() {
     delete globalThis.prksSync;
 }
 
+/* ---- year + published_date: one field, many cached surfaces ---- */
+async function highFanOut() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    globalThis.prksSync = { store };
+    const observed = resolved(base({
+        year: { value: '', revision: 0 },
+        published_date: { value: '2020-05-01', revision: 2 },
+    }));
+    await store.saveWorkMetadataFields('W-Y', { year: '1998' }, observed);
+    await globalThis.prksRefreshPendingWorkMetadata();
+
+    /* The card's displayed year is DERIVED -- explicit Year, else the date's
+     * year -- and that rule stays in the renderer. The overlay only supplies
+     * effective field values. */
+    const displayedYear = work => {
+        const effective = globalThis.prksEffectiveWorkSync(work);
+        const year = String(effective.year || '').trim();
+        if (year) return year;
+        const match = String(effective.published_date || '').match(/^(\d{4})/);
+        return match ? match[1] : '';
+    };
+    const server = { id: 'W-Y', title: 'Paper', year: '', published_date: '2020-05-01' };
+    assert.equal(displayedYear(server), '1998', 'a pending Year overrides the acknowledged date');
+    assert.equal(server.year, '', 'the acknowledged Work is untouched');
+
+    // Clearing Year reveals the date's year again.
+    await store.saveWorkMetadataFields('W-Y', { year: '' },
+        resolved(base({ year: { value: '1998', revision: 1 },
+            published_date: { value: '2020-05-01', revision: 2 } })));
+    await globalThis.prksRefreshPendingWorkMetadata();
+    assert.equal(displayedYear({ id: 'W-Y', year: '1998', published_date: '2020-05-01' }), '2020',
+        'a pending cleared Year falls back to the date');
+
+    // A pending date alone moves the displayed year.
+    const store2 = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    globalThis.prksSync = { store: store2 };
+    await store2.saveWorkMetadataFields('W-Y', { published_date: '2022-09-01' },
+        resolved(base({ published_date: { value: '2020-05-01', revision: 1 } })));
+    await globalThis.prksRefreshPendingWorkMetadata();
+    assert.equal(displayedYear({ id: 'W-Y', year: '', published_date: '2020-05-01' }), '2022');
+    // ...but an explicit pending Year still wins over a pending date.
+    await store2.saveWorkMetadataFields('W-Y', { year: '1999' }, resolved(base()));
+    await globalThis.prksRefreshPendingWorkMetadata();
+    assert.equal(displayedYear({ id: 'W-Y', year: '', published_date: '2020-05-01' }), '1999');
+
+    /* All three browse lists carry both fields, because every Work card shows
+     * a year. Order of independent operations never matters. */
+    for (const projection of ['works-browse', 'recent', 'recently-added']) {
+        const rows = [{ id: 'W-Y', title: 'Paper', year: '2020', published_date: '2020-05-01' },
+            { id: 'W-Z', title: 'Other', year: '2001', published_date: '2001-01-01' }];
+        const frozen = JSON.parse(JSON.stringify(rows));
+        const effective = globalThis.prksEffectiveProjectionRows(rows, projection);
+        assert.equal(effective[0].year, '1999', projection + ' carries the pending Year');
+        assert.equal(effective[0].published_date, '2022-09-01', projection + ' carries the pending date');
+        assert.equal(effective[1].year, '2001', 'untouched rows are untouched');
+        assert.deepEqual(rows, frozen, projection + ' snapshot is never mutated');
+    }
+
+    /* Cached Folder/Person/Playlist details embed Work SUMMARIES. One helper
+     * serves all three, so no component reads the durable queue itself. */
+    const summaries = [{ id: 'W-Y', title: 'Paper', year: '2020', published_date: '2020-05-01',
+        publisher: 'Elsevier' }];
+    const frozenSummaries = JSON.parse(JSON.stringify(summaries));
+    const effectiveSummaries = globalThis.prksEffectiveWorkSummaries(summaries);
+    assert.equal(effectiveSummaries[0].year, '1999');
+    assert.equal(effectiveSummaries[0].published_date, '2022-09-01');
+    assert.equal(effectiveSummaries[0].publisher, 'Elsevier', 'untouched fields survive');
+    assert.deepEqual(summaries, frozenSummaries, 'the cached entity is never mutated');
+    assert.deepEqual(globalThis.PRKS_WORK_SUMMARY_FIELDS,
+        ['year', 'published_date', 'publisher']);
+
+    /* The Published Date codec: the editor spells it dd/mm/yyyy, the wire and
+     * the column are ISO, and comparing the spellings would make an untouched
+     * date dirty on every save. */
+    /* The REAL date module, never a hand-written double: the stub this
+     * replaced answered `null` for an unreadable date while production
+     * answered `''`, so the contract looked pinned while the editor was
+     * actually treating `31/02/2026` as "clear the field". */
+    require('../../frontend/js/date-format.js');
+    assert.equal(globalThis.prksWorkFieldToDisplay('published_date', '2026-09-12'), '12/09/2026');
+    assert.equal(globalThis.prksWorkFieldToCanonical('published_date', '12/09/2026'), '2026-09-12');
+    assert.equal(globalThis.prksWorkFieldToCanonical('published_date', ''), '',
+        'a cleared date is the empty string, like every other field');
+    assert.equal(globalThis.prksWorkFieldToCanonical('published_date', '31/02/2026'), null,
+        'an uninterpretable date is null, so the caller can refuse it');
+    assert.equal(globalThis.prksWorkFieldToCanonical('year', '1998'), '1998', 'other fields are identity');
+
+    const displayDraft = { published_date: '12/09/2026', year: '1999' };
+    const dateObserved = { fields: base({ published_date: { value: '2026-09-12', revision: 1 },
+        year: { value: '1999', revision: 1 } }) };
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields(displayDraft, dateObserved), {},
+        'an untouched date is not dirty merely because it is spelled differently');
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields(
+        { published_date: '01/01/2000' }, dateObserved), { published_date: '2000-01-01' },
+        'and a real change is recorded canonically');
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields(
+        { published_date: '31/02/2026' }, dateObserved), {},
+        'an uninterpretable draft produces no operation');
+    delete globalThis.prksSync;
+}
+
 async function main() {
     await coalescing();
     await independence();
@@ -747,6 +944,10 @@ async function main() {
     await hydration();
     await abstracts();
     await abstractAcknowledgement();
+    await highFanOut();
+    await embeddedReconciliation();
+    await unreadableSummariesBlockRetirement();
+    await staleEmbeddedRead();
     console.log('All ' + checks + ' Work metadata checks passed');
 }
 

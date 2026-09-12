@@ -6,7 +6,7 @@ PRKS has one semantic-operation protocol and **two families** on it:
 | --- | --- | --- |
 | `ADD_WORK_TAG` / `REMOVE_WORK_TAG` | 2B | Revisioned relationship. Two devices can genuinely disagree, so conflicts are real and the user resolves them. |
 | `MARK_WORK_OPENED` | 2C | Max-register over normalized event time. Two devices cannot disagree, so there is no conflict and none is offered. |
-| `SET_WORK_METADATA_FIELD` | 2D, 2E, 2F | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
+| `SET_WORK_METADATA_FIELD` | 2D, 2E, 2F, 2G | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
 
 Both commit to durable browser storage before the UI acts on them, survive
 reloads and offline periods, and synchronize idempotently on reconnect. Other
@@ -223,8 +223,9 @@ A render PRKS decided to do -- the reconnect refresh -- is not an open either.
 
 ## Work metadata fields
 
-Ten bibliographic scalars synchronize: `abstract`, `publisher`, `location`,
-`edition`, `journal`, `volume`, `issue`, `pages`, `isbn`, `doi`. Each owns a revision scope
+Twelve bibliographic scalars synchronize: `year`, `published_date`, `abstract`,
+`publisher`, `location`, `edition`, `journal`, `volume`, `issue`, `pages`,
+`isbn`, `doi`. Each owns a revision scope
 `work-field / ["<work id>", "<field>"]` -- the same structural JSON encoding the
 Work-Tag scopes use, so no delimiter has to be excluded from either component.
 A missing row is revision 0. No schema change was needed: these live in the
@@ -233,7 +234,8 @@ existing `sync_entity_revisions` table.
 The envelope payload is `{"field": ..., "value": ...}`, one operation type for
 all of them rather than one per field: the semantic act is "set one supported
 field to one scalar value", so 2E added `publisher` and `location` as registry
-entries and nothing else. The field must be in the server's own registry -- an
+entries and nothing else, and 2G added `year` and `published_date` the same way
+-- the cost of those two was never the operation, it was the fan-out below. The field must be in the server's own registry -- an
 arbitrary column name from a client would be both an injection surface and a
 way to reach fields these milestones deliberately exclude.
 
@@ -421,6 +423,15 @@ Abstract.
 | --- | --- | --- | --- |
 | `publisher` | `recently-added` | `publisher` | copied |
 | `abstract` | `works-browse` | `abstract_excerpt` | **derived** (first 100 code points) |
+| `year` | `works-browse`, `recent`, `recently-added` | `year` | copied |
+| `published_date` | `works-browse`, `recent`, `recently-added` | `published_date` | copied |
+
+A declared projection the runtime cannot address is a wiring error, not
+something to step over: `reconcileFieldProjections` returns false rather than
+skipping it, and a test pins that every domain in `FIELD_PROJECTIONS` has a
+list key. 2G shipped that guard because `recent` was declared and unmapped --
+acknowledgements silently skipped `recent:index`, leaving the Recent catalog
+serving a value the server no longer held.
 
 Consumers ask for effective rows and never interpret durable operations
 themselves, so a third field is a table entry rather than an `if` inside
@@ -430,14 +441,14 @@ the server answers.
 
 ## Fan-out: which fields reach which projections
 
-Eight of the ten are rendered on the Work detail and nowhere else. The Work
+Eight of the twelve are rendered on the Work detail and nowhere else. The Work
 summary projection carries them, so cached Folder, Person and Playlist details
 hold them in their payloads -- but no Work card, browse catalog, Concept,
 Argument or Graph surface displays them, so a pending value needs no optimistic
 propagation beyond the Work itself, and an acknowledgement invalidates no browse
 catalog.
 
-Two are exceptions, in different ways. `publisher` is COPIED into
+Four are exceptions, in three different ways. `publisher` is COPIED into
 `recently-added:index`, which 2E exists because of: **being invisible on a card
 is not the same as being unused** -- that projection selects `works.publisher`
 because Home -> Recently Added filters LOCALLY over it. `abstract` is DERIVED
@@ -447,13 +458,36 @@ exists because of that. `FIELD_PROJECTIONS` in
 dependencies on both sides, and the parity is pinned by a test -- an earlier
 version of this table claimed publisher reached nothing else, which was wrong.
 
+`year` and `published_date` are the HIGH FAN-OUT case, and 2G exists because of
+them. Every Work card shows a year, so both reach all three browse catalogs,
+and both are also embedded in cached Folder, Person and Playlist details, whose
+rows are Work summaries. That is three cached lists plus an unbounded number of
+cached entities per edit. Two mechanisms carry it:
+
+| Reach | Mechanism | Where |
+| --- | --- | --- |
+| Three browse catalogs | `FIELD_PROJECTIONS` + `PROJECTION_COLUMNS` | `reconcileFieldProjections` |
+| Embedded Work summaries in Folder / Person / Playlist details | `SUMMARY_FIELDS` + `store.getEntitiesByKind()` | `reconcileEmbeddedSummaries` |
+
+Embedded rows are PATCHED rather than invalidated. Dropping three whole domains
+for a one-field edit would cost the user every cached Folder, profile and
+playlist -- and we know the exact new value, so there is nothing to re-fetch.
+Each domain's generation advances BEFORE its rows are read, so a GET that began
+earlier cannot publish its pre-acknowledgement body afterwards; the domain is
+not blocked, because rows are being corrected, not invalidated. A field no
+summary carries (`doi`, say) never touches those domains at all.
+
+The displayed year is DERIVED, not stored: an explicit `year` wins, and
+`published_date` supplies it otherwise. So a pending edit to either field can
+move what a card shows, which is why both are registry entries rather than one.
+
 The deferred fields do not share that property:
 
 | Field | Also rendered or matched by |
 | --- | --- |
 | `source_url` | every Work card, via `prksInferWorkSourceKind()` deciding the thumbnail kind |
 | `thumb_page` | every Work card, via the thumbnail URL |
-| `year`, `published_date`, `author_text` | every Work card's meta and credit lines, in all three browse catalogs and in cached Folder / Person / Playlist details |
+| `author_text` | every Work card's credit line, in all three browse catalogs and in cached Folder / Person / Playlist details |
 | `status` | Work card badges, the Progress route's grouping, and the same cached details |
 | `doc_type` | Work card badges, the Types route's grouping, the Graph |
 | `title` | all of the above, plus Concept details (mention titles), Argument details (source Works), Graph snapshots and the command palette |

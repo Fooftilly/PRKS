@@ -251,6 +251,40 @@
         }
 
         /**
+         * Every cached entity of one kind, as stored envelopes.
+         *
+         * Persistence only: no domain knowledge, no DOM, no synchronization
+         * logic. A caller that must patch one field inside many cached
+         * snapshots -- a Work summary embedded in every cached Folder, say --
+         * cannot know which ids to ask for, and guessing would mean either
+         * dropping whole domains or leaving stale rows behind.
+         *
+         * Reuses the same bounded compound-key range as the whole-kind sweep,
+         * so no index or schema change is needed. Fail-soft like the rest of
+         * this store: an unreadable cache yields an empty list.
+         */
+        function getEntitiesByKind(kind) {
+            const range = kindKeyRange(String(kind));
+            return runRequest(STORE_ENTITIES, 'readonly', function (store) {
+                return range ? store.getAll(range) : store.getAll();
+            }).then(function (r) {
+                /* null for a FAILED read, [] for a kind with nothing cached.
+                 * The caller reconciles acknowledgements into these rows and
+                 * must not retire an operation believing it patched every
+                 * cached copy when it could not even read them -- so the two
+                 * outcomes cannot share a spelling. Still fail-soft: this
+                 * resolves, it never throws to the caller. */
+                if (!r.ok || !Array.isArray(r.value)) return null;
+                // Without a usable key range every row comes back, so filter.
+                return range ? r.value : r.value.filter(function (row) {
+                    return row && String(row.kind) === String(kind);
+                });
+            }).catch(function () {
+                return null;
+            });
+        }
+
+        /**
          * Removes every cached entity of one kind. Used by domain-level offline
          * coherence (see offline-runtime.js): some cached read models span many
          * canonical records, so one canonical change can stale a whole kind
@@ -526,6 +560,7 @@
             isAvailable: isAvailable,
             putEntity: putEntity,
             getEntity: getEntity,
+            getEntitiesByKind: getEntitiesByKind,
             deleteEntity: deleteEntity,
             deleteEntitiesByKind: deleteEntitiesByKind,
             putList: putList,

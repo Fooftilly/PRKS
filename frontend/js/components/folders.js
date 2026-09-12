@@ -972,8 +972,14 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
     const canDelete = (!folder.works || folder.works.length === 0) && !hasChildren;
 
     let worksHtml = `<div class="card-grid">`;
-    if (folder.works && folder.works.length > 0) {
-        folder.works.forEach((w) => {
+    /* Acknowledged summaries + pending Work-field edits. The cached Folder is
+     * never mutated; the overlay is applied where the rows are rendered, and
+     * the rules for it live in work-metadata-state.js so this component never
+     * learns to read the durable queue. */
+    const folderWorks = typeof prksEffectiveWorkSummaries === 'function'
+        ? prksEffectiveWorkSummaries(folder.works || []) : (folder.works || []);
+    if (folderWorks.length > 0) {
+        folderWorks.forEach((w) => {
             // A card rendered from IndexedDB must not request a PRKS thumbnail
             // that cannot succeed; a broken image is worse than none.
             worksHtml += typeof prksWorkCardHtml === 'function'

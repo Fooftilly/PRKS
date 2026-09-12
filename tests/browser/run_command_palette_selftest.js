@@ -783,6 +783,8 @@ Promise.resolve()
         const rows = root.prksCommandPaletteGetResults();
         const work = rows.filter(function (r) { return r.id === 'open-work-W-1'; })[0];
         assert('work row present', !!work);
+        assert('work subtitle carries the acknowledged year',
+            String(work.subtitle).indexOf('1991') !== -1);
         const idx = rows.indexOf(work);
         navCalls.length = 0;
         while (root.prksCommandPaletteGetActiveIndex() !== idx) {
@@ -791,6 +793,44 @@ Promise.resolve()
         }
         root.prksCommandPaletteExecuteActive();
         assertEq('work navigates hash', navCalls[0] && navCalls[0].hash, '#/works/W-1');
+
+        /* Search results come from the SERVER, so a pending Year edit is not in
+         * them. The palette must read the same effective-Work overlay every
+         * other surface uses rather than showing a year the user already
+         * changed -- and must not grow its own reading of the durable queue. */
+        root.prksEffectiveWorkSync = function (w) {
+            return w && w.id === 'W-1' ? Object.assign({}, w, { year: '2026' }) : w;
+        };
+        root.prksCloseCommandPalette();
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('retorika');
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        const work = root.prksCommandPaletteGetResults()
+            .filter(function (r) { return r.id === 'open-work-W-1'; })[0];
+        assert('pending year reaches the palette subtitle',
+            String(work.subtitle).indexOf('2026') !== -1);
+        assert('the value it replaced is gone',
+            String(work.subtitle).indexOf('1991') === -1);
+        assert('the author is still there', String(work.subtitle).indexOf('Aristotle') !== -1);
+
+        // Cleared Year, pending Published Date: the displayed year follows it.
+        root.prksEffectiveWorkSync = function (w) {
+            return w && w.id === 'W-1'
+                ? Object.assign({}, w, { year: '', published_date: '1954-06-07' }) : w;
+        };
+        root.prksCloseCommandPalette();
+        root.prksOpenCommandPalette();
+        root.prksCommandPaletteSetQuery('retorika');
+        return new Promise(function (r) { setTimeout(r, 0); });
+    })
+    .then(function () {
+        const work = root.prksCommandPaletteGetResults()
+            .filter(function (r) { return r.id === 'open-work-W-1'; })[0];
+        assert('a cleared Year falls back to the Published Date',
+            String(work.subtitle).indexOf('1954') !== -1);
+        delete root.prksEffectiveWorkSync;
 
         root.prksOpenCommandPalette();
         root.prksCommandPaletteSetQuery('rhetoric');

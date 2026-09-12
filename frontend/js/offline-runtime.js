@@ -449,7 +449,60 @@
             for (let i = 0; i < kinds.length; i++) {
                 if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
             }
-            return reconcileFieldProjections(result);
+            if (!await reconcileFieldProjections(result)) return false;
+            return reconcileEmbeddedSummaries(result);
+        }
+
+        /* Cached Folder, Person and Playlist details embed Work SUMMARIES, so a
+         * field those rows carry has to be patched there too. We know the exact
+         * new value, so the snapshots are corrected rather than dropped:
+         * invalidating three whole domains would cost the user every cached
+         * Folder, profile and playlist for a one-field edit.
+         *
+         * Each domain's generation is advanced BEFORE its rows are read, so a
+         * GET that began earlier cannot publish its pre-acknowledgement body
+         * afterwards. The domain is NOT blocked -- we are replacing rows with
+         * known-good values, not invalidating them.
+         */
+        const SUMMARY_ENTITIES = [
+            { kind: 'folder', domain: DOMAIN_FOLDERS, rows: value => value.works },
+            { kind: 'person', domain: DOMAIN_PEOPLE, rows: value => value.works },
+            { kind: 'playlist', domain: DOMAIN_PLAYLISTS, rows: value => value.items },
+        ];
+
+        async function reconcileEmbeddedSummaries(result) {
+            const fields = root.PRKS_WORK_SUMMARY_FIELDS || [];
+            if (fields.indexOf(result.field) === -1) return true;
+            for (const spec of SUMMARY_ENTITIES) {
+                if (!await reconcileSummaryKind(result, spec)) return false;
+            }
+            return true;
+        }
+
+        async function reconcileSummaryKind(result, spec) {
+            if (typeof store.getEntitiesByKind !== 'function') return true;
+            const token = currentDomainGeneration(spec.domain) + 1;
+            domainGeneration.set(spec.domain, token);
+            const cached = await store.getEntitiesByKind(spec.kind).catch(function () { return null; });
+            // Nothing cached of this kind is nothing to reconcile, not a
+            // failure -- and one field is never enough to invent a snapshot.
+            if (!Array.isArray(cached)) return false;
+            for (const row of cached) {
+                if (!row || !row.value) continue;
+                const summaries = spec.rows(row.value);
+                if (!Array.isArray(summaries)) continue;
+                let touched = false;
+                summaries.forEach(function (summary, index) {
+                    if (!summary || summary.id !== result.work_id) return;
+                    summaries[index] = Object.assign({}, summary, { [result.field]: result.value });
+                    touched = true;
+                });
+                if (!touched) continue;
+                const entityToken = currentEntityGeneration(spec.kind, row.id) + 1;
+                entityCoherence.set(entityKey(spec.kind, row.id), entityToken);
+                if (!await cacheEntityIfCurrent(spec.kind, row.id, row.value, entityToken)) return false;
+            }
+            return true;
         }
 
         /* Some synchronized fields also live in a cached LIST. `publisher` is
@@ -465,13 +518,17 @@
         const FIELD_PROJECTION_LISTS = {
             'recently-added': RECENTLY_ADDED_LIST_KEY,
             'works-browse': WORKS_BROWSE_LIST_KEY,
+            'recent': RECENT_LIST_KEY,
         };
 
         async function reconcileFieldProjections(result) {
             const projections = (root.PRKS_SYNCED_WORK_FIELD_PROJECTIONS || {})[result.field] || [];
             for (const domain of projections) {
                 const listKey = FIELD_PROJECTION_LISTS[domain];
-                if (!listKey) continue;
+                // A declared projection we cannot address is a wiring error,
+                // and skipping it would leave that list serving a value the
+                // server no longer holds -- exactly the drift this reconciles.
+                if (!listKey) return false;
                 if (!await reconcileProjectionList(result, domain, listKey)) return false;
             }
             return true;

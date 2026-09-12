@@ -451,7 +451,11 @@ function renderPlaylistDetail(ctx, pl, container) {
             ? prksTabContextOwnsEntityRoute(ctx, generation, 'playlist', pl.id, 'playlist-detail')
             : !!(ctx && ctx.isCurrent && ctx.isCurrent(generation));
     };
-    const items = Array.isArray(pl.items) ? pl.items : [];
+    // Acknowledged items + pending Work-field edits (Published Date drives the
+    // item subtitle). The cached playlist itself is never rewritten.
+    const acknowledged = Array.isArray(pl.items) ? pl.items : [];
+    const items = typeof prksEffectiveWorkSummaries === 'function'
+        ? prksEffectiveWorkSummaries(acknowledged) : acknowledged;
     const editing = !!(ctx && ctx.ui && ctx.ui.playlistEditing);
     const ren =
         ctx && ctx.ui && ctx.ui.playlistRename && typeof ctx.ui.playlistRename === 'object'

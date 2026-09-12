@@ -617,9 +617,14 @@
     function workSubtitle(w) {
         if (!w) return '';
         const author = String(w.linked_authors || w.primary_author || w.author_text || '').trim();
-        let year = String(w.year || '').trim();
-        if (!year && w.published_date) {
-            const m = String(w.published_date).match(/^(\d{4})/);
+        /* Search results come from the server, so while an edit is pending
+         * they still carry the acknowledged Year and Published Date. The same
+         * effective-Work overlay every other surface uses corrects that --
+         * this file must not grow its own reading of the durable queue. */
+        const work = typeof prksEffectiveWorkSync === 'function' ? prksEffectiveWorkSync(w) : w;
+        let year = String(work.year || '').trim();
+        if (!year && work.published_date) {
+            const m = String(work.published_date).match(/^(\d{4})/);
             if (m) year = m[1];
         }
         if (author && year) return author + ' · ' + year;

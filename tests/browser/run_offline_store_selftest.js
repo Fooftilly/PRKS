@@ -211,6 +211,56 @@ async function run() {
         assertEq('database removed from the fake factory registry', idb.__databases.has(mod.PRKS_OFFLINE_DB_NAME), false);
     }
 
+    /* ---- getEntitiesByKind: every cached row of one kind, and only that kind ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        await store.putEntity('folder', 'F-1', { id: 'F-1', works: [{ id: 'W-1' }] }, '');
+        await store.putEntity('folder', 'F-2', { id: 'F-2', works: [] }, '');
+        await store.putEntity('person', 'P-1', { id: 'P-1', works: [] }, '');
+        const rows = await store.getEntitiesByKind('folder');
+        assertEq('getEntitiesByKind returns every row of the kind', rows.length, 2);
+        assertEq('getEntitiesByKind returns them sorted by key',
+            rows.map(r => r.id).sort(), ['F-1', 'F-2']);
+        assert('rows carry their kind', rows.every(r => r.kind === 'folder'));
+        assert('rows carry their cached value', !!rows[0].value.id);
+        assertEq('a kind with nothing cached is an empty list, not null',
+            await store.getEntitiesByKind('playlist'), []);
+    }
+
+    /* ---- getEntitiesByKind: without IDBKeyRange the scan must still not leak other kinds ----
+     * The reconciler patches Work summaries embedded in these rows, so a
+     * `person` row reaching the folder pass would be written back under the
+     * wrong kind. */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: null });
+        await store.putEntity('folder', 'F-1', { id: 'F-1' }, '');
+        await store.putEntity('person', 'P-1', { id: 'P-1' }, '');
+        const rows = await store.getEntitiesByKind('folder');
+        assertEq('fallback scan returns only the requested kind', rows.map(r => r.id), ['F-1']);
+    }
+
+    /* ---- getEntitiesByKind: a failing read is an empty list, never a throw ----
+     * Reconciliation calls this on the acknowledgement path; a rejection there
+     * would surface as "could not save that locally" for a save that DID
+     * succeed on the server. */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        await store.putEntity('folder', 'F-1', { id: 'F-1' }, '');
+        idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME)._stores.get('entities').forceError = true;
+        let threw = false;
+        let rows;
+        try {
+            rows = await store.getEntitiesByKind('folder');
+        } catch (_e) {
+            threw = true;
+        }
+        assert('getEntitiesByKind never throws to the caller', !threw);
+        assertEq('a failed read reports null, not an empty list', rows, null);
+    }
+
     /* ---- deleteEntitiesByKind: removes one whole kind, leaves every other kind intact ---- */
     {
         const idb = createFakeIndexedDBFactory();

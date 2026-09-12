@@ -107,6 +107,21 @@
         return paint(ctx, state).catch(() => {});
     }
 
+    /** Inline, field-local feedback for a value the codec rejected. */
+    function showFieldError(field) {
+        const input = document.querySelector('[data-prks-work-field="' + field + '"]');
+        const error = document.getElementById('meta-date-error');
+        if (input) { input.setAttribute('aria-invalid', 'true'); input.focus(); }
+        if (error && field === 'published_date') error.textContent = 'Use dd/mm/yyyy.';
+    }
+
+    function clearFieldErrors() {
+        document.querySelectorAll('[data-prks-work-field][aria-invalid]').forEach(
+            input => input.removeAttribute('aria-invalid'));
+        const error = document.getElementById('meta-date-error');
+        if (error) error.textContent = '';
+    }
+
     const PREVIEW_CHARS = 160;
 
     /** Bounded, code-point safe, and never the whole value. */
@@ -265,6 +280,7 @@
         try {
             if (state.preparing) await state.preparing;
             if (!state.observed) throw new Error('no observed base');
+            clearFieldErrors();
             const draft = {};
             document.querySelectorAll('[data-prks-work-field]').forEach(input => {
                 draft[input.dataset.prksWorkField] = input.value;
@@ -272,6 +288,16 @@
             // A byte-limited field's acknowledged base lives on the Work
             // record, not in the projection -- see prksObservedWorkFields().
             const observed = { fields: root.prksObservedWorkFields(state.observed, ctx.getEntity('work')) };
+            /* A value the codec cannot interpret -- `31/02/2026` -- must not
+             * become an operation. The existing inline date error says so, the
+             * draft stays, and nothing is stored or sent. */
+            for (const field of Object.keys(draft)) {
+                if (root.prksWorkFieldToCanonical(field, draft[field]) !== null) continue;
+                state.error = null;
+                showFieldError(field);
+                await safePaint(ctx, state);
+                return;
+            }
             const changes = root.prksDirtyWorkMetadataFields(draft, observed, state.operations);
             /* Refuse visibly rather than enqueue something the server will
              * reject: the draft stays on screen, nothing is stored, and nothing

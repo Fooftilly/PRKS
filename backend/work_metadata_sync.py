@@ -46,6 +46,8 @@ MAX_ABSTRACT_UTF8_BYTES = 1024 * 1024
 
 SYNCED_FIELDS = {
     "abstract": MAX_ABSTRACT_UTF8_BYTES,
+    "year": 50,
+    "published_date": 40,
     "edition": 200,
     "journal": 500,
     "volume": 100,
@@ -68,6 +70,8 @@ SYNCED_FIELDS = {
 # byte concern. The others bound how much text a one-line field may hold, which
 # is a display concern -- and switching them to bytes would quietly shorten
 # every one of them by a factor of three for anyone writing CJK.
+BROWSE_LISTS = ("works-browse", "recent", "recently-added")
+
 BYTE_LIMITED_FIELDS = frozenset({"abstract"})
 
 # A conflict result is persisted in the browser's durable operation row, which
@@ -85,12 +89,24 @@ def preview(value):
     return text[:CONFLICT_PREVIEW_CHARS]
 
 
+# Cached LIST projections that carry a synchronized field.
 FIELD_PROJECTIONS = {
     "publisher": ("recently-added",),
     # DERIVED, unlike publisher: what reaches `works-browse:index` is not the
     # abstract but its first 100 code points, which Progress renders.
     "abstract": ("works-browse",),
+    # Every Work card shows a year, so these reach all three browse catalogs.
+    # They are also embedded in cached Folder/Person/Playlist details -- see
+    # SUMMARY_FIELDS, which those entity snapshots carry verbatim.
+    "year": BROWSE_LISTS,
+    "published_date": BROWSE_LISTS,
 }
+
+# Fields that cached ENTITY snapshots embed as part of a Work summary:
+# `folder.works[]`, `person.works[]`, `playlist.items[]`. A pending value has to
+# reach those rows too, and an acknowledgement has to patch them.
+SUMMARY_FIELDS = frozenset({"year", "published_date", "publisher"})
+SUMMARY_ENTITY_KINDS = ("folder", "person", "playlist")
 
 
 def scope_key(work_id, field):
@@ -144,7 +160,7 @@ def get_field_state_on_conn(conn, work_id):
     # `work-field` row in the library and discarding the ones that belong to
     # other Works: the cost of that scan grows with the library, while the
     # answer never does. `(scope_type, scope_id)` is the primary key, so this
-    # is an indexed lookup of at most nine rows.
+    # is an indexed lookup of at most one row per supported field.
     by_key = {scope_key(work_id, field): field for field in SYNCED_FIELDS}
     placeholders = ", ".join("?" * len(by_key))
     revisions = {

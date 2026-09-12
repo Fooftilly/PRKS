@@ -1369,9 +1369,13 @@ function renderPersonDetails(ctx, person, container) {
     const offlineCached = !!(ctx && ctx.ui && ctx.ui.personOfflineCached);
     const rolesByWork = prksPersonWorkRolesById(person);
     let worksHtml = '';
-    if (person.works && person.works.length > 0) {
+    // Acknowledged summaries + pending Work-field edits; the cached Person is
+    // left exactly as the server sent it.
+    const personWorks = typeof prksEffectiveWorkSummaries === 'function'
+        ? prksEffectiveWorkSummaries(person.works || []) : (person.works || []);
+    if (personWorks.length > 0) {
         if (worksEditing) {
-            const groupedWorks = person.works.reduce((acc, w) => {
+            const groupedWorks = personWorks.reduce((acc, w) => {
                 const role = (w && w.role_type) || 'Linked';
                 if (!acc[role]) acc[role] = [];
                 acc[role].push(w);
@@ -1394,7 +1398,10 @@ function renderPersonDetails(ctx, person, container) {
                 worksHtml += personRoleBlockHtml(role || 'Linked', worksList.length, cards);
             }
         } else {
-            const uniqueWorks = prksUniquePersonWorks(person);
+            // Same overlay on the read-only path.
+            const uniqueWorks = typeof prksEffectiveWorkSummaries === 'function'
+                ? prksEffectiveWorkSummaries(prksUniquePersonWorks(person))
+                : prksUniquePersonWorks(person);
             const groupedUnique = {};
             uniqueWorks.forEach((w) => {
                 const workId = w && w.id != null ? String(w.id).trim() : '';

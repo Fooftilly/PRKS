@@ -1037,10 +1037,16 @@ class WorkDetailsPolishTests(_BrowserE2E):
         page.locator("#panel-content .card-title", has_text=WORK_A_TITLE).wait_for()
 
     def test_metadata_invalid_date_blocks_save_and_marks_field(self):
-        """submitWorkMetaEdit() must query the shared #panel-content for #meta-date /
-        #meta-date-error, not ctx.query() (which is scoped beneath ctx.root and would never
-        find them). An invalid date must mark the field, populate the error, focus it, and
-        issue zero PATCH."""
+        """An uninterpretable date must mark the field, populate the error,
+        focus it, and store nothing.
+
+        The date moved into the synchronized Bibliographic details group in
+        2G, so its Save is the one that has to refuse -- and it refuses BEFORE
+        enqueueing, because a value the codec cannot read is not something to
+        guess at. The scoping half of this test still matters: the error
+        element lives in the shared `#panel-content`, not beneath `ctx.root`,
+        so a save path that looked for it with `ctx.query()` would never find
+        it."""
         server, page, _collector = self._start_app()
         work_a = server.ids["work_a"]
         patches = []
@@ -1054,20 +1060,31 @@ class WorkDetailsPolishTests(_BrowserE2E):
         _open_work_from_home(page, WORK_A_TITLE)
         page.locator("#panel-content button", has_text="Edit metadata").click()
         page.locator("#meta-date").wait_for()
+        page.wait_for_function(
+            "() => { const b = document.getElementById('save-work-bib-btn'); return b && !b.disabled; }"
+        )
         page.fill("#meta-date", "31/02/2020")
         page.route("**/api/works/*", count_patch)
         try:
-            page.locator("#inline-save-metadata-btn").click()
+            page.locator("#save-work-bib-btn").click()
             page.wait_for_function(
                 "() => document.getElementById('meta-date').getAttribute('aria-invalid') === 'true'"
             )
-            self.assertEqual(page.locator("#meta-date-error").inner_text(), "Use dd/mm/yyyy.")
+            self.assertEqual(
+                page.evaluate("() => document.getElementById('meta-date-error').textContent"),
+                "Use dd/mm/yyyy.",
+            )
             self.assertEqual(
                 page.evaluate("() => document.activeElement && document.activeElement.id"),
                 "meta-date",
             )
             page.wait_for_timeout(200)
             self.assertEqual(patches, [])
+            self.assertEqual(
+                page.evaluate("() => prksSync.store.listOperations().then(r => r.length)"),
+                0,
+                "a date PRKS would have to guess at is never enqueued either",
+            )
         finally:
             try:
                 page.unroute("**/api/works/*", count_patch)
@@ -3223,7 +3240,26 @@ class WorkspaceTabsTests(_BrowserE2E):
 
         page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash === '#/folders'")
-        self.assertEqual(page.locator(".work-detail").count(), 0)
+        page.wait_for_selector(".prks-folder-library")
+        # Scoped to the MAIN TILE, like the pdf-viewer assertion below, because
+        # a page-wide count is not the claim being made. A tab whose PDF
+        # resource is mounted is WARM-PARKED when you switch away
+        # (`prksWarmParkTabContext`): its DOM is deliberately kept alive inside
+        # the hidden `#prks-tab-warm-parking` host so returning to it is
+        # instant. So `.work-detail` legitimately survives this switch, and
+        # whether it does depends on whether the PDF finished mounting before
+        # the switch -- which is why the page-wide count passed when run alone
+        # and failed under parallel load. What must be true is that the Folders
+        # tab shows no Work detail.
+        self.assertEqual(page.locator(".prks-tile--main").count(), 1)
+        self.assertEqual(page.locator('.prks-tile--main .work-detail').count(), 0)
+        # And a surviving copy is the PARKED one, not a stray visible render:
+        # equal counts hold whether or not the PDF mounted in time, and fail
+        # the moment a Work detail exists anywhere the user could see it.
+        self.assertEqual(
+            page.locator(".work-detail").count(),
+            page.locator("#prks-tab-warm-parking .work-detail").count(),
+            "a Work detail outside the hidden warm-parking host is visible on the Folders tab")
         self.assertEqual(page.locator('.prks-tile--main [data-prks-role="pdf-viewer"]').count(), 0)
 
     def test_middle_click_opens_background_person(self):

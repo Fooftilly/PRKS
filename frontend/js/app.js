@@ -2012,6 +2012,28 @@ async function prksOfflineWorksBrowseFetch(signal) {
     );
 }
 
+/* Acknowledged browse rows + pending Work-field edits, through that
+ * projection's own transforms. Every consumer of a cached list goes through
+ * here so none of them interprets durable operations itself. The caller must
+ * have hydrated the pending map first (see prksRefreshPendingWorkMetadata). */
+/* Cached Folder, Person and Playlist details embed Work SUMMARIES, and those
+ * rows are overlaid at render time by `prksEffectiveWorkSummaries()`. That
+ * overlay reads a map hydrated from the durable queue, so a route that renders
+ * embedded summaries has to hydrate it FIRST -- otherwise a reload with a
+ * pending Year edit reopens a cached Folder showing the value the user already
+ * replaced, and it silently corrects itself only once some other surface
+ * happens to read the queue. */
+async function prksHydratePendingWorkMetadata() {
+    if (typeof prksRefreshPendingWorkMetadata !== 'function') return;
+    await prksRefreshPendingWorkMetadata();
+}
+
+function prksEffectiveBrowseRows(rows, projection) {
+    return rows && typeof prksEffectiveProjectionRows === 'function'
+        ? prksEffectiveProjectionRows(rows, projection)
+        : rows;
+}
+
 function prksResolveOfflineWorksBrowse(result) {
     return prksResolveOfflineBrowseList(
         result, PRKS_WORKS_BROWSE_LIST_KEY, prksIsWorksBrowseIndexShape, 'Works browse'
@@ -2729,6 +2751,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         break;
                     }
                     const pl = resolvedPlaylist.playlist;
+                    await prksHydratePendingWorkMetadata();
+                    if (stale()) return;
                     ctx.setEntity('playlist', pl);
                     ctx.ui.playlistEditing = false;
                     ctx.ui.playlistRename = {};
@@ -2766,6 +2790,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     break;
                 }
                 const folder = resolvedFolder.folder;
+                await prksHydratePendingWorkMetadata();
+                if (stale()) return;
                 ctx.setEntity('folder', folder);
                 renderFolderDetails(ctx, folder, contentDiv, {
                     offlineCached: offlineFolder.source === 'cache',
@@ -2885,8 +2911,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 // missing snapshot stays missing: one open event is not a
                 // Recent page. Reconstructed from prks-local-v1, so it survives
                 // a reload rather than living in this tab's memory.
-                const works = base && typeof prksEffectiveRecent === 'function' && window.prksSync
-                    ? prksEffectiveRecent(base, await prksSync.store.listOperations()) : base;
+                if (typeof prksRefreshPendingWorkMetadata === 'function') {
+                    await prksRefreshPendingWorkMetadata();
+                    if (stale()) return;
+                }
+                // Two overlays compose: pending metadata edits change what each
+                // row SAYS, pending open events change where it SITS.
+                const rows = prksEffectiveBrowseRows(base, 'recent');
+                const works = rows && typeof prksEffectiveRecent === 'function' && window.prksSync
+                    ? prksEffectiveRecent(rows, await prksSync.store.listOperations()) : rows;
                 if (stale()) return;
                 if (!works) {
                     prksOfflineRenderUnavailable(contentDiv, 'Recently opened not available offline');
@@ -2954,8 +2987,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     await prksRefreshPendingWorkMetadata();
                     if (stale()) return;
                 }
-                const works = typeof prksEffectiveProjectionRows === 'function'
-                    ? prksEffectiveProjectionRows(base, 'works-browse') : base;
+                const works = prksEffectiveBrowseRows(base, 'works-browse');
                 publishSidebar({ status });
                 // Pure local projection of the cached catalog -- no request.
                 renderProgressByStatus(works, status, contentDiv,
@@ -3015,7 +3047,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
             case 'types': {
                 const offlineBrowse = await prksOfflineWorksBrowseFetch(routeSignal);
                 if (stale()) return;
-                const works = prksResolveOfflineWorksBrowse(offlineBrowse);
+                if (typeof prksRefreshPendingWorkMetadata === 'function') {
+                    await prksRefreshPendingWorkMetadata();
+                    if (stale()) return;
+                }
+                const works = prksEffectiveBrowseRows(
+                    prksResolveOfflineWorksBrowse(offlineBrowse), 'works-browse');
                 if (!works) {
                     prksOfflineRenderUnavailable(contentDiv, 'Types not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Types not available offline' };
@@ -3028,7 +3065,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
             case 'type-detail': {
                 const offlineBrowse = await prksOfflineWorksBrowseFetch(routeSignal);
                 if (stale()) return;
-                const works = prksResolveOfflineWorksBrowse(offlineBrowse);
+                if (typeof prksRefreshPendingWorkMetadata === 'function') {
+                    await prksRefreshPendingWorkMetadata();
+                    if (stale()) return;
+                }
+                const works = prksEffectiveBrowseRows(
+                    prksResolveOfflineWorksBrowse(offlineBrowse), 'works-browse');
                 if (!works) {
                     prksOfflineRenderUnavailable(contentDiv, 'Types not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Types not available offline' };
@@ -3311,6 +3353,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 // A page served from cache must not ask PRKS for portrait or
                 // Work-thumbnail bytes it cannot get; render the no-media form.
                 ctx.ui.personOfflineCached = offlinePerson.source === 'cache';
+                await prksHydratePendingWorkMetadata();
+                if (stale()) return;
                 renderPersonDetails(ctx, person, contentDiv);
                 prksOfflinePrependBanner(contentDiv, offlinePerson);
                 if (person) {

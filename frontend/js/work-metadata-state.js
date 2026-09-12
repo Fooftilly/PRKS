@@ -20,11 +20,11 @@
  */
 (function (root) {
     'use strict';
-    const FIELDS = Object.freeze(['abstract', 'publisher', 'location', 'edition', 'journal',
-        'volume', 'issue', 'pages', 'isbn', 'doi']);
+    const FIELDS = Object.freeze(['year', 'published_date', 'abstract', 'publisher',
+        'location', 'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi']);
     const FIELD_SET = new Set(FIELDS);
     const LABELS = Object.freeze({
-        abstract: 'Abstract',
+        year: 'Year', published_date: 'Published date', abstract: 'Abstract',
         publisher: 'Publisher', location: 'Location', edition: 'Edition',
         journal: 'Journal', volume: 'Volume', issue: 'Issue',
         pages: 'Pages', isbn: 'ISBN', doi: 'DOI',
@@ -32,10 +32,20 @@
     /* Cached projections other than the Work that carry a synchronized field.
      * Mirrors `work_metadata_sync.FIELD_PROJECTIONS`; the parity is pinned by
      * `tests/test_frontend_work_metadata_sync.py`. */
+    const BROWSE_LISTS = Object.freeze(['works-browse', 'recent', 'recently-added']);
     const FIELD_PROJECTIONS = Object.freeze({
         publisher: ['recently-added'],
         abstract: ['works-browse'],
+        year: BROWSE_LISTS,
+        published_date: BROWSE_LISTS,
     });
+
+    /* Fields that cached ENTITY snapshots embed verbatim as part of a Work
+     * summary -- `folder.works[]`, `person.works[]`, `playlist.items[]`. Those
+     * rows are rendered as Work cards and searched locally, so a pending value
+     * has to reach them. `abstract` is deliberately absent: summaries carry it,
+     * but nothing there renders or searches it. */
+    const SUMMARY_FIELDS = Object.freeze(['year', 'published_date', 'publisher']);
 
     /* Mirrors `backend/work_metadata_sync.BYTE_LIMITED_FIELDS`: a field whose
      * bound is a storage limit rather than a display one, and whose value the
@@ -53,9 +63,14 @@
      * adding a third field here is a table entry rather than an `if` inside
      * whichever component happens to render it.
      */
+    const copy = field => ({ field, column: field, derive: value => value });
     const PROJECTION_COLUMNS = Object.freeze({
-        'recently-added': [{ field: 'publisher', column: 'publisher', derive: value => value }],
-        'works-browse': [{ field: 'abstract', column: 'abstract_excerpt', derive: text => abstractExcerpt(text) }],
+        'recently-added': [copy('publisher'), copy('year'), copy('published_date')],
+        'works-browse': [
+            { field: 'abstract', column: 'abstract_excerpt', derive: text => abstractExcerpt(text) },
+            copy('year'), copy('published_date'),
+        ],
+        'recent': [copy('year'), copy('published_date')],
     });
 
     /* The excerpt Progress shows under each Work card.
@@ -83,6 +98,48 @@
         return points.length <= EXCERPT_CODE_POINTS
             ? points.join('')
             : points.slice(0, EXCERPT_CODE_POINTS).join('');
+    }
+
+    /* ---- field codec ----
+     *
+     * Published Date is the first synchronized field whose editor spelling is
+     * not its canonical one: the form shows `dd/mm/yyyy`, the column and the
+     * wire hold `yyyy-mm-dd`. That conversion belongs here, beside the field
+     * registry -- not in the durable store, which stores whatever it is handed
+     * and must never learn what a date is.
+     *
+     * Comparing the two spellings directly would make an untouched Published
+     * Date look dirty on every save, so the draft is canonicalized first.
+     */
+    const CODECS = {
+        published_date: {
+            toDisplay: value => (typeof root.prksIsoToDdMmYyyy === 'function'
+                ? root.prksIsoToDdMmYyyy(value) || '' : canonical(value)),
+            toCanonical: draft => {
+                const raw = canonical(draft).trim();
+                if (!raw) return '';
+                if (typeof root.prksParsePublishedDateInput !== 'function') return raw;
+                /* The parser answers '' for anything it cannot read. The empty
+                 * DRAFT was already handled above, so at this point an empty
+                 * answer can only mean "that is not a date" -- and the two must
+                 * not share a spelling, or refusing to guess would be
+                 * indistinguishable from being told to clear the field, and
+                 * `31/02/2026` would silently DELETE the user's date. */
+                const parsed = root.prksParsePublishedDateInput(raw);
+                return parsed ? String(parsed) : null;
+            },
+        },
+    };
+
+    function toDisplayValue(field, value) {
+        const codec = CODECS[field];
+        return codec ? codec.toDisplay(value) : canonical(value);
+    }
+
+    /** The canonical value for a draft, or null when it is not interpretable. */
+    function toCanonicalValue(field, draft) {
+        const codec = CODECS[field];
+        return codec ? codec.toCanonical(draft) : canonical(draft);
     }
 
     /** SQLite NULL and "" are one logical value; whitespace is never stripped. */
@@ -202,7 +259,11 @@
         FIELDS.forEach(field => {
             if (!Object.prototype.hasOwnProperty.call(draft, field)) return;
             const shown = pending.has(field) ? pending.get(field) : canonical(state.fields[field].value);
-            const desired = canonical(draft[field]);
+            // Canonical on both sides: `12/09/2026` and `2026-09-12` are the
+            // same value, and comparing the spellings would make an untouched
+            // Published Date dirty on every save.
+            const desired = toCanonicalValue(field, draft[field]);
+            if (desired === null) return;  // uninterpretable; the caller refuses
             if (desired !== shown) changes[field] = desired;
         });
         return changes;
@@ -436,7 +497,14 @@
         prksObservedWorkFields: observedFields,
         prksMetadataStateAckPatch: metadataStateAckPatch,
         prksEffectiveMetadataAck: effectiveAck,
+        PRKS_WORK_SUMMARY_FIELDS: SUMMARY_FIELDS,
+        prksWorkFieldToDisplay: toDisplayValue,
+        prksWorkFieldToCanonical: toCanonicalValue,
         prksEffectiveProjectionRows: effectiveProjectionRows,
+        /* Cached Folder/Person/Playlist details embed Work summaries. One
+         * helper serves all three so no component learns to read the durable
+         * queue itself. */
+        prksEffectiveWorkSummaries: rows => effectiveRows(rows, SUMMARY_FIELDS),
         /* The acknowledged counterpart of the overlay: the same transform,
          * applied once the server has spoken. One definition, so a row cannot
          * visibly change at acknowledgement. */

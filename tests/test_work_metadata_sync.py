@@ -39,7 +39,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
     def test_every_supported_field_round_trips(self):
         self.assertEqual(sorted(meta.SYNCED_FIELDS),
                          ["abstract", "doi", "edition", "isbn", "issue", "journal",
-                          "location", "pages", "publisher", "volume"])
+                          "location", "pages", "published_date", "publisher",
+                          "volume", "year"])
         for index, field in enumerate(sorted(meta.SYNCED_FIELDS)):
             with self.subTest(field=field):
                 status, result = self.send(field, "value-%d" % index)
@@ -51,7 +52,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """An arbitrary column name from a client is both an injection surface
         and a way to reach fields this milestone deliberately does not
         synchronize."""
-        for field in ("title", "status", "year", "id",
+        for field in ("title", "status", "doc_type", "author_text", "id",
                       "doi; DROP TABLE works", "", None, 7):
             with self.subTest(field=field):
                 self.assertEqual(sync_protocol.process_operation(self.db, self.op(field, "x")),
@@ -179,11 +180,53 @@ class WorkMetadataSyncTests(unittest.TestCase):
         # And a device holding the pre-PATCH DOI now correctly conflicts.
         self.assertEqual(self.send("doi", "10.1/device", base=0)[1]["code"], "REVISION_CONFLICT")
 
+    def test_every_synchronized_field_advances_its_revision_through_the_patch(self):
+        """Sampling two fields would not have caught `year` and
+        `published_date` arriving: a synchronized field whose online PATCH
+        writes the column without moving the counter leaves every offline
+        device believing its stale copy is current, and the next save from
+        that device silently overwrites the newer value."""
+        for index, field in enumerate(sorted(meta.SYNCED_FIELDS)):
+            with self.subTest(field=field):
+                before = self.state()[field]["revision"]
+                self.db.update_work_metadata(self.work, {field: "patched-%d" % index})
+                after = self.state()[field]
+                self.assertEqual(after["revision"], before + 1,
+                                 "%s did not advance through update_work_metadata" % field)
+                self.assertEqual(self.value(field), "patched-%d" % index)
+                # A device holding the pre-PATCH value must now be told so.
+                self.assertEqual(self.send(field, "device", base=before)[1]["code"],
+                                 "REVISION_CONFLICT", field)
+
+    def test_no_other_backend_statement_writes_a_synchronized_column(self):
+        """The audit behind the test above, kept honest as the schema grows: a
+        second writer that skips `set_field_on_conn` would reintroduce the
+        defect for one field while every field-driven test stayed green."""
+        import pathlib as _pathlib
+        import re
+        backend_dir = _pathlib.Path(__file__).resolve().parents[1] / "backend"
+        # These are the only sanctioned writers: the synchronization handler
+        # itself, and the PATCH path, which routes synchronized fields through
+        # it. Creation is exempt -- a brand-new Work has no revision to overtake.
+        sanctioned = {"work_metadata_sync.py"}
+        pattern = re.compile(r"UPDATE\s+works\s+SET\s+([^\n]*)", re.IGNORECASE)
+        offenders = []
+        for path in sorted(backend_dir.rglob("*.py")):
+            if path.name in sanctioned:
+                continue
+            for clause in pattern.findall(path.read_text(encoding="utf-8")):
+                for field in meta.SYNCED_FIELDS:
+                    if re.search(r"\b%s\b\s*=" % re.escape(field), clause):
+                        offenders.append("%s: %s" % (path.name, clause.strip()))
+        # db_manager builds its SET clause from a variable, which this cannot
+        # read; it is covered by the field-driven revision test above.
+        self.assertEqual(offenders, [], "unsanctioned writes to synchronized columns")
+
     def test_unrelated_metadata_never_advances_a_field_revision(self):
         self.send("doi", "10.1/keep")
         before = self.state()
         self.db.update_work_metadata(self.work, {
-            "title": "Renamed", "status": "Paused", "year": "1999",
+            "title": "Renamed", "status": "Paused",
             "author_text": "Someone", "doc_type": "book"})
         self.assertEqual(self.state(), before)
         self.assertEqual(self.db.execute_query(
@@ -258,16 +301,58 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertEqual(row["publisher"], "Fixture Press")
         self.assertEqual(meta.FIELD_PROJECTIONS["publisher"], ("recently-added",))
 
-    def test_only_publisher_and_abstract_claim_another_projection(self):
+    def test_the_projection_map_names_every_dependency(self):
         """Location is the control case: a detail-only field must not drag an
         unrelated cached read model into its reconciliation. Publisher copies a
-        value into one; Abstract DERIVES one."""
-        self.assertEqual(sorted(meta.FIELD_PROJECTIONS), ["abstract", "publisher"])
+        value into one list; Abstract DERIVES one; Year and Published Date are
+        on every Work card and so reach all three."""
+        self.assertEqual(sorted(meta.FIELD_PROJECTIONS),
+                         ["abstract", "published_date", "publisher", "year"])
         self.assertEqual(meta.FIELD_PROJECTIONS["abstract"], ("works-browse",))
+        self.assertEqual(meta.FIELD_PROJECTIONS["publisher"], ("recently-added",))
+        for field in ("year", "published_date"):
+            self.assertEqual(meta.FIELD_PROJECTIONS[field],
+                             ("works-browse", "recent", "recently-added"), field)
         for field in meta.SYNCED_FIELDS:
-            if field in ("publisher", "abstract"):
+            if field in ("publisher", "abstract", "year", "published_date"):
                 continue
             self.assertNotIn(field, meta.FIELD_PROJECTIONS, field)
+
+    def test_embedded_summary_fields_are_named(self):
+        """Folder, Person and Playlist details embed Work summaries. A field
+        those rows carry has to reach them too -- rendering AND local search."""
+        self.assertEqual(sorted(meta.SUMMARY_FIELDS),
+                         ["published_date", "publisher", "year"])
+        self.assertEqual(meta.SUMMARY_ENTITY_KINDS, ("folder", "person", "playlist"))
+        for field in meta.SUMMARY_FIELDS:
+            self.assertIn(field, meta.SYNCED_FIELDS, field)
+
+    def test_year_and_published_date_are_independent_conflict_units(self):
+        """They interact on screen -- a card falls back from Year to the date's
+        year -- but that is a RENDERING rule. Conflict is about canonical field
+        ownership, so editing one must never collide with the other."""
+        self.send("year", "1998")
+        self.send("published_date", "2020-05-01")
+        state = self.state()
+        self.assertEqual(state["year"], {"value": "1998", "revision": 1})
+        self.assertEqual(state["published_date"], {"value": "2020-05-01", "revision": 1})
+        # A device stale on Published Date still applies its Year edit cleanly.
+        self.send("published_date", "2021-06-02", base=1)
+        self.assertEqual(self.send("year", "2001", base=1)[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual((self.value("year"), self.value("published_date")),
+                         ("2001", "2021-06-02"))
+        # ...and only a same-field disagreement conflicts.
+        self.assertEqual(self.send("year", "1975", base=1)[1]["code"], "REVISION_CONFLICT")
+
+    def test_published_date_is_stored_in_one_canonical_representation(self):
+        """The editor shows dd/mm/yyyy; the wire and the column are ISO. The
+        sync path must never introduce a second spelling."""
+        self.send("published_date", "2026-09-12")
+        self.assertEqual(self.value("published_date"), "2026-09-12")
+        # Clearing is the empty string, like every other field.
+        self.assertTrue(self.send("published_date", "", base=1)[1]["changed"])
+        self.assertEqual(self.value("published_date"), "")
+        self.assertEqual(self.state()["published_date"], {"value": "", "revision": 2})
 
     def test_publisher_and_location_behave_like_every_other_field(self):
         """No new machinery: the expanded registry reuses the scalar path."""

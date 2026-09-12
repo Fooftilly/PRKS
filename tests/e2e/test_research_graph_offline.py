@@ -134,7 +134,15 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                 missing = CORE if people else PEOPLE
                 page.evaluate('k => prksOfflineInvalidateEntity(k, "snapshot")', missing)
                 self.offline(page, context)
-                page.evaluate('window.__graphBefore = prksGetResearchGraphDebug().cy')
+                # A BLOCK body, so this returns undefined. `window.__x = cy`
+                # is an expression whose value is the cytoscape instance, and
+                # `evaluate` serializes whatever the expression evaluates to --
+                # Playwright then walks that entire object graph, takes ~7-10
+                # SECONDS, allocates heavily enough to crash the renderer under
+                # parallel load, and hands back None anyway. Identity is
+                # compared in the page below; the object must never cross the
+                # protocol boundary.
+                page.evaluate('() => { window.__graphBefore = prksGetResearchGraphDebug().cy; }')
                 self.toggle(page, not people)
                 page.get_by_text(('Core graph' if people else 'People-inclusive graph') + ' is not available offline on this device.', exact=True).wait_for()
                 self.assertEqual(page.locator('[data-graph-filter="people"]').is_checked(), people)
@@ -148,7 +156,13 @@ class ResearchGraphOfflineTests(unittest.TestCase):
             o._wait_offline_unavailable(page)
             self.assertIn(label, o._content_text(page))
             self.assertNotIn('Requested node is not present', o._content_text(page))
-            self.assertIsNone(page.evaluate('prksGetResearchGraphDebug().cy'))
+            # A BOOLEAN, never the instance itself: `evaluate` returning a
+            # live cytoscape object serializes the whole object graph, costs
+            # seconds, and hands back None -- so `assertIsNone` on it passed
+            # whether or not a graph was mounted, and this assertion was doing
+            # nothing at all.
+            self.assertFalse(page.evaluate('() => !!prksGetResearchGraphDebug().cy'),
+                             'no graph may be mounted here')
 
     def malformed_authoritative(self, people):
         server, page, context = self.start()
@@ -197,7 +211,8 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                 self.graph(page)
                 o._wait_offline_unavailable(page)
                 o._wait_entity_uncached(page, CORE, 'snapshot')
-                self.assertIsNone(page.evaluate('prksGetResearchGraphDebug().cy'))
+                self.assertFalse(page.evaluate('() => !!prksGetResearchGraphDebug().cy'),
+                                 'no graph may be mounted here')
 
     def test_413_preserves_online_too_large_ui_without_fallback(self):
         server, page, context = self.start()
@@ -207,7 +222,8 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         page.get_by_text('This graph is too large to render as a single snapshot.', exact=True).wait_for()
         self.assertEqual(page.evaluate('prksOfflineRuntimeState()'), 'online')
         self.assertEqual(page.locator('[data-prks-role="offline-provenance-banner"]').count(), 0)
-        self.assertIsNone(page.evaluate('prksGetResearchGraphDebug().cy'))
+        self.assertFalse(page.evaluate('() => !!prksGetResearchGraphDebug().cy'),
+                         'no graph may be mounted here')
 
     def test_degraded_derived_edges_remain_cacheable(self):
         server, page, context = self.start()
