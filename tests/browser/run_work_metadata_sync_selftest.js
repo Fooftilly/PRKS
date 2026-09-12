@@ -1045,6 +1045,58 @@ async function abstracts() {
         { revision: 7 }, 'a byte-limited field carries its revision only');
     assert.deepEqual(globalThis.prksMetadataStateAckPatch('doi', 7, '10.1/x'),
         { value: '10.1/x', revision: 7 });
+
+    /* ---- author_text rides exactly the same machinery ----
+     *
+     * It is byte-limited too, so it gets the compact acknowledgement, the
+     * revision-only projection entry and the bounded conflict WITHOUT a branch
+     * of its own -- membership of the registry is the whole mechanism. If any
+     * of these needed field-specific code, the abstraction would be the thing
+     * to fix.
+     */
+    const bigAuthor = 'Q'.repeat(20 * 1024);
+    const authorOp = { operation: 'SET_WORK_METADATA_FIELD', entity_id: 'W-A',
+        payload: { field: 'author_text', value: bigAuthor } };
+    const authorAck = { code: 'ACKNOWLEDGED', work_id: 'W-A', field: 'author_text',
+        server_revision: 4, changed: true, value_omitted: true };
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(authorAck, authorOp), true);
+    assert.equal(globalThis.prksEffectiveMetadataAck(authorAck, authorOp).value, bigAuthor,
+        'reconstructed from the immutable operation, not re-fetched');
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(
+        Object.assign({ value: bigAuthor }, authorAck), authorOp), false,
+        'a byte-limited ACK must not carry the value either way');
+    assert.deepEqual(globalThis.prksMetadataStateAckPatch('author_text', 7, bigAuthor),
+        { revision: 7 }, 'the projection carries the revision only');
+
+    /* The observed base after a reload: the projection has no value for this
+     * field, so it is read from the cached WORK record instead. Getting this
+     * wrong would measure the next save against an empty string and enqueue a
+     * change the user never made. */
+    const state = { work_id: 'W-A', fields: base({ author_text: { revision: 3 } }) };
+    const observedFields = globalThis.prksObservedWorkFields(
+        state, { id: 'W-A', author_text: bigAuthor, doi: '10.1/x' });
+    assert.deepEqual(observedFields.author_text, { value: bigAuthor, revision: 3 });
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields(
+        { author_text: bigAuthor }, { fields: observedFields }), {},
+        'an untouched large Author is not dirty after a reload');
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields(
+        { author_text: 'Jane' }, { fields: observedFields }), { author_text: 'Jane' });
+
+    // The editor refuses over-limit values before they can become operations.
+    const authorLimit = globalThis.PRKS_WORK_FIELD_BYTE_LIMITS.author_text;
+    assert.equal(authorLimit, 64 * 1024);
+    assert.equal(globalThis.prksWorkFieldLimitError('author_text', 'x'.repeat(authorLimit)), null);
+    const refusal = globalThis.prksWorkFieldLimitError(
+        'author_text', 'x'.repeat(authorLimit + 1024));
+    assert.match(refusal, /^Author is too long to save \(65 KB of 64 KB allowed\)\.$/);
+    assert.match(
+        globalThis.prksWorkFieldLimitError(
+            'author_text', 'x'.repeat(authorLimit + 1024), 'Channel name'),
+        /^Channel name is too long/, 'named the way the form names it');
+    // Bytes, not characters.
+    assert.equal(globalThis.prksWorkFieldLimitError('author_text', '\u65e5'.repeat(30000)) === null,
+        false, 'a multibyte value over the byte limit is refused');
+
     delete globalThis.prksSync;
 }
 

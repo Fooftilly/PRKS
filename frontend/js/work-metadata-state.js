@@ -24,7 +24,7 @@
  * Editor stands in when it is empty, so this module produces the effective
  * FIELD and the existing credit helper decides what the user sees.
  *
- * `abstract` is also the only byte-limited field: its bound is in UTF-8 bytes,
+ * `abstract` and `author_text` are byte-limited: their bounds are in UTF-8 bytes,
  * the metadata-state projection carries its revision alone, and its
  * acknowledgement omits the value rather than echoing a megabyte back.
  */
@@ -78,13 +78,23 @@
     const SUMMARY_FIELDS = Object.freeze(
         ['status', 'author_text', 'year', 'published_date', 'publisher']);
 
-    /* Mirrors `backend/work_metadata_sync.BYTE_LIMITED_FIELDS`: a field whose
-     * bound is a storage limit rather than a display one, and whose value the
-     * metadata-state projection therefore omits -- the Work record already has
-     * it, and echoing a megabyte into a second cache would double what every
-     * read costs for a value the client already holds. */
-    const BYTE_LIMITED_FIELDS = new Set(['abstract']);
-    const MAX_ABSTRACT_UTF8_BYTES = 1024 * 1024;
+    /* Mirrors `backend/work_metadata_sync.BYTE_LIMITS`: fields whose bound is a
+     * storage limit rather than a display one, measured in UTF-8 BYTES because
+     * that is the unit storage and transport actually use.
+     *
+     * Membership here is what makes a field byte-limited, and everything
+     * downstream follows from it -- the metadata-state projection omits the
+     * value (the Work record already has it, and echoing it into a second
+     * cache would double what every read costs), acknowledgements come back
+     * compact, and conflicts report bounded previews instead of two values the
+     * durable result could not hold. A third large field is an entry here, not
+     * another special case threaded through five files. */
+    const BYTE_LIMITS = Object.freeze({
+        abstract: 1024 * 1024,
+        author_text: 64 * 1024,
+    });
+    const BYTE_LIMITED_FIELDS = new Set(Object.keys(BYTE_LIMITS));
+    const MAX_ABSTRACT_UTF8_BYTES = BYTE_LIMITS.abstract;
 
     /* How a pending field value reaches a cached projection.
      *
@@ -148,9 +158,10 @@
          * PATCH, so the durable path must trim identically -- otherwise moving
          * the field to local-first would silently start storing the leading
          * and trailing whitespace the same keystrokes used to discard. No
-         * other normalization is added: the column is unbounded, the server
-         * stores what it is given, and synchronization is not a licence to
-         * start reshaping a value PRKS never reshaped. */
+         * other normalization is added: the server stores what it is given,
+         * and synchronization is not a licence to start reshaping a value
+         * PRKS never reshaped. Its SIZE is bounded -- see BYTE_LIMITS -- but
+         * that is a storage contract, not a change of shape. */
         author_text: {
             toDisplay: value => canonical(value),
             toCanonical: draft => canonical(draft).trim(),
@@ -247,14 +258,21 @@
         return Buffer.byteLength(value, 'utf8');
     }
 
-    /** null when the value fits, otherwise a message naming the limit. */
-    function fieldLimitError(field, value) {
-        if (!BYTE_LIMITED_FIELDS.has(field)) return null;
+    /** null when the value fits, otherwise a message naming the field and limit. */
+    function fieldLimitError(field, value, label) {
+        const limit = BYTE_LIMITS[field];
+        if (limit === undefined) return null;
         const bytes = utf8Bytes(value);
-        if (bytes <= MAX_ABSTRACT_UTF8_BYTES) return null;
-        return (LABELS[field] || field) + ' is too long to save (' +
-            Math.ceil(bytes / 1024) + ' KB of ' + (MAX_ABSTRACT_UTF8_BYTES / 1024) +
-            ' KB allowed). Shorten it, or keep long material in Research Notes.';
+        if (bytes <= limit) return null;
+        /* Name the field the way the FORM does. "Abstract" and "Author" come
+         * from the label registry, but a video's control says "Channel name",
+         * and a refusal that names a control the user cannot see is a refusal
+         * they cannot act on. */
+        const name = label || LABELS[field] || field;
+        const advice = field === 'abstract'
+            ? ' Shorten it, or keep long material in Research Notes.' : '';
+        return name + ' is too long to save (' + Math.ceil(bytes / 1024) + ' KB of ' +
+            (limit / 1024) + ' KB allowed).' + advice;
     }
 
     async function readState(workId, options = {}) {
@@ -556,6 +574,7 @@
         PRKS_SYNCED_WORK_FIELD_PROJECTIONS: FIELD_PROJECTIONS,
         PRKS_BYTE_LIMITED_WORK_FIELDS: BYTE_LIMITED_FIELDS,
         PRKS_MAX_ABSTRACT_UTF8_BYTES: MAX_ABSTRACT_UTF8_BYTES,
+        PRKS_WORK_FIELD_BYTE_LIMITS: BYTE_LIMITS,
         prksWorkFieldUtf8Bytes: utf8Bytes,
         prksWorkFieldLimitError: fieldLimitError,
         prksObservedWorkFields: observedFields,

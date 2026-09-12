@@ -567,6 +567,64 @@ async function run() {
             (await store.enqueueOperation(abstractOp(fits))).payload.value, fits);
     }
 
+    /* ---- the same allowance, derived from a registry rather than a branch ----
+     *
+     * `author_text` is the second byte-limited field. Before it had a stated
+     * limit the server accepted any length and this store decided -- so the
+     * same Author name was savable online and impossible offline, which is the
+     * split contract the whole design removes.
+     */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const authorOp = (value) => ({
+            operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
+            payload: { field: 'author_text', value }, base_revision: 0,
+        });
+        const limits = mod.PRKS_LOCAL_WORK_FIELD_VALUE_BYTES;
+        assertEq('the registry holds both byte-limited fields',
+            Object.keys(limits).sort().join(','), 'abstract,author_text');
+        const limit = limits.author_text;
+        assertEq('the author_text allowance is the product limit', limit, 64 * 1024);
+
+        for (const size of [10 * 1024, limit]) {
+            const stored = await store.enqueueOperation(authorOp('x'.repeat(size)));
+            assertEq('an author_text of ' + Math.round(size / 1024) + ' KiB is stored',
+                stored.payload.value.length, size);
+        }
+        await assertRejects('one byte over the limit is refused',
+            store.enqueueOperation(authorOp('x'.repeat(limit + 1))), 'payload_too_large');
+
+        /* THE CASE THE ORDINARY BOUND WOULD GET WRONG: a value at exactly the
+         * limit whose JSON encoding is twice that. An Author name full of
+         * quotation marks must not fail for a reason no user could see. */
+        const quoted = '"\\'.repeat(limit / 2);
+        assertEq('the value is exactly at the limit', quoted.length, limit);
+        assert('...while its JSON encoding is far over it',
+            JSON.stringify({ field: 'author_text', value: quoted }).length > limit * 1.5);
+        assertEq('it is stored anyway, because the VALUE is what is bounded',
+            (await store.enqueueOperation(authorOp(quoted))).payload.value.length, limit);
+
+        // Bytes, not characters.
+        const cjk = '\u65e5'.repeat(Math.floor(limit / 3) + 10);
+        assert('the multibyte value is under the limit by character count', cjk.length < limit);
+        await assertRejects('...but over it in bytes, so it is refused',
+            store.enqueueOperation(authorOp(cjk)), 'payload_too_large');
+
+        // The allowance is shape-scoped: it cannot be used to smuggle a payload.
+        await assertRejects('an extra payload key forfeits the allowance',
+            store.enqueueOperation({
+                operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
+                payload: { field: 'author_text', value: 'x'.repeat(70 * 1024), extra: 1 },
+                base_revision: 0,
+            }), 'payload_too_large');
+        await assertRejects('and a field outside the registry gets none of it',
+            store.enqueueOperation({
+                operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
+                payload: { field: 'publisher', value: 'x'.repeat(70 * 1024) }, base_revision: 0,
+            }), 'payload_too_large');
+    }
+
     /* ---- module hygiene: persistence only ---- */
     {
         const src = fs.readFileSync(path.join(rootDir, 'frontend/js/local-store.js'), 'utf8');

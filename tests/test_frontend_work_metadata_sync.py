@@ -17,6 +17,9 @@ process.stdout.write(JSON.stringify({
     summary: globalThis.PRKS_WORK_SUMMARY_FIELDS,
     byteLimited: Array.from(globalThis.PRKS_BYTE_LIMITED_WORK_FIELDS),
     statuses: globalThis.PRKS_WORK_STATUSES,
+    byteLimits: globalThis.PRKS_WORK_FIELD_BYTE_LIMITS,
+    storeLimits: require(process.argv[1] + '/frontend/js/local-store.js')
+        .PRKS_LOCAL_WORK_FIELD_VALUE_BYTES,
 }));
 """
 
@@ -314,15 +317,23 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
                                   'payload.field', "=== 'abstract'"):
                     self.assertNotIn(forbidden, source, forbidden)
 
-    def test_the_abstract_limit_is_one_number_on_both_sides(self):
-        """An Abstract savable online and refused offline would be exactly the
-        split contract that moving a field to local-first removes."""
+    def test_every_byte_limit_is_one_number_on_every_path(self):
+        """A value savable online and refused offline -- or accepted by the
+        editor and rejected by the durable store -- is the split contract that
+        moving a field to local-first removes. Three registries hold these
+        numbers (server, client, durable store) and all three must agree."""
         from backend import work_metadata_sync
-        module = (FRONTEND / 'work-metadata-state.js').read_text()
-        self.assertEqual(work_metadata_sync.MAX_ABSTRACT_UTF8_BYTES, 1024 * 1024)
-        self.assertIn('const MAX_ABSTRACT_UTF8_BYTES = 1024 * 1024;', module)
-        self.assertEqual(sorted(work_metadata_sync.BYTE_LIMITED_FIELDS), ['abstract'])
-        self.assertIn("const BYTE_LIMITED_FIELDS = new Set(['abstract']);", module)
+        client = client_registries()
+        server = dict(work_metadata_sync.BYTE_LIMITS)
+        self.assertEqual(server, {'abstract': 1024 * 1024, 'author_text': 64 * 1024})
+        self.assertEqual(client['byteLimits'], server, 'client registry drifted')
+        self.assertEqual(client['storeLimits'], server, 'durable store registry drifted')
+        # The byte-limited SET is derived from the registry, never listed twice.
+        self.assertEqual(sorted(client['byteLimited']), sorted(server))
+        self.assertEqual(sorted(work_metadata_sync.BYTE_LIMITED_FIELDS), sorted(server))
+        # And each one is the field's entry in the size registry too.
+        for field, limit in server.items():
+            self.assertEqual(work_metadata_sync.SYNCED_FIELDS[field], limit, field)
 
     def test_the_editor_refuses_an_oversize_value_before_enqueueing(self):
         editor = (FRONTEND / 'work-metadata-editor.js').read_text()

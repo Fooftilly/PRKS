@@ -369,7 +369,14 @@
              * reject: the draft stays on screen, nothing is stored, and nothing
              * is sent. Silently truncating would destroy the user's text. */
             for (const field of Object.keys(changes)) {
-                const tooLong = root.prksWorkFieldLimitError(field, changes[field]);
+                /* Named the way the FORM names it: a video's control says
+                 * "Channel name", and a refusal naming a control the user
+                 * cannot see is a refusal they cannot act on. */
+                const control = section.querySelector('[data-prks-work-field="' + field + '"]');
+                const labelEl = control && control.id
+                    ? section.querySelector('label[for="' + control.id + '"]') : null;
+                const label = labelEl ? labelEl.textContent.trim() : '';
+                const tooLong = root.prksWorkFieldLimitError(field, changes[field], label);
                 if (tooLong) {
                     setError(state, group, tooLong);
                     await safePaint(ctx, state);

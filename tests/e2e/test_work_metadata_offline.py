@@ -1,4 +1,5 @@
 """Field-scoped Work metadata: independence, conflicts and atomic local save."""
+import json
 import os
 import unittest
 
@@ -98,6 +99,13 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
     def server_fields(self, server, work_id):
         return self.db_for(server).get_work_metadata_state(work_id)['fields']
+
+    def server_value(self, server, work_id, field):
+        """The canonical column. A BYTE-LIMITED field's metadata-state entry
+        carries its revision alone -- the Work record already has the value,
+        and duplicating it into a second projection would double what every
+        read costs -- so the projection is the wrong place to ask."""
+        return self.db_for(server).get_work(work_id)[field]
 
     def record_paths(self, page):
         seen = []
@@ -1046,7 +1054,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(self.server_fields(server, work)['author_text']['value'], 'New Author')
+        self.assertEqual(self.server_value(server, work, 'author_text'), 'New Author')
         page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn('New Author', self.credit(page, work), 'no reversion at acknowledgement')
@@ -1084,7 +1092,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(self.server_fields(server, work)['author_text']['value'], 'New Text')
+        self.assertEqual(self.server_value(server, work, 'author_text'), 'New Text')
         page.evaluate("r => prksNavigate(r)", self.PROGRESS)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn(PERSON_DISPLAY, self.credit(page, work),
@@ -1119,10 +1127,86 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(self.server_fields(server, work)['author_text']['value'], '')
+        self.assertEqual(self.server_value(server, work, 'author_text'), '')
         page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn(PERSON_DISPLAY, self.credit(page, work))
+
+    def test_a_large_author_text_survives_the_whole_durable_round_trip(self):
+        """8 KiB is well past the point where the compact-result path matters:
+        the old contract would have put the whole value in the server ledger
+        and, on a conflict, tried to store two of them in a 2 KB durable
+        result. Small enough to keep the browser test cheap."""
+        server, page, context = self.start()
+        work = server.ids['work_b']
+        big = 'Q' * (8 * 1024)
+        self.open_work_b(page)
+        self.offline(page, context)
+        self.field(page, 'author_text', big)
+        self.save(page)
+        self.pending(page, 1)
+        self.assertEqual(len(self.operations(page)[0]['payload']['value']), len(big))
+
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.open_work_b(page)
+        self.assertEqual(len(page.locator('[data-prks-work-field="author_text"]').input_value()),
+                         len(big), 'the pending value survives a reload in full')
+        self.pending(page, 1)
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.server_fields(server, work)['author_text'], {'revision': 1},
+                         'the projection carries the revision alone')
+        self.assertEqual(
+            self.db_for(server).get_work(work)['author_text'], big,
+            'while the Work record has the whole value')
+        ledger = self.db_for(server).execute_query(
+            "SELECT result_json FROM sync_operations "
+            "WHERE operation_type = 'SET_WORK_METADATA_FIELD'")[0]['result_json']
+        self.assertNotIn(big, ledger, 'the ledger never became a second copy of it')
+        self.assertLess(len(ledger), 1024)
+
+        # The credit is still composed correctly from the acknowledged value.
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertIn('QQQ', self.credit(page, work))
+
+    def test_a_large_author_text_conflict_still_fits_the_durable_result(self):
+        """Two 8 KiB values in one conflict would be four times the browser's
+        2 KB structured-result bound. Without the bounded representation the
+        operation could not settle at all -- it would fail to store its own
+        outcome rather than reach the user, which is worse than either value
+        winning."""
+        server, page, context = self.start()
+        work = server.ids['work_b']
+        self.open_work_b(page)
+        self.offline(page, context)
+        self.field(page, 'author_text', 'D' * (8 * 1024))
+        self.save(page)
+        self.pending(page, 1)
+
+        self.db_for(server).update_work_metadata(work, {'author_text': 'S' * (8 * 1024)})
+        self.reconnect(page, context)
+        self.settled_conflicts(page, 1)
+
+        op = self.operations(page)[0]
+        result = op['server_result']
+        self.assertEqual(result['code'], 'REVISION_CONFLICT')
+        self.assertNotIn('current_value', result)
+        self.assertEqual(result['current_bytes'], 8 * 1024)
+        self.assertEqual(result['requested_bytes'], 8 * 1024)
+        self.assertLessEqual(len(json.dumps(result)), 2048,
+                             'the stored terminal result fits the durable bound')
+        # The user's own value is still there in full, in the immutable payload.
+        self.assertEqual(len(op['payload']['value']), 8 * 1024)
+        # And the conflict reached the UI with sizes rather than two values.
+        sync_text = page.locator('[data-prks-role="work-bib-sync"]').inner_text()
+        self.assertIn('KB', sync_text)
+
+        page.get_by_role('button', name='Apply my value', exact=True).click()
+        self.pending(page, 0)
+        self.assertEqual(self.db_for(server).get_work(work)['author_text'], 'D' * (8 * 1024))
 
     def test_recently_added_filters_on_the_pending_author_text(self):
         """That filter indexes the RAW field, which is deliberately not the
@@ -1167,14 +1251,17 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         op = self.operations(page)[0]
         self.assertEqual(op['payload']['field'], 'author_text')
         self.assertEqual(op['server_result']['code'], 'REVISION_CONFLICT')
-        self.assertEqual(op['server_result']['current_value'], 'Bob')
+        # Byte-limited, so the disagreement arrives as a bounded preview plus
+        # sizes rather than two values the durable result could not hold.
+        self.assertEqual(op['server_result']['current_preview'], 'Bob')
+        self.assertEqual(op['server_result']['current_bytes'], 3)
         sync_text = page.locator('[data-prks-role="work-bib-sync"]').inner_text()
         self.assertIn('Alice', sync_text)
         self.assertIn('Bob', sync_text)
 
         page.get_by_role('button', name='Apply my value', exact=True).click()
         self.pending(page, 0)
-        self.assertEqual(self.server_fields(server, work)['author_text']['value'], 'Alice')
+        self.assertEqual(self.server_value(server, work, 'author_text'), 'Alice')
 
     def test_location_is_detail_only_and_leaves_recently_added_alone(self):
         """The control case: expanding the field family must not make every

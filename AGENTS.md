@@ -1568,9 +1568,25 @@ The families are deliberately different in kind, and that is the point:
   Work discoverable; a returned Work is still RENDERED from effective local
   metadata. After ACK the FTS trigger on `works` carries the new value -- do
   not add manual index maintenance.
-- **No size rule.** The column is unbounded and PATCH accepts any length, so a
-  new bound here would refuse values the API accepts. The editor trims before
-  sending, exactly as it always did; the server stores what it is given.
+- **One size contract, on every path** (2I.1). `author_text` is byte-limited at
+  64 KiB -- absurdly generous for an Author or Channel name, which is the
+  point: the number exists so the field's size is a PRKS contract rather than
+  an accident of whichever storage layer refused first. Before it, the server
+  accepted any length and the browser's durable envelope decided, so the same
+  value was savable online and impossible offline. The editor still trims
+  before sending, exactly as it always did; the server stores what it is given.
+- **Byte limits live in one registry.** `BYTE_LIMITS` on the server, mirrored
+  in `work-metadata-state.js` and `local-store.js`, and a test compares all
+  three at runtime. Membership is the whole mechanism: compact
+  acknowledgements, revision-only metadata-state entries and bounded conflict
+  previews are all derived from it, so a third large field is a registry entry
+  rather than another special case threaded through five files.
+- **Bound the VALUE, not its JSON encoding.** Every quote and backslash doubles
+  under escaping, so measuring the serialized payload would refuse an Author
+  name full of quotation marks that is exactly at the stated limit -- a failure
+  no user could see the cause of. The allowance is shape-scoped
+  (`{field, value}` exactly, field in the registry, value a string) so it
+  cannot be used to smuggle an unbounded payload.
 
 ### Local-first Work opens (Milestone 2C)
 

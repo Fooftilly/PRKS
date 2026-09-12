@@ -73,7 +73,16 @@
      * any future operation would inherit a megabyte payload merely by existing
      * after this milestone. Mirrors
      * `backend/work_metadata_sync.MAX_ABSTRACT_UTF8_BYTES`. */
-    const MAX_ABSTRACT_VALUE_BYTES = 1024 * 1024;
+    /* Mirrors `backend/work_metadata_sync.BYTE_LIMITS`. The durable store is
+     * the last place a value can be refused before it becomes durable user
+     * data, so it has to know the same numbers the server and the editor use
+     * -- a value the editor accepted and the store rejected would be an edit
+     * the user was told was saved and was not. */
+    const WORK_FIELD_VALUE_BYTES = Object.freeze({
+        abstract: 1024 * 1024,
+        author_text: 64 * 1024,
+    });
+    const MAX_ABSTRACT_VALUE_BYTES = WORK_FIELD_VALUE_BYTES.abstract;
     const MAX_ERROR_CHARS = 500;
 
     function defaultIndexedDB() {
@@ -210,21 +219,28 @@
     /**
      * The payload bound for one operation.
      *
-     * The ordinary limit is 64 KiB and stays that way for every family. A
-     * SET_WORK_METADATA_FIELD carrying exactly `{field: "abstract", value:
-     * <string>}` is the single exception, and what is bounded there is the
-     * ABSTRACT ITSELF, not its JSON encoding: a quote or a backslash doubles
-     * in length under escaping, so measuring the serialized object would
-     * refuse a value that is exactly at the product's stated limit. The rest
-     * of the payload is two short keys, so nothing meaningful is unbounded.
+     * The ordinary limit is 64 KiB of serialized JSON and stays that way for
+     * every family. A SET_WORK_METADATA_FIELD carrying exactly
+     * `{field: <a byte-limited field>, value: <string>}` is the exception, and
+     * what is bounded there is the VALUE ITSELF, not its JSON encoding: a
+     * quote or a backslash doubles in length under escaping, so measuring the
+     * serialized object would refuse a value that is exactly at the product's
+     * stated limit -- an Author name full of quotation marks would fail for a
+     * reason no user could see. The rest of the payload is two short keys, so
+     * nothing meaningful is left unbounded.
+     *
+     * The shape is checked EXACTLY. An envelope with a third key, a non-string
+     * value or a field outside the registry falls through to the ordinary
+     * bound, so the exception cannot be used to smuggle an unbounded payload.
      */
     function payloadWithinLimit(operation, payload) {
         if (operation === 'SET_WORK_METADATA_FIELD') {
             const keys = Object.keys(payload);
-            if (keys.length === 2 && payload.field === 'abstract' &&
+            const limit = WORK_FIELD_VALUE_BYTES[payload.field];
+            if (keys.length === 2 && limit !== undefined &&
                 Object.prototype.hasOwnProperty.call(payload, 'value') &&
                 typeof payload.value === 'string') {
-                return utf8ByteLength(payload.value) <= MAX_ABSTRACT_VALUE_BYTES;
+                return utf8ByteLength(payload.value) <= limit;
             }
         }
         return jsonByteLength(payload) <= MAX_PAYLOAD_BYTES;
@@ -1057,6 +1073,7 @@
         PRKS_LOCAL_OPERATION_STATUSES: STATUSES,
         PRKS_LOCAL_MAX_PAYLOAD_BYTES: MAX_PAYLOAD_BYTES,
         PRKS_LOCAL_MAX_ABSTRACT_VALUE_BYTES: MAX_ABSTRACT_VALUE_BYTES,
+        PRKS_LOCAL_WORK_FIELD_VALUE_BYTES: WORK_FIELD_VALUE_BYTES,
     };
 
     Object.keys(api).forEach(function (k) {

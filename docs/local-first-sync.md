@@ -624,13 +624,40 @@ The Phase A audit found no other writer that mutates an existing Work's
 
 ### Validation
 
-`author_text` is the one synchronized field with no size rule of its own. The
-column is unbounded and the ordinary PATCH accepts any length, so inventing a
-bound here would refuse values the API still accepts. The durable queue still
-bounds it through the store's general payload cap. The editor trims leading and
-trailing whitespace before sending -- exactly as it did through the old PATCH,
-so that rule moved location without changing meaning -- and the server stores
-what it is given.
+`author_text` is byte-limited at **64 KiB** — absurdly generous for an Author
+or Channel name, which is the point. The number exists so that the field's size
+is a PRKS *contract* rather than an accident of whichever storage layer happened
+to refuse first: before 2I.1 the server accepted any length while the browser's
+durable envelope stopped at 64 KiB of *serialized JSON*, so the same value was
+savable online and impossible offline, and an Author name full of quotation
+marks could fail for a reason no user could see.
+
+The limit is enforced identically by the sync handler, the ordinary PATCH, the
+editor before enqueue and the durable store, and it is measured in UTF-8 bytes —
+a limit documented in bytes but enforced in characters does not exist for the
+users most likely to reach it. Nothing is ever truncated: an over-limit value is
+refused visibly, the draft stays, and nothing is stored or sent.
+
+The editor trims leading and trailing whitespace before sending — exactly as it
+did through the old PATCH, so that rule moved location without changing
+meaning — and the server stores what it is given.
+
+### Byte limits are a registry, not a branch
+
+`BYTE_LIMITS` (server) and its mirrors in `work-metadata-state.js` and
+`local-store.js` name every field whose bound is a storage concern. Membership
+is the entire mechanism, and everything else is derived from it:
+
+| Consequence | Why |
+| --- | --- |
+| The acknowledgement omits the value (`value_omitted: true`) | `sync_operations.result_json` has no retention policy; echoing the value back would make every edit a permanent second copy of it. The client reconstructs from its own immutable operation payload, so replay stays exact. |
+| `work-metadata-state` carries the revision alone | The Work record already has the value; duplicating it into a second cached projection would double what the endpoint sends, what IndexedDB stores and what every re-read costs. |
+| A conflict reports `current_preview` + byte counts | The browser bounds a durable structured result to 2 KB. Two large values would mean the client could not store the conflict at all — the operation would fail to settle rather than reach the user, which is worse than either value winning. |
+| The durable store bounds the VALUE, not the JSON | Escaping doubles quotes and backslashes; measuring the encoded form would refuse a value exactly at the stated limit. The allowance is shape-scoped so it cannot smuggle an unbounded payload. |
+
+A third large field is an entry in that registry. If it ever needs
+field-specific code in any of the four rows above, the abstraction is the thing
+to fix.
 
 ## Every canonical mutation advances revisions
 
@@ -737,11 +764,25 @@ editing, and no synchronization for the Work fields still listed as deferred
 below. No CRDT, multi-user sync, batching, server push or automatic lifecycle
 retargeting.
 
-The remaining Work fields -- `title`, `doc_type`, `source_url`, `author_text`,
-`thumb_page` -- are a separate problem. Every one of them is rendered on Work
-cards across three browse catalogs and inside cached Folder, Person and
+The Work fields still outside `SYNCED_FIELDS` -- `title`, `doc_type`,
+`source_url`, `thumb_page` -- are a separate problem. Every one is rendered on
+Work cards across three browse catalogs and inside cached Folder, Person and
 Playlist details, and `title` additionally reaches Concept mention titles,
-Argument source Works, Graph snapshots and the command palette. `doc_type` also
-decides which *group* a card belongs to on Types, so an overlay has to move
-rows between sections rather than rewrite text in place -- the problem 2H
-solved for `status` and Progress.
+Argument source Works, Graph snapshots and the command palette. Each also
+brings something the registry has not had to answer yet:
+
+- `doc_type` decides which *group* a card belongs to on Types -- the problem 2H
+  solved for `status` and Progress -- and additionally propagates to the
+  Research Graph.
+- `thumb_page` is the first NON-STRING canonical value: nullable and integer,
+  where the protocol currently assumes `payload.value` is a string on both
+  sides. It also changes a derived RESOURCE identity, the thumbnail URL, so a
+  pending value must never make a cached offline card request bytes it cannot
+  obtain.
+- `source_url` is not self-contained: what a Work *is* derives from
+  `source_kind`, `file_path`, `provider` and `provider_id` as well, and
+  `provider_id` can override what a changed URL would imply. Synchronizing it
+  alone could leave a video's identity inconsistent.
+
+The registry is the authority on what synchronizes; this list is a note on why
+these four have not.

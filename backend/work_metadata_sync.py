@@ -18,9 +18,10 @@ filters LOCALLY over it, so a pending publisher has to reach that projection's
 filtering even though no card renders it -- being invisible is not the same as
 being unused. `works-browse:index` carries `abstract_excerpt`, which Progress
 renders, so a pending Abstract reaches it through a DERIVATION rather than a
-copy; `abstract` is also the only field whose limit is measured in bytes and
-whose value the metadata-state projection omits (see MAX_ABSTRACT_UTF8_BYTES
-and BYTE_LIMITED_FIELDS). `status` decides which GROUP a Work occupies on
+copy. `abstract` and `author_text` are the BYTE_LIMITS fields: large enough
+that their bound is a storage concern rather than a display one, so they are
+measured in UTF-8 bytes, acknowledged without echoing the value back, and
+carried by the metadata-state projection as a revision alone (see BYTE_LIMITS). `status` decides which GROUP a Work occupies on
 Progress, so a pending value moves a card between lists rather than rewriting
 text in it. `author_text` is the field whose stored value is not necessarily
 its displayed value: a linked Author outranks it, and a linked Editor stands in
@@ -51,6 +52,31 @@ import json
 # another.
 MAX_ABSTRACT_UTF8_BYTES = 1024 * 1024
 
+# `author_text` is an Author or Channel name, so 64 KiB is absurdly generous
+# for it -- which is the point. The number exists to make the field's size a
+# PRKS CONTRACT rather than an accident of whichever storage layer happened to
+# refuse first: before this, the server accepted any length and the browser's
+# durable envelope decided, so the same value could be savable online and
+# impossible offline. That is the split contract this architecture removes.
+MAX_AUTHOR_TEXT_UTF8_BYTES = 64 * 1024
+
+# Fields measured in UTF-8 BYTES rather than code points, and their limits.
+# A byte bound is a STORAGE and TRANSPORT concern -- how much a durable
+# operation, a cached projection and every read of them may cost -- so it is
+# counted in the unit storage actually uses. The small one-line fields keep
+# code-point limits, which bound how much TEXT a field may hold; switching
+# those to bytes would quietly shorten each by a factor of three for anyone
+# writing CJK.
+#
+# Membership of this registry is what makes a field byte-limited. Everything
+# downstream -- compact acknowledgements, revision-only metadata-state entries,
+# bounded conflict previews -- is derived from it, so a second large field is a
+# registry entry rather than another special case threaded through five files.
+BYTE_LIMITS = {
+    "abstract": MAX_ABSTRACT_UTF8_BYTES,
+    "author_text": MAX_AUTHOR_TEXT_UTF8_BYTES,
+}
+
 # The canonical Work statuses. This lives HERE, in the field-synchronization
 # domain, rather than in db_manager: PATCH, the bulk action and the sync
 # handler must all decide validity the same way, and db_manager already
@@ -73,16 +99,13 @@ FIELD_ALLOWLISTS = {
     "status": WORK_STATUS_SET,
 }
 
-# A field's entry is its SIZE limit in code points, or None when the field has
-# no size rule of its own. `status` has none because it is validated by
-# allowlist instead; `author_text` has none because it never had one -- the
-# column is unbounded, the ordinary PATCH accepts any length, and inventing a
-# bound here would refuse values the API still accepts, which is exactly the
-# split contract moving a field to local-first exists to remove. Both remain
-# bounded in the durable queue by the store's own general payload cap.
+# A field's entry is its size limit -- in UTF-8 BYTES for a field listed in
+# BYTE_LIMITS, in code points otherwise -- or None when the field has no size
+# rule at all. `status` is the only None: it is validated by allowlist instead,
+# and asking a five-value enumeration how long it may be is meaningless.
 SYNCED_FIELDS = {
     "status": None,
-    "author_text": None,
+    "author_text": MAX_AUTHOR_TEXT_UTF8_BYTES,
     "abstract": MAX_ABSTRACT_UTF8_BYTES,
     "year": 50,
     "published_date": 40,
@@ -110,12 +133,12 @@ SYNCED_FIELDS = {
 # every one of them by a factor of three for anyone writing CJK.
 BROWSE_LISTS = ("works-browse", "recent", "recently-added")
 
-BYTE_LIMITED_FIELDS = frozenset({"abstract"})
+BYTE_LIMITED_FIELDS = frozenset(BYTE_LIMITS)
 
 # A conflict result is persisted in the browser's durable operation row, which
-# bounds a structured result to 2 KB. Echoing two megabyte-scale Abstracts into
-# it would mean the client could not store the conflict at all -- the operation
-# would fail to settle rather than reach the user. So a byte-limited field
+# bounds a structured result to 2 KB. Echoing two values that may each be far
+# larger than that would mean the client could not store the conflict at all --
+# the operation would fail to settle rather than reach the user. So a byte-limited field
 # reports bounded PREVIEWS and sizes instead, enough to show the user what the
 # disagreement is; taking the server's version re-reads the authoritative value
 # rather than trusting a truncated copy.
@@ -215,11 +238,11 @@ def get_field_state_on_conn(conn, work_id):
     Work-Tag scopes use.
     """
     # Byte-limited fields contribute their REVISION only. The Work record
-    # already carries the acknowledged Abstract, and echoing up to a megabyte
-    # of it into a second cached projection would double what this endpoint
-    # sends, what IndexedDB stores and what every re-read costs -- for a value
-    # the client already has. Small scalars stay inline; there is nothing to
-    # save by splitting them.
+    # already carries the acknowledged value, and echoing it into a second
+    # cached projection would double what this endpoint sends, what IndexedDB
+    # stores and what every re-read costs -- for a value the client already
+    # has. Small scalars stay inline; there is nothing to save by splitting
+    # them.
     valued = sorted(set(SYNCED_FIELDS) - BYTE_LIMITED_FIELDS)
     columns = ", ".join(valued) if valued else "id"
     row = conn.execute("SELECT %s FROM works WHERE id = ?" % columns, (work_id,)).fetchone()
@@ -337,7 +360,7 @@ def apply(db, conn, op, received_at):
     result.update(code="ACKNOWLEDGED", server_revision=after, changed=changed)
     if field in BYTE_LIMITED_FIELDS:
         # The ledger has no retention policy: whatever goes in `result_json`
-        # stays there for the life of the library. Echoing the Abstract back
+        # stays there for the life of the library. Echoing the value back
         # would make every edit a permanent second copy of the text, so the
         # acknowledgement says only that the value was applied. The client
         # already holds the authoritative copy in its immutable operation

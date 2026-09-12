@@ -344,23 +344,105 @@ class WorkMetadataSyncTests(unittest.TestCase):
 
     # ---- author_text: a stored value that is not necessarily the shown one ----
 
-    def test_author_text_carries_no_size_rule_of_its_own(self):
-        """The column is unbounded and the ordinary PATCH accepts any length.
-        Inventing a bound here would refuse values the API still accepts --
-        the split contract moving a field to local-first exists to remove.
-        The durable queue still bounds it, by its own general payload cap."""
-        self.assertIsNone(meta.SYNCED_FIELDS["author_text"])
-        self.assertNotIn("author_text", meta.FIELD_ALLOWLISTS)
-        self.assertTrue(meta.is_valid_field_value("author_text", "x" * 100000))
-        self.assertTrue(meta.is_valid_field_value("author_text", ""))
-        code, result = self.send("author_text", "x" * 50000)
+    def test_author_text_has_one_size_contract_on_every_path(self):
+        """Before 2I.1 the server accepted any length and the browser's durable
+        envelope decided -- so the same value was savable online and impossible
+        offline, which is the split contract this architecture exists to
+        remove. The limit is now a PRKS field contract, enforced identically by
+        the sync handler and the ordinary PATCH."""
+        limit = meta.MAX_AUTHOR_TEXT_UTF8_BYTES
+        self.assertEqual(limit, 64 * 1024)
+        self.assertEqual(meta.SYNCED_FIELDS["author_text"], limit)
+        self.assertIn("author_text", meta.BYTE_LIMITED_FIELDS)
+
+        for size, ok in ((10 * 1024, True), (limit, True), (limit + 1, False)):
+            with self.subTest(bytes=size):
+                self.assertIs(meta.is_valid_field_value("author_text", "x" * size), ok)
+
+        # Exactly at the limit is legitimate, and reaches the column.
+        code, result = self.send("author_text", "a" * limit)
         self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
-        # Whitespace is NOT stripped server-side; it never was. The EDITOR
-        # trims before sending, exactly as it did through the old PATCH, so
-        # the trimming rule lives in one place and did not move.
-        self.assertEqual(self.send("author_text", "  Jane  ",
-                                   base=result["server_revision"])[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual(len(self.value("author_text")), limit)
+        # One byte over is refused by BOTH paths, and changes nothing.
+        self.assertEqual(sync_protocol.process_operation(
+            self.db, self.op("author_text", "a" * (limit + 1),
+                             base=result["server_revision"])),
+            (400, {"code": "INVALID_ENVELOPE"}))
+        with self.assertRaises(ValueError):
+            self.db.update_work_metadata(self.work, {"author_text": "a" * (limit + 1)})
+        self.assertEqual(len(self.value("author_text")), limit)
+
+    def test_the_author_text_limit_counts_utf8_bytes_not_characters(self):
+        """A limit documented in bytes but enforced in characters does not
+        exist for the users most likely to reach it. Every CJK character is
+        three UTF-8 bytes, so a value well under the limit by `len()` can be
+        well over it in storage."""
+        limit = meta.MAX_AUTHOR_TEXT_UTF8_BYTES
+        over = "漢" * 30000          # 30k characters, 90k bytes
+        self.assertLess(len(over), limit)
+        self.assertGreater(len(over.encode("utf-8")), limit)
+        self.assertFalse(meta.is_valid_field_value("author_text", over))
+        self.assertEqual(sync_protocol.process_operation(
+            self.db, self.op("author_text", over)), (400, {"code": "INVALID_ENVELOPE"}))
+        # And a CJK value that genuinely fits is accepted.
+        fits = "漢" * 20000          # 60k bytes
+        self.assertLessEqual(len(fits.encode("utf-8")), limit)
+        self.assertEqual(self.send("author_text", fits)[1]["code"], "ACKNOWLEDGED")
+
+    def test_whitespace_is_not_stripped_server_side(self):
+        """It never was. The EDITOR trims before sending, exactly as it did
+        through the old PATCH, so that rule changed location without changing
+        meaning."""
+        self.assertEqual(self.send("author_text", "  Jane  ")[1]["code"], "ACKNOWLEDGED")
         self.assertEqual(self.value("author_text"), "  Jane  ")
+
+    def test_a_large_author_text_acknowledgement_stays_out_of_the_ledger(self):
+        """`sync_operations.result_json` has no retention policy: whatever goes
+        in stays for the life of the library. Echoing the value back would make
+        every edit a permanent second copy of it."""
+        value = "Q" * (32 * 1024)
+        code, result = self.send("author_text", value)
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertTrue(result["value_omitted"])
+        self.assertNotIn("value", result)
+        stored = self.db.execute_query(
+            "SELECT result_json FROM sync_operations "
+            "WHERE operation_type = 'SET_WORK_METADATA_FIELD'")[0]["result_json"]
+        self.assertNotIn(value, stored)
+        self.assertLess(len(stored), 1024, "the ledger row stays small")
+        self.assertEqual(self.value("author_text"), value, "while the column has it in full")
+
+    def test_a_large_author_text_conflict_fits_the_durable_result_bound(self):
+        """The browser stores a terminal result in the operation row and bounds
+        it to 2 KB. Two 64-KiB values in one conflict would mean the client
+        could not store the conflict at all -- the operation would fail to
+        settle rather than reach the user, which is worse than either value
+        winning."""
+        import json as _json
+        server_value = "S" * (40 * 1024)
+        self.db.update_work_metadata(self.work, {"author_text": server_value})
+        code, result = self.send("author_text", "D" * (40 * 1024), base=0)
+        self.assertEqual((code, result["code"]), (409, "REVISION_CONFLICT"))
+        self.assertNotIn("current_value", result)
+        self.assertNotIn("requested_value", result)
+        self.assertEqual(result["current_bytes"], len(server_value.encode("utf-8")))
+        self.assertEqual(result["requested_bytes"], 40 * 1024)
+        self.assertLessEqual(len(result["current_preview"]), meta.CONFLICT_PREVIEW_CHARS)
+        self.assertLessEqual(len(_json.dumps(result).encode("utf-8")), 2048,
+                             "the whole result must fit the durable bound")
+
+    def test_metadata_state_carries_the_author_text_revision_only(self):
+        """The Work record already carries the acknowledged value; duplicating
+        up to 64 KiB into a second cached projection would double what this
+        endpoint sends, what IndexedDB stores and what every re-read costs."""
+        self.send("author_text", "A" * 5000)
+        entry = self.state()["author_text"]
+        self.assertEqual(entry, {"revision": 1})
+        self.assertNotIn("value", entry)
+        # The observed base is reconstructed from the Work record instead.
+        self.assertEqual(self.value("author_text"), "A" * 5000)
+        # Small scalars still carry their value inline.
+        self.assertIn("value", self.state()["doi"])
 
     def test_author_text_conflicts_are_field_scoped_like_any_other_scalar(self):
         self.db.update_work_metadata(self.work, {"author_text": "Alpha"})
@@ -368,7 +450,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.db.update_work_metadata(self.work, {"author_text": "Bob"})
         code, result = self.send("author_text", "Alice", base=base)
         self.assertEqual((code, result["code"]), (409, "REVISION_CONFLICT"))
-        self.assertEqual(result["current_value"], "Bob")
+        # Byte-limited, so the disagreement is reported as a bounded preview.
+        self.assertEqual(result["current_preview"], "Bob")
         # Convergence is not a conflict.
         self.assertEqual(self.send("author_text", "Bob", base=base)[1]["code"], "ACKNOWLEDGED")
         # And nothing else is blocked by it.
@@ -378,7 +461,9 @@ class WorkMetadataSyncTests(unittest.TestCase):
     def test_creation_does_not_manufacture_an_author_text_revision(self):
         created = self.db.add_work("Fresh", author_text="Jane Smith")
         self.assertEqual(self.db.get_work_metadata_state(created)["fields"]["author_text"],
-                         {"value": "Jane Smith", "revision": 0})
+                         {"revision": 0})
+        self.assertEqual(self.db.get_work(created)["author_text"], "Jane Smith",
+                         "the value lives on the Work record, not in the projection")
 
     def test_patch_and_sync_are_the_only_existing_work_author_text_writers(self):
         """The Phase A audit, kept honest. Every OTHER path that sets
@@ -709,7 +794,12 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """Switching them to bytes would quietly shorten every one by a factor
         of three for anyone writing CJK, which nothing here asked for."""
         self.assertNotIn("journal", meta.BYTE_LIMITED_FIELDS)
-        self.assertEqual(sorted(meta.BYTE_LIMITED_FIELDS), ["abstract"])
+        self.assertEqual(sorted(meta.BYTE_LIMITED_FIELDS), ["abstract", "author_text"])
+        # Membership of BYTE_LIMITS is what makes a field byte-limited; the two
+        # registries cannot drift because one is derived from the other.
+        self.assertEqual(sorted(meta.BYTE_LIMITS), sorted(meta.BYTE_LIMITED_FIELDS))
+        for field, limit in meta.BYTE_LIMITS.items():
+            self.assertEqual(meta.SYNCED_FIELDS[field], limit, field)
         cjk = "\u65e5" * meta.SYNCED_FIELDS["journal"]
         self.assertGreater(len(cjk.encode("utf-8")), meta.SYNCED_FIELDS["journal"])
         self.assertEqual(self.send("journal", cjk)[0], 200)
