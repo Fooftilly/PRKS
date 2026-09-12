@@ -324,15 +324,97 @@ def validate(op):
         raise ValueError("INVALID_BASE_REVISION")
 
 
+# The browser stores a terminal result in the durable operation row and bounds
+# it to this many bytes of SERIALIZED JSON. Mirrors `MAX_RESULT_BYTES` in
+# `local-store.js`; a test pins that the two agree.
+#
+# A result the client cannot store is worse than either value winning: the
+# durable write fails, the coordinator reads that as a failed sync, and the
+# operation goes back to pending and retries -- forever, deterministically,
+# because the same oversized result comes back every time. The user never
+# reaches the conflict UI and has no way to resolve anything. So the server's
+# obligation is not "bound the preview" but "return something the client can
+# store", and that has to be measured, not estimated.
+MAX_DURABLE_RESULT_BYTES = 2048
+
+
+def serialized_result_bytes(result):
+    """Exactly what the client will measure.
+
+    `JSON.stringify` does not escape non-ASCII, so `ensure_ascii=False` is
+    required for this to be the same number -- with the default the server
+    would count a CJK character as six bytes where the browser counts three,
+    and would truncate previews nobody needed truncated. The separators match
+    JS's, which emits no spaces. Verified against node across control
+    characters, quotes, CJK, astral characters and combining marks.
+    """
+    return len(json.dumps(result, ensure_ascii=False,
+                          separators=(",", ":")).encode("utf-8"))
+
+
 def disagreement(field, current, desired):
-    """What the two sides hold, in a form the client can durably store."""
+    """What the two sides hold, in the PREFERRED form for this field.
+
+    A small scalar reports both values, because the client can then offer
+    "Use server" without a second request. A byte-limited field reports bounded
+    previews and sizes instead. Either shape may still be too large to store --
+    see `fit_terminal_result()`, which is what actually guarantees it.
+    """
     if field not in BYTE_LIMITED_FIELDS:
         return {"current_value": current, "requested_value": desired}
+    return bounded_disagreement(current, desired)
+
+
+def bounded_disagreement(current, desired):
     return {
         "current_preview": preview(current),
         "current_bytes": len(current.encode("utf-8")),
         "requested_bytes": len(desired.encode("utf-8")),
     }
+
+
+def fit_terminal_result(result, current, desired):
+    """Shrink a conflict result until the client can durably store it.
+
+    Character counts are not byte counts and neither is a serialized size. One
+    control character occupies one code point, one byte in the column and SIX
+    bytes as `\u0001` in JSON, so a 400-character preview can serialize to
+    2400 bytes and a 500-code-point `journal` conflict carrying both values can
+    reach 6 KB. Both were storable by the server and unstorable by the client.
+
+    Two steps, in order of how much the user loses:
+
+    1. A full-value result that does not fit degrades to the bounded preview
+       shape. The client already renders that shape and re-reads the
+       authoritative value when the user takes the server's version.
+    2. The preview is then shortened until the WHOLE object fits -- the whole
+       object, because the guarantee is about what gets stored, not about one
+       field of it.
+    """
+    if serialized_result_bytes(result) <= MAX_DURABLE_RESULT_BYTES:
+        return result
+    if "current_value" in result:
+        del result["current_value"]
+        result.pop("requested_value", None)
+        result.update(bounded_disagreement(current, desired))
+        if serialized_result_bytes(result) <= MAX_DURABLE_RESULT_BYTES:
+            return result
+    if "current_preview" not in result:
+        return result
+    # The longest prefix that fits. Code points, so a surrogate pair is never
+    # split -- a lone surrogate would serialize to six bytes and render as a
+    # replacement glyph.
+    points = list(result["current_preview"])
+    low, high = 0, len(points)
+    while low < high:
+        middle = (low + high + 1) // 2
+        result["current_preview"] = "".join(points[:middle])
+        if serialized_result_bytes(result) <= MAX_DURABLE_RESULT_BYTES:
+            low = middle
+        else:
+            high = middle - 1
+    result["current_preview"] = "".join(points[:low])
+    return result
 
 
 def apply(db, conn, op, received_at):
@@ -349,13 +431,13 @@ def apply(db, conn, op, received_at):
     if base > revision:
         result.update(code="FUTURE_REVISION", current_revision=revision,
                       **disagreement(field, current, desired))
-        return 400, result
+        return 400, fit_terminal_result(result, current, desired)
     # A stale base is only a conflict when the two devices actually disagree.
     # Two people typing the same DOI have converged, not collided.
     if base < revision and current != desired:
         result.update(code="REVISION_CONFLICT", current_revision=revision,
                       **disagreement(field, current, desired))
-        return 409, result
+        return 409, fit_terminal_result(result, current, desired)
     changed, after = set_field_on_conn(conn, work_id, field, desired)
     result.update(code="ACKNOWLEDGED", server_revision=after, changed=changed)
     if field in BYTE_LIMITED_FIELDS:

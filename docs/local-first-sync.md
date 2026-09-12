@@ -652,12 +652,60 @@ is the entire mechanism, and everything else is derived from it:
 | --- | --- |
 | The acknowledgement omits the value (`value_omitted: true`) | `sync_operations.result_json` has no retention policy; echoing the value back would make every edit a permanent second copy of it. The client reconstructs from its own immutable operation payload, so replay stays exact. |
 | `work-metadata-state` carries the revision alone | The Work record already has the value; duplicating it into a second cached projection would double what the endpoint sends, what IndexedDB stores and what every re-read costs. |
-| A conflict reports `current_preview` + byte counts | The browser bounds a durable structured result to 2 KB. Two large values would mean the client could not store the conflict at all — the operation would fail to settle rather than reach the user, which is worse than either value winning. |
+| A conflict reports `current_preview` + byte counts | The browser bounds a durable structured result to 2 KB. Two large values would mean the client could not store the conflict at all — see below. |
 | The durable store bounds the VALUE, not the JSON | Escaping doubles quotes and backslashes; measuring the encoded form would refuse a value exactly at the stated limit. The allowance is shape-scoped so it cannot smuggle an unbounded payload. |
 
 A third large field is an entry in that registry. If it ever needs
 field-specific code in any of the four rows above, the abstraction is the thing
 to fix.
+
+### A terminal result the client cannot store is worse than losing the edit
+
+The browser persists a conflict in the durable operation row and refuses
+anything over **2048 bytes of serialized JSON**. When that refusal fires the
+settle fails, the coordinator reads it as a failed sync, and the operation
+returns to pending — and retries forever, because the same oversized result
+comes back every time. The user never reaches the conflict UI and has no way to
+resolve anything. That is strictly worse than either value simply winning.
+
+Bounding the preview by CHARACTERS did not prevent it, because a character
+count, a byte count and a serialized size are three different measurements:
+
+| Input | Code points | Column bytes | Serialized JSON bytes |
+| --- | --- | --- | --- |
+| `A` | 1 | 1 | 1 |
+| `é` | 1 | 2 | 2 |
+| `日` | 1 | 3 | 3 |
+| `🧪` | 1 | 4 | 4 |
+| `"` or `\` | 1 | 1 | 2 |
+| `\u0001` (any C0 control without a short escape) | 1 | 1 | **6** |
+
+So a 400-character preview of control characters serialized to ~2400 bytes, and
+a 500-code-point `journal` conflict — which carries BOTH values in full —
+reached over 6 KB. Both were storable by the server and unstorable by the
+client.
+
+`fit_terminal_result()` now guarantees the whole object fits, in two steps
+ordered by how much the user loses:
+
+1. A full-value result that does not fit **degrades to the bounded preview
+   shape**. The client already renders that shape, and re-reads the
+   authoritative value when the user takes the server's version.
+2. The preview is then shortened to the longest prefix that still fits —
+   by code points, so a surrogate pair is never split.
+
+Two details make this a guarantee rather than an estimate. The server measures
+with `ensure_ascii=False`, because `JSON.stringify` does not escape non-ASCII:
+with Python's default the server would count `日` as six bytes where the browser
+counts three, and truncate previews nobody needed truncated. And the server
+measures the WHOLE answer including `work_id` and `field`, which the client's
+handler projects away before storing — so the server's bound is deliberately
+conservative, erring on the side the user can survive.
+
+Because a small scalar's conflict may now arrive in either shape, the client
+validates **what it received** rather than what the field's type implies. A
+byte-limited field is still always bounded: accepting the full shape there
+would admit a megabyte into the durable row.
 
 ## Every canonical mutation advances revisions
 

@@ -1,4 +1,5 @@
 """Field-scoped Work metadata: per-field revisions, conflicts and independence."""
+import pathlib
 import tempfile
 import unittest
 import uuid
@@ -430,6 +431,132 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertLessEqual(len(result["current_preview"]), meta.CONFLICT_PREVIEW_CHARS)
         self.assertLessEqual(len(_json.dumps(result).encode("utf-8")), 2048,
                              "the whole result must fit the durable bound")
+
+    # ---- the durable result bound (2I.2) ----
+
+    def durable_bytes(self, result):
+        """Exactly what the browser will measure: `JSON.stringify` does not
+        escape non-ASCII, so `ensure_ascii=False` is what makes this the same
+        number the client computes."""
+        import json as _json
+        return len(_json.dumps(result, ensure_ascii=False,
+                               separators=(",", ":")).encode("utf-8"))
+
+    def conflict_over(self, field, server_value, device_value="D" * 64):
+        self.db.update_work_metadata(self.work, {field: server_value})
+        code, result = self.send(field, device_value, base=0)
+        self.assertEqual((code, result["code"]), (409, "REVISION_CONFLICT"))
+        return result
+
+    def test_every_conflict_result_fits_what_the_browser_can_store(self):
+        """A result the client cannot store is worse than either value winning.
+        The durable write fails, the coordinator reads that as a failed sync,
+        and the operation returns to pending -- forever, because the same
+        oversized result comes back every retry. The user never reaches the
+        conflict UI and has no way to resolve anything.
+
+        A character count is not a byte count and neither is a serialized size:
+        one control character is one code point, one byte in the column and SIX
+        bytes as `\u0001` in JSON.
+        """
+        limit = meta.MAX_DURABLE_RESULT_BYTES
+        self.assertEqual(limit, 2048)
+        cases = [
+            # (field, server value, what made it overflow before)
+            ("author_text", "\x00" * 5000, "NUL characters, six bytes each"),
+            ("author_text", "\x01\x1f" * 2500, "other C0 controls"),
+            ("author_text", "\x7f" * 5000, "DEL, which is NOT escaped"),
+            ("author_text", "\U0001f9ea" * 5000, "astral characters"),
+            ("author_text", "日" * 5000, "CJK"),
+            ("author_text", '"\\' * 2500, "quotes and backslashes"),
+            ("author_text", "e\u0301" * 2500, "combining marks"),
+            ("abstract", "\x01" * 20000, "a byte-limited field at scale"),
+            # A small scalar carries BOTH values in full, so its worst case is
+            # roughly twice as bad: 500 code points x 6 bytes x 2.
+            ("journal", "\x01" * meta.SYNCED_FIELDS["journal"], "a small scalar"),
+            ("publisher", "\x02" * meta.SYNCED_FIELDS["publisher"], "a small scalar"),
+            ("doi", "\x03" * meta.SYNCED_FIELDS["doi"], "a small scalar"),
+        ]
+        for field, server_value, why in cases:
+            with self.subTest(field=field, why=why):
+                result = self.conflict_over(field, server_value)
+                self.assertLessEqual(self.durable_bytes(result), limit, why)
+
+    def test_a_small_scalar_conflict_degrades_to_previews_only_when_it_must(self):
+        """Both values are more useful than a preview -- the client can offer
+        "Use server" without a second request -- so the full shape is kept
+        whenever it fits, and given up only when keeping it would mean the
+        conflict could not be stored at all."""
+        ordinary = self.conflict_over("journal", "Nature Physics")
+        self.assertEqual(ordinary["current_value"], "Nature Physics")
+        self.assertEqual(ordinary["requested_value"], "D" * 64)
+        self.assertNotIn("current_preview", ordinary)
+
+        pathological = self.conflict_over("journal", "\x01" * 500)
+        self.assertNotIn("current_value", pathological)
+        self.assertNotIn("requested_value", pathological)
+        self.assertIn("current_preview", pathological)
+        self.assertEqual(pathological["current_bytes"], 500)
+        self.assertLessEqual(self.durable_bytes(pathological),
+                             meta.MAX_DURABLE_RESULT_BYTES)
+        # The two shapes are never mixed: which one to trust would be undecided.
+        self.assertFalse({"current_value", "current_preview"} <= set(pathological))
+
+    def test_the_preview_is_shortened_only_as_far_as_it_has_to_be(self):
+        """An ASCII preview keeps its full character budget; only input that
+        actually serializes large is cut, and then to the longest prefix that
+        still fits."""
+        ascii_case = self.conflict_over("author_text", "A" * 5000)
+        self.assertEqual(len(ascii_case["current_preview"]), meta.CONFLICT_PREVIEW_CHARS)
+
+        control = self.conflict_over("author_text", "\x01" * 5000)
+        self.assertLess(len(control["current_preview"]), meta.CONFLICT_PREVIEW_CHARS)
+        self.assertGreater(len(control["current_preview"]), 0,
+                           "something of the server's value still reaches the user")
+        # Longest prefix that fits: one more code point would not.
+        self.assertLessEqual(self.durable_bytes(control), meta.MAX_DURABLE_RESULT_BYTES)
+        oversized = dict(control)
+        oversized["current_preview"] = control["current_preview"] + "\x01"
+        self.assertGreater(self.durable_bytes(oversized), meta.MAX_DURABLE_RESULT_BYTES)
+
+    def test_a_surrogate_pair_is_never_split_by_the_preview_bound(self):
+        """Half a pair serializes to six bytes and renders as a replacement
+        glyph. Cutting by code points makes that unrepresentable."""
+        result = self.conflict_over("author_text", "\U0001f9ea" * 5000)
+        preview = result["current_preview"]
+        self.assertTrue(preview)
+        for index, ch in enumerate(preview):
+            self.assertFalse(0xD800 <= ord(ch) <= 0xDFFF,
+                             "lone surrogate at %d" % index)
+        self.assertEqual(preview, "\U0001f9ea" * len(preview),
+                         "the prefix is whole characters of the server's value")
+
+    def test_the_server_measures_at_least_what_the_browser_stores(self):
+        """The client's handler projects the answer down to the allowlisted
+        keys before storing it, so `work_id` and `field` never reach durable
+        storage. The server measures the whole answer including them, which
+        makes its bound CONSERVATIVE -- it truncates slightly sooner than
+        strictly necessary. That direction is the safe one, and it is a
+        deliberate choice rather than an accident: the alternative is teaching
+        the server the client's allowlist, which is a duplication that could
+        drift silently in the unsafe direction."""
+        import json as _json
+        stored_keys = ("code", "current_revision", "current_value", "requested_value",
+                       "current_preview", "current_bytes", "requested_bytes")
+        result = self.conflict_over("author_text", "\x01" * 5000)
+        stored = {k: v for k, v in result.items() if k in stored_keys}
+        self.assertLess(len(stored), len(result), "the server says more than is stored")
+        stored_bytes = len(_json.dumps(stored, ensure_ascii=False,
+                                       separators=(",", ":")).encode("utf-8"))
+        self.assertLessEqual(stored_bytes, meta.serialized_result_bytes(result))
+        self.assertLessEqual(stored_bytes, meta.MAX_DURABLE_RESULT_BYTES)
+
+    def test_the_server_and_the_browser_agree_on_the_result_bound(self):
+        """Two numbers that drift would mean the server believing it sent
+        something storable and the client refusing it."""
+        store = (pathlib.Path(__file__).resolve().parents[1] /
+                 "frontend" / "js" / "local-store.js").read_text(encoding="utf-8")
+        self.assertIn("const MAX_RESULT_BYTES = %d;" % meta.MAX_DURABLE_RESULT_BYTES, store)
 
     def test_metadata_state_carries_the_author_text_revision_only(self):
         """The Work record already carries the acknowledged value; duplicating

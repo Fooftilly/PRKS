@@ -499,12 +499,13 @@ async function run() {
         assertEq('retired conflict removed atomically', await store.getOperation(op.op_id), null);
     }
 
-    /* ---- the Abstract payload allowance ----
+    /* ---- the byte-limited payload allowance: abstract ----
      *
-     * The 64 KiB bound stays the ordinary limit. Abstract is the one
-     * exception, granted to an exact operation SHAPE rather than to a size, so
-     * no future family inherits a megabyte payload merely by existing. And
-     * what is bounded is the ABSTRACT, not its JSON encoding.
+     * The 64 KiB bound stays the ordinary limit. The fields in BYTE_LIMITS are
+     * the exception, and the allowance is granted to an exact operation SHAPE
+     * rather than to a size, so no future family inherits a large payload
+     * merely by existing. What is bounded is the VALUE, not its JSON encoding.
+     * `author_text` has its own section below; this one covers the largest.
      */
     {
         const idb = createFakeIndexedDBFactory();
@@ -623,6 +624,61 @@ async function run() {
                 operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
                 payload: { field: 'publisher', value: 'x'.repeat(70 * 1024) }, base_revision: 0,
             }), 'payload_too_large');
+    }
+
+    /* ---- the durable terminal-result bound is a real refusal ----
+     *
+     * A conflict the store will not accept is worse than either value winning:
+     * the settle fails, the coordinator reads that as a failed sync, and the
+     * operation goes back to pending -- forever, because the same oversized
+     * result arrives on every retry. The user never reaches the conflict UI.
+     * The server is what guarantees the fit (see `fit_terminal_result`); this
+     * pins that the refusal it is protecting against is real, and exactly
+     * where it falls.
+     */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const enqueue = () => store.enqueueOperation({
+            operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-R',
+            payload: { field: 'author_text', value: 'mine' }, base_revision: 0,
+        });
+        /* Exactly the shape the store receives: the handler's `terminal()`
+         * projects the server's answer down to the allowlisted keys first, so
+         * `work_id` and `field` never reach durable storage. */
+        const conflict = (preview) => ({
+            code: 'REVISION_CONFLICT', current_revision: 4, current_preview: preview,
+            current_bytes: 5000, requested_bytes: 4,
+        });
+
+        // 400 characters of ASCII: what the character cap was designed for.
+        const okRow = await enqueue();
+        const settled = await store.updateOperationSyncState(okRow.op_id, {
+            status: 'conflict', server_result: conflict('A'.repeat(400)) });
+        assertEq('an ASCII preview at the character cap is storable',
+            settled.server_result.current_preview.length, 400);
+
+        /* THE REGRESSION: the same 400 CHARACTERS, each serializing to six
+         * bytes as `\u0001`. The cap was in characters and the bound is in
+         * serialized bytes, and those are not the same measurement. */
+        const control = '\u0001'.repeat(400);
+        assert('400 control characters serialize past the durable bound',
+            Buffer.byteLength(JSON.stringify(conflict(control)), 'utf8') > 2048);
+        const badRow = await enqueue();
+        await assertRejects('...so the store refuses it, and the conflict never lands',
+            store.updateOperationSyncState(badRow.op_id, {
+                status: 'conflict', server_result: conflict(control) }),
+            'invalid_result');
+        const untouched = await store.getOperation(badRow.op_id);
+        assert('the operation is left exactly as it was', !untouched.server_result);
+        assertEq('...and never became conflicted', untouched.status, 'pending');
+
+        // The server's bounded answer for that same input does land.
+        const fitted = await enqueue();
+        const okConflict = await store.updateOperationSyncState(fitted.op_id, {
+            status: 'conflict', server_result: conflict('\u0001'.repeat(300)) });
+        assertEq('a preview shortened to fit is accepted',
+            okConflict.status, 'conflict');
     }
 
     /* ---- module hygiene: persistence only ---- */

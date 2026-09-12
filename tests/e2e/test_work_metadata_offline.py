@@ -1208,6 +1208,49 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 0)
         self.assertEqual(self.db_for(server).get_work(work)['author_text'], 'D' * (8 * 1024))
 
+    def test_a_conflict_the_browser_could_not_store_still_reaches_the_user(self):
+        """The 2I.2 regression, end to end. The server's answer used to be
+        bounded by CHARACTERS while the browser bounds by serialized BYTES, and
+        one control character is one code point and six bytes as `\\u0001`. The
+        oversized result was refused by durable storage, the settle failed, the
+        coordinator read a failed sync, and the operation went back to pending
+        -- retrying forever on the same answer. The user never saw the conflict
+        and had nothing to resolve.
+
+        Nothing here asserts a size: it asserts the operation reaches a
+        TERMINAL state and the user can act on it, which is the thing that was
+        actually broken."""
+        server, page, context = self.start()
+        work = server.ids['work_b']
+        self.open_work_b(page)
+        self.offline(page, context)
+        self.field(page, 'author_text', 'My Author')
+        self.save(page)
+        self.pending(page, 1)
+
+        # 400+ control characters: what the old character cap let through.
+        self.db_for(server).update_work_metadata(
+            server.ids['work_b'], {'author_text': '\x01' * 5000})
+        self.reconnect(page, context)
+        self.settled_conflicts(page, 1)
+
+        op = self.operations(page)[0]
+        self.assertEqual(op['status'], 'conflict',
+                         'the operation settled instead of retrying forever')
+        self.assertEqual(op['server_result']['code'], 'REVISION_CONFLICT')
+        self.assertEqual(op['server_result']['current_bytes'], 5000)
+        self.assertEqual(op['attempt_count'], 1, 'and it was not retried')
+        # It survives a reload, because it actually reached durable storage.
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.assertEqual(self.operations(page)[0]['status'], 'conflict')
+
+        # And the user can resolve it.
+        self.open_work_b(page)
+        page.get_by_role('button', name='Apply my value', exact=True).click()
+        self.pending(page, 0)
+        self.assertEqual(self.server_value(server, work, 'author_text'), 'My Author')
+
     def test_recently_added_filters_on_the_pending_author_text(self):
         """That filter indexes the RAW field, which is deliberately not the
         same as the displayed credit -- 2I preserves that rather than

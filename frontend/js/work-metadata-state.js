@@ -384,16 +384,28 @@
                 }
                 return data.value_omitted === undefined &&
                     typeof data.value === 'string' && data.value === op.payload.value;
-            case 'REVISION_CONFLICT': case 'FUTURE_REVISION':
+            case 'REVISION_CONFLICT': case 'FUTURE_REVISION': {
                 if (!revision(data.current_revision)) return false;
-                // A byte-limited field reports previews and sizes instead of
-                // the values themselves; see the server's disagreement().
-                return BYTE_LIMITED_FIELDS.has(data.field)
-                    ? typeof data.current_preview === 'string' &&
-                      Number.isSafeInteger(data.current_bytes) &&
-                      Number.isSafeInteger(data.requested_bytes)
-                    : typeof data.current_value === 'string' &&
-                      data.requested_value === op.payload.value;
+                const has = key => Object.prototype.hasOwnProperty.call(data, key);
+                /* Bounded previews and sizes instead of the values themselves.
+                 * Exactly one of the two shapes, never a mixture: a result
+                 * carrying both would leave which one to trust undecided. */
+                const bounded = typeof data.current_preview === 'string' &&
+                    Number.isSafeInteger(data.current_bytes) &&
+                    Number.isSafeInteger(data.requested_bytes) && !has('current_value');
+                // A byte-limited field is ALWAYS bounded -- accepting the full
+                // shape would admit a megabyte into the durable row.
+                if (BYTE_LIMITED_FIELDS.has(data.field)) return bounded;
+                /* A small scalar normally reports both values. It may still
+                 * arrive bounded: the server degrades to previews when the
+                 * full shape would not fit the durable result limit, which a
+                 * 500-code-point value made of control characters does -- each
+                 * one occupies six bytes as `\u0001`. Rejecting that here
+                 * would turn a storable conflict into a protocol error and
+                 * strand the operation in retry. */
+                return bounded || (typeof data.current_value === 'string' &&
+                    data.requested_value === op.payload.value && !has('current_preview'));
+            }
             case 'ENTITY_NOT_FOUND': return true;
             default: return false;
         }

@@ -68,12 +68,12 @@
      * large is a bug, not a legitimate semantic operation. */
     const MAX_PAYLOAD_BYTES = 64 * 1024;
 
-    /* Abstract is the one operation allowed to be larger, and the allowance is
-     * granted to an exact operation SHAPE rather than to a size -- otherwise
-     * any future operation would inherit a megabyte payload merely by existing
-     * after this milestone. Mirrors
-     * `backend/work_metadata_sync.MAX_ABSTRACT_UTF8_BYTES`. */
-    /* Mirrors `backend/work_metadata_sync.BYTE_LIMITS`. The durable store is
+    /* The byte-limited Work metadata fields are allowed to be larger, and the
+     * allowance is granted to an exact operation SHAPE rather than to a size
+     * -- otherwise any future operation would inherit a large payload merely
+     * by existing after this milestone.
+     *
+     * Mirrors `backend/work_metadata_sync.BYTE_LIMITS`. The durable store is
      * the last place a value can be refused before it becomes durable user
      * data, so it has to know the same numbers the server and the editor use
      * -- a value the editor accepted and the store rejected would be an edit
@@ -198,8 +198,14 @@
      *   ...byte-limited      current_preview, current_bytes, requested_bytes
      *
      * A byte-limited field reports previews and sizes rather than its values:
-     * two megabyte-scale Abstracts would blow the size bound below, and a
-     * conflict the store cannot persist is a conflict the user never sees.
+     * two large values would blow the size bound below, and a conflict the
+     * store cannot persist is a conflict the user never sees -- the settle
+     * fails, the coordinator reads it as a failed sync, and the operation
+     * returns to pending forever because the same result comes back each
+     * retry. The SERVER guarantees the fit (`fit_terminal_result`), measuring
+     * serialized bytes rather than characters: one control character is one
+     * code point and six bytes as `\u0001`. This bound is the backstop that
+     * makes that guarantee enforceable rather than assumed.
      */
     const STRUCTURED_RESULT_KEYS = Object.freeze([
         'code', 'current_revision', 'current_state', 'requested_state', 'target_tag_id',

@@ -1581,6 +1581,21 @@ The families are deliberately different in kind, and that is the point:
   acknowledgements, revision-only metadata-state entries and bounded conflict
   previews are all derived from it, so a third large field is a registry entry
   rather than another special case threaded through five files.
+- **A terminal result the client cannot store is worse than losing the edit.**
+  The browser refuses a durable `server_result` over 2048 serialized bytes; the
+  settle then fails, the coordinator reads a failed sync, and the operation
+  retries forever on the same oversized result — the conflict UI is never
+  reached. `fit_terminal_result()` guarantees the fit: a full-value result that
+  does not fit degrades to the bounded preview shape, then the preview is cut
+  to the longest prefix that fits. Measure with `ensure_ascii=False`
+  (`JSON.stringify` does not escape non-ASCII) and measure the WHOLE object.
+  Characters are not bytes and neither is a serialized size: one C0 control
+  character is one code point, one column byte and SIX bytes as `\u0001`, which
+  is how a 400-character preview reached ~2400 bytes and a 500-code-point
+  `journal` conflict reached 6 KB.
+- **The client validates the conflict shape it RECEIVED**, not the one the
+  field's type implies, because a small scalar may now arrive bounded. A
+  byte-limited field stays always-bounded regardless.
 - **Bound the VALUE, not its JSON encoding.** Every quote and backslash doubles
   under escaping, so measuring the serialized payload would refuse an Author
   name full of quotation marks that is exactly at the stated limit -- a failure
