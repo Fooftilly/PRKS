@@ -45,6 +45,10 @@
     async function paint(ctx, state) {
         const paintVersion = state.paintVersion = (state.paintVersion || 0) + 1;
         const rows = await root.prksSync.store.listOperations();
+        // One read serves both this editor and the synchronous overlay other
+        // surfaces consult (the leave guard, the form's initial values, the
+        // Recently Added filter), so nothing re-reads the queue per consumer.
+        root.prksSetPendingWorkMetadata(rows);
         if (!live(ctx, state) || paintVersion !== state.paintVersion) return;
         state.operations = root.prksWorkMetadataFieldOperations(rows, state.workId);
         if (!owns(ctx, state)) return;

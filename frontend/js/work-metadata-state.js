@@ -155,12 +155,10 @@
     let pendingByWork = new Map();
     let pendingGeneration = 0;
 
-    async function refreshPending() {
-        if (!root.prksSync) return pendingGeneration;
-        let rows;
-        try { rows = await root.prksSync.store.listOperations(); } catch (_) { return pendingGeneration; }
+    /** Rebuild the map from rows a caller has already read. */
+    function setPending(rows) {
         const next = new Map();
-        rows.filter(op => op && op.operation === 'SET_WORK_METADATA_FIELD' &&
+        (rows || []).filter(op => op && op.operation === 'SET_WORK_METADATA_FIELD' &&
             op.entity_type === 'work' && op.status !== 'acknowledged' &&
             FIELD_SET.has(op.payload.field)).forEach(op => {
                 if (!next.has(op.entity_id)) next.set(op.entity_id, {});
@@ -169,6 +167,23 @@
         pendingByWork = next;
         pendingGeneration += 1;
         return pendingGeneration;
+    }
+
+    async function refreshPending() {
+        if (!root.prksSync) return pendingGeneration;
+        let rows;
+        try { rows = await root.prksSync.store.listOperations(); } catch (_) { return pendingGeneration; }
+        return setPending(rows);
+    }
+
+    /**
+     * The effective view of ONE Work, synchronously. Callers that must decide
+     * something without awaiting -- a leave guard, a form's initial values --
+     * need the pending values without a round trip to IndexedDB.
+     */
+    function effectiveWorkSync(work) {
+        if (!work || typeof work.id !== 'string') return work;
+        return effectiveRows([work], FIELDS)[0];
     }
 
     /**
@@ -198,6 +213,8 @@
         PRKS_SYNCED_WORK_FIELDS: FIELDS,
         PRKS_SYNCED_WORK_FIELD_PROJECTIONS: FIELD_PROJECTIONS,
         prksRefreshPendingWorkMetadata: refreshPending,
+        prksSetPendingWorkMetadata: setPending,
+        prksEffectiveWorkSync: effectiveWorkSync,
         prksPendingWorkMetadataGeneration: () => pendingGeneration,
         prksEffectiveWorkMetadataRows: effectiveRows,
         PRKS_SYNCED_WORK_FIELD_LABELS: LABELS,

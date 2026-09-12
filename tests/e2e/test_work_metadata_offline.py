@@ -62,7 +62,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             for (;;) {
                 const rows = (await prksSync.store.listOperations())
                     .filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
-                if (rows.length === n) return;
+                if (rows.length === n && !rows.some(r => r.status === 'syncing')) return;
                 if (Date.now() > deadline) throw new Error('Sync did not settle: ' + JSON.stringify(rows));
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
@@ -351,6 +351,12 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         page.wait_for_selector('.prks-folder-library__tab-btn[data-tab="recently-added"]')
         page.evaluate("() => prksSwitchFolderLibraryTab('recently-added')")
         page.wait_for_selector('#prks-folder-library-recently-added')
+        # The pane div exists before its first render finishes; filtering an
+        # empty pane would pass or fail on timing rather than on the overlay.
+        page.wait_for_function("""() => {
+            const pane = document.querySelector('#prks-folder-library-recently-added');
+            return !!pane && pane.children.length > 0;
+        }""")
 
     def filter_recently_added(self, page, query):
         """Type into the tab's local filter and return the matching Work ids."""

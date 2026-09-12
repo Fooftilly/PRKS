@@ -5,8 +5,8 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 ## Commands
 
 - Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`. UX Interaction Tour (separate, opt-in, artifact-producing): `python run_tests.py --ux-tour`.
-- Full E2E gate: `python tests/e2e/run.py --jobs 4`. Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow".
-- **Never run browser E2E tests while iterating** — not the full suite, not a whole module — unless the behavior can only be verified in a browser. Use unit tests, Node selftests, static contracts and API tests instead. Run the relevant E2E module once a vertical slice or the milestone implementation is finished, and the full parallel suite once after that. Debug any failure with the individual test, never by rerunning the suite. See "E2E test workflow".
+- Full E2E gate: `timeout 1200 python tests/e2e/run.py --jobs 4` (expected ~7-10 min; over ~15 min is a hang to investigate, not a slow run). Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow".
+- **Never run browser E2E tests while iterating** — not the full suite, not a whole module — unless the behavior can only be verified in a browser. Use unit tests, Node selftests, static contracts and API tests instead. Run the relevant E2E module once a vertical slice or the milestone implementation is finished (`python tests/e2e/run.py --jobs 4 --no-pointer-capture <module>`, never raw `python -m unittest`, which is serial), and the full parallel suite once after that. Debug any failure with `--jobs 1 <test id>`, never by rerunning the suite. See "E2E test workflow".
 - App, default for agents: `python prks_app.py --testing`
 - Real app or Compose: only with run-real authorization from the user
 
@@ -1579,7 +1579,8 @@ python tests/e2e/run.py                 # serial, deterministic (debugging)
 python tests/e2e/run.py --jobs 4        # sharded across 4 worker processes
 PRKS_E2E_JOBS=4 python run_tests.py --e2e
 python tests/e2e/run.py --jobs 4 --fail-fast
-python tests/e2e/run.py tests.e2e.test_playlists_offline.OfflinePlaylistTests.test_x
+python tests/e2e/run.py --jobs 1 tests.e2e.test_playlists_offline.OfflinePlaylistTests.test_x
+python tests/e2e/run.py --jobs 4 --no-pointer-capture tests.e2e.test_playlists_offline
 ```
 
 `--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
@@ -1601,20 +1602,53 @@ way, in seconds rather than minutes.
 **After a complete user-visible vertical slice, or once the milestone's
 implementation is finished, run the relevant targeted E2E module once.** That
 is where a browser earns its cost: real navigation, real IndexedDB, real
-service worker.
+service worker. Always through the sharding runner, never raw unittest:
+
+```
+python tests/e2e/run.py --jobs 4 --no-pointer-capture tests.e2e.test_x
+```
+
+`python -m unittest tests.e2e.<module>` runs SERIALLY -- a browser launch and a
+PRKS server per test, one at a time -- which turns a two-minute module into
+half an hour. It is for isolating one already-identified failure, not for
+feature completion. `--no-pointer-capture` skips the once-per-run pointer
+checks, which belong to the full gate rather than to a module.
 
 **After all milestone work and targeted verification are complete, run the full
 parallel E2E suite once:**
 
 ```
 python run_tests.py
-python tests/e2e/run.py --jobs 4
+timeout 1200 python tests/e2e/run.py --jobs 4
 ```
 
-**If an E2E test fails, debug with the individual failing test or its module.**
-Never rerun the full suite to find out whether a fix worked -- reproduce the
-one failure, fix it, re-run that test and its module, and only then spend the
-full suite again.
+The full run already contains every module, so do not run a module separately
+immediately before it.
+
+**Budget the full run and treat an overrun as a bug, not as patience.**
+
+| | |
+| --- | --- |
+| Expected `--jobs 4` runtime | ~7-10 min |
+| Investigate | > 15 min |
+| Hard outer timeout | ~20 min (`timeout 1200`) |
+
+A generous outer timeout does not make a run succeed; it hides a hang. If the
+suite overruns, do NOT wait it out and do NOT restart it: read the log, see
+which shards reported and which did not, check for orphaned Chromium or PRKS
+processes, and reproduce the suspect test alone. A worker that never reports
+while its peers finish in eight minutes is a stuck test or a stuck teardown,
+and the full suite is the worst possible instrument for finding it. Raise the
+limit only when the suite genuinely grows, and re-measure rather than guess.
+
+**If an E2E test fails, stop running the full suite.** Reproduce that one test:
+
+```
+python tests/e2e/run.py --jobs 1 tests.e2e.test_x.Class.test_name
+```
+
+Fix it, re-run its module, and only then spend the full parallel gate once
+more. Never rerun the full suite to find out whether a fix worked.
 
 A full run costs several minutes of wall clock and saturates the machine; a
 single module still costs a browser launch and a PRKS server per test. The

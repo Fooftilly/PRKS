@@ -125,7 +125,11 @@ class TestRunTests(unittest.TestCase):
             "neither the full suite nor an entire module",
             "Never run browser E2E tests while iterating",
             "run the relevant targeted E2E module once",
-            "debug with the individual failing test or its module",
+            "If an E2E test fails, stop running the full suite",
+            "--jobs 4 --no-pointer-capture",
+            "runs SERIALLY",
+            "Hard outer timeout",
+            "timeout 1200 python tests/e2e/run.py --jobs 4",
         ):
             self.assertIn(phrase, text, phrase)
         # Stated where an agent starts reading, not only 1500 lines in.

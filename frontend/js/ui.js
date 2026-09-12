@@ -3126,7 +3126,13 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
     input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 }
 
-function prksWorkMetaDraftFromWork(work) {
+function prksWorkMetaDraftFromWork(rawWork) {
+    /* EFFECTIVE, not acknowledged. A synchronized field with a pending durable
+     * edit is already saved as far as the user is concerned, so comparing
+     * against the acknowledged value would ask them whether to discard changes
+     * they had just saved -- and re-opening the form would show them the old
+     * text. The draft guard protects unsaved typing, not saved work. */
+    const work = typeof prksEffectiveWorkSync === 'function' ? prksEffectiveWorkSync(rawWork) : rawWork;
     const inferredKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
     const published = typeof prksIsoToDdMmYyyy === 'function' ? prksIsoToDdMmYyyy(work.published_date) : work.published_date;
     return {
@@ -4492,7 +4498,10 @@ function prksWorkBibRowsHtml(work) {
 
 function renderWorkMetaEditTab(work, draft) {
     const hasDraft = !!draft;
-    work = Object.assign({}, work || {}, draft || {});
+    // Same reason as prksWorkMetaDraftFromWork(): a pending durable edit is
+    // what the user last saved, so it is what the form must show.
+    const effective = typeof prksEffectiveWorkSync === 'function' ? prksEffectiveWorkSync(work) : work;
+    work = Object.assign({}, effective || {}, draft || {});
     const safeStr = (str) => (str || '').toString().replace(/"/g, '&quot;');
     const filePath = work && work.file_path ? String(work.file_path).trim() : '';
     const inferredKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
