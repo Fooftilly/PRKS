@@ -150,7 +150,7 @@ async function overlay() {
     assert.equal(globalThis.prksEffectiveWorkMetadata(work, await store.listOperations()).doi, 'server-doi');
 
     /* Only genuinely dirty fields become operations: the form submits all
-     * seven every time, and seven operations per Save would be seven chances
+     * nine every time, and nine operations per Save would be nine chances
      * to conflict over nothing. */
     const draft = { doi: 'server-doi', isbn: 'changed', journal: '', volume: '', issue: '', pages: '', edition: '' };
     assert.deepEqual(globalThis.prksDirtyWorkMetadataFields(draft, { fields: observed }), { isbn: 'changed' });
@@ -471,6 +471,77 @@ async function staleProjectionRead() {
         'a stale /api/recently-added response cannot beat the acknowledgement');
 }
 
+/* ---- hydration: "not read yet" must never read as "nothing pending" ----
+ *
+ * The synchronous overlay exists because Recently Added filters on every
+ * keystroke. Its cost is that an un-hydrated empty map is indistinguishable
+ * from a genuinely empty one, so anything that must be CORRECT rather than
+ * merely fast waits for the one shared hydration.
+ */
+async function hydration() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const observed = base({ publisher: { value: 'Elsevier', revision: 2 } });
+    await store.saveWorkMetadataFields('W-H', { publisher: 'Springer' }, observed);
+    const durableRows = await store.listOperations();
+
+    // A store whose read is held open by the test, so the race is constructed
+    // rather than waited for.
+    let release = null;
+    let reads = 0;
+    const gate = new Promise(resolve => { release = resolve; });
+    globalThis.prksSync = { store: { listOperations: async () => { reads += 1; await gate; return durableRows; } } };
+    delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
+    require('../../frontend/js/work-metadata-state.js');
+
+    const work = { id: 'W-H', title: 'Paper', publisher: 'Elsevier' };
+    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), false, 'nothing has read the queue yet');
+
+    // The mount begins hydration, exactly as the editor's paint does.
+    const mounting = globalThis.prksRefreshPendingWorkMetadata();
+    // The user reaches Edit metadata before that read has landed.
+    let settled = false;
+    const waiting = globalThis.prksEnsurePendingWorkMetadata().then(() => { settled = true; });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(settled, false, 'hydration does not resolve before the read lands');
+    assert.equal(reads, 1, 'the waiter joins the read in flight; it never starts a second one');
+    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), false);
+
+    release();
+    await mounting; await waiting;
+    assert.equal(settled, true);
+    assert.equal(reads, 1, 'still one read for the one event');
+    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), true);
+    // ...and only now does the synchronous overlay speak for the durable queue.
+    assert.equal(globalThis.prksEffectiveWorkSync(work).publisher, 'Springer');
+    assert.equal(work.publisher, 'Elsevier', 'the acknowledged Work is untouched');
+
+    // Once hydrated, waiting is free: no await, no read.
+    const after = globalThis.prksEnsurePendingWorkMetadata();
+    await after;
+    assert.equal(reads, 1);
+
+    /* Durable storage being unavailable is a settled answer too -- otherwise a
+     * browser with IndexedDB blocked would wait for a hydration that can never
+     * arrive, and the metadata editor would never open. */
+    delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
+    globalThis.prksSync = { store: { listOperations: async () => { throw new Error('unavailable'); } } };
+    require('../../frontend/js/work-metadata-state.js');
+    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), false);
+    await globalThis.prksEnsurePendingWorkMetadata();
+    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), true, 'a failed read still settles');
+
+    // No sync runtime at all settles immediately rather than hanging.
+    delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
+    delete globalThis.prksSync;
+    require('../../frontend/js/work-metadata-state.js');
+    await globalThis.prksEnsurePendingWorkMetadata();
+    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), true);
+
+    // Restore the module the rest of the suite shares.
+    delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
+    require('../../frontend/js/work-metadata-state.js');
+}
+
 async function main() {
     await coalescing();
     await independence();
@@ -483,6 +554,7 @@ async function main() {
     await crossProjection();
     await projectionReconciliation();
     await staleProjectionRead();
+    await hydration();
     console.log('All ' + checks + ' Work metadata checks passed');
 }
 

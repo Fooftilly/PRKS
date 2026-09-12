@@ -3220,10 +3220,25 @@ function prksMountWorkMetaEditor(ownerCtx, work) {
 
 function toggleWorkMetaEdit(isEditing) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    toggleWorkMetaEditForContext(ownerCtx, isEditing);
+    void toggleWorkMetaEditForContext(ownerCtx, isEditing);
 }
 
-function prksSetWorkDetailsMode(mode) {
+/* A pending durable edit that has not been read out of IndexedDB yet is
+ * indistinguishable from no pending edit at all. Building the metadata draft
+ * from that would show the user stale text after a reload and then ask whether
+ * to discard changes they had already saved -- so the one path that must be
+ * correct rather than merely fast waits for the hydration ALREADY in flight.
+ * Never a second read, never a poll, and no wait once it has settled. */
+function prksAwaitPendingWorkMetadata() {
+    if (typeof prksPendingWorkMetadataHydrated !== 'function' ||
+        typeof prksEnsurePendingWorkMetadata !== 'function' ||
+        prksPendingWorkMetadataHydrated()) {
+        return null;
+    }
+    return prksEnsurePendingWorkMetadata();
+}
+
+async function prksSetWorkDetailsMode(mode) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const work = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
     const next = ['view', 'metadata', 'people', 'tags'].includes(mode) ? mode : 'view';
@@ -3232,6 +3247,15 @@ function prksSetWorkDetailsMode(mode) {
     ownerCtx.ui.workDetailsMode = next;
     if (next === 'metadata') {
         if (ownerCtx.ui.workMetaDraftWorkId !== String(work.id) || !ownerCtx.ui.workMetaDraft) {
+            const hydration = prksAwaitPendingWorkMetadata();
+            if (hydration) {
+                await hydration;
+                // Anything could have changed across that await.
+                if (!ownerCtx.ui || ownerCtx.destroyed || ownerCtx.ui.workDetailsMode !== 'metadata' ||
+                    !prksOwnerTabIsFocused(ownerCtx)) return;
+                const current = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+                if (!current || current.id !== work.id) return;
+            }
             ownerCtx.ui.workMetaDraft = prksWorkMetaDraftFromWork(work);
             ownerCtx.ui.workMetaDraftWorkId = String(work.id);
         }
@@ -3259,11 +3283,11 @@ async function prksCancelWorkMetaEdit() {
         });
         if (!confirmed) return;
     }
-    toggleWorkMetaEditForContext(ownerCtx, false);
+    await toggleWorkMetaEditForContext(ownerCtx, false);
 }
 window.prksCancelWorkMetaEdit = prksCancelWorkMetaEdit;
 
-function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
+async function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
     if (!ownerCtx || !prksOwnerTabIsFocused(ownerCtx)) return;
     const _cw = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
     if (_cw) {
@@ -3271,6 +3295,13 @@ function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
         if (isEditing) {
             ownerCtx.ui.workDetailsMode = 'metadata';
             if (ownerCtx.ui.workMetaDraftWorkId !== String(_cw.id) || !ownerCtx.ui.workMetaDraft) {
+                const hydration = prksAwaitPendingWorkMetadata();
+                if (hydration) {
+                    await hydration;
+                    if (!ownerCtx.ui || ownerCtx.destroyed || !prksOwnerTabIsFocused(ownerCtx)) return;
+                    const current = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+                    if (!current || current.id !== _cw.id) return;
+                }
                 ownerCtx.ui.workMetaDraft = prksWorkMetaDraftFromWork(_cw);
                 ownerCtx.ui.workMetaDraftWorkId = String(_cw.id);
             }
@@ -3321,7 +3352,7 @@ function prksSettleWorkMetaEditAfterSave(ownerCtx, panel) {
     ownerCtx.ui.workMetaDraft = null;
     ownerCtx.ui.workMetaDraftWorkId = null;
     if (typeof prksRightPanelOwnedBy === 'function' && prksRightPanelOwnedBy(ownerCtx, panel)) {
-        toggleWorkMetaEditForContext(ownerCtx, false);
+        void toggleWorkMetaEditForContext(ownerCtx, false);
     }
 }
 
@@ -4541,10 +4572,10 @@ function renderWorkMetaEditTab(work, draft) {
             <input type="url" id="meta-source-url" placeholder="https://…" value="${safeStr(work.source_url)}" autocomplete="off">
             <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web.</p>
         `;
-    /* The seven synchronized fields are their own section with their own Save.
-     * One button must not quietly mean "seven fields into the durable local
-     * queue, eleven more over HTTP, either half able to fail alone" -- that is
-     * a partial-save contract nobody could explain afterwards. */
+    /* The nine synchronized fields are their own section with their own Save.
+     * One button must not quietly mean "nine fields into the durable local
+     * queue, the rest over HTTP, either half able to fail alone" -- that is a
+     * partial-save contract nobody could explain afterwards. */
     const syncedBibSection = isVideo
         ? ''
         : `

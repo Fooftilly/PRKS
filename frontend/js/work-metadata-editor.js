@@ -44,11 +44,11 @@
 
     async function paint(ctx, state) {
         const paintVersion = state.paintVersion = (state.paintVersion || 0) + 1;
-        const rows = await root.prksSync.store.listOperations();
         // One read serves both this editor and the synchronous overlay other
         // surfaces consult (the leave guard, the form's initial values, the
-        // Recently Added filter), so nothing re-reads the queue per consumer.
-        root.prksSetPendingWorkMetadata(rows);
+        // Recently Added filter), so nothing re-reads the queue per consumer --
+        // and this is the read that hydrates that overlay in the first place.
+        const rows = await root.prksRefreshPendingWorkMetadata();
         if (!live(ctx, state) || paintVersion !== state.paintVersion) return;
         state.operations = root.prksWorkMetadataFieldOperations(rows, state.workId);
         if (!owns(ctx, state)) return;
@@ -207,8 +207,8 @@
     /**
      * One Save, one transaction, however many fields it touched. Only fields
      * whose value actually differs from the observed server state become
-     * operations -- the form submits all seven every time, and seven
-     * operations per Save would be seven chances to conflict over nothing.
+     * operations -- the form submits all nine every time, and nine
+     * operations per Save would be nine chances to conflict over nothing.
      */
     async function save(workId) {
         const ctx = root.prksGetFocusedTabContext ? root.prksGetFocusedTabContext() : null;

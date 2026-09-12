@@ -75,16 +75,21 @@ def get_field_state_on_conn(conn, work_id):
     row = conn.execute("SELECT %s FROM works WHERE id = ?" % columns, (work_id,)).fetchone()
     if row is None:
         return None
-    revisions = {}
-    for scope_id, revision in conn.execute(
-        "SELECT scope_id, revision FROM sync_entity_revisions WHERE scope_type = 'work-field'"
-    ).fetchall():
-        try:
-            owner, field = json.loads(scope_id)
-        except (ValueError, TypeError):
-            continue
-        if owner == work_id:
-            revisions[field] = revision
+    # Ask for this Work's own scopes by key rather than scanning every
+    # `work-field` row in the library and discarding the ones that belong to
+    # other Works: the cost of that scan grows with the library, while the
+    # answer never does. `(scope_type, scope_id)` is the primary key, so this
+    # is an indexed lookup of at most nine rows.
+    by_key = {scope_key(work_id, field): field for field in SYNCED_FIELDS}
+    placeholders = ", ".join("?" * len(by_key))
+    revisions = {
+        by_key[scope_id]: revision
+        for scope_id, revision in conn.execute(
+            "SELECT scope_id, revision FROM sync_entity_revisions "
+            "WHERE scope_type = 'work-field' AND scope_id IN (%s)" % placeholders,
+            tuple(by_key),
+        ).fetchall()
+    }
     return {
         "work_id": work_id,
         "fields": {

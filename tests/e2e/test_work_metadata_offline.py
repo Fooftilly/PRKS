@@ -510,6 +510,75 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertEqual(self.server_fields(server, work)['publisher'],
                          {'value': 'server-publisher', 'revision': 1})
 
+    def test_entering_the_editor_before_hydration_still_shows_pending_values(self):
+        """The one race a unit test cannot reach: a reload, then Edit metadata
+        pressed before the durable queue has been read out of IndexedDB.
+
+        An un-hydrated empty map is indistinguishable from nothing pending, so
+        building the draft from it would show the acknowledged text and then
+        ask whether to discard changes the user had already saved. The read is
+        held open deliberately here rather than raced against a timer.
+        """
+        server, page, context = self.start()
+        self.offline(page, context)
+        self.field(page, 'publisher', 'Held Press')
+        self.save(page)
+        self.pending(page, 1)
+
+        # Install the gate BEFORE the reload, via an init script: the durable
+        # store's first read blocks until this test releases it.
+        context.add_init_script("""
+            (() => {
+                let real = null;
+                window.__prksReleaseRead = null;
+                const gate = new Promise(resolve => { window.__prksReleaseRead = resolve; });
+                Object.defineProperty(window, 'createPrksLocalStore', {
+                    configurable: true,
+                    get() {
+                        if (!real) return undefined;
+                        return (...args) => {
+                            const store = real(...args);
+                            // EVERY read is held, not just the first: the sync
+                            // coordinator's startup recovery reads before the
+                            // metadata editor does, and gating only that one
+                            // would let hydration finish before the race began.
+                            const listOperations = store.listOperations.bind(store);
+                            store.listOperations = async (...inner) => {
+                                await gate;
+                                return listOperations(...inner);
+                            };
+                            return store;
+                        };
+                    },
+                    set(value) { real = value; },
+                });
+            })();
+        """)
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        # The Work panel renders from the cached entity, not from hydration, so
+        # waiting for it does not release the gate the mount is already held on.
+        page.locator('#panel-content button', has_text='Edit metadata').wait_for()
+        # Fire and forget: this call cannot resolve until the read is released.
+        page.evaluate("() => { void prksSetWorkDetailsMode('metadata'); }")
+        page.evaluate("() => window.__prksReleaseRead()")
+
+        publisher = page.locator('[data-prks-work-field="publisher"]')
+        publisher.wait_for()
+        page.wait_for_function("""() => {
+            const input = document.querySelector('[data-prks-work-field="publisher"]');
+            return !!input && input.value === 'Held Press';
+        }""")
+        # ...and the draft it was built from agrees, so leaving raises nothing.
+        self.assertFalse(page.evaluate("""() => {
+            const ctx = prksGetFocusedTabContext();
+            return prksWorkMetaDraftIsDirty(ctx, ctx.getEntity('work'));
+        }"""), 'a saved field must not read as an unsaved draft')
+        page.evaluate("() => prksNavigate('#/folders')")
+        page.wait_for_function("() => location.hash.indexOf('/works/') === -1")
+        self.assertEqual(page.locator('#prks-modal-confirm:not(.hidden)').count(), 0,
+                         'no prompt to discard changes that were already saved')
+
     # ---- boundaries ---------------------------------------------------------
 
     def test_online_save_uses_the_same_durable_queue(self):

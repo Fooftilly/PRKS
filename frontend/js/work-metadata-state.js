@@ -154,6 +154,19 @@
      */
     let pendingByWork = new Map();
     let pendingGeneration = 0;
+    /* Hydration state. Before the durable queue has been read once, an empty
+     * map means "not read yet", NOT "nothing pending" -- and the two are
+     * indistinguishable to a synchronous caller. Anything that must be correct
+     * rather than merely fast waits for this. */
+    let hydrated = false;
+    let hydrationPromise = null;
+    let hydrationResolve = null;
+    let readStarted = false;
+
+    function markHydrated() {
+        hydrated = true;
+        if (hydrationResolve) { hydrationResolve(); hydrationResolve = null; }
+    }
 
     /** Rebuild the map from rows a caller has already read. */
     function setPending(rows) {
@@ -166,14 +179,44 @@
             });
         pendingByWork = next;
         pendingGeneration += 1;
+        markHydrated();
         return pendingGeneration;
     }
 
+    /**
+     * Read the durable queue once and republish the map. Returns the rows, so
+     * a caller that needs them too -- the metadata editor's paint -- shares
+     * this read instead of issuing its own.
+     */
     async function refreshPending() {
-        if (!root.prksSync) return pendingGeneration;
+        if (!root.prksSync) { markHydrated(); return []; }
+        readStarted = true;
         let rows;
-        try { rows = await root.prksSync.store.listOperations(); } catch (_) { return pendingGeneration; }
-        return setPending(rows);
+        try {
+            rows = await root.prksSync.store.listOperations();
+        } catch (_) {
+            // Durable storage being unavailable is a settled answer too: there
+            // is nothing pending that this device could ever produce.
+            markHydrated();
+            return [];
+        }
+        setPending(rows);
+        return rows;
+    }
+
+    /**
+     * The ONE shared hydration. A caller that must not act on a
+     * not-yet-read map awaits this; it never starts a second read for the
+     * same event, because a read already in flight resolves this same promise
+     * when it lands.
+     */
+    function ensurePending() {
+        if (hydrated) return Promise.resolve();
+        if (!hydrationPromise) {
+            hydrationPromise = new Promise(resolve => { hydrationResolve = resolve; });
+        }
+        if (!readStarted) void refreshPending();
+        return hydrationPromise;
     }
 
     /**
@@ -213,6 +256,8 @@
         PRKS_SYNCED_WORK_FIELDS: FIELDS,
         PRKS_SYNCED_WORK_FIELD_PROJECTIONS: FIELD_PROJECTIONS,
         prksRefreshPendingWorkMetadata: refreshPending,
+        prksEnsurePendingWorkMetadata: ensurePending,
+        prksPendingWorkMetadataHydrated: () => hydrated,
         prksSetPendingWorkMetadata: setPending,
         prksEffectiveWorkSync: effectiveWorkSync,
         prksPendingWorkMetadataGeneration: () => pendingGeneration,

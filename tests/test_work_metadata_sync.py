@@ -305,5 +305,38 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.send("location", value)
         self.assertEqual(self.value("location"), value)
 
+    def test_the_projection_reads_only_this_works_scopes(self):
+        """A library-wide scan would grow with the library while the answer
+        stays nine rows, and it would hand another Work's revisions to this
+        one if a scope key were ever ambiguous."""
+        noisy = [self.db.add_work("Noise %d" % i) for i in range(5)]
+        for work in noisy:
+            self.db.update_work_metadata(work, {"doi": "10.1/%s" % work, "isbn": work})
+        self.db.update_work_metadata(self.work, {"doi": "10.1/mine"})
+
+        state = self.state()
+        self.assertEqual(state["doi"], {"value": "10.1/mine", "revision": 1})
+        self.assertEqual(state["isbn"], {"value": "", "revision": 0},
+                         "another Work's ISBN revision must not leak in")
+        for work in noisy:
+            self.assertEqual(self.db.get_work_metadata_state(work)["fields"]["isbn"]["revision"], 1)
+
+        scanned = []
+
+        class Watched:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, *args):
+                if "sync_entity_revisions" in sql:
+                    scanned.append(sql)
+                return self._conn.execute(sql, *args)
+
+        with self.db.connection() as conn:
+            observed = meta.get_field_state_on_conn(Watched(conn), self.work)
+        self.assertEqual(observed, self.db.get_work_metadata_state(self.work))
+        self.assertEqual(len(scanned), 1, "one query, not one per field")
+        self.assertIn("scope_id IN", scanned[0], "bounded to this Work's own scope keys")
+
     def test_scope_keys_are_structural(self):
         self.assertNotEqual(meta.scope_key("W-a:b", "doi"), meta.scope_key("W-a", "b:doi"))

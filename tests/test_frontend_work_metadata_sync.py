@@ -28,8 +28,8 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertEqual(sorted(work_metadata_sync.SYNCED_FIELDS), sorted(SYNCED))
 
     def test_the_synchronized_fields_left_the_online_patch_payload(self):
-        """One Save must not secretly mean "seven fields into the durable queue
-        and eleven more over HTTP, either half able to fail alone"."""
+        """One Save must not secretly mean "nine fields into the durable queue
+        and the rest over HTTP, either half able to fail alone"."""
         ui = (FRONTEND / 'ui.js').read_text()
         at = ui.index('async function submitWorkMetaEdit(')
         body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]

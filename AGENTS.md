@@ -1322,7 +1322,7 @@ success):
 | Work create | YES | — | YES |
 | Work delete | YES | YES | YES |
 | Work metadata (title / status / doc type / year / author) | YES | YES | YES |
-| The seven synchronized bibliographic fields | — | — | — |
+| The nine synchronized bibliographic fields | — | — | — |
 | Author **or Editor** role change | YES | YES | YES |
 | Person canonical first/last-name change | YES | YES | YES |
 | managed PDF save (`file_size_bytes`) | YES | YES | YES |
@@ -1524,7 +1524,7 @@ Other mutations remain server-required. The implementation contract is in
   Work projections invalidate, including absent tombstones on delete/merge.
 - No offline Tag creation, Folder edits, Playlists, research-note editing,
   CRDTs, multi-user sync or server push. Open events joined the protocol in 2C
-  and seven bibliographic fields in 2D; nothing else has.
+  and nine bibliographic fields in 2D/2E; nothing else has.
 
 **Tag identity is persistent.** Only `delete_tag()` and `merge_tags_into()`
 may destroy or transform a Tag. Removing a tag from a Work or Folder, deleting
