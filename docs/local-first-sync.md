@@ -223,9 +223,9 @@ A render PRKS decided to do -- the reconnect refresh -- is not an open either.
 
 ## Work metadata fields
 
-Twelve bibliographic scalars synchronize: `year`, `published_date`, `abstract`,
-`publisher`, `location`, `edition`, `journal`, `volume`, `issue`, `pages`,
-`isbn`, `doi`. Each owns a revision scope
+Thirteen Work fields synchronize: `status`, `year`, `published_date`,
+`abstract`, `publisher`, `location`, `edition`, `journal`, `volume`, `issue`,
+`pages`, `isbn`, `doi`. Each owns a revision scope
 `work-field / ["<work id>", "<field>"]` -- the same structural JSON encoding the
 Work-Tag scopes use, so no delimiter has to be excluded from either component.
 A missing row is revision 0. No schema change was needed: these live in the
@@ -381,7 +381,7 @@ the split contract that moving a field to local-first exists to remove. It is
 measured in **UTF-8 bytes**, never `len()`: a limit documented in bytes but
 enforced in characters does not exist for the users most likely to reach it.
 An over-limit value is refused visibly — the draft stays, nothing is enqueued,
-nothing is sent. Nothing is ever truncated. The nine small scalars keep their
+nothing is sent. Nothing is ever truncated. The other small scalars keep their
 code-point limits; switching those to bytes would quietly shorten each by a
 factor of three for anyone writing CJK.
 
@@ -425,6 +425,7 @@ Abstract.
 | `abstract` | `works-browse` | `abstract_excerpt` | **derived** (first 100 code points) |
 | `year` | `works-browse`, `recent`, `recently-added` | `year` | copied |
 | `published_date` | `works-browse`, `recent`, `recently-added` | `published_date` | copied |
+| `status` | `works-browse`, `recent`, `recently-added` | `status` | copied |
 
 A declared projection the runtime cannot address is a wiring error, not
 something to step over: `reconcileFieldProjections` returns false rather than
@@ -441,14 +442,14 @@ the server answers.
 
 ## Fan-out: which fields reach which projections
 
-Eight of the twelve are rendered on the Work detail and nowhere else. The Work
+Eight of the thirteen are rendered on the Work detail and nowhere else. The Work
 summary projection carries them, so cached Folder, Person and Playlist details
 hold them in their payloads -- but no Work card, browse catalog, Concept,
 Argument or Graph surface displays them, so a pending value needs no optimistic
 propagation beyond the Work itself, and an acknowledgement invalidates no browse
 catalog.
 
-Four are exceptions, in three different ways. `publisher` is COPIED into
+Five are exceptions, in four different ways. `publisher` is COPIED into
 `recently-added:index`, which 2E exists because of: **being invisible on a card
 is not the same as being unused** -- that projection selects `works.publisher`
 because Home -> Recently Added filters LOCALLY over it. `abstract` is DERIVED
@@ -491,6 +492,63 @@ The deferred fields do not share that property:
 | `status` | Work card badges, the Progress route's grouping, and the same cached details |
 | `doc_type` | Work card badges, the Types route's grouping, the Graph |
 | `title` | all of the above, plus Concept details (mention titles), Argument details (source Works), Graph snapshots and the command palette |
+
+## Status: a field that changes which GROUP a Work is in
+
+Every field before `status` changed what a card SAID. Status changes where the
+card IS. Progress renders one status at a time, selecting over the rows the
+route hands it, so a pending Status has to make a Work **leave** the group the
+server put it in and **join** the pending one -- before synchronization, and
+across a reload.
+
+That needs no new mechanism. The route already fetches `works-browse:index`,
+overlays it with `prksEffectiveBrowseRows()` and hands the result to
+`renderProgressByStatus()`, which filters `w.status === status`. Adding
+`status` to `FIELD_PROJECTIONS` and `PROJECTION_COLUMNS` is therefore the whole
+change: `progress.js` never learns what a durable operation is, and could not
+disagree with any other surface about pending state if it wanted to.
+
+### Where Status is read
+
+| Surface | Reads | Overlay |
+| --- | --- | --- |
+| Work detail card and editor | the Work record | `prksEffectiveWorkSync()` |
+| Progress groups | `works-browse:index` | `prksEffectiveBrowseRows()`, then the route's filter |
+| Recently opened / Recently added cards | `recent:index`, `recently-added:index` | `prksEffectiveBrowseRows()` |
+| Recently Added local search | `recently-added:index` | the same overlaid rows the cards use |
+| Folder / Person / Playlist detail cards | embedded Work summaries | `prksEffectiveWorkSummaries()` |
+| Search and Saved View result cards | a fresh server response | `prksEffectiveWorksSync()` in `prksSearchResultCardsHtml()` |
+| Types, Concepts, Arguments, Graph, command palette | do not render a Status badge | — |
+
+### Where Status is written
+
+| Path | Revision-aware | Note |
+| --- | --- | --- |
+| `SET_WORK_METADATA_FIELD` | yes | the only path the UI uses, online and offline |
+| `PATCH /api/works/:id` | yes | routed through `set_field_on_conn` like every synchronized field |
+| `bulk_update_works(action="set_status")` | **yes, since 2H** | see below |
+| `add_work()` (create, Processing import) | n/a | a new Work starts at revision 0; construction is not a change |
+
+**The bulk action was the dangerous one.** It used to run
+`UPDATE works SET status = ?` over the selection directly. Once Status carries
+a revision, that is not merely inconsistent, it is a silent data-loss path: the
+value changes while the counter does not, so a device holding the pre-bulk
+Status reconnects, compares equal revisions, concludes it is current and
+overwrites the newer value. It now routes each selected Work through
+`set_field_on_conn` inside the transaction it already had -- exactly as the Tag
+branch beside it already did -- so only Works whose Status actually changes
+advance, and values and revisions roll back together.
+
+### One validation rule
+
+Status is the first synchronized field validated by an ALLOWLIST rather than a
+length: a value outside `WORK_STATUSES` is not "too long", it is not a status.
+`is_valid_field_value()` answers for every field and every path -- the sync
+handler, the PATCH and the bulk action -- because a value savable by one path
+and refused by another is the split contract that moving a field to
+local-first exists to remove. The SQLite CHECK constraint remains a last line
+of defence: it raises an IntegrityError rather than telling the client what it
+should have sent.
 
 ## Every canonical mutation advances revisions
 
@@ -589,20 +647,19 @@ explicit conflict discard when the original Work is no longer available.
 Structured terminal results are allowlisted and size-bounded, separate from
 short retry error messages. None of this content belongs in logs.
 
-## Deferred beyond 2F
+## Deferred beyond the current milestone
 
 No offline Tag creation/rename/merge/delete, Folder mutation, Work
 creation/deletion, Playlist mutation, Concept editing or Research Notes
-editing, and no synchronization for the high fan-out Work fields in the table
-above. No CRDT, multi-user sync, batching, server push or automatic lifecycle
+editing, and no synchronization for the Work fields still listed as deferred
+below. No CRDT, multi-user sync, batching, server push or automatic lifecycle
 retargeting.
 
-The remaining Work fields -- `title`, `status`, `doc_type`, `year`,
-`published_date`, `source_url`, `author_text`, `thumb_page` -- are a separate
-problem. Every one of them is rendered on Work cards across three browse
-catalogs and inside cached Folder, Person and Playlist details, and `title`
-additionally reaches Concept mention titles, Argument source Works, Graph
-snapshots and the command palette. `status` and `doc_type` also decide which
-*group* a card belongs to on Progress and Types, so an overlay would have to
-move rows between sections rather than rewrite text in place. None of that is
-answered by the transform table above.
+The remaining Work fields -- `title`, `doc_type`, `source_url`, `author_text`,
+`thumb_page` -- are a separate problem. Every one of them is rendered on Work
+cards across three browse catalogs and inside cached Folder, Person and
+Playlist details, and `title` additionally reaches Concept mention titles,
+Argument source Works, Graph snapshots and the command palette. `doc_type` also
+decides which *group* a card belongs to on Types, so an overlay has to move
+rows between sections rather than rewrite text in place -- the problem 2H
+solved for `status` and Progress.

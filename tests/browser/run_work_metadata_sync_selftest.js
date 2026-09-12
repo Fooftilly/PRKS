@@ -502,6 +502,84 @@ async function projectionReconciliation() {
     assert.equal(await cache.getList('recently-added:index'), null);
 }
 
+/* ---- Status: a pending value that changes GROUP MEMBERSHIP ---- */
+function statusMembership() {
+    const ops = [{ operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work',
+        entity_id: 'W-S', status: 'pending',
+        payload: { field: 'status', value: 'Completed' } }];
+    globalThis.prksSetPendingWorkMetadata(ops);
+
+    // 1. The Work itself.
+    const work = { id: 'W-S', title: 'Paper', status: 'Planned', year: '1999' };
+    const frozenWork = JSON.parse(JSON.stringify(work));
+    assert.equal(globalThis.prksEffectiveWorkSync(work).status, 'Completed');
+    assert.equal(globalThis.prksEffectiveWorkSync(work).year, '1999', 'other fields survive');
+    assert.deepEqual(work, frozenWork, 'the acknowledged Work is never mutated');
+
+    // 2. All three browse catalogs -- Progress reads the first of them.
+    for (const projection of ['works-browse', 'recent', 'recently-added']) {
+        const rows = [{ id: 'W-S', status: 'Planned' }, { id: 'W-OTHER', status: 'Planned' }];
+        const frozen = JSON.parse(JSON.stringify(rows));
+        const out = globalThis.prksEffectiveProjectionRows(rows, projection);
+        assert.equal(out[0].status, 'Completed', projection + ' carries the pending Status');
+        assert.equal(out[1].status, 'Planned', 'and only for the Work that was edited');
+        assert.deepEqual(rows, frozen, projection + ' snapshot is untouched');
+    }
+
+    /* 3. GROUP MEMBERSHIP. This is what makes Status different from every
+     * earlier synchronized field: Progress does not merely render the value,
+     * it selects on it. The filter below is exactly what
+     * `renderProgressByStatus` applies to the rows it is handed, so a Work
+     * must LEAVE the group the server put it in and JOIN the pending one. */
+    const catalog = [
+        { id: 'W-S', status: 'Planned' },
+        { id: 'W-STAY', status: 'Planned' },
+        { id: 'W-DONE', status: 'Completed' },
+    ];
+    const groupOf = status => globalThis.prksEffectiveProjectionRows(catalog, 'works-browse')
+        .filter(w => w.status === status).map(w => w.id);
+    assert.deepEqual(groupOf('Planned'), ['W-STAY'], 'the edited Work left its old group');
+    assert.deepEqual(groupOf('Completed'), ['W-S', 'W-DONE'], 'and joined the pending one');
+
+    // The reverse direction has to work identically.
+    globalThis.prksSetPendingWorkMetadata([{ operation: 'SET_WORK_METADATA_FIELD',
+        entity_type: 'work', entity_id: 'W-DONE', status: 'pending',
+        payload: { field: 'status', value: 'Planned' } }]);
+    assert.deepEqual(groupOf('Planned'), ['W-S', 'W-STAY', 'W-DONE']);
+    assert.deepEqual(groupOf('Completed'), []);
+
+    // 4. Embedded Work summaries -- Folder, Person, Playlist all render a badge.
+    globalThis.prksSetPendingWorkMetadata(ops);
+    const summaries = [{ id: 'W-S', status: 'Planned', year: '1999' }];
+    const frozenSummaries = JSON.parse(JSON.stringify(summaries));
+    assert.equal(globalThis.prksEffectiveWorkSummaries(summaries)[0].status, 'Completed');
+    assert.deepEqual(summaries, frozenSummaries);
+
+    // 5. Server-backed search results, which are never cached at all.
+    const results = [{ id: 'W-S', title: 'Paper', status: 'Planned', doi: '10.1/x' }];
+    const effective = globalThis.prksEffectiveWorksSync(results);
+    assert.equal(effective[0].status, 'Completed', 'a fresh server result is overlaid too');
+    assert.equal(effective[0].doi, '10.1/x');
+    assert.equal(results[0].status, 'Planned', 'and the response itself is not rewritten');
+
+    /* 6. Only an allowlisted value can become an operation. The control offers
+     * five choices, so this is unreachable through the UI -- which is why it
+     * belongs at the boundary rather than in the control. */
+    for (const bad of ['Finished', 'completed', '', 'Done']) {
+        assert.equal(globalThis.prksWorkFieldToCanonical('status', bad), null, bad);
+    }
+    for (const good of globalThis.PRKS_WORK_STATUSES) {
+        assert.equal(globalThis.prksWorkFieldToCanonical('status', good), good);
+    }
+    // An untouched Status is not dirty, and a real change is recorded.
+    const observed = { fields: base({ status: { value: 'Planned', revision: 2 } }) };
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields({ status: 'Planned' }, observed), {});
+    assert.deepEqual(globalThis.prksDirtyWorkMetadataFields({ status: 'Paused' }, observed),
+        { status: 'Paused' });
+
+    globalThis.prksSetPendingWorkMetadata([]);
+}
+
 /* ---- acknowledgement reaches every cached representation ---- */
 async function embeddedReconciliation() {
     const factory = createFakeIndexedDBFactory();
@@ -529,6 +607,17 @@ async function embeddedReconciliation() {
     for (const key of ['works-browse:index', 'recent:index', 'recently-added:index']) {
         assert.equal((await cache.getList(key)).value[0].year, '1998', key + ' was patched');
     }
+    /* Status rides the SAME generic path: a registry entry, and no
+     * Status-specific reconciliation code anywhere. */
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-Y',
+        field: 'status', value: 'Completed', server_revision: 1, changed: true }), true);
+    for (const key of ['works-browse:index', 'recent:index', 'recently-added:index']) {
+        assert.equal((await cache.getList(key)).value[0].status, 'Completed', key + ' status');
+    }
+    assert.equal((await cache.getEntity('folder', 'F1')).value.works[0].status, 'Completed');
+    assert.equal((await cache.getEntity('person', 'P1')).value.works[0].status, 'Completed');
+    assert.equal((await cache.getEntity('playlist', 'PL1')).value.items[0].status, 'Completed');
+
     const folder = (await cache.getEntity('folder', 'F1')).value;
     assert.equal(folder.works[0].year, '1998', 'the embedded Folder summary was patched');
     assert.equal(folder.works[1].year, '1990', 'other Works in that Folder are untouched');
@@ -622,6 +711,39 @@ async function staleProjectionRead() {
     await settle();
     assert.equal((await cache.getList('recently-added:index')).value[0].publisher, 'Springer',
         'a stale /api/recently-added response cannot beat the acknowledgement');
+}
+
+/* A stale catalog response must not move a Work back into its old Progress
+ * GROUP. Reverting a rendered value is bad; reverting membership makes the
+ * Work vanish from the list the user is looking at and reappear in one they
+ * are not. */
+async function staleReadCannotRestoreTheOldGroup() {
+    const factory = createFakeIndexedDBFactory();
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const stale = [{ id: 'W-G', title: 'Paper', status: 'Planned' },
+                   { id: 'W-OTHER', title: 'Other', status: 'Planned' }];
+    await cache.putEntity('work', 'W-G', { id: 'W-G', status: 'Planned' });
+    await cache.putList('works-browse:index', JSON.parse(JSON.stringify(stale)), '');
+    let release = null;
+    const inFlight = new Promise(resolve => { release = resolve; });
+    const offline = createPrksOfflineRuntime({ store: cache, window: null, prksRequest: async () => {
+        await inFlight;
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(stale)) };
+    } });
+
+    const reading = offline.readThroughList('works-browse:index', '/api/works?projection=browse',
+        { domain: 'works-browse', validate: rows => Array.isArray(rows) });
+    await settle();
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-G',
+        field: 'status', value: 'Completed', server_revision: 2, changed: true }), true);
+    release();
+    await reading;
+    await settle();
+
+    const rows = (await cache.getList('works-browse:index')).value;
+    const group = status => rows.filter(w => w.status === status).map(w => w.id);
+    assert.deepEqual(group('Completed'), ['W-G'], 'the Work stayed in its acknowledged group');
+    assert.deepEqual(group('Planned'), ['W-OTHER'], 'and the old response did not drag it back');
 }
 
 /* ---- hydration: "not read yet" must never read as "nothing pending" ----
@@ -897,7 +1019,7 @@ async function highFanOut() {
     assert.equal(effectiveSummaries[0].publisher, 'Elsevier', 'untouched fields survive');
     assert.deepEqual(summaries, frozenSummaries, 'the cached entity is never mutated');
     assert.deepEqual(globalThis.PRKS_WORK_SUMMARY_FIELDS,
-        ['year', 'published_date', 'publisher']);
+        ['status', 'year', 'published_date', 'publisher']);
 
     /* The Published Date codec: the editor spells it dd/mm/yyyy, the wire and
      * the column are ISO, and comparing the spellings would make an untouched
@@ -941,10 +1063,12 @@ async function main() {
     await crossProjection();
     await projectionReconciliation();
     await staleProjectionRead();
+    await staleReadCannotRestoreTheOldGroup();
     await hydration();
     await abstracts();
     await abstractAcknowledgement();
     await highFanOut();
+    statusMembership();
     await embeddedReconciliation();
     await unreadableSummariesBlockRetirement();
     await staleEmbeddedRead();

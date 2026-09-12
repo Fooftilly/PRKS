@@ -4,9 +4,9 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
-SYNCED = ('year', 'published_date', 'abstract', 'publisher', 'location',
+SYNCED = ('status', 'year', 'published_date', 'abstract', 'publisher', 'location',
           'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi')
-DEFERRED = ('title', 'status', 'doc_type', 'source_url', 'author_text', 'thumb_page')
+DEFERRED = ('title', 'doc_type', 'source_url', 'author_text', 'thumb_page')
 
 
 class WorkMetadataSyncFrontendTests(unittest.TestCase):
@@ -100,16 +100,18 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn("abstract: ['works-browse']", listed)
         self.assertIn('year: BROWSE_LISTS', listed)
         self.assertIn('published_date: BROWSE_LISTS', listed)
+        self.assertIn('status: BROWSE_LISTS', listed)
         self.assertEqual(sorted(work_metadata_sync.FIELD_PROJECTIONS),
-                         ['abstract', 'published_date', 'publisher', 'year'])
+                         ['abstract', 'published_date', 'publisher', 'status', 'year'])
         self.assertEqual(work_metadata_sync.FIELD_PROJECTIONS['publisher'], ('recently-added',))
         self.assertEqual(work_metadata_sync.FIELD_PROJECTIONS['abstract'], ('works-browse',))
-        # Every Work card shows a year, so both reach all three browse lists.
-        for field in ('year', 'published_date'):
+        # Every Work card shows a year and a Status badge, and Status decides
+        # Progress group membership, so all three reach every browse list.
+        for field in ('year', 'published_date', 'status'):
             self.assertEqual(work_metadata_sync.FIELD_PROJECTIONS[field],
                              ('works-browse', 'recent', 'recently-added'), field)
         for field in SYNCED:
-            if field not in ('publisher', 'abstract', 'year', 'published_date'):
+            if field not in ('publisher', 'abstract', 'year', 'published_date', 'status'):
                 self.assertNotIn("%s:" % field, listed, field)
 
     def test_every_declared_projection_can_actually_be_reconciled(self):
@@ -157,6 +159,45 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         # The memoized render is refused when the overlay moved, not only when
         # the coherence domain did.
         self.assertIn('recentlyAddedPendingGeneration', folders)
+
+    def test_progress_filters_effective_rows_and_stays_ignorant_of_operations(self):
+        """Status is the first synchronized field that changes which GROUP a
+        Work belongs to, not merely what its card says. The route must hand
+        `renderProgressByStatus` the OVERLAID rows and the component must keep
+        filtering them by value -- teaching the component about durable
+        operations would give it a second opinion about pending state, and it
+        would drift from every other surface the first time either changed."""
+        app = (FRONTEND / 'app.js').read_text()
+        at = app.index("case 'progress': {")
+        body = app[at: app.index("case 'processing-files': {", at)]
+        self.assertIn("prksEffectiveBrowseRows(base, 'works-browse')", body)
+        self.assertIn('prksRefreshPendingWorkMetadata', body)
+        # The overlaid rows, not the acknowledged snapshot, are what it renders.
+        self.assertIn('renderProgressByStatus(works,', body)
+
+        progress = (FRONTEND / 'components' / 'progress.js').read_text()
+        for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'prksSync',
+                          'payload.field', 'prksEffective'):
+            self.assertNotIn(forbidden, progress, forbidden)
+        # It selects on the value it was given -- that is the whole mechanism.
+        self.assertIn('w.status === status', progress)
+
+    def test_search_result_cards_render_the_effective_work(self):
+        """Search and Saved View results are fetched fresh from the server, so
+        they still carry the acknowledged value while a local edit is pending.
+        One overlay for every synchronized field, in the shared renderer, so
+        this is not a Status-specific patch and the next field needs none."""
+        saved = (FRONTEND / 'saved-views.js').read_text()
+        at = saved.index('function prksSearchResultCardsHtml(')
+        body = saved[at: saved.index('const modalState', at)]
+        self.assertIn('prksEffectiveWorksSync', body)
+        for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'payload.field'):
+            self.assertNotIn(forbidden, saved, forbidden)
+        # The routes that call it must hydrate the map before rendering.
+        app = (FRONTEND / 'app.js').read_text()
+        for marker in ("case 'search': {", "case 'saved-view-detail': {"):
+            at = app.index(marker)   # missing marker is a failure, not a skip
+            self.assertIn('prksHydratePendingWorkMetadata', app[at: at + 1400], marker)
 
     def test_recently_added_search_filters_the_effective_rows(self):
         """Rendering the overlay but filtering the acknowledged array is a real
@@ -263,7 +304,28 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         for field in work_metadata_sync.SUMMARY_FIELDS:
             self.assertIn("'%s'" % field, listed, field)
         self.assertEqual(sorted(work_metadata_sync.SUMMARY_FIELDS),
-                         ['published_date', 'publisher', 'year'])
+                         ['published_date', 'publisher', 'status', 'year'])
+
+    def test_status_left_the_legacy_save(self):
+        """Status had exactly the defect this milestone removes: an online
+        PATCH and, once synchronized, a durable queue -- two mutation paths for
+        one field, the non-revision-aware one silently overwriting the other's
+        conflicts. It now has one path, online and offline."""
+        ui = (FRONTEND / 'ui.js').read_text()
+        at = ui.index('async function submitWorkMetaEdit(')
+        body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]
+        self.assertNotIn('status: draft.status', body)
+        # The control is a segmented button group whose VALUE lives on a hidden
+        # input, so the marker is emitted by the helper rather than written
+        # literally -- pin the call that asks for it.
+        self.assertIn("{ workField: 'status' }", ui)
+        self.assertIn('opts.workField ? ` data-prks-work-field=', ui)
+        # And its Save is its OWN, not the bibliographic one: a button labelled
+        # "Save bibliographic details" must not also move a Work between
+        # Progress groups.
+        self.assertIn('data-prks-role="work-status-editor"', ui)
+        self.assertIn('save-work-status-btn', ui)
+        self.assertIn("prksSaveWorkMetadataFields('${work.id}', 'status')", ui)
 
     def test_year_and_published_date_left_the_legacy_save(self):
         """Two mutation paths for one field means the path that is not

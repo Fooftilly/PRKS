@@ -30,6 +30,15 @@ class WorkMetadataSyncTests(unittest.TestCase):
     def state(self, work=None):
         return self.db.get_work_metadata_state(work or self.work)["fields"]
 
+    def sample(self, field, index):
+        """A value this field will actually accept. Status is validated by
+        ALLOWLIST, not by length, so the free-text sample every other field
+        takes is a refusal for it."""
+        if field in meta.FIELD_ALLOWLISTS:
+            allowed = sorted(meta.FIELD_ALLOWLISTS[field])
+            return allowed[index % len(allowed)]
+        return "value-%d" % index
+
     def value(self, field):
         return self.db.execute_query(
             "SELECT %s AS v FROM works WHERE id = ?" % field, (self.work,))[0]["v"]
@@ -40,13 +49,14 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertEqual(sorted(meta.SYNCED_FIELDS),
                          ["abstract", "doi", "edition", "isbn", "issue", "journal",
                           "location", "pages", "published_date", "publisher",
-                          "volume", "year"])
+                          "status", "volume", "year"])
         for index, field in enumerate(sorted(meta.SYNCED_FIELDS)):
             with self.subTest(field=field):
-                status, result = self.send(field, "value-%d" % index)
-                self.assertEqual((status, result["code"], result["changed"]), (200, "ACKNOWLEDGED", True))
+                wanted = self.sample(field, index + 1)
+                code, result = self.send(field, wanted)
+                self.assertEqual((code, result["code"], result["changed"]), (200, "ACKNOWLEDGED", True))
                 self.assertEqual(result["server_revision"], 1)
-                self.assertEqual(self.value(field), "value-%d" % index)
+                self.assertEqual(self.value(field), wanted)
 
     def test_an_unsupported_field_never_reaches_the_column(self):
         """An arbitrary column name from a client is both an injection surface
@@ -189,14 +199,143 @@ class WorkMetadataSyncTests(unittest.TestCase):
         for index, field in enumerate(sorted(meta.SYNCED_FIELDS)):
             with self.subTest(field=field):
                 before = self.state()[field]["revision"]
-                self.db.update_work_metadata(self.work, {field: "patched-%d" % index})
+                wanted = self.sample(field, index + 1)
+                self.db.update_work_metadata(self.work, {field: wanted})
                 after = self.state()[field]
                 self.assertEqual(after["revision"], before + 1,
                                  "%s did not advance through update_work_metadata" % field)
-                self.assertEqual(self.value(field), "patched-%d" % index)
+                self.assertEqual(self.value(field), wanted)
                 # A device holding the pre-PATCH value must now be told so.
-                self.assertEqual(self.send(field, "device", base=before)[1]["code"],
+                self.assertEqual(self.send(field, self.sample(field, index + 2), base=before)[1]["code"],
                                  "REVISION_CONFLICT", field)
+
+    # ---- the bulk boundary ----
+
+    def test_bulk_status_advances_the_same_revisions_every_other_path_uses(self):
+        """A bulk action is an ordinary canonical mutation wearing a different
+        hat. If it wrote the column directly it would change the value while
+        leaving the revision where it was, and every offline device holding the
+        pre-bulk Status would compare equal revisions, conclude it was current
+        and overwrite the newer value on its next save."""
+        other = self.db.add_work("Second", status="Planned")
+        self.db.update_work_metadata(self.work, {"status": "Planned"})
+        before = self.state()["status"]["revision"]
+        self.db.bulk_update_works({"work_ids": [self.work, other],
+                                   "action": "set_status", "status": "Completed"})
+        self.assertEqual(self.value("status"), "Completed")
+        self.assertEqual(self.state()["status"]["revision"], before + 1)
+        self.assertEqual(self.state(other)["status"], {"value": "Completed", "revision": 1})
+        # And nothing else moved: a bulk Status change is not a Work-wide edit.
+        for field in ("doi", "year", "abstract"):
+            self.assertEqual(self.state()[field]["revision"], 0, field)
+
+    def test_a_no_op_bulk_status_manufactures_no_revision(self):
+        """Inflating a counter for a value that did not change would invent
+        staleness for every device that already holds it -- and a bulk action
+        over a large selection is exactly where most of the rows are already
+        in the requested state."""
+        self.db.bulk_update_works({"work_ids": [self.work],
+                                   "action": "set_status", "status": "Completed"})
+        after_first = self.state()["status"]["revision"]
+        self.db.bulk_update_works({"work_ids": [self.work],
+                                   "action": "set_status", "status": "Completed"})
+        self.assertEqual(self.state()["status"]["revision"], after_first)
+        # A device holding the current value is still current.
+        self.assertEqual(self.send("status", "Paused", base=after_first)[1]["code"],
+                         "ACKNOWLEDGED")
+
+    def test_bulk_status_values_and_revisions_roll_back_together(self):
+        """Partial application is the one outcome that cannot be recovered
+        from: a stored value whose revision did not advance makes every other
+        device's staleness check lie, permanently."""
+        import sqlite3
+        other = self.db.add_work("Second", status="Planned")
+        self.db.update_work_metadata(self.work, {"status": "Planned"})
+        before = self.state()
+        self.db.execute_query(
+            "CREATE TRIGGER reject_bulk BEFORE UPDATE OF revision ON sync_entity_revisions "
+            "BEGIN SELECT RAISE(ABORT, 'injected'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.bulk_update_works({"work_ids": [self.work, other],
+                                       "action": "set_status", "status": "Completed"})
+        self.assertEqual(self.value("status"), "Planned")
+        self.assertEqual(self.db.get_work(other)["status"], "Planned")
+        self.assertEqual(self.state(), before)
+
+    def test_a_bulk_change_makes_an_offline_device_conflict(self):
+        """The whole point of routing bulk through the revision boundary. The
+        device was away when the bulk action ran; it must be told, not
+        silently allowed to overwrite."""
+        self.db.update_work_metadata(self.work, {"status": "Planned"})
+        observed = self.state()["status"]["revision"]
+        self.assertEqual(observed, 1)
+        self.db.bulk_update_works({"work_ids": [self.work],
+                                   "action": "set_status", "status": "Completed"})
+        self.assertEqual(self.state()["status"]["revision"], 2)
+        code, result = self.send("status", "Paused", base=observed)
+        self.assertEqual((code, result["code"]), (409, "REVISION_CONFLICT"))
+        self.assertEqual(result["current_value"], "Completed")
+        self.assertEqual(self.value("status"), "Completed",
+                         "the away device did not overwrite the bulk change")
+
+    # ---- the allowlist ----
+
+    def test_status_is_validated_by_allowlist_on_every_mutation_path(self):
+        """Three paths, one rule. A value savable by one and refused by another
+        is the split contract moving a field to local-first exists to remove --
+        and the SQLite CHECK constraint is a last line of defence, not a
+        first: it raises an IntegrityError rather than telling the client which
+        value it should have sent."""
+        for bad in ("Finished", "completed", "", "Done", " "):
+            with self.subTest(value=bad):
+                # 1. the synchronization operation
+                self.assertEqual(sync_protocol.process_operation(
+                    self.db, self.op("status", bad)), (400, {"code": "INVALID_ENVELOPE"}))
+                # 2. the ordinary PATCH
+                with self.assertRaises(ValueError):
+                    self.db.update_work_metadata(self.work, {"status": bad})
+                # 3. the bulk action
+                from backend.db_manager import BulkWorkError
+                with self.assertRaises(BulkWorkError):
+                    self.db.bulk_update_works({"work_ids": [self.work],
+                                               "action": "set_status", "status": bad})
+        self.assertEqual(self.value("status"), "Not Started",
+                         "not one refusal reached the column")
+        self.assertEqual(self.state()["status"]["revision"], 0)
+        self.assertEqual(self.db.execute_query("SELECT * FROM sync_operations"), [])
+        for good in meta.WORK_STATUSES:
+            with self.subTest(value=good):
+                self.assertTrue(meta.is_valid_field_value("status", good))
+
+    def test_a_convergent_status_edit_is_not_a_conflict(self):
+        """Two devices that independently decided a Work was Completed have
+        not disagreed about anything. Telling them they had would demand a
+        resolution for a collision that never happened."""
+        self.db.update_work_metadata(self.work, {"status": "Planned"})
+        base = self.state()["status"]["revision"]
+        # Someone else gets there first, with the same answer.
+        self.db.update_work_metadata(self.work, {"status": "Completed"})
+        advanced = self.state()["status"]["revision"]
+        code, result = self.send("status", "Completed", base=base)
+        self.assertEqual((code, result["code"], result["changed"]), (200, "ACKNOWLEDGED", False))
+        self.assertEqual(self.state()["status"]["revision"], advanced,
+                         "a convergent edit advances nothing")
+
+    def test_a_status_conflict_leaves_every_other_field_writable(self):
+        """Status shares a displayed card with Year, and nothing else. A
+        decision pending on one must not freeze the other."""
+        self.db.update_work_metadata(self.work, {"status": "Planned"})
+        self.assertEqual(self.send("status", "Paused", base=0)[1]["code"], "REVISION_CONFLICT")
+        self.assertEqual(self.send("year", "1998", base=0)[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual(self.send("doi", "10.1/x", base=0)[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual(self.value("status"), "Planned")
+
+    def test_creation_does_not_manufacture_a_status_revision(self):
+        """A revision records a CHANGE to an existing synchronization
+        aggregate, not the construction of a new object."""
+        created = self.db.add_work("Fresh", status="Planned")
+        self.assertEqual(self.db.get_work_metadata_state(created)["fields"]["status"],
+                         {"value": "Planned", "revision": 0})
 
     def test_no_other_backend_statement_writes_a_synchronized_column(self):
         """The audit behind the test above, kept honest as the schema grows: a
@@ -226,8 +365,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.send("doi", "10.1/keep")
         before = self.state()
         self.db.update_work_metadata(self.work, {
-            "title": "Renamed", "status": "Paused",
-            "author_text": "Someone", "doc_type": "book"})
+            "title": "Renamed", "author_text": "Someone", "doc_type": "book"})
         self.assertEqual(self.state(), before)
         self.assertEqual(self.db.execute_query(
             "SELECT title FROM works WHERE id = ?", (self.work,))[0]["title"], "Renamed")
@@ -307,14 +445,17 @@ class WorkMetadataSyncTests(unittest.TestCase):
         value into one list; Abstract DERIVES one; Year and Published Date are
         on every Work card and so reach all three."""
         self.assertEqual(sorted(meta.FIELD_PROJECTIONS),
-                         ["abstract", "published_date", "publisher", "year"])
+                         ["abstract", "published_date", "publisher", "status", "year"])
         self.assertEqual(meta.FIELD_PROJECTIONS["abstract"], ("works-browse",))
         self.assertEqual(meta.FIELD_PROJECTIONS["publisher"], ("recently-added",))
-        for field in ("year", "published_date"):
+        # Status is the strongest case for reaching all three: it does not only
+        # change what a card SAYS, it changes which Progress group the card
+        # belongs to, and Progress reads `works-browse:index`.
+        for field in ("year", "published_date", "status"):
             self.assertEqual(meta.FIELD_PROJECTIONS[field],
                              ("works-browse", "recent", "recently-added"), field)
         for field in meta.SYNCED_FIELDS:
-            if field in ("publisher", "abstract", "year", "published_date"):
+            if field in ("publisher", "abstract", "year", "published_date", "status"):
                 continue
             self.assertNotIn(field, meta.FIELD_PROJECTIONS, field)
 
@@ -322,7 +463,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """Folder, Person and Playlist details embed Work summaries. A field
         those rows carry has to reach them too -- rendering AND local search."""
         self.assertEqual(sorted(meta.SUMMARY_FIELDS),
-                         ["published_date", "publisher", "year"])
+                         ["published_date", "publisher", "status", "year"])
         self.assertEqual(meta.SUMMARY_ENTITY_KINDS, ("folder", "person", "playlist"))
         for field in meta.SUMMARY_FIELDS:
             self.assertIn(field, meta.SYNCED_FIELDS, field)

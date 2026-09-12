@@ -6,12 +6,14 @@
  * have -- which is why every field carries its own revision and its own
  * resolution, and why one conflicting field leaves the rest editable.
  *
- * Eight of the ten synchronized scalars reach no cached read model but the
- * Work detail. Two do, in different ways, and PROJECTION_COLUMNS below says
- * how: `publisher` is COPIED into `recently-added:index`, because Home ->
- * Recently Added filters locally over it; `abstract` is DERIVED into
- * `works-browse:index.abstract_excerpt`, which Progress renders. A field being
- * invisible on a card is not the same as it being unused, and neither pending
+ * Eight of the twelve synchronized scalars reach no cached read model but the
+ * Work detail. Four do, and PROJECTION_COLUMNS below says how: `publisher` is
+ * COPIED into `recently-added:index`, because Home -> Recently Added filters
+ * locally over it; `abstract` is DERIVED into
+ * `works-browse:index.abstract_excerpt`, which Progress renders; `year` and
+ * `published_date` are COPIED into all three browse catalogs and carried by
+ * every embedded Work summary, because every card shows a year. A field being
+ * invisible on a card is not the same as it being unused, and no pending
  * value is ever written into an acknowledged snapshot.
  *
  * `abstract` is also the only byte-limited field: its bound is in UTF-8 bytes,
@@ -20,11 +22,17 @@
  */
 (function (root) {
     'use strict';
-    const FIELDS = Object.freeze(['year', 'published_date', 'abstract', 'publisher',
+    const FIELDS = Object.freeze(['status', 'year', 'published_date', 'abstract', 'publisher',
         'location', 'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi']);
     const FIELD_SET = new Set(FIELDS);
+    /* Mirrors `work_metadata_sync.WORK_STATUSES`. Status is the first
+     * synchronized field validated by an ALLOWLIST rather than a length: a
+     * value outside it is not "too long", it is not a status at all. */
+    const WORK_STATUSES = Object.freeze(
+        ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused']);
+    const FIELD_ALLOWLISTS = Object.freeze({ status: new Set(WORK_STATUSES) });
     const LABELS = Object.freeze({
-        year: 'Year', published_date: 'Published date', abstract: 'Abstract',
+        status: 'Progress', year: 'Year', published_date: 'Published date', abstract: 'Abstract',
         publisher: 'Publisher', location: 'Location', edition: 'Edition',
         journal: 'Journal', volume: 'Volume', issue: 'Issue',
         pages: 'Pages', isbn: 'ISBN', doi: 'DOI',
@@ -38,6 +46,12 @@
         abstract: ['works-browse'],
         year: BROWSE_LISTS,
         published_date: BROWSE_LISTS,
+        /* Status is not only rendered as a badge on every card: it decides
+         * which GROUP a Work belongs to on Progress, which reads
+         * `works-browse:index`. So a pending Status has to reach these rows
+         * before the route filters them, or the Work stays in the group the
+         * server last knew about. */
+        status: BROWSE_LISTS,
     });
 
     /* Fields that cached ENTITY snapshots embed verbatim as part of a Work
@@ -45,7 +59,7 @@
      * rows are rendered as Work cards and searched locally, so a pending value
      * has to reach them. `abstract` is deliberately absent: summaries carry it,
      * but nothing there renders or searches it. */
-    const SUMMARY_FIELDS = Object.freeze(['year', 'published_date', 'publisher']);
+    const SUMMARY_FIELDS = Object.freeze(['status', 'year', 'published_date', 'publisher']);
 
     /* Mirrors `backend/work_metadata_sync.BYTE_LIMITED_FIELDS`: a field whose
      * bound is a storage limit rather than a display one, and whose value the
@@ -65,12 +79,12 @@
      */
     const copy = field => ({ field, column: field, derive: value => value });
     const PROJECTION_COLUMNS = Object.freeze({
-        'recently-added': [copy('publisher'), copy('year'), copy('published_date')],
+        'recently-added': [copy('status'), copy('publisher'), copy('year'), copy('published_date')],
         'works-browse': [
             { field: 'abstract', column: 'abstract_excerpt', derive: text => abstractExcerpt(text) },
-            copy('year'), copy('published_date'),
+            copy('status'), copy('year'), copy('published_date'),
         ],
-        'recent': [copy('year'), copy('published_date')],
+        'recent': [copy('status'), copy('year'), copy('published_date')],
     });
 
     /* The excerpt Progress shows under each Work card.
@@ -138,6 +152,16 @@
 
     /** The canonical value for a draft, or null when it is not interpretable. */
     function toCanonicalValue(field, draft) {
+        /* An allowlisted field has no "nearly right" value: anything off the
+         * list is refused here, before it can become an operation the server
+         * would reject on arrival. The editor offers a fixed set of choices,
+         * so this is unreachable through the UI -- which is exactly why it
+         * belongs at the boundary rather than in the control. */
+        const allowed = FIELD_ALLOWLISTS[field];
+        if (allowed) {
+            const text = canonical(draft).trim();
+            return allowed.has(text) ? text : null;
+        }
         const codec = CODECS[field];
         return codec ? codec.toCanonical(draft) : canonical(draft);
     }
@@ -449,6 +473,17 @@
     }
 
     /**
+     * The same overlay for a LIST of full Work records -- server-backed search
+     * and Saved View results, which are fetched fresh and therefore still
+     * carry acknowledged values while a local edit is pending. One helper for
+     * every synchronized field, so a surface does not become consistent for
+     * Status and stale for Year.
+     */
+    function effectiveWorksSync(works) {
+        return Array.isArray(works) ? effectiveRows(works, FIELDS) : works;
+    }
+
+    /**
      * Acknowledged projection rows + pending field values = what the user
      * should see and search. The rows are NEVER mutated: a new object is
      * returned for any row an edit touches, so the caller's acknowledged
@@ -498,6 +533,7 @@
         prksMetadataStateAckPatch: metadataStateAckPatch,
         prksEffectiveMetadataAck: effectiveAck,
         PRKS_WORK_SUMMARY_FIELDS: SUMMARY_FIELDS,
+        PRKS_WORK_STATUSES: WORK_STATUSES,
         prksWorkFieldToDisplay: toDisplayValue,
         prksWorkFieldToCanonical: toCanonicalValue,
         prksEffectiveProjectionRows: effectiveProjectionRows,
@@ -521,6 +557,7 @@
         prksPendingWorkMetadataSettled: () => hydration === READY || hydration === UNAVAILABLE,
         prksSetPendingWorkMetadata: setPending,
         prksEffectiveWorkSync: effectiveWorkSync,
+        prksEffectiveWorksSync: effectiveWorksSync,
         prksPendingWorkMetadataGeneration: () => pendingGeneration,
         prksEffectiveWorkMetadataRows: effectiveRows,
         PRKS_SYNCED_WORK_FIELD_LABELS: LABELS,

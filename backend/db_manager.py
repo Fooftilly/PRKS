@@ -80,14 +80,11 @@ PRKS_BIBTEX_EXPORT_FIELD_IDS: Tuple[str, ...] = (
 )
 PRKS_BIBTEX_EXPORT_FIELDS_DEFAULT: Dict[str, bool] = {k: True for k in PRKS_BIBTEX_EXPORT_FIELD_IDS}
 
-PRKS_WORK_STATUSES: Tuple[str, ...] = (
-    "Not Started",
-    "Planned",
-    "In Progress",
-    "Completed",
-    "Paused",
-)
-PRKS_WORK_STATUS_SET = frozenset(PRKS_WORK_STATUSES)
+# One definition, in the module that decides whether a field value is valid at
+# all. PATCH, the bulk action and the synchronization handler all answer the
+# same question, so they must consult the same list.
+PRKS_WORK_STATUSES: Tuple[str, ...] = work_metadata_sync.WORK_STATUSES
+PRKS_WORK_STATUS_SET = work_metadata_sync.WORK_STATUS_SET
 PRKS_BULK_WORK_ACTIONS = frozenset({"set_status", "move_folder", "add_tags", "remove_tags"})
 PRKS_BULK_WORK_MAX = 500
 
@@ -2391,10 +2388,10 @@ class PRKSDatabase:
         # would be savable online and impossible offline -- exactly the split
         # contract moving a field to local-first is supposed to remove.
         for field, value in synced.items():
-            if not work_metadata_sync.within_limit(field, value):
-                raise ValueError(
-                    "%s exceeds the maximum supported length" % field
-                )
+            if not work_metadata_sync.is_valid_field_value(field, value):
+                raise ValueError("%s is not a valid value for %s" % (value, field)
+                                 if field in work_metadata_sync.FIELD_ALLOWLISTS
+                                 else "%s exceeds the maximum supported length" % field)
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if plain:
@@ -2984,7 +2981,8 @@ class PRKSDatabase:
 
         if action == "set_status":
             raw_status = data.get("status")
-            if not isinstance(raw_status, str) or raw_status not in PRKS_WORK_STATUS_SET:
+            if not isinstance(raw_status, str) or \
+                    not work_metadata_sync.is_valid_field_value("status", raw_status):
                 raise BulkWorkError("Invalid status.")
             status = raw_status
         elif action == "move_folder":
@@ -3019,10 +3017,17 @@ class PRKSDatabase:
                     raise BulkWorkError("One or more selected tags no longer exist.", 404)
 
             if action == "set_status":
-                conn.executemany(
-                    "UPDATE works SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    [(status, wid) for wid in work_ids],
-                )
+                # The SAME revision-aware boundary PATCH and the sync handler
+                # use, inside this transaction -- exactly like the Tag branch
+                # below. A bulk action that wrote the column directly would
+                # change the value while leaving the revision where it was, so
+                # a device holding the pre-bulk Status would reconnect,
+                # compare equal revisions, believe itself current and
+                # overwrite the newer value. Revisions record CANONICAL
+                # history; there is no such thing as a mutation path exempt
+                # from it. Only Works whose Status actually changes advance.
+                for wid in work_ids:
+                    work_metadata_sync.set_field_on_conn(conn, wid, "status", status)
             elif action == "move_folder":
                 conn.executemany(
                     "DELETE FROM folder_files WHERE work_id = ?",

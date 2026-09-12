@@ -2963,6 +2963,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         : { q: '', tag: null, options: {} };
                 const results = await fetchSearch(mapped.q, mapped.tag, Object.assign({}, mapped.options, { signal: routeSignal }));
                 if (stale()) return;
+                await prksHydratePendingWorkMetadata();
+                if (stale()) return;
                 if (typeof renderSavedViewDetail === 'function') {
                     renderSavedViewDetail(view, results, contentDiv);
                 }
@@ -3019,6 +3021,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 const publisher = route.params.publisher || '';
                 const any = route.params.any || '';
                 const results = await fetchSearch(query, tag, { author, publisher, any, signal: routeSignal });
+                if (stale()) return;
+                // Server results carry acknowledged values; the cards render
+                // the effective ones (see prksSearchResultCardsHtml), which
+                // needs the pending map read first.
+                await prksHydratePendingWorkMetadata();
                 if (stale()) return;
                 publishSidebar({
                     query,

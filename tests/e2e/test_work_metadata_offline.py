@@ -751,6 +751,241 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                          'the Published Date synchronized while the Year conflicted')
         self.assertEqual(fields['year']['value'], '1988', 'and the Year was not overwritten')
 
+    # ---- Status: a pending field that changes GROUP MEMBERSHIP (2H) --------
+
+    STATUS_SECTION = '[data-prks-role="work-status-editor"]'
+
+    def set_status(self, page, value):
+        """The control is a segmented button group whose value lives on a
+        hidden input, so a user sets it by clicking, not by typing."""
+        page.locator('%s .prks-segmented__btn[data-value="%s"]' % (self.STATUS_SECTION, value)).click()
+
+    def save_status(self, page):
+        page.locator('#save-work-status-btn').click()
+
+    def progress_ids(self, page, status):
+        """The Work ids Progress shows for one status group."""
+        page.evaluate("s => prksNavigate('#/progress?status=' + encodeURIComponent(s))", status)
+        page.wait_for_function("""() => {
+            const el = document.querySelector('.prks-tile--main');
+            return !!el && !el.querySelector('.prks-route-loading');
+        }""")
+        page.wait_for_timeout(120)
+        return page.evaluate(
+            "() => Array.from(document.querySelectorAll('[data-work-id]')).map(el => el.dataset.workId)")
+
+    def card_badge(self, page, work_id):
+        return page.evaluate("""id => {
+            const el = document.querySelector('[data-work-id="' + id + '"] .status-badge');
+            return el ? el.textContent.trim() : '';
+        }""", work_id)
+
+    def cached_status(self, page, list_key, work_id):
+        return self.cached_list_field(page, list_key, work_id, 'status')
+
+    def warm_all_catalogs(self, page, work_id):
+        """All three browse snapshots on disk. A test that asserts a list was
+        patched must first have that list: a MISSING snapshot is left missing
+        by design, and asserting over one would pass or fail on whether the
+        route happened to be visited."""
+        self.progress_ids(page, 'In Progress')
+        o._wait_list_cached(page, 'works-browse:index')
+        page.evaluate("() => prksNavigate('#/recent')")
+        page.wait_for_selector('[data-work-id="%s"]' % work_id)
+        o._wait_list_cached(page, 'recent:index')
+        self.recently_added(page)
+        o._wait_list_cached(page, 'recently-added:index')
+
+    def test_a_pending_status_moves_the_work_between_progress_groups(self):
+        """The central case of this milestone. Every field before Status
+        changed what a card SAID; Status changes where the card IS. Progress
+        selects one group at a time, so a pending value has to make the Work
+        leave the group the server put it in and join the pending one --
+        before anything has been sent."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        # Work A is seeded "In Progress"; warm the catalog Progress reads.
+        self.assertIn(work, self.progress_ids(page, 'In Progress'))
+        o._wait_list_cached(page, 'works-browse:index')
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.set_status(page, 'Completed')
+        self.save_status(page)
+        self.pending(page, 1)
+        self.assertEqual(self.operations(page)[0]['payload'],
+                         {'field': 'status', 'value': 'Completed'})
+
+        self.assertNotIn(work, self.progress_ids(page, 'In Progress'),
+                         'the Work left the group the server put it in')
+        self.assertIn(work, self.progress_ids(page, 'Completed'),
+                      'and joined the pending one, before synchronizing')
+        self.assertEqual(self.cached_status(page, 'works-browse:index', work), 'In Progress',
+                         'the acknowledged catalog is untouched until the server answers')
+
+    def test_a_pending_status_badge_reaches_every_cached_surface(self):
+        """One offline edit, every representation that renders a badge: the
+        three browse catalogs and the Work summaries embedded in cached
+        Folder, Person and Playlist details."""
+        server, page, context = self.start()
+        work, person = server.ids['work_a'], server.ids['person']
+        playlist = page.evaluate("""async workId => {
+            const id = await createPlaylist('E2E Status Playlist', '');
+            await addWorkToPlaylist(id, workId);
+            return id;
+        }""", work)
+        self.warm_all_catalogs(page, work)
+        o._open_person(page, person)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        o._wait_entity_cached(page, 'person', person)
+        page.evaluate("id => prksNavigate('#/playlists/' + encodeURIComponent(id))", playlist)
+        page.wait_for_selector('.prks-playlist-detail')
+        o._wait_entity_cached(page, 'playlist', playlist)
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.set_status(page, 'Paused')
+        self.save_status(page)
+        self.pending(page, 1)
+
+        page.evaluate("() => prksNavigate('#/recent')")
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertEqual(self.card_badge(page, work), 'Paused', 'Recently opened')
+        self.recently_added(page)
+        self.assertEqual(self.card_badge(page, work), 'Paused', 'Recently added')
+        o._open_person(page, person)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertEqual(self.card_badge(page, work), 'Paused', 'the embedded Person summary')
+
+        for key in ('works-browse:index', 'recent:index', 'recently-added:index'):
+            self.assertEqual(self.cached_status(page, key, work), 'In Progress',
+                             '%s still holds what the server said' % key)
+        self.assertEqual(self.cached_person_work_field(page, person, work, 'status'), 'In Progress',
+                         'and so does the cached Person detail')
+
+    def test_the_status_overlay_survives_a_reload(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.progress_ids(page, 'In Progress')
+        o._wait_list_cached(page, 'works-browse:index')
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.set_status(page, 'Completed')
+        self.save_status(page)
+        self.pending(page, 1)
+
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.assertIn(work, self.progress_ids(page, 'Completed'),
+                      'membership is rebuilt from durable storage, not tab memory')
+        self.assertEqual(self.card_badge(page, work), 'Completed')
+        self.pending(page, 1)
+
+    def test_acknowledgement_keeps_the_work_in_its_new_group(self):
+        """Retiring the overlay must not flicker the Work back: the
+        acknowledged rows are patched to the value the overlay was already
+        showing, so nothing visibly changes when the server answers."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.warm_all_catalogs(page, work)
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.set_status(page, 'Completed')
+        self.save_status(page)
+        self.pending(page, 1)
+        self.reconnect(page, context)
+        self.pending(page, 0)
+
+        self.assertEqual(self.server_fields(server, work)['status'],
+                         {'value': 'Completed', 'revision': 1})
+        for key in ('works-browse:index', 'recent:index', 'recently-added:index'):
+            self.assertEqual(self.cached_status(page, key, work), 'Completed',
+                             '%s was patched, not dropped' % key)
+        self.assertIn(work, self.progress_ids(page, 'Completed'),
+                      'the Work stayed where the overlay had already put it')
+        self.assertNotIn(work, self.progress_ids(page, 'In Progress'))
+
+    def test_a_status_conflict_uses_the_existing_field_level_ux(self):
+        """Two devices genuinely disagreed about this Work's status, so the
+        user decides -- and only about Status. No new conflict architecture."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.offline(page, context)
+        self.set_status(page, 'Completed')
+        self.field(page, 'doi', 'device-doi')
+        self.save_status(page)
+        self.save(page)
+        self.pending(page, 2)
+
+        self.db_for(server).update_work_metadata(work, {'status': 'Paused'})
+        self.reconnect(page, context)
+        self.settled_conflicts(page, 1)
+
+        conflicted = [op for op in self.operations(page) if op['status'] == 'conflict']
+        self.assertEqual(len(conflicted), 1)
+        self.assertEqual(conflicted[0]['payload']['field'], 'status')
+        self.assertEqual(conflicted[0]['server_result']['current_value'], 'Paused')
+        self.assertEqual(self.server_fields(server, work)['doi']['value'], 'device-doi',
+                         'the field that did not collide synchronized normally')
+
+        # The conflict is reported by the Status group, not the bibliographic one.
+        status_text = page.locator('[data-prks-role="work-status-sync"]').inner_text()
+        self.assertIn('Paused', status_text)
+        self.assertIn('Completed', status_text)
+        self.assertNotIn('Paused', page.locator('[data-prks-role="work-bib-sync"]').inner_text())
+        for label in ('Use server', 'Apply my value'):
+            self.assertEqual(page.locator('%s button' % self.STATUS_SECTION,
+                                          has_text=label).count(), 1, label)
+
+        page.locator('%s button' % self.STATUS_SECTION, has_text='Apply my value').click()
+        # Wait in the BROWSER, not by polling the database: constructing a
+        # PRKSDatabase per poll contends with the server's own writer, which is
+        # exactly the commit being waited for.
+        self.pending(page, 0)
+        self.assertEqual(self.server_fields(server, work)['status'],
+                         {'value': 'Completed', 'revision': 2})
+
+    def test_a_bulk_status_change_conflicts_with_an_offline_device(self):
+        """The bulk action is an ordinary canonical mutation: it advances the
+        same revision this device observed, so an edit made while away is a
+        real disagreement rather than a silent overwrite."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.offline(page, context)
+        self.set_status(page, 'Completed')
+        self.save_status(page)
+        self.pending(page, 1)
+
+        self.db_for(server).bulk_update_works(
+            {'work_ids': [work], 'action': 'set_status', 'status': 'Paused'})
+        self.reconnect(page, context)
+        self.settled_conflicts(page, 1)
+        result = self.operations(page)[0]['server_result']
+        self.assertEqual(result['code'], 'REVISION_CONFLICT')
+        self.assertEqual(result['current_value'], 'Paused')
+        self.assertEqual(self.server_fields(server, work)['status']['value'], 'Paused',
+                         'the away device did not overwrite the bulk change')
+
+    def test_status_left_the_online_save(self):
+        """One mutation path, online and offline. Two would mean the one that
+        is not revision-aware silently overwrites the other's conflicts."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        seen = self.record_paths(page)
+        self.set_status(page, 'Planned')
+        self.save_status(page)
+        self.pending(page, 0)
+        self.assertEqual([url for method, url in seen if method == 'PATCH'], [],
+                         'a status change is never a PATCH, even online')
+        self.assertEqual(self.server_fields(server, work)['status'],
+                         {'value': 'Planned', 'revision': 1})
+
     def test_location_is_detail_only_and_leaves_recently_added_alone(self):
         """The control case: expanding the field family must not make every
         field invalidate every projection."""

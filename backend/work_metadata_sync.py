@@ -44,7 +44,30 @@ import json
 # another.
 MAX_ABSTRACT_UTF8_BYTES = 1024 * 1024
 
+# The canonical Work statuses. This lives HERE, in the field-synchronization
+# domain, rather than in db_manager: PATCH, the bulk action and the sync
+# handler must all decide validity the same way, and db_manager already
+# imports this module (the reverse would be a cycle). `db_manager` re-exports
+# it as PRKS_WORK_STATUSES so existing callers are unaffected.
+WORK_STATUSES = (
+    "Not Started",
+    "Planned",
+    "In Progress",
+    "Completed",
+    "Paused",
+)
+WORK_STATUS_SET = frozenset(WORK_STATUSES)
+
+# A synchronized field is validated either by SIZE or by an ALLOWLIST. Status
+# is the first of the second kind: its legal values are an enumeration the
+# whole application shares, and a free-text length bound would say nothing
+# about whether a value is meaningful.
+FIELD_ALLOWLISTS = {
+    "status": WORK_STATUS_SET,
+}
+
 SYNCED_FIELDS = {
+    "status": None,
     "abstract": MAX_ABSTRACT_UTF8_BYTES,
     "year": 50,
     "published_date": 40,
@@ -100,12 +123,17 @@ FIELD_PROJECTIONS = {
     # SUMMARY_FIELDS, which those entity snapshots carry verbatim.
     "year": BROWSE_LISTS,
     "published_date": BROWSE_LISTS,
+    # Status is not only a badge on every Work card: it decides which GROUP a
+    # Work belongs to on Progress, which reads `works-browse:index`. A pending
+    # Status therefore has to reach these rows before the route filters them,
+    # or the Work stays in the group the server last knew about.
+    "status": BROWSE_LISTS,
 }
 
 # Fields that cached ENTITY snapshots embed as part of a Work summary:
 # `folder.works[]`, `person.works[]`, `playlist.items[]`. A pending value has to
 # reach those rows too, and an acknowledgement has to patch them.
-SUMMARY_FIELDS = frozenset({"year", "published_date", "publisher"})
+SUMMARY_FIELDS = frozenset({"status", "year", "published_date", "publisher"})
 SUMMARY_ENTITY_KINDS = ("folder", "person", "playlist")
 
 
@@ -115,8 +143,27 @@ def scope_key(work_id, field):
     return json.dumps([work_id, field], ensure_ascii=True, separators=(",", ":"))
 
 
+def is_valid_field_value(field, value):
+    """The ONE rule every mutation path asks. The sync handler, the ordinary
+    PATCH and the bulk action must not be able to disagree about whether a
+    value is acceptable: a value savable by one path and refused by another is
+    the split contract moving a field to local-first exists to remove.
+
+    The SQLite CHECK constraint is a last line of defence, not the first: it
+    reports an IntegrityError rather than a field-specific refusal, and it
+    cannot tell the client which value it should have sent.
+    """
+    allowed = FIELD_ALLOWLISTS.get(field)
+    if allowed is not None:
+        return canonical(value) in allowed
+    return within_limit(field, value)
+
+
 def within_limit(field, value):
     limit = SYNCED_FIELDS[field]
+    if limit is None:
+        # An allowlisted field has no size rule; asking for one is a bug.
+        raise ValueError("%s is validated by allowlist, not by size" % field)
     text = canonical(value)
     if field not in BYTE_LIMITED_FIELDS:
         return len(text) <= limit
@@ -223,7 +270,7 @@ def validate(op):
     # a way to reach fields this milestone deliberately does not synchronize.
     if not isinstance(field, str) or field not in SYNCED_FIELDS:
         raise ValueError("INVALID_ENVELOPE")
-    if not isinstance(value, str) or not within_limit(field, value):
+    if not isinstance(value, str) or not is_valid_field_value(field, value):
         raise ValueError("INVALID_ENVELOPE")
     # A scalar edit is optimistic-concurrency controlled: a null base revision
     # is a client that cannot detect a conflict, which would silently overwrite

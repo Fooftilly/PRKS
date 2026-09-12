@@ -3398,7 +3398,6 @@ async function submitWorkMetaEdit(workId) {
     if (!draft) return;
     const payload = {
         title: draft.title,
-        status: draft.status,
         doc_type: draft.doc_type || 'article',
         thumb_page: (() => {
             const raw = String(draft.thumb_page || '').trim();
@@ -3409,6 +3408,10 @@ async function submitWorkMetaEdit(workId) {
             return i >= 1 ? i : null;
         })(),
     };
+    // Status is deliberately absent: it takes the durable semantic queue
+    // through "Save status", online and offline, because a pending Status has
+    // to move the Work between Progress groups before the server has heard
+    // about it.
     // Year and Published Date are deliberately absent: they take the durable
     // semantic queue through "Save bibliographic details", online and offline.
     // Sending them here as well would give the same fields two mutation paths,
@@ -3976,6 +3979,10 @@ function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, va
     const hiddenExtra = [
         opts.dataField ? ` data-field="${prksEscapeAttr(opts.dataField)}"` : '',
         opts.dataRole ? ` data-role="${prksEscapeAttr(opts.dataRole)}"` : '',
+        // The hidden input IS the field control as far as the synchronized
+        // metadata editor is concerned: it holds the value, and the buttons
+        // are its presentation.
+        opts.workField ? ` data-prks-work-field="${prksEscapeAttr(opts.workField)}"` : '',
     ].join('');
     return `<div class="prks-segmented-wrap${wrapMod}">
     <input type="hidden" id="${prksEscapeAttr(hiddenId)}" value="${prksEscapeAttr(sel)}"${hiddenExtra}>
@@ -4559,10 +4566,29 @@ function renderWorkMetaEditTab(work, draft) {
             <input type="url" id="meta-source-url" placeholder="https://…" value="${safeStr(work.source_url)}" autocomplete="off">
             <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web.</p>
         `;
-    /* The ten synchronized fields are their own section with their own Save.
-     * One button must not quietly mean "ten fields into the durable local
-     * queue, the rest over HTTP, either half able to fail alone" -- that is a
-     * partial-save contract nobody could explain afterwards. */
+    /* Status has its own bounded Save. It is not a bibliographic detail -- it
+     * decides which Progress group the Work appears in -- so it must not ride
+     * along on a button labelled "Save bibliographic details", and the
+     * bibliographic fields must not ride along on this one. Both are durable
+     * and behave identically online and offline. */
+    const statusSection = `
+            <section class="work-meta-editor__section" data-prks-role="work-status-editor">
+                <h4>Progress</h4>
+                <div class="prks-work-upload-status-field">
+                    <label for="meta-status">Status</label>
+                    ${prksSegmentedControlHtml('meta-status', 'Status', PRKS_WORK_STATUS_LABELS, work.status, 'status', { workField: 'status' })}
+                </div>
+                <div class="prks-form-actions form-actions">
+                    <button type="button" id="save-work-status-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}', 'status')">Save status</button>
+                </div>
+                <div class="meta-row" data-prks-role="work-status-sync" aria-live="polite"></div>
+            </section>
+        `;
+    /* The synchronized bibliographic fields are their own section with their
+     * own Save. One button must not quietly mean "these fields into the
+     * durable local queue, the rest over HTTP, either half able to fail
+     * alone" -- that is a partial-save contract nobody could explain
+     * afterwards. */
     const syncedBibSection = isVideo
         ? ''
         : `
@@ -4626,11 +4652,6 @@ function renderWorkMetaEditTab(work, draft) {
             <section class="work-meta-editor__section"><h4>Identity &amp; progress</h4><label for="meta-title">Title</label>
             <input type="text" id="meta-title" value="${safeStr(work.title)}">
             
-            <div class="prks-work-upload-status-field">
-                <label for="meta-status">Status</label>
-                ${prksSegmentedControlHtml('meta-status', 'Status', PRKS_WORK_STATUS_LABELS, work.status, 'status')}
-            </div>
-
             <label for="meta-doc-type-trigger">Document type (BibLaTeX)</label>
             ${metaDocMenu}
             </section>
@@ -4640,6 +4661,7 @@ function renderWorkMetaEditTab(work, draft) {
 
             ${bibFields}
             </section>
+            ${statusSection}
             ${syncedBibSection}
             <section class="work-meta-editor__section"><h4>Presentation</h4>
             ${thumbField}

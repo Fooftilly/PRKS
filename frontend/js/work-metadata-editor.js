@@ -25,6 +25,48 @@
     }
     function panelOf() { return document.getElementById('panel-content'); }
 
+    /* Each durable Save covers EXACTLY the fields in its own section. Status
+     * decides which Progress group a Work belongs to, which is not a
+     * bibliographic edit and must not ride along on a button labelled "Save
+     * bibliographic details" -- nor the reverse. One button that quietly meant
+     * "these fields plus that one" is the mixed-atomicity contract 2D removed
+     * from the online save; reintroducing it inside the durable path would be
+     * the same mistake with better storage.
+     *
+     * Which fields belong to a group is read from the DOM rather than listed
+     * here, so the control's position IS the answer and the two cannot drift. */
+    const SAVE_GROUPS = Object.freeze([
+        { name: 'bib', role: 'work-bib-editor', saveId: 'save-work-bib-btn',
+          syncRole: 'work-bib-sync',
+          failure: 'Could not save these details locally. Please retry.' },
+        { name: 'status', role: 'work-status-editor', saveId: 'save-work-status-btn',
+          syncRole: 'work-status-sync',
+          failure: 'Could not save the status locally. Please retry.' },
+    ]);
+
+    function groupSection(group) {
+        const panel = panelOf();
+        return panel && panel.querySelector('[data-prks-role="' + group.role + '"]');
+    }
+
+    function groupInputs(section) {
+        return Array.prototype.slice.call(section.querySelectorAll('[data-prks-work-field]'));
+    }
+
+    function groupOperations(state, section) {
+        const fields = groupInputs(section).map(input => input.dataset.prksWorkField);
+        return state.operations.filter(op => fields.indexOf(op.payload.field) !== -1);
+    }
+
+    function errorFor(state, group) {
+        return (state.errors && state.errors[group.name]) || null;
+    }
+
+    function setError(state, group, text) {
+        if (!state.errors) state.errors = {};
+        state.errors[group.name] = text;
+    }
+
     function statusText(ops) {
         if (ops.some(o => o.status === 'conflict')) return 'Some fields need your decision below.';
         if (ops.some(o => o.status === 'syncing')) return 'Syncing…';
@@ -61,34 +103,53 @@
         if (!owns(ctx, state)) return;
         await repaintDisplay(ctx, state);
         const panel = panelOf();
-        const section = panel && panel.querySelector('[data-prks-role="work-bib-editor"]');
-        if (!section) return;
+        if (!panel) return;
 
         const durable = typeof root.prksPendingWorkMetadataState === 'function'
             ? root.prksPendingWorkMetadataState() : 'ready';
         const readable = durable !== 'unavailable';
         const editable = !!state.observed && readable;
-        section.querySelectorAll('[data-prks-work-field]').forEach(input => {
-            const blocked = !editable || busy(state, input.dataset.prksWorkField);
-            input.disabled = blocked;
-            input.title = blocked
-                ? (!readable ? unreadable : (state.observed ? 'This field is syncing or needs resolution.' : unavailable))
-                : '';
-        });
-        const save = section.querySelector('#save-work-bib-btn');
-        if (save) save.disabled = !editable;
-
-        const status = section.querySelector('[data-prks-role="work-bib-sync"]');
-        if (!status) return;
-        status.replaceChildren();
         const blockedText = readable ? unavailable : unreadable;
-        status.appendChild(document.createTextNode(
-            state.error || (editable ? statusText(state.operations) : blockedText)));
 
-        for (const op of state.operations.filter(o => o.status === 'conflict')) {
-            status.appendChild(conflictRow(ctx, state, op));
+        for (const group of SAVE_GROUPS) {
+            const section = groupSection(group);
+            if (!section) continue;
+            groupInputs(section).forEach(input => {
+                const blocked = !editable || busy(state, input.dataset.prksWorkField);
+                input.disabled = blocked;
+                input.title = blocked
+                    ? (!readable ? unreadable : (state.observed ? 'This field is syncing or needs resolution.' : unavailable))
+                    : '';
+                /* A segmented control's field value lives on a HIDDEN input,
+                 * so disabling that alone leaves the buttons the user actually
+                 * clicks fully live -- a control that looks editable while its
+                 * save is refused. Disable the presentation with the value. */
+                const wrap = typeof input.closest === 'function'
+                    ? input.closest('.prks-segmented-wrap') : null;
+                if (wrap) {
+                    wrap.querySelectorAll('.prks-segmented__btn').forEach(btn => {
+                        btn.disabled = blocked;
+                        btn.title = input.title;
+                    });
+                }
+            });
+            const save = section.querySelector('#' + group.saveId);
+            if (save) save.disabled = !editable;
+
+            const status = section.querySelector('[data-prks-role="' + group.syncRole + '"]');
+            if (!status) continue;
+            /* A group reports only its OWN fields. A DOI conflict must not
+             * tell the user their Status needs a decision, and a Status
+             * conflict must not make the bibliographic group look broken. */
+            const ops = groupOperations(state, section);
+            status.replaceChildren();
+            status.appendChild(document.createTextNode(
+                errorFor(state, group) || (editable ? statusText(ops) : blockedText)));
+            for (const op of ops.filter(o => o.status === 'conflict')) {
+                status.appendChild(conflictRow(ctx, state, op, group));
+            }
         }
-        // Everything above the synchronized group still saves over HTTP.
+        // Everything outside the synchronized groups still saves over HTTP.
         const note = panel.querySelector('[data-prks-role="work-meta-online-only"]');
         const offline = root.prksOfflineRuntimeState() !== 'online';
         if (note) note.hidden = !offline;
@@ -137,7 +198,7 @@
         return bytes < 1024 ? bytes + ' bytes' : Math.ceil(bytes / 1024) + ' KB';
     }
 
-    function conflictRow(ctx, state, op) {
+    function conflictRow(ctx, state, op, group) {
         const result = op.server_result || {};
         const field = op.payload.field;
         const label = root.PRKS_SYNCED_WORK_FIELD_LABELS[field] || field;
@@ -165,12 +226,12 @@
                 label + ' could not synchronize (' + (result.code || 'protocol error') + '). '));
         }
         const reappliable = result.code === 'REVISION_CONFLICT' && Number.isSafeInteger(result.current_revision);
-        action(item, ctx, state, op, reappliable ? 'Use server' : 'Discard my value', false);
-        if (reappliable) action(item, ctx, state, op, 'Apply my value', true);
+        action(item, ctx, state, op, reappliable ? 'Use server' : 'Discard my value', false, group);
+        if (reappliable) action(item, ctx, state, op, 'Apply my value', true, group);
         return item;
     }
 
-    function action(item, ctx, state, op, label, apply) {
+    function action(item, ctx, state, op, label, apply, group) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'prks-btn prks-btn--secondary prks-btn--sm';
@@ -199,10 +260,10 @@
                     state.observed = null;
                 }
                 await root.prksSync.store.resolveConflict(op.op_id, apply);
-                state.error = null;
+                setError(state, group, null);
                 root.prksSync.changed();
             } catch (_) {
-                state.error = 'Could not save that resolution locally. Please retry.';
+                setError(state, group, 'Could not save that resolution locally. Please retry.');
             }
             await safePaint(ctx, state);
         };
@@ -266,23 +327,28 @@
     }
 
     /**
-     * One Save, one transaction, however many fields it touched. Only fields
-     * whose value actually differs from the observed server state become
-     * operations -- the form submits all ten every time, and ten
-     * operations per Save would be ten chances to conflict over nothing.
+     * One Save, one transaction, however many fields it touched -- and only the
+     * fields of ONE group. Only values that actually differ from the observed
+     * server state become operations: the form submits every field every time,
+     * and one operation per field per Save would be one chance to conflict
+     * over nothing per field.
      */
-    async function save(workId) {
+    async function save(workId, groupName) {
         const ctx = root.prksGetFocusedTabContext ? root.prksGetFocusedTabContext() : null;
         const state = ctx && ctx.getResource('workMetadataEditor');
         if (!state || !live(ctx, state) || state.workId !== workId) return;
-        const button = document.getElementById('save-work-bib-btn');
+        const group = SAVE_GROUPS.find(g => g.name === (groupName || 'bib'));
+        if (!group) return;
+        const section = groupSection(group);
+        if (!section) return;
+        const button = section.querySelector('#' + group.saveId);
         if (button && root.prksSetButtonBusy) root.prksSetButtonBusy(button, true, { busyLabel: 'Saving…' });
         try {
             if (state.preparing) await state.preparing;
             if (!state.observed) throw new Error('no observed base');
             clearFieldErrors();
             const draft = {};
-            document.querySelectorAll('[data-prks-work-field]').forEach(input => {
+            groupInputs(section).forEach(input => {
                 draft[input.dataset.prksWorkField] = input.value;
             });
             // A byte-limited field's acknowledged base lives on the Work
@@ -293,7 +359,7 @@
              * draft stays, and nothing is stored or sent. */
             for (const field of Object.keys(draft)) {
                 if (root.prksWorkFieldToCanonical(field, draft[field]) !== null) continue;
-                state.error = null;
+                setError(state, group, null);
                 showFieldError(field);
                 await safePaint(ctx, state);
                 return;
@@ -305,19 +371,19 @@
             for (const field of Object.keys(changes)) {
                 const tooLong = root.prksWorkFieldLimitError(field, changes[field]);
                 if (tooLong) {
-                    state.error = tooLong;
+                    setError(state, group, tooLong);
                     await safePaint(ctx, state);
                     return;
                 }
             }
             await root.prksSync.store.saveWorkMetadataFields(workId, changes, observed.fields);
-            state.error = null;
+            setError(state, group, null);
             await safePaint(ctx, state);
             root.prksSync.changed();
         } catch (error) {
-            state.error = error && error.prksLocalStoreCode === 'scope_busy'
+            setError(state, group, error && error.prksLocalStoreCode === 'scope_busy'
                 ? 'One of these fields is still syncing or needs a decision below.'
-                : 'Could not save these details locally. Please retry.';
+                : group.failure);
             await safePaint(ctx, state);
         } finally {
             if (button && root.prksSetButtonBusy) root.prksSetButtonBusy(button, false);

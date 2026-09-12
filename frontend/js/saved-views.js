@@ -135,10 +135,27 @@
     }
 
     function prksSearchResultCardsHtml(results, emptyMsg) {
+        /* Search and Saved View results come from the SERVER, so while a local
+         * edit is pending they still carry the acknowledged value -- a card
+         * here would show "Planned" seconds after the user set it to
+         * "Completed" everywhere else. One overlay for every synchronized
+         * field, applied where the cards are built, so this file never learns
+         * to read the durable queue and the fix is not Status-specific. The
+         * results array itself is never mutated. */
+        const rows = typeof root.prksEffectiveWorksSync === 'function'
+            ? root.prksEffectiveWorksSync(results) : results;
         let html = '<div class="card-grid">';
-        if (results && results.length > 0) {
-            results.forEach(function (w) {
-                const subtitle = w.abstract ? String(w.abstract).substring(0, 100) + '…' : '';
+        if (rows && rows.length > 0) {
+            rows.forEach(function (w) {
+                /* The server's own excerpt rule -- code points, not UTF-16
+                 * units -- so a pending Abstract is cut exactly where the
+                 * acknowledged one will be and the card does not shift at
+                 * acknowledgement. */
+                const subtitle = w.abstract
+                    ? (typeof root.prksAbstractExcerpt === 'function'
+                        ? root.prksAbstractExcerpt(w.abstract)
+                        : String(w.abstract).substring(0, 100)) + '…'
+                    : '';
                 html +=
                     typeof root.prksWorkCardHtml === 'function'
                         ? root.prksWorkCardHtml(w, { subtitle: subtitle })

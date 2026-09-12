@@ -1425,9 +1425,9 @@ The families are deliberately different in kind, and that is the point:
   revision would demand a resolution for a collision that never happened. Scope
   is `work-field / ["<work id>", "<field>"]` in the existing
   `sync_entity_revisions` table -- no schema change.
-- Twelve fields synchronize: `year`, `published_date` (2G), `abstract`,
-  `publisher`, `location`, `edition`, `journal`, `volume`, `issue`, `pages`,
-  `isbn`, `doi`.
+- Thirteen fields synchronize: `status` (2H), `year`, `published_date` (2G),
+  `abstract`, `publisher`, `location`, `edition`, `journal`, `volume`, `issue`,
+  `pages`, `isbn`, `doi`.
   `backend/work_metadata_sync.SYNCED_FIELDS` is the authority and the client
   list is pinned against it by `tests/test_frontend_work_metadata_sync.py`.
   Never accept a column name from a client.
@@ -1507,6 +1507,40 @@ The families are deliberately different in kind, and that is the point:
   `null` and the save is refused before enqueueing; never enqueue a value the
   server would have to guess at.
 
+### Group-changing fields (Milestone 2H)
+
+- **`status` changes where a card IS, not what it says.** Progress renders one
+  status at a time by filtering the rows the route hands it, so a pending
+  Status must make a Work LEAVE its acknowledged group and JOIN the pending
+  one, before sync and across a reload.
+- That needed no new mechanism: the route already overlays
+  `works-browse:index` with `prksEffectiveBrowseRows()` before calling
+  `renderProgressByStatus()`. Adding `status` to `FIELD_PROJECTIONS`,
+  `PROJECTION_COLUMNS` and `SUMMARY_FIELDS` was the whole propagation change.
+  **`progress.js` must never learn what a durable operation is** -- a second
+  opinion about pending state drifts from every other surface.
+- **The bulk action is a canonical mutation like any other.**
+  `bulk_update_works(action="set_status")` routes each Work through
+  `set_field_on_conn` inside its existing transaction. Writing the column
+  directly would change the value while leaving the revision, so a device
+  holding the pre-bulk Status would compare equal revisions, believe itself
+  current and overwrite the newer value. Only actual changes advance; values
+  and revisions roll back together.
+- **Validation is by ALLOWLIST, not length.** `is_valid_field_value()` is the
+  one rule the sync handler, the PATCH and the bulk action all ask. The SQLite
+  CHECK constraint is a last line of defence, not the first: it raises an
+  IntegrityError instead of telling the client what it should have sent.
+- **Status has its own bounded Save**, separate from "Save bibliographic
+  details". One durable button covering both would be the mixed-atomicity
+  contract 2D removed from the online save, rebuilt inside the durable path.
+  Each group reads its own fields from the DOM and reports only its own
+  conflicts.
+- **Server-backed Search and Saved View results are overlaid too**
+  (`prksEffectiveWorksSync()` inside `prksSearchResultCardsHtml()`). They are
+  fetched fresh, so without it a card shows the acknowledged Status seconds
+  after the user changed it everywhere else. It covers every synchronized
+  field, not Status alone.
+
 ### Local-first Work opens (Milestone 2C)
 
 - `last_opened_at` is a **max-register over event time**, not last-writer-wins.
@@ -1572,7 +1606,7 @@ Other mutations remain server-required. The implementation contract is in
   Work projections invalidate, including absent tombstones on delete/merge.
 - No offline Tag creation, Folder edits, Playlists, research-note editing,
   CRDTs, multi-user sync or server push. Open events joined the protocol in 2C
-  and twelve bibliographic fields in 2D/2E/2F/2G; nothing else has. `year` and
+  and thirteen Work fields in 2D/2E/2F/2G/2H; nothing else has. `year` and
   `published_date` (2G) are the high fan-out case: they reach all three browse
   catalogs AND the Work summaries embedded in cached Folder, Person and
   Playlist details, which are patched -- never invalidated -- under a
