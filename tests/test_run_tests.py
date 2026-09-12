@@ -110,6 +110,26 @@ class TestRunTests(unittest.TestCase):
         self.assertIn("e2e", src)
         self.assertIn("run.py", src)
 
+    def test_agents_documents_the_e2e_cadence_rule(self):
+        """The rule that keeps the inner loop cheap must stay written down.
+
+        A test cannot make an agent run fewer suites; it can stop the
+        instruction from being quietly dropped or softened, which is what would
+        actually cause the behaviour to drift back.
+        """
+        agents = os.path.join(_PROJECT_DIR, "AGENTS.md")
+        with open(agents, encoding="utf-8") as handle:
+            text = handle.read()
+        for phrase in (
+            "Do not run the full E2E suite during normal implementation iterations",
+            "Never run the full E2E suite while iterating",
+            "diagnose it using the individual test or module",
+        ):
+            self.assertIn(phrase, text, phrase)
+        # Stated where an agent starts reading, not only 1500 lines in.
+        self.assertLess(text.index("Never run the full E2E suite while iterating"),
+                        text.index("## Storage"))
+
 
 if __name__ == "__main__":
     unittest.main()

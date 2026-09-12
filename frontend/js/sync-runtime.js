@@ -179,6 +179,7 @@
             ADD_WORK_TAG: root.prksWorkTagSyncHandler,
             REMOVE_WORK_TAG: root.prksWorkTagSyncHandler,
             MARK_WORK_OPENED: root.prksWorkOpenSyncHandler,
+            SET_WORK_METADATA_FIELD: root.prksWorkMetadataSyncHandler,
         },
         lock: root.navigator.locks ? fn => root.navigator.locks.request('prks-sync', { ifAvailable: true }, lock => lock ? fn() : undefined) : null,
     });

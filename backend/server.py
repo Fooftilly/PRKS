@@ -1995,6 +1995,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.wfile.write(generated_bytes)
                 except Exception as exc:
                     self._send_internal_error(exc)
+            elif path.startswith('/api/works/') and path.endswith('/metadata-state') and len(path.split('/')) == 5:
+                data = db.get_work_metadata_state(path.split('/')[3])
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    etag = db.etag_for_representation("work-metadata-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/works/') and path.endswith('/tag-options') and len(path.split('/')) == 5:
                 data = db.get_work_tag_options(path.split('/')[3])
                 if data is None:

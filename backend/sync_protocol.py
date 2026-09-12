@@ -133,8 +133,9 @@ def process_operation(db, data):
 
 # Registration is explicit and lives here so the set of families PRKS accepts
 # is readable in one place. Handler modules import nothing from this one.
-from backend import work_open_sync, work_tag_sync  # noqa: E402
+from backend import work_metadata_sync, work_open_sync, work_tag_sync  # noqa: E402
 
 register("ADD_WORK_TAG", work_tag_sync.HANDLER)
 register("REMOVE_WORK_TAG", work_tag_sync.HANDLER)
 register("MARK_WORK_OPENED", work_open_sync.HANDLER)
+register("SET_WORK_METADATA_FIELD", work_metadata_sync.HANDLER)

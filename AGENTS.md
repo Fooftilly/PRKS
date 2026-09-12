@@ -6,6 +6,7 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 
 - Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`. UX Interaction Tour (separate, opt-in, artifact-producing): `python run_tests.py --ux-tour`.
 - Full E2E gate: `python tests/e2e/run.py --jobs 4`. Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow".
+- **Never run the full E2E suite while iterating.** Use the smallest relevant unit test, selftest, static-contract test or E2E module; run the complete parallel suite only once the milestone's implementation and targeted verification are done. Diagnose any failure it reports with the individual test or module, then rerun the full suite once the issue is fixed. See "E2E test workflow".
 - App, default for agents: `python prks_app.py --testing`
 - Real app or Compose: only with run-real authorization from the user
 
@@ -1320,7 +1321,8 @@ success):
 | `GET /api/works/:id` (a pure read, incl. every internal refresh) | — | — | — |
 | Work create | YES | — | YES |
 | Work delete | YES | YES | YES |
-| Work metadata / title / status / doc type | YES | YES | YES |
+| Work metadata (title / status / doc type / year / author) | YES | YES | YES |
+| The seven synchronized bibliographic fields | — | — | — |
 | Author **or Editor** role change | YES | YES | YES |
 | Person canonical first/last-name change | YES | YES | YES |
 | managed PDF save (`file_size_bytes`) | YES | YES | YES |
@@ -1388,9 +1390,13 @@ registration, never another branch in a growing conditional.
 | `backend/sync_protocol.py` | Envelope normalization, request hashing, the `sync_operations` ledger, OP_ID_REUSE, exact replay, `BEGIN IMMEDIATE`, dispatch |
 | `backend/work_tag_sync.py` | Work-Tag relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
 | `backend/work_open_sync.py` | `last_opened_at` max-register, clock-skew policy, MARK_WORK_OPENED handler |
+| `backend/work_metadata_sync.py` | Synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |
 | `frontend/js/sync-runtime.js` | Transport, claiming, backoff, Web Locks, replay, status transitions, retirement |
 | `frontend/js/work-tag-state.js` | Work-Tag overlay + `prksWorkTagSyncHandler` |
 | `frontend/js/work-open-state.js` | Recent overlay/merge + `prksWorkOpenSyncHandler` |
+| `frontend/js/work-metadata-state.js` | Field overlay/diff + `prksWorkMetadataSyncHandler` |
+| `frontend/js/work-metadata-editor.js` | Bibliographic group save + per-field conflict UI |
+| `frontend/js/sync-diagnostics.js` | Settings -> Diagnostics for every family |
 
 A handler decides what a server answer MEANS: `isResult` (is this a
 well-formed answer for this operation), `reconcile` (apply an acknowledgement
@@ -1399,15 +1405,47 @@ resolves, `{discard}` for one with no resolution worth offering). The
 coordinator must name no family and no result code beyond the envelope-level
 protocol errors; `tests/test_frontend_work_open_sync.py` pins that.
 
-The two families are deliberately different in kind, and that is the point:
+The families are deliberately different in kind, and that is the point:
 
-| | Work Tags | Work opens |
-| --- | --- | --- |
-| Concurrency | revisioned relationship, `base_revision` required | none, `base_revision` must be null |
-| Two devices disagreeing | genuinely possible | impossible |
-| Terminal outcomes | REVISION_CONFLICT / TAG_MERGED / TAG_DELETED / ENTITY_NOT_FOUND, all resolved by the user | ENTITY_NOT_FOUND only, consumed silently |
-| Local failure to persist | must be reported; never claim success | best-effort; must never block opening the Work |
-| Convergence | last explicit resolution wins | max-register over normalized `occurred_at` |
+| | Work Tags | Work opens | Work metadata fields |
+| --- | --- | --- | --- |
+| Conflict scope | one Work/Tag relationship | none | one FIELD of one Work |
+| Concurrency | `base_revision` required | must be null | `base_revision` required |
+| Two devices disagreeing | genuinely possible | impossible | possible, but only per field |
+| Terminal outcomes | REVISION_CONFLICT / TAG_MERGED / TAG_DELETED / ENTITY_NOT_FOUND | ENTITY_NOT_FOUND only, consumed silently | REVISION_CONFLICT / FUTURE_REVISION / ENTITY_NOT_FOUND, all resolved by the user |
+| Local failure to persist | must be reported | best-effort; never blocks opening the Work | must be reported |
+| Convergence | last explicit resolution wins | max-register over `occurred_at` | last explicit resolution wins, per field |
+
+### Field-scoped Work metadata (Milestone 2D)
+
+- **The conflict unit is a FIELD, not a Work.** Two devices editing `doi` and
+  `isbn` on the same Work have not disagreed about anything; one Work-level
+  revision would demand a resolution for a collision that never happened. Scope
+  is `work-field / ["<work id>", "<field>"]` in the existing
+  `sync_entity_revisions` table -- no schema change.
+- Exactly seven fields synchronize: `edition`, `journal`, `volume`, `issue`,
+  `pages`, `isbn`, `doi`. `backend/work_metadata_sync.SYNCED_FIELDS` is the
+  authority and the client list is pinned against it by
+  `tests/test_frontend_work_metadata_sync.py`. Never accept a column name from
+  a client.
+- **Store exactly what a PATCH would store.** No case folding, no ISBN
+  punctuation rewriting, no page-range parsing, no whitespace stripping --
+  synchronization is not a licence to start normalizing values PRKS never
+  normalized. SQLite NULL and `""` are one logical value.
+- `update_work_metadata()` advances the same revisions, for changed fields
+  only, in one transaction with the value write. Revisions are canonical
+  history, not sync-endpoint history: a value stored without its revision is
+  exactly what makes every other device's staleness check lie.
+- `GET /api/works/:id/metadata-state` is its own projection, cached as
+  `work-metadata-state`. Do not move revisions onto the Work detail.
+- One Save is one IndexedDB transaction across every changed field. "Changed"
+  is measured against what the form was SHOWING (pending value, else server
+  value), not against the server base -- otherwise editing back to the server
+  value strands the pending operation.
+- A conflicted or possibly-sent field is busy; the other six stay editable.
+- The seven fields are rendered on the Work detail and nowhere else, which is
+  why they need no cross-projection overlay. Before adding a field here, check
+  the fan-out table in [docs/local-first-sync.md](docs/local-first-sync.md).
 
 ### Local-first Work opens (Milestone 2C)
 
@@ -1472,9 +1510,9 @@ Other mutations remain server-required. The implementation contract is in
   Tag catalog copy. Catalog edits invalidate tags, relationship edits do not.
   `work-tag-options` is per Work and contains no catalog ETag. Only affected
   Work projections invalidate, including absent tombstones on delete/merge.
-- No offline Tag creation, Folder or metadata edits, Playlists, research-note
-  editing, CRDTs, multi-user sync or server push. Open events joined the
-  protocol in 2C; nothing else has.
+- No offline Tag creation, Folder edits, Playlists, research-note editing,
+  CRDTs, multi-user sync or server push. Open events joined the protocol in 2C
+  and seven bibliographic fields in 2D; nothing else has.
 
 **Tag identity is persistent.** Only `delete_tag()` and `merge_tags_into()`
 may destroy or transform a Tag. Removing a tag from a Work or Folder, deleting
@@ -1539,21 +1577,32 @@ The E2E performance milestone is closed. Console suppression ignores only
 `blob:` resource failures containing `ERR_FILE_NOT_FOUND`; other blob errors
 remain failures. Do not broaden that teardown exception.
 
-Agent inner loop. Do not run the full E2E suite after every edit. Run
-`python run_tests.py`, the relevant Node/static selftests, and only the affected
-E2E class or module — a Playlist change runs `tests.e2e.test_playlists_offline`
-plus the specific Work/Playlist scenarios; a Concept change runs
-`OfflineConceptTests`.
+### When to run what
 
-Milestone completion. The full parallel suite is mandatory before declaring a
-milestone complete, alongside the ordinary unit/selftest gates:
+**Do not run the full E2E suite during normal implementation iterations.** While
+developing, run the smallest relevant unit test, Node selftest,
+static-contract test, or E2E module. Run the complete parallel E2E suite only
+after the milestone's implementation and targeted verification are complete. If
+the full suite finds a failure, diagnose it using the individual test or module
+and rerun the complete suite only after the issue is resolved.
+
+Inner loop, by example: a Playlist change runs `tests.e2e.test_playlists_offline`
+plus the specific Work/Playlist scenarios; a Concept change runs
+`OfflineConceptTests`; a sync change runs its family's selftest and E2E module.
+
+Milestone completion, in this order:
 
 ```
 python run_tests.py
 python tests/e2e/run.py --jobs 4
 ```
 
-The optimization is faster execution, not less verification.
+A full run costs several minutes of wall clock and saturates the machine, so
+repeating it to find a failure you could have reproduced in seconds is the
+expensive way to learn the same thing. The optimization is faster execution,
+not less verification: the full suite is still mandatory before declaring a
+milestone complete, and a failure it reports is never dismissed without being
+reproduced and classified.
 
 Worker count, measured on a 12-core development machine over the full 418-test
 suite: serial 1131s; `--jobs 2` 652s; `--jobs 3` 422s; `--jobs 4` 315-370s

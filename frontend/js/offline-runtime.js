@@ -408,6 +408,46 @@
             return true;
         }
 
+        /* Reconcile one acknowledged field edit into both cached records that
+         * carry it: the Work itself and its metadata-state projection.
+         *
+         * Both generations are bumped BEFORE the reads, so a GET that began
+         * earlier cannot publish its pre-acknowledgement body over either. A
+         * missing base stays missing -- one field is not enough to invent a
+         * Work from -- and a partial write is reported as failure so the
+         * caller keeps the durable operation and replays it.
+         */
+        async function reconcileWorkField(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.work_id;
+            const kinds = ['work', 'work-metadata-state'];
+            const tokens = kinds.map(function (kind) {
+                const token = currentEntityGeneration(kind, id) + 1;
+                entityCoherence.set(entityKey(kind, id), token);
+                return token;
+            });
+            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
+            const work = snapshots[0] && snapshots[0].value;
+            const state = snapshots[1] && snapshots[1].value;
+            if (state) {
+                if (typeof root.prksIsWorkMetadataStateShape === 'function' &&
+                    !root.prksIsWorkMetadataStateShape(state, id)) return false;
+                const entry = state.fields[result.field];
+                if (!entry) return false;
+                // An acknowledgement older than what the cache already holds
+                // has been superseded; applying it would move the field back.
+                if (entry.revision > result.server_revision) return true;
+                entry.value = result.value;
+                entry.revision = result.server_revision;
+            }
+            if (work) work[result.field] = result.value;
+            const values = [work, state];
+            for (let i = 0; i < kinds.length; i++) {
+                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
+            }
+            return true;
+        }
+
         /* Reconcile an acknowledged open event into the cached Recent list.
          *
          * The domain generation is bumped BEFORE the read, so a GET /api/recent
@@ -706,6 +746,7 @@
             readThroughEntity: readThroughEntity,
             readThroughList: readThroughList,
             reconcileWorkTag,
+            reconcileWorkField,
             reconcileRecentOpen,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
@@ -908,6 +949,7 @@
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
         prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
+        prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineMarkTagsChanged: () => production.markDomainChanged('tags', { entityKinds: [], listKeys: ['tags:index'] }),
         prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,

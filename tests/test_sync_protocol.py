@@ -3,7 +3,7 @@ import tempfile
 import unittest
 import uuid
 
-from backend import sync_protocol, work_open_sync, work_tag_sync
+from backend import sync_protocol, work_metadata_sync, work_open_sync, work_tag_sync
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 
@@ -24,7 +24,8 @@ class SyncProtocolTests(unittest.TestCase):
 
     def test_registered_families(self):
         self.assertEqual(sorted(sync_protocol.supported_operations()),
-                         ["ADD_WORK_TAG", "MARK_WORK_OPENED", "REMOVE_WORK_TAG"])
+                         ["ADD_WORK_TAG", "MARK_WORK_OPENED", "REMOVE_WORK_TAG",
+                          "SET_WORK_METADATA_FIELD"])
 
     def test_unregistered_operation_is_refused_and_unledgered(self):
         """A family the server does not implement must not reach a handler, and
@@ -78,6 +79,6 @@ class SyncProtocolTests(unittest.TestCase):
     def test_domain_modules_do_not_reimplement_the_protocol(self):
         """Ledger, hashing and dispatch belong to exactly one module. A family
         that grew its own copy would drift from the others silently."""
-        for module in (work_tag_sync, work_open_sync):
+        for module in (work_tag_sync, work_open_sync, work_metadata_sync):
             for name in ("process_operation", "insert_result", "normalize_envelope", "request_hash"):
                 self.assertFalse(hasattr(module, name), module.__name__ + "." + name)

@@ -30,7 +30,11 @@
         const work = ctx.getEntity('work');
         const effective = { ...work, tags: root.prksEffectiveWorkTags(work, state.operations) };
         const editable = ctx.ui.workDetailsMode === 'tags';
-        list.innerHTML = root.renderWorkTagsChips(effective, { editable });
+        // Identical markup is not a repaint. Rewriting innerHTML needlessly
+        // churns the DOM other tiles may be reading, and the first paint now
+        // produces exactly what the panel was rendered with.
+        const chips = root.renderWorkTagsChips(effective, { editable });
+        if (list.innerHTML !== chips) list.innerHTML = chips;
         list.querySelectorAll('[data-tag-id]').forEach(button => {
             button.disabled = !state.options || blocked(state, button.dataset.tagId);
             if (button.disabled) button.title = state.options ? 'This change is syncing or needs resolution.' : unavailable;
@@ -167,7 +171,14 @@
         if (!state || state.workId !== workId || state.generation !== ctx.generation) {
             state = { workId, generation: ctx.generation, operations: [], options: null, catalog: null, error: null };
             const unsubscribe = root.prksSync.subscribe(event => {
-                if (event.acknowledged) acceptAck(ctx, state, event.acknowledged);
+                /* Only THIS family's acknowledgements. The durable queue is
+                 * shared, and another family's ACK carries no tag_id -- feeding
+                 * it to acceptAck() bumps readVersion, which silently cancels
+                 * an in-flight prepare() and leaves the picker disabled with no
+                 * catalog and nothing to retry it. */
+                if (event.acknowledged && ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(event.operation)) {
+                    acceptAck(ctx, state, event.acknowledged);
+                }
                 void paint(ctx, state).catch(() => {});
             });
             ctx.setResource('workTagEditor', state, unsubscribe);
@@ -206,44 +217,6 @@
             await paint(ctx, state);
         }
     }
-    /* Diagnostics lists every family, so the label cannot assume Work Tags. */
-    function operationLabel(op) {
-        if (op.operation === 'MARK_WORK_OPENED') {
-            const item = op.local_context && op.local_context.recent_item;
-            return 'Opened ' + ((item && item.title) || 'a file');
-        }
-        const tag = op.local_context && op.local_context.tag;
-        return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') + ((tag && tag.name) || 'Tag');
-    }
-    root.prksRenderSyncDiagnostics = async host => {
-        let section = host.parentElement.querySelector('[data-sync-diagnostics]');
-        if (!section) { section = document.createElement('div'); section.dataset.syncDiagnostics = ''; host.after(section); }
-        section.replaceChildren();
-        const operations = (await root.prksSync.store.listOperations()).filter(op => op.status !== 'acknowledged');
-        for (const op of operations) {
-            const row = document.createElement('p');
-            const link = document.createElement('a');
-            link.href = '#/works/' + encodeURIComponent(op.entity_id);
-            link.textContent = operationLabel(op);
-            row.append(link, document.createTextNode(' · ' + statusText([op]) + ' '));
-            if (op.status === 'conflict') {
-                const discard = document.createElement('button'); discard.type = 'button';
-                discard.className = 'prks-btn prks-btn--secondary prks-btn--sm'; discard.textContent = 'Discard local change';
-                discard.onclick = async () => {
-                    discard.disabled = true;
-                    try {
-                        root.prksOfflineMarkEntityChanged('work', op.entity_id);
-                        root.prksOfflineMarkEntityChanged('work-tag-options', op.entity_id);
-                        await root.prksSync.store.resolveConflict(op.op_id, false);
-                        root.prksSync.changed();
-                        await root.prksRenderSyncDiagnostics(host);
-                    } catch (_) { discard.disabled = false; discard.textContent = 'Could not discard; retry'; }
-                };
-                row.appendChild(discard);
-            }
-            section.appendChild(row);
-        }
-    };
     root.prksMountWorkTags = mount;
     root.prksWorkTagEdit = edit;
 })(typeof window === 'undefined' ? globalThis : window);

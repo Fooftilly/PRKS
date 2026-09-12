@@ -61,6 +61,7 @@
         'MARK_WORK_OPENED',
         'ADD_WORK_TAG',
         'REMOVE_WORK_TAG',
+        'SET_WORK_METADATA_FIELD',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -160,6 +161,31 @@
             } else bytes += 3;
         }
         return bytes;
+    }
+
+    /* The UNION of the structured-result keys every operation family persists.
+     * An allowlist rather than "any small object" on purpose: a raw response
+     * body must never end up in durable local storage, where it could carry
+     * anything the server happened to say. A new family adds its keys here
+     * deliberately, and the values stay scalar and bounded so an allowed key
+     * name cannot smuggle a nested payload through.
+     *
+     *   all families        code
+     *   Work Tags           current_revision, current_state, requested_state, target_tag_id
+     *   Work metadata       current_revision, current_value, requested_value
+     */
+    const STRUCTURED_RESULT_KEYS = Object.freeze([
+        'code', 'current_revision', 'current_state', 'requested_state', 'target_tag_id',
+        'current_value', 'requested_value',
+    ]);
+    const MAX_RESULT_BYTES = 2048;
+
+    function isValidStructuredResult(value) {
+        if (!isPlainObject(value)) return false;
+        const entries = Object.entries(value);
+        if (entries.some(([key, entry]) => STRUCTURED_RESULT_KEYS.indexOf(key) === -1 ||
+            (entry !== null && typeof entry === 'object'))) return false;
+        return jsonByteLength(value) <= MAX_RESULT_BYTES;
     }
 
     /** Thrown for anything the caller could have prevented; carries a code. */
@@ -660,6 +686,62 @@
             });
         }
 
+        /* One Save, one transaction, however many fields it touched.
+         *
+         * The user pressed a single button. Durably storing three of their
+         * four edits and then reporting "Saved locally" would be a lie that
+         * only shows up later, so every field in one save commits together or
+         * none of them does -- IndexedDB gives us that for free, as long as
+         * the whole batch is one transaction.
+         *
+         * `changes` is field -> desired value; `base` is the observed server
+         * state (field -> {value, revision}). Fields whose canonical value
+         * already matches the base produce nothing. Returns the list of
+         * operations that exist for these fields afterwards.
+         */
+        function saveWorkMetadataFields(workId, changes, base) {
+            if (!isNonBlankString(workId) || !isPlainObject(changes) || !isPlainObject(base)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid metadata save.'));
+            }
+            for (const field of Object.keys(changes)) {
+                const observed = base[field];
+                if (typeof changes[field] !== 'string' || !isPlainObject(observed) ||
+                    typeof observed.value !== 'string' ||
+                    !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                    return Promise.reject(localStoreError('invalid_base', 'Invalid observed field state.'));
+                }
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                const written = [];
+                for (const field of Object.keys(changes)) {
+                    const desired = changes[field];
+                    const observed = base[field];
+                    const existing = rows.find(r => r.operation === 'SET_WORK_METADATA_FIELD' &&
+                        r.entity_type === 'work' && r.entity_id === workId &&
+                        r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        /* Only a NEVER SENT row may be rewritten. A retry after
+                         * a lost response might already be ledgered, and a
+                         * conflict is the user's to resolve -- but this is one
+                         * field, so every other field stays editable. */
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy', 'This field is syncing or needs resolution.');
+                        }
+                        if (existing.payload.value === desired) { written.push(existing); continue; }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    // Editing back to the observed value leaves no intent at all.
+                    if (desired === observed.value) continue;
+                    written.push(await insertEnvelopeIn(request, {
+                        operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: workId,
+                        payload: { field, value: desired }, base_revision: observed.revision,
+                    }, null));
+                }
+                setResult(written);
+            });
+        }
+
         /* Explicit user resolution, atomically retires the conflict and, when
          * requested, creates a NEW envelope against the observed server base. */
         function resolveConflict(opId, apply) {
@@ -779,8 +861,7 @@
                     }
                     if (Object.prototype.hasOwnProperty.call(changes, 'server_result')) {
                         const value = changes.server_result;
-                        const allowed = ['code', 'current_revision', 'current_state', 'requested_state', 'target_tag_id'];
-                        if (value !== null && (!isPlainObject(value) || Object.keys(value).some(k => !allowed.includes(k)) || jsonByteLength(value) > 2048)) {
+                        if (value !== null && !isValidStructuredResult(value)) {
                             throw localStoreError('invalid_result', 'Invalid structured server result.');
                         }
                         next.server_result = value == null ? null : JSON.parse(JSON.stringify(value));
@@ -914,7 +995,7 @@
         return {
             getOrCreateDeviceId: getOrCreateDeviceId,
             enqueueOperation: enqueueOperation,
-            coalesceWorkTag, recordWorkOpened, resolveConflict, claimOperation,
+            coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, resolveConflict, claimOperation,
             getOperation: getOperation,
             listOperations: listOperations,
             updateOperationSyncState: updateOperationSyncState,

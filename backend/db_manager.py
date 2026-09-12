@@ -14,7 +14,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import work_open_sync, work_tag_sync
+from backend import work_metadata_sync, work_open_sync, work_tag_sync
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_annotations import (
@@ -2377,12 +2377,36 @@ class PRKSDatabase:
                     updates['thumb_page'] = None
         if not updates:
             return
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [work_id]
-        self.execute_query(
-            f"UPDATE works SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            tuple(values)
-        )
+        # Revisions record CANONICAL history, not sync-endpoint history. An
+        # ordinary online PATCH that changes a synchronized field has to
+        # advance that field's revision, or an offline device holding the old
+        # value has no way to discover it was overtaken -- and would overwrite
+        # it believing itself current. Only fields whose canonical value
+        # actually changes advance, and the whole edit commits as one
+        # transaction so a value can never be stored without its revision.
+        synced = {k: v for k, v in updates.items() if k in work_metadata_sync.SYNCED_FIELDS}
+        plain = {k: v for k, v in updates.items() if k not in synced}
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if plain:
+                set_clause = ", ".join(f"{k} = ?" for k in plain)
+                conn.execute(
+                    f"UPDATE works SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    tuple(list(plain.values()) + [work_id]),
+                )
+            for field, value in synced.items():
+                work_metadata_sync.set_field_on_conn(conn, work_id, field, value)
+
+    def get_work_metadata_state(self, work_id: str) -> Optional[dict]:
+        """Synchronization state for the supported Work fields.
+
+        Deliberately its own endpoint rather than extra keys on the Work
+        detail: revisions are synchronization bookkeeping, and every consumer
+        of a Work would otherwise pay for them and re-cache on every change.
+        """
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return work_metadata_sync.get_field_state_on_conn(conn, work_id)
 
     # --- Playlists (ordered collections of works, used for video courses) ---
 

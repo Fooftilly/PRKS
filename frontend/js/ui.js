@@ -2378,6 +2378,7 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
     if (typeof initPrksPrivateNotesEditor === 'function') initPrksPrivateNotesEditor('work', work.id, ctx);
     if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id, ctx);
+    if (typeof prksMountWorkMetadataEditor === 'function') prksMountWorkMetadataEditor(ctx, work.id);
     if (mode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
         void mountPlaylistAttachControls(work, ctx);
     }
@@ -2745,6 +2746,7 @@ function updatePanelContent(tabId) {
                 void mountFolderAttachControlsForWork(_cw, focusedCtx);
             }
             initWorkTagCombobox(_cw.id, focusedCtx);
+            if (typeof prksMountWorkMetadataEditor === 'function') prksMountWorkMetadataEditor(focusedCtx, _cw.id);
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(_cw, focusedCtx);
             }
@@ -3207,6 +3209,7 @@ function prksMountWorkMetaEditor(ownerCtx, work) {
     prksBindWorkMetaDraftEditor(ownerCtx, work);
     const panel = document.getElementById('panel-content');
     if (panel && typeof prksBindAutosizeTextareas === 'function') prksBindAutosizeTextareas(panel);
+    if (typeof prksMountWorkMetadataEditor === 'function') prksMountWorkMetadataEditor(ownerCtx, work.id, { editing: true });
 }
 
 function toggleWorkMetaEdit(isEditing) {
@@ -3385,10 +3388,11 @@ async function submitWorkMetaEdit(workId) {
         })(),
         year: draft.year,
         published_date: metaDateIso || null,
-        publisher: draft.publisher, location: draft.location, edition: draft.edition,
-        journal: draft.journal, volume: draft.volume, issue: draft.issue, pages: draft.pages,
-        isbn: draft.isbn, doi: draft.doi, abstract: draft.abstract
+        publisher: draft.publisher, location: draft.location, abstract: draft.abstract
     };
+    // Edition/journal/volume/issue/pages/ISBN/DOI are deliberately absent:
+    // they take the durable semantic queue through "Save bibliographic
+    // details", online and offline, so this PATCH cannot half-save them.
     if (draft.author_text != null) payload.author_text = String(draft.author_text || '').trim();
     if (draft.source_url != null) payload.source_url = String(draft.source_url || '').trim();
     
@@ -3682,20 +3686,14 @@ function renderWorkMetaTab(work, mode = 'view') {
                     : ''
             }
             ${renderRow('Location', work.location)}
-            ${renderRow('Edition', work.edition)}
-            ${renderRow('Journal', work.journal)}
-            ${renderRow('Volume', work.volume)}
-            ${renderRow('Issue', work.issue)}
-            ${renderRow('Pages', work.pages)}
-            ${renderRow('ISBN', work.isbn)}
-            ${renderRow('DOI', work.doi)}
+            <div id="work-bib-rows" data-prks-role="work-bib-rows">${prksWorkBibRowsHtml(work)}</div>
             ${
                 originalUrlPdf
                     ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(originalUrlPdf)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrlPdf)}</a></p>`
                     : ''
             }
             ${renderRow('Abstract', work.abstract)}
-            ${!hasMetadata ? '<p class="meta-row meta-row--muted-italic">No metadata available.</p>' : ''}
+            ${!hasMetadata ? '<p class="meta-row meta-row--muted-italic" data-prks-role="work-meta-empty">No metadata available.</p>' : ''}
             <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm copy-bibtex-btn" aria-live="polite">${typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : ''} Copy BibTeX</button>
             </div>
         </details>
@@ -3709,9 +3707,7 @@ function renderWorkMetaTab(work, mode = 'view') {
         </div>
         <div class="doc-meta-card">
             <div class="card-heading-row card-heading-row--wrap"><h3>Tags</h3><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('${managingTags ? 'view' : 'tags'}')">${managingTags ? 'Done' : 'Manage tags'}</button></div>
-            <div id="work-tags-list" class="tag-cloud work-tags-list">
-                ${renderWorkTagsChips(work, { editable: managingTags })}
-            </div>
+            <div id="work-tags-list" class="tag-cloud work-tags-list">${renderWorkTagsChips(work, { editable: managingTags })}</div>
             ${managingTags ? `<p class="tag-add-field__caption">Add a tag</p>
             <div class="tag-add-shell combobox-container">
                 <div class="tag-add-shell__field">
@@ -4474,6 +4470,24 @@ async function prksRemoveWorkTag(workId, tagId, btn) {
     finally { if (btn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false); }
 }
 
+/* The synchronized bibliographic rows, rendered from whatever Work object is
+ * handed in -- the cached one for the first paint, the effective one (cached +
+ * durable pending edits) once `work-metadata-editor.js` has read the queue. One
+ * renderer, so the two can never drift apart. */
+function prksWorkBibRowsHtml(work) {
+    const fields = typeof PRKS_SYNCED_WORK_FIELDS !== 'undefined'
+        ? PRKS_SYNCED_WORK_FIELDS : ['edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi'];
+    const labels = typeof PRKS_SYNCED_WORK_FIELD_LABELS !== 'undefined' ? PRKS_SYNCED_WORK_FIELD_LABELS : {};
+    return fields
+        .map((field) => {
+            const value = work && work[field] != null ? String(work[field]) : '';
+            if (!value) return '';
+            const label = labels[field] || field;
+            return `<p class="meta-row"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</p>`;
+        })
+        .join('');
+}
+
 function renderWorkMetaEditTab(work, draft) {
     const hasDraft = !!draft;
     work = Object.assign({}, work || {}, draft || {});
@@ -4518,29 +4532,44 @@ function renderWorkMetaEditTab(work, draft) {
             <label for="meta-location">Location (place of publication)</label>
             <input type="text" id="meta-location" value="${safeStr(work.location)}" placeholder="e.g. Cambridge, UK or Paris; Berlin" autocomplete="off">
             <p class="meta-row meta-row--hint">Separate multiple places with semicolons; BibLaTeX export joins them with &quot; and &quot;.</p>
-            
-            <label for="meta-edition">Edition</label>
-            <input type="text" id="meta-edition" value="${safeStr(work.edition)}" placeholder="e.g. 2 or revised" autocomplete="off">
-            
-            <label for="meta-journal">Journal</label>
-            <input type="text" id="meta-journal" value="${safeStr(work.journal)}">
-            
-            <div class="form-grid-2 form-grid-2--compact">
-                <div><label for="meta-volume">Volume</label><input type="text" id="meta-volume" value="${safeStr(work.volume)}"></div>
-                <div><label for="meta-issue">Issue</label><input type="text" id="meta-issue" value="${safeStr(work.issue)}"></div>
-            </div>
-            
-            <div class="form-grid-2 form-grid-2--compact">
-                <div><label for="meta-pages">Pages</label><input type="text" id="meta-pages" value="${safeStr(work.pages)}"></div>
-                <div><label for="meta-isbn">ISBN</label><input type="text" id="meta-isbn" value="${safeStr(work.isbn)}"></div>
-            </div>
-            
-            <label for="meta-doi">DOI</label>
-            <input type="text" id="meta-doi" value="${safeStr(work.doi)}">
-            
+
             <label for="meta-source-url">Original URL (optional)</label>
             <input type="url" id="meta-source-url" placeholder="https://…" value="${safeStr(work.source_url)}" autocomplete="off">
             <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web.</p>
+        `;
+    /* The seven synchronized fields are their own section with their own Save.
+     * One button must not quietly mean "seven fields into the durable local
+     * queue, eleven more over HTTP, either half able to fail alone" -- that is
+     * a partial-save contract nobody could explain afterwards. */
+    const syncedBibSection = isVideo
+        ? ''
+        : `
+            <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
+                <h4>Bibliographic details</h4>
+                <label for="meta-edition">Edition</label>
+                <input type="text" id="meta-edition" data-prks-work-field="edition" value="${safeStr(work.edition)}" placeholder="e.g. 2 or revised" autocomplete="off">
+
+                <label for="meta-journal">Journal</label>
+                <input type="text" id="meta-journal" data-prks-work-field="journal" value="${safeStr(work.journal)}">
+
+                <div class="form-grid-2 form-grid-2--compact">
+                    <div><label for="meta-volume">Volume</label><input type="text" id="meta-volume" data-prks-work-field="volume" value="${safeStr(work.volume)}"></div>
+                    <div><label for="meta-issue">Issue</label><input type="text" id="meta-issue" data-prks-work-field="issue" value="${safeStr(work.issue)}"></div>
+                </div>
+
+                <div class="form-grid-2 form-grid-2--compact">
+                    <div><label for="meta-pages">Pages</label><input type="text" id="meta-pages" data-prks-work-field="pages" value="${safeStr(work.pages)}"></div>
+                    <div><label for="meta-isbn">ISBN</label><input type="text" id="meta-isbn" data-prks-work-field="isbn" value="${safeStr(work.isbn)}"></div>
+                </div>
+
+                <label for="meta-doi">DOI</label>
+                <input type="text" id="meta-doi" data-prks-work-field="doi" value="${safeStr(work.doi)}">
+
+                <div class="prks-form-actions form-actions">
+                    <button type="button" id="save-work-bib-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}')">Save bibliographic details</button>
+                </div>
+                <div class="meta-row" data-prks-role="work-bib-sync" aria-live="polite"></div>
+            </section>
         `;
     const thumbField = isVideo
         ? ''
@@ -4576,6 +4605,7 @@ function renderWorkMetaEditTab(work, draft) {
             
             ${bibFields}
             </section>
+            ${syncedBibSection}
             <section class="work-meta-editor__section"><h4>Presentation</h4>
             ${thumbField}
             </section>
@@ -4589,6 +4619,7 @@ function renderWorkMetaEditTab(work, draft) {
                 <button type="button" class="prks-btn prks-btn--secondary" onclick="void prksCancelWorkMetaEdit()">Cancel</button>
                 <button id="inline-save-metadata-btn" class="prks-btn prks-btn--primary" onclick="submitWorkMetaEdit('${work.id}')">Save Changes</button>
             </div>
+            <p class="meta-row" data-prks-role="work-meta-online-only" hidden>The fields above Bibliographic details are saved on the PRKS server and need a connection.</p>
         </div>
     `;
 }

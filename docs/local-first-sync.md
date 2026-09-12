@@ -6,6 +6,7 @@ PRKS has one semantic-operation protocol and **two families** on it:
 | --- | --- | --- |
 | `ADD_WORK_TAG` / `REMOVE_WORK_TAG` | 2B | Revisioned relationship. Two devices can genuinely disagree, so conflicts are real and the user resolves them. |
 | `MARK_WORK_OPENED` | 2C | Max-register over normalized event time. Two devices cannot disagree, so there is no conflict and none is offered. |
+| `SET_WORK_METADATA_FIELD` | 2D | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
 
 Both commit to durable browser storage before the UI acts on them, survive
 reloads and offline periods, and synchronize idempotently on reconnect. Other
@@ -16,6 +17,13 @@ deliberately unlike the first -- no concurrency control, no conflict UI, a
 different result set, and a different failure posture -- so anything the two
 share had to become generic rather than Work-Tag-shaped.
 
+The third exists to decide **conflict granularity**, which every later family
+inherits. A Work is not the unit: two devices editing `doi` and `isbn` on the
+same Work have not disagreed about anything, and one Work-level revision would
+tell them they had -- demanding a resolution for a collision that never
+happened. So the scope is the field, and one conflicting field leaves the other
+six editable.
+
 ## Layers
 
 | Layer | Owns |
@@ -23,9 +31,13 @@ share had to become generic rather than Work-Tag-shaped.
 | `backend/sync_protocol.py` | Envelope normalization, request hashing, ledger, OP_ID_REUSE, exact replay, one transaction, dispatch |
 | `backend/work_tag_sync.py` | Relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
 | `backend/work_open_sync.py` | `last_opened_at` max-register, skew policy, MARK_WORK_OPENED handler |
+| `backend/work_metadata_sync.py` | The synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |
 | `frontend/js/sync-runtime.js` | Transport, claiming, backoff, locks, replay, status transitions, retirement |
 | `frontend/js/work-tag-state.js` | Work-Tag overlay and sync handler |
 | `frontend/js/work-open-state.js` | Recent overlay, acknowledged merge, sync handler |
+| `frontend/js/work-metadata-state.js` | Field projection, field overlay, dirty-field diff, sync handler |
+| `frontend/js/work-metadata-editor.js` | The bibliographic group's save and per-field conflict UI |
+| `frontend/js/sync-diagnostics.js` | Settings -> Diagnostics, for every family |
 
 A client handler answers three questions and nothing else: `isResult` (is this
 a well-formed answer for this operation), `reconcile` (apply an acknowledgement
@@ -85,8 +97,9 @@ Restoring a backup restores its ledger, revisions and lifecycle together.
 }
 ```
 
-`ADD_WORK_TAG`, `REMOVE_WORK_TAG` and `MARK_WORK_OPENED` are supported; an
-unregistered operation is `INVALID_ENVELOPE` and never reaches a handler.
+`ADD_WORK_TAG`, `REMOVE_WORK_TAG`, `MARK_WORK_OPENED` and
+`SET_WORK_METADATA_FIELD` are supported; an unregistered operation is
+`INVALID_ENVELOPE` and never reaches a handler.
 UUIDs, bounded IDs and timezone-aware timestamps are validated generically.
 Unknown envelope fields are rejected. Dependencies must be empty in v1; there
 is no batch or dependency executor. Hashes cover the normalized immutable
@@ -208,6 +221,118 @@ metadata the user never asked for: losing it costs a Recent ordering, and
 refusing to show the Work over it would cost them what they actually wanted.
 A render PRKS decided to do -- the reconnect refresh -- is not an open either.
 
+## Work metadata fields
+
+Seven bibliographic scalars synchronize: `edition`, `journal`, `volume`,
+`issue`, `pages`, `isbn`, `doi`. Each owns a revision scope
+`work-field / ["<work id>", "<field>"]` -- the same structural JSON encoding the
+Work-Tag scopes use, so no delimiter has to be excluded from either component.
+A missing row is revision 0. No schema change was needed: these live in the
+existing `sync_entity_revisions` table.
+
+The envelope payload is `{"field": ..., "value": ...}`, one operation type for
+all seven rather than seven operation types: the semantic act is "set one
+supported field to one scalar value". The field must be in the server's own
+registry -- an arbitrary column name from a client would be both an injection
+surface and a way to reach fields this milestone deliberately excludes.
+
+| Base vs field revision | Requested vs current value | Result |
+| --- | --- | --- |
+| Current | Different | Apply, advance that field's revision, ACK `changed: true` |
+| Current | Same | ACK `changed: false`, no write |
+| Stale | Same | Convergent ACK, no revision advance |
+| Stale | Different | `REVISION_CONFLICT`, HTTP 409 |
+| Future | Either | `FUTURE_REVISION`, HTTP 400 |
+
+A stale base is only a conflict when the two devices actually disagree. Two
+people typing the same DOI have converged, not collided.
+
+**Values are stored exactly as a PATCH would store them.** Synchronization is
+not a licence to start normalizing what PRKS never normalized: a DOI keeps its
+case, an ISBN keeps its punctuation, a page range is not parsed, and whitespace
+is not stripped. The only validation this layer adds is a per-field length
+bound. SQLite NULL (a row older than the field) and `""` (one a user cleared)
+are one logical value, so clearing an already-empty field is not a change.
+
+The ACK carries `work_id`, `field`, `value`, `server_revision` and `changed`;
+the conflict carries `current_revision`, `current_value` and `requested_value`.
+Both are field-specific, so the UI can resolve one field without disturbing the
+others. No second GET is needed before retiring the operation.
+
+`GET /api/works/:id/metadata-state` returns every supported field's value and
+revision, cached as entity kind `work-metadata-state`. It is deliberately its
+own endpoint: revisions are synchronization bookkeeping, and putting them on
+the Work detail would make every consumer of a Work pay for them and re-cache
+on every change. Its ETag hashes the representation, so a value change, a
+same-length replacement and a revision-only change all move it.
+
+**The ordinary online PATCH advances the same revisions.** Revisions record
+canonical history, not sync-endpoint history: if `PATCH /api/works/:id` could
+change a DOI without moving `work-field / W:doi`, an offline device holding the
+old value would have no way to discover it had been overtaken, and would
+overwrite the newer value believing itself current. `update_work_metadata()`
+compares canonical old and new values and advances only the fields that
+actually changed, with values and revisions committing in one transaction -- a
+stored value whose revision did not advance is exactly the state that makes
+every other device's staleness check lie.
+
+Work creation manufactures no revisions: initial values are revision 0.
+
+## Metadata: overlay, atomic save and per-field conflicts
+
+The effective Work is the acknowledged cached record plus durable
+pending/conflicted field edits. Pending intent is never written into the cached
+Work; the overlay is recomputed from `prks-local-v1`, so it survives a reload,
+and it is applied on every Work detail render rather than only while editing.
+One renderer produces the bibliographic rows for both the first paint and the
+overlay repaint, so they cannot drift.
+
+**One Save, one transaction, however many fields it touched.** The user pressed
+a single button; durably storing three of their four edits and then reporting
+"Saved locally" is a lie that only surfaces later. Every field in one save
+commits together or none does.
+
+Only fields the user actually changed become operations, and "changed" is
+measured against what the form was **showing** -- the pending value if there is
+one, otherwise the server's. Measuring against the server base instead is
+subtly wrong in both directions: editing a field back to its server value would
+look like no change and quietly strand the pending operation, and a field still
+displaying an untouched pending value would look dirty on every save.
+
+Coalescing is per field. Only never-sent rows may be rewritten, so a field whose
+operation may already have reached the server, or whose operation is
+conflicted, is temporarily busy -- and only that field. The other six stay
+editable, which is the whole point of the scope.
+
+A conflict belongs to the field. The editor shows this device's value and the
+server's beside that input, with **Use server** and **Apply my value**. Use
+server reconciles the reported state and discards the operation, creating
+nothing. Apply my value creates a NEW operation against the reported current
+revision; the conflicted id is never reused. Settings -> Diagnostics lists every
+unsynchronized operation with its Work id, field, local value and the server's,
+and can discard a conflicted one without the Work's page existing at all.
+
+## Fan-out: why these seven
+
+These fields are rendered on the Work detail and nowhere else. The Work summary
+projection carries them, so cached Folder, Person and Playlist details hold
+them in their payloads -- but no Work card, browse catalog, Concept, Argument or
+Graph surface displays them, so a pending value needs no optimistic propagation
+beyond the Work itself, and an acknowledgement invalidates no browse catalog.
+
+The deferred fields do not share that property:
+
+| Field | Also rendered by |
+| --- | --- |
+| `publisher`, `location` | nothing else (Work detail only; `publisher` is a server-side search filter, and search is never cached) |
+| `abstract` | Progress, via the bounded `abstract_excerpt` in `works-browse:index` |
+| `source_url` | every Work card, via `prksInferWorkSourceKind()` deciding the thumbnail kind |
+| `thumb_page` | every Work card, via the thumbnail URL |
+| `year`, `published_date`, `author_text` | every Work card's meta and credit lines, in all three browse catalogs and in cached Folder / Person / Playlist details |
+| `status` | Work card badges, the Progress route's grouping, and the same cached details |
+| `doc_type` | Work card badges, the Types route's grouping, the Graph |
+| `title` | all of the above, plus Concept details (mention titles), Argument details (source Works), Graph snapshots and the command palette |
+
 ## Every canonical mutation advances revisions
 
 Public add/remove, transactional bulk add/remove, Processing import, Tag merge
@@ -305,10 +430,12 @@ explicit conflict discard when the original Work is no longer available.
 Structured terminal results are allowlisted and size-bounded, separate from
 short retry error messages. None of this content belongs in logs.
 
-## Deferred beyond 2C
+## Deferred beyond 2D
 
-No offline Tag creation/rename/merge/delete, Folder mutation, Work metadata,
-Work creation/deletion, Playlist mutation, Concept editing or Research Notes
-editing. No CRDT, multi-user sync, batching, server push or automatic lifecycle
-retargeting. A third family should be chosen from what these two taught us, and
-must arrive as a handler registration rather than a second protocol.
+No offline Tag creation/rename/merge/delete, Folder mutation, Work
+creation/deletion, Playlist mutation, Concept editing or Research Notes
+editing, and no synchronization for the high fan-out Work fields in the table
+above. No CRDT, multi-user sync, batching, server push or automatic lifecycle
+retargeting. The next family must arrive as a handler registration rather than
+a second protocol, and the fan-out table -- not convenience -- decides which
+one it is.
