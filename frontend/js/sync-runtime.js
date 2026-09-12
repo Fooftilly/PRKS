@@ -117,7 +117,11 @@
                     if (response.ok && data.code === 'ACKNOWLEDGED') {
                         if (!await family.reconcile(data, op)) throw new Error('cache_write_failed');
                         await store.updateOperationSyncState(op.op_id, { status: 'acknowledged', last_error: null, server_revision: data.server_revision });
-                        emit({ acknowledged: data, operation: op.operation });
+                        // The operation travels with its acknowledgement: a
+                        // family whose ACK deliberately omits part of the
+                        // result reconstructs it from the immutable envelope,
+                        // and the coordinator needs to know nothing about that.
+                        emit({ acknowledged: data, operation: op.operation, op });
                         // Only now: the cache is reconciled and the live UI has
                         // seen the ACK, so nothing still needs this row.
                         await retire(op.op_id);

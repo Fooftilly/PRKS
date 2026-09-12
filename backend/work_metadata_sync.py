@@ -6,15 +6,22 @@ Work-level revision would tell them they had -- forcing a resolution UI over a
 conflict that does not exist. So each supported field carries its own revision
 scope and they advance independently.
 
-Nine scalars are synchronized. Eight of them reach no cached read model but the
+Ten scalars are synchronized. Eight of them reach no cached read model but the
 Work detail: the Work summary projection carries them, yet Work cards, browse
 catalogs, Folders, People, Playlists and the Graph display none of them.
 
-`publisher` is the exception, and the reason it is here. `recently-added:index`
-carries it because Home -> Recently Added filters LOCALLY over it, so a pending
-publisher has to reach that projection's filtering even though no card renders
-it. Being invisible is not the same as being unused. Higher fan-out fields
-(title, status, doc_type, year, abstract) are a separate problem and are
+Two are exceptions, and they are exceptions in different ways.
+`recently-added:index` carries `publisher` because Home -> Recently Added
+filters LOCALLY over it, so a pending publisher has to reach that projection's
+filtering even though no card renders it -- being invisible is not the same as
+being unused. `works-browse:index` carries `abstract_excerpt`, which Progress
+renders, so a pending Abstract has to reach it through a DERIVATION rather than
+a copy. `abstract` is also the only field whose limit is measured in bytes and
+whose value the metadata-state projection omits; see MAX_ABSTRACT_UTF8_BYTES
+and BYTE_LIMITED_FIELDS.
+
+The remaining high fan-out fields (title, status, doc_type, year) reach Work
+cards across three browse catalogs and several cached details, and are
 deliberately not here.
 
 Nothing in this module imports the database layer; the handler is handed the
@@ -242,7 +249,18 @@ def apply(db, conn, op, received_at):
                       **disagreement(field, current, desired))
         return 409, result
     changed, after = set_field_on_conn(conn, work_id, field, desired)
-    result.update(code="ACKNOWLEDGED", value=desired, server_revision=after, changed=changed)
+    result.update(code="ACKNOWLEDGED", server_revision=after, changed=changed)
+    if field in BYTE_LIMITED_FIELDS:
+        # The ledger has no retention policy: whatever goes in `result_json`
+        # stays there for the life of the library. Echoing the Abstract back
+        # would make every edit a permanent second copy of the text, so the
+        # acknowledgement says only that the value was applied. The client
+        # already holds the authoritative copy in its immutable operation
+        # payload and reconstructs the effective value from it, so no second
+        # request is needed and replay stays exact.
+        result["value_omitted"] = True
+    else:
+        result["value"] = desired
     return 200, result
 
 

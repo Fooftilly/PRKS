@@ -429,5 +429,37 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertEqual(conflict["requested_value"], "10.1/device")
         self.assertNotIn("current_preview", conflict)
 
+    def test_the_ledger_never_becomes_a_second_copy_of_the_abstract(self):
+        """`sync_operations` has no retention policy: whatever lands in
+        `result_json` stays for the life of the library. Echoing the Abstract
+        back would make every edit a permanent duplicate of the text."""
+        body = "Q" * (300 * 1024)
+        op = self.op("abstract", body)
+        status, result = sync_protocol.process_operation(self.db, op)
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertTrue(result["value_omitted"])
+        self.assertNotIn("value", result)
+        # The Work itself did receive the whole thing.
+        self.assertEqual(self.value("abstract"), body)
+
+        rows = self.db.execute_query(
+            "SELECT result_json FROM sync_operations WHERE operation_type = 'SET_WORK_METADATA_FIELD'")
+        self.assertEqual(len(rows), 1)
+        stored = rows[0]["result_json"]
+        self.assertLess(len(stored), 2048, "the ledger row stays small")
+        self.assertNotIn(body[:200], stored, "the Abstract body is not in the ledger")
+
+        # Replay returns the same compact result, and mutates nothing further.
+        self.assertEqual(sync_protocol.process_operation(self.db, op), (status, result))
+        self.assertEqual(self.db.execute_query(
+            "SELECT result_json FROM sync_operations WHERE op_id = ?",
+            (op["op_id"],))[0]["result_json"], stored)
+        self.assertEqual(self.state()["abstract"], {"revision": 1})
+
+    def test_small_fields_still_echo_their_value(self):
+        result = self.send("doi", "10.1/echoed")[1]
+        self.assertEqual(result["value"], "10.1/echoed")
+        self.assertNotIn("value_omitted", result)
+
     def test_scope_keys_are_structural(self):
         self.assertNotEqual(meta.scope_key("W-a:b", "doi"), meta.scope_key("W-a", "b:doi"))

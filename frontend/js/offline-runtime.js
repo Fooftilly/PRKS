@@ -437,8 +437,12 @@
                 // An acknowledgement older than what the cache already holds
                 // has been superseded; applying it would move the field back.
                 if (entry.revision > result.server_revision) return true;
-                entry.value = result.value;
-                entry.revision = result.server_revision;
+                // The projection's shape belongs to work-metadata-state.js: a
+                // byte-limited field keeps its revision ONLY, and writing a
+                // value here would make the cached projection fail its own
+                // validator on the next read.
+                state.fields[result.field] = root.prksMetadataStateAckPatch(
+                    result.field, result.server_revision, result.value);
             }
             if (work) work[result.field] = result.value;
             const values = [work, state];

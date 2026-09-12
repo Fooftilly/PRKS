@@ -430,19 +430,21 @@ the server answers.
 
 ## Fan-out: which fields reach which projections
 
-Eight of the nine are rendered on the Work detail and nowhere else. The Work
+Eight of the ten are rendered on the Work detail and nowhere else. The Work
 summary projection carries them, so cached Folder, Person and Playlist details
 hold them in their payloads -- but no Work card, browse catalog, Concept,
 Argument or Graph surface displays them, so a pending value needs no optimistic
 propagation beyond the Work itself, and an acknowledgement invalidates no browse
 catalog.
 
-`publisher` is the exception, and 2E exists because of it. **Being invisible on
-a card is not the same as being unused:** `recently-added:index` selects
-`works.publisher` because Home -> Recently Added filters LOCALLY over it, so a
-pending publisher has to reach that projection's filtering. `FIELD_PROJECTIONS`
-in `backend/work_metadata_sync.py` and `work-metadata-state.js` names that
-dependency on both sides, and the parity is pinned by a test -- an earlier
+Two are exceptions, in different ways. `publisher` is COPIED into
+`recently-added:index`, which 2E exists because of: **being invisible on a card
+is not the same as being unused** -- that projection selects `works.publisher`
+because Home -> Recently Added filters LOCALLY over it. `abstract` is DERIVED
+into `works-browse:index.abstract_excerpt`, which Progress renders, and 2F
+exists because of that. `FIELD_PROJECTIONS` in
+`backend/work_metadata_sync.py` and `work-metadata-state.js` names both
+dependencies on both sides, and the parity is pinned by a test -- an earlier
 version of this table claimed publisher reached nothing else, which was wrong.
 
 The deferred fields do not share that property:

@@ -656,6 +656,59 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertIn(expected, self.progress_excerpt(page, work),
                       'nothing visibly changed when the server answered')
 
+    def test_an_abstract_larger_than_the_old_payload_ceiling_synchronizes(self):
+        """The exact gap the previous suite missed. The editor and the server
+        accepted 64 KiB-1 MiB, but durable storage refused it -- so the save
+        failed at the one step the user had been told already succeeded. 150 KiB
+        crosses that boundary without making the browser test slow."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        db = self.db_for(server)
+        db.update_work_metadata(work, {'status': 'In Progress'})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.progress(page)
+        o._wait_list_cached(page, 'works-browse:index')
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        page.evaluate("""() => {
+            const input = document.querySelector('[data-prks-work-field="abstract"]');
+            input.value = 'Beyond the old ceiling. ' + 'L'.repeat(150 * 1024);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }""")
+        self.save(page)
+        self.pending(page, 1)
+
+        stored = self.operations(page)[0]
+        self.assertEqual(stored['payload']['field'], 'abstract')
+        self.assertGreater(len(stored['payload']['value']), 150 * 1024,
+                           'the whole Abstract reached the durable queue')
+
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.pending(page, 1)
+        self.assertGreater(len(self.operations(page)[0]['payload']['value']), 150 * 1024,
+                           'and survived the reload intact')
+        self.progress(page)
+        self.assertIn('Beyond the old ceiling', self.progress_excerpt(page, work))
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        saved = db.execute_query("SELECT abstract FROM works WHERE id = ?", (work,))[0]['abstract']
+        self.assertGreater(len(saved), 150 * 1024, 'the server received the whole value')
+        self.assertTrue(saved.startswith('Beyond the old ceiling.'))
+        # The ledger keeps the outcome, never a second copy of the text.
+        ledger = db.execute_query(
+            "SELECT result_json FROM sync_operations WHERE operation_type = 'SET_WORK_METADATA_FIELD'")
+        self.assertTrue(ledger)
+        for row in ledger:
+            self.assertLess(len(row['result_json']), 2048)
+        self.progress(page)
+        self.assertIn('Beyond the old ceiling', self.progress_excerpt(page, work),
+                      'the excerpt is unchanged by acknowledgement')
+
     def test_an_oversize_abstract_is_refused_without_touching_anything(self):
         server, page, context = self.start()
         work = server.ids['work_a']

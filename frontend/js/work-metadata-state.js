@@ -6,13 +6,17 @@
  * have -- which is why every field carries its own revision and its own
  * resolution, and why one conflicting field leaves the rest editable.
  *
- * Eight of the nine synchronized scalars reach no cached read model but the
- * Work detail. `publisher` is the exception and the reason this module now
- * exports a cross-projection overlay: `recently-added:index` carries it
- * because Home -> Recently Added filters LOCALLY over it. A field being
- * invisible on a card is not the same as it being unused, so a pending
- * publisher has to reach that projection's filtering too -- without ever being
- * written into the acknowledged snapshot.
+ * Eight of the ten synchronized scalars reach no cached read model but the
+ * Work detail. Two do, in different ways, and PROJECTION_COLUMNS below says
+ * how: `publisher` is COPIED into `recently-added:index`, because Home ->
+ * Recently Added filters locally over it; `abstract` is DERIVED into
+ * `works-browse:index.abstract_excerpt`, which Progress renders. A field being
+ * invisible on a card is not the same as it being unused, and neither pending
+ * value is ever written into an acknowledged snapshot.
+ *
+ * `abstract` is also the only byte-limited field: its bound is in UTF-8 bytes,
+ * the metadata-state projection carries its revision alone, and its
+ * acknowledgement omits the value rather than echoing a megabyte back.
  */
 (function (root) {
     'use strict';
@@ -204,13 +208,50 @@
         return changes;
     }
 
+    /**
+     * The metadata-state entry an acknowledgement produces.
+     *
+     * The projection shape is this module's business, so both the cached
+     * reconciliation and the live editor ask here rather than each deciding
+     * for itself -- otherwise the two could disagree about whether a field
+     * carries a value, and the validator would reject whichever wrote last.
+     */
+    function metadataStateAckPatch(field, revision_, value) {
+        return BYTE_LIMITED_FIELDS.has(field)
+            ? { revision: revision_ }
+            : { value: canonical(value), revision: revision_ };
+    }
+
+    /**
+     * The acknowledgement as the client should act on it.
+     *
+     * A byte-limited field's ACK deliberately omits the value so the server's
+     * ledger never becomes a permanent second copy of the text. The immutable
+     * operation payload is the authoritative record of what was requested, and
+     * the server has just said it applied exactly that -- so the effective
+     * value is reconstructed locally rather than fetched again.
+     */
+    function effectiveAck(data, op) {
+        if (!data || data.code !== 'ACKNOWLEDGED' || data.value_omitted !== true) return data;
+        return Object.assign({}, data, { value: op.payload.value });
+    }
+
     /* ---- sync handler ---- */
     function isResult(data, op) {
         if (!data || data.work_id !== op.entity_id || data.field !== op.payload.field) return false;
         switch (data.code) {
             case 'ACKNOWLEDGED':
-                return typeof data.value === 'string' && data.value === op.payload.value &&
-                    typeof data.changed === 'boolean' && revision(data.server_revision);
+                if (typeof data.changed !== 'boolean' || !revision(data.server_revision)) return false;
+                /* An omitted value must be DECLARED, never merely absent: a
+                 * missing key would otherwise be indistinguishable from a
+                 * malformed response, and the client would reconstruct a value
+                 * the server never confirmed. */
+                if (BYTE_LIMITED_FIELDS.has(data.field)) {
+                    return data.value_omitted === true &&
+                        !Object.prototype.hasOwnProperty.call(data, 'value');
+                }
+                return data.value_omitted === undefined &&
+                    typeof data.value === 'string' && data.value === op.payload.value;
             case 'REVISION_CONFLICT': case 'FUTURE_REVISION':
                 if (!revision(data.current_revision)) return false;
                 // A byte-limited field reports previews and sizes instead of
@@ -240,7 +281,7 @@
 
     const handler = {
         isResult, terminal,
-        reconcile: data => root.prksOfflineReconcileWorkField(data),
+        reconcile: (data, op) => root.prksOfflineReconcileWorkField(effectiveAck(data, op)),
     };
 
     /* ---- synchronous pending-value snapshot ----
@@ -393,6 +434,8 @@
         prksWorkFieldUtf8Bytes: utf8Bytes,
         prksWorkFieldLimitError: fieldLimitError,
         prksObservedWorkFields: observedFields,
+        prksMetadataStateAckPatch: metadataStateAckPatch,
+        prksEffectiveMetadataAck: effectiveAck,
         prksEffectiveProjectionRows: effectiveProjectionRows,
         /* The acknowledged counterpart of the overlay: the same transform,
          * applied once the server has spoken. One definition, so a row cannot

@@ -203,7 +203,12 @@
         if (entry && entry.revision > ack.server_revision) return;
         const work = ctx.getEntity('work');
         ctx.setEntity('work', Object.assign({}, work, { [ack.field]: ack.value }));
-        if (entry) { entry.value = ack.value; entry.revision = ack.server_revision; }
+        // Same helper as the cached reconciliation, so the live editor and the
+        // cached projection cannot disagree about this field's shape.
+        if (entry) {
+            state.observed.fields[ack.field] =
+                root.prksMetadataStateAckPatch(ack.field, ack.server_revision, ack.value);
+        }
         const input = document.querySelector('[data-prks-work-field="' + ack.field + '"]');
         if (input && !input.disabled && document.activeElement !== input) input.value = ack.value;
     }
@@ -232,7 +237,7 @@
             state = { workId, generation: ctx.generation, operations: [], observed: null, error: null };
             const stopSync = root.prksSync.subscribe(event => {
                 if (event.acknowledged && event.operation === 'SET_WORK_METADATA_FIELD') {
-                    acceptAck(ctx, state, event.acknowledged);
+                    acceptAck(ctx, state, root.prksEffectiveMetadataAck(event.acknowledged, event.op));
                 }
                 void safePaint(ctx, state);
             });
@@ -248,8 +253,8 @@
     /**
      * One Save, one transaction, however many fields it touched. Only fields
      * whose value actually differs from the observed server state become
-     * operations -- the form submits all nine every time, and nine
-     * operations per Save would be nine chances to conflict over nothing.
+     * operations -- the form submits all ten every time, and ten
+     * operations per Save would be ten chances to conflict over nothing.
      */
     async function save(workId) {
         const ctx = root.prksGetFocusedTabContext ? root.prksGetFocusedTabContext() : null;

@@ -4571,8 +4571,8 @@ function renderWorkMetaEditTab(work, draft) {
             <input type="url" id="meta-source-url" placeholder="https://…" value="${safeStr(work.source_url)}" autocomplete="off">
             <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web.</p>
         `;
-    /* The nine synchronized fields are their own section with their own Save.
-     * One button must not quietly mean "nine fields into the durable local
+    /* The ten synchronized fields are their own section with their own Save.
+     * One button must not quietly mean "ten fields into the durable local
      * queue, the rest over HTTP, either half able to fail alone" -- that is a
      * partial-save contract nobody could explain afterwards. */
     const syncedBibSection = isVideo

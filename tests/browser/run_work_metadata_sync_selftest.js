@@ -411,6 +411,50 @@ async function crossProjection() {
     delete globalThis.prksSync;
 }
 
+/* ---- a full Abstract acknowledgement, through the coordinator ---- */
+async function abstractAcknowledgement() {
+    const factory = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    globalThis.prksSync = { store };
+    await cache.putEntity('work', 'W-X', { id: 'W-X', title: 'Paper', abstract: 'old' });
+    await cache.putEntity('work-metadata-state', 'W-X', { work_id: 'W-X', fields: base() });
+    await cache.putList('works-browse:index', [{ id: 'W-X', title: 'Paper', abstract_excerpt: 'old' }], '');
+    const offline = createPrksOfflineRuntime({ store: cache, window: null,
+        prksRequest: async () => { throw new Error('no reads in this scenario'); } });
+
+    // Deliberately across the old 64 KiB durable ceiling.
+    const big = 'A'.repeat(120 * 1024);
+    const op = await store.saveWorkMetadataFields('W-X', { abstract: big }, resolved(base()));
+    assert.equal(op.length, 1, 'a 120 KiB Abstract reaches the durable queue');
+
+    const runtime = globalThis.createPrksSyncRuntime({ store, online: () => true,
+        request: async () => ({ ok: true, status: 200, json: async () => ({
+            code: 'ACKNOWLEDGED', work_id: 'W-X', field: 'abstract',
+            server_revision: 1, changed: true, value_omitted: true }) }),
+        // The real handler's validation and reconstruction, pointed at this
+        // scenario's cache rather than the production singleton.
+        handlers: { SET_WORK_METADATA_FIELD: Object.assign({}, globalThis.prksWorkMetadataSyncHandler, {
+            reconcile: (data, op) => offline.reconcileWorkField(
+                globalThis.prksEffectiveMetadataAck(data, op)),
+        }) } });
+    await runtime.wake(); await settle(); runtime.stop();
+
+    assert.equal(await store.getOperation(op[0].op_id), null, 'the operation retires');
+    assert.equal((await cache.getEntity('work', 'W-X')).value.abstract, big,
+        'the cached Work holds the full Abstract, reconstructed from the operation');
+    const fields = (await cache.getEntity('work-metadata-state', 'W-X')).value.fields;
+    assert.deepEqual(fields.abstract, { revision: 1 });
+    assert.equal(Object.prototype.hasOwnProperty.call(fields.abstract, 'value'), false,
+        'the projection never acquires a value key');
+    assert.equal(globalThis.prksIsWorkMetadataStateShape(
+        (await cache.getEntity('work-metadata-state', 'W-X')).value, 'W-X'), true,
+        'and the projection still validates after reconciliation');
+    assert.equal((await cache.getList('works-browse:index')).value[0].abstract_excerpt,
+        globalThis.prksAbstractExcerpt(big), 'the derived excerpt was reconciled too');
+    delete globalThis.prksSync;
+}
+
 /* ---- PHASE L/M/N: acknowledgement reaches the projection too ---- */
 async function projectionReconciliation() {
     const factory = createFakeIndexedDBFactory();
@@ -642,6 +686,49 @@ async function abstracts() {
     for (let i = 0; i < 200; i++) excerpt(huge);
     assert(Date.now() - started < 500, 'excerpt derivation stays bounded for a 1 MiB Abstract');
     assert.equal(excerpt(huge), 'x'.repeat(100));
+    /* ---- the compact Abstract acknowledgement ----
+     *
+     * The server does not echo the Abstract back, so the ledger never becomes
+     * a permanent second copy of the text. The client reconstructs the value
+     * from its own immutable operation payload -- which the server has just
+     * confirmed it applied -- rather than fetching it again.
+     */
+    const abstractOp = { operation: 'SET_WORK_METADATA_FIELD', entity_id: 'W-A',
+        payload: { field: 'abstract', value: pendingText } };
+    const compact = { code: 'ACKNOWLEDGED', work_id: 'W-A', field: 'abstract',
+        server_revision: 4, changed: true, value_omitted: true };
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(compact, abstractOp), true);
+    assert.equal(globalThis.prksEffectiveMetadataAck(compact, abstractOp).value, pendingText,
+        'the effective value comes from the immutable operation');
+    assert.equal(compact.value, undefined, 'and the server result is left alone');
+
+    /* An omission must be DECLARED. A merely missing value is indistinguishable
+     * from a malformed response, and reconstructing from that would invent a
+     * value the server never confirmed. */
+    const ambiguous = { code: 'ACKNOWLEDGED', work_id: 'W-A', field: 'abstract',
+        server_revision: 4, changed: true };
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(ambiguous, abstractOp), false);
+    assert.equal(globalThis.prksEffectiveMetadataAck(ambiguous, abstractOp), ambiguous,
+        'an undeclared omission is not reconstructed');
+    // ...and a byte-limited ACK must not carry a value either way.
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(
+        Object.assign({ value: pendingText }, compact), abstractOp), false);
+    // A small field keeps the full-value contract.
+    const doiOp = { operation: 'SET_WORK_METADATA_FIELD', entity_id: 'W-A',
+        payload: { field: 'doi', value: '10.1/x' } };
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(
+        { code: 'ACKNOWLEDGED', work_id: 'W-A', field: 'doi', value: '10.1/x',
+            server_revision: 1, changed: true }, doiOp), true);
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(
+        { code: 'ACKNOWLEDGED', work_id: 'W-A', field: 'doi', server_revision: 1,
+            changed: true, value_omitted: true }, doiOp), false,
+        'only byte-limited fields may omit their value');
+
+    /* ---- the metadata-state projection keeps its shape ---- */
+    assert.deepEqual(globalThis.prksMetadataStateAckPatch('abstract', 7, pendingText),
+        { revision: 7 }, 'a byte-limited field carries its revision only');
+    assert.deepEqual(globalThis.prksMetadataStateAckPatch('doi', 7, '10.1/x'),
+        { value: '10.1/x', revision: 7 });
     delete globalThis.prksSync;
 }
 
@@ -659,6 +746,7 @@ async function main() {
     await staleProjectionRead();
     await hydration();
     await abstracts();
+    await abstractAcknowledgement();
     console.log('All ' + checks + ' Work metadata checks passed');
 }
 

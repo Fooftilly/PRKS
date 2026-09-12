@@ -67,6 +67,13 @@
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
      * large is a bug, not a legitimate semantic operation. */
     const MAX_PAYLOAD_BYTES = 64 * 1024;
+
+    /* Abstract is the one operation allowed to be larger, and the allowance is
+     * granted to an exact operation SHAPE rather than to a size -- otherwise
+     * any future operation would inherit a megabyte payload merely by existing
+     * after this milestone. Mirrors
+     * `backend/work_metadata_sync.MAX_ABSTRACT_UTF8_BYTES`. */
+    const MAX_ABSTRACT_VALUE_BYTES = 1024 * 1024;
     const MAX_ERROR_CHARS = 500;
 
     function defaultIndexedDB() {
@@ -137,6 +144,12 @@
     function jsonByteLength(value) {
         const json = JSON.stringify(value);
         if (!json) return 0;
+        return utf8ByteLength(json);
+    }
+
+    /** UTF-8 bytes of a string as it stands -- no JSON escaping applied. */
+    function utf8ByteLength(json) {
+        if (typeof json !== 'string' || !json) return 0;
         if (typeof TextEncoder !== 'undefined') {
             return new TextEncoder().encode(json).length;
         }
@@ -194,6 +207,29 @@
         return jsonByteLength(value) <= MAX_RESULT_BYTES;
     }
 
+    /**
+     * The payload bound for one operation.
+     *
+     * The ordinary limit is 64 KiB and stays that way for every family. A
+     * SET_WORK_METADATA_FIELD carrying exactly `{field: "abstract", value:
+     * <string>}` is the single exception, and what is bounded there is the
+     * ABSTRACT ITSELF, not its JSON encoding: a quote or a backslash doubles
+     * in length under escaping, so measuring the serialized object would
+     * refuse a value that is exactly at the product's stated limit. The rest
+     * of the payload is two short keys, so nothing meaningful is unbounded.
+     */
+    function payloadWithinLimit(operation, payload) {
+        if (operation === 'SET_WORK_METADATA_FIELD') {
+            const keys = Object.keys(payload);
+            if (keys.length === 2 && payload.field === 'abstract' &&
+                Object.prototype.hasOwnProperty.call(payload, 'value') &&
+                typeof payload.value === 'string') {
+                return utf8ByteLength(payload.value) <= MAX_ABSTRACT_VALUE_BYTES;
+            }
+        }
+        return jsonByteLength(payload) <= MAX_PAYLOAD_BYTES;
+    }
+
     /** Thrown for anything the caller could have prevented; carries a code. */
     function localStoreError(code, message) {
         const err = new Error(message);
@@ -233,13 +269,13 @@
         if (!isPlainObject(payload)) {
             throw localStoreError('invalid_envelope', 'payload must be an object.');
         }
-        let payloadBytes;
+        let withinLimit;
         try {
-            payloadBytes = jsonByteLength(payload);
+            withinLimit = payloadWithinLimit(operation, payload);
         } catch (_e) {
             throw localStoreError('invalid_envelope', 'payload must be JSON-serializable.');
         }
-        if (payloadBytes > MAX_PAYLOAD_BYTES) {
+        if (!withinLimit) {
             throw localStoreError('payload_too_large', 'Operation payload exceeds the local limit.');
         }
         const dependsOn = Object.prototype.hasOwnProperty.call(input, 'depends_on')
@@ -1020,6 +1056,7 @@
         PRKS_LOCAL_OPERATION_TYPES: OPERATION_TYPES,
         PRKS_LOCAL_OPERATION_STATUSES: STATUSES,
         PRKS_LOCAL_MAX_PAYLOAD_BYTES: MAX_PAYLOAD_BYTES,
+        PRKS_LOCAL_MAX_ABSTRACT_VALUE_BYTES: MAX_ABSTRACT_VALUE_BYTES,
     };
 
     Object.keys(api).forEach(function (k) {

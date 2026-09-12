@@ -499,6 +499,74 @@ async function run() {
         assertEq('retired conflict removed atomically', await store.getOperation(op.op_id), null);
     }
 
+    /* ---- the Abstract payload allowance ----
+     *
+     * The 64 KiB bound stays the ordinary limit. Abstract is the one
+     * exception, granted to an exact operation SHAPE rather than to a size, so
+     * no future family inherits a megabyte payload merely by existing. And
+     * what is bounded is the ABSTRACT, not its JSON encoding.
+     */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const abstractOp = (value) => ({
+            operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
+            payload: { field: 'abstract', value }, base_revision: 0,
+        });
+        const normal = mod.PRKS_LOCAL_MAX_PAYLOAD_BYTES;
+        const limit = mod.PRKS_LOCAL_MAX_ABSTRACT_VALUE_BYTES;
+        assertEq('the ordinary payload limit is unchanged', normal, 64 * 1024);
+        assertEq('the Abstract allowance is the product limit', limit, 1024 * 1024);
+
+        await assertRejects('an ordinary operation over 64 KiB is still refused',
+            store.enqueueOperation(tagOp('W-1', 'T-1', { payload: { note: 'x'.repeat(normal + 100) } })),
+            'payload_too_large');
+        // ...including another metadata field, which has no such allowance.
+        await assertRejects('a non-Abstract metadata field gets no allowance',
+            store.enqueueOperation({
+                operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
+                payload: { field: 'doi', value: 'x'.repeat(normal + 100) }, base_revision: 0,
+            }), 'payload_too_large');
+        // ...and neither does an Abstract payload of the wrong shape.
+        await assertRejects('an extra payload key forfeits the allowance',
+            store.enqueueOperation({
+                operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
+                payload: { field: 'abstract', value: 'x'.repeat(normal + 100), extra: 1 },
+                base_revision: 0,
+            }), 'payload_too_large');
+
+        /* THE REGRESSION: 64 KiB to 1 MiB. The editor and the server both
+         * accepted this range; durable storage did not, so the save failed at
+         * the one step the user was told had already succeeded. */
+        for (const size of [100 * 1024, 512 * 1024, limit]) {
+            const stored = await store.enqueueOperation(abstractOp('x'.repeat(size)));
+            assertEq('an Abstract of ' + Math.round(size / 1024) + ' KiB is stored',
+                stored.payload.value.length, size);
+        }
+        await assertRejects('an Abstract over 1 MiB is refused',
+            store.enqueueOperation(abstractOp('x'.repeat(limit + 1))), 'payload_too_large');
+
+        /* The bound is on the VALUE, not the serialized object: every quote and
+         * backslash doubles under JSON escaping, so measuring the encoded form
+         * would refuse a value that is exactly at the stated limit. */
+        const quoted = '"\\'.repeat(limit / 2);
+        assertEq('the escaped form is far larger than the value', quoted.length, limit);
+        assert('...and its JSON encoding exceeds the limit',
+            JSON.stringify({ field: 'abstract', value: quoted }).length > limit);
+        const escaped = await store.enqueueOperation(abstractOp(quoted));
+        assertEq('an Abstract at the limit is stored whatever it escapes to',
+            escaped.payload.value.length, limit);
+
+        // Bytes, not characters: three bytes per CJK character.
+        const cjk = '\u65e5'.repeat(Math.floor(limit / 3) + 10);
+        assert('the multibyte Abstract is under the limit by character count', cjk.length < limit);
+        await assertRejects('...but over it in bytes, so it is refused',
+            store.enqueueOperation(abstractOp(cjk)), 'payload_too_large');
+        const fits = '\u65e5'.repeat(1000);
+        assertEq('a multibyte Abstract that genuinely fits round-trips',
+            (await store.enqueueOperation(abstractOp(fits))).payload.value, fits);
+    }
+
     /* ---- module hygiene: persistence only ---- */
     {
         const src = fs.readFileSync(path.join(rootDir, 'frontend/js/local-store.js'), 'utf8');
