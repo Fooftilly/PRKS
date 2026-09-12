@@ -645,6 +645,98 @@ function thumbPageKeepsRowsValid() {
     globalThis.prksSetPendingWorkMetadata([]);
 }
 
+/* ---- every effective-Work helper produces ENTITY values ----
+ *
+ * `prksEffectiveWorkMetadata()` takes an explicit operation list rather than
+ * the shared pending map -- the metadata editor holds its own -- and that
+ * second path copied wire values straight into a Work-like object. The result
+ * was `thumb_page === "5"` from one helper and `5` from every other, which is
+ * the entity contract broken by the helper the EDITOR uses.
+ */
+function everyEffectiveHelperIsTyped() {
+    const op = (field, value) => ({ operation: 'SET_WORK_METADATA_FIELD',
+        entity_type: 'work', entity_id: 'W-E', status: 'pending',
+        payload: { field, value } });
+    const work = { id: 'W-E', thumb_page: 2, status: 'Planned',
+        author_text: 'Old', year: '1999' };
+
+    // The editor's helper, given operations directly.
+    const paged = globalThis.prksEffectiveWorkMetadata(work, [op('thumb_page', '5')]);
+    assert.equal(paged.thumb_page, 5);
+    assert.equal(typeof paged.thumb_page, 'number', 'a NUMBER, not the wire string');
+    const cleared = globalThis.prksEffectiveWorkMetadata(
+        { id: 'W-E', thumb_page: 5 }, [op('thumb_page', '')]);
+    assert.equal(cleared.thumb_page, null, 'a pending clear is null, never ""');
+
+    // Fields that need no conversion are untouched by the codec layer.
+    const others = globalThis.prksEffectiveWorkMetadata(work,
+        [op('status', 'Completed'), op('author_text', 'Jane'), op('year', '2020')]);
+    assert.equal(others.status, 'Completed');
+    assert.equal(others.author_text, 'Jane');
+    assert.equal(others.year, '2020');
+    assert.equal(others.thumb_page, 2, 'and an untouched field keeps its entity value');
+    assert.deepEqual(work, { id: 'W-E', thumb_page: 2, status: 'Planned',
+        author_text: 'Old', year: '1999' }, 'the acknowledged Work is never mutated');
+
+    /* EVERY constructor agrees. This is the assertion that would have caught
+     * the leak: one helper disagreeing with the others is the defect, not the
+     * value any single one returns. */
+    globalThis.prksSetPendingWorkMetadata([op('thumb_page', '5')]);
+    const viaMap = globalThis.prksEffectiveWorkSync({ id: 'W-E', thumb_page: 2 });
+    const viaList = globalThis.prksEffectiveWorkMetadata({ id: 'W-E', thumb_page: 2 },
+        [op('thumb_page', '5')]);
+    const viaRows = globalThis.prksEffectiveWorksSync([{ id: 'W-E', thumb_page: 2 }])[0];
+    const viaSummaries = globalThis.prksEffectiveWorkSummaries([{ id: 'W-E', thumb_page: 2 }])[0];
+    const viaProjection = globalThis.prksEffectiveProjectionRows(
+        [{ id: 'W-E', thumb_page: 2 }], 'works-browse')[0];
+    for (const [label, row] of [['sync', viaMap], ['operation list', viaList],
+        ['rows', viaRows], ['summaries', viaSummaries], ['projection', viaProjection]]) {
+        assert.equal(row.thumb_page, 5, label + ' value');
+        assert.equal(typeof row.thumb_page, 'number', label + ' type');
+    }
+    globalThis.prksSetPendingWorkMetadata([]);
+}
+
+/* ---- metadata-state stores CANONICAL WIRE values ----
+ *
+ * That projection is synchronization bookkeeping: its `value` is what a base
+ * revision was observed against, in the representation the protocol uses. So
+ * "003" is as wrong there as "abc" -- neither is something the server emits --
+ * and an integer is wrong too, because that is the ENTITY representation and
+ * belongs on the Work record.
+ *
+ * Validation asks whether the stored value is valid, never whether it could be
+ * repaired: silently canonicalizing corrupt acknowledged state would hide the
+ * corruption and leave the observed base disagreeing with the server.
+ */
+function metadataStateWireValidation() {
+    const state = value => ({ work_id: 'W-S',
+        fields: base({ thumb_page: { value, revision: 4 } }) });
+    const valid = v => globalThis.prksIsWorkMetadataStateShape(state(v), 'W-S');
+
+    for (const good of ['', '1', '3', '15', '1000']) {
+        assert.equal(valid(good), true, JSON.stringify(good) + ' is canonical');
+    }
+    for (const bad of ['003', '0', '-1', 'abc', '1.5', ' 3 ', '+3', '01']) {
+        assert.equal(valid(bad), false, JSON.stringify(bad) + ' is not canonical wire');
+    }
+    // The ENTITY representation is not the wire representation.
+    assert.equal(valid(3), false, 'an integer belongs on the Work record, not here');
+    assert.equal(valid(null), false);
+
+    // A field whose codec has no opinion accepts any string, as always.
+    const doiState = value => ({ work_id: 'W-S',
+        fields: base({ doi: { value, revision: 4 } }) });
+    assert.equal(globalThis.prksIsWorkMetadataStateShape(doiState('003'), 'W-S'), true,
+        'an ordinary scalar has no canonical form to violate');
+    assert.equal(globalThis.prksIsWorkMetadataStateShape(doiState(3), 'W-S'), false,
+        'though it still has to be a string');
+
+    // The rule lives with the FIELD, not in the shape validator.
+    assert.equal(globalThis.prksIsCanonicalWorkFieldWire('thumb_page', '003'), false);
+    assert.equal(globalThis.prksIsCanonicalWorkFieldWire('doi', '003'), true);
+}
+
 /* ---- thumbnail resource identity comes from the EFFECTIVE Work ----
  *
  * A URL with no page means "whatever page the server currently has stored",
@@ -1467,6 +1559,8 @@ async function main() {
     thumbPageCodec();
     thumbPageKeepsRowsValid();
     thumbnailResourceIdentity();
+    everyEffectiveHelperIsTyped();
+    metadataStateWireValidation();
     await embeddedReconciliation();
     await unreadableSummariesBlockRetirement();
     await staleEmbeddedRead();

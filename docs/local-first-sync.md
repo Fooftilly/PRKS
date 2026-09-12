@@ -932,8 +932,10 @@ brings something the registry has not had to answer yet:
   obtain.
 - `source_url` is not self-contained: what a Work *is* derives from
   `source_kind`, `file_path`, `provider` and `provider_id` as well, and
-  `provider_id` can override what a changed URL would imply. Synchronizing it
-  alone could leave a video's identity inconsistent.
+  `provider_id` short-circuits what a changed URL would imply. Synchronizing it
+  alone could leave a video's identity inconsistent. Audited in full in
+  [work-source-identity.md](work-source-identity.md), which recommends one
+  aggregate operation rather than independent scalars.
 
 The registry is the authority on what synchronizes; this list is a note on why
 these four have not.

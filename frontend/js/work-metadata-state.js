@@ -200,6 +200,15 @@
          * different spellings of the same page would disagree about having
          * converged. */
         thumb_page: {
+            /* Is this what the server would have STORED? `metadata-state` holds
+             * already-canonical wire values, so "003" is as wrong there as
+             * "abc": neither is something the server emits, and a projection
+             * carrying one has been corrupted rather than merely spelled
+             * oddly. Validation asks whether the stored representation is
+             * valid -- never whether it could be repaired. */
+            isCanonicalWire: value => typeof value === 'string' &&
+                (value === '' || (/^[1-9][0-9]*$/.test(value) &&
+                    Number.isSafeInteger(Number(value)))),
             toDisplay: value => (value == null ? '' : String(value)),
             toCanonical: draft => {
                 const text = canonical(draft).trim();
@@ -241,6 +250,22 @@
     function toDisplayValue(field, value) {
         const codec = CODECS[field];
         return codec ? codec.toDisplay(value) : canonical(value);
+    }
+
+    /**
+     * Is this a value the SERVER would have stored in `metadata-state`?
+     *
+     * That projection holds canonical WIRE values, so the question is not
+     * "could this be understood" but "is this what canonicalization
+     * produces". A field whose codec has no opinion is any string, which is
+     * what every field except `thumb_page` has always been. Delegating keeps
+     * the rule with the field rather than growing a list of special cases
+     * inside the shape validator.
+     */
+    function isCanonicalWireValue(field, value) {
+        const codec = CODECS[field];
+        if (codec && codec.isCanonicalWire) return codec.isCanonicalWire(value);
+        return typeof value === 'string';
     }
 
     /**
@@ -287,9 +312,10 @@
             if (!entry || typeof entry !== 'object' || !revision(entry.revision)) return false;
             // A byte-limited field carries a revision only; its value lives on
             // the Work record. Anything else must carry both.
-            return BYTE_LIMITED_FIELDS.has(name)
-                ? !Object.prototype.hasOwnProperty.call(entry, 'value')
-                : typeof entry.value === 'string';
+            if (BYTE_LIMITED_FIELDS.has(name)) {
+                return !Object.prototype.hasOwnProperty.call(entry, 'value');
+            }
+            return isCanonicalWireValue(name, entry.value);
         });
     }
 
@@ -363,11 +389,15 @@
         if (!work || typeof work.id !== 'string') return work;
         const pending = fieldOperations(operations, work.id);
         if (!pending.length) return work;
-        const out = Object.assign({}, work);
+        /* The same generic overlay every other surface uses, given this
+         * caller's own operations instead of the shared map. Later operations
+         * win, exactly as they do when the map is built. */
+        const values = {};
         pending.forEach(op => {
-            if (FIELD_SET.has(op.payload.field)) out[op.payload.field] = op.payload.value;
+            if (FIELD_SET.has(op.payload.field)) values[op.payload.field] = op.payload.value;
         });
-        return out;
+        const byWork = new Map([[work.id, values]]);
+        return applyPendingFrom([work], entityTransforms(FIELDS), byWork)[0];
     }
 
     /**
@@ -616,15 +646,18 @@
      * snapshot -- in memory or in IndexedDB -- stays exactly what the server
      * said.
      */
+    /* Pending values are WIRE values -- that is what an operation carries --
+     * and these rows are Work-like objects, so each is converted to its entity
+     * representation on the way in. Without this a pending `thumb_page` of "3"
+     * would put the string "3" where every consumer, and every shape
+     * validator, expects the integer 3. */
+    function entityTransforms(fields) {
+        return (fields || FIELDS).filter(field => FIELD_SET.has(field)).map(
+            field => ({ field, column: field, derive: value => toEntityValue(field, value) }));
+    }
+
     function effectiveRows(rows, fields) {
-        const wanted = (fields || FIELDS).filter(field => FIELD_SET.has(field));
-        /* The pending map holds WIRE values -- that is what the operation
-         * carries -- and these rows are Work-like objects, so each value is
-         * converted to its entity representation on the way in. Without this a
-         * pending `thumb_page` of "3" would put the string "3" where every
-         * consumer, and every shape validator, expects the integer 3. */
-        return applyPending(rows, wanted.map(
-            field => ({ field, column: field, derive: value => toEntityValue(field, value) })));
+        return applyPending(rows, entityTransforms(fields));
     }
 
     /**
@@ -637,9 +670,23 @@
     }
 
     function applyPending(rows, transforms) {
-        if (!Array.isArray(rows) || !pendingByWork.size || !transforms.length) return rows;
+        return applyPendingFrom(rows, transforms, pendingByWork);
+    }
+
+    /**
+     * THE one rule for turning pending values into a Work-like object.
+     *
+     * Callers differ only in where their pending values come from: most read
+     * the shared map hydrated from the durable queue, while the metadata
+     * editor holds an explicit operation list for the Work it is editing. They
+     * must not differ in what a value BECOMES -- a second loop that copied
+     * wire values straight into an entity is exactly how `thumb_page` came out
+     * as the string "3" from one helper and the integer 3 from every other.
+     */
+    function applyPendingFrom(rows, transforms, byWork) {
+        if (!Array.isArray(rows) || !byWork.size || !transforms.length) return rows;
         return rows.map(row => {
-            const pending = row && pendingByWork.get(row.id);
+            const pending = row && byWork.get(row.id);
             if (!pending) return row;
             let out = row;
             transforms.forEach(({ field, column, derive }) => {
@@ -669,6 +716,7 @@
         prksWorkFieldToDisplay: toDisplayValue,
         prksWorkFieldToCanonical: toCanonicalValue,
         prksWorkFieldToEntity: toEntityValue,
+        prksIsCanonicalWorkFieldWire: isCanonicalWireValue,
         prksEffectiveProjectionRows: effectiveProjectionRows,
         /* Cached Folder/Person/Playlist details embed Work summaries. One
          * helper serves all three so no component learns to read the durable

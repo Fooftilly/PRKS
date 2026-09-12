@@ -1631,6 +1631,20 @@ The families are deliberately different in kind, and that is the point:
   URL means "whatever the server stores", which is wrong while a clear is
   pending -- the card would keep rendering the old page. `?page=1` and a stored
   NULL are the same page and the same cache artifact.
+- **Every effective-Work helper converts.** There is ONE rule
+  (`applyPendingFrom` + `entityTransforms`); callers differ only in where
+  their pending values come from -- the shared map, or an explicit operation
+  list for the editor. A second loop that copied wire values straight into an
+  entity is how `thumb_page` once came back as `"5"` from the helper the
+  EDITOR uses and `5` from every other. A selftest asserts all five
+  constructors agree, because one disagreeing is the defect.
+- **`metadata-state` holds CANONICAL wire values**, and its shape validator
+  asks the field's codec (`isCanonicalWire`) rather than growing special
+  cases. `"003"` is as invalid there as `"abc"`, and an integer is invalid too
+  -- that is the entity representation. Validation asks whether the stored
+  value is valid, NEVER whether it could be repaired: silently canonicalizing
+  corrupt acknowledged state hides the corruption and leaves the observed base
+  disagreeing with the server.
 - **Offline suppression is decided BEFORE any URL is derived.** A cached card
   emits no source at all; a pending edit is never a reason to request bytes
   that cannot arrive.
