@@ -676,7 +676,19 @@ function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
         st && st.recentlyAddedFilterQuery != null ? String(st.recentlyAddedFilterQuery) : '';
     const q = filterQuery.trim();
     const foldersById = prksFolderLibraryFoldersById();
-    const all = Array.isArray(works) ? works : [];
+    /* Acknowledged rows + durable pending field edits, applied here rather
+     * than stored. `st.recentlyAddedWorks` stays exactly what the server said:
+     * this tab already shipped a bug where its RAM copy outlived an IndexedDB
+     * invalidation, and baking unsynchronized values into it would be the same
+     * mistake with a longer fuse. The overlay costs one map lookup per row and
+     * is rebuilt from `prks-local-v1`, so it survives a reload. */
+    const acknowledged = Array.isArray(works) ? works : [];
+    const all =
+        typeof prksEffectiveWorkMetadataRows === 'function'
+            ? prksEffectiveWorkMetadataRows(acknowledged, ['publisher'])
+            : acknowledged;
+    // Filtering runs over the EFFECTIVE rows, so a pending Publisher is
+    // searchable immediately and the value it replaced stops matching.
     const list = q ? all.filter((w) => prksRecentlyAddedWorkMatchesQuery(w, q, foldersById)) : all;
     let html = '';
     if (list.length > 0) {
@@ -700,6 +712,29 @@ function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
     paneEl.innerHTML = html;
 }
 
+/* A durable metadata edit changes what Recently Added should SHOW and MATCH.
+ * The pane repaints from the same acknowledged rows with a refreshed overlay --
+ * no refetch, because nothing on the server moved. The propagation rules
+ * themselves stay in `work-metadata-state.js`; this only says "repaint". */
+async function prksRefreshRecentlyAddedOverlay() {
+    const st = window.__prksFolderDashboardState;
+    if (!st || !st.container || !Array.isArray(st.recentlyAddedWorks)) return;
+    if (typeof prksRefreshPendingWorkMetadata !== 'function') return;
+    await prksRefreshPendingWorkMetadata();
+    st.recentlyAddedPendingGeneration =
+        typeof prksPendingWorkMetadataGeneration === 'function'
+            ? prksPendingWorkMetadataGeneration()
+            : null;
+    prksRerenderFolderLibraryRecentlyAddedOnly();
+}
+
+if (typeof window !== 'undefined' && window.prksSync &&
+    typeof window.prksSync.subscribe === 'function') {
+    window.prksSync.subscribe(() => {
+        void prksRefreshRecentlyAddedOverlay().catch(() => {});
+    });
+}
+
 async function prksLoadFolderLibraryRecentlyAdded(force) {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
@@ -713,10 +748,19 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
         typeof prksOfflineDomainGeneration === 'function'
             ? prksOfflineDomainGeneration('recently-added')
             : null;
+    const pendingGeneration =
+        typeof prksPendingWorkMetadataGeneration === 'function'
+            ? prksPendingWorkMetadataGeneration()
+            : null;
     const memoryStale = st.recentlyAddedGeneration !== generation;
+    // A moved pending overlay is NOT a reason to refetch: the acknowledged
+    // rows in memory are still exactly what the server said. Only what we draw
+    // over them changed, so this repaints and never touches the network.
+    const overlayStale = st.recentlyAddedPendingGeneration !== pendingGeneration;
     const shouldForce = !!force || window.__prksRecentlyAddedDirty === true || memoryStale;
     if (st.recentlyAddedLoading) return;
     if (!shouldForce && Array.isArray(st.recentlyAddedWorks)) {
+        if (overlayStale) st.recentlyAddedPendingGeneration = pendingGeneration;
         prksRenderFolderLibraryRecentlyAdded(st.recentlyAddedWorks, pane);
         if (!st.recentlyAddedCached && typeof window.prksInitLazyWorkThumbs === 'function') {
             window.prksInitLazyWorkThumbs(pane);
@@ -724,6 +768,10 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
         return;
     }
     st.recentlyAddedLoading = true;
+    // One read of the durable queue for the whole list, not one per row.
+    if (typeof prksRefreshPendingWorkMetadata === 'function') {
+        await prksRefreshPendingWorkMetadata();
+    }
     // Its own snapshot, never derived from the Folder hierarchy or the stable
     // Work catalog: the canonical order is top-N by created_at with an id
     // tie-break, which neither of those carries.
@@ -739,6 +787,7 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
     if (!works) {
         st.recentlyAddedWorks = null;
         st.recentlyAddedGeneration = null;
+        st.recentlyAddedPendingGeneration = null;
         pane.innerHTML =
             '<p class="prks-inline-message">Recently added is not available offline.</p>';
         return;
@@ -748,6 +797,10 @@ async function prksLoadFolderLibraryRecentlyAdded(force) {
     st.recentlyAddedGeneration =
         typeof prksOfflineDomainGeneration === 'function'
             ? prksOfflineDomainGeneration('recently-added')
+            : null;
+    st.recentlyAddedPendingGeneration =
+        typeof prksPendingWorkMetadataGeneration === 'function'
+            ? prksPendingWorkMetadataGeneration()
             : null;
     window.__prksRecentlyAddedDirty = false;
     prksRenderFolderLibraryRecentlyAdded(works, pane);
@@ -880,6 +933,7 @@ function renderDashboard(folders, container, options = {}) {
         recentlyAddedFilterQuery,
         recentlyAddedWorks: prev.recentlyAddedWorks,
         recentlyAddedGeneration: prev.recentlyAddedGeneration,
+        recentlyAddedPendingGeneration: prev.recentlyAddedPendingGeneration,
         recentlyAddedCached: prev.recentlyAddedCached,
         recentlyAddedLoading: false,
     };

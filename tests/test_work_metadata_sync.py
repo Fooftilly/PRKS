@@ -38,7 +38,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
 
     def test_every_supported_field_round_trips(self):
         self.assertEqual(sorted(meta.SYNCED_FIELDS),
-                         ["doi", "edition", "isbn", "issue", "journal", "pages", "volume"])
+                         ["doi", "edition", "isbn", "issue", "journal", "location",
+                          "pages", "publisher", "volume"])
         for index, field in enumerate(sorted(meta.SYNCED_FIELDS)):
             with self.subTest(field=field):
                 status, result = self.send(field, "value-%d" % index)
@@ -50,7 +51,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """An arbitrary column name from a client is both an injection surface
         and a way to reach fields this milestone deliberately does not
         synchronize."""
-        for field in ("title", "status", "abstract", "id", "doi; DROP TABLE works", "", None, 7):
+        for field in ("title", "status", "abstract", "year", "id",
+                      "doi; DROP TABLE works", "", None, 7):
             with self.subTest(field=field):
                 self.assertEqual(sync_protocol.process_operation(self.db, self.op(field, "x")),
                                  (400, {"code": "INVALID_ENVELOPE"}))
@@ -182,7 +184,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
         before = self.state()
         self.db.update_work_metadata(self.work, {
             "title": "Renamed", "status": "Paused", "abstract": "New abstract",
-            "year": "1999", "publisher": "Someone", "doc_type": "book"})
+            "year": "1999", "author_text": "Someone", "doc_type": "book"})
         self.assertEqual(self.state(), before)
         self.assertEqual(self.db.execute_query(
             "SELECT title FROM works WHERE id = ?", (self.work,))[0]["title"], "Renamed")
@@ -240,6 +242,68 @@ class WorkMetadataSyncTests(unittest.TestCase):
             "WHERE scope_type = 'work-field' AND scope_id = ?",
             (meta.scope_key(self.work, "doi"),))
         snapshot("revision only")
+
+    # ---- the cross-projection dependency this milestone exists for ----
+
+    def test_recently_added_carries_publisher_for_its_local_filter(self):
+        """The pin behind `FIELD_PROJECTIONS`. Recently Added filters locally
+        over Publisher, so the value is part of that cached projection's
+        semantics even though no Work card renders it -- being invisible is not
+        the same as being unused. If this projection ever stops selecting it,
+        the client overlay built on top becomes dead weight rather than a bug
+        anyone would notice."""
+        self.db.update_work_metadata(self.work, {"publisher": "Fixture Press"})
+        rows = self.db.get_recently_added_browse()
+        row = next(r for r in rows if r["id"] == self.work)
+        self.assertEqual(row["publisher"], "Fixture Press")
+        self.assertEqual(meta.FIELD_PROJECTIONS["publisher"], ("recently-added",))
+
+    def test_only_publisher_claims_another_projection(self):
+        """Location is the control case: a detail-only field must not drag an
+        unrelated cached read model into its reconciliation."""
+        self.assertEqual(sorted(meta.FIELD_PROJECTIONS), ["publisher"])
+        for field in meta.SYNCED_FIELDS:
+            if field == "publisher":
+                continue
+            self.assertNotIn(field, meta.FIELD_PROJECTIONS, field)
+
+    def test_publisher_and_location_behave_like_every_other_field(self):
+        """No new machinery: the expanded registry reuses the scalar path."""
+        for field in ("publisher", "location"):
+            with self.subTest(field=field):
+                self.assertEqual(self.send(field, "first")[1]["code"], "ACKNOWLEDGED")
+                self.assertEqual(self.state()[field], {"value": "first", "revision": 1})
+                self.assertFalse(self.send(field, "first", base=1)[1]["changed"])
+                self.assertEqual(self.send(field, "second", base=0)[1]["code"], "REVISION_CONFLICT")
+                self.assertEqual(self.send(field, "second", base=1)[1]["code"], "ACKNOWLEDGED")
+                self.assertEqual(self.value(field), "second")
+
+    def test_publisher_and_location_are_independent_of_each_other(self):
+        self.send("publisher", "Elsevier")
+        self.send("location", "Amsterdam")
+        self.send("location", "Amsterdam; Boston", base=1)
+        # A device stale on Location still applies its Publisher edit cleanly.
+        self.assertEqual(self.send("publisher", "Springer", base=1)[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual((self.value("publisher"), self.value("location")),
+                         ("Springer", "Amsterdam; Boston"))
+
+    def test_new_fields_keep_their_documented_bounds(self):
+        """Ordinary PATCH imposes no length limit; the sync envelope does, so
+        the bound is a deliberate, tested number rather than an accident."""
+        for field in ("publisher", "location"):
+            with self.subTest(field=field):
+                self.assertEqual(meta.SYNCED_FIELDS[field], 500)
+                limit = meta.SYNCED_FIELDS[field]
+                self.assertEqual(self.send(field, "x" * limit)[0], 200)
+                over = self.op(field, "x" * (limit + 1), base=1)
+                self.assertEqual(sync_protocol.process_operation(self.db, over)[0], 400)
+
+    def test_multi_place_locations_are_stored_verbatim(self):
+        """PRKS joins semicolon-separated places at BibLaTeX export time and
+        stores what the user typed; the sync path must not start parsing."""
+        value = "Cambridge, UK; Paris; Berlin"
+        self.send("location", value)
+        self.assertEqual(self.value("location"), value)
 
     def test_scope_keys_are_structural(self):
         self.assertNotEqual(meta.scope_key("W-a:b", "doi"), meta.scope_key("W-a", "b:doi"))

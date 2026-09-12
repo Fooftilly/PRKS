@@ -75,7 +75,10 @@ class FrontendWorkCardTests(unittest.TestCase):
         src = _read(_FOLDERS)
         at = src.find("function prksRenderFolderLibraryRecentlyAdded")
         self.assertNotEqual(at, -1)
-        block = src[at : at + 1400]
+        # Bounded by the function, not by a character count: a comment added
+        # above the branch should not be able to hide it from this check.
+        end = src.index("\nasync function prksLoadFolderLibraryRecentlyAdded(", at)
+        block = src[at:end]
         self.assertIn("No files in the library yet.", block)
         self.assertIn("openModal(", block)
         self.assertIn("work-modal", block)

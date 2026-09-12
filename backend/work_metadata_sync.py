@@ -6,13 +6,16 @@ Work-level revision would tell them they had -- forcing a resolution UI over a
 conflict that does not exist. So each supported field carries its own revision
 scope and they advance independently.
 
-Only the seven bibliographic scalars below are synchronized. They were chosen
-because they are real user-editable metadata that no other cached read model
-RENDERS: the Work summary projection carries them, but Work cards, browse
-catalogs, Folders, People, Playlists and the Graph display none of them. A
-pending value therefore needs no optimistic propagation beyond the Work itself.
-Higher fan-out fields (title, status, doc_type, year, abstract) are a separate
-problem and are deliberately not here.
+Nine scalars are synchronized. Eight of them reach no cached read model but the
+Work detail: the Work summary projection carries them, yet Work cards, browse
+catalogs, Folders, People, Playlists and the Graph display none of them.
+
+`publisher` is the exception, and the reason it is here. `recently-added:index`
+carries it because Home -> Recently Added filters LOCALLY over it, so a pending
+publisher has to reach that projection's filtering even though no card renders
+it. Being invisible is not the same as being unused. Higher fan-out fields
+(title, status, doc_type, year, abstract) are a separate problem and are
+deliberately not here.
 
 Nothing in this module imports the database layer; the handler is handed the
 `db` it needs, so the ordinary PATCH boundary can share the same helpers.
@@ -31,6 +34,16 @@ SYNCED_FIELDS = {
     "pages": 200,
     "isbn": 100,
     "doi": 500,
+    "publisher": 500,
+    "location": 500,
+}
+
+# Cached projections that carry a synchronized field and therefore have to be
+# reconciled when it is acknowledged. Absent means "the Work detail only".
+# `recently-added:index` selects `publisher` for its local filter, so this is a
+# real dependency even though no Work card renders the value.
+FIELD_PROJECTIONS = {
+    "publisher": ("recently-added",),
 }
 
 

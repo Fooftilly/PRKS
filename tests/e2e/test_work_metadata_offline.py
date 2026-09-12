@@ -343,6 +343,167 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertEqual(self.server_fields(server, work)['doi'],
                          {'value': 'server-doi', 'revision': 1})
 
+    # ---- the cross-projection case this milestone exists for ----------------
+
+    def recently_added(self, page):
+        """Home -> Recently Added, warmed and rendered."""
+        page.evaluate("() => prksNavigate('#/folders')")
+        page.wait_for_selector('.prks-folder-library__tab-btn[data-tab="recently-added"]')
+        page.evaluate("() => prksSwitchFolderLibraryTab('recently-added')")
+        page.wait_for_selector('#prks-folder-library-recently-added')
+
+    def filter_recently_added(self, page, query):
+        """Type into the tab's local filter and return the matching Work ids."""
+        page.locator('#prks-folder-library-files-search').fill(query)
+        page.wait_for_timeout(150)
+        return page.evaluate("""() => Array.from(
+            document.querySelectorAll('#prks-folder-library-recently-added [data-work-id]')
+        ).map(el => el.dataset.workId)""")
+
+    def cached_recently_added_publisher(self, page, work_id):
+        return page.evaluate("""id => window.createPrksOfflineStore().getList('recently-added:index')
+            .then(row => {
+                if (!row) return null;
+                const found = row.value.find(w => w.id === id);
+                return found ? found.publisher : null;
+            })""", work_id)
+
+    def test_pending_publisher_is_searchable_in_recently_added_before_it_syncs(self):
+        """The core of this milestone. Recently Added filters locally over
+        Publisher, so a pending value has to reach that projection's filtering
+        even though no card renders it -- while the acknowledged snapshot on
+        disk still says what the server said."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'publisher': 'Elsevier'})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.recently_added(page)
+        o._wait_list_cached(page, 'recently-added:index')
+        self.assertIn(work, self.filter_recently_added(page, 'Elsevier'))
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'publisher', 'Springer')
+        self.save(page)
+        self.pending(page, 1)
+
+        self.recently_added(page)
+        self.assertIn(work, self.filter_recently_added(page, 'Springer'),
+                      'the pending publisher is searchable immediately')
+        self.assertNotIn(work, self.filter_recently_added(page, 'Elsevier'),
+                         'the value it replaced stops matching')
+        self.assertEqual(self.cached_recently_added_publisher(page, work), 'Elsevier',
+                         'the acknowledged snapshot is untouched until the server answers')
+
+    def test_the_pending_publisher_overlay_survives_a_reload(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'publisher': 'Elsevier'})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.recently_added(page)
+        o._wait_list_cached(page, 'recently-added:index')
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'publisher', 'Springer')
+        self.save(page)
+        self.pending(page, 1)
+
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.recently_added(page)
+        self.assertIn(work, self.filter_recently_added(page, 'Springer'),
+                      'the overlay is rebuilt from durable storage, not tab memory')
+        self.pending(page, 1)
+
+    def test_acknowledgement_reconciles_the_projection_and_retires_the_overlay(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'publisher': 'Elsevier'})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.recently_added(page)
+        o._wait_list_cached(page, 'recently-added:index')
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'publisher', 'Springer')
+        self.save(page)
+        self.pending(page, 1)
+        self.reconnect(page, context)
+        self.pending(page, 0)
+
+        self.assertEqual(self.server_fields(server, work)['publisher'],
+                         {'value': 'Springer', 'revision': 2})
+        self.assertEqual(self.cached_recently_added_publisher(page, work), 'Springer',
+                         'the acknowledged projection row was patched, not dropped')
+        self.recently_added(page)
+        self.assertIn(work, self.filter_recently_added(page, 'Springer'),
+                      'the value survives the overlay being retired')
+
+    def test_location_is_detail_only_and_leaves_recently_added_alone(self):
+        """The control case: expanding the field family must not make every
+        field invalidate every projection."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.recently_added(page)
+        o._wait_list_cached(page, 'recently-added:index')
+        before = page.evaluate("() => prksOfflineDomainGeneration('recently-added')")
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'location', 'Amsterdam; Boston')
+        self.save(page)
+        self.pending(page, 1)
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.assertIn('Amsterdam; Boston', self.bib_rows(page))
+        self.pending(page, 1)
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.server_fields(server, work)['location'],
+                         {'value': 'Amsterdam; Boston', 'revision': 1})
+        self.assertEqual(page.evaluate("() => prksOfflineDomainGeneration('recently-added')"), before,
+                         'a detail-only field never touches an unrelated projection')
+        self.assertIsNotNone(o._cached_list(page, 'recently-added:index'))
+
+    def test_a_publisher_conflict_uses_the_existing_field_path(self):
+        """No new conflict machinery: the expanded registry reuses 2D's."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.offline(page, context)
+        self.field(page, 'publisher', 'device-publisher')
+        self.field(page, 'location', 'device-location')
+        self.field(page, 'doi', 'device-doi')
+        self.save(page)
+        self.pending(page, 3)
+        self.db_for(server).update_work_metadata(work, {'publisher': 'server-publisher'})
+        self.reconnect(page, context)
+        self.pending(page, 1)
+
+        rows = self.operations(page)
+        self.assertEqual(rows[0]['payload']['field'], 'publisher')
+        self.assertEqual(rows[0]['status'], 'conflict')
+        state = self.server_fields(server, work)
+        self.assertEqual(state['location']['value'], 'device-location',
+                         'Location was never in the collision')
+        self.assertEqual(state['doi']['value'], 'device-doi')
+        self.assertTrue(page.locator('[data-prks-work-field="publisher"]').is_disabled())
+        self.assertFalse(page.locator('[data-prks-work-field="location"]').is_disabled())
+        self.assertFalse(page.locator('[data-prks-work-field="doi"]').is_disabled())
+
+        page.get_by_role('button', name='Use server', exact=True).click()
+        self.pending(page, 0)
+        self.assertEqual(self.server_fields(server, work)['publisher'],
+                         {'value': 'server-publisher', 'revision': 1})
+
     # ---- boundaries ---------------------------------------------------------
 
     def test_online_save_uses_the_same_durable_queue(self):
@@ -360,6 +521,22 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                          'the synchronized fields never travel in the online PATCH')
         self.assertEqual(self.server_fields(server, work)['doi'],
                          {'value': '10.1/online', 'revision': 1})
+
+    def test_publisher_and_location_left_the_online_save(self):
+        """Two mutation paths for one field would mean the path that is not
+        revision-aware silently overwriting the other's conflicts."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        seen = self.record_paths(page)
+        self.field(page, 'publisher', 'Durable Press')
+        self.field(page, 'location', 'Durable City')
+        self.save(page)
+        self.pending(page, 0)
+        self.assertEqual([(m, u) for m, u in seen if m == 'PATCH'], [],
+                         'the synchronized fields never travel in the online PATCH')
+        state = self.server_fields(server, work)
+        self.assertEqual(state['publisher'], {'value': 'Durable Press', 'revision': 1})
+        self.assertEqual(state['location'], {'value': 'Durable City', 'revision': 1})
 
     def test_unsupported_metadata_stays_explicitly_online_only(self):
         server, page, context = self.start()

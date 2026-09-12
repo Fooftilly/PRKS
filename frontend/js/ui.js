@@ -3388,11 +3388,13 @@ async function submitWorkMetaEdit(workId) {
         })(),
         year: draft.year,
         published_date: metaDateIso || null,
-        publisher: draft.publisher, location: draft.location, abstract: draft.abstract
+        abstract: draft.abstract
     };
-    // Edition/journal/volume/issue/pages/ISBN/DOI are deliberately absent:
-    // they take the durable semantic queue through "Save bibliographic
-    // details", online and offline, so this PATCH cannot half-save them.
+    // Publisher, Location, edition, journal, volume, issue, pages, ISBN and
+    // DOI are deliberately absent: they take the durable semantic queue
+    // through "Save bibliographic details", online and offline. Sending them
+    // here as well would give the same fields two mutation paths, and the one
+    // that is not revision-aware would overwrite the other's conflicts.
     if (draft.author_text != null) payload.author_text = String(draft.author_text || '').trim();
     if (draft.source_url != null) payload.source_url = String(draft.source_url || '').trim();
     
@@ -3680,12 +3682,6 @@ function renderWorkMetaTab(work, mode = 'view') {
             <div class="work-details-metadata__body">
             ${renderRow('Year', work.year)}
             ${showPublishedDate ? renderRow('Published', typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date) : ''}
-            ${
-                work.publisher
-                    ? `<p class="meta-row"><strong>Publisher:</strong> <a href="#/search?publisher=${encodeURIComponent(String(work.publisher).trim())}" class="route-sidebar__link">${escapeHtml(work.publisher)}</a></p>`
-                    : ''
-            }
-            ${renderRow('Location', work.location)}
             <div id="work-bib-rows" data-prks-role="work-bib-rows">${prksWorkBibRowsHtml(work)}</div>
             ${
                 originalUrlPdf
@@ -4476,14 +4472,20 @@ async function prksRemoveWorkTag(workId, tagId, btn) {
  * renderer, so the two can never drift apart. */
 function prksWorkBibRowsHtml(work) {
     const fields = typeof PRKS_SYNCED_WORK_FIELDS !== 'undefined'
-        ? PRKS_SYNCED_WORK_FIELDS : ['edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi'];
+        ? PRKS_SYNCED_WORK_FIELDS
+        : ['publisher', 'location', 'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi'];
     const labels = typeof PRKS_SYNCED_WORK_FIELD_LABELS !== 'undefined' ? PRKS_SYNCED_WORK_FIELD_LABELS : {};
     return fields
         .map((field) => {
             const value = work && work[field] != null ? String(work[field]) : '';
             if (!value) return '';
             const label = labels[field] || field;
-            return `<p class="meta-row"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</p>`;
+            // Publisher stays a search link; the rest are plain values.
+            const rendered =
+                field === 'publisher'
+                    ? `<a href="#/search?publisher=${encodeURIComponent(value.trim())}" class="route-sidebar__link">${escapeHtml(value)}</a>`
+                    : escapeHtml(value);
+            return `<p class="meta-row"><strong>${escapeHtml(label)}:</strong> ${rendered}</p>`;
         })
         .join('');
 }
@@ -4526,13 +4528,6 @@ function renderWorkMetaEditTab(work, draft) {
     const bibFields = isVideo
         ? ''
         : `
-            <label for="meta-publisher">Publisher</label>
-            <input type="text" id="meta-publisher" value="${safeStr(work.publisher)}">
-
-            <label for="meta-location">Location (place of publication)</label>
-            <input type="text" id="meta-location" value="${safeStr(work.location)}" placeholder="e.g. Cambridge, UK or Paris; Berlin" autocomplete="off">
-            <p class="meta-row meta-row--hint">Separate multiple places with semicolons; BibLaTeX export joins them with &quot; and &quot;.</p>
-
             <label for="meta-source-url">Original URL (optional)</label>
             <input type="url" id="meta-source-url" placeholder="https://…" value="${safeStr(work.source_url)}" autocomplete="off">
             <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web.</p>
@@ -4546,6 +4541,13 @@ function renderWorkMetaEditTab(work, draft) {
         : `
             <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
                 <h4>Bibliographic details</h4>
+                <label for="meta-publisher">Publisher</label>
+                <input type="text" id="meta-publisher" data-prks-work-field="publisher" value="${safeStr(work.publisher)}">
+
+                <label for="meta-location">Location (place of publication)</label>
+                <input type="text" id="meta-location" data-prks-work-field="location" value="${safeStr(work.location)}" placeholder="e.g. Cambridge, UK or Paris; Berlin" autocomplete="off">
+                <p class="meta-row meta-row--hint">Separate multiple places with semicolons; BibLaTeX export joins them with &quot; and &quot;.</p>
+
                 <label for="meta-edition">Edition</label>
                 <input type="text" id="meta-edition" data-prks-work-field="edition" value="${safeStr(work.edition)}" placeholder="e.g. 2 or revised" autocomplete="off">
 

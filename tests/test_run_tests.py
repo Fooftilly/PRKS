@@ -121,13 +121,15 @@ class TestRunTests(unittest.TestCase):
         with open(agents, encoding="utf-8") as handle:
             text = handle.read()
         for phrase in (
-            "Do not run the full E2E suite during normal implementation iterations",
-            "Never run the full E2E suite while iterating",
-            "diagnose it using the individual test or module",
+            "do not run browser E2E tests at all",
+            "neither the full suite nor an entire module",
+            "Never run browser E2E tests while iterating",
+            "run the relevant targeted E2E module once",
+            "debug with the individual failing test or its module",
         ):
             self.assertIn(phrase, text, phrase)
         # Stated where an agent starts reading, not only 1500 lines in.
-        self.assertLess(text.index("Never run the full E2E suite while iterating"),
+        self.assertLess(text.index("Never run browser E2E tests while iterating"),
                         text.index("## Storage"))
 
 

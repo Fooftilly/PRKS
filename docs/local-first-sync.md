@@ -6,7 +6,7 @@ PRKS has one semantic-operation protocol and **two families** on it:
 | --- | --- | --- |
 | `ADD_WORK_TAG` / `REMOVE_WORK_TAG` | 2B | Revisioned relationship. Two devices can genuinely disagree, so conflicts are real and the user resolves them. |
 | `MARK_WORK_OPENED` | 2C | Max-register over normalized event time. Two devices cannot disagree, so there is no conflict and none is offered. |
-| `SET_WORK_METADATA_FIELD` | 2D | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
+| `SET_WORK_METADATA_FIELD` | 2D, 2E | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
 
 Both commit to durable browser storage before the UI acts on them, survive
 reloads and offline periods, and synchronize idempotently on reconnect. Other
@@ -223,18 +223,19 @@ A render PRKS decided to do -- the reconnect refresh -- is not an open either.
 
 ## Work metadata fields
 
-Seven bibliographic scalars synchronize: `edition`, `journal`, `volume`,
-`issue`, `pages`, `isbn`, `doi`. Each owns a revision scope
+Nine bibliographic scalars synchronize: `publisher`, `location`, `edition`,
+`journal`, `volume`, `issue`, `pages`, `isbn`, `doi`. Each owns a revision scope
 `work-field / ["<work id>", "<field>"]` -- the same structural JSON encoding the
 Work-Tag scopes use, so no delimiter has to be excluded from either component.
 A missing row is revision 0. No schema change was needed: these live in the
 existing `sync_entity_revisions` table.
 
 The envelope payload is `{"field": ..., "value": ...}`, one operation type for
-all seven rather than seven operation types: the semantic act is "set one
-supported field to one scalar value". The field must be in the server's own
-registry -- an arbitrary column name from a client would be both an injection
-surface and a way to reach fields this milestone deliberately excludes.
+all of them rather than one per field: the semantic act is "set one supported
+field to one scalar value", so 2E added `publisher` and `location` as registry
+entries and nothing else. The field must be in the server's own registry -- an
+arbitrary column name from a client would be both an injection surface and a
+way to reach fields these milestones deliberately exclude.
 
 | Base vs field revision | Requested vs current value | Result |
 | --- | --- | --- |
@@ -280,6 +281,8 @@ Work creation manufactures no revisions: initial values are revision 0.
 
 ## Metadata: overlay, atomic save and per-field conflicts
 
+### Cross-projection overlay (2E)
+
 The effective Work is the acknowledged cached record plus durable
 pending/conflicted field edits. Pending intent is never written into the cached
 Work; the overlay is recomputed from `prks-local-v1`, so it survives a reload,
@@ -299,6 +302,32 @@ subtly wrong in both directions: editing a field back to its server value would
 look like no change and quietly strand the pending operation, and a field still
 displaying an untouched pending value would look dirty on every save.
 
+A field carried by another cached projection needs that projection's rows
+overlaid too, and `publisher` is the only one today. The rules live in
+`work-metadata-state.js`; the Folder component only says "repaint", so there is
+one interpretation of operation semantics rather than two that can drift.
+
+The durable queue is read ONCE into a `workId -> {field: value}` map, not once
+per row: Recently Added filters up to 50 rows synchronously on every keystroke,
+and a query per row would be a storm. Effective rows are produced by copying
+only the rows an edit touches -- the acknowledged array, in memory and in
+IndexedDB, stays exactly what the server said. That matters more than it
+sounds: this tab already shipped a bug where its RAM copy outlived an IndexedDB
+invalidation, and writing pending values into it would be the same mistake with
+a longer fuse. The memoized render is refused when either the coherence
+generation or the overlay generation moves, and an overlay change repaints
+without refetching, because nothing on the server moved.
+
+On acknowledgement the projection row is **patched in place** rather than the
+list invalidated: dropping the snapshot would cost Recently Added its offline
+availability for a change whose exact shape is already known. The
+`recently-added` domain generation is bumped before the read, so a
+`GET /api/recently-added` that began earlier cannot publish over it. A Work the
+projection does not carry, or no cached projection at all, is nothing to
+reconcile rather than a failure.
+
+### Per-field save and conflicts
+
 Coalescing is per field. Only never-sent rows may be rewritten, so a field whose
 operation may already have reached the server, or whose operation is
 conflicted, is temporarily busy -- and only that field. The other six stay
@@ -312,19 +341,27 @@ revision; the conflicted id is never reused. Settings -> Diagnostics lists every
 unsynchronized operation with its Work id, field, local value and the server's,
 and can discard a conflicted one without the Work's page existing at all.
 
-## Fan-out: why these seven
+## Fan-out: which fields reach which projections
 
-These fields are rendered on the Work detail and nowhere else. The Work summary
-projection carries them, so cached Folder, Person and Playlist details hold
-them in their payloads -- but no Work card, browse catalog, Concept, Argument or
-Graph surface displays them, so a pending value needs no optimistic propagation
-beyond the Work itself, and an acknowledgement invalidates no browse catalog.
+Eight of the nine are rendered on the Work detail and nowhere else. The Work
+summary projection carries them, so cached Folder, Person and Playlist details
+hold them in their payloads -- but no Work card, browse catalog, Concept,
+Argument or Graph surface displays them, so a pending value needs no optimistic
+propagation beyond the Work itself, and an acknowledgement invalidates no browse
+catalog.
+
+`publisher` is the exception, and 2E exists because of it. **Being invisible on
+a card is not the same as being unused:** `recently-added:index` selects
+`works.publisher` because Home -> Recently Added filters LOCALLY over it, so a
+pending publisher has to reach that projection's filtering. `FIELD_PROJECTIONS`
+in `backend/work_metadata_sync.py` and `work-metadata-state.js` names that
+dependency on both sides, and the parity is pinned by a test -- an earlier
+version of this table claimed publisher reached nothing else, which was wrong.
 
 The deferred fields do not share that property:
 
-| Field | Also rendered by |
+| Field | Also rendered or matched by |
 | --- | --- |
-| `publisher`, `location` | nothing else (Work detail only; `publisher` is a server-side search filter, and search is never cached) |
 | `abstract` | Progress, via the bounded `abstract_excerpt` in `works-browse:index` |
 | `source_url` | every Work card, via `prksInferWorkSourceKind()` deciding the thumbnail kind |
 | `thumb_page` | every Work card, via the thumbnail URL |
@@ -430,12 +467,26 @@ explicit conflict discard when the original Work is no longer available.
 Structured terminal results are allowlisted and size-bounded, separate from
 short retry error messages. None of this content belongs in logs.
 
-## Deferred beyond 2D
+## Deferred beyond 2E
 
 No offline Tag creation/rename/merge/delete, Folder mutation, Work
 creation/deletion, Playlist mutation, Concept editing or Research Notes
 editing, and no synchronization for the high fan-out Work fields in the table
 above. No CRDT, multi-user sync, batching, server push or automatic lifecycle
-retargeting. The next family must arrive as a handler registration rather than
-a second protocol, and the fan-out table -- not convenience -- decides which
-one it is.
+retargeting.
+
+**`abstract` is deliberately still online-only**, and it is not simply the next
+field on the list. It needs two things nothing here has solved:
+
+1. A **derived** optimistic projection. Publisher copies a scalar into another
+   projection unchanged. `abstract` feeds `abstract_excerpt` -- the server's
+   first 100 characters -- into `works-browse:index` for Progress, so the client
+   would have to reproduce a server-side derivation and stay byte-identical to
+   it. Copying and deriving are not the same problem.
+2. A **payload-size decision**. The durable local store caps an operation
+   payload at 64 KB (`PRKS_LOCAL_MAX_PAYLOAD_BYTES`), while ordinary PATCH
+   imposes no limit on an abstract at all. Moving the field to the durable path
+   without deciding this would quietly turn "an abstract can be saved" into "an
+   abstract can be saved if it fits the sync envelope". Decide the maximum
+   supported size, whether the cap changes, and whether large text belongs in
+   the operation envelope at all -- before writing any of it.

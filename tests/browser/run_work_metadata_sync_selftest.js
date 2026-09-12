@@ -341,6 +341,136 @@ async function isolation() {
     assert.equal(globalThis.prksIsWorkMetadataStateShape({ work_id: 'W-M', fields: missing }, 'W-M'), false);
 }
 
+/* ---- PHASE H/I: a pending value reaches ANOTHER cached projection ----
+ *
+ * Publisher is carried by `recently-added:index` because that tab filters
+ * locally over it. The acknowledged snapshot must stay untouched while the
+ * effective rows the user sees and searches carry the pending value.
+ */
+async function crossProjection() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    globalThis.prksSync = { store };
+    const acknowledged = [
+        { id: 'W-1', title: 'Alpha', publisher: 'Elsevier', created_at: '2026-09-01' },
+        { id: 'W-2', title: 'Beta', publisher: 'Springer', created_at: '2026-08-01' },
+    ];
+    const frozen = JSON.parse(JSON.stringify(acknowledged));
+
+    await globalThis.prksRefreshPendingWorkMetadata();
+    assert.deepEqual(globalThis.prksEffectiveWorkMetadataRows(acknowledged, ['publisher']), acknowledged,
+        'with nothing pending the acknowledged rows are returned as they are');
+
+    const observed = base({ publisher: { value: 'Elsevier', revision: 2 } });
+    await store.saveWorkMetadataFields('W-1', { publisher: 'Springer' }, observed);
+    const before = globalThis.prksPendingWorkMetadataGeneration();
+    await globalThis.prksRefreshPendingWorkMetadata();
+    assert(globalThis.prksPendingWorkMetadataGeneration() > before,
+        'the overlay generation moves so memoized renders can be refused');
+
+    const effective = globalThis.prksEffectiveWorkMetadataRows(acknowledged, ['publisher']);
+    assert.equal(effective[0].publisher, 'Springer', 'the effective row carries the pending value');
+    assert.equal(effective[1].publisher, 'Springer', 'an untouched row is untouched');
+    assert.equal(effective[0].title, 'Alpha', 'the rest of the row survives the overlay');
+    assert.deepEqual(acknowledged, frozen, 'the acknowledged snapshot is never mutated');
+    assert.notEqual(effective[0], acknowledged[0], 'an edited row is a copy, not the original');
+    assert.equal(effective[1], acknowledged[1], 'an unedited row is not needlessly copied');
+
+    // Only the fields the caller asked for are overlaid.
+    await store.saveWorkMetadataFields('W-1', { doi: '10.1/x' }, observed);
+    await globalThis.prksRefreshPendingWorkMetadata();
+    const publisherOnly = globalThis.prksEffectiveWorkMetadataRows(acknowledged, ['publisher'])[0];
+    assert.equal(publisherOnly.publisher, 'Springer');
+    assert.equal(publisherOnly.doi, undefined, 'a projection gets only the fields it carries');
+
+    /* PHASE I: the filter is the point. A pending Publisher must match, and
+     * the value it replaced must stop matching, before anything synchronizes. */
+    const matches = (row, query) => [row.title, row.publisher]
+        .some(v => v != null && String(v).toLowerCase().includes(query.toLowerCase()));
+    assert.equal(matches(effective[0], 'Springer'), true, 'the pending publisher is searchable');
+    assert.equal(matches(effective[0], 'Elsevier'), false, 'the replaced publisher stops matching');
+    assert.equal(matches(acknowledged[0], 'Elsevier'), true, 'the cached row still says Elsevier');
+
+    // Acknowledged operations belong to the server, not the overlay.
+    const rows = await store.listOperations();
+    for (const op of rows) await store.updateOperationSyncState(op.op_id, { status: 'acknowledged' });
+    await globalThis.prksRefreshPendingWorkMetadata();
+    assert.deepEqual(globalThis.prksEffectiveWorkMetadataRows(acknowledged, ['publisher']), acknowledged);
+    delete globalThis.prksSync;
+}
+
+/* ---- PHASE L/M/N: acknowledgement reaches the projection too ---- */
+async function projectionReconciliation() {
+    const factory = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    await cache.putEntity('work', 'W-M', { id: 'W-M', title: 'Paper', publisher: 'Elsevier' });
+    await cache.putEntity('work-metadata-state', 'W-M',
+        { work_id: 'W-M', fields: base({ publisher: { value: 'Elsevier', revision: 2 } }) });
+    await cache.putList('recently-added:index', [
+        { id: 'W-M', title: 'Paper', publisher: 'Elsevier' },
+        { id: 'W-OTHER', title: 'Other', publisher: 'Wiley' },
+    ], '');
+    const offline = createPrksOfflineRuntime({ store: cache, window: null,
+        prksRequest: async () => { throw new Error('no reads in this scenario'); } });
+
+    const acknowledgement = { code: 'ACKNOWLEDGED', work_id: 'W-M', field: 'publisher',
+        value: 'Springer', server_revision: 3, changed: true };
+    assert.equal(await offline.reconcileWorkField(acknowledgement), true);
+    assert.equal((await cache.getEntity('work', 'W-M')).value.publisher, 'Springer');
+    assert.deepEqual((await cache.getEntity('work-metadata-state', 'W-M')).value.fields.publisher,
+        { value: 'Springer', revision: 3 });
+    const list = (await cache.getList('recently-added:index')).value;
+    assert.equal(list[0].publisher, 'Springer', 'the acknowledged projection row is patched in place');
+    assert.equal(list[1].publisher, 'Wiley', 'other rows are untouched');
+    assert.equal(list.length, 2, 'the snapshot is patched, never dropped');
+
+    /* A detail-only field must not drag an unrelated projection into its
+     * reconciliation -- Location is the control case for exactly that. */
+    const locationAck = { code: 'ACKNOWLEDGED', work_id: 'W-M', field: 'location',
+        value: 'Amsterdam', server_revision: 1, changed: true };
+    const generationBefore = offline.currentDomainGeneration('recently-added');
+    assert.equal(await offline.reconcileWorkField(locationAck), true);
+    assert.equal(offline.currentDomainGeneration('recently-added'), generationBefore,
+        'Location leaves the Recently Added domain completely alone');
+    assert.equal((await cache.getEntity('work', 'W-M')).value.location, 'Amsterdam');
+
+    // A Work the projection does not carry is not a failure, and adds nothing.
+    assert.equal(await offline.reconcileWorkField(
+        { ...acknowledgement, work_id: 'W-ABSENT', server_revision: 1 }), true);
+    assert.equal((await cache.getList('recently-added:index')).value.length, 2);
+
+    // No cached projection at all: nothing to reconcile, nothing invented.
+    await cache.deleteList('recently-added:index');
+    assert.equal(await offline.reconcileWorkField({ ...acknowledgement, server_revision: 4 }), true);
+    assert.equal(await cache.getList('recently-added:index'), null);
+}
+
+/* A GET that began before the acknowledgement cannot publish over it. */
+async function staleProjectionRead() {
+    const factory = createFakeIndexedDBFactory();
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const stale = [{ id: 'W-M', title: 'Paper', publisher: 'Elsevier' }];
+    await cache.putEntity('work', 'W-M', { id: 'W-M', title: 'Paper', publisher: 'Elsevier' });
+    await cache.putList('recently-added:index', stale, '');
+    let release = null;
+    const inFlight = new Promise(resolve => { release = resolve; });
+    const offline = createPrksOfflineRuntime({ store: cache, window: null, prksRequest: async () => {
+        await inFlight;
+        return { ok: true, status: 200, json: async () => stale };
+    } });
+
+    const reading = offline.readThroughList('recently-added:index', '/api/recently-added',
+        { domain: 'recently-added', validate: rows => Array.isArray(rows) });
+    await settle();
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-M',
+        field: 'publisher', value: 'Springer', server_revision: 3, changed: true }), true);
+    release();
+    await reading;
+    await settle();
+    assert.equal((await cache.getList('recently-added:index')).value[0].publisher, 'Springer',
+        'a stale /api/recently-added response cannot beat the acknowledgement');
+}
+
 async function main() {
     await coalescing();
     await independence();
@@ -350,6 +480,9 @@ async function main() {
     await staleReads();
     await conflicts();
     await isolation();
+    await crossProjection();
+    await projectionReconciliation();
+    await staleProjectionRead();
     console.log('All ' + checks + ' Work metadata checks passed');
 }
 

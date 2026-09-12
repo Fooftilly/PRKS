@@ -6,7 +6,7 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 
 - Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`. UX Interaction Tour (separate, opt-in, artifact-producing): `python run_tests.py --ux-tour`.
 - Full E2E gate: `python tests/e2e/run.py --jobs 4`. Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow".
-- **Never run the full E2E suite while iterating.** Use the smallest relevant unit test, selftest, static-contract test or E2E module; run the complete parallel suite only once the milestone's implementation and targeted verification are done. Diagnose any failure it reports with the individual test or module, then rerun the full suite once the issue is fixed. See "E2E test workflow".
+- **Never run browser E2E tests while iterating** — not the full suite, not a whole module — unless the behavior can only be verified in a browser. Use unit tests, Node selftests, static contracts and API tests instead. Run the relevant E2E module once a vertical slice or the milestone implementation is finished, and the full parallel suite once after that. Debug any failure with the individual test, never by rerunning the suite. See "E2E test workflow".
 - App, default for agents: `python prks_app.py --testing`
 - Real app or Compose: only with run-real authorization from the user
 
@@ -1423,11 +1423,11 @@ The families are deliberately different in kind, and that is the point:
   revision would demand a resolution for a collision that never happened. Scope
   is `work-field / ["<work id>", "<field>"]` in the existing
   `sync_entity_revisions` table -- no schema change.
-- Exactly seven fields synchronize: `edition`, `journal`, `volume`, `issue`,
-  `pages`, `isbn`, `doi`. `backend/work_metadata_sync.SYNCED_FIELDS` is the
-  authority and the client list is pinned against it by
-  `tests/test_frontend_work_metadata_sync.py`. Never accept a column name from
-  a client.
+- Nine fields synchronize: `publisher`, `location`, `edition`, `journal`,
+  `volume`, `issue`, `pages`, `isbn`, `doi`.
+  `backend/work_metadata_sync.SYNCED_FIELDS` is the authority and the client
+  list is pinned against it by `tests/test_frontend_work_metadata_sync.py`.
+  Never accept a column name from a client.
 - **Store exactly what a PATCH would store.** No case folding, no ISBN
   punctuation rewriting, no page-range parsing, no whitespace stripping --
   synchronization is not a licence to start normalizing values PRKS never
@@ -1443,9 +1443,21 @@ The families are deliberately different in kind, and that is the point:
   value), not against the server base -- otherwise editing back to the server
   value strands the pending operation.
 - A conflicted or possibly-sent field is busy; the other six stay editable.
-- The seven fields are rendered on the Work detail and nowhere else, which is
-  why they need no cross-projection overlay. Before adding a field here, check
-  the fan-out table in [docs/local-first-sync.md](docs/local-first-sync.md).
+- **Being invisible on a card is not the same as being unused.**
+  `recently-added:index` selects `works.publisher` because Home -> Recently
+  Added filters locally over it, so a pending publisher must reach that
+  projection's filtering. `FIELD_PROJECTIONS` names that dependency on both
+  sides and the parity is pinned by a test. Before adding a field here, check
+  the fan-out table in [docs/local-first-sync.md](docs/local-first-sync.md) --
+  and check what *filters* on it, not only what renders it.
+- The cross-projection overlay lives in `work-metadata-state.js`. Components
+  say "repaint"; they must not grow a second opinion about which operations are
+  pending or what they mean. The durable queue is read once into a map, never
+  once per row, and pending values are never written into an acknowledged
+  snapshot -- in IndexedDB or in a component's RAM copy.
+- On acknowledgement a projection row is patched in place, not invalidated:
+  dropping the snapshot costs offline availability for a change whose exact
+  shape is already known.
 
 ### Local-first Work opens (Milestone 2C)
 
@@ -1579,30 +1591,36 @@ remain failures. Do not broaden that teardown exception.
 
 ### When to run what
 
-**Do not run the full E2E suite during normal implementation iterations.** While
-developing, run the smallest relevant unit test, Node selftest,
-static-contract test, or E2E module. Run the complete parallel E2E suite only
-after the milestone's implementation and targeted verification are complete. If
-the full suite finds a failure, diagnose it using the individual test or module
-and rerun the complete suite only after the issue is resolved.
+**During normal implementation iterations, do not run browser E2E tests at all
+-- neither the full suite nor an entire module** -- unless the behavior being
+debugged can only be verified at browser level. Prefer unit tests, Node
+selftests, static contracts, API tests and other fast targeted tests. Almost
+every sync, projection, validator and coherence question is answerable that
+way, in seconds rather than minutes.
 
-Inner loop, by example: a Playlist change runs `tests.e2e.test_playlists_offline`
-plus the specific Work/Playlist scenarios; a Concept change runs
-`OfflineConceptTests`; a sync change runs its family's selftest and E2E module.
+**After a complete user-visible vertical slice, or once the milestone's
+implementation is finished, run the relevant targeted E2E module once.** That
+is where a browser earns its cost: real navigation, real IndexedDB, real
+service worker.
 
-Milestone completion, in this order:
+**After all milestone work and targeted verification are complete, run the full
+parallel E2E suite once:**
 
 ```
 python run_tests.py
 python tests/e2e/run.py --jobs 4
 ```
 
-A full run costs several minutes of wall clock and saturates the machine, so
-repeating it to find a failure you could have reproduced in seconds is the
-expensive way to learn the same thing. The optimization is faster execution,
-not less verification: the full suite is still mandatory before declaring a
-milestone complete, and a failure it reports is never dismissed without being
-reproduced and classified.
+**If an E2E test fails, debug with the individual failing test or its module.**
+Never rerun the full suite to find out whether a fix worked -- reproduce the
+one failure, fix it, re-run that test and its module, and only then spend the
+full suite again.
+
+A full run costs several minutes of wall clock and saturates the machine; a
+single module still costs a browser launch and a PRKS server per test. The
+optimization is faster execution, not less verification: the full suite is
+still mandatory before declaring a milestone complete, and a failure it reports
+is never dismissed without being reproduced and classified.
 
 Worker count, measured on a 12-core development machine over the full 418-test
 suite: serial 1131s; `--jobs 2` 652s; `--jobs 3` 422s; `--jobs 4` 315-370s

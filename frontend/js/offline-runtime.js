@@ -445,7 +445,35 @@
             for (let i = 0; i < kinds.length; i++) {
                 if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
             }
-            return true;
+            return reconcileFieldProjections(result);
+        }
+
+        /* Some synchronized fields also live in a cached LIST. `publisher` is
+         * carried by `recently-added:index` because that tab filters locally
+         * over it, so an acknowledgement has to land there too -- otherwise the
+         * pending overlay disappears on retirement and the row reverts to a
+         * value the server no longer holds.
+         *
+         * The row is PATCHED rather than the whole list invalidated: dropping
+         * the snapshot would cost Recently Added its offline availability for a
+         * change we already know the exact shape of.
+         */
+        async function reconcileFieldProjections(result) {
+            const projections = (root.PRKS_SYNCED_WORK_FIELD_PROJECTIONS || {})[result.field];
+            if (!projections || projections.indexOf(DOMAIN_RECENTLY_ADDED) === -1) return true;
+            const token = currentDomainGeneration(DOMAIN_RECENTLY_ADDED) + 1;
+            domainGeneration.set(DOMAIN_RECENTLY_ADDED, token);
+            const cached = await store.getList(RECENTLY_ADDED_LIST_KEY).catch(function () { return null; });
+            // No snapshot is nothing to reconcile, not a failure: one field is
+            // not enough to invent a Recently Added page from, and the next
+            // authoritative fetch carries the value anyway.
+            if (!cached) return true;
+            const rows = cached.value;
+            if (!Array.isArray(rows)) return false;
+            if (!rows.some(row => row && row.id === result.work_id)) return true;
+            const merged = rows.map(row => (row && row.id === result.work_id
+                ? Object.assign({}, row, { [result.field]: result.value }) : row));
+            return cacheListForDomain(RECENTLY_ADDED_LIST_KEY, merged, DOMAIN_RECENTLY_ADDED, token);
         }
 
         /* Reconcile an acknowledged open event into the cached Recent list.

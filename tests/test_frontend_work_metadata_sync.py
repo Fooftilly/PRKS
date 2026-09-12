@@ -4,9 +4,10 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
-SYNCED = ('edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi')
-DEFERRED = ('title', 'status', 'doc_type', 'year', 'published_date', 'publisher',
-            'location', 'abstract', 'source_url', 'author_text', 'thumb_page')
+SYNCED = ('publisher', 'location', 'edition', 'journal', 'volume', 'issue',
+          'pages', 'isbn', 'doi')
+DEFERRED = ('title', 'status', 'doc_type', 'year', 'published_date',
+            'abstract', 'source_url', 'author_text', 'thumb_page')
 
 
 class WorkMetadataSyncFrontendTests(unittest.TestCase):
@@ -34,8 +35,9 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]
         for field in SYNCED:
             self.assertNotIn('%s: draft.%s' % (field, field), body, field)
+            self.assertNotIn('%s: draft' % field, body, field)
         # The fields this milestone deliberately leaves online-only are still there.
-        for field in ('title', 'status', 'abstract', 'publisher', 'location'):
+        for field in ('title', 'status', 'abstract'):
             self.assertIn(field, body, field)
 
     def test_high_fan_out_fields_are_not_synchronized(self):
@@ -86,3 +88,43 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
             with self.subTest(module=name):
                 self.assertIn('event.acknowledged', body)
                 self.assertIn('event.operation', body)
+
+    def test_client_and_server_agree_on_which_fields_reach_another_projection(self):
+        """A field the server thinks is Work-detail-only, but the client
+        overlays into a list -- or the reverse -- is a silent coherence bug:
+        one side reconciles a cached projection the other never updates."""
+        from backend import work_metadata_sync
+        module = (FRONTEND / 'work-metadata-state.js').read_text()
+        listed = module[module.index('const FIELD_PROJECTIONS = Object.freeze('):]
+        listed = listed[: listed.index(';')]
+        self.assertIn("publisher: ['recently-added']", listed)
+        self.assertEqual(sorted(work_metadata_sync.FIELD_PROJECTIONS), ['publisher'])
+        self.assertEqual(work_metadata_sync.FIELD_PROJECTIONS['publisher'], ('recently-added',))
+        for field in SYNCED:
+            if field != 'publisher':
+                self.assertNotIn("%s:" % field, listed, field)
+
+    def test_recently_added_does_not_reimplement_the_overlay(self):
+        """The Folder component says "repaint"; it must not grow a second
+        opinion about which fields are pending or what they mean. Two
+        interpretations of operation semantics would drift the moment either
+        changed."""
+        folders = (FRONTEND / 'components' / 'folders.js').read_text()
+        self.assertIn('prksEffectiveWorkMetadataRows(acknowledged', folders)
+        self.assertIn('prksRefreshPendingWorkMetadata', folders)
+        for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'server_result',
+                          'payload.field'):
+            self.assertNotIn(forbidden, folders, forbidden)
+
+    def test_pending_values_never_enter_the_acknowledged_recently_added_rows(self):
+        """This tab already shipped a bug where its RAM copy outlived an
+        IndexedDB invalidation. Baking unsynchronized values into that array
+        would be the same mistake with a longer fuse."""
+        folders = (FRONTEND / 'components' / 'folders.js').read_text()
+        at = folders.index('function prksRenderFolderLibraryRecentlyAdded(')
+        body = folders[at: folders.index('async function prksLoadFolderLibraryRecentlyAdded(', at)]
+        self.assertIn('const acknowledged =', body)
+        self.assertNotIn('st.recentlyAddedWorks =', body)
+        # The memoized render is refused when the overlay moved, not only when
+        # the coherence domain did.
+        self.assertIn('recentlyAddedPendingGeneration', folders)
