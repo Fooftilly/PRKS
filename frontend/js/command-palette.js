@@ -616,12 +616,20 @@
 
     function workSubtitle(w) {
         if (!w) return '';
-        const author = String(w.linked_authors || w.primary_author || w.author_text || '').trim();
         /* Search results come from the server, so while an edit is pending
-         * they still carry the acknowledged Year and Published Date. The same
-         * effective-Work overlay every other surface uses corrects that --
-         * this file must not grow its own reading of the durable queue. */
+         * they still carry the acknowledged values. The same effective-Work
+         * overlay every other surface uses corrects that -- this file must not
+         * grow its own reading of the durable queue.
+         *
+         * The overlay is applied BEFORE the credit is composed, never after.
+         * `author_text` is only one of three possible sources of a credit: a
+         * linked Author outranks it and a linked Editor stands in when it is
+         * empty, so a pending value read off the acknowledged row would both
+         * miss the edit and, in the other direction, be unable to reveal the
+         * Editor when the field is cleared. */
         const work = typeof prksEffectiveWorkSync === 'function' ? prksEffectiveWorkSync(w) : w;
+        const author = String(work.linked_authors || work.primary_author ||
+            work.author_text || work.primary_editor || '').trim();
         let year = String(work.year || '').trim();
         if (!year && work.published_date) {
             const m = String(work.published_date).match(/^(\d{4})/);

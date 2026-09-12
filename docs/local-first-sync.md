@@ -223,9 +223,11 @@ A render PRKS decided to do -- the reconnect refresh -- is not an open either.
 
 ## Work metadata fields
 
-Thirteen Work fields synchronize: `status`, `year`, `published_date`,
-`abstract`, `publisher`, `location`, `edition`, `journal`, `volume`, `issue`,
-`pages`, `isbn`, `doi`. Each owns a revision scope
+`backend/work_metadata_sync.SYNCED_FIELDS` is the authoritative registry of
+which Work fields synchronize; the client list is pinned against it by a test.
+Today it holds `status`, `author_text`, `year`, `published_date`, `abstract`,
+`publisher`, `location`, `edition`, `journal`, `volume`, `issue`, `pages` and
+`doi`, plus `isbn`. Each owns a revision scope
 `work-field / ["<work id>", "<field>"]` -- the same structural JSON encoding the
 Work-Tag scopes use, so no delimiter has to be excluded from either component.
 A missing row is revision 0. No schema change was needed: these live in the
@@ -369,8 +371,8 @@ and can discard a conflicted one without the Work's page existing at all.
 ## Abstract: a large scalar with a derived projection
 
 `abstract` is the first synchronized field that is neither small nor copied
-verbatim into its projection, and it needed three decisions the other nine did
-not.
+verbatim into its projection, and it needed three decisions no earlier field
+did.
 
 **Size.** `MAX_ABSTRACT_UTF8_BYTES` is **1 MiB**, a deliberate PRKS product
 rule rather than a measurement — an abstract is bibliographic summary text, and
@@ -426,6 +428,7 @@ Abstract.
 | `year` | `works-browse`, `recent`, `recently-added` | `year` | copied |
 | `published_date` | `works-browse`, `recent`, `recently-added` | `published_date` | copied |
 | `status` | `works-browse`, `recent`, `recently-added` | `status` | copied |
+| `author_text` | `works-browse`, `recent`, `recently-added` | `author_text` | copied |
 
 A declared projection the runtime cannot address is a wiring error, not
 something to step over: `reconcileFieldProjections` returns false rather than
@@ -442,14 +445,14 @@ the server answers.
 
 ## Fan-out: which fields reach which projections
 
-Eight of the thirteen are rendered on the Work detail and nowhere else. The Work
-summary projection carries them, so cached Folder, Person and Playlist details
-hold them in their payloads -- but no Work card, browse catalog, Concept,
+Most synchronized fields are rendered on the Work detail and nowhere else. The
+Work summary projection carries them, so cached Folder, Person and Playlist
+details hold them in their payloads -- but no Work card, browse catalog, Concept,
 Argument or Graph surface displays them, so a pending value needs no optimistic
 propagation beyond the Work itself, and an acknowledgement invalidates no browse
 catalog.
 
-Five are exceptions, in four different ways. `publisher` is COPIED into
+The exceptions are listed below, and each one cost a milestone. `publisher` is COPIED into
 `recently-added:index`, which 2E exists because of: **being invisible on a card
 is not the same as being unused** -- that projection selects `works.publisher`
 because Home -> Recently Added filters LOCALLY over it. `abstract` is DERIVED
@@ -549,6 +552,85 @@ and refused by another is the split contract that moving a field to
 local-first exists to remove. The SQLite CHECK constraint remains a last line
 of defence: it raises an IntegrityError rather than telling the client what it
 should have sent.
+
+## `author_text`: a stored value that is not necessarily the displayed one
+
+Every field before this one was shown, or not shown, as itself. `author_text`
+is one of three possible sources of a Work's CREDIT, and it is the weakest but
+one:
+
+```
+linked Author(s)  ->  author_text  ->  linked Editor  ->  no credit
+```
+
+So a pending `author_text` always changes the FIELD and only sometimes changes
+what the user sees. That is not a defect to design around; it is the existing
+composition, and synchronization must not quietly take it over.
+
+**The overlay produces the field; the existing credit helper decides the
+rest.** `prksWorkCardCreditLine()` is unchanged and remains the single place
+that rule lives. The ordering is the whole design:
+
+```
+acknowledged row -> apply pending fields -> effective row -> credit helper -> HTML
+```
+
+Never the reverse. Composing the credit first and patching `author_text` onto
+the rendered string afterwards cannot work: with a linked Author the patch must
+do nothing, and with the field cleared it must reveal a *different* person
+entirely. The command palette had precisely this ordering bug and 2I fixed it.
+
+There are deliberately no `display_author`, `display_credit` or
+`effective_credit` stored fields. A derived value that is also stored is two
+sources of truth that drift the first time either input changes -- and a future
+role-synchronization milestone must be able to change which value is *preferred*
+without touching `author_text` at all.
+
+### Local filters index the raw field, not the credit
+
+Recently Added's filter searches `author_text` *and* `linked_authors`,
+`primary_author` and `primary_editor` separately. A Work whose card credits a
+linked Author can therefore still match on its hidden textual author. That is
+existing behavior and 2I preserves it: the filter runs over effective rows, so
+it matches the pending raw value -- this milestone is synchronization, not a
+search redesign.
+
+### Search membership is server-authoritative
+
+The server decides which Works a search RETURNS and cannot know about a value
+that has not been sent. Before synchronization:
+
+- searching for a pending `author_text` does **not** discover the Work;
+- searching for the acknowledged value still **does**;
+- but any Work the server returns is rendered from `prksEffectiveWorksSync()`,
+  so its visible credit reflects effective local state.
+
+Changing that would require a local search index and result merging, which is
+not this milestone. After acknowledgement the ordinary FTS machinery carries
+the new value: `author_text` is an FTS column maintained by an `AFTER UPDATE ON
+works` trigger, and the synchronized write is an ordinary UPDATE, so no manual
+index maintenance exists or should be added.
+
+### Where `author_text` is written
+
+| Path | Revision-aware | Note |
+| --- | --- | --- |
+| `SET_WORK_METADATA_FIELD` | yes | the only path the editor uses, online and offline |
+| `PATCH /api/works/:id` | yes | routed through `set_field_on_conn` like every synchronized field |
+| `add_work()` — creation, Processing import, video oEmbed fill | n/a | all CREATE a Work; construction is not a change, so revision starts at 0 |
+
+The Phase A audit found no other writer that mutates an existing Work's
+`author_text`, and a test pins that result rather than leaving it as a claim.
+
+### Validation
+
+`author_text` is the one synchronized field with no size rule of its own. The
+column is unbounded and the ordinary PATCH accepts any length, so inventing a
+bound here would refuse values the API still accepts. The durable queue still
+bounds it through the store's general payload cap. The editor trims leading and
+trailing whitespace before sending -- exactly as it did through the old PATCH,
+so that rule moved location without changing meaning -- and the server stores
+what it is given.
 
 ## Every canonical mutation advances revisions
 

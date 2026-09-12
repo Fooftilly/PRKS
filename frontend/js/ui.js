@@ -3144,7 +3144,11 @@ function prksWorkMetaDraftFromWork(rawWork) {
         volume: work.volume || '', issue: work.issue || '', pages: work.pages || '', isbn: work.isbn || '',
         doi: work.doi || '', source_url: work.source_url || '', abstract: work.abstract || '',
         thumb_page: work.thumb_page == null ? '' : String(work.thumb_page),
-        author_text: inferredKind === 'video' ? work.author_text || '' : '',
+        /* Every Work carries `author_text`, and now every Work has a control
+         * for it -- "Channel name" for a video, the textual Author otherwise.
+         * Restricting the draft to videos would make a non-video edit read as
+         * unchanged, and the leave guard would let it be discarded silently. */
+        author_text: work.author_text || '',
     };
 }
 
@@ -3422,7 +3426,10 @@ async function submitWorkMetaEdit(workId) {
     // through "Save bibliographic details", online and offline. Sending them
     // here as well would give the same fields two mutation paths, and the one
     // that is not revision-aware would overwrite the other's conflicts.
-    if (draft.author_text != null) payload.author_text = String(draft.author_text || '').trim();
+    // author_text is deliberately absent: it takes the durable semantic queue
+    // through the synchronized section, online and offline. Sending it here as
+    // well would give one field two mutation paths, and the one that is not
+    // revision-aware would overwrite the other's conflicts.
     if (draft.source_url != null) payload.source_url = String(draft.source_url || '').trim();
     
     // Disable save button to prevent double submission
@@ -4553,12 +4560,11 @@ function renderWorkMetaEditTab(work, draft) {
         !hasDraft && typeof prksIsoToDdMmYyyy === 'function'
             ? prksIsoToDdMmYyyy(work.published_date)
             : safeStr(work.published_date);
-    const channelField = isVideo
-        ? `
-            <label for="meta-author-text">Channel name</label>
-            <input type="text" id="meta-author-text" value="${safeStr(work.author_text)}" autocomplete="off">
-        `
-        : '';
+    /* `author_text` is synchronized, so its control lives INSIDE the durable
+     * section below -- for a video as "Channel name", for everything else as
+     * the textual Author. A second copy outside that section would be a second
+     * mutation path for one field. */
+    const channelField = '';
     const bibFields = isVideo
         ? ''
         : `
@@ -4590,10 +4596,24 @@ function renderWorkMetaEditTab(work, draft) {
      * alone" -- that is a partial-save contract nobody could explain
      * afterwards. */
     const syncedBibSection = isVideo
-        ? ''
+        ? `
+            <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
+                <h4>Channel</h4>
+                <label for="meta-author-text">Channel name</label>
+                <input type="text" id="meta-author-text" data-prks-work-field="author_text" value="${safeStr(work.author_text)}" autocomplete="off">
+                <div class="prks-form-actions form-actions">
+                    <button type="button" id="save-work-bib-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}')">Save channel name</button>
+                </div>
+                <div class="meta-row" data-prks-role="work-bib-sync" aria-live="polite"></div>
+            </section>
+        `
         : `
             <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
                 <h4>Bibliographic details</h4>
+                <label for="meta-author-text">Author (text)</label>
+                <input type="text" id="meta-author-text" data-prks-work-field="author_text" value="${safeStr(work.author_text)}" autocomplete="off">
+                <p class="meta-row meta-row--hint">Used for the credit line only when no Author is linked to this file. A linked Author always takes precedence; a linked Editor stands in when this is empty.</p>
+
                 <div class="form-grid-2 form-grid-2--compact">
                     <div><label for="meta-year">Year</label><input type="text" id="meta-year" data-prks-work-field="year" value="${safeStr(work.year)}"></div>
                     <div><label for="meta-date">${dateLabel}</label><input type="text" id="meta-date" data-prks-work-field="published_date" value="${safeStr(publishedDateValue)}" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-describedby="meta-date-error"></div>

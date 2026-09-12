@@ -6,15 +6,23 @@
  * have -- which is why every field carries its own revision and its own
  * resolution, and why one conflicting field leaves the rest editable.
  *
- * Eight of the twelve synchronized scalars reach no cached read model but the
- * Work detail. Four do, and PROJECTION_COLUMNS below says how: `publisher` is
+ * FIELDS is the authoritative client registry, pinned against the server's by
+ * `tests/test_frontend_work_metadata_sync.py`. Most of those fields reach no
+ * cached read model but the Work detail; FIELD_PROJECTIONS and
+ * PROJECTION_COLUMNS below name the ones that do, and how: `publisher` is
  * COPIED into `recently-added:index`, because Home -> Recently Added filters
  * locally over it; `abstract` is DERIVED into
- * `works-browse:index.abstract_excerpt`, which Progress renders; `year` and
- * `published_date` are COPIED into all three browse catalogs and carried by
- * every embedded Work summary, because every card shows a year. A field being
+ * `works-browse:index.abstract_excerpt`, which Progress renders; `year`,
+ * `published_date`, `status` and `author_text` are COPIED into all three
+ * browse catalogs and carried by every embedded Work summary. A field being
  * invisible on a card is not the same as it being unused, and no pending
  * value is ever written into an acknowledged snapshot.
+ *
+ * `status` and `author_text` are the two that do more than change text.
+ * `status` decides which GROUP a card occupies on Progress. `author_text` is
+ * not necessarily displayed at all: a linked Author outranks it and a linked
+ * Editor stands in when it is empty, so this module produces the effective
+ * FIELD and the existing credit helper decides what the user sees.
  *
  * `abstract` is also the only byte-limited field: its bound is in UTF-8 bytes,
  * the metadata-state projection carries its revision alone, and its
@@ -22,8 +30,8 @@
  */
 (function (root) {
     'use strict';
-    const FIELDS = Object.freeze(['status', 'year', 'published_date', 'abstract', 'publisher',
-        'location', 'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi']);
+    const FIELDS = Object.freeze(['status', 'author_text', 'year', 'published_date', 'abstract',
+        'publisher', 'location', 'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi']);
     const FIELD_SET = new Set(FIELDS);
     /* Mirrors `work_metadata_sync.WORK_STATUSES`. Status is the first
      * synchronized field validated by an ALLOWLIST rather than a length: a
@@ -32,7 +40,8 @@
         ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused']);
     const FIELD_ALLOWLISTS = Object.freeze({ status: new Set(WORK_STATUSES) });
     const LABELS = Object.freeze({
-        status: 'Progress', year: 'Year', published_date: 'Published date', abstract: 'Abstract',
+        status: 'Progress', author_text: 'Author', year: 'Year',
+        published_date: 'Published date', abstract: 'Abstract',
         publisher: 'Publisher', location: 'Location', edition: 'Edition',
         journal: 'Journal', volume: 'Volume', issue: 'Issue',
         pages: 'Pages', isbn: 'ISBN', doi: 'DOI',
@@ -52,6 +61,13 @@
          * before the route filters them, or the Work stays in the group the
          * server last knew about. */
         status: BROWSE_LISTS,
+        /* Every Work card's CREDIT line can come from `author_text`. What the
+         * user actually sees is decided afterwards, by the ordinary credit
+         * helper, from linked role data this module knows nothing about -- a
+         * linked Author outranks this field, and a linked Editor stands in
+         * when it is empty. The overlay produces the FIELD; composition stays
+         * where it already lives. */
+        author_text: BROWSE_LISTS,
     });
 
     /* Fields that cached ENTITY snapshots embed verbatim as part of a Work
@@ -59,7 +75,8 @@
      * rows are rendered as Work cards and searched locally, so a pending value
      * has to reach them. `abstract` is deliberately absent: summaries carry it,
      * but nothing there renders or searches it. */
-    const SUMMARY_FIELDS = Object.freeze(['status', 'year', 'published_date', 'publisher']);
+    const SUMMARY_FIELDS = Object.freeze(
+        ['status', 'author_text', 'year', 'published_date', 'publisher']);
 
     /* Mirrors `backend/work_metadata_sync.BYTE_LIMITED_FIELDS`: a field whose
      * bound is a storage limit rather than a display one, and whose value the
@@ -79,12 +96,13 @@
      */
     const copy = field => ({ field, column: field, derive: value => value });
     const PROJECTION_COLUMNS = Object.freeze({
-        'recently-added': [copy('status'), copy('publisher'), copy('year'), copy('published_date')],
+        'recently-added': [copy('status'), copy('author_text'), copy('publisher'),
+            copy('year'), copy('published_date')],
         'works-browse': [
             { field: 'abstract', column: 'abstract_excerpt', derive: text => abstractExcerpt(text) },
-            copy('status'), copy('year'), copy('published_date'),
+            copy('status'), copy('author_text'), copy('year'), copy('published_date'),
         ],
-        'recent': [copy('status'), copy('year'), copy('published_date')],
+        'recent': [copy('status'), copy('author_text'), copy('year'), copy('published_date')],
     });
 
     /* The excerpt Progress shows under each Work card.
@@ -126,6 +144,17 @@
      * Date look dirty on every save, so the draft is canonicalized first.
      */
     const CODECS = {
+        /* The editor has always trimmed this before sending it to the ordinary
+         * PATCH, so the durable path must trim identically -- otherwise moving
+         * the field to local-first would silently start storing the leading
+         * and trailing whitespace the same keystrokes used to discard. No
+         * other normalization is added: the column is unbounded, the server
+         * stores what it is given, and synchronization is not a licence to
+         * start reshaping a value PRKS never reshaped. */
+        author_text: {
+            toDisplay: value => canonical(value),
+            toCanonical: draft => canonical(draft).trim(),
+        },
         published_date: {
             toDisplay: value => (typeof root.prksIsoToDdMmYyyy === 'function'
                 ? root.prksIsoToDdMmYyyy(value) || '' : canonical(value)),

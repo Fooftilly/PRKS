@@ -11,6 +11,16 @@ require('../../frontend/js/work-tag-state.js');
 require('../../frontend/js/work-metadata-state.js');
 require('../../frontend/js/sync-runtime.js');
 
+/* The REAL credit helper, not a restatement of it. `work-cards.js` is browser
+ * script code rather than a module, so it is evaluated in the global scope the
+ * way a <script> tag would; its top-level function declarations then become
+ * globals. Re-implementing the precedence rule here would prove only that the
+ * test and the test agree. */
+globalThis.window = globalThis;   // the file ends by exporting onto `window`
+(0, eval)(require('fs').readFileSync(
+    require('path').join(__dirname, '../../frontend/js/components/work-cards.js'), 'utf8'));
+const creditLine = globalThis.prksWorkCardCreditLine;
+
 let sequence = 0;
 const uuid = () => '00000000-0000-4000-8000-' + (++sequence).toString(16).padStart(12, '0');
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
@@ -502,6 +512,78 @@ async function projectionReconciliation() {
     assert.equal(await cache.getList('recently-added:index'), null);
 }
 
+/* ---- author_text: a stored value that is not necessarily the displayed one ----
+ *
+ * PRKS composes a Work's credit as linked Author(s) -> author_text -> linked
+ * Editor. Synchronization changes the FIELD; the existing credit helper decides
+ * what the user sees. These cases pin that the two compose in that order and
+ * that neither learns the other's job.
+ */
+function authorTextComposition() {
+    const pending = value => globalThis.prksSetPendingWorkMetadata([{
+        operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
+        status: 'pending', payload: { field: 'author_text', value } }]);
+    const credit = row => creditLine(globalThis.prksEffectiveWorkSync(row));
+
+    // 1. No linked Author: the pending text IS the credit, immediately.
+    pending('New Author');
+    assert.equal(credit({ id: 'W-A', author_text: 'Old Author' }), 'Author: New Author');
+
+    /* 2. A linked Author OUTRANKS it. The field still changes -- the editor
+     * shows the new text -- but the card must not start crediting someone the
+     * user did not link. This is the central invariant of the milestone. */
+    const linked = { id: 'W-A', author_text: 'Old Author', linked_authors: 'Jane Smith' };
+    assert.equal(credit(linked), 'Author: Jane Smith', 'a linked Author masks pending text');
+    assert.equal(globalThis.prksEffectiveWorkSync(linked).author_text, 'New Author',
+        'while the FIELD itself is the pending value');
+    assert.equal(credit({ id: 'W-A', author_text: 'Old', primary_author: 'Solo Person' }),
+        'Author: Solo Person', 'primary_author outranks it too');
+
+    // 3. Clearing it reveals the linked Editor.
+    pending('');
+    const withEditor = { id: 'W-A', author_text: 'Text Author', primary_editor: 'Editor Person' };
+    assert.equal(credit(withEditor), 'Editor: Editor Person',
+        'a cleared author_text falls through to the Editor');
+    assert.equal(creditLine(withEditor), 'Author: Text Author',
+        'and without the overlay the acknowledged text still wins -- so the '
+        + 'overlay is doing the work, not the helper');
+
+    // 4. Cleared with nothing to fall back to is no credit at all.
+    assert.equal(credit({ id: 'W-A', author_text: 'Text Author' }), '');
+
+    // 5. Whitespace-only is empty, exactly as the editor has always sent it.
+    assert.equal(globalThis.prksWorkFieldToCanonical('author_text', '   '), '');
+    assert.equal(globalThis.prksWorkFieldToCanonical('author_text', '  Jane  '), 'Jane');
+
+    // 6. The three browse catalogs and embedded summaries carry the field.
+    pending('New Author');
+    for (const projection of ['works-browse', 'recent', 'recently-added']) {
+        const rows = [{ id: 'W-A', author_text: 'Old Author', linked_authors: 'Jane Smith' }];
+        const frozen = JSON.parse(JSON.stringify(rows));
+        const out = globalThis.prksEffectiveProjectionRows(rows, projection);
+        assert.equal(out[0].author_text, 'New Author', projection);
+        assert.equal(creditLine(out[0]), 'Author: Jane Smith',
+            projection + ' still credits the linked Author');
+        assert.deepEqual(rows, frozen, projection + ' snapshot untouched');
+    }
+    const summaries = [{ id: 'W-A', author_text: 'Old Author' }];
+    assert.equal(globalThis.prksEffectiveWorkSummaries(summaries)[0].author_text, 'New Author');
+    assert.equal(globalThis.prksEffectiveWorksSync(
+        [{ id: 'W-A', author_text: 'Old Author' }])[0].author_text, 'New Author',
+        'server search results are overlaid too');
+
+    /* 7. A local filter indexes the RAW field, which is deliberately not the
+     * same as the displayed credit: a Work whose card credits a linked Author
+     * can still match on its hidden textual author. Preserved, not redesigned. */
+    const row = globalThis.prksEffectiveProjectionRows(
+        [{ id: 'W-A', author_text: 'Old Author', linked_authors: 'Jane Smith' }],
+        'recently-added')[0];
+    assert.equal(row.author_text, 'New Author', 'the filter sees the pending raw value');
+    assert.equal(creditLine(row), 'Author: Jane Smith', 'though the card shows the linked one');
+
+    globalThis.prksSetPendingWorkMetadata([]);
+}
+
 /* ---- Status: a pending value that changes GROUP MEMBERSHIP ---- */
 function statusMembership() {
     const ops = [{ operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work',
@@ -617,6 +699,22 @@ async function embeddedReconciliation() {
     assert.equal((await cache.getEntity('folder', 'F1')).value.works[0].status, 'Completed');
     assert.equal((await cache.getEntity('person', 'P1')).value.works[0].status, 'Completed');
     assert.equal((await cache.getEntity('playlist', 'PL1')).value.items[0].status, 'Completed');
+
+    /* And so does `author_text` -- the same registry-only change. The value it
+     * writes is the FIELD; what any of these rows end up CREDITING is still
+     * decided afterwards by the credit helper from linked role data. */
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-Y',
+        field: 'author_text', value: 'Acknowledged Author', server_revision: 1,
+        changed: true }), true);
+    for (const key of ['works-browse:index', 'recent:index', 'recently-added:index']) {
+        assert.equal((await cache.getList(key)).value[0].author_text, 'Acknowledged Author', key);
+    }
+    assert.equal((await cache.getEntity('folder', 'F1')).value.works[0].author_text,
+        'Acknowledged Author');
+    assert.equal((await cache.getEntity('person', 'P1')).value.works[0].author_text,
+        'Acknowledged Author');
+    assert.equal((await cache.getEntity('playlist', 'PL1')).value.items[0].author_text,
+        'Acknowledged Author');
 
     const folder = (await cache.getEntity('folder', 'F1')).value;
     assert.equal(folder.works[0].year, '1998', 'the embedded Folder summary was patched');
@@ -1019,7 +1117,7 @@ async function highFanOut() {
     assert.equal(effectiveSummaries[0].publisher, 'Elsevier', 'untouched fields survive');
     assert.deepEqual(summaries, frozenSummaries, 'the cached entity is never mutated');
     assert.deepEqual(globalThis.PRKS_WORK_SUMMARY_FIELDS,
-        ['status', 'year', 'published_date', 'publisher']);
+        ['status', 'author_text', 'year', 'published_date', 'publisher']);
 
     /* The Published Date codec: the editor spells it dd/mm/yyyy, the wire and
      * the column are ISO, and comparing the spellings would make an untouched
@@ -1069,6 +1167,7 @@ async function main() {
     await abstractAcknowledgement();
     await highFanOut();
     statusMembership();
+    authorTextComposition();
     await embeddedReconciliation();
     await unreadableSummariesBlockRetirement();
     await staleEmbeddedRead();

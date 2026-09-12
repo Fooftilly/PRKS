@@ -6,23 +6,30 @@ Work-level revision would tell them they had -- forcing a resolution UI over a
 conflict that does not exist. So each supported field carries its own revision
 scope and they advance independently.
 
-Ten scalars are synchronized. Eight of them reach no cached read model but the
-Work detail: the Work summary projection carries them, yet Work cards, browse
-catalogs, Folders, People, Playlists and the Graph display none of them.
+`SYNCED_FIELDS` is the authoritative registry of which fields synchronize;
+`FIELD_PROJECTIONS` and `SUMMARY_FIELDS` say which cached read models each one
+reaches. Most reach no cached read model but the Work detail: the Work summary
+projection carries them, yet no Work card, browse catalog, Folder, Person,
+Playlist or Graph surface displays them.
 
-Two are exceptions, and they are exceptions in different ways.
+The exceptions are exceptions in different ways, and each one cost a milestone.
 `recently-added:index` carries `publisher` because Home -> Recently Added
 filters LOCALLY over it, so a pending publisher has to reach that projection's
 filtering even though no card renders it -- being invisible is not the same as
 being unused. `works-browse:index` carries `abstract_excerpt`, which Progress
-renders, so a pending Abstract has to reach it through a DERIVATION rather than
-a copy. `abstract` is also the only field whose limit is measured in bytes and
-whose value the metadata-state projection omits; see MAX_ABSTRACT_UTF8_BYTES
-and BYTE_LIMITED_FIELDS.
+renders, so a pending Abstract reaches it through a DERIVATION rather than a
+copy; `abstract` is also the only field whose limit is measured in bytes and
+whose value the metadata-state projection omits (see MAX_ABSTRACT_UTF8_BYTES
+and BYTE_LIMITED_FIELDS). `status` decides which GROUP a Work occupies on
+Progress, so a pending value moves a card between lists rather than rewriting
+text in it. `author_text` is the field whose stored value is not necessarily
+its displayed value: a linked Author outranks it, and a linked Editor stands in
+when it is empty, so this module synchronizes the FIELD and the existing credit
+helper decides what becomes visible.
 
-The remaining high fan-out fields (title, status, doc_type, year) reach Work
-cards across three browse catalogs and several cached details, and are
-deliberately not here.
+Fields deliberately still outside the registry are listed in
+docs/local-first-sync.md; the registry above is what decides, not this
+paragraph.
 
 Nothing in this module imports the database layer; the handler is handed the
 `db` it needs, so the ordinary PATCH boundary can share the same helpers.
@@ -66,8 +73,16 @@ FIELD_ALLOWLISTS = {
     "status": WORK_STATUS_SET,
 }
 
+# A field's entry is its SIZE limit in code points, or None when the field has
+# no size rule of its own. `status` has none because it is validated by
+# allowlist instead; `author_text` has none because it never had one -- the
+# column is unbounded, the ordinary PATCH accepts any length, and inventing a
+# bound here would refuse values the API still accepts, which is exactly the
+# split contract moving a field to local-first exists to remove. Both remain
+# bounded in the durable queue by the store's own general payload cap.
 SYNCED_FIELDS = {
     "status": None,
+    "author_text": None,
     "abstract": MAX_ABSTRACT_UTF8_BYTES,
     "year": 50,
     "published_date": 40,
@@ -86,8 +101,8 @@ SYNCED_FIELDS = {
 # reconciled when it is acknowledged. Absent means "the Work detail only".
 # `recently-added:index` selects `publisher` for its local filter, so this is a
 # real dependency even though no Work card renders the value.
-# Abstract's limit is measured in UTF-8 BYTES; the eight small scalars keep the
-# code-point limits they have had since 2D. The distinction is deliberate, not
+# Abstract's limit is measured in UTF-8 BYTES; the other size-limited fields
+# keep the code-point limits they have had since 2D. The distinction is deliberate, not
 # an oversight. Abstract's bound exists to keep a durable operation and every
 # read of it cheap, which is a storage and transport concern and therefore a
 # byte concern. The others bound how much text a one-line field may hold, which
@@ -123,6 +138,11 @@ FIELD_PROJECTIONS = {
     # SUMMARY_FIELDS, which those entity snapshots carry verbatim.
     "year": BROWSE_LISTS,
     "published_date": BROWSE_LISTS,
+    # Every Work card's CREDIT line can come from `author_text`, so it reaches
+    # all three catalogs -- though whether it is what the user actually SEES is
+    # decided afterwards, by the credit helper, from linked role data this
+    # module knows nothing about.
+    "author_text": BROWSE_LISTS,
     # Status is not only a badge on every Work card: it decides which GROUP a
     # Work belongs to on Progress, which reads `works-browse:index`. A pending
     # Status therefore has to reach these rows before the route filters them,
@@ -133,7 +153,7 @@ FIELD_PROJECTIONS = {
 # Fields that cached ENTITY snapshots embed as part of a Work summary:
 # `folder.works[]`, `person.works[]`, `playlist.items[]`. A pending value has to
 # reach those rows too, and an acknowledgement has to patch them.
-SUMMARY_FIELDS = frozenset({"status", "year", "published_date", "publisher"})
+SUMMARY_FIELDS = frozenset({"status", "author_text", "year", "published_date", "publisher"})
 SUMMARY_ENTITY_KINDS = ("folder", "person", "playlist")
 
 
@@ -156,6 +176,8 @@ def is_valid_field_value(field, value):
     allowed = FIELD_ALLOWLISTS.get(field)
     if allowed is not None:
         return canonical(value) in allowed
+    if SYNCED_FIELDS[field] is None:
+        return True
     return within_limit(field, value)
 
 

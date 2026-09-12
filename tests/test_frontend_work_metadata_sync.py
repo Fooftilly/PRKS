@@ -4,9 +4,35 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
-SYNCED = ('status', 'year', 'published_date', 'abstract', 'publisher', 'location',
-          'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi')
-DEFERRED = ('title', 'doc_type', 'source_url', 'author_text', 'thumb_page')
+SYNCED = ('status', 'author_text', 'year', 'published_date', 'abstract', 'publisher',
+          'location', 'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi')
+DEFERRED = ('title', 'doc_type', 'source_url', 'thumb_page')
+
+_REGISTRY_JS = """
+require(process.argv[1] + '/frontend/js/date-format.js');
+require(process.argv[1] + '/frontend/js/work-metadata-state.js');
+process.stdout.write(JSON.stringify({
+    fields: globalThis.PRKS_SYNCED_WORK_FIELDS,
+    projections: globalThis.PRKS_SYNCED_WORK_FIELD_PROJECTIONS,
+    summary: globalThis.PRKS_WORK_SUMMARY_FIELDS,
+    byteLimited: Array.from(globalThis.PRKS_BYTE_LIMITED_WORK_FIELDS),
+    statuses: globalThis.PRKS_WORK_STATUSES,
+}));
+"""
+
+
+def client_registries():
+    """The registries the client actually EXPORTS, not how its source is
+    formatted. Slicing the module text for `const X = Object.freeze([` broke
+    twice on ordinary edits -- a wrapped line, and a semicolon inside a
+    comment -- which is a test failing for a reason the code is not
+    responsible for."""
+    import json
+    proc = subprocess.run(['node', '-e', _REGISTRY_JS, str(ROOT)],
+                          cwd=ROOT, capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        raise AssertionError(proc.stdout + proc.stderr)
+    return json.loads(proc.stdout)
 
 
 class WorkMetadataSyncFrontendTests(unittest.TestCase):
@@ -19,11 +45,8 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         """Two registries that drift would mean the editor offering a field the
         server refuses, or silently online-only saving one it would accept."""
         from backend import work_metadata_sync
-        module = (FRONTEND / 'work-metadata-state.js').read_text()
-        listed = module[module.index('const FIELDS = Object.freeze(['):]
-        listed = listed[: listed.index(']')]
-        for field in SYNCED:
-            self.assertIn("'%s'" % field, listed, field)
+        self.assertEqual(sorted(client_registries()['fields']),
+                         sorted(work_metadata_sync.SYNCED_FIELDS))
         self.assertEqual(sorted(work_metadata_sync.SYNCED_FIELDS), sorted(SYNCED))
 
     def test_the_synchronized_fields_left_the_online_patch_payload(self):
@@ -93,26 +116,24 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         overlays into a list -- or the reverse -- is a silent coherence bug:
         one side reconciles a cached projection the other never updates."""
         from backend import work_metadata_sync
-        module = (FRONTEND / 'work-metadata-state.js').read_text()
-        listed = module[module.index('const FIELD_PROJECTIONS = Object.freeze('):]
-        listed = listed[: listed.index(';')]
-        self.assertIn("publisher: ['recently-added']", listed)
-        self.assertIn("abstract: ['works-browse']", listed)
-        self.assertIn('year: BROWSE_LISTS', listed)
-        self.assertIn('published_date: BROWSE_LISTS', listed)
-        self.assertIn('status: BROWSE_LISTS', listed)
-        self.assertEqual(sorted(work_metadata_sync.FIELD_PROJECTIONS),
-                         ['abstract', 'published_date', 'publisher', 'status', 'year'])
-        self.assertEqual(work_metadata_sync.FIELD_PROJECTIONS['publisher'], ('recently-added',))
-        self.assertEqual(work_metadata_sync.FIELD_PROJECTIONS['abstract'], ('works-browse',))
-        # Every Work card shows a year and a Status badge, and Status decides
-        # Progress group membership, so all three reach every browse list.
-        for field in ('year', 'published_date', 'status'):
-            self.assertEqual(work_metadata_sync.FIELD_PROJECTIONS[field],
-                             ('works-browse', 'recent', 'recently-added'), field)
+        client = client_registries()
+        server = work_metadata_sync.FIELD_PROJECTIONS
+        self.assertEqual(sorted(client['projections']), sorted(server))
+        for field, domains in server.items():
+            self.assertEqual(list(client['projections'][field]), list(domains), field)
+        self.assertEqual(server['publisher'], ('recently-added',))
+        self.assertEqual(server['abstract'], ('works-browse',))
+        # Every Work card shows a year, a Status badge and a credit line, and
+        # Status additionally decides Progress group membership -- so all four
+        # reach every browse catalog.
+        for field in ('year', 'published_date', 'status', 'author_text'):
+            self.assertEqual(server[field], ('works-browse', 'recent', 'recently-added'), field)
+        # And nothing else claims a projection on either side.
         for field in SYNCED:
-            if field not in ('publisher', 'abstract', 'year', 'published_date', 'status'):
-                self.assertNotIn("%s:" % field, listed, field)
+            if field not in ('publisher', 'abstract', 'year', 'published_date',
+                             'status', 'author_text'):
+                self.assertNotIn(field, client['projections'], field)
+                self.assertNotIn(field, server, field)
 
     def test_every_declared_projection_can_actually_be_reconciled(self):
         """The defect this pins: `recent` was a declared projection for `year`
@@ -198,6 +219,51 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         for marker in ("case 'search': {", "case 'saved-view-detail': {"):
             at = app.index(marker)   # missing marker is a failure, not a skip
             self.assertIn('prksHydratePendingWorkMetadata', app[at: at + 1400], marker)
+
+    def test_author_text_left_the_legacy_save_and_has_one_control(self):
+        """Two mutation paths for one field means the path that is not
+        revision-aware silently overwrites the other's conflicts. The control
+        also has to live INSIDE the synchronized section: a second copy outside
+        it would be exactly that second path, wearing the same label."""
+        ui = (FRONTEND / 'ui.js').read_text()
+        at = ui.index('async function submitWorkMetaEdit(')
+        body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]
+        self.assertNotIn('payload.author_text', body)
+        self.assertNotIn('draft.author_text', body)
+        # Exactly one control, and it is marked as a synchronized field. The
+        # editor renders one of two shapes (video "Channel name", otherwise the
+        # textual Author), so both markers are expected -- but never a bare one.
+        self.assertEqual(ui.count('id="meta-author-text"'), 2)
+        self.assertEqual(ui.count('id="meta-author-text" data-prks-work-field="author_text"'), 2)
+
+    def test_credit_is_composed_after_the_overlay_not_before(self):
+        """`author_text` is only one of three possible sources of a credit: a
+        linked Author outranks it, a linked Editor stands in when it is empty.
+        Reading it off the acknowledged row before the overlay both misses the
+        edit and cannot reveal the Editor when the field is cleared -- and
+        overlaying onto already-rendered HTML could not work at all."""
+        palette = (FRONTEND / 'command-palette.js').read_text()
+        at = palette.index('function workSubtitle(')
+        body = palette[at: palette.index('function entityRows(', at)]
+        overlay = body.index('prksEffectiveWorkSync(')
+        credit = body.index('linked_authors')
+        self.assertLess(overlay, credit,
+                        'the credit is composed from the acknowledged row')
+        self.assertIn('work.linked_authors', body)
+        self.assertIn('work.author_text', body)
+        self.assertNotIn('w.author_text', body)
+
+        # The card renderer receives an already-overlaid row; it must not try
+        # to interpret pending operations itself.
+        cards = (FRONTEND / 'components' / 'work-cards.js').read_text()
+        for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'prksSync',
+                          'prksEffective', 'payload.field'):
+            self.assertNotIn(forbidden, cards, forbidden)
+        # And the precedence itself still lives there, in one place.
+        credit_fn = cards[cards.index('function prksWorkCardCreditLine('):]
+        credit_fn = credit_fn[: credit_fn.index('\n}')]
+        self.assertLess(credit_fn.index('linked_authors'), credit_fn.index('author_text'))
+        self.assertLess(credit_fn.index('author_text'), credit_fn.index('primary_editor'))
 
     def test_recently_added_search_filters_the_effective_rows(self):
         """Rendering the overlay but filtering the acknowledged array is a real
@@ -298,13 +364,12 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
 
     def test_summary_field_registries_agree(self):
         from backend import work_metadata_sync
-        module = (FRONTEND / 'work-metadata-state.js').read_text()
-        listed = module[module.index('const SUMMARY_FIELDS = Object.freeze(['):]
-        listed = listed[: listed.index(']')]
-        for field in work_metadata_sync.SUMMARY_FIELDS:
-            self.assertIn("'%s'" % field, listed, field)
+        self.assertEqual(sorted(client_registries()['summary']),
+                         sorted(work_metadata_sync.SUMMARY_FIELDS))
         self.assertEqual(sorted(work_metadata_sync.SUMMARY_FIELDS),
-                         ['published_date', 'publisher', 'status', 'year'])
+                         ['author_text', 'published_date', 'publisher', 'status', 'year'])
+        for field in work_metadata_sync.SUMMARY_FIELDS:
+            self.assertIn(field, work_metadata_sync.SYNCED_FIELDS, field)
 
     def test_status_left_the_legacy_save(self):
         """Status had exactly the defect this milestone removes: an online

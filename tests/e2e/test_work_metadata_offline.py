@@ -5,7 +5,7 @@ import unittest
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
-from tests.e2e.fixtures import WORK_A_TITLE, seed_library
+from tests.e2e.fixtures import PERSON_DISPLAY, WORK_A_TITLE, WORK_B_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
 
 
@@ -471,6 +471,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
     # Progress renders one status at a time; Work A is seeded "In Progress".
     PROGRESS = '#/progress?status=In%20Progress'
+    PROGRESS_NOT_STARTED = '#/progress?status=Not%20Started'
 
     def seed_dates(self, server, page, year='1970', published='1954-06-07'):
         """Give Work A an acknowledged Year and Published Date, then reload so
@@ -783,12 +784,18 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def cached_status(self, page, list_key, work_id):
         return self.cached_list_field(page, list_key, work_id, 'status')
 
-    def warm_all_catalogs(self, page, work_id):
-        """All three browse snapshots on disk. A test that asserts a list was
-        patched must first have that list: a MISSING snapshot is left missing
-        by design, and asserting over one would pass or fail on whether the
-        route happened to be visited."""
-        self.progress_ids(page, 'In Progress')
+    def warm_all_catalogs(self, page, work_id, status='In Progress', open_title=None):
+        """All three browse snapshots on disk, each containing this Work. A
+        test that asserts a list was patched must first have that list: a
+        MISSING snapshot is left missing by design, and asserting over one
+        would pass or fail on whether the route happened to be visited.
+
+        `status` selects the Progress group the Work is actually in, and
+        `open_title` opens it first -- Recent is ordered by last-opened, so a
+        Work nobody has opened is legitimately absent from it."""
+        if open_title:
+            o._open_work_from_home(page, open_title)
+        self.progress_ids(page, status)
         o._wait_list_cached(page, 'works-browse:index')
         page.evaluate("() => prksNavigate('#/recent')")
         page.wait_for_selector('[data-work-id="%s"]' % work_id)
@@ -985,6 +992,189 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                          'a status change is never a PATCH, even online')
         self.assertEqual(self.server_fields(server, work)['status'],
                          {'value': 'Planned', 'revision': 1})
+
+    # ---- author_text: the field whose value is not always what is shown (2I) --
+
+    def credit(self, page, work_id):
+        """The credit half of a Work card's meta line."""
+        return page.evaluate("""id => {
+            const el = document.querySelector('[data-work-id="' + id + '"] .work-card__meta');
+            return el ? el.textContent.trim() : '';
+        }""", work_id)
+
+    def open_work_b(self, page, editing=True):
+        o._open_work_from_home(page, WORK_B_TITLE)
+        if editing:
+            self.edit(page)
+
+    def test_a_pending_author_text_becomes_the_credit_with_no_linked_author(self):
+        """Work B has no linked Author, so `author_text` IS its credit. The
+        pending value has to reach every cached card, survive a reload, and
+        still be there after the server answers -- without the card visibly
+        changing at acknowledgement."""
+        server, page, context = self.start()
+        work = server.ids['work_b']
+        self.db_for(server).update_work_metadata(work, {'author_text': 'Old Author'})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.warm_all_catalogs(page, work, status='Not Started', open_title=WORK_B_TITLE)
+        self.assertIn('Old Author', self.credit(page, work))
+
+        self.open_work_b(page)
+        self.offline(page, context)
+        self.field(page, 'author_text', 'New Author')
+        self.save(page)
+        self.pending(page, 1)
+        self.assertEqual(self.operations(page)[0]['payload'],
+                         {'field': 'author_text', 'value': 'New Author'})
+
+        for route in (self.PROGRESS_NOT_STARTED, '#/recent'):
+            page.evaluate("r => prksNavigate(r)", route)
+            page.wait_for_selector('[data-work-id="%s"]' % work)
+            self.assertIn('New Author', self.credit(page, work), route)
+            self.assertNotIn('Old Author', self.credit(page, work), route)
+        self.recently_added(page)
+        self.assertIn('New Author', self.credit(page, work), 'Recently added')
+        self.assertEqual(self.cached_list_field(page, 'recent:index', work, 'author_text'),
+                         'Old Author', 'the acknowledged snapshot is untouched')
+
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertIn('New Author', self.credit(page, work), 'after a reload')
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.server_fields(server, work)['author_text']['value'], 'New Author')
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertIn('New Author', self.credit(page, work), 'no reversion at acknowledgement')
+        self.assertEqual(self.cached_list_field(page, 'recent:index', work, 'author_text'),
+                         'New Author', 'the acknowledged row was patched')
+
+    def test_a_linked_author_outranks_a_pending_author_text(self):
+        """The central invariant. Work A has a linked Author, so changing the
+        textual author changes the FIELD -- the editor shows it -- while the
+        card keeps crediting the linked person. Synchronizing a field is not
+        permission to take over how a credit is composed."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.db_for(server).update_work_metadata(work, {'author_text': 'Old Text'})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.warm_all_catalogs(page, work)
+        self.assertIn(PERSON_DISPLAY, self.credit(page, work),
+                      'the linked Author is the credit to begin with')
+
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.field(page, 'author_text', 'New Text')
+        self.save(page)
+        self.pending(page, 1)
+
+        self.assertEqual(page.locator('[data-prks-work-field="author_text"]').input_value(),
+                         'New Text', 'the editor shows the pending FIELD')
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertIn(PERSON_DISPLAY, self.credit(page, work),
+                      'the card still credits the linked Author')
+        self.assertNotIn('New Text', self.credit(page, work))
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.server_fields(server, work)['author_text']['value'], 'New Text')
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertIn(PERSON_DISPLAY, self.credit(page, work),
+                      'and still does once the server knows')
+
+    def test_clearing_author_text_reveals_the_linked_editor(self):
+        """The fallback runs in the other direction too -- which is why the
+        overlay has to happen BEFORE the credit is composed. Patching a
+        rendered credit could never reveal a different person."""
+        server, page, context = self.start()
+        work, person = server.ids['work_b'], server.ids['person']
+        db = self.db_for(server)
+        db.update_work_metadata(work, {'author_text': 'Text Author'})
+        db.add_role(person, work, 'Editor')
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.warm_all_catalogs(page, work, status='Not Started', open_title=WORK_B_TITLE)
+        self.assertIn('Text Author', self.credit(page, work))
+
+        self.open_work_b(page)
+        self.offline(page, context)
+        self.field(page, 'author_text', '')
+        self.save(page)
+        self.pending(page, 1)
+
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        credit = self.credit(page, work)
+        self.assertIn(PERSON_DISPLAY, credit, 'the linked Editor stands in')
+        self.assertIn('Editor', credit)
+        self.assertNotIn('Text Author', credit)
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.server_fields(server, work)['author_text']['value'], '')
+        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.assertIn(PERSON_DISPLAY, self.credit(page, work))
+
+    def test_recently_added_filters_on_the_pending_author_text(self):
+        """That filter indexes the RAW field, which is deliberately not the
+        same as the displayed credit -- 2I preserves that rather than
+        redesigning it."""
+        server, page, context = self.start()
+        work = server.ids['work_b']
+        self.db_for(server).update_work_metadata(work, {'author_text': 'Old Author'})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.recently_added(page)
+        o._wait_list_cached(page, 'recently-added:index')
+        self.assertIn(work, self.filter_recently_added(page, 'Old Author'))
+
+        self.open_work_b(page)
+        self.offline(page, context)
+        self.field(page, 'author_text', 'New Author')
+        self.save(page)
+        self.pending(page, 1)
+
+        self.recently_added(page)
+        self.assertIn(work, self.filter_recently_added(page, 'New Author'),
+                      'the pending value is searchable locally at once')
+        self.assertNotIn(work, self.filter_recently_added(page, 'Old Author'),
+                         'and the value it replaced stops matching')
+
+    def test_an_author_text_conflict_is_visible_even_when_masked_on_the_card(self):
+        """A conflict is about the FIELD, not about what happens to be
+        displayed. Work A credits a linked Author throughout, so nothing on its
+        card ever changes -- and the disagreement still has to be surfaced and
+        resolvable."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.offline(page, context)
+        self.field(page, 'author_text', 'Alice')
+        self.save(page)
+        self.pending(page, 1)
+        self.db_for(server).update_work_metadata(work, {'author_text': 'Bob'})
+        self.reconnect(page, context)
+        self.settled_conflicts(page, 1)
+
+        op = self.operations(page)[0]
+        self.assertEqual(op['payload']['field'], 'author_text')
+        self.assertEqual(op['server_result']['code'], 'REVISION_CONFLICT')
+        self.assertEqual(op['server_result']['current_value'], 'Bob')
+        sync_text = page.locator('[data-prks-role="work-bib-sync"]').inner_text()
+        self.assertIn('Alice', sync_text)
+        self.assertIn('Bob', sync_text)
+
+        page.get_by_role('button', name='Apply my value', exact=True).click()
+        self.pending(page, 0)
+        self.assertEqual(self.server_fields(server, work)['author_text']['value'], 'Alice')
 
     def test_location_is_detail_only_and_leaves_recently_added_alone(self):
         """The control case: expanding the field family must not make every

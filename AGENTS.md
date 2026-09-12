@@ -1425,9 +1425,11 @@ The families are deliberately different in kind, and that is the point:
   revision would demand a resolution for a collision that never happened. Scope
   is `work-field / ["<work id>", "<field>"]` in the existing
   `sync_entity_revisions` table -- no schema change.
-- Thirteen fields synchronize: `status` (2H), `year`, `published_date` (2G),
+- `backend/work_metadata_sync.SYNCED_FIELDS` is the authoritative registry of
+  which fields synchronize -- consult it rather than any count written in prose.
+  It holds `status` (2H), `author_text` (2I), `year`, `published_date` (2G),
   `abstract`, `publisher`, `location`, `edition`, `journal`, `volume`, `issue`,
-  `pages`, `isbn`, `doi`.
+  `pages`, `isbn` and `doi`.
   `backend/work_metadata_sync.SYNCED_FIELDS` is the authority and the client
   list is pinned against it by `tests/test_frontend_work_metadata_sync.py`.
   Never accept a column name from a client.
@@ -1541,6 +1543,35 @@ The families are deliberately different in kind, and that is the point:
   after the user changed it everywhere else. It covers every synchronized
   field, not Status alone.
 
+### Fields whose stored value is not what is shown (Milestone 2I)
+
+- **`author_text` is one of three sources of a credit**, and not the first:
+  `linked Author(s) -> author_text -> linked Editor -> nothing`. A pending
+  value always changes the FIELD and only sometimes changes what the user
+  sees. That is the existing composition; synchronization must not take it
+  over.
+- **Order: overlay, then compose.** `acknowledged row -> effective row ->
+  prksWorkCardCreditLine() -> HTML`. Never patch `author_text` onto rendered
+  credit: with a linked Author the patch must do nothing, and with the field
+  cleared it must reveal a different person. The command palette had this
+  ordering bug -- it read the credit off the acknowledged row and the overlay
+  afterwards -- and 2I fixed it.
+- **Never store a derived credit.** No `display_author` / `display_credit` /
+  `effective_credit` field. Two sources of truth drift the moment either input
+  changes, and a future role-sync milestone must be able to change which value
+  is preferred without touching `author_text`.
+- **Local filters index the RAW field.** Recently Added searches `author_text`
+  separately from `linked_authors` / `primary_author` / `primary_editor`, so a
+  card crediting a linked Author can still match on its hidden textual author.
+  Preserved deliberately: this is synchronization, not a search redesign.
+- **Server search decides membership.** A pending `author_text` does not make a
+  Work discoverable; a returned Work is still RENDERED from effective local
+  metadata. After ACK the FTS trigger on `works` carries the new value -- do
+  not add manual index maintenance.
+- **No size rule.** The column is unbounded and PATCH accepts any length, so a
+  new bound here would refuse values the API accepts. The editor trims before
+  sending, exactly as it always did; the server stores what it is given.
+
 ### Local-first Work opens (Milestone 2C)
 
 - `last_opened_at` is a **max-register over event time**, not last-writer-wins.
@@ -1606,7 +1637,7 @@ Other mutations remain server-required. The implementation contract is in
   Work projections invalidate, including absent tombstones on delete/merge.
 - No offline Tag creation, Folder edits, Playlists, research-note editing,
   CRDTs, multi-user sync or server push. Open events joined the protocol in 2C
-  and thirteen Work fields in 2D/2E/2F/2G/2H; nothing else has. `year` and
+  and the Work fields in `SYNCED_FIELDS` (2D/2E/2F/2G/2H/2I); nothing else has. `year` and
   `published_date` (2G) are the high fan-out case: they reach all three browse
   catalogs AND the Work summaries embedded in cached Folder, Person and
   Playlist details, which are patched -- never invalidated -- under a

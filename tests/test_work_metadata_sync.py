@@ -35,7 +35,12 @@ class WorkMetadataSyncTests(unittest.TestCase):
         ALLOWLIST, not by length, so the free-text sample every other field
         takes is a refusal for it."""
         if field in meta.FIELD_ALLOWLISTS:
-            allowed = sorted(meta.FIELD_ALLOWLISTS[field])
+            # Deliberately a value the Work does NOT already hold: an
+            # allowlist is small, so an index-chosen sample can silently
+            # become a no-op and turn "did this advance?" into a test that
+            # asserts nothing.
+            current = self.value(field)
+            allowed = [v for v in sorted(meta.FIELD_ALLOWLISTS[field]) if v != current]
             return allowed[index % len(allowed)]
         return "value-%d" % index
 
@@ -47,8 +52,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
 
     def test_every_supported_field_round_trips(self):
         self.assertEqual(sorted(meta.SYNCED_FIELDS),
-                         ["abstract", "doi", "edition", "isbn", "issue", "journal",
-                          "location", "pages", "published_date", "publisher",
+                         ["abstract", "author_text", "doi", "edition", "isbn", "issue",
+                          "journal", "location", "pages", "published_date", "publisher",
                           "status", "volume", "year"])
         for index, field in enumerate(sorted(meta.SYNCED_FIELDS)):
             with self.subTest(field=field):
@@ -62,7 +67,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """An arbitrary column name from a client is both an injection surface
         and a way to reach fields this milestone deliberately does not
         synchronize."""
-        for field in ("title", "status", "doc_type", "author_text", "id",
+        for field in ("title", "doc_type", "id",
                       "doi; DROP TABLE works", "", None, 7):
             with self.subTest(field=field):
                 self.assertEqual(sync_protocol.process_operation(self.db, self.op(field, "x")),
@@ -337,6 +342,98 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertEqual(self.db.get_work_metadata_state(created)["fields"]["status"],
                          {"value": "Planned", "revision": 0})
 
+    # ---- author_text: a stored value that is not necessarily the shown one ----
+
+    def test_author_text_carries_no_size_rule_of_its_own(self):
+        """The column is unbounded and the ordinary PATCH accepts any length.
+        Inventing a bound here would refuse values the API still accepts --
+        the split contract moving a field to local-first exists to remove.
+        The durable queue still bounds it, by its own general payload cap."""
+        self.assertIsNone(meta.SYNCED_FIELDS["author_text"])
+        self.assertNotIn("author_text", meta.FIELD_ALLOWLISTS)
+        self.assertTrue(meta.is_valid_field_value("author_text", "x" * 100000))
+        self.assertTrue(meta.is_valid_field_value("author_text", ""))
+        code, result = self.send("author_text", "x" * 50000)
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        # Whitespace is NOT stripped server-side; it never was. The EDITOR
+        # trims before sending, exactly as it did through the old PATCH, so
+        # the trimming rule lives in one place and did not move.
+        self.assertEqual(self.send("author_text", "  Jane  ",
+                                   base=result["server_revision"])[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual(self.value("author_text"), "  Jane  ")
+
+    def test_author_text_conflicts_are_field_scoped_like_any_other_scalar(self):
+        self.db.update_work_metadata(self.work, {"author_text": "Alpha"})
+        base = self.state()["author_text"]["revision"]
+        self.db.update_work_metadata(self.work, {"author_text": "Bob"})
+        code, result = self.send("author_text", "Alice", base=base)
+        self.assertEqual((code, result["code"]), (409, "REVISION_CONFLICT"))
+        self.assertEqual(result["current_value"], "Bob")
+        # Convergence is not a conflict.
+        self.assertEqual(self.send("author_text", "Bob", base=base)[1]["code"], "ACKNOWLEDGED")
+        # And nothing else is blocked by it.
+        self.assertEqual(self.send("doi", "10.1/x", base=0)[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual(self.send("status", "Paused", base=0)[1]["code"], "ACKNOWLEDGED")
+
+    def test_creation_does_not_manufacture_an_author_text_revision(self):
+        created = self.db.add_work("Fresh", author_text="Jane Smith")
+        self.assertEqual(self.db.get_work_metadata_state(created)["fields"]["author_text"],
+                         {"value": "Jane Smith", "revision": 0})
+
+    def test_patch_and_sync_are_the_only_existing_work_author_text_writers(self):
+        """The Phase A audit, kept honest. Every OTHER path that sets
+        `author_text` -- the Processing import, the video oEmbed fill --
+        CREATES a Work, and construction is not a change to an existing
+        synchronization aggregate. If a path that mutates an existing Work is
+        ever added, it must route through `set_field_on_conn` and this test
+        should be the thing that notices."""
+        import pathlib as _pathlib
+        import re
+        backend_dir = _pathlib.Path(__file__).resolve().parents[1] / "backend"
+        offenders = []
+        pattern = re.compile(r"UPDATE\s+works\s+SET\s+([^\n]*)", re.IGNORECASE)
+        for path in sorted(backend_dir.rglob("*.py")):
+            if path.name == "work_metadata_sync.py":
+                continue
+            for clause in pattern.findall(path.read_text(encoding="utf-8")):
+                if re.search(r"\bauthor_text\b\s*=", clause):
+                    offenders.append("%s: %s" % (path.name, clause.strip()))
+        self.assertEqual(offenders, [])
+        # The oEmbed fill reaches add_work, never an update.
+        server = (backend_dir / "server.py").read_text(encoding="utf-8")
+        at = server.index("If author_text not provided, fill from oEmbed author_name.")
+        self.assertIn("db.add_work(", server[at: at + 2000])
+        self.assertNotIn("update_work_metadata", server[at: at + 2000])
+
+    def test_search_finds_the_new_author_text_after_synchronization(self):
+        """`author_text` is an FTS column, kept current by an AFTER UPDATE
+        trigger on `works`. The synchronized write is an ordinary UPDATE, so
+        this needs no manual index maintenance -- but it is worth proving
+        against the real engine rather than assuming it."""
+        self.db.update_work_metadata(self.work, {"author_text": "Alpha Person"})
+        found = [row["id"] for row in self.db.search_works("Alpha Person")]
+        self.assertIn(self.work, found)
+
+        base = self.state()["author_text"]["revision"]
+        self.assertEqual(self.send("author_text", "Beta Person", base=base)[1]["code"],
+                         "ACKNOWLEDGED")
+        self.assertIn(self.work, [row["id"] for row in self.db.search_works("Beta Person")],
+                      "the synchronized value is searchable")
+        self.assertNotIn(self.work, [row["id"] for row in self.db.search_works("Alpha Person")],
+                         "and the value it replaced no longer matches via author_text")
+
+    def test_pending_author_text_is_not_a_server_search_term(self):
+        """The documented 2I boundary: the server decides result MEMBERSHIP
+        and knows nothing about a pending local value. The client overlays
+        effective fields for RENDERING only. Making the server discover an
+        unsent value would need a local search index, which is not this
+        milestone."""
+        self.db.update_work_metadata(self.work, {"author_text": "Alpha Person"})
+        # Nothing has been sent, so nothing about "Beta" can be known here.
+        self.assertEqual(self.db.search_works("Beta Person"), [])
+        self.assertIn(self.work, [row["id"] for row in self.db.search_works("Alpha Person")],
+                      "and the Work is still discoverable under its acknowledged value")
+
     def test_no_other_backend_statement_writes_a_synchronized_column(self):
         """The audit behind the test above, kept honest as the schema grows: a
         second writer that skips `set_field_on_conn` would reintroduce the
@@ -365,7 +462,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.send("doi", "10.1/keep")
         before = self.state()
         self.db.update_work_metadata(self.work, {
-            "title": "Renamed", "author_text": "Someone", "doc_type": "book"})
+            "title": "Renamed", "doc_type": "book"})
         self.assertEqual(self.state(), before)
         self.assertEqual(self.db.execute_query(
             "SELECT title FROM works WHERE id = ?", (self.work,))[0]["title"], "Renamed")
@@ -445,17 +542,19 @@ class WorkMetadataSyncTests(unittest.TestCase):
         value into one list; Abstract DERIVES one; Year and Published Date are
         on every Work card and so reach all three."""
         self.assertEqual(sorted(meta.FIELD_PROJECTIONS),
-                         ["abstract", "published_date", "publisher", "status", "year"])
+                         ["abstract", "author_text", "published_date", "publisher",
+                          "status", "year"])
         self.assertEqual(meta.FIELD_PROJECTIONS["abstract"], ("works-browse",))
         self.assertEqual(meta.FIELD_PROJECTIONS["publisher"], ("recently-added",))
         # Status is the strongest case for reaching all three: it does not only
         # change what a card SAYS, it changes which Progress group the card
         # belongs to, and Progress reads `works-browse:index`.
-        for field in ("year", "published_date", "status"):
+        for field in ("year", "published_date", "status", "author_text"):
             self.assertEqual(meta.FIELD_PROJECTIONS[field],
                              ("works-browse", "recent", "recently-added"), field)
         for field in meta.SYNCED_FIELDS:
-            if field in ("publisher", "abstract", "year", "published_date", "status"):
+            if field in ("publisher", "abstract", "year", "published_date", "status",
+                         "author_text"):
                 continue
             self.assertNotIn(field, meta.FIELD_PROJECTIONS, field)
 
@@ -463,7 +562,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """Folder, Person and Playlist details embed Work summaries. A field
         those rows carry has to reach them too -- rendering AND local search."""
         self.assertEqual(sorted(meta.SUMMARY_FIELDS),
-                         ["published_date", "publisher", "status", "year"])
+                         ["author_text", "published_date", "publisher", "status", "year"])
         self.assertEqual(meta.SUMMARY_ENTITY_KINDS, ("folder", "person", "playlist"))
         for field in meta.SUMMARY_FIELDS:
             self.assertIn(field, meta.SYNCED_FIELDS, field)
