@@ -47,7 +47,7 @@ async function main() {
     let received = [];
     const runtime = globalThis.createPrksSyncRuntime({ store, online: () => true,
         request: async (path, init) => { received.push(JSON.parse(init.body)); return { ok: true, status: 200, json: async () => ack }; },
-        reconcile: async result => cacheWorks && await offline.reconcileWorkTag(result),
+        handlers: tagHandlers(async result => cacheWorks && await offline.reconcileWorkTag(result)),
     });
     await runtime.wake(); runtime.stop();
     assert.equal((await store.getOperation(op.op_id)).status, 'pending');
@@ -58,7 +58,7 @@ async function main() {
     cacheWorks = true;
     const recovered = globalThis.createPrksSyncRuntime({ store, online: () => true,
         request: async (path, init) => { received.push(JSON.parse(init.body)); return { ok: true, status: 200, json: async () => ack }; },
-        reconcile: result => offline.reconcileWorkTag(result),
+        handlers: tagHandlers(result => offline.reconcileWorkTag(result)),
     });
     await recovered.wake(); recovered.stop();
     assert.equal(await store.getOperation(op.op_id), null, 'a reconciled ACK retires the local operation');
@@ -75,7 +75,7 @@ async function main() {
     const conflicts = globalThis.createPrksSyncRuntime({ store, online: () => true,
         request: async () => ({ ok: false, status: 409, json: async () => ({
             work_id: 'W-A', tag_id: tag.id, code: 'REVISION_CONFLICT', current_revision: 3, current_state: true, requested_state: false,
-        }) }), reconcile: async () => { throw new Error('must not reconcile conflict'); },
+        }) }), handlers: tagHandlers(async () => { throw new Error('must not reconcile conflict'); }),
     });
     await conflicts.wake(); conflicts.stop();
     assert.equal((await store.getOperation(remove.op_id)).server_result.current_revision, 3);
@@ -99,8 +99,14 @@ async function waitFor(predicate, label) {
 }
 async function settle() { for (let i = 0; i < 5; i++) await tick(); }
 
+/* The coordinator dispatches per family now; these selftests still exercise
+ * the Work-Tag family, with its reconciliation swapped for the scenario's. */
+function tagHandlers(reconcile) {
+    const family = Object.assign({}, globalThis.prksWorkTagSyncHandler, { reconcile });
+    return { ADD_WORK_TAG: family, REMOVE_WORK_TAG: family };
+}
 function syncRuntime(store, request, reconcile) {
-    return globalThis.createPrksSyncRuntime({ store, online: () => true, request, reconcile });
+    return globalThis.createPrksSyncRuntime({ store, online: () => true, request, handlers: tagHandlers(reconcile) });
 }
 
 /* PHASE A -- reachability is observed, never assumed.
@@ -135,7 +141,7 @@ async function connectivity() {
     let sent = 0;
     runtime = globalThis.createPrksSyncRuntime({ store, online: gate,
         request: async () => { sent += 1; return { ok: true, status: 200, json: async () => ({ ...ack, work_id: 'W-G' }) }; },
-        reconcile: async () => true,
+        handlers: tagHandlers(async () => true),
     });
 
     await runtime.wake();

@@ -2270,7 +2270,7 @@ function prksOfflineMaybeRefreshFocusedRoute() {
     if (ctx.ui && (ctx.ui.workDetailsMode === 'metadata' || ctx.ui.personDetailEditing || ctx.ui.argumentEditing || ctx.ui.personGroupEditing || ctx.ui.personGroupMembersEditing || ctx.ui.playlistEditing)) return;
     const banner = ctx.root.querySelector('[data-prks-role="offline-provenance-banner"], [data-prks-role="offline-unavailable"]');
     if (!banner) return;
-    void prksRenderTabRoute(ctx, ctx.lastResolvedRoute.canonicalHash, { leaveApproved: true });
+    void prksRenderTabRoute(ctx, ctx.lastResolvedRoute.canonicalHash, { leaveApproved: true, internalRefresh: true });
 }
 
 let __prksOfflinePrevState = 'online';
@@ -2333,9 +2333,15 @@ async function prksLoadOfflineCacheStatus() {
             '.';
         if (typeof prksSyncDiagnostics === 'function') {
             const sync = await prksSyncDiagnostics();
-            summaryEl.textContent += ' Unsynchronized Tag changes: ' + sync.pendingTotal +
+            summaryEl.textContent += ' Unsynchronized changes: ' + sync.pendingTotal +
                 ' (waiting: ' + sync.byStatus.pending + ', syncing: ' + sync.byStatus.syncing +
                 ', conflicts: ' + sync.byStatus.conflict + '). Clearing the cache preserves these changes.';
+            // Activity events the server refused have no resolution to offer,
+            // so they are consumed rather than parked -- but they are still
+            // worth seeing here rather than vanishing without trace.
+            if (sync.discarded && sync.discarded.length) {
+                summaryEl.textContent += ' Open events dropped this session: ' + sync.discarded.length + '.';
+            }
             if (typeof prksRenderSyncDiagnostics === 'function') await prksRenderSyncDiagnostics(summaryEl);
         }
     } catch (e) {
@@ -2570,6 +2576,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const fromPopstate = !!opts.fromPopstate;
     const leaveApproved = !!opts.leaveApproved;
     const routeStateCaptured = !!opts.routeStateCaptured;
+    // A re-render PRKS decided to do -- reconnecting, say -- is not the user
+    // opening anything. Recording an open here would mean that regaining
+    // connectivity silently reordered Recent, which is the same defect that
+    // made GET /api/works/:id impure in the first place.
+    const internalRefresh = !!opts.internalRefresh;
     const suppliedHash = hash == null ? '#/folders' : String(hash);
     let route = typeof prksParseRoute === 'function' ? prksParseRoute(suppliedHash) : null;
     if (!route) return;
@@ -2866,9 +2877,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     prksIsRecentIndexShape, routeSignal
                 );
                 if (stale()) return;
-                const works = prksResolveOfflineBrowseList(
+                const base = prksResolveOfflineBrowseList(
                     offlineRecent, PRKS_RECENT_LIST_KEY, prksIsRecentIndexShape, 'Recent'
                 );
+                // Acknowledged snapshot + durable pending open events. Pending
+                // intent is never written into the cached list itself, and a
+                // missing snapshot stays missing: one open event is not a
+                // Recent page. Reconstructed from prks-local-v1, so it survives
+                // a reload rather than living in this tab's memory.
+                const works = base && typeof prksEffectiveRecent === 'function' && window.prksSync
+                    ? prksEffectiveRecent(base, await prksSync.store.listOperations()) : base;
+                if (stale()) return;
                 if (!works) {
                     prksOfflineRenderUnavailable(contentDiv, 'Recently opened not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Recently opened not available offline' };
@@ -3021,17 +3040,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (stale()) return;
                 // This route IS the genuine foreground open, so it is the only
                 // place that records one. The read itself is pure; the explicit
-                // event is what reorders #/recent, and it publishes Recent
-                // coherence on acknowledged success. Fire-and-forget: failing
-                // to record an open must never break opening the Work.
-                // Opening a CACHED Work offline deliberately records nothing
-                // today: there is no durable outbox to hold the event, and
-                // silently dropping it is honest where faking a local reorder
-                // would not be. When the outbox lands this becomes a queued
-                // MARK_WORK_OPENED plus an optimistic recent:index update.
-                if (offlineWork.source === 'server' && offlineWork.value &&
-                    typeof markWorkOpened === 'function') {
-                    void markWorkOpened(workId);
+                // event is what reorders #/recent. It takes the durable path
+                // whether or not PRKS is reachable -- a Work opened from cache
+                // offline is just as genuinely opened -- so online and offline
+                // share one implementation rather than diverging.
+                // Fire-and-forget, and deliberately never awaited: recording
+                // the activity must not delay or endanger showing the Work.
+                if (!internalRefresh && offlineWork.value && typeof prksRecordWorkOpened === 'function') {
+                    void prksRecordWorkOpened(offlineWork.value);
                 }
                 const work = offlineWork.value;
                 if (!work && offlineWork.source === 'unavailable') {

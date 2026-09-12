@@ -47,6 +47,19 @@ class OfflineWorkTagTests(unittest.TestCase):
         o._wait_list_cached(page, 'tags:index')
         return server, page, context
 
+    # The durable queue is shared with Work open events now, so every
+    # assertion here scopes itself to the Work-Tag family.
+    TAG_OPS = "['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(r.operation)"
+    TAG_LEDGER = "operation_type IN ('ADD_WORK_TAG', 'REMOVE_WORK_TAG')"
+
+    def tag_operations(self, page):
+        return page.evaluate(
+            "() => prksSync.store.listOperations().then(rows => rows.filter(r => %s))" % self.TAG_OPS)
+
+    def tag_ledger(self, server, columns='*'):
+        return self.db_for(server).execute_query(
+            'SELECT %s FROM sync_operations WHERE %s' % (columns, self.TAG_LEDGER))
+
     def manage(self, page):
         page.locator('#panel-content button', has_text='Manage tags').click()
         page.wait_for_function("() => { const i = document.getElementById('work-tag-search'); return i && !i.disabled; }")
@@ -77,7 +90,8 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.evaluate("""async n => {
             const deadline = Date.now() + 20000;
             while (Date.now() < deadline) {
-                const rows = await prksSync.store.listOperations();
+                const rows = (await prksSync.store.listOperations())
+                    .filter(r => ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(r.operation));
                 if (rows.filter(r => r.status !== 'acknowledged').length === n) return;
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
@@ -124,7 +138,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.remove(page); self.pending(page, 1)
         page.reload(); self.manage(page)
         self.add(page, 'Initially Assigned'); self.pending(page, 0)
-        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [])
+        self.assertEqual(self.tag_operations(page), [])
 
     def test_revision_conflict_retains_intent_and_apply_creates_new_operation(self):
         server, page, context = self.start(); self.offline(page, context)
@@ -132,19 +146,19 @@ class OfflineWorkTagTests(unittest.TestCase):
         db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
         w, t = server.ids['work_a'], server.ids['tag']
         db.add_tag_to_work(w, t); db.remove_tag_from_work(w, t)
-        original = page.evaluate('() => prksSync.store.listOperations().then(r => r[0].op_id)')
+        original = self.tag_operations(page)[0]['op_id']
         self.reconnect(page, context)
         page.get_by_role('button', name='Apply my change', exact=True).wait_for()
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
         self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
         page.get_by_role('button', name='Apply my change', exact=True).click()
         self.pending(page, 0)
-        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [],
+        self.assertEqual(self.tag_operations(page), [],
                          'the completed operation is retired locally')
         self.assertIn(t, [r['id'] for r in db.get_work_tags(w)])
         # The ledger proves a NEW operation carried the reapplied intent: the
         # original id kept its recorded conflict and was never reused.
-        ledger = {r['op_id']: r['status'] for r in db.execute_query('SELECT op_id, status FROM sync_operations')}
+        ledger = {r['op_id']: r['status'] for r in self.tag_ledger(server, 'op_id, status')}
         self.assertEqual(ledger.pop(original), 'REVISION_CONFLICT')
         self.assertEqual(list(ledger.values()), ['ACKNOWLEDGED'])
 
@@ -165,7 +179,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
         options = db.get_work_tag_options(server.ids['work_a'])
         self.assertEqual(next(t['relation_revision'] for t in options['assigned'] if t['tag_id'] == server.ids['tag']), 1)
-        self.assertEqual(len(db.execute_query('SELECT * FROM sync_operations')), 1)
+        self.assertEqual(len(self.tag_ledger(server)), 1)
 
     def test_cache_clear_keeps_intent_and_syncs_without_base(self):
         server, page, context = self.start(); self.offline(page, context)
@@ -203,7 +217,8 @@ class OfflineWorkTagTests(unittest.TestCase):
         return page.evaluate("""async () => {
             const deadline = Date.now() + 20000;
             for (;;) {
-                const rows = await prksSync.store.listOperations();
+                const rows = (await prksSync.store.listOperations())
+                    .filter(r => ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(r.operation));
                 if (rows.length === 1 && rows[0].status === 'conflict' && rows[0].server_result) return rows[0];
                 if (Date.now() > deadline) throw new Error('No conflict settled: ' + JSON.stringify(rows));
                 await new Promise(resolve => setTimeout(resolve, 50));
@@ -233,7 +248,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.wait_for_timeout(200)
         self.assertEqual(page.locator('#work-tag-search-results .result-item').count(), 0)
         self.assertEqual([url for method, url in seen if method != 'GET'], [])
-        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [])
+        self.assertEqual(self.tag_operations(page), [])
 
     def test_offline_remove_does_not_need_the_tag_catalog(self):
         """Removing an assigned Tag needs only what the Work and its
@@ -265,7 +280,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertEqual(page.locator('#work-tags-list .work-tag-chip',
                                       has_text='Brand New Offline Tag').count(), 0)
         self.assertEqual([url for method, url in seen if method != 'GET'], [])
-        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [])
+        self.assertEqual(self.tag_operations(page), [])
 
     # ---- Phase H: one durable-first path, online and offline ----
 
@@ -285,7 +300,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         db = self.db_for(server)
         self.assertEqual([t['id'] for t in db.get_work_tags(server.ids['work_a'])], [server.ids['tag']])
         self.assertEqual(
-            sorted(r['status'] for r in db.execute_query('SELECT status FROM sync_operations')),
+            sorted(r['status'] for r in self.tag_ledger(server, 'status')),
             ['ACKNOWLEDGED', 'ACKNOWLEDGED'])
 
     # ---- Phase E: the conflict branches the browser run had not covered ----
@@ -303,11 +318,11 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.get_by_role('button', name='Use server state', exact=True).click()
         self.pending(page, 0)
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for(state='detached')
-        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [],
+        self.assertEqual(self.tag_operations(page), [],
                          'resolving with server state creates no replacement operation')
         self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
         # The conflict itself was ledgered; resolving it mutated nothing more.
-        rows = db.execute_query('SELECT status FROM sync_operations')
+        rows = self.tag_ledger(server, 'status')
         self.assertEqual([r['status'] for r in rows], ['REVISION_CONFLICT'])
         options = page.evaluate(
             """id => window.createPrksOfflineStore().getEntity('work-tag-options', id)
@@ -337,7 +352,7 @@ class OfflineWorkTagTests(unittest.TestCase):
 
         page.get_by_role('button', name='Discard local change', exact=True).click()
         self.pending(page, 0)
-        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [])
+        self.assertEqual(self.tag_operations(page), [])
         self.assertEqual([t['id'] for t in db.get_work_tags(w)], [target],
                          'discarding a merge conflict retargets nothing')
         self.assertNotIn(source, [r['id'] for r in db.execute_query('SELECT id FROM tags')])
@@ -356,7 +371,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertIn('was deleted on the server', self.conflict_text(page))
         page.get_by_role('button', name='Discard local change', exact=True).click()
         self.pending(page, 0)
-        self.assertEqual(page.evaluate('() => prksSync.store.listOperations()'), [])
+        self.assertEqual(self.tag_operations(page), [])
         self.assertNotIn(t, [r['id'] for r in db.execute_query('SELECT id FROM tags')])
         self.assertEqual([r['id'] for r in db.get_work_tags(w)], [server.ids['assigned']])
 
@@ -374,9 +389,9 @@ class OfflineWorkTagTests(unittest.TestCase):
         # No retry loop: the attempt count is still 1 a while later, and the
         # change is still there for the user to decide about.
         page.wait_for_timeout(2500)
-        after = page.evaluate('() => prksSync.store.listOperations().then(rows => rows[0])')
+        after = self.tag_operations(page)[0]
         self.assertEqual((after['attempt_count'], after['status']), (1, 'conflict'))
-        self.assertEqual(len(db.execute_query('SELECT * FROM sync_operations')), 1)
+        self.assertEqual(len(self.tag_ledger(server)), 1)
 
     # ---- Phase F: conflicts survive the loss of the Work they belong to ----
 
@@ -403,7 +418,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         discard = panel.get_by_role('button', name='Discard local change', exact=True)
         discard.wait_for()
         discard.click()
-        page.wait_for_function("() => prksSync.store.listOperations().then(rows => rows.length === 0)")
+        page.wait_for_function(
+            "() => prksSync.store.listOperations().then(rows => rows.every(r => !%s))" % self.TAG_OPS)
         self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
-        self.assertEqual([r['status'] for r in db.execute_query('SELECT status FROM sync_operations')],
-                         ['REVISION_CONFLICT'])
+        self.assertEqual([r['status'] for r in self.tag_ledger(server, 'status')], ['REVISION_CONFLICT'])

@@ -1,0 +1,140 @@
+"""Generic semantic-operation protocol: envelope, ledger, dispatch.
+
+This layer owns exactly what every operation family shares and nothing that
+only one family needs. Domain rules -- which payloads are legal, what a
+revision means, what the mutation is -- live in per-family handler modules, so
+adding a family is a registration rather than another branch in a growing
+conditional here.
+
+The ledger, revisions and lifecycle history are canonical backup state. No
+retention policy exists: dropping an old idempotency row could reapply an old
+operation.
+"""
+import hashlib
+import json
+import re
+from datetime import datetime, timezone
+
+UUID = re.compile(r"^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
+FIELDS = frozenset(("op_id", "device_id", "operation", "entity_type", "entity_id",
+                    "payload", "base_revision", "occurred_at", "created_at", "depends_on"))
+MAX_REVISION = 9007199254740991
+MAX_ID_CHARS = 200
+
+_HANDLERS = {}
+
+
+def register(operation, handler):
+    """Bind one operation name to its domain handler.
+
+    A handler provides `validate(op)` -- raising ValueError(code) for anything
+    this family forbids -- and `apply(db, conn, op, received_at)` returning
+    `(http_status, result)`. Nothing else about the family is visible here.
+    """
+    if operation in _HANDLERS:
+        raise RuntimeError("duplicate sync operation handler: " + operation)
+    _HANDLERS[operation] = handler
+
+
+def supported_operations():
+    return frozenset(_HANDLERS)
+
+
+def normalize_envelope(data):
+    """Validate and canonicalize the fields every operation family shares.
+
+    Normalization is what the request hash is taken over, so two spellings of
+    the same operation (key order, `Z` vs `+00:00`, upper-case UUIDs) must
+    reduce to identical bytes or a retry after a lost response would read as a
+    different operation and be refused as OP_ID_REUSE.
+    """
+    if not isinstance(data, dict) or set(data) != FIELDS:
+        raise ValueError("INVALID_ENVELOPE")
+    out = dict(data)
+    for field in ("op_id", "device_id"):
+        if not isinstance(data[field], str) or not UUID.fullmatch(data[field]):
+            raise ValueError("INVALID_ENVELOPE")
+        out[field] = data[field].lower()
+    if not isinstance(data["operation"], str) or data["operation"] not in _HANDLERS:
+        raise ValueError("INVALID_ENVELOPE")
+    if data["entity_type"] != "work":
+        raise ValueError("INVALID_ENVELOPE")
+    if not isinstance(data["payload"], dict):
+        raise ValueError("INVALID_ENVELOPE")
+    value = data["entity_id"]
+    if not isinstance(value, str) or not value.strip() or value != value.strip() or len(value) > MAX_ID_CHARS:
+        raise ValueError("INVALID_ENVELOPE")
+    # Families that need no optimistic concurrency send null; families that do
+    # send a counter. Which one is legal is the handler's decision, not this
+    # layer's -- both spellings are structurally valid here.
+    revision = data["base_revision"]
+    if revision is not None and (type(revision) is not int or not 0 <= revision <= MAX_REVISION):
+        raise ValueError("INVALID_BASE_REVISION")
+    # v1 deliberately supports no dependency execution.
+    if data["depends_on"] != []:
+        raise ValueError("UNSUPPORTED_DEPENDENCIES")
+    for field in ("occurred_at", "created_at"):
+        out[field] = normalize_timestamp(data[field])
+    return out
+
+
+def normalize_timestamp(value):
+    """A bounded, timezone-aware ISO-8601 instant, canonicalized to UTC."""
+    if not isinstance(value, str) or len(value) > 40:
+        raise ValueError("INVALID_ENVELOPE")
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError()
+        return timestamp.astimezone(timezone.utc).isoformat()
+    except ValueError:
+        raise ValueError("INVALID_ENVELOPE") from None
+
+
+def request_hash(op):
+    return hashlib.sha256(json.dumps(op, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def insert_result(conn, op, digest, http_status, result):
+    conn.execute("""INSERT INTO sync_operations
+        (op_id, device_id, operation_type, entity_type, entity_id, request_hash, status, http_status, result_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (op["op_id"], op["device_id"], op["operation"], op["entity_type"], op["entity_id"],
+         digest, result["code"], http_status, json.dumps(result, sort_keys=True, separators=(",", ":"))))
+
+
+def process_operation(db, data):
+    """Execute one semantic operation exactly once, ever.
+
+    Validation errors precede the ledger deliberately: a malformed envelope is
+    not an outcome worth remembering, and ledgering one would burn an op_id the
+    client can legitimately retry after fixing nothing but its own bug.
+    """
+    try:
+        op = normalize_envelope(data)
+        handler = _HANDLERS[op["operation"]]
+        handler.validate(op)
+    except ValueError as exc:
+        return 400, {"code": exc.args[0]}
+    digest = request_hash(op)
+    received_at = datetime.now(timezone.utc)
+    with db.connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        seen = conn.execute("SELECT request_hash, http_status, result_json FROM sync_operations WHERE op_id = ?",
+                            (op["op_id"],)).fetchone()
+        if seen:
+            if seen[0] != digest:
+                return 409, {"code": "OP_ID_REUSE"}
+            return seen[1], json.loads(seen[2])
+        status, result = handler.apply(db, conn, op, received_at)
+        insert_result(conn, op, digest, status, result)
+        return status, result
+
+
+# Registration is explicit and lives here so the set of families PRKS accepts
+# is readable in one place. Handler modules import nothing from this one.
+from backend import work_open_sync, work_tag_sync  # noqa: E402
+
+register("ADD_WORK_TAG", work_tag_sync.HANDLER)
+register("REMOVE_WORK_TAG", work_tag_sync.HANDLER)
+register("MARK_WORK_OPENED", work_open_sync.HANDLER)

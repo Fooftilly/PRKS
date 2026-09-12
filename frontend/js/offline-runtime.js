@@ -408,6 +408,34 @@
             return true;
         }
 
+        /* Reconcile an acknowledged open event into the cached Recent list.
+         *
+         * The domain generation is bumped BEFORE the read, so a GET /api/recent
+         * that began earlier cannot publish its pre-acknowledgement body over
+         * this. The domain is deliberately NOT blocked: this publishes a
+         * known-good value rather than invalidating one, and blocking would
+         * make Recent unavailable offline for no reason.
+         *
+         * A missing Recent snapshot is success, not failure: there is nothing
+         * to reconcile, and one open event is not enough to invent a Recent
+         * page from. The next authoritative fetch carries the right state.
+         */
+        async function reconcileRecentOpen(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const token = currentDomainGeneration(DOMAIN_RECENT) + 1;
+            domainGeneration.set(DOMAIN_RECENT, token);
+            const cached = await store.getList(RECENT_LIST_KEY).catch(function () { return null; });
+            if (!cached) return true;
+            const rows = cached.value;
+            if (typeof root.prksIsRecentIndexShape === 'function' && !root.prksIsRecentIndexShape(rows)) {
+                return false;
+            }
+            const merged = typeof root.prksMergeRecentOpen === 'function'
+                ? root.prksMergeRecentOpen(rows, result) : null;
+            if (!merged) return false;
+            return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token);
+        }
+
         /** Remove a disposable entity snapshot. Never changes connectivity or server state. */
         function invalidateEntity(kind, id) {
             if (!store || typeof store.deleteEntity !== 'function') return Promise.resolve(false);
@@ -678,6 +706,7 @@
             readThroughEntity: readThroughEntity,
             readThroughList: readThroughList,
             reconcileWorkTag,
+            reconcileRecentOpen,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
             invalidateEntity: invalidateEntity,
@@ -879,6 +908,7 @@
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
         prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
+        prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineMarkTagsChanged: () => production.markDomainChanged('tags', { entityKinds: [], listKeys: ['tags:index'] }),
         prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,
         prksOfflineInvalidateEntity: prksOfflineInvalidateEntity,

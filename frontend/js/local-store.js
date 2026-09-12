@@ -623,6 +623,43 @@
             });
         }
 
+        /* One effective never-sent open event per Work.
+         *
+         * Opening the same Work three times offline is one fact -- "last opened
+         * at the latest of those" -- so keeping three envelopes stores nothing
+         * the newest does not already say. A row that has been SENT is left
+         * alone: it may already be ledgered, and it does not need cancelling
+         * anyway, because the server takes the maximum event time and applying
+         * two open events in either order gives the same canonical result.
+         *
+         * Envelopes stay immutable: coalescing deletes the superseded row and
+         * inserts a new one under a new id, never rewrites history in place.
+         */
+        function recordWorkOpened(workId, occurredAt, localContext) {
+            if (!isNonBlankString(workId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'work id is required.'));
+            }
+            if (!isParsableTimestamp(occurredAt)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'occurred_at must be an ISO timestamp.'));
+            }
+            const at = Date.parse(occurredAt);
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                const existing = rows.find(r => r.operation === 'MARK_WORK_OPENED' &&
+                    r.entity_type === 'work' && r.entity_id === workId &&
+                    r.status === STATUS_PENDING && r.attempt_count === 0);
+                if (existing) {
+                    // A clock that went backwards must not lose the later event.
+                    if (Date.parse(existing.occurred_at) >= at) { setResult(existing); return; }
+                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                }
+                setResult(await insertEnvelopeIn(request, {
+                    operation: 'MARK_WORK_OPENED', entity_type: 'work', entity_id: workId,
+                    payload: {}, base_revision: null, occurred_at: occurredAt,
+                }, localContext));
+            });
+        }
+
         /* Explicit user resolution, atomically retires the conflict and, when
          * requested, creates a NEW envelope against the observed server base. */
         function resolveConflict(opId, apply) {
@@ -877,7 +914,7 @@
         return {
             getOrCreateDeviceId: getOrCreateDeviceId,
             enqueueOperation: enqueueOperation,
-            coalesceWorkTag, resolveConflict, claimOperation,
+            coalesceWorkTag, recordWorkOpened, resolveConflict, claimOperation,
             getOperation: getOperation,
             listOperations: listOperations,
             updateOperationSyncState: updateOperationSyncState,

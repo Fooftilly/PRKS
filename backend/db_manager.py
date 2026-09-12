@@ -14,7 +14,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import work_tag_sync
+from backend import work_open_sync, work_tag_sync
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_annotations import (
@@ -1738,11 +1738,15 @@ class PRKSDatabase:
     def get_recent_browse(self, limit: int = 30) -> List[dict]:
         """Top-N by `last_opened_at`, with an explicit tie-break.
 
-        `last_opened_at` has one-second resolution, so ties are ordinary (a
-        session that opens several files quickly). Without a secondary key the
-        order is unspecified, which an offline projection could not reproduce
-        faithfully -- so `id` is the canonical tie-break here and everywhere
-        the same list is derived.
+        Open events are recorded at millisecond resolution
+        (`work_open_sync.format_moment`), so two quick opens rarely tie any
+        more -- but rows written before that, and two events inside the same
+        millisecond, still can. Without a secondary key their order would be
+        unspecified, which an offline projection could not reproduce
+        faithfully, so `id` is the canonical tie-break here and everywhere the
+        same list is derived. Mixed second- and millisecond-precision values
+        sort chronologically against each other: a bare `12:00:00` is a prefix
+        of `12:00:00.250`, so text ordering already reads it as `.000`.
         """
         sel = _prks_work_browse_select("works", abstract_excerpt=False)
         pex = _prks_sql_work_summary_person_extras("works")
@@ -2289,12 +2293,36 @@ class PRKSDatabase:
         wid = (work_id or "").strip()
         if not wid:
             raise ValueError("work_id is required")
-        if not self.execute_query("SELECT 1 FROM works WHERE id = ?", (wid,)):
-            return False
-        self.execute_query(
-            "UPDATE works SET last_opened_at = CURRENT_TIMESTAMP WHERE id = ?", (wid,)
-        )
-        return True
+        # Server-now is this caller's event time; a synchronized
+        # MARK_WORK_OPENED supplies the device's own normalized event time
+        # instead. Both go through the same max-register, so the two entry
+        # points can never give the column two different meanings.
+        with self.connection() as conn:
+            existed, _changed, _effective = work_open_sync.set_opened_at(
+                conn, wid, work_open_sync.now_moment()
+            )
+        return existed
+
+    def recent_item_on_conn(self, conn, work_id: str) -> Optional[dict]:
+        """One Work in the exact `/api/recent` row projection.
+
+        Shares the projection with `get_recent_browse()` so an acknowledged
+        open event can be reconciled into a cached Recent list without the
+        client rebuilding server-derived author and file fields itself.
+        """
+        sel = _prks_work_browse_select("works", abstract_excerpt=False)
+        pex = _prks_sql_work_summary_person_extras("works")
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                f"SELECT {sel}, works.last_opened_at, {pex} FROM works WHERE works.id = ?",
+                (work_id,),
+            ).fetchall()
+        ]
+        if not rows:
+            return None
+        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        return rows[0]
 
     def get_recent_works(self, limit: int = 30) -> List[dict]:
         sel = _prks_work_summary_select("works")

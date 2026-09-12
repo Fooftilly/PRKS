@@ -329,7 +329,11 @@ class BrowseOfflineTests(unittest.TestCase):
                 )
 
     def test_a_genuine_foreground_open_does_record_one(self):
-        """The other half: the explicit event must still fire for real opens."""
+        """The other half: the explicit event must still fire for real opens.
+
+        It now travels the durable semantic queue rather than its own endpoint,
+        so the same path serves an online open and one made from cache while
+        PRKS is unreachable."""
         server, page, context, _c = self.start()
         ids = server.ids
         self.cache_all(page, ids)
@@ -344,7 +348,19 @@ class BrowseOfflineTests(unittest.TestCase):
             "(g) => window.prksOfflineDomainGeneration('recent') > g",
             arg=before['recent'], timeout=20000,
         )
-        self.assertIn('/api/works/%s/opened' % ids['work_b'], seen)
+        self.assertIn('/api/sync/operations', seen)
+        ledger = page.evaluate(
+            """async () => {
+                const res = await prksRequest('/api/recent');
+                return await res.json();
+            }"""
+        )
+        self.assertEqual(ledger[0]['id'], ids['work_b'], 'the open reordered the server Recent')
+        # Acknowledgement reconciles the cached list in place rather than
+        # dropping it, so Recent stays available offline straight afterwards.
+        cached = o._cached_list(page, 'recent:index')
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached['value'][0]['id'], ids['work_b'])
         # ... and still only Recent.
         self.changed(page, before, {'recent'})
 

@@ -11,7 +11,7 @@ from unittest.mock import patch
 from tests.test_db_migrations import MigrationTestCase, _raw, _version
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
-from backend import work_tag_sync as sync
+from backend import sync_protocol, work_tag_sync as sync
 from backend.db_migrations import application_schema_signature
 
 
@@ -66,29 +66,29 @@ class WorkTagSyncTests(unittest.TestCase):
             self.assertEqual(sync.resolve_lifecycle(conn, last), {"state": "ACTIVE"})
             self.assertEqual(sync.resolve_lifecycle(conn, "unknown"), {"state": "UNKNOWN"})
         op = self.op()
-        original = sync.process_operation(self.db, op)
+        original = sync_protocol.process_operation(self.db, op)
         self.assertEqual(original[1]["target_tag_id"], last)
         self.db.delete_tag(last)
         self.assertEqual(self.revision(last), 2)
-        self.assertEqual(sync.process_operation(self.db, op), original)
-        self.assertEqual(sync.process_operation(self.db, self.op())[1]["code"], "TAG_DELETED")
+        self.assertEqual(sync_protocol.process_operation(self.db, op), original)
+        self.assertEqual(sync_protocol.process_operation(self.db, self.op())[1]["code"], "TAG_DELETED")
 
     def test_cycle_is_transient_not_ledgered(self):
         self.db.execute_query("UPDATE sync_tag_lifecycle SET state='merged', target_tag_id=tag_id WHERE tag_id=?", (self.tag,))
         with self.assertRaises(RuntimeError):
-            sync.process_operation(self.db, self.op())
+            sync_protocol.process_operation(self.db, self.op())
         self.assertEqual(self.db.execute_query("SELECT * FROM sync_operations"), [])
 
     def test_idempotency_normalization_and_reuse(self):
         op = self.op()
-        first = sync.process_operation(self.db, op)
+        first = sync_protocol.process_operation(self.db, op)
         self.assertEqual(first[0], 200)
         reordered = dict(reversed(list(op.items())))
         reordered["occurred_at"] = "2026-09-11T00:00:00+00:00"
-        self.assertEqual(sync.process_operation(self.db, reordered), first)
+        self.assertEqual(sync_protocol.process_operation(self.db, reordered), first)
         self.assertEqual(self.revision(), 1)
         op["operation"] = "REMOVE_WORK_TAG"
-        self.assertEqual(sync.process_operation(self.db, op), (409, {"code": "OP_ID_REUSE"}))
+        self.assertEqual(sync_protocol.process_operation(self.db, op), (409, {"code": "OP_ID_REUSE"}))
         self.assertEqual(self.revision(), 1)
 
     def test_conflict_matrix_and_future(self):
@@ -98,9 +98,9 @@ class WorkTagSyncTests(unittest.TestCase):
                 (False, 2, "FUTURE_REVISION", 1)):
             with self.subTest(desired=desired, base=base, code=code):
                 op = self.op(desired, base)
-                response = sync.process_operation(self.db, op)
+                response = sync_protocol.process_operation(self.db, op)
                 self.assertEqual(response[1]["code"], code)
-                self.assertEqual(sync.process_operation(self.db, op), response)
+                self.assertEqual(sync_protocol.process_operation(self.db, op), response)
                 self.assertEqual(self.revision(), revision)
         conflict = response[1]
         self.assertEqual((conflict["current_state"], conflict["current_revision"], conflict["requested_state"]), (True, 1, False))
@@ -108,29 +108,29 @@ class WorkTagSyncTests(unittest.TestCase):
     def test_missing_entity_terminal(self):
         for field, value in (("entity_id", "missing"), ("payload", {"tag_id": "missing"})):
             op = self.op(); op[field] = value
-            result = sync.process_operation(self.db, op)
+            result = sync_protocol.process_operation(self.db, op)
             self.assertEqual(result[0], 404)
             self.assertEqual(result[1]["code"], "ENTITY_NOT_FOUND")
-            self.assertEqual(sync.process_operation(self.db, op), result)
+            self.assertEqual(sync_protocol.process_operation(self.db, op), result)
 
     def test_strict_envelope(self):
         for field, value in (("base_revision", True), ("base_revision", -1), ("base_revision", 1.2),
                 ("base_revision", None), ("device_id", "bad"), ("op_id", "bad"),
-                ("operation", "MARK_WORK_OPENED"), ("payload", {"tag_id": self.tag, "extra": 1}),
+                ("operation", "RENAME_EVERYTHING"), ("payload", {"tag_id": self.tag, "extra": 1}),
                 ("occurred_at", "yesterday"), ("created_at", None), ("depends_on", [str(uuid.uuid4())])):
             op = self.op(); op[field] = value
-            self.assertEqual(sync.process_operation(self.db, op)[0], 400)
+            self.assertEqual(sync_protocol.process_operation(self.db, op)[0], 400)
         self.assertEqual(self.revision(), 0)
         self.assertEqual(self.db.get_work_tags(self.work), [])
         self.assertEqual(self.db.execute_query("SELECT * FROM sync_operations"), [])
 
     def test_atomic_rollback_before_and_during_ledger_insert(self):
-        with patch.object(sync, "insert_result", side_effect=RuntimeError("injected")):
+        with patch.object(sync_protocol, "insert_result", side_effect=RuntimeError("injected")):
             with self.assertRaises(RuntimeError):
-                sync.process_operation(self.db, self.op())
+                sync_protocol.process_operation(self.db, self.op())
         self.db.execute_query("CREATE TRIGGER reject_sync BEFORE INSERT ON sync_operations BEGIN SELECT RAISE(ABORT, 'injected'); END")
         with self.assertRaises(sqlite3.IntegrityError):
-            sync.process_operation(self.db, self.op())
+            sync_protocol.process_operation(self.db, self.op())
         self.assertEqual(self.db.get_work_tags(self.work), [])
         self.assertEqual(self.revision(), 0)
         self.assertEqual(self.db.execute_query("SELECT * FROM sync_operations"), [])
@@ -179,7 +179,7 @@ class WorkTagSyncTests(unittest.TestCase):
         originals = {}
 
         def record(code, op):
-            result = sync.process_operation(self.db, op)
+            result = sync_protocol.process_operation(self.db, op)
             self.assertEqual(result[1]["code"], code)
             originals[code] = (op, result)
 
@@ -204,7 +204,7 @@ class WorkTagSyncTests(unittest.TestCase):
         ledger = self.db.execute_query("SELECT * FROM sync_operations ORDER BY op_id")
 
         for code, (op, result) in originals.items():
-            self.assertEqual(sync.process_operation(self.db, op), result, code)
+            self.assertEqual(sync_protocol.process_operation(self.db, op), result, code)
         self.assertEqual(self._domain_snapshot(), before, "replay performed a domain mutation")
         self.assertEqual(self.db.execute_query("SELECT * FROM sync_operations ORDER BY op_id"), ledger)
 

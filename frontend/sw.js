@@ -102,6 +102,7 @@
         '/js/offline-runtime.js',
         '/js/local-store.js',
         '/js/work-tag-state.js',
+        '/js/work-open-state.js',
         '/js/sync-runtime.js',
         '/js/work-tag-editor.js',
         '/js/api.js',

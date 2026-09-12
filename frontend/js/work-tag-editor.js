@@ -206,6 +206,15 @@
             await paint(ctx, state);
         }
     }
+    /* Diagnostics lists every family, so the label cannot assume Work Tags. */
+    function operationLabel(op) {
+        if (op.operation === 'MARK_WORK_OPENED') {
+            const item = op.local_context && op.local_context.recent_item;
+            return 'Opened ' + ((item && item.title) || 'a file');
+        }
+        const tag = op.local_context && op.local_context.tag;
+        return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') + ((tag && tag.name) || 'Tag');
+    }
     root.prksRenderSyncDiagnostics = async host => {
         let section = host.parentElement.querySelector('[data-sync-diagnostics]');
         if (!section) { section = document.createElement('div'); section.dataset.syncDiagnostics = ''; host.after(section); }
@@ -215,8 +224,7 @@
             const row = document.createElement('p');
             const link = document.createElement('a');
             link.href = '#/works/' + encodeURIComponent(op.entity_id);
-            link.textContent = (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') +
-                (op.local_context && op.local_context.tag ? op.local_context.tag.name : 'Tag');
+            link.textContent = operationLabel(op);
             row.append(link, document.createTextNode(' · ' + statusText([op]) + ' '));
             if (op.status === 'conflict') {
                 const discard = document.createElement('button'); discard.type = 'button';

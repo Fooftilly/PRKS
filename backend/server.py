@@ -1,4 +1,4 @@
-from backend.work_tag_sync import process_operation
+from backend.sync_protocol import process_operation
 import http.server
 import socketserver
 import json
@@ -2817,10 +2817,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     self.send_error(404, "API endpoint not found")
             elif path.startswith('/api/works/') and path.endswith('/opened'):
-                # Explicit "the user opened this Work" event. GET
-                # /api/works/:id is a pure read, so only genuine foreground
-                # navigation reaches here -- internal refreshes after a tag,
-                # folder, playlist, role, metadata or notes change must not.
+                # Explicit "the user opened this Work" event, with server-now
+                # as this caller's event time. GET /api/works/:id is a pure
+                # read. PRKS's own UI takes the durable MARK_WORK_OPENED path
+                # instead, so that an open made from cache while the server is
+                # unreachable is recorded identically; this endpoint remains
+                # for other canonical callers and shares the same max-register
+                # helper, so the column can never acquire two meanings.
                 parts = path.split('/')
                 if len(parts) != 5:
                     self.send_error(404, "API endpoint not found")

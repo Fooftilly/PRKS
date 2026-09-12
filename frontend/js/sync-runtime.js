@@ -1,35 +1,32 @@
-/* Single semantic-operation coordinator. No component owns transport retries. */
+/* Single semantic-operation coordinator. No component owns transport retries.
+ *
+ * This module is deliberately family-agnostic. It owns transport, claiming,
+ * backoff, cross-tab locking, replay, status transitions and retirement --
+ * everything that is identical no matter what the operation means. What a
+ * server answer MEANS belongs to that operation family's handler, so adding a
+ * family is a registration rather than another branch in here.
+ *
+ * A handler provides:
+ *   isResult(data, op)  is this a well-formed answer for this operation?
+ *   reconcile(data, op) apply an acknowledgement to the disposable cache
+ *   terminal(data, op)  {conflict: <bounded structured result>} for an outcome
+ *                       the user must resolve, or {discard: <code>} for one
+ *                       with no resolution worth offering.
+ */
 (function (root) {
     'use strict';
     const fields = ['op_id', 'device_id', 'operation', 'entity_type', 'entity_id', 'payload',
         'base_revision', 'occurred_at', 'created_at', 'depends_on'];
-    const supported = op => ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(op.operation);
-    const integer = v => Number.isSafeInteger(v) && v >= 0;
-    function structuredResult(data) {
-        const out = { code: data.code };
-        for (const key of ['current_revision', 'current_state', 'requested_state', 'target_tag_id']) {
-            if (Object.prototype.hasOwnProperty.call(data, key)) out[key] = data[key];
-        }
-        return out;
-    }
-    function validResult(data, op) {
-        if (!data || data.work_id !== op.entity_id || data.tag_id !== op.payload.tag_id) return false;
-        switch (data.code) {
-            case 'ACKNOWLEDGED':
-                return typeof data.present === 'boolean' && data.present === (op.operation === 'ADD_WORK_TAG') &&
-                    integer(data.server_revision) && data.tag && data.tag.id === data.tag_id &&
-                    typeof data.tag.name === 'string' && (data.tag.color === null || typeof data.tag.color === 'string');
-            case 'REVISION_CONFLICT': case 'FUTURE_REVISION':
-                return integer(data.current_revision) && typeof data.current_state === 'boolean' &&
-                    data.requested_state === (op.operation === 'ADD_WORK_TAG');
-            case 'TAG_MERGED': return typeof data.target_tag_id === 'string' && data.target_tag_id.length <= 200;
-            case 'TAG_DELETED': case 'ENTITY_NOT_FOUND': return true;
-            default: return false;
-        }
-    }
+    /* Envelope-level refusals: the server never executed the operation, so no
+     * family can salvage it by retrying the same bytes. */
+    const PROTOCOL_ERRORS = ['OP_ID_REUSE', 'INVALID_ENVELOPE', 'INVALID_BASE_REVISION', 'UNSUPPORTED_DEPENDENCIES'];
+    const MAX_DISCARD_NOTES = 10;
     function createRuntime(deps) {
         const store = deps.store;
+        const handlers = deps.handlers || {};
+        const supported = op => Object.prototype.hasOwnProperty.call(handlers, op.operation);
         const listeners = new Set();
+        const discarded = [];
         let running = false, timer = null, recovered = false;
         function emit(event) {
             listeners.forEach(fn => { try { fn(event || {}); } catch (_) { /* subscriber isolation */ } });
@@ -58,6 +55,33 @@
         async function retire(opId) {
             try { await store.deleteAcknowledgedOperation(opId); } catch (_) { /* cleared on next startup */ }
         }
+        /* A terminal semantic outcome is not a transport failure, and what it
+         * is worth to the user is the family's call. A deliberate edit becomes
+         * a conflict the user resolves. An activity event has no resolution to
+         * offer -- "apply my open event to a Work that no longer exists" is not
+         * a choice anyone can make -- so it is consumed and noted instead.
+         *
+         * A consumed row passes through `acknowledged` on its way out: in this
+         * store that status means "the server has spoken and nothing further is
+         * owed", which is exactly true here, and it keeps the local store's
+         * guard that only such a row may ever be deleted. */
+        async function settle(op, disposition) {
+            const outcome = disposition || {};
+            if (outcome.conflict) {
+                await store.updateOperationSyncState(op.op_id, {
+                    status: 'conflict', server_result: outcome.conflict, last_error: null });
+                emit();
+                return;
+            }
+            await store.updateOperationSyncState(op.op_id, { status: 'acknowledged', last_error: null });
+            await retire(op.op_id);
+            // In-memory and bounded: worth surfacing in Diagnostics, not worth
+            // durable storage of its own.
+            discarded.unshift({ operation: op.operation, entity_id: op.entity_id,
+                code: String(outcome.discard || 'unknown') });
+            discarded.length = Math.min(discarded.length, MAX_DISCARD_NOTES);
+            emit();
+        }
         async function drain() {
             if (!recovered) await recover();
             while (deps.online()) {
@@ -69,6 +93,7 @@
                 if (candidate.attempt_count && elapsed < backoff) { schedule(backoff - elapsed + Math.random() * 500); break; }
                 const op = await store.claimOperation(candidate.op_id);
                 if (!op) continue;
+                const family = handlers[op.operation];
                 emit();
                 try {
                     const controller = new AbortController();
@@ -82,23 +107,22 @@
                     } finally { clearTimeout(timeout); }
                     if (response.status >= 500) throw new Error('server_unavailable');
                     const data = await response.json();
-                    if (!validResult(data, op)) {
-                        if (response.status >= 400 && ['OP_ID_REUSE', 'INVALID_ENVELOPE', 'INVALID_BASE_REVISION', 'UNSUPPORTED_DEPENDENCIES'].includes(data.code)) {
-                            await store.updateOperationSyncState(op.op_id, { status: 'conflict', server_result: { code: data.code } });
-                            emit(); continue;
+                    if (!family.isResult(data, op)) {
+                        if (response.status >= 400 && data && PROTOCOL_ERRORS.includes(data.code)) {
+                            await settle(op, family.terminal({ code: data.code }, op));
+                            continue;
                         }
                         throw new Error('invalid_response');
                     }
                     if (response.ok && data.code === 'ACKNOWLEDGED') {
-                        if (!await deps.reconcile(data)) throw new Error('cache_write_failed');
+                        if (!await family.reconcile(data, op)) throw new Error('cache_write_failed');
                         await store.updateOperationSyncState(op.op_id, { status: 'acknowledged', last_error: null, server_revision: data.server_revision });
-                        emit({ acknowledged: data });
+                        emit({ acknowledged: data, operation: op.operation });
                         // Only now: the cache is reconciled and the live UI has
                         // seen the ACK, so nothing still needs this row.
                         await retire(op.op_id);
                     } else {
-                        await store.updateOperationSyncState(op.op_id, { status: 'conflict', server_result: structuredResult(data), last_error: null });
-                        emit();
+                        await settle(op, family.terminal(data, op));
                     }
                 } catch (_) {
                     await store.updateOperationSyncState(op.op_id, { status: 'pending', last_error: 'Sync failed; retry scheduled.' });
@@ -124,7 +148,8 @@
             finally { running = false; }
         }
         return { wake, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
-            store, changed() { emit(); void wake(); }, stop() { clearTimeout(timer); } };
+            store, changed() { emit(); void wake(); }, stop() { clearTimeout(timer); },
+            discarded: () => discarded.slice() };
     }
     /* Reachability is OBSERVED, never assumed. The offline runtime starts in a
      * provisional `online` state before any probe has answered, and
@@ -148,12 +173,18 @@
         root.prksOfflineRuntimeState, () => { if (runtime) runtime.changed(); });
     runtime = createRuntime({ store, online,
         request: (...args) => root.prksRequest(...args),
-        reconcile: result => root.prksOfflineReconcileWorkTag(result),
-        lock: root.navigator.locks ? fn => root.navigator.locks.request('prks-work-tag-sync', { ifAvailable: true }, lock => lock ? fn() : undefined) : null,
+        // The registry, in one readable place. Two families share a handler
+        // when they share meaning, not when they share a code path.
+        handlers: {
+            ADD_WORK_TAG: root.prksWorkTagSyncHandler,
+            REMOVE_WORK_TAG: root.prksWorkTagSyncHandler,
+            MARK_WORK_OPENED: root.prksWorkOpenSyncHandler,
+        },
+        lock: root.navigator.locks ? fn => root.navigator.locks.request('prks-sync', { ifAvailable: true }, lock => lock ? fn() : undefined) : null,
     });
     root.prksSync = runtime;
     root.addEventListener('focus', () => runtime.changed());
     // Durable rows, including conflicts, are discoverable after cache clearing.
-    root.prksSyncDiagnostics = () => store.stats();
+    root.prksSyncDiagnostics = async () => Object.assign(await store.stats(), { discarded: runtime.discarded() });
     void runtime.wake();
 })(typeof window === 'undefined' ? globalThis : window);

@@ -1343,32 +1343,98 @@ nothing to do with Recent. That is both a cache-coherence bug (`recent:index`
 stale with no invalidation) and a product bug (changing a tag made a file look
 "recently opened").
 
-Recording an open is now the explicit operation `POST /api/works/:id/opened`
--> `db.mark_work_opened()`, reached only through `markWorkOpened()` in
-`api.js`, and called from exactly one place: the `case 'work'` route, which is
-the genuine foreground navigation. It is best-effort (a failed open event must
-never break opening the Work) and publishes `prksMarkRecentChanged()` only on
-acknowledged success. `tests/test_frontend_offline_runtime.py` asserts that no
-other module mentions `markWorkOpened` or `/opened`.
+Recording an open is the explicit semantic operation `MARK_WORK_OPENED`,
+enqueued by `prksRecordWorkOpened()` from exactly one place: the `case 'work'`
+route, which is the genuine foreground navigation. A render PRKS decided to do
+is not an open -- `prksRenderTabRoute(..., { internalRefresh: true })` marks the
+reconnect refresh, which must not reorder Recent behind the user's back.
 
-This is also the local-first shape: `MARK_WORK_OPENED(workId)` is a semantic
-operation that can be queued, coalesced and synchronized independently of
-`UPDATE_WORK_METADATA` / `ADD_TAG` / `MOVE_FOLDER`, which a mutation hidden
-inside a GET could never be. Opening a cached Work offline currently records
-nothing -- the Work Tag coordinator deliberately does not synchronize open events.
+The browser has exactly ONE open-event path, online and offline.
+`POST /api/works/:id/opened` -> `db.mark_work_opened()` survives for other
+canonical callers and shares the same max-register helper, but no frontend
+module may call it: two client paths would mean online and offline opens
+diverge. `tests/test_frontend_offline_runtime.py` asserts no module reaches
+that endpoint and that only the Work route records an open.
+
+Recording an open is best-effort in a way a Work-Tag edit deliberately is NOT.
+A durable-write failure there must be reported, because the user made a change
+and would otherwise believe it was saved. An open event is activity metadata
+the user never asked for: losing it costs a Recent ordering, and refusing to
+show the Work over it would cost them the thing they actually wanted.
 
 Components must go through the semantic helpers
 `prksMarkWorksBrowseChanged()`, `prksMarkRecentChanged()`,
 `prksMarkRecentlyAddedChanged()` and the shared
 `prksMarkWorkBrowseDisplayChanged()` -- never a direct
 `deleteList('works-browse:index')`. That is enforced by
-`tests/test_frontend_offline_runtime.py` and matters for the local-first
-direction below: a future sync coordinator needs one place to turn "discard the
-projection" into "apply the pending operation to it optimistically".
+`tests/test_frontend_offline_runtime.py`. Recent is the one projection that now
+also has the other half of that story: `prksEffectiveRecent()` applies pending
+open events over the cached snapshot at render time, and an acknowledgement
+reconciles the snapshot in place (`reconcileRecentOpen`) rather than dropping
+it -- so an open no longer costs Recent its offline availability.
 
 The Recently-added tab additionally records the coherence generation alongside
 its in-memory copy, so an invalidation cannot leave that tab rendering
 pre-mutation rows while the cache is already right.
+
+### Synchronized operation families
+
+PRKS has ONE semantic-operation protocol and two families on it. The split
+between generic and domain is the load-bearing part: a third family must be a
+registration, never another branch in a growing conditional.
+
+| Layer | Owns |
+| --- | --- |
+| `backend/sync_protocol.py` | Envelope normalization, request hashing, the `sync_operations` ledger, OP_ID_REUSE, exact replay, `BEGIN IMMEDIATE`, dispatch |
+| `backend/work_tag_sync.py` | Work-Tag relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
+| `backend/work_open_sync.py` | `last_opened_at` max-register, clock-skew policy, MARK_WORK_OPENED handler |
+| `frontend/js/sync-runtime.js` | Transport, claiming, backoff, Web Locks, replay, status transitions, retirement |
+| `frontend/js/work-tag-state.js` | Work-Tag overlay + `prksWorkTagSyncHandler` |
+| `frontend/js/work-open-state.js` | Recent overlay/merge + `prksWorkOpenSyncHandler` |
+
+A handler decides what a server answer MEANS: `isResult` (is this a
+well-formed answer for this operation), `reconcile` (apply an acknowledgement
+to the disposable cache), `terminal` (`{conflict}` for an outcome the user
+resolves, `{discard}` for one with no resolution worth offering). The
+coordinator must name no family and no result code beyond the envelope-level
+protocol errors; `tests/test_frontend_work_open_sync.py` pins that.
+
+The two families are deliberately different in kind, and that is the point:
+
+| | Work Tags | Work opens |
+| --- | --- | --- |
+| Concurrency | revisioned relationship, `base_revision` required | none, `base_revision` must be null |
+| Two devices disagreeing | genuinely possible | impossible |
+| Terminal outcomes | REVISION_CONFLICT / TAG_MERGED / TAG_DELETED / ENTITY_NOT_FOUND, all resolved by the user | ENTITY_NOT_FOUND only, consumed silently |
+| Local failure to persist | must be reported; never claim success | best-effort; must never block opening the Work |
+| Convergence | last explicit resolution wins | max-register over normalized `occurred_at` |
+
+### Local-first Work opens (Milestone 2C)
+
+- `last_opened_at` is a **max-register over event time**, not last-writer-wins.
+  Arrival order must not decide it: a device that reconnects on Friday carrying
+  Monday's open cannot drag the Work back to Monday, and must not claim it was
+  opened on Friday. That is what makes the operation commutative, idempotent
+  and order-independent, and why there is no conflict UI.
+- Event time comes from the device. Server receive time is used only to clamp a
+  timestamp more than `MAX_CLIENT_FUTURE_SKEW_SECONDS` in the future, so a fast
+  clock cannot pin a Work to the top of Recent. An OLD timestamp is legitimate
+  and is never rejected -- the max-register makes it a harmless no-op.
+- Values are stored as `YYYY-MM-DD HH:MM:SS.mmm` UTC
+  (`work_open_sync.format_moment`). Second-resolution rows written before this
+  milestone stay valid and keep sorting correctly, because `12:00:00` is a
+  prefix of `12:00:00.250`. No destructive migration for precision.
+- `POST /api/works/:id/opened` and the sync handler share
+  `work_open_sync.set_opened_at()`. One column, one meaning.
+- Only never-sent open events coalesce, per Work, keeping the latest instant. A
+  SENT event is left alone: it may already be ledgered, and it does not need
+  cancelling, because applying two open events in either order converges.
+- The acknowledgement carries the compact `/api/recent` row
+  (`db.recent_item_on_conn`), so reconciliation needs no second request and the
+  client never rebuilds server-derived author/display fields itself.
+- Pending opens are an overlay computed at render time, never written into
+  `recent:index`. Without a cached Recent snapshot, Recent stays honestly
+  unavailable -- one open event is not a Recent page.
 
 ### Local-first Work Tags (Milestone 2B)
 
@@ -1406,8 +1472,9 @@ Other mutations remain server-required. The implementation contract is in
   Tag catalog copy. Catalog edits invalidate tags, relationship edits do not.
   `work-tag-options` is per Work and contains no catalog ETag. Only affected
   Work projections invalidate, including absent tombstones on delete/merge.
-- No offline Tag creation, Folder or metadata edits, open events, Playlists,
-  research-note editing, CRDTs, multi-user sync or server push in this milestone.
+- No offline Tag creation, Folder or metadata edits, Playlists, research-note
+  editing, CRDTs, multi-user sync or server push. Open events joined the
+  protocol in 2C; nothing else has.
 
 **Tag identity is persistent.** Only `delete_tag()` and `merge_tags_into()`
 may destroy or transform a Tag. Removing a tag from a Work or Folder, deleting

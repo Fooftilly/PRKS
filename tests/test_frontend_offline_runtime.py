@@ -1,6 +1,7 @@
 """Structural + Node regressions for the offline connectivity/read-through/
 mutation-guard runtime (offline-runtime.js)."""
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -1042,17 +1043,18 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
 
     def test_opening_a_work_records_an_explicit_open_event_only(self):
         """The Work route is the ONLY genuine foreground open. It records an
-        explicit event rather than relying on a side effect of reading, and it
-        touches no other browse projection."""
+        explicit durable event rather than relying on a side effect of reading,
+        and it touches no other browse projection."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("case 'work': {")
         body = app[at: at + 1800]
-        self.assertIn("markWorkOpened(workId)", body)
+        self.assertIn("prksRecordWorkOpened(offlineWork.value)", body)
         for forbidden in ("prksMarkWorksBrowseChanged", "prksMarkRecentlyAddedChanged",
                           "prksMarkWorkBrowseDisplayChanged"):
             self.assertNotIn(forbidden, body, forbidden)
-        # A cache hit is not an open.
-        self.assertIn("offlineWork.source === 'server'", body)
+        # A Work opened from cache while PRKS is unreachable is just as
+        # genuinely opened, so the event is no longer gated on a server read.
+        self.assertNotIn("offlineWork.source === 'server'", body)
 
     def test_only_the_work_route_records_an_open_event(self):
         """Every other fetchWorkDetails() call site is an INTERNAL refresh --
@@ -1063,20 +1065,36 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
                      "components/people.js", "components/tags.js"):
             src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
             with self.subTest(module=name):
-                self.assertNotIn("markWorkOpened", src)
+                self.assertNotIn("prksRecordWorkOpened", src)
                 self.assertNotIn("/opened", src)
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
-        self.assertEqual(app.count("markWorkOpened("), 1)
+        self.assertEqual(app.count("prksRecordWorkOpened("), 1)
 
-    def test_mark_work_opened_publishes_recent_only_on_success(self):
-        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        body = _fn_body(api, "async function markWorkOpened(")
-        self.assertIn("prksMarkRecentChanged();", body)
-        # Best-effort: a failure must not break opening the Work, and must not
-        # publish coherence for a mutation that did not happen.
-        self.assertLess(body.index("if (!res || !res.ok) return false;"),
-                        body.index("prksMarkRecentChanged();"))
-        self.assertIn("catch (e)", body)
+    def test_the_browser_has_exactly_one_open_event_path(self):
+        """`POST /api/works/:id/opened` survives for other canonical callers,
+        but the browser must not keep a second client route to it: two client
+        paths would mean online and offline opens diverge, which is the whole
+        defect the durable queue exists to prevent."""
+        endpoint = re.compile(r"/opened['\"`]")
+        for path in pathlib.Path(_FRONTEND, "js").rglob("*.js"):
+            with self.subTest(module=path.name):
+                self.assertIsNone(endpoint.search(path.read_text(encoding="utf-8")))
+
+    def test_recording_an_open_never_blocks_showing_the_work(self):
+        """Activity metadata is not the research content. A durable-write
+        failure costs a Recent ordering; refusing to show the Work over it
+        would cost the user the thing they actually asked for."""
+        module = _read(os.path.join(_FRONTEND, "js", "work-open-state.js"))
+        at = module.index("async function recordOpened(")
+        body = module[at: module.index("/* ---- sync handler ---- */", at)]
+        self.assertIn("catch (_)", body)
+        self.assertIn("return false", body)
+        self.assertNotIn("prksAlertMessage", body)
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        at = app.index("case 'work': {")
+        # Fire-and-forget: never awaited on the render path.
+        self.assertIn("void prksRecordWorkOpened(", app[at: at + 1800])
+        self.assertNotIn("await prksRecordWorkOpened(", app)
 
     def test_semantic_helpers_are_the_only_invalidation_path(self):
         """A future sync coordinator needs ONE place to turn "discard" into

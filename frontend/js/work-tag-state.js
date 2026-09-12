@@ -56,9 +56,41 @@
             });
         return Array.from(tags.values());
     }
+    /* ---- sync handler: what a server answer MEANS for this family ----
+     * A Work-Tag edit is something the user chose, so every terminal outcome
+     * is a conflict they get to resolve rather than something to consume
+     * silently. The coordinator owns transport; this owns meaning. */
+    const integer = v => Number.isSafeInteger(v) && v >= 0;
+    function isResult(data, op) {
+        if (!data || data.work_id !== op.entity_id || data.tag_id !== op.payload.tag_id) return false;
+        switch (data.code) {
+            case 'ACKNOWLEDGED':
+                return typeof data.present === 'boolean' && data.present === (op.operation === 'ADD_WORK_TAG') &&
+                    integer(data.server_revision) && data.tag && data.tag.id === data.tag_id &&
+                    typeof data.tag.name === 'string' && (data.tag.color === null || typeof data.tag.color === 'string');
+            case 'REVISION_CONFLICT': case 'FUTURE_REVISION':
+                return integer(data.current_revision) && typeof data.current_state === 'boolean' &&
+                    data.requested_state === (op.operation === 'ADD_WORK_TAG');
+            case 'TAG_MERGED': return typeof data.target_tag_id === 'string' && data.target_tag_id.length <= 200;
+            case 'TAG_DELETED': case 'ENTITY_NOT_FOUND': return true;
+            default: return false;
+        }
+    }
+    function terminal(data) {
+        const out = { code: data.code };
+        for (const key of ['current_revision', 'current_state', 'requested_state', 'target_tag_id']) {
+            if (Object.prototype.hasOwnProperty.call(data, key)) out[key] = data[key];
+        }
+        return { conflict: out };
+    }
+    const handler = {
+        isResult, terminal,
+        reconcile: data => root.prksOfflineReconcileWorkTag(data),
+    };
     Object.assign(root, {
         prksIsTagsIndexShape: tagsShape, prksIsWorkTagOptionsShape: optionsShape,
         prksReadTagsIndex: readTags, prksReadWorkTagOptions: readOptions,
         prksWorkTagBase: base, prksEffectiveWorkTags: effectiveTags,
+        prksWorkTagSyncHandler: handler,
     });
 })(typeof window === 'undefined' ? globalThis : window);

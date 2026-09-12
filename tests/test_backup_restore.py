@@ -249,7 +249,7 @@ class TestBackupInventory(BackupRestoreTestCase):
 class TestBackupRoundTrip(BackupRestoreTestCase):
     def test_round_trip_to_empty_storage(self):
         source = self._bind_library(extra_pdf_name="orphan.pdf")
-        from backend.work_tag_sync import process_operation
+        from backend.sync_protocol import process_operation
         import uuid
         sync_db = server_module.db
         sync_tag = sync_db.add_tag("Sync backup")["id"]
