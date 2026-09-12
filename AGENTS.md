@@ -9,6 +9,7 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 - **Never run browser E2E tests while iterating** — not the full suite, not a whole module — unless the behavior can only be verified in a browser. Use unit tests, Node selftests, static contracts and API tests instead. Run the relevant E2E module once a vertical slice or the milestone implementation is finished (`python tests/e2e/run.py --jobs 4 --no-pointer-capture <module>`, never raw `python -m unittest`, which is serial), and the full parallel suite once after that. Debug any failure with `--jobs 1 <test id>`, never by rerunning the suite. See "E2E test workflow".
 - App, default for agents: `python prks_app.py --testing`
 - Real app or Compose: only with run-real authorization from the user
+- Git hooks: after clone, `./scripts/setup-git-hooks.sh` (sets local `core.hooksPath` to `.githooks`). Successful commits overwrite gitignored `prks-latest.zip` at the repo root with `git archive` of the new `HEAD`. Verify with `git config --get core.hooksPath` (expected: `.githooks`).
 
 If the user says only "run the app", your first application execution path is `python prks_app.py --testing`. Do not run unflagged `python prks_app.py`. Do not run Docker Compose. Do not target `./data`.
 

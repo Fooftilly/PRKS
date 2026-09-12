@@ -461,6 +461,30 @@ PRKS_UX_RECORD=1 python run_tests.py --ux-tour   # record every scenario for rev
 
 `-e2e`, `-all`, and `-ux-tour` are the same flags. Unflagged `python run_tests.py` discovers tests under `tests/` and does not launch Chromium. It always forces `PRKS_TESTING=1` and `PRKS_STORAGE` to the repo’s `data_testing/` directory and clears `PRKS_FOR_PROCESSING_DIR` and `PRKS_LOG_FILE`. That is stricter than `python prks_app.py --testing`, which may honor an explicit safe `PRKS_STORAGE`. Neither path uses `./data` or container `/data`. `--ux-tour` is a separate, explicitly opt-in suite: it never runs as part of the default, `--e2e`, or `--all` modes.
 
+### Commit archive
+
+After a successful `git commit`, the tracked `post-commit` hook writes `prks-latest.zip` at the repository root. It is `git archive` of the new `HEAD`, so it contains only that committed revision, not the working tree. The file is gitignored and overwritten on every later successful commit.
+
+`core.hooksPath` is local clone config and is not carried by a clone. Enable once:
+
+```bash
+./scripts/setup-git-hooks.sh
+```
+
+or:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Verify:
+
+```bash
+git config --get core.hooksPath
+```
+
+Expected output: `.githooks`
+
 ### UX Interaction Tour
 
 `tests/ux_tour/` is a deliberately human-oriented, artifact-producing scenario suite -- longer than E2E, one recording per workflow (Workspace, Work/PDF, Library/Creation, Research/Graph, People/Groups, Organization/Progress, Settings, and shell navigation). It complements the fast E2E suite; it does not replace it. See `tests/ux_tour/COVERAGE.md` for what each tour covers and where everything else is exercised instead.

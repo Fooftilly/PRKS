@@ -1,0 +1,15 @@
+#!/bin/sh
+# Write <repo>/prks-latest.zip from the just-committed HEAD.
+# The commit has already succeeded; archive failure does not undo it.
+
+ROOT="$(git rev-parse --show-toplevel)" || {
+    echo "post-commit: could not determine repository root; prks-latest.zip was not updated" >&2
+    echo "post-commit: the commit itself already succeeded" >&2
+    exit 1
+}
+
+if ! git archive --format=zip --output="$ROOT/prks-latest.zip" HEAD
+then
+    echo "post-commit: git archive failed; the commit itself already succeeded, but prks-latest.zip was not updated" >&2
+    exit 1
+fi
