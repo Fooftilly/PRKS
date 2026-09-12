@@ -8,6 +8,13 @@
 (function (root) {
     'use strict';
     const unavailable = 'Bibliographic details not available offline for this Work yet. Connect once and open Edit metadata to prepare them.';
+    /* Durable storage could not be read. The editor still opens -- the
+     * online-only controls above are unaffected -- but these fields must not
+     * become editable from a base we cannot trust: a pending edit may exist
+     * that this session simply could not see, and saving over it would destroy
+     * work. Falling back to a direct PATCH is equally out: online and offline
+     * keep the same durable-first contract, always. */
+    const unreadable = 'Local changes could not be read from browser storage. Bibliographic editing is temporarily unavailable.';
 
     function live(ctx, state) {
         return ctx && !ctx.destroyed && ctx.generation === state.generation &&
@@ -57,12 +64,15 @@
         const section = panel && panel.querySelector('[data-prks-role="work-bib-editor"]');
         if (!section) return;
 
-        const editable = !!state.observed;
+        const durable = typeof root.prksPendingWorkMetadataState === 'function'
+            ? root.prksPendingWorkMetadataState() : 'ready';
+        const readable = durable !== 'unavailable';
+        const editable = !!state.observed && readable;
         section.querySelectorAll('[data-prks-work-field]').forEach(input => {
             const blocked = !editable || busy(state, input.dataset.prksWorkField);
             input.disabled = blocked;
             input.title = blocked
-                ? (editable ? 'This field is syncing or needs resolution.' : unavailable)
+                ? (!readable ? unreadable : (state.observed ? 'This field is syncing or needs resolution.' : unavailable))
                 : '';
         });
         const save = section.querySelector('#save-work-bib-btn');
@@ -71,8 +81,9 @@
         const status = section.querySelector('[data-prks-role="work-bib-sync"]');
         if (!status) return;
         status.replaceChildren();
+        const blockedText = readable ? unavailable : unreadable;
         status.appendChild(document.createTextNode(
-            state.error || (editable ? statusText(state.operations) : unavailable)));
+            state.error || (editable ? statusText(state.operations) : blockedText)));
 
         for (const op of state.operations.filter(o => o.status === 'conflict')) {
             status.appendChild(conflictRow(ctx, state, op));
@@ -96,6 +107,21 @@
         return paint(ctx, state).catch(() => {});
     }
 
+    const PREVIEW_CHARS = 160;
+
+    /** Bounded, code-point safe, and never the whole value. */
+    function preview(text) {
+        const points = Array.from(String(text == null ? '' : text));
+        return points.length <= PREVIEW_CHARS
+            ? points.join('')
+            : points.slice(0, PREVIEW_CHARS).join('') + '…';
+    }
+
+    function sizeLabel(bytes) {
+        if (!Number.isSafeInteger(bytes)) return 'unknown size';
+        return bytes < 1024 ? bytes + ' bytes' : Math.ceil(bytes / 1024) + ' KB';
+    }
+
     function conflictRow(ctx, state, op) {
         const result = op.server_result || {};
         const field = op.payload.field;
@@ -103,9 +129,20 @@
         const item = document.createElement('div');
         item.dataset.prksWorkFieldConflict = field;
         if (result.code === 'REVISION_CONFLICT' || result.code === 'FUTURE_REVISION') {
-            item.appendChild(document.createTextNode(
-                label + ' — this device: "' + op.payload.value + '". Server: "' +
-                (result.current_value || '') + '". '));
+            /* Never dump a megabyte of Abstract into a one-line conflict
+             * sentence. A byte-limited field reports bounded previews and
+             * sizes, which is what the user needs to tell the two apart. */
+            if (typeof result.current_preview === 'string') {
+                const mine = op.payload.value;
+                item.appendChild(document.createTextNode(
+                    label + ' differs. This device (' + sizeLabel(root.prksWorkFieldUtf8Bytes(mine)) +
+                    '): "' + preview(mine) + '". Server (' + sizeLabel(result.current_bytes) +
+                    '): "' + preview(result.current_preview) + '". '));
+            } else {
+                item.appendChild(document.createTextNode(
+                    label + ' — this device: "' + op.payload.value + '". Server: "' +
+                    (result.current_value || '') + '". '));
+            }
         } else if (result.code === 'ENTITY_NOT_FOUND') {
             item.appendChild(document.createTextNode('This Work no longer exists on the server. '));
         } else {
@@ -127,6 +164,10 @@
             button.disabled = true;
             try {
                 const result = op.server_result || {};
+                /* With only a preview there is no authoritative value to write,
+                 * so taking the server's version discards the local intent and
+                 * lets the next read fetch the real text rather than trusting a
+                 * truncated copy. */
                 if (!apply && typeof result.current_value === 'string') {
                     // Taking the server value is itself an acknowledged state:
                     // reconcile it so the cache and the form agree immediately.
@@ -223,8 +264,22 @@
             document.querySelectorAll('[data-prks-work-field]').forEach(input => {
                 draft[input.dataset.prksWorkField] = input.value;
             });
-            const changes = root.prksDirtyWorkMetadataFields(draft, state.observed, state.operations);
-            await root.prksSync.store.saveWorkMetadataFields(workId, changes, state.observed.fields);
+            // A byte-limited field's acknowledged base lives on the Work
+            // record, not in the projection -- see prksObservedWorkFields().
+            const observed = { fields: root.prksObservedWorkFields(state.observed, ctx.getEntity('work')) };
+            const changes = root.prksDirtyWorkMetadataFields(draft, observed, state.operations);
+            /* Refuse visibly rather than enqueue something the server will
+             * reject: the draft stays on screen, nothing is stored, and nothing
+             * is sent. Silently truncating would destroy the user's text. */
+            for (const field of Object.keys(changes)) {
+                const tooLong = root.prksWorkFieldLimitError(field, changes[field]);
+                if (tooLong) {
+                    state.error = tooLong;
+                    await safePaint(ctx, state);
+                    return;
+                }
+            }
+            await root.prksSync.store.saveWorkMetadataFields(workId, changes, observed.fields);
             state.error = null;
             await safePaint(ctx, state);
             root.prksSync.changed();

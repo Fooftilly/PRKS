@@ -38,8 +38,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
 
     def test_every_supported_field_round_trips(self):
         self.assertEqual(sorted(meta.SYNCED_FIELDS),
-                         ["doi", "edition", "isbn", "issue", "journal", "location",
-                          "pages", "publisher", "volume"])
+                         ["abstract", "doi", "edition", "isbn", "issue", "journal",
+                          "location", "pages", "publisher", "volume"])
         for index, field in enumerate(sorted(meta.SYNCED_FIELDS)):
             with self.subTest(field=field):
                 status, result = self.send(field, "value-%d" % index)
@@ -51,7 +51,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """An arbitrary column name from a client is both an injection surface
         and a way to reach fields this milestone deliberately does not
         synchronize."""
-        for field in ("title", "status", "abstract", "year", "id",
+        for field in ("title", "status", "year", "id",
                       "doi; DROP TABLE works", "", None, 7):
             with self.subTest(field=field):
                 self.assertEqual(sync_protocol.process_operation(self.db, self.op(field, "x")),
@@ -183,8 +183,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.send("doi", "10.1/keep")
         before = self.state()
         self.db.update_work_metadata(self.work, {
-            "title": "Renamed", "status": "Paused", "abstract": "New abstract",
-            "year": "1999", "author_text": "Someone", "doc_type": "book"})
+            "title": "Renamed", "status": "Paused", "year": "1999",
+            "author_text": "Someone", "doc_type": "book"})
         self.assertEqual(self.state(), before)
         self.assertEqual(self.db.execute_query(
             "SELECT title FROM works WHERE id = ?", (self.work,))[0]["title"], "Renamed")
@@ -258,12 +258,14 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertEqual(row["publisher"], "Fixture Press")
         self.assertEqual(meta.FIELD_PROJECTIONS["publisher"], ("recently-added",))
 
-    def test_only_publisher_claims_another_projection(self):
+    def test_only_publisher_and_abstract_claim_another_projection(self):
         """Location is the control case: a detail-only field must not drag an
-        unrelated cached read model into its reconciliation."""
-        self.assertEqual(sorted(meta.FIELD_PROJECTIONS), ["publisher"])
+        unrelated cached read model into its reconciliation. Publisher copies a
+        value into one; Abstract DERIVES one."""
+        self.assertEqual(sorted(meta.FIELD_PROJECTIONS), ["abstract", "publisher"])
+        self.assertEqual(meta.FIELD_PROJECTIONS["abstract"], ("works-browse",))
         for field in meta.SYNCED_FIELDS:
-            if field == "publisher":
+            if field in ("publisher", "abstract"):
                 continue
             self.assertNotIn(field, meta.FIELD_PROJECTIONS, field)
 
@@ -337,6 +339,95 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertEqual(observed, self.db.get_work_metadata_state(self.work))
         self.assertEqual(len(scanned), 1, "one query, not one per field")
         self.assertIn("scope_id IN", scanned[0], "bounded to this Work's own scope keys")
+
+    # ---- Abstract: one canonical limit, measured in bytes ----
+
+    def test_abstract_limit_is_the_same_contract_on_both_paths(self):
+        """If PATCH accepted an Abstract the durable queue would refuse, the
+        same edit would be savable online and impossible offline -- the split
+        contract that moving a field to local-first exists to remove."""
+        limit = meta.MAX_ABSTRACT_UTF8_BYTES
+        self.assertEqual(limit, 1024 * 1024)
+        at_limit = "x" * limit
+        over = "x" * (limit + 1)
+
+        self.assertEqual(self.send("abstract", at_limit)[0], 200)
+        self.assertEqual(self.value("abstract"), at_limit)
+        self.assertEqual(sync_protocol.process_operation(
+            self.db, self.op("abstract", over, base=1)), (400, {"code": "INVALID_ENVELOPE"}))
+
+        self.db.update_work_metadata(self.work, {"abstract": "x" * 1000})
+        with self.assertRaises(ValueError):
+            self.db.update_work_metadata(self.work, {"abstract": over})
+        self.assertEqual(self.value("abstract"), "x" * 1000,
+                         "a refused PATCH changes nothing")
+
+    def test_the_abstract_limit_counts_utf8_bytes_not_characters(self):
+        """`len()` counts code points. A limit documented in bytes but enforced
+        in characters does not exist for the users most likely to reach it."""
+        limit = meta.MAX_ABSTRACT_UTF8_BYTES
+        # Three bytes per character: well under the limit by character count,
+        # well over it in bytes.
+        multibyte = "\u65e5" * (limit // 3 + 10)
+        self.assertLess(len(multibyte), limit)
+        self.assertGreater(len(multibyte.encode("utf-8")), limit)
+        self.assertEqual(sync_protocol.process_operation(
+            self.db, self.op("abstract", multibyte)), (400, {"code": "INVALID_ENVELOPE"}))
+        with self.assertRaises(ValueError):
+            self.db.update_work_metadata(self.work, {"abstract": multibyte})
+        # One that genuinely fits is accepted.
+        fits = "\u65e5" * 1000
+        self.assertEqual(self.send("abstract", fits)[0], 200)
+        self.assertEqual(self.value("abstract"), fits)
+
+    def test_the_small_scalars_keep_their_code_point_limits(self):
+        """Switching them to bytes would quietly shorten every one by a factor
+        of three for anyone writing CJK, which nothing here asked for."""
+        self.assertNotIn("journal", meta.BYTE_LIMITED_FIELDS)
+        self.assertEqual(sorted(meta.BYTE_LIMITED_FIELDS), ["abstract"])
+        cjk = "\u65e5" * meta.SYNCED_FIELDS["journal"]
+        self.assertGreater(len(cjk.encode("utf-8")), meta.SYNCED_FIELDS["journal"])
+        self.assertEqual(self.send("journal", cjk)[0], 200)
+
+    def test_abstract_uses_the_ordinary_scalar_conflict_path(self):
+        self.send("abstract", "device text")
+        # The projection carries Abstract's REVISION only: the Work record
+        # already holds the value, and echoing a megabyte of it here would
+        # double every read for something the client already has.
+        self.assertEqual(self.state()["abstract"], {"revision": 1})
+        self.assertEqual(self.value("abstract"), "device text")
+        self.assertFalse(self.send("abstract", "device text", base=1)[1]["changed"])
+        self.db.update_work_metadata(self.work, {"abstract": "server text"})
+        self.assertEqual(self.state()["abstract"]["revision"], 2)
+        conflict = self.send("abstract", "other text", base=1)[1]
+        self.assertEqual(conflict["code"], "REVISION_CONFLICT")
+        # Convergent: the same text from a stale base is not a collision.
+        self.assertEqual(self.send("abstract", "server text", base=1)[1]["code"], "ACKNOWLEDGED")
+
+    def test_an_abstract_conflict_is_small_enough_to_persist(self):
+        """The durable operation row bounds a structured result to 2 KB. A
+        conflict the browser cannot store is a conflict the user never sees."""
+        import json as _json
+        big = "s" * (64 * 1024)
+        self.db.update_work_metadata(self.work, {"abstract": big})
+        conflict = self.send("abstract", "m" * (64 * 1024), base=0)[1]
+        self.assertEqual(conflict["code"], "REVISION_CONFLICT")
+        self.assertNotIn("current_value", conflict)
+        self.assertNotIn("requested_value", conflict)
+        self.assertEqual(conflict["current_preview"], "s" * meta.CONFLICT_PREVIEW_CHARS)
+        self.assertEqual(conflict["current_bytes"], len(big))
+        self.assertEqual(conflict["requested_bytes"], 64 * 1024)
+        structured = {k: v for k, v in conflict.items()
+                      if k not in ("work_id", "field", "code")}
+        self.assertLess(len(_json.dumps(structured).encode()), 2048,
+                        "must fit the durable structured-result bound")
+
+    def test_small_fields_still_report_their_values_in_a_conflict(self):
+        self.db.update_work_metadata(self.work, {"doi": "10.1/server"})
+        conflict = self.send("doi", "10.1/device", base=0)[1]
+        self.assertEqual(conflict["current_value"], "10.1/server")
+        self.assertEqual(conflict["requested_value"], "10.1/device")
+        self.assertNotIn("current_preview", conflict)
 
     def test_scope_keys_are_structural(self):
         self.assertNotEqual(meta.scope_key("W-a:b", "doi"), meta.scope_key("W-a", "b:doi"))

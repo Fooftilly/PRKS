@@ -1322,7 +1322,7 @@ success):
 | Work create | YES | — | YES |
 | Work delete | YES | YES | YES |
 | Work metadata (title / status / doc type / year / author) | YES | YES | YES |
-| The nine synchronized bibliographic fields | — | — | — |
+| The ten synchronized bibliographic fields (`abstract` reaches works-browse only) | — | — | — |
 | Author **or Editor** role change | YES | YES | YES |
 | Person canonical first/last-name change | YES | YES | YES |
 | managed PDF save (`file_size_bytes`) | YES | YES | YES |
@@ -1423,11 +1423,27 @@ The families are deliberately different in kind, and that is the point:
   revision would demand a resolution for a collision that never happened. Scope
   is `work-field / ["<work id>", "<field>"]` in the existing
   `sync_entity_revisions` table -- no schema change.
-- Nine fields synchronize: `publisher`, `location`, `edition`, `journal`,
-  `volume`, `issue`, `pages`, `isbn`, `doi`.
+- Ten fields synchronize: `abstract`, `publisher`, `location`, `edition`,
+  `journal`, `volume`, `issue`, `pages`, `isbn`, `doi`.
   `backend/work_metadata_sync.SYNCED_FIELDS` is the authority and the client
   list is pinned against it by `tests/test_frontend_work_metadata_sync.py`.
   Never accept a column name from a client.
+- **`abstract` is the large one.** `MAX_ABSTRACT_UTF8_BYTES` is 1 MiB, enforced
+  identically on PATCH, the sync handler, the durable store and the editor --
+  in UTF-8 BYTES, never `len()`. Over-limit is refused visibly; nothing is ever
+  truncated. It is in `BYTE_LIMITED_FIELDS`, so `metadata-state` carries its
+  revision only (the Work record has the value) and a conflict reports bounded
+  previews plus sizes rather than two megabyte values the 2 KB structured-result
+  bound could not store. The nine small scalars keep code-point limits.
+- `prksAbstractExcerpt()` is the canonical excerpt rule: first 100 Unicode CODE
+  POINTS, matching SQLite's `SUBSTR`, not UTF-16 units and not graphemes.
+  `tests/test_abstract_excerpt.py` pins equality against the real engine. Never
+  re-truncate an `abstract_excerpt` the server already bounded.
+- Hydration is four-valued (`unread`/`loading`/`ready`/`unavailable`). A failed
+  read is `unavailable`, NEVER `ready`: it proves nothing about what is stored,
+  so the map is kept, an empty one stays untrusted, and the synchronized fields
+  refuse to become editable rather than save over an edit this session could not
+  see. Never fall back to a direct PATCH for them.
 - **Store exactly what a PATCH would store.** No case folding, no ISBN
   punctuation rewriting, no page-range parsing, no whitespace stripping --
   synchronization is not a licence to start normalizing values PRKS never
@@ -1524,7 +1540,7 @@ Other mutations remain server-required. The implementation contract is in
   Work projections invalidate, including absent tombstones on delete/merge.
 - No offline Tag creation, Folder edits, Playlists, research-note editing,
   CRDTs, multi-user sync or server push. Open events joined the protocol in 2C
-  and nine bibliographic fields in 2D/2E; nothing else has.
+  and ten bibliographic fields in 2D/2E/2F; nothing else has.
 
 **Tag identity is persistent.** Only `delete_tag()` and `merge_tags_into()`
 may destroy or transform a Tag. Removing a tag from a Work or Folder, deleting

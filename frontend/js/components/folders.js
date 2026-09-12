@@ -684,8 +684,8 @@ function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
      * is rebuilt from `prks-local-v1`, so it survives a reload. */
     const acknowledged = Array.isArray(works) ? works : [];
     const all =
-        typeof prksEffectiveWorkMetadataRows === 'function'
-            ? prksEffectiveWorkMetadataRows(acknowledged, ['publisher'])
+        typeof prksEffectiveProjectionRows === 'function'
+            ? prksEffectiveProjectionRows(acknowledged, 'recently-added')
             : acknowledged;
     // Filtering runs over the EFFECTIVE rows, so a pending Publisher is
     // searchable immediately and the value it replaced stops matching.

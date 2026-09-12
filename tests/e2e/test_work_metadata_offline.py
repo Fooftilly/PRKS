@@ -52,6 +52,21 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def save(self, page):
         page.locator('#save-work-bib-btn').click()
 
+    def settled_conflicts(self, page, count):
+        """Exactly `count` field operations, all of which have reached a
+        terminal result. Waiting on the row count alone also matches the
+        instant before a retry is claimed, or before the result is written."""
+        page.evaluate("""async n => {
+            const deadline = Date.now() + 25000;
+            for (;;) {
+                const rows = (await prksSync.store.listOperations())
+                    .filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
+                if (rows.length === n && rows.every(r => r.status === 'conflict' && !!r.server_result)) return;
+                if (Date.now() > deadline) throw new Error('No conflict settled: ' + JSON.stringify(rows));
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }""", count)
+
     def operations(self, page):
         return page.evaluate(
             "() => prksSync.store.listOperations().then(rows => rows.filter(r => %s))" % self.FIELD_OPS)
@@ -222,7 +237,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 2)
         self.db_for(server).update_work_metadata(work, {'doi': 'server-doi'})
         self.reconnect(page, context)
-        self.pending(page, 1)
+        self.settled_conflicts(page, 1)
 
         rows = self.operations(page)
         self.assertEqual(rows[0]['payload']['field'], 'doi')
@@ -244,7 +259,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 1)
         self.db_for(server).update_work_metadata(work, {'doi': 'server-doi'})
         self.reconnect(page, context)
-        self.pending(page, 1)
+        self.settled_conflicts(page, 1)
 
         page.get_by_role('button', name='Use server', exact=True).click()
         self.pending(page, 0)
@@ -267,7 +282,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         original = self.operations(page)[0]['op_id']
         self.db_for(server).update_work_metadata(work, {'doi': 'server-doi'})
         self.reconnect(page, context)
-        self.pending(page, 1)
+        self.settled_conflicts(page, 1)
 
         page.get_by_role('button', name='Apply my value', exact=True).click()
         self.pending(page, 0)
@@ -492,7 +507,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 3)
         self.db_for(server).update_work_metadata(work, {'publisher': 'server-publisher'})
         self.reconnect(page, context)
-        self.pending(page, 1)
+        self.settled_conflicts(page, 1)
 
         rows = self.operations(page)
         self.assertEqual(rows[0]['payload']['field'], 'publisher')
@@ -578,6 +593,117 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         page.wait_for_function("() => location.hash.indexOf('/works/') === -1")
         self.assertEqual(page.locator('#prks-modal-confirm:not(.hidden)').count(), 0,
                          'no prompt to discard changes that were already saved')
+
+    # ---- Abstract: large scalar with a DERIVED projection -------------------
+
+    def progress(self, page, status='In Progress'):
+        page.evaluate("s => prksNavigate('#/progress?status=' + encodeURIComponent(s))", status)
+        page.wait_for_function("() => location.hash.indexOf('/progress') !== -1")
+        page.wait_for_selector('.card-grid')
+
+    def progress_excerpt(self, page, work_id):
+        return page.evaluate("""id => {
+            const ctx = prksGetFocusedTabContext();
+            const card = ctx.root.querySelector('[data-work-id="' + id + '"]');
+            const context = card && card.querySelector('.work-card__context');
+            return context ? context.textContent : null;
+        }""", work_id)
+
+    def test_pending_abstract_reaches_progress_with_the_servers_own_excerpt(self):
+        """The derived projection. Progress shows the first 100 code points of
+        the pending Abstract, cut exactly where the server would cut it -- and
+        the acknowledged catalog on disk still says what the server said."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        db = self.db_for(server)
+        db.update_work_metadata(work, {'abstract': 'Server abstract text.', 'status': 'In Progress'})
+        page.reload()
+        page.wait_for_selector('#sidebar')
+        self.progress(page)
+        o._wait_list_cached(page, 'works-browse:index')
+        self.assertIn('Server abstract', self.progress_excerpt(page, work))
+
+        # An astral Abstract: JS slicing would cut this at 50 characters.
+        pending = '\U0001F9EA' * 150
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        page.locator('[data-prks-work-field="abstract"]').fill(pending)
+        self.save(page)
+        self.pending(page, 1)
+
+        self.progress(page)
+        shown = self.progress_excerpt(page, work)
+        expected = db.execute_query(
+            "SELECT SUBSTR(?, 1, 100) AS e", (pending,))[0]['e']
+        self.assertIn(expected, shown,
+                      'the pending excerpt equals what SQLite would produce')
+        self.assertEqual(len(expected), 100)
+        cached = page.evaluate("""id => window.createPrksOfflineStore().getList('works-browse:index')
+            .then(row => row.value.find(w => w.id === id).abstract_excerpt)""", work)
+        self.assertEqual(cached, 'Server abstract text.',
+                         'the acknowledged catalog is untouched until the server answers')
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(db.execute_query(
+            "SELECT abstract FROM works WHERE id = ?", (work,))[0]['abstract'], pending,
+            'the server received the whole Abstract, not the excerpt')
+        after = page.evaluate("""id => window.createPrksOfflineStore().getList('works-browse:index')
+            .then(row => row.value.find(w => w.id === id).abstract_excerpt)""", work)
+        self.assertEqual(after, expected, 'and the acknowledged row now matches')
+        self.progress(page)
+        self.assertIn(expected, self.progress_excerpt(page, work),
+                      'nothing visibly changed when the server answered')
+
+    def test_an_oversize_abstract_is_refused_without_touching_anything(self):
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.offline(page, context)
+        seen = self.record_paths(page)
+        page.evaluate("""() => {
+            const input = document.querySelector('[data-prks-work-field="abstract"]');
+            input.value = 'x'.repeat(1024 * 1024 + 1);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }""")
+        self.save(page)
+        page.wait_for_function("""() => {
+            const status = document.querySelector('[data-prks-role="work-bib-sync"]');
+            return !!status && status.textContent.indexOf('too long to save') !== -1;
+        }""")
+        self.assertEqual(self.operations(page), [], 'nothing durable was stored')
+        self.assertEqual([url for method, url in seen if method != 'GET'], [])
+        self.assertEqual(page.evaluate(
+            "() => document.querySelector('[data-prks-work-field=\"abstract\"]').value.length"),
+            1024 * 1024 + 1, 'the draft stays on screen')
+        self.assertEqual(self.server_fields(server, work)['abstract'], {'revision': 0})
+
+    def test_an_abstract_conflict_shows_bounded_previews(self):
+        """A megabyte of Abstract must not be dumped into a conflict sentence,
+        and the durable row could not store it even if it were."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.offline(page, context)
+        page.locator('[data-prks-work-field="abstract"]').fill('D' * 5000)
+        self.save(page)
+        self.pending(page, 1)
+        self.db_for(server).update_work_metadata(work, {'abstract': 'S' * 5000})
+        self.reconnect(page, context)
+        self.settled_conflicts(page, 1)
+
+        row = self.operations(page)[0]
+        self.assertEqual(row['status'], 'conflict')
+        self.assertEqual(row['server_result']['code'], 'REVISION_CONFLICT')
+        self.assertNotIn('current_value', row['server_result'])
+        self.assertEqual(row['server_result']['current_bytes'], 5000)
+        status = page.locator('[data-prks-role="work-bib-sync"]').inner_text()
+        self.assertIn('Abstract differs', status)
+        self.assertLess(len(status), 1200, 'the conflict line stays readable')
+
+        page.get_by_role('button', name='Use server', exact=True).click()
+        self.pending(page, 0)
+        self.assertEqual(self.server_fields(server, work)['abstract'], {'revision': 1},
+                         'the server was not mutated again')
 
     # ---- boundaries ---------------------------------------------------------
 

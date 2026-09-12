@@ -16,10 +16,11 @@
  */
 (function (root) {
     'use strict';
-    const FIELDS = Object.freeze(['publisher', 'location', 'edition', 'journal',
+    const FIELDS = Object.freeze(['abstract', 'publisher', 'location', 'edition', 'journal',
         'volume', 'issue', 'pages', 'isbn', 'doi']);
     const FIELD_SET = new Set(FIELDS);
     const LABELS = Object.freeze({
+        abstract: 'Abstract',
         publisher: 'Publisher', location: 'Location', edition: 'Edition',
         journal: 'Journal', volume: 'Volume', issue: 'Issue',
         pages: 'Pages', isbn: 'ISBN', doi: 'DOI',
@@ -27,7 +28,58 @@
     /* Cached projections other than the Work that carry a synchronized field.
      * Mirrors `work_metadata_sync.FIELD_PROJECTIONS`; the parity is pinned by
      * `tests/test_frontend_work_metadata_sync.py`. */
-    const FIELD_PROJECTIONS = Object.freeze({ publisher: ['recently-added'] });
+    const FIELD_PROJECTIONS = Object.freeze({
+        publisher: ['recently-added'],
+        abstract: ['works-browse'],
+    });
+
+    /* Mirrors `backend/work_metadata_sync.BYTE_LIMITED_FIELDS`: a field whose
+     * bound is a storage limit rather than a display one, and whose value the
+     * metadata-state projection therefore omits -- the Work record already has
+     * it, and echoing a megabyte into a second cache would double what every
+     * read costs for a value the client already holds. */
+    const BYTE_LIMITED_FIELDS = new Set(['abstract']);
+    const MAX_ABSTRACT_UTF8_BYTES = 1024 * 1024;
+
+    /* How a pending field value reaches a cached projection.
+     *
+     * `publisher` COPIES a scalar into a column of the same name.
+     * `abstract` DERIVES a different column from it. Consumers ask for
+     * effective rows and never interpret durable operations themselves, so
+     * adding a third field here is a table entry rather than an `if` inside
+     * whichever component happens to render it.
+     */
+    const PROJECTION_COLUMNS = Object.freeze({
+        'recently-added': [{ field: 'publisher', column: 'publisher', derive: value => value }],
+        'works-browse': [{ field: 'abstract', column: 'abstract_excerpt', derive: text => abstractExcerpt(text) }],
+    });
+
+    /* The excerpt Progress shows under each Work card.
+     *
+     * PRKS's rule is the FIRST 100 UNICODE CODE POINTS, because that is what
+     * the server's `SUBSTR(COALESCE(abstract, ''), 1, 100)` produces -- SQLite
+     * counts characters, not UTF-16 code units and not grapheme clusters. The
+     * client must reproduce the server exactly, not improve on it: a pending
+     * excerpt that disagreed with the one the server will send back would
+     * flicker at acknowledgement. `Array.from()` iterates code points, so a
+     * surrogate pair is never split and a 4-byte character counts once. */
+    const EXCERPT_CODE_POINTS = 100;
+
+    function abstractExcerpt(text) {
+        if (text == null) return '';
+        const value = String(text);
+        if (value.length <= EXCERPT_CODE_POINTS) return value;
+        /* A code point is at most two UTF-16 units, so the first 100 code
+         * points always lie within the first 200 units. Bounding the slice
+         * BEFORE expanding keeps a megabyte-scale Abstract from being turned
+         * into a million-entry array on every Progress render. The prefix
+         * yields between 100 and 200 code points, so taking 100 can never
+         * reach a surrogate the slice happened to split. */
+        const points = Array.from(value.slice(0, EXCERPT_CODE_POINTS * 2));
+        return points.length <= EXCERPT_CODE_POINTS
+            ? points.join('')
+            : points.slice(0, EXCERPT_CODE_POINTS).join('');
+    }
 
     /** SQLite NULL and "" are one logical value; whitespace is never stripped. */
     function canonical(value) {
@@ -45,9 +97,50 @@
         if (names.length !== FIELDS.length || !names.every(name => FIELD_SET.has(name))) return false;
         return names.every(name => {
             const entry = fields[name];
-            return !!entry && typeof entry === 'object' &&
-                typeof entry.value === 'string' && revision(entry.revision);
+            if (!entry || typeof entry !== 'object' || !revision(entry.revision)) return false;
+            // A byte-limited field carries a revision only; its value lives on
+            // the Work record. Anything else must carry both.
+            return BYTE_LIMITED_FIELDS.has(name)
+                ? !Object.prototype.hasOwnProperty.call(entry, 'value')
+                : typeof entry.value === 'string';
         });
+    }
+
+    /**
+     * The acknowledged base a save is measured against. For most fields the
+     * projection carries it; for a byte-limited one the Work record does.
+     */
+    function observedFields(state, work) {
+        const out = {};
+        if (!state || !state.fields) return out;
+        FIELDS.forEach(field => {
+            const entry = state.fields[field];
+            if (!entry) return;
+            out[field] = {
+                revision: entry.revision,
+                value: BYTE_LIMITED_FIELDS.has(field)
+                    ? canonical(work && work[field])
+                    : entry.value,
+            };
+        });
+        return out;
+    }
+
+    /** Exact UTF-8 byte length, the unit every wire and storage limit uses. */
+    function utf8Bytes(text) {
+        const value = canonical(text);
+        if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(value).length;
+        return Buffer.byteLength(value, 'utf8');
+    }
+
+    /** null when the value fits, otherwise a message naming the limit. */
+    function fieldLimitError(field, value) {
+        if (!BYTE_LIMITED_FIELDS.has(field)) return null;
+        const bytes = utf8Bytes(value);
+        if (bytes <= MAX_ABSTRACT_UTF8_BYTES) return null;
+        return (LABELS[field] || field) + ' is too long to save (' +
+            Math.ceil(bytes / 1024) + ' KB of ' + (MAX_ABSTRACT_UTF8_BYTES / 1024) +
+            ' KB allowed). Shorten it, or keep long material in Research Notes.';
     }
 
     async function readState(workId, options = {}) {
@@ -93,9 +186,10 @@
      * still displaying an untouched pending value would look dirty on every
      * save.
      */
-    function dirtyFields(draft, state, operations) {
+    function dirtyFields(draft, observed, operations) {
         const changes = {};
-        if (!draft || !state || !state.fields) return changes;
+        if (!draft || !observed || !observed.fields) return changes;
+        const state = observed;
         const pending = new Map();
         (operations || []).forEach(op => {
             if (op && op.operation === 'SET_WORK_METADATA_FIELD' && op.status !== 'acknowledged' &&
@@ -118,8 +212,15 @@
                 return typeof data.value === 'string' && data.value === op.payload.value &&
                     typeof data.changed === 'boolean' && revision(data.server_revision);
             case 'REVISION_CONFLICT': case 'FUTURE_REVISION':
-                return revision(data.current_revision) && typeof data.current_value === 'string' &&
-                    data.requested_value === op.payload.value;
+                if (!revision(data.current_revision)) return false;
+                // A byte-limited field reports previews and sizes instead of
+                // the values themselves; see the server's disagreement().
+                return BYTE_LIMITED_FIELDS.has(data.field)
+                    ? typeof data.current_preview === 'string' &&
+                      Number.isSafeInteger(data.current_bytes) &&
+                      Number.isSafeInteger(data.requested_bytes)
+                    : typeof data.current_value === 'string' &&
+                      data.requested_value === op.payload.value;
             case 'ENTITY_NOT_FOUND': return true;
             default: return false;
         }
@@ -130,7 +231,8 @@
      * conflict is recorded against the FIELD, so the rest stay usable. */
     function terminal(data) {
         const out = { code: data.code };
-        for (const key of ['current_revision', 'current_value', 'requested_value']) {
+        for (const key of ['current_revision', 'current_value', 'requested_value',
+            'current_preview', 'current_bytes', 'requested_bytes']) {
             if (Object.prototype.hasOwnProperty.call(data, key)) out[key] = data[key];
         }
         return { conflict: out };
@@ -154,18 +256,35 @@
      */
     let pendingByWork = new Map();
     let pendingGeneration = 0;
-    /* Hydration state. Before the durable queue has been read once, an empty
-     * map means "not read yet", NOT "nothing pending" -- and the two are
-     * indistinguishable to a synchronous caller. Anything that must be correct
-     * rather than merely fast waits for this. */
-    let hydrated = false;
+    /* Hydration state, four-valued on purpose.
+     *
+     * An empty map cannot carry this: "not read yet", "read and genuinely
+     * empty" and "the read FAILED" are three different facts, and only the
+     * middle one licenses a synchronous caller to say "there is no pending
+     * value for this field". A failed IndexedDB read proves nothing about what
+     * is stored -- operations persisted by an earlier session may still be
+     * sitting there -- so it must never be collapsed into "nothing pending".
+     */
+    const UNREAD = 'unread';
+    const LOADING = 'loading';
+    const READY = 'ready';
+    const UNAVAILABLE = 'unavailable';
+    let hydration = UNREAD;
     let hydrationPromise = null;
     let hydrationResolve = null;
-    let readStarted = false;
 
-    function markHydrated() {
-        hydrated = true;
-        if (hydrationResolve) { hydrationResolve(); hydrationResolve = null; }
+    function settle(state) {
+        hydration = state;
+        if (hydrationResolve) { hydrationResolve(state); hydrationResolve = null; }
+        hydrationPromise = null;
+    }
+
+    /* The durable queue could not be read. Waiters are released -- nothing is
+     * served by hanging the UI on a read that already failed -- but the map is
+     * left exactly as it was. Whatever was last known to be pending is still
+     * the best information available, and an empty map stays untrusted. */
+    function failHydration() {
+        settle(UNAVAILABLE);
     }
 
     /** Rebuild the map from rows a caller has already read. */
@@ -179,7 +298,7 @@
             });
         pendingByWork = next;
         pendingGeneration += 1;
-        markHydrated();
+        settle(READY);
         return pendingGeneration;
     }
 
@@ -189,15 +308,13 @@
      * this read instead of issuing its own.
      */
     async function refreshPending() {
-        if (!root.prksSync) { markHydrated(); return []; }
-        readStarted = true;
+        if (!root.prksSync) { failHydration(); return []; }
+        if (hydration === UNREAD || hydration === UNAVAILABLE) hydration = LOADING;
         let rows;
         try {
             rows = await root.prksSync.store.listOperations();
         } catch (_) {
-            // Durable storage being unavailable is a settled answer too: there
-            // is nothing pending that this device could ever produce.
-            markHydrated();
+            failHydration();
             return [];
         }
         setPending(rows);
@@ -211,11 +328,11 @@
      * when it lands.
      */
     function ensurePending() {
-        if (hydrated) return Promise.resolve();
+        if (hydration === READY || hydration === UNAVAILABLE) return Promise.resolve(hydration);
         if (!hydrationPromise) {
             hydrationPromise = new Promise(resolve => { hydrationResolve = resolve; });
         }
-        if (!readStarted) void refreshPending();
+        if (hydration === UNREAD) void refreshPending();
         return hydrationPromise;
     }
 
@@ -237,16 +354,30 @@
      * said.
      */
     function effectiveRows(rows, fields) {
-        if (!Array.isArray(rows) || !pendingByWork.size) return rows;
         const wanted = (fields || FIELDS).filter(field => FIELD_SET.has(field));
+        return applyPending(rows, wanted.map(
+            field => ({ field, column: field, derive: value => value })));
+    }
+
+    /**
+     * Acknowledged projection rows + pending values, through that projection's
+     * own transforms. Rows are never mutated: only a row an edit touches is
+     * copied, so the caller's acknowledged snapshot stays what the server said.
+     */
+    function effectiveProjectionRows(rows, projection) {
+        return applyPending(rows, PROJECTION_COLUMNS[projection] || []);
+    }
+
+    function applyPending(rows, transforms) {
+        if (!Array.isArray(rows) || !pendingByWork.size || !transforms.length) return rows;
         return rows.map(row => {
             const pending = row && pendingByWork.get(row.id);
             if (!pending) return row;
             let out = row;
-            wanted.forEach(field => {
+            transforms.forEach(({ field, column, derive }) => {
                 if (!Object.prototype.hasOwnProperty.call(pending, field)) return;
                 if (out === row) out = Object.assign({}, row);
-                out[field] = pending[field];
+                out[column] = derive(pending[field]);
             });
             return out;
         });
@@ -254,10 +385,29 @@
 
     Object.assign(root, {
         PRKS_SYNCED_WORK_FIELDS: FIELDS,
+        PRKS_ABSTRACT_EXCERPT_CODE_POINTS: EXCERPT_CODE_POINTS,
+        prksAbstractExcerpt: abstractExcerpt,
         PRKS_SYNCED_WORK_FIELD_PROJECTIONS: FIELD_PROJECTIONS,
+        PRKS_BYTE_LIMITED_WORK_FIELDS: BYTE_LIMITED_FIELDS,
+        PRKS_MAX_ABSTRACT_UTF8_BYTES: MAX_ABSTRACT_UTF8_BYTES,
+        prksWorkFieldUtf8Bytes: utf8Bytes,
+        prksWorkFieldLimitError: fieldLimitError,
+        prksObservedWorkFields: observedFields,
+        prksEffectiveProjectionRows: effectiveProjectionRows,
+        /* The acknowledged counterpart of the overlay: the same transform,
+         * applied once the server has spoken. One definition, so a row cannot
+         * visibly change at acknowledgement. */
+        prksProjectionFieldPatch: (projection, field, value) => {
+            const transform = (PROJECTION_COLUMNS[projection] || []).find(t => t.field === field);
+            return transform ? { [transform.column]: transform.derive(value) } : null;
+        },
         prksRefreshPendingWorkMetadata: refreshPending,
         prksEnsurePendingWorkMetadata: ensurePending,
-        prksPendingWorkMetadataHydrated: () => hydrated,
+        prksPendingWorkMetadataState: () => hydration,
+        /* Settled, either way. A caller that only needs to know whether to
+         * WAIT asks this; a caller deciding whether to TRUST an absent value
+         * must ask for the state and require `ready`. */
+        prksPendingWorkMetadataSettled: () => hydration === READY || hydration === UNAVAILABLE,
         prksSetPendingWorkMetadata: setPending,
         prksEffectiveWorkSync: effectiveWorkSync,
         prksPendingWorkMetadataGeneration: () => pendingGeneration,

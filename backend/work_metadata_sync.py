@@ -26,7 +26,19 @@ import json
 # adds: synchronization is not a licence to start normalizing values PRKS never
 # normalized. A DOI keeps its case, an ISBN keeps its punctuation, and a page
 # range is not parsed -- the sync path must store exactly what a PATCH would.
+# Abstract is a bibliographic summary, and 1 MiB is already thousands of times
+# any real one -- long-form material belongs in Research Notes, which has its
+# own storage. The number is a deliberate PRKS product rule, not a measurement:
+# it is small enough that every `listOperations()`, diagnostics render and
+# coordinator pass stays cheap, and large enough that no genuine abstract can
+# reach it. The same limit is enforced on the ordinary PATCH, on the sync
+# operation, in the durable local store and in the editor before enqueue --
+# one contract, so a value can never be savable by one path and refused by
+# another.
+MAX_ABSTRACT_UTF8_BYTES = 1024 * 1024
+
 SYNCED_FIELDS = {
+    "abstract": MAX_ABSTRACT_UTF8_BYTES,
     "edition": 200,
     "journal": 500,
     "volume": 100,
@@ -42,8 +54,35 @@ SYNCED_FIELDS = {
 # reconciled when it is acknowledged. Absent means "the Work detail only".
 # `recently-added:index` selects `publisher` for its local filter, so this is a
 # real dependency even though no Work card renders the value.
+# Abstract's limit is measured in UTF-8 BYTES; the eight small scalars keep the
+# code-point limits they have had since 2D. The distinction is deliberate, not
+# an oversight. Abstract's bound exists to keep a durable operation and every
+# read of it cheap, which is a storage and transport concern and therefore a
+# byte concern. The others bound how much text a one-line field may hold, which
+# is a display concern -- and switching them to bytes would quietly shorten
+# every one of them by a factor of three for anyone writing CJK.
+BYTE_LIMITED_FIELDS = frozenset({"abstract"})
+
+# A conflict result is persisted in the browser's durable operation row, which
+# bounds a structured result to 2 KB. Echoing two megabyte-scale Abstracts into
+# it would mean the client could not store the conflict at all -- the operation
+# would fail to settle rather than reach the user. So a byte-limited field
+# reports bounded PREVIEWS and sizes instead, enough to show the user what the
+# disagreement is; taking the server's version re-reads the authoritative value
+# rather than trusting a truncated copy.
+CONFLICT_PREVIEW_CHARS = 400
+
+
+def preview(value):
+    text = canonical(value)
+    return text[:CONFLICT_PREVIEW_CHARS]
+
+
 FIELD_PROJECTIONS = {
     "publisher": ("recently-added",),
+    # DERIVED, unlike publisher: what reaches `works-browse:index` is not the
+    # abstract but its first 100 code points, which Progress renders.
+    "abstract": ("works-browse",),
 }
 
 
@@ -51,6 +90,18 @@ def scope_key(work_id, field):
     # Structural encoding, like the Work-Tag scope: no delimiter has to be
     # excluded from either component for this to stay unambiguous.
     return json.dumps([work_id, field], ensure_ascii=True, separators=(",", ":"))
+
+
+def within_limit(field, value):
+    limit = SYNCED_FIELDS[field]
+    text = canonical(value)
+    if field not in BYTE_LIMITED_FIELDS:
+        return len(text) <= limit
+    # No string exceeds a byte limit without having at least limit/4
+    # characters, so ordinary values never pay for the encode.
+    if len(text) * 4 <= limit:
+        return True
+    return len(text.encode("utf-8")) <= limit
 
 
 def canonical(value):
@@ -71,7 +122,14 @@ def get_field_state_on_conn(conn, work_id):
     existed, which is revision 0 -- the same "missing means zero" rule the
     Work-Tag scopes use.
     """
-    columns = ", ".join(sorted(SYNCED_FIELDS))
+    # Byte-limited fields contribute their REVISION only. The Work record
+    # already carries the acknowledged Abstract, and echoing up to a megabyte
+    # of it into a second cached projection would double what this endpoint
+    # sends, what IndexedDB stores and what every re-read costs -- for a value
+    # the client already has. Small scalars stay inline; there is nothing to
+    # save by splitting them.
+    valued = sorted(set(SYNCED_FIELDS) - BYTE_LIMITED_FIELDS)
+    columns = ", ".join(valued) if valued else "id"
     row = conn.execute("SELECT %s FROM works WHERE id = ?" % columns, (work_id,)).fetchone()
     if row is None:
         return None
@@ -90,13 +148,13 @@ def get_field_state_on_conn(conn, work_id):
             tuple(by_key),
         ).fetchall()
     }
-    return {
-        "work_id": work_id,
-        "fields": {
-            field: {"value": canonical(row[field]), "revision": revisions.get(field, 0)}
-            for field in sorted(SYNCED_FIELDS)
-        },
-    }
+    fields = {}
+    for field in sorted(SYNCED_FIELDS):
+        entry = {"revision": revisions.get(field, 0)}
+        if field not in BYTE_LIMITED_FIELDS:
+            entry["value"] = canonical(row[field])
+        fields[field] = entry
+    return {"work_id": work_id, "fields": fields}
 
 
 def get_revision(conn, work_id, field):
@@ -142,13 +200,24 @@ def validate(op):
     # a way to reach fields this milestone deliberately does not synchronize.
     if not isinstance(field, str) or field not in SYNCED_FIELDS:
         raise ValueError("INVALID_ENVELOPE")
-    if not isinstance(value, str) or len(value) > SYNCED_FIELDS[field]:
+    if not isinstance(value, str) or not within_limit(field, value):
         raise ValueError("INVALID_ENVELOPE")
     # A scalar edit is optimistic-concurrency controlled: a null base revision
     # is a client that cannot detect a conflict, which would silently overwrite
     # whatever another device wrote.
     if op["base_revision"] is None:
         raise ValueError("INVALID_BASE_REVISION")
+
+
+def disagreement(field, current, desired):
+    """What the two sides hold, in a form the client can durably store."""
+    if field not in BYTE_LIMITED_FIELDS:
+        return {"current_value": current, "requested_value": desired}
+    return {
+        "current_preview": preview(current),
+        "current_bytes": len(current.encode("utf-8")),
+        "requested_bytes": len(desired.encode("utf-8")),
+    }
 
 
 def apply(db, conn, op, received_at):
@@ -164,13 +233,13 @@ def apply(db, conn, op, received_at):
     base = op["base_revision"]
     if base > revision:
         result.update(code="FUTURE_REVISION", current_revision=revision,
-                      current_value=current, requested_value=desired)
+                      **disagreement(field, current, desired))
         return 400, result
     # A stale base is only a conflict when the two devices actually disagree.
     # Two people typing the same DOI have converged, not collided.
     if base < revision and current != desired:
         result.update(code="REVISION_CONFLICT", current_revision=revision,
-                      current_value=current, requested_value=desired)
+                      **disagreement(field, current, desired))
         return 409, result
     changed, after = set_field_on_conn(conn, work_id, field, desired)
     result.update(code="ACKNOWLEDGED", value=desired, server_revision=after, changed=changed)

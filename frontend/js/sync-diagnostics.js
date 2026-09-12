@@ -9,6 +9,24 @@
 (function (root) {
     'use strict';
 
+    const PREVIEW_CHARS = 120;
+
+    function bounded(text) {
+        const value = String(text == null ? '' : text);
+        if (value.length <= PREVIEW_CHARS) return value;
+        const points = Array.from(value.slice(0, PREVIEW_CHARS * 2));
+        return points.slice(0, PREVIEW_CHARS).join('') + '…';
+    }
+
+    function sizeNote(op) {
+        if (op.operation !== 'SET_WORK_METADATA_FIELD') return '';
+        const value = String(op.payload.value == null ? '' : op.payload.value);
+        if (value.length <= PREVIEW_CHARS) return '';
+        const bytes = typeof root.prksWorkFieldUtf8Bytes === 'function'
+            ? root.prksWorkFieldUtf8Bytes(value) : value.length;
+        return ' · ' + Math.ceil(bytes / 1024) + ' KB';
+    }
+
     function status(op) {
         if (op.status === 'conflict') return 'Needs a decision';
         if (op.status === 'syncing') return 'Syncing…';
@@ -25,7 +43,9 @@
         if (op.operation === 'SET_WORK_METADATA_FIELD') {
             const labels = root.PRKS_SYNCED_WORK_FIELD_LABELS || {};
             const field = op.payload.field;
-            return (labels[field] || field) + ' = "' + op.payload.value + '"';
+            // Bounded: an Abstract may be a megabyte, and Diagnostics is a
+            // status list, not a place to render -- or log -- a whole value.
+            return (labels[field] || field) + ' = "' + bounded(op.payload.value) + '"';
         }
         return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') +
             ((context.tag && context.tag.name) || 'Tag');
@@ -43,8 +63,12 @@
 
     function conflictDetail(op) {
         const result = op.server_result || {};
+        if (typeof result.current_preview === 'string') {
+            return ' Server currently has "' + bounded(result.current_preview) + '" (' +
+                Math.ceil((result.current_bytes || 0) / 1024) + ' KB).';
+        }
         if (typeof result.current_value !== 'string') return '';
-        return ' Server currently has "' + result.current_value + '".';
+        return ' Server currently has "' + bounded(result.current_value) + '".';
     }
 
     root.prksRenderSyncDiagnostics = async host => {
@@ -63,7 +87,7 @@
             link.href = '#/works/' + encodeURIComponent(op.entity_id);
             link.textContent = describe(op);
             row.append(link, document.createTextNode(
-                ' · ' + op.entity_id + ' · ' + status(op) + conflictDetail(op) + ' '));
+                ' · ' + op.entity_id + sizeNote(op) + ' · ' + status(op) + conflictDetail(op) + ' '));
             if (op.status === 'conflict') {
                 const discard = document.createElement('button');
                 discard.type = 'button';

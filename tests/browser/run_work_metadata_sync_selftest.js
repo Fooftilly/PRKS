@@ -18,9 +18,22 @@ async function settle() { for (let i = 0; i < 5; i++) await tick(); }
 
 function base(overrides) {
     const fields = {};
-    globalThis.PRKS_SYNCED_WORK_FIELDS.forEach(field => { fields[field] = { value: '', revision: 0 }; });
+    globalThis.PRKS_SYNCED_WORK_FIELDS.forEach(field => {
+        // A byte-limited field contributes its revision only; its value lives
+        // on the Work record rather than in this projection.
+        fields[field] = globalThis.PRKS_BYTE_LIMITED_WORK_FIELDS.has(field)
+            ? { revision: 0 } : { value: '', revision: 0 };
+    });
     Object.assign(fields, overrides || {});
     return fields;
+}
+/** The store needs a value for every field; the projection omits some. */
+function resolved(fields) {
+    const out = {};
+    Object.entries(fields).forEach(([field, entry]) => {
+        out[field] = { revision: entry.revision, value: entry.value == null ? '' : entry.value };
+    });
+    return out;
 }
 function ack(field, value, revision, changed) {
     return { code: 'ACKNOWLEDGED', work_id: 'W-M', field, value,
@@ -35,7 +48,7 @@ const fieldsOf = rows => rows.map(r => r.payload.field + '=' + r.payload.value).
 /* ---- one effective never-sent operation per FIELD ---- */
 async function coalescing() {
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
-    const observed = base({ doi: { value: 'A', revision: 4 } });
+    const observed = resolved(base({ doi: { value: 'A', revision: 4 } }));
 
     const first = await store.saveWorkMetadataFields('W-M', { doi: 'B' }, observed);
     assert.equal(first.length, 1);
@@ -65,7 +78,7 @@ async function coalescing() {
 /* ---- fields are independent, including when one is busy ---- */
 async function independence() {
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
-    const observed = base({ doi: { value: 'D0', revision: 2 }, isbn: { value: 'I0', revision: 5 } });
+    const observed = resolved(base({ doi: { value: 'D0', revision: 2 }, isbn: { value: 'I0', revision: 5 } }));
 
     await store.saveWorkMetadataFields('W-M', { doi: 'D1', isbn: 'I1', journal: 'J1' }, observed);
     let rows = await store.listOperations();
@@ -101,7 +114,7 @@ async function independence() {
 async function atomicity() {
     const factory = createFakeIndexedDBFactory();
     const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const observed = base();
+    const observed = resolved(base());
     await store.saveWorkMetadataFields('W-M', { doi: 'keep' }, observed);
     assert.equal((await store.listOperations()).length, 1);
 
@@ -130,7 +143,7 @@ async function atomicity() {
 async function overlay() {
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
     const work = { id: 'W-M', title: 'Paper', doi: 'server-doi', isbn: 'server-isbn' };
-    const observed = base({ doi: { value: 'server-doi', revision: 1 }, isbn: { value: 'server-isbn', revision: 1 } });
+    const observed = resolved(base({ doi: { value: 'server-doi', revision: 1 }, isbn: { value: 'server-isbn', revision: 1 } }));
 
     assert.deepEqual(globalThis.prksEffectiveWorkMetadata(work, []), work);
     await store.saveWorkMetadataFields('W-M', { doi: 'local-doi' }, observed);
@@ -186,7 +199,7 @@ async function acknowledgement() {
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
         prksRequest: async () => { throw new Error('no reads in this scenario'); } });
 
-    const observed = base({ doi: { value: 'old', revision: 3 } });
+    const observed = resolved(base({ doi: { value: 'old', revision: 3 } }));
     const op = await store.saveWorkMetadataFields('W-M', { doi: 'new' }, observed);
     let cacheWorks = false;
     const sent = [];
@@ -257,7 +270,7 @@ async function staleReads() {
 /* ---- the conflict belongs to the field ---- */
 async function conflicts() {
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
-    const observed = base({ doi: { value: 'D0', revision: 1 } });
+    const observed = resolved(base({ doi: { value: 'D0', revision: 1 } }));
     const saved = await store.saveWorkMetadataFields('W-M', { doi: 'mine', journal: 'J' }, observed);
     const doi = saved.find(r => r.payload.field === 'doi');
 
@@ -360,7 +373,7 @@ async function crossProjection() {
     assert.deepEqual(globalThis.prksEffectiveWorkMetadataRows(acknowledged, ['publisher']), acknowledged,
         'with nothing pending the acknowledged rows are returned as they are');
 
-    const observed = base({ publisher: { value: 'Elsevier', revision: 2 } });
+    const observed = resolved(base({ publisher: { value: 'Elsevier', revision: 2 } }));
     await store.saveWorkMetadataFields('W-1', { publisher: 'Springer' }, observed);
     const before = globalThis.prksPendingWorkMetadataGeneration();
     await globalThis.prksRefreshPendingWorkMetadata();
@@ -480,7 +493,7 @@ async function staleProjectionRead() {
  */
 async function hydration() {
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
-    const observed = base({ publisher: { value: 'Elsevier', revision: 2 } });
+    const observed = resolved(base({ publisher: { value: 'Elsevier', revision: 2 } }));
     await store.saveWorkMetadataFields('W-H', { publisher: 'Springer' }, observed);
     const durableRows = await store.listOperations();
 
@@ -494,7 +507,7 @@ async function hydration() {
     require('../../frontend/js/work-metadata-state.js');
 
     const work = { id: 'W-H', title: 'Paper', publisher: 'Elsevier' };
-    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), false, 'nothing has read the queue yet');
+    assert.equal(globalThis.prksPendingWorkMetadataState(), 'unread', 'nothing has read the queue yet');
 
     // The mount begins hydration, exactly as the editor's paint does.
     const mounting = globalThis.prksRefreshPendingWorkMetadata();
@@ -504,13 +517,13 @@ async function hydration() {
     await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(settled, false, 'hydration does not resolve before the read lands');
     assert.equal(reads, 1, 'the waiter joins the read in flight; it never starts a second one');
-    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), false);
+    assert.equal(globalThis.prksPendingWorkMetadataState(), 'loading');
 
     release();
     await mounting; await waiting;
     assert.equal(settled, true);
     assert.equal(reads, 1, 'still one read for the one event');
-    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), true);
+    assert.equal(globalThis.prksPendingWorkMetadataState(), 'ready');
     // ...and only now does the synchronous overlay speak for the durable queue.
     assert.equal(globalThis.prksEffectiveWorkSync(work).publisher, 'Springer');
     assert.equal(work.publisher, 'Elsevier', 'the acknowledged Work is untouched');
@@ -520,26 +533,116 @@ async function hydration() {
     await after;
     assert.equal(reads, 1);
 
-    /* Durable storage being unavailable is a settled answer too -- otherwise a
-     * browser with IndexedDB blocked would wait for a hydration that can never
-     * arrive, and the metadata editor would never open. */
+    /* A FAILED read is not an empty queue. It settles -- nothing is served by
+     * hanging the UI on a read that already failed -- but it must not license
+     * anyone to act as though nothing is pending. */
     delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
-    globalThis.prksSync = { store: { listOperations: async () => { throw new Error('unavailable'); } } };
+    let failing = true;
+    globalThis.prksSync = { store: { listOperations: async () => {
+        if (failing) throw new Error('IndexedDB is unavailable.');
+        return durableRows;
+    } } };
     require('../../frontend/js/work-metadata-state.js');
-    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), false);
+    assert.equal(globalThis.prksPendingWorkMetadataState(), 'unread');
     await globalThis.prksEnsurePendingWorkMetadata();
-    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), true, 'a failed read still settles');
+    assert.equal(globalThis.prksPendingWorkMetadataState(), 'unavailable',
+        'a failed read is unavailable, never ready');
+    assert.equal(globalThis.prksPendingWorkMetadataSettled(), true, 'but waiters are released');
 
-    // No sync runtime at all settles immediately rather than hanging.
+    /* A retry recovers without a reload. */
+    failing = false;
+    await globalThis.prksRefreshPendingWorkMetadata();
+    assert.equal(globalThis.prksPendingWorkMetadataState(), 'ready');
+    assert.equal(globalThis.prksEffectiveWorkSync(work).publisher, 'Springer',
+        'and the pending value appears once the queue is readable again');
+
+    /* A later failure must not erase what is already known to be pending. */
+    failing = true;
+    await globalThis.prksRefreshPendingWorkMetadata();
+    assert.equal(globalThis.prksPendingWorkMetadataState(), 'unavailable');
+    assert.equal(globalThis.prksEffectiveWorkSync(work).publisher, 'Springer',
+        'the last known pending map survives a failed refresh');
+
+    // No sync runtime at all is equally "could not read", not "nothing there".
     delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
     delete globalThis.prksSync;
     require('../../frontend/js/work-metadata-state.js');
     await globalThis.prksEnsurePendingWorkMetadata();
-    assert.equal(globalThis.prksPendingWorkMetadataHydrated(), true);
+    assert.equal(globalThis.prksPendingWorkMetadataState(), 'unavailable');
 
     // Restore the module the rest of the suite shares.
     delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
     require('../../frontend/js/work-metadata-state.js');
+}
+
+/* ---- Abstract: large scalar + DERIVED projection ---- */
+async function abstracts() {
+    const excerpt = globalThis.prksAbstractExcerpt;
+    // The canonical rule: first 100 Unicode CODE POINTS, matching SQLite.
+    assert.equal(Array.from(excerpt('x'.repeat(150))).length, 100);
+    assert.equal(Array.from(excerpt('\u{1F9EA}'.repeat(150))).length, 100,
+        'astral characters count once, exactly as SQLite counts them');
+    assert.equal(excerpt('short'), 'short');
+    assert.equal(excerpt(null), '');
+    const boundary = 'y'.repeat(99) + '\u{1F9EA}' + 'tail';
+    assert.equal(Array.from(excerpt(boundary)).length, 100);
+    const last = excerpt(boundary).charCodeAt(excerpt(boundary).length - 1);
+    assert(!(last >= 0xD800 && last <= 0xDBFF), 'never ends mid surrogate pair');
+
+    // The byte limit is measured in bytes, not characters.
+    const limit = globalThis.PRKS_MAX_ABSTRACT_UTF8_BYTES;
+    assert.equal(limit, 1024 * 1024);
+    assert.equal(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit)), null);
+    assert(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit + 1)));
+    const multibyte = '\u65e5'.repeat(Math.floor(limit / 3) + 10);
+    assert(multibyte.length < limit, 'under the limit by character count');
+    assert(globalThis.prksWorkFieldUtf8Bytes(multibyte) > limit, '...but over it in bytes');
+    assert(globalThis.prksWorkFieldLimitError('abstract', multibyte),
+        'a limit enforced in characters would not exist for the users most likely to hit it');
+    assert.equal(globalThis.prksWorkFieldLimitError('doi', 'x'.repeat(limit)), null,
+        'only byte-limited fields are checked here');
+
+    // Pending Abstract overlays the Work, and DERIVES the browse excerpt.
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    globalThis.prksSync = { store };
+    const observed = resolved(base());
+    const pendingText = '\u{1F9EA}'.repeat(150);
+    await store.saveWorkMetadataFields('W-A', { abstract: pendingText }, observed);
+    await globalThis.prksRefreshPendingWorkMetadata();
+
+    const work = { id: 'W-A', title: 'Paper', abstract: 'server abstract' };
+    assert.equal(globalThis.prksEffectiveWorkSync(work).abstract, pendingText);
+    assert.equal(work.abstract, 'server abstract', 'the acknowledged Work is untouched');
+
+    const catalog = [{ id: 'W-A', title: 'Paper', abstract_excerpt: 'server abstract' },
+        { id: 'W-B', title: 'Other', abstract_excerpt: 'untouched' }];
+    const frozen = JSON.parse(JSON.stringify(catalog));
+    const effective = globalThis.prksEffectiveProjectionRows(catalog, 'works-browse');
+    assert.equal(effective[0].abstract_excerpt, excerpt(pendingText),
+        'the projection receives the DERIVED excerpt, not the Abstract');
+    assert.equal(Array.from(effective[0].abstract_excerpt).length, 100);
+    assert.equal(effective[0].abstract, undefined, 'and never the full text');
+    assert.equal(effective[1].abstract_excerpt, 'untouched');
+    assert.deepEqual(catalog, frozen, 'the acknowledged catalog is never mutated');
+
+    // Recently Added must not acquire an abstract column from this.
+    assert.equal(globalThis.prksEffectiveProjectionRows(catalog, 'recently-added')[0].abstract_excerpt,
+        'server abstract', 'a field reaches only the projections that carry it');
+
+    // The acknowledged patch uses the same derivation, so nothing visibly
+    // changes at acknowledgement.
+    assert.deepEqual(globalThis.prksProjectionFieldPatch('works-browse', 'abstract', pendingText),
+        { abstract_excerpt: excerpt(pendingText) });
+    assert.equal(globalThis.prksProjectionFieldPatch('works-browse', 'doi', 'x'), null);
+    /* PHASE 15: deriving an excerpt must not expand the whole Abstract. A
+     * megabyte turned into a million-entry array on every Progress render
+     * would make one pending operation everyone else's problem. */
+    const huge = 'x'.repeat(1024 * 1024);
+    const started = Date.now();
+    for (let i = 0; i < 200; i++) excerpt(huge);
+    assert(Date.now() - started < 500, 'excerpt derivation stays bounded for a 1 MiB Abstract');
+    assert.equal(excerpt(huge), 'x'.repeat(100));
+    delete globalThis.prksSync;
 }
 
 async function main() {
@@ -555,6 +658,7 @@ async function main() {
     await projectionReconciliation();
     await staleProjectionRead();
     await hydration();
+    await abstracts();
     console.log('All ' + checks + ' Work metadata checks passed');
 }
 

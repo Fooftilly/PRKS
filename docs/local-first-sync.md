@@ -6,7 +6,7 @@ PRKS has one semantic-operation protocol and **two families** on it:
 | --- | --- | --- |
 | `ADD_WORK_TAG` / `REMOVE_WORK_TAG` | 2B | Revisioned relationship. Two devices can genuinely disagree, so conflicts are real and the user resolves them. |
 | `MARK_WORK_OPENED` | 2C | Max-register over normalized event time. Two devices cannot disagree, so there is no conflict and none is offered. |
-| `SET_WORK_METADATA_FIELD` | 2D, 2E | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
+| `SET_WORK_METADATA_FIELD` | 2D, 2E, 2F | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
 
 Both commit to durable browser storage before the UI acts on them, survive
 reloads and offline periods, and synchronize idempotently on reconnect. Other
@@ -223,8 +223,8 @@ A render PRKS decided to do -- the reconnect refresh -- is not an open either.
 
 ## Work metadata fields
 
-Nine bibliographic scalars synchronize: `publisher`, `location`, `edition`,
-`journal`, `volume`, `issue`, `pages`, `isbn`, `doi`. Each owns a revision scope
+Ten bibliographic scalars synchronize: `abstract`, `publisher`, `location`,
+`edition`, `journal`, `volume`, `issue`, `pages`, `isbn`, `doi`. Each owns a revision scope
 `work-field / ["<work id>", "<field>"]` -- the same structural JSON encoding the
 Work-Tag scopes use, so no delimiter has to be excluded from either component.
 A missing row is revision 0. No schema change was needed: these live in the
@@ -278,6 +278,29 @@ stored value whose revision did not advance is exactly the state that makes
 every other device's staleness check lie.
 
 Work creation manufactures no revisions: initial values are revision 0.
+
+## Hydration: four states, not a boolean
+
+The synchronous overlay exists because Recently Added and Progress filter on
+every keystroke. Its cost is that an empty pending map is ambiguous, so
+hydration is four-valued -- `unread`, `loading`, `ready`, `unavailable` -- and
+only `ready` licenses a caller to say "there is no pending value for this
+field".
+
+A failed IndexedDB read settles as **`unavailable`**, never `ready`. It proves
+nothing about what is stored: operations persisted by an earlier session may
+still be there. Waiters are released, because hanging the UI on a read that
+already failed serves nobody, but the last known map is kept and an empty one
+stays untrusted. The bibliographic fields then refuse to become editable -- a
+save against an untrusted base could destroy a pending edit this session simply
+could not see -- and the editor says so. Falling back to a direct PATCH is not
+an option: online and offline keep the same durable-first contract. A later
+successful refresh moves `unavailable` back to `ready` with no reload.
+
+Entering Edit metadata before hydration settles waits for the read **already in
+flight** -- one shared promise, never a second read, never a poll. Building the
+draft from an un-hydrated map would show stale text after a reload and then ask
+the user whether to discard changes they had already saved.
 
 ## Metadata: overlay, atomic save and per-field conflicts
 
@@ -341,6 +364,70 @@ revision; the conflicted id is never reused. Settings -> Diagnostics lists every
 unsynchronized operation with its Work id, field, local value and the server's,
 and can discard a conflicted one without the Work's page existing at all.
 
+## Abstract: a large scalar with a derived projection
+
+`abstract` is the first synchronized field that is neither small nor copied
+verbatim into its projection, and it needed three decisions the other nine did
+not.
+
+**Size.** `MAX_ABSTRACT_UTF8_BYTES` is **1 MiB**, a deliberate PRKS product
+rule rather than a measurement — an abstract is bibliographic summary text, and
+long-form material belongs in Research Notes. It is enforced identically by the
+ordinary PATCH, the sync handler, the durable local store and the editor before
+enqueue, because an Abstract savable online and refused offline would be exactly
+the split contract that moving a field to local-first exists to remove. It is
+measured in **UTF-8 bytes**, never `len()`: a limit documented in bytes but
+enforced in characters does not exist for the users most likely to reach it.
+An over-limit value is refused visibly — the draft stays, nothing is enqueued,
+nothing is sent. Nothing is ever truncated. The nine small scalars keep their
+code-point limits; switching those to bytes would quietly shorten each by a
+factor of three for anyone writing CJK.
+
+**The excerpt.** Progress renders `abstract_excerpt`, which the server derives
+with `SUBSTR(COALESCE(abstract, ''), 1, 100)`. SQLite counts **code points**;
+JavaScript's `slice`/`substring` count UTF-16 code units, and the two disagree
+for every astral character. `prksAbstractExcerpt()` is the canonical client
+rule — first 100 Unicode code points, matching the server, *not* grapheme
+clusters — and `tests/test_abstract_excerpt.py` pins equality against the real
+SQLite engine across ASCII, accented Latin, CJK, emoji, mixed BMP/astral,
+combining marks and the boundary at 100. It bounds the input slice before
+expanding, so a megabyte Abstract costs nothing per render.
+
+A pre-existing bug fell out of this: Progress re-truncated the already-bounded
+excerpt with `substring(0, 100)`, which cut it by UTF-16 units and could end
+mid-surrogate-pair — a broken glyph. That second truncation is gone.
+
+**Storage shape.** `abstract` is in `BYTE_LIMITED_FIELDS`, and the
+`metadata-state` projection carries its **revision only**. The Work record
+already holds the acknowledged value; echoing up to a megabyte into a second
+cached entity would double what the endpoint sends, what IndexedDB stores and
+what every re-read costs, for a value the client already has. The editor
+resolves that field's base from the Work.
+
+**Conflicts.** The durable operation row bounds a structured result to 2 KB, so
+a byte-limited field reports `current_preview`, `current_bytes` and
+`requested_bytes` instead of the two values — a conflict the browser cannot
+store is a conflict the user never sees. Taking the server's version therefore
+discards the local intent and invalidates the cached Work rather than trusting
+a truncated copy. Diagnostics shows bounded previews and sizes, never a whole
+Abstract.
+
+## Projection transforms
+
+`FIELD_PROJECTIONS` says *which* cached projections a field reaches;
+`PROJECTION_COLUMNS` in `work-metadata-state.js` says *how*:
+
+| Field | Projection | Column | Transform |
+| --- | --- | --- | --- |
+| `publisher` | `recently-added` | `publisher` | copied |
+| `abstract` | `works-browse` | `abstract_excerpt` | **derived** (first 100 code points) |
+
+Consumers ask for effective rows and never interpret durable operations
+themselves, so a third field is a table entry rather than an `if` inside
+whichever component happens to render it. The acknowledged patch applied at
+reconciliation uses the *same* transform, so a row cannot visibly change when
+the server answers.
+
 ## Fan-out: which fields reach which projections
 
 Eight of the nine are rendered on the Work detail and nowhere else. The Work
@@ -362,7 +449,6 @@ The deferred fields do not share that property:
 
 | Field | Also rendered or matched by |
 | --- | --- |
-| `abstract` | Progress, via the bounded `abstract_excerpt` in `works-browse:index` |
 | `source_url` | every Work card, via `prksInferWorkSourceKind()` deciding the thumbnail kind |
 | `thumb_page` | every Work card, via the thumbnail URL |
 | `year`, `published_date`, `author_text` | every Work card's meta and credit lines, in all three browse catalogs and in cached Folder / Person / Playlist details |
@@ -467,7 +553,7 @@ explicit conflict discard when the original Work is no longer available.
 Structured terminal results are allowlisted and size-bounded, separate from
 short retry error messages. None of this content belongs in logs.
 
-## Deferred beyond 2E
+## Deferred beyond 2F
 
 No offline Tag creation/rename/merge/delete, Folder mutation, Work
 creation/deletion, Playlist mutation, Concept editing or Research Notes
@@ -475,18 +561,12 @@ editing, and no synchronization for the high fan-out Work fields in the table
 above. No CRDT, multi-user sync, batching, server push or automatic lifecycle
 retargeting.
 
-**`abstract` is deliberately still online-only**, and it is not simply the next
-field on the list. It needs two things nothing here has solved:
-
-1. A **derived** optimistic projection. Publisher copies a scalar into another
-   projection unchanged. `abstract` feeds `abstract_excerpt` -- the server's
-   first 100 characters -- into `works-browse:index` for Progress, so the client
-   would have to reproduce a server-side derivation and stay byte-identical to
-   it. Copying and deriving are not the same problem.
-2. A **payload-size decision**. The durable local store caps an operation
-   payload at 64 KB (`PRKS_LOCAL_MAX_PAYLOAD_BYTES`), while ordinary PATCH
-   imposes no limit on an abstract at all. Moving the field to the durable path
-   without deciding this would quietly turn "an abstract can be saved" into "an
-   abstract can be saved if it fits the sync envelope". Decide the maximum
-   supported size, whether the cap changes, and whether large text belongs in
-   the operation envelope at all -- before writing any of it.
+The remaining Work fields -- `title`, `status`, `doc_type`, `year`,
+`published_date`, `source_url`, `author_text`, `thumb_page` -- are a separate
+problem. Every one of them is rendered on Work cards across three browse
+catalogs and inside cached Folder, Person and Playlist details, and `title`
+additionally reaches Concept mention titles, Argument source Works, Graph
+snapshots and the command palette. `status` and `doc_type` also decide which
+*group* a card belongs to on Progress and Types, so an overlay would have to
+move rows between sections rather than rewrite text in place. None of that is
+answered by the transform table above.

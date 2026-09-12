@@ -1087,7 +1087,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 safe_error_type(e),
                             )
                     if body:
-                        db.update_work_metadata(w_id, body)
+                        try:
+                            db.update_work_metadata(w_id, body)
+                        except ValueError as e:
+                            # A refused length is the caller's mistake, not a
+                            # server fault: say so rather than 500.
+                            self.send_json(400, {'error': str(e)})
+                            return
                     if patched_file_path:
                         try:
                             rows = db.execute_query(

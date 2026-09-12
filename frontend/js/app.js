@@ -2940,12 +2940,22 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 const status = route.params.status;
                 const offlineBrowse = await prksOfflineWorksBrowseFetch(routeSignal);
                 if (stale()) return;
-                const works = prksResolveOfflineWorksBrowse(offlineBrowse);
-                if (!works) {
+                const base = prksResolveOfflineWorksBrowse(offlineBrowse);
+                if (!base) {
                     prksOfflineRenderUnavailable(contentDiv, 'Progress not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Progress not available offline' };
                     break;
                 }
+                // Acknowledged catalog + pending Abstract edits, through the
+                // projection's own derivation: what reaches this row is not the
+                // Abstract but its excerpt, exactly as the server would derive
+                // it. The cached catalog itself is never rewritten.
+                if (typeof prksRefreshPendingWorkMetadata === 'function') {
+                    await prksRefreshPendingWorkMetadata();
+                    if (stale()) return;
+                }
+                const works = typeof prksEffectiveProjectionRows === 'function'
+                    ? prksEffectiveProjectionRows(base, 'works-browse') : base;
                 publishSidebar({ status });
                 // Pure local projection of the cached catalog -- no request.
                 renderProgressByStatus(works, status, contentDiv,

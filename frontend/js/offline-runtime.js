@@ -458,22 +458,39 @@
          * the snapshot would cost Recently Added its offline availability for a
          * change we already know the exact shape of.
          */
+        const FIELD_PROJECTION_LISTS = {
+            'recently-added': RECENTLY_ADDED_LIST_KEY,
+            'works-browse': WORKS_BROWSE_LIST_KEY,
+        };
+
         async function reconcileFieldProjections(result) {
-            const projections = (root.PRKS_SYNCED_WORK_FIELD_PROJECTIONS || {})[result.field];
-            if (!projections || projections.indexOf(DOMAIN_RECENTLY_ADDED) === -1) return true;
-            const token = currentDomainGeneration(DOMAIN_RECENTLY_ADDED) + 1;
-            domainGeneration.set(DOMAIN_RECENTLY_ADDED, token);
-            const cached = await store.getList(RECENTLY_ADDED_LIST_KEY).catch(function () { return null; });
+            const projections = (root.PRKS_SYNCED_WORK_FIELD_PROJECTIONS || {})[result.field] || [];
+            for (const domain of projections) {
+                const listKey = FIELD_PROJECTION_LISTS[domain];
+                if (!listKey) continue;
+                if (!await reconcileProjectionList(result, domain, listKey)) return false;
+            }
+            return true;
+        }
+
+        async function reconcileProjectionList(result, domain, listKey) {
+            const token = currentDomainGeneration(domain) + 1;
+            domainGeneration.set(domain, token);
+            const cached = await store.getList(listKey).catch(function () { return null; });
             // No snapshot is nothing to reconcile, not a failure: one field is
-            // not enough to invent a Recently Added page from, and the next
-            // authoritative fetch carries the value anyway.
+            // not enough to invent a catalog from, and the next authoritative
+            // fetch carries the value anyway.
             if (!cached) return true;
             const rows = cached.value;
             if (!Array.isArray(rows)) return false;
             if (!rows.some(row => row && row.id === result.work_id)) return true;
+            // The SAME derivation the overlay used, so the row does not visibly
+            // change at acknowledgement.
+            const patch = root.prksProjectionFieldPatch(domain, result.field, result.value);
+            if (!patch) return true;
             const merged = rows.map(row => (row && row.id === result.work_id
-                ? Object.assign({}, row, { [result.field]: result.value }) : row));
-            return cacheListForDomain(RECENTLY_ADDED_LIST_KEY, merged, DOMAIN_RECENTLY_ADDED, token);
+                ? Object.assign({}, row, patch) : row));
+            return cacheListForDomain(listKey, merged, domain, token);
         }
 
         /* Reconcile an acknowledged open event into the cached Recent list.

@@ -3230,9 +3230,9 @@ function toggleWorkMetaEdit(isEditing) {
  * correct rather than merely fast waits for the hydration ALREADY in flight.
  * Never a second read, never a poll, and no wait once it has settled. */
 function prksAwaitPendingWorkMetadata() {
-    if (typeof prksPendingWorkMetadataHydrated !== 'function' ||
+    if (typeof prksPendingWorkMetadataSettled !== 'function' ||
         typeof prksEnsurePendingWorkMetadata !== 'function' ||
-        prksPendingWorkMetadataHydrated()) {
+        prksPendingWorkMetadataSettled()) {
         return null;
     }
     return prksEnsurePendingWorkMetadata();
@@ -3425,7 +3425,6 @@ async function submitWorkMetaEdit(workId) {
         })(),
         year: draft.year,
         published_date: metaDateIso || null,
-        abstract: draft.abstract
     };
     // Publisher, Location, edition, journal, volume, issue, pages, ISBN and
     // DOI are deliberately absent: they take the durable semantic queue
@@ -4607,6 +4606,9 @@ function renderWorkMetaEditTab(work, draft) {
                 <label for="meta-doi">DOI</label>
                 <input type="text" id="meta-doi" data-prks-work-field="doi" value="${safeStr(work.doi)}">
 
+                <label for="meta-abstract">Abstract</label>
+                <textarea id="meta-abstract" class="textarea-md" data-prks-work-field="abstract">${safeStr(work.abstract)}</textarea>
+
                 <div class="prks-form-actions form-actions">
                     <button type="button" id="save-work-bib-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}')">Save bibliographic details</button>
                 </div>
@@ -4650,10 +4652,6 @@ function renderWorkMetaEditTab(work, draft) {
             ${syncedBibSection}
             <section class="work-meta-editor__section"><h4>Presentation</h4>
             ${thumbField}
-            </section>
-            <section class="work-meta-editor__section"><h4>Abstract</h4>
-            <label for="meta-abstract">Abstract</label>
-            <textarea id="meta-abstract" class="textarea-md">${safeStr(work.abstract)}</textarea>
             </section>
             <p id="meta-date-error" class="field-error" aria-live="polite"></p>
             

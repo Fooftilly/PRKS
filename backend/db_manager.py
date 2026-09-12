@@ -2386,6 +2386,15 @@ class PRKSDatabase:
         # transaction so a value can never be stored without its revision.
         synced = {k: v for k, v in updates.items() if k in work_metadata_sync.SYNCED_FIELDS}
         plain = {k: v for k, v in updates.items() if k not in synced}
+        # One canonical limit, whichever path a value arrives by. If PATCH
+        # accepted an Abstract the durable queue would refuse, the same edit
+        # would be savable online and impossible offline -- exactly the split
+        # contract moving a field to local-first is supposed to remove.
+        for field, value in synced.items():
+            if not work_metadata_sync.within_limit(field, value):
+                raise ValueError(
+                    "%s exceeds the maximum supported length" % field
+                )
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if plain:

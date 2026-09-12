@@ -41,10 +41,16 @@ function renderProgressByStatus(works, status, container, options = {}) {
     let html = `<div class="prks-page-header page-header"><h2 class="prks-page-title">${title}</h2></div><div class="card-grid">`;
     if (list.length > 0) {
         list.forEach((w) => {
-            // The browse projection ships a bounded `abstract_excerpt`; the
-            // full `abstract` is only present on the older full summary.
-            const excerptSource = w.abstract_excerpt != null ? w.abstract_excerpt : w.abstract;
-            const excerpt = excerptSource ? String(excerptSource).substring(0, 100) : '';
+            /* `abstract_excerpt` arrives ALREADY bounded to 100 Unicode code
+             * points by the server's SUBSTR(). Re-truncating it here with
+             * substring() counted UTF-16 code units instead, so an abstract
+             * containing emoji rendered barely half the intended excerpt and
+             * could end mid-surrogate-pair -- a broken glyph. The only case
+             * that still needs bounding is the older full summary, which ships
+             * the whole `abstract`. */
+            const excerpt = w.abstract_excerpt != null
+                ? String(w.abstract_excerpt)
+                : prksAbstractExcerpt(w.abstract);
             const subtitle = excerpt ? excerpt + '…' : '';
             html += typeof prksWorkCardHtml === 'function'
                 ? prksWorkCardHtml(w, offlineCached ? { subtitle, suppressThumbnail: true } : { subtitle })

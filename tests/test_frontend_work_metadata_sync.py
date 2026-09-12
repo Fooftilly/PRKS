@@ -4,10 +4,10 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
-SYNCED = ('publisher', 'location', 'edition', 'journal', 'volume', 'issue',
-          'pages', 'isbn', 'doi')
+SYNCED = ('abstract', 'publisher', 'location', 'edition', 'journal', 'volume',
+          'issue', 'pages', 'isbn', 'doi')
 DEFERRED = ('title', 'status', 'doc_type', 'year', 'published_date',
-            'abstract', 'source_url', 'author_text', 'thumb_page')
+            'source_url', 'author_text', 'thumb_page')
 
 
 class WorkMetadataSyncFrontendTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
             self.assertNotIn('%s: draft.%s' % (field, field), body, field)
             self.assertNotIn('%s: draft' % field, body, field)
         # The fields this milestone deliberately leaves online-only are still there.
-        for field in ('title', 'status', 'abstract'):
+        for field in ('title', 'status'):
             self.assertIn(field, body, field)
 
     def test_high_fan_out_fields_are_not_synchronized(self):
@@ -98,10 +98,12 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         listed = module[module.index('const FIELD_PROJECTIONS = Object.freeze('):]
         listed = listed[: listed.index(';')]
         self.assertIn("publisher: ['recently-added']", listed)
-        self.assertEqual(sorted(work_metadata_sync.FIELD_PROJECTIONS), ['publisher'])
+        self.assertIn("abstract: ['works-browse']", listed)
+        self.assertEqual(sorted(work_metadata_sync.FIELD_PROJECTIONS), ['abstract', 'publisher'])
         self.assertEqual(work_metadata_sync.FIELD_PROJECTIONS['publisher'], ('recently-added',))
+        self.assertEqual(work_metadata_sync.FIELD_PROJECTIONS['abstract'], ('works-browse',))
         for field in SYNCED:
-            if field != 'publisher':
+            if field not in ('publisher', 'abstract'):
                 self.assertNotIn("%s:" % field, listed, field)
 
     def test_recently_added_does_not_reimplement_the_overlay(self):
@@ -110,7 +112,7 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         interpretations of operation semantics would drift the moment either
         changed."""
         folders = (FRONTEND / 'components' / 'folders.js').read_text()
-        self.assertIn('prksEffectiveWorkMetadataRows(acknowledged', folders)
+        self.assertIn("prksEffectiveProjectionRows(acknowledged, 'recently-added')", folders)
         self.assertIn('prksRefreshPendingWorkMetadata', folders)
         for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'server_result',
                           'payload.field'):
@@ -128,3 +130,42 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         # The memoized render is refused when the overlay moved, not only when
         # the coherence domain did.
         self.assertIn('recentlyAddedPendingGeneration', folders)
+
+    def test_progress_does_not_interpret_durable_operations_itself(self):
+        """The overlay rules live in the metadata-state layer. A component that
+        grew its own `if (field === 'abstract')` would be a second opinion about
+        operation semantics, drifting the moment either side changed."""
+        for name in ('components/progress.js', 'components/folders.js'):
+            source = (FRONTEND / name).read_text()
+            with self.subTest(module=name):
+                for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations',
+                                  'payload.field', "=== 'abstract'"):
+                    self.assertNotIn(forbidden, source, forbidden)
+
+    def test_the_abstract_limit_is_one_number_on_both_sides(self):
+        """An Abstract savable online and refused offline would be exactly the
+        split contract that moving a field to local-first removes."""
+        from backend import work_metadata_sync
+        module = (FRONTEND / 'work-metadata-state.js').read_text()
+        self.assertEqual(work_metadata_sync.MAX_ABSTRACT_UTF8_BYTES, 1024 * 1024)
+        self.assertIn('const MAX_ABSTRACT_UTF8_BYTES = 1024 * 1024;', module)
+        self.assertEqual(sorted(work_metadata_sync.BYTE_LIMITED_FIELDS), ['abstract'])
+        self.assertIn("const BYTE_LIMITED_FIELDS = new Set(['abstract']);", module)
+
+    def test_the_editor_refuses_an_oversize_value_before_enqueueing(self):
+        editor = (FRONTEND / 'work-metadata-editor.js').read_text()
+        at = editor.index('const changes = root.prksDirtyWorkMetadataFields(')
+        body = editor[at: editor.index('await root.prksSync.store.saveWorkMetadataFields(', at)]
+        self.assertIn('prksWorkFieldLimitError', body)
+        self.assertIn('return;', body, 'the save must abort, not continue')
+
+    def test_a_conflict_result_never_carries_a_byte_limited_value(self):
+        """The durable row bounds a structured result to 2 KB; a conflict the
+        browser cannot store is a conflict the user never sees."""
+        from backend import work_metadata_sync
+        self.assertEqual(
+            sorted(work_metadata_sync.disagreement('abstract', 'a' * 5000, 'b' * 5000)),
+            ['current_bytes', 'current_preview', 'requested_bytes'])
+        self.assertEqual(
+            sorted(work_metadata_sync.disagreement('doi', '10.1/a', '10.1/b')),
+            ['current_value', 'requested_value'])

@@ -173,10 +173,16 @@
      *   all families        code
      *   Work Tags           current_revision, current_state, requested_state, target_tag_id
      *   Work metadata       current_revision, current_value, requested_value
+     *   ...byte-limited      current_preview, current_bytes, requested_bytes
+     *
+     * A byte-limited field reports previews and sizes rather than its values:
+     * two megabyte-scale Abstracts would blow the size bound below, and a
+     * conflict the store cannot persist is a conflict the user never sees.
      */
     const STRUCTURED_RESULT_KEYS = Object.freeze([
         'code', 'current_revision', 'current_state', 'requested_state', 'target_tag_id',
         'current_value', 'requested_value',
+        'current_preview', 'current_bytes', 'requested_bytes',
     ]);
     const MAX_RESULT_BYTES = 2048;
 
