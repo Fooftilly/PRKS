@@ -374,6 +374,61 @@ def _prks_fts_prefix_clause(tokens: List[str]) -> str:
     return " ".join(parts)
 
 
+def _canonical_new_source(source_kind, source_url, provider, provider_id):
+    """The source columns a NEW Work may be created with, or a refusal.
+
+    Creation is the other point where a source identity comes into existence.
+    Bounding it only in the synchronization parser left the whole invariant
+    bypassable: a Work could be created with `provider_id` naming video A while
+    `source_url` named video B -- so the viewer, which reads `provider_id`
+    first, played a video the row did not claim -- or with a 3000-character
+    `provider_id` that no later conflict could report back, because
+    `fit_terminal_result` cannot shorten an identity. The row would be accepted
+    happily and become unresolvable months later.
+
+    So the same canonical parser decides here. `provider` and `provider_id` are
+    DERIVED from the URL, exactly as they are on the synchronization path.
+
+    A contradictory pair is REFUSED rather than repaired. A caller passing
+    video B's URL with video A's id has a bug, and silently rewriting it to B
+    would hide the bug while making the next one harder to find -- the caller
+    would go on believing it had asserted an identity.
+
+    Nothing here creates a source revision: construction is not mutation, and a
+    Work begins at revision 0 like every other scope.
+    """
+    kind = (source_kind or "").strip().lower()
+    url = (source_url or "").strip()
+    supplied_provider = (provider or "").strip().lower()
+    supplied_id = (provider_id or "").strip()
+
+    if kind != "video":
+        # These columns ARE video identity. On anything else they would be a
+        # claim about a video this Work is not -- and `prksInferWorkSourceKind`
+        # can still reach a video branch for a Work with no explicit kind and
+        # no file, at which point `provider_id` would outrank the URL again.
+        if supplied_provider or supplied_id:
+            raise ValueError(
+                "provider and provider_id belong to a video source; this Work is "
+                "not one")
+        return source_kind, source_url, provider, provider_id
+
+    canonical = work_source_sync.canonical_source({"kind": "video", "url": url})
+    if canonical is None:
+        raise ValueError(
+            "a video Work needs a supported video URL: %s is not one"
+            % (url[:120] or "(empty)"))
+    if supplied_provider and supplied_provider != canonical["provider"]:
+        raise ValueError(
+            "provider %s contradicts the source URL, which is %s"
+            % (supplied_provider, canonical["provider"]))
+    if supplied_id and supplied_id != canonical["provider_id"]:
+        raise ValueError(
+            "provider_id does not identify the video this source URL names")
+    return (canonical["source_kind"], canonical["source_url"],
+            canonical["provider"], canonical["provider_id"])
+
+
 def normalize_doc_type(value: Any) -> str:
     """Map user/API input to a whitelisted BibLaTeX entry type; unknown → misc."""
     return work_metadata_sync.normalize_doc_type(value)
@@ -1643,6 +1698,8 @@ class PRKSDatabase:
                  thumb_page=None,
                  private_notes: str = "") -> str:
         work_id = self.generate_id("W")
+        source_kind, source_url, provider, provider_id = _canonical_new_source(
+            source_kind, source_url, provider, provider_id)
         dt = normalize_doc_type(doc_type)
         tp = thumb_page
         if tp is None or tp == "":

@@ -10,6 +10,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
 
 
+def _padded_url(total_bytes: int) -> str:
+    """A valid YouTube URL padded to exactly `total_bytes` UTF-8 bytes."""
+    base = 'https://www.youtube.com/watch?v=ABC&pad='
+    return base + 'x' * (total_bytes - len(base.encode('utf-8')))
+
+
 class WorkSourceSyncFrontendTests(unittest.TestCase):
     def test_runtime_selftests(self):
         result = subprocess.run(
@@ -23,7 +29,8 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         and a Work's stored URL and stored id could name different videos."""
         import json
         from backend import work_source_sync
-        from backend.work_source_sync import MAX_PROVIDER_ID_CHARS
+        from backend.work_source_sync import (
+            MAX_PROVIDER_ID_CHARS, MAX_SOURCE_URL_UTF8_BYTES)
         urls = [
             'https://www.youtube.com/watch?v=ABC', 'https://youtu.be/ABC',
             'https://www.youtube.com/embed/ABC', 'https://m.youtube.com/watch?v=ABC',
@@ -61,25 +68,47 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
             'https://www.youtube.com/watch?v=ab/cd',
             # ... and the safe alphabet itself, which must stay accepted.
             'https://www.youtube.com/watch?v=dQw4-_9WgXcQ',
+            # The URL's own byte bound. The client did not enforce it, so it
+            # accepted a URL the server refuses -- not an acknowledged-state
+            # corruption, because the durable store rejects it eventually, but
+            # the user got the store's generic "could not save locally" instead
+            # of being told the URL was too long. Parity that holds for
+            # identity and not for size is not parity.
+            _padded_url(MAX_SOURCE_URL_UTF8_BYTES),
+            _padded_url(MAX_SOURCE_URL_UTF8_BYTES + 1),
+            _padded_url(MAX_SOURCE_URL_UTF8_BYTES + 6000),
+            # Trim, then measure what would be STORED, then parse -- surrounding
+            # whitespace must not cost a caller a URL whose canonical form fits.
+            '  ' + _padded_url(MAX_SOURCE_URL_UTF8_BYTES) + '  ',
+            # A multi-byte URL: the bound is in BYTES, and `.length` counts
+            # UTF-16 code units, so measuring characters would make the limit
+            # silently not exist for the URLs most likely to reach it.
+            'https://www.youtube.com/watch?v=ABC&q=' + '\u00e9' * 40000,
         ]
+        # Over stdin, not argv: a 64 KiB URL is larger than a single argument
+        # may be, and the cases that matter most here are the largest ones.
         js = """
         require(process.argv[1] + '/frontend/js/work-source-state.js');
-        const out = {};
-        for (const url of JSON.parse(process.argv[2])) {
-            const source = globalThis.prksCanonicalWorkSource(url);
-            out[url] = source ? source.provider_id : null;
-        }
-        process.stdout.write(JSON.stringify(out));
+        let raw = '';
+        process.stdin.on('data', chunk => { raw += chunk; });
+        process.stdin.on('end', () => {
+            const out = JSON.parse(raw).map(url => {
+                const source = globalThis.prksCanonicalWorkSource(url);
+                return source ? source.provider_id : null;
+            });
+            process.stdout.write(JSON.stringify(out));
+        });
         """
-        proc = subprocess.run(['node', '-e', js, str(ROOT), json.dumps(urls)],
+        proc = subprocess.run(['node', '-e', js, str(ROOT)], input=json.dumps(urls),
                               cwd=ROOT, capture_output=True, text=True, timeout=60)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stdout[:400] + proc.stderr[:400])
         client = json.loads(proc.stdout)
-        for url in urls:
-            with self.subTest(url=url):
+        self.assertEqual(len(client), len(urls))
+        for url, seen in zip(urls, client):
+            with self.subTest(url=url[:80], bytes=len(url.encode('utf-8'))):
                 source = work_source_sync.canonical_source({'kind': 'video', 'url': url})
                 server = source['provider_id'] if source else None
-                self.assertEqual(client[url], server, url)
+                self.assertEqual(seen, server, url[:120])
 
     def test_both_sides_bound_the_identifier_at_the_same_place(self):
         """The constant itself, not only its effects.
@@ -89,12 +118,14 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         the other cannot name.
         """
         import json
-        from backend.work_source_sync import MAX_PROVIDER_ID_CHARS
+        from backend.work_source_sync import (
+            MAX_PROVIDER_ID_CHARS, MAX_SOURCE_URL_UTF8_BYTES)
 
         js = """
         require(process.argv[1] + '/frontend/js/work-source-state.js');
         process.stdout.write(JSON.stringify({
             max: globalThis.PRKS_MAX_PROVIDER_ID_CHARS,
+            maxUrl: globalThis.PRKS_MAX_SOURCE_URL_UTF8_BYTES,
             accepts: ['dQw4w9WgXcQ', 'a-b_C9', 'B'.repeat(512), '', 'a b', 'a"b',
                       'a.b', 'a/b', 'a%01b', 'B'.repeat(513)]
                 .map(v => globalThis.prksIsProviderId(v)),
@@ -105,6 +136,7 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         client = json.loads(proc.stdout)
         self.assertEqual(client['max'], MAX_PROVIDER_ID_CHARS)
+        self.assertEqual(client['maxUrl'], MAX_SOURCE_URL_UTF8_BYTES)
         self.assertEqual(
             client['accepts'],
             [work_source_sync.is_provider_id(v) for v in

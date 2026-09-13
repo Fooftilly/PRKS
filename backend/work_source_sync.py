@@ -150,16 +150,21 @@ def canonical_source(payload_source):
     kind, url = payload_source.get("kind"), payload_source.get("url")
     if kind != "video" or not isinstance(url, str):
         return None
-    if len(url.encode("utf-8")) > MAX_SOURCE_URL_UTF8_BYTES:
+    # Trim first, then measure what would actually be STORED. Measuring the raw
+    # input rejected a URL whose canonical form fits, purely for surrounding
+    # whitespace the product removes -- and the client, which mirrors this, has
+    # to be able to reach the same answer from the same rule.
+    text = url.strip()
+    if len(text.encode("utf-8")) > MAX_SOURCE_URL_UTF8_BYTES:
         return None
-    video_id = validate_youtube_url(url)
+    video_id = validate_youtube_url(text)
     if not video_id:
         return None
     return {
         "source_kind": "video",
         "provider": "youtube",
         "provider_id": video_id,
-        "source_url": url.strip(),
+        "source_url": text,
     }
 
 

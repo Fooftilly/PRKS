@@ -150,6 +150,19 @@ function handlerContract() {
         delete partial[missing];
         assert.equal(handler.isResult(partial, operation), false, missing);
     }
+    /* The identity is checked against the canonical contract, not merely for
+     * being a string. An honest server satisfies this by construction; a
+     * malformed identity accepted here would become the base the editor
+     * measures against, and no URL the parser can produce would ever match it
+     * -- so every later edit would read as a change and nothing would cancel. */
+    for (const bad of ['B'.repeat(513), 'a b', 'a.b', '', 'a%01b']) {
+        assert.equal(handler.isResult(
+            Object.assign({}, conflict, { current_provider_id: bad }), operation), false,
+            'malformed identity: ' + bad.slice(0, 12));
+    }
+    assert.equal(handler.isResult(
+        Object.assign({}, conflict, { current_provider: 'vimeo' }), operation), false,
+        'and a provider this parser cannot produce');
     assert.equal(globalThis.prksWorkSourceConflictIdentity(conflict),
         globalThis.prksWorkSourceIdentity(globalThis.prksCanonicalWorkSource(WATCH('CCC'))),
         'and it is spelled the same way an identity from a Work record is');

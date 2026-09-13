@@ -2496,35 +2496,42 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         except Exception:
                             urldate = ""
 
-                w_id = db.add_work(
-                    title=data.get('title', 'Untitled'),
-                    status=data.get('status', 'Not Started'),
-                    abstract=data.get('abstract', ''),
-                    text_content=data.get('text_content', ''),
-                    published_date=data.get('published_date', ''),
-                    file_path=file_path,
-                    author_text=data.get('author_text', ''),
-                    year=data.get('year', ''),
-                    publisher=data.get('publisher', ''),
-                    location=data.get('location', ''),
-                    edition=data.get('edition', ''),
-                    journal=data.get('journal', ''),
-                    volume=data.get('volume', ''),
-                    issue=data.get('issue', ''),
-                    pages=data.get('pages', ''),
-                    isbn=data.get('isbn', ''),
-                    doi=data.get('doi', ''),
-                    doc_type=data.get('doc_type', 'article'),
-                    source_kind=source_kind,
-                    source_url=source_url,
-                    source_mime=source_mime,
-                    thumb_url=thumb_url,
-                    provider=provider,
-                    provider_id=provider_id,
-                    urldate=urldate,
-                    thumb_page=data.get('thumb_page'),
-                    private_notes=data.get('private_notes', ''),
-                )
+                # A source identity that contradicts itself is the caller's
+                # mistake, not a server fault: `add_work` refuses it at the
+                # creation boundary, and that refusal is a 400.
+                try:
+                    w_id = db.add_work(
+                        title=data.get('title', 'Untitled'),
+                        status=data.get('status', 'Not Started'),
+                        abstract=data.get('abstract', ''),
+                        text_content=data.get('text_content', ''),
+                        published_date=data.get('published_date', ''),
+                        file_path=file_path,
+                        author_text=data.get('author_text', ''),
+                        year=data.get('year', ''),
+                        publisher=data.get('publisher', ''),
+                        location=data.get('location', ''),
+                        edition=data.get('edition', ''),
+                        journal=data.get('journal', ''),
+                        volume=data.get('volume', ''),
+                        issue=data.get('issue', ''),
+                        pages=data.get('pages', ''),
+                        isbn=data.get('isbn', ''),
+                        doi=data.get('doi', ''),
+                        doc_type=data.get('doc_type', 'article'),
+                        source_kind=source_kind,
+                        source_url=source_url,
+                        source_mime=source_mime,
+                        thumb_url=thumb_url,
+                        provider=provider,
+                        provider_id=provider_id,
+                        urldate=urldate,
+                        thumb_page=data.get('thumb_page'),
+                        private_notes=data.get('private_notes', ''),
+                    )
+                except ValueError as e:
+                    self.send_json(400, {'error': str(e)})
+                    return
                 try:
                     text_index.sync_work(w_id, file_path)
                 except Exception as e:

@@ -73,6 +73,19 @@
         return '';
     }
 
+    /* Mirrors `backend/work_source_sync.MAX_SOURCE_URL_UTF8_BYTES`. A URL is one
+     * line of text; the bound exists so the value has a contract rather than
+     * inheriting whichever storage layer refuses first. */
+    const MAX_SOURCE_URL_UTF8_BYTES = 64 * 1024;
+
+    /* Bytes, not `.length`: string length counts UTF-16 code units, which
+     * undercounts every non-ASCII character, so a limit documented in bytes
+     * would silently not exist for the URLs most likely to reach it. */
+    function utf8Bytes(text) {
+        if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(text).length;
+        return unescape(encodeURIComponent(text)).length;
+    }
+
     /**
      * User intent -> the canonical identity, or null when it is not one.
      *
@@ -83,6 +96,13 @@
     function canonicalSource(url) {
         const text = String(url == null ? '' : url).trim();
         if (!text) return null;
+        /* Trim, then measure what would actually be STORED, then parse -- the
+         * server's order exactly. Without this bound the client accepted a URL
+         * the server refuses, so the editor reported the durable store's
+         * generic "could not save locally" instead of saying the URL was too
+         * long. A parser parity claim that holds for identity but not for size
+         * is not parity. */
+        if (utf8Bytes(text) > MAX_SOURCE_URL_UTF8_BYTES) return null;
         const videoId = youtubeVideoId(text);
         if (!videoId) return null;
         return {
@@ -219,10 +239,16 @@
                 /* The preview is DISPLAY TEXT -- bounded, and shortened further
                  * whenever the whole result would not fit the durable limit --
                  * so nothing may be derived from it. The IDENTITY is exact and
-                 * is what a reapply measures its next edit against. */
+                 * is what a reapply measures its next edit against, so it is
+                 * checked against the canonical contract rather than merely
+                 * for being a string: an honest server satisfies this by
+                 * construction, and accepting a malformed identity would mean
+                 * adopting a base that can never match anything the parser can
+                 * produce -- every later edit would read as a change and
+                 * nothing would ever cancel. */
                 return Number.isSafeInteger(data.current_revision) &&
-                    typeof data.current_provider === 'string' &&
-                    typeof data.current_provider_id === 'string' &&
+                    data.current_provider === 'youtube' &&
+                    isProviderId(data.current_provider_id) &&
                     typeof data.current_preview === 'string' &&
                     Number.isSafeInteger(data.current_bytes) &&
                     Number.isSafeInteger(data.requested_bytes) && !has('source_url');
@@ -272,6 +298,7 @@
     Object.assign(root, {
         PRKS_YOUTUBE_HOSTS: YOUTUBE_HOSTS,
         PRKS_MAX_PROVIDER_ID_CHARS: MAX_PROVIDER_ID_CHARS,
+        PRKS_MAX_SOURCE_URL_UTF8_BYTES: MAX_SOURCE_URL_UTF8_BYTES,
         prksIsProviderId: isProviderId,
         prksYoutubeVideoId: youtubeVideoId,
         prksCanonicalWorkSource: canonicalSource,

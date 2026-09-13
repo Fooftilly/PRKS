@@ -145,6 +145,89 @@ class WorkSourceSyncTests(unittest.TestCase):
         self.assertEqual(result["server_revision"], self.revision(),
                          "a convergent write advances nothing")
 
+    # ---- the creation boundary ----
+
+    def test_creation_derives_and_refuses_rather_than_repairing(self):
+        """Creation is the OTHER point where a source identity comes into
+        existence, and bounding only the synchronization parser left the whole
+        invariant bypassable: a Work could be created claiming video B's URL
+        while carrying video A's id, so the viewer -- which reads `provider_id`
+        first -- played a video the row did not name.
+        """
+        made = self.db.add_work("Ok", source_kind="video", source_url=WATCH % "MMM",
+                                provider="youtube", provider_id="MMM")
+        row = self.db.get_work(made)
+        self.assertEqual((row["provider"], row["provider_id"]), ("youtube", "MMM"))
+
+        # Omitted derived values are derived, not demanded of the caller.
+        made = self.db.add_work("Derived", source_kind="video", source_url=SHORT % "NNN")
+        row = self.db.get_work(made)
+        self.assertEqual((row["provider"], row["provider_id"]), ("youtube", "NNN"))
+        self.assertEqual(row["source_url"], SHORT % "NNN",
+                         "the URL is stored as the caller wrote it, canonically trimmed")
+
+        # A contradictory pair is a caller BUG. Silently rewriting it to match
+        # the URL would hide the bug and leave the caller believing it had
+        # asserted an identity.
+        with self.assertRaises(ValueError) as caught:
+            self.db.add_work("Lie", source_kind="video", source_url=WATCH % "BBB",
+                             provider="youtube", provider_id="AAA")
+        self.assertIn("provider_id", str(caught.exception))
+        with self.assertRaises(ValueError):
+            self.db.add_work("Lie", source_kind="video", source_url=WATCH % "BBB",
+                             provider="vimeo")
+
+    def test_creation_refuses_an_identity_no_conflict_could_report(self):
+        """The bound has to hold here too, or a Work created with a 3000-character
+        `provider_id` becomes unresolvable months later: a source conflict copies
+        the stored identity into `current_provider_id`, and `fit_terminal_result`
+        cannot shorten an identity."""
+        for bad, why in (
+            ("B" * (src.MAX_PROVIDER_ID_CHARS + 1), "one over the bound"),
+            ("B" * 3000, "the original reproduction"),
+            ("a.b", "outside the identifier alphabet"),
+            ("a b", "whitespace"),
+        ):
+            with self.subTest(why=why):
+                with self.assertRaises(ValueError, msg=why):
+                    self.db.add_work("Bad", source_kind="video",
+                                     source_url=WATCH % "CCC", provider_id=bad)
+                with self.assertRaises(ValueError, msg=why):
+                    self.db.add_work("Bad", source_kind="video", source_url=WATCH % bad)
+
+    def test_a_video_work_cannot_be_created_without_a_usable_source(self):
+        with self.assertRaises(ValueError):
+            self.db.add_work("No URL", source_kind="video")
+        with self.assertRaises(ValueError):
+            self.db.add_work("Not a video", source_kind="video",
+                             source_url="https://example.com/clip.mp4")
+
+    def test_identity_columns_are_refused_on_a_work_that_is_not_a_video(self):
+        """They ARE video identity. On anything else they claim a video this
+        Work is not -- and the kind inference can still reach a video branch
+        for a Work with no explicit kind and no file, at which point
+        `provider_id` outranks the URL again."""
+        with self.assertRaises(ValueError):
+            self.db.add_work("PDF", source_kind="pdf", file_path="/api/pdfs/x.pdf",
+                             provider_id="AAA")
+        with self.assertRaises(ValueError):
+            self.db.add_work("Kindless", source_url=WATCH % "AAA", provider_id="AAA")
+        # Provenance on a PDF is untouched by any of this.
+        made = self.db.add_work("PDF", source_kind="pdf", file_path="/api/pdfs/x.pdf",
+                                source_url="https://example.org/paper.pdf")
+        self.assertEqual(self.db.get_work(made)["source_url"],
+                         "https://example.org/paper.pdf")
+
+    def test_creation_is_construction_and_advances_no_revision(self):
+        """A Work begins at revision 0 like every other scope. Creation writing
+        one would make every device's first read look like a missed change."""
+        made = self.db.add_work("Fresh", source_kind="video", source_url=WATCH % "PPP")
+        self.assertEqual(src.get_source_state(self.db, made)["revision"], 0)
+        self.assertEqual(
+            self.db.execute_query(
+                "SELECT COUNT(*) AS n FROM sync_entity_revisions WHERE scope_type = ? "
+                "AND scope_id = ?", (src.SCOPE_TYPE, src.scope_key(made)))[0]["n"], 0)
+
     # ---- the legacy PATCH surface ----
 
     def test_patch_cannot_write_source_identity_columns_independently(self):

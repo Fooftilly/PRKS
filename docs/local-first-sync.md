@@ -1028,6 +1028,53 @@ bare revision, and why `SOURCE_REVISION_CONFLICT` reports `current_provider` and
 `current_provider_id` beside the preview. Deriving identity by parsing the
 preview would mean deriving it from a value designed to be shortened.
 
+
+### Creation is the other place an identity comes into existence
+
+Bounding the synchronization parser alone left the whole invariant bypassable,
+because `add_work()` stored caller-supplied `provider`/`provider_id` verbatim
+and only derived them when they were blank. A Work could therefore be created
+carrying video B's URL and video A's id — so the viewer, which reads
+`provider_id` first, played a video the row did not name — or with a
+3000-character id that becomes unresolvable months later, when a conflict copies
+it into `current_provider_id` and `fit_terminal_result` cannot shorten an
+identity.
+
+So `add_work()` enforces the same canonical parser. It is the right boundary
+rather than the HTTP handler because it also covers scripts, fixtures, imports
+and any future internal caller. A contradictory pair is **refused, not
+repaired**: a caller passing video B's URL with video A's id has a bug, and
+rewriting it silently would hide that bug while leaving the caller believing it
+had asserted an identity. `provider`/`provider_id` are refused outright on a
+Work that is not a video — they *are* video identity, and the kind inference can
+still reach a video branch for a Work with no explicit kind and no file, where
+`provider_id` would outrank the URL again.
+
+Creation advances no revision: construction is not mutation, and a Work begins
+at source revision 0 like every other scope.
+
+The invariant this completes, from creation through every later mutation and
+conflict:
+
+> No video Work can enter canonical storage unless its URL, provider and
+> provider_id describe one parser-validated, bounded source identity.
+
+### The URL has a bound too, on both sides
+
+`canonical_source()` bounds the URL at `MAX_SOURCE_URL_UTF8_BYTES`, and the
+client did not — so it accepted a URL the server refuses. Not an
+acknowledged-state corruption, since the durable store rejects it eventually,
+but the user was told "could not save the video source locally" rather than that
+the URL was too long. Parity that holds for identity and not for size is not
+parity.
+
+Both sides now follow one order: **trim, measure what would be stored, then
+parse**. Measuring the raw input rejected a URL whose canonical form fits, purely
+for surrounding whitespace the product removes. The measurement is in UTF-8
+bytes on both sides — JavaScript's `.length` counts UTF-16 code units, so a limit
+documented in bytes would silently not exist for the URLs most likely to reach
+it.
+
 ### Identity is exact *because* it is bounded
 
 The conflict makes two promises: identity is reported **exactly** — a truncated
