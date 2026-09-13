@@ -67,9 +67,10 @@ class WorkMetadataSyncTests(unittest.TestCase):
 
     def test_every_supported_field_round_trips(self):
         self.assertEqual(sorted(meta.SYNCED_FIELDS),
-                         ["abstract", "author_text", "doi", "edition", "isbn", "issue",
-                          "journal", "location", "pages", "published_date", "publisher",
-                          "status", "thumb_page", "volume", "year"])
+                         ["abstract", "author_text", "doc_type", "doi", "edition", "isbn",
+                          "issue", "journal", "location", "pages", "published_date",
+                          "publisher", "source_url", "status", "thumb_page", "title",
+                          "volume", "year"])
         for index, field in enumerate(sorted(meta.SYNCED_FIELDS)):
             with self.subTest(field=field):
                 wanted = self.sample(field, index + 1)
@@ -82,7 +83,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """An arbitrary column name from a client is both an injection surface
         and a way to reach fields this milestone deliberately does not
         synchronize."""
-        for field in ("title", "doc_type", "id",
+        for field in ("id",
                       "doi; DROP TABLE works", "", None, 7):
             with self.subTest(field=field):
                 self.assertEqual(sync_protocol.process_operation(self.db, self.op(field, "x")),
@@ -446,6 +447,166 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertLessEqual(len(_json.dumps(result).encode("utf-8")), 2048,
                              "the whole result must fit the durable bound")
 
+    # ---- source_url: provenance, guarded at the mutation boundary (2N) ----
+
+    def test_provenance_url_is_field_scoped_only_where_it_is_provenance(self):
+        """On a Work whose kind is explicitly video, this column is one
+        spelling of an identity spanning `source_kind`, `provider` and
+        `provider_id` -- and `provider_id` outranks it, so changing the column
+        alone would leave the stored URL naming one video while the viewer
+        plays another. The guard lives on the MUTATION BOUNDARY, because a
+        guard that lives only in a form is not a contract."""
+        self.assertEqual(meta.FIELD_KIND_GUARDS, {"source_url": "video"})
+        pdf = self.db.add_work("Paper", source_kind="pdf", file_path="/api/pdfs/x.pdf")
+        video = self.db.add_work("Clip", source_kind="video",
+                                 source_url="https://www.youtube.com/watch?v=AAA",
+                                 provider="youtube", provider_id="AAA")
+
+        # Provenance on a PDF: an ordinary field-scoped edit.
+        envelope = self.op("source_url", "https://example.com/paper")
+        envelope["entity_id"] = pdf
+        code, result = sync_protocol.process_operation(self.db, envelope)
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(self.db.get_work(pdf)["source_url"], "https://example.com/paper")
+
+        # The same operation on a video is refused, terminally.
+        envelope = self.op("source_url", "https://www.youtube.com/watch?v=BBB")
+        envelope["entity_id"] = video
+        code, result = sync_protocol.process_operation(self.db, envelope)
+        self.assertEqual((code, result["code"]), (409, "WRONG_OPERATION_FOR_SOURCE"))
+        self.assertNotIn("current_value", result, "there is nothing to choose between")
+        work = self.db.get_work(video)
+        self.assertEqual(work["source_url"], "https://www.youtube.com/watch?v=AAA")
+        self.assertEqual(work["provider_id"], "AAA", "identity is untouched")
+
+        # ...and so is the ordinary PATCH, whichever path a client uses.
+        with self.assertRaises(ValueError):
+            self.db.update_work_metadata(video, {"source_url": "https://x/B"})
+        self.assertEqual(self.db.get_work(video)["source_url"],
+                         "https://www.youtube.com/watch?v=AAA")
+        self.db.update_work_metadata(pdf, {"source_url": "https://example.com/other"})
+        self.assertEqual(self.db.get_work(pdf)["source_url"], "https://example.com/other")
+
+    def test_provenance_url_is_byte_limited_like_the_other_large_scalars(self):
+        self.assertEqual(meta.MAX_SOURCE_URL_UTF8_BYTES, 64 * 1024)
+        self.assertIn("source_url", meta.BYTE_LIMITED_FIELDS)
+        code, result = self.send("source_url", "https://example.com/" + "a" * 1000)
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertTrue(result["value_omitted"])
+        self.assertEqual(self.state()["source_url"], {"revision": 1})
+
+    # ---- title: the widest scalar (2M) ----
+
+    def test_title_has_one_size_contract_and_a_compact_acknowledgement(self):
+        """Title is byte-limited, so the compact ACK, the revision-only
+        projection entry and the bounded conflict all follow from registry
+        membership rather than from Title-specific code."""
+        self.assertEqual(meta.MAX_TITLE_UTF8_BYTES, 64 * 1024)
+        self.assertIn("title", meta.BYTE_LIMITED_FIELDS)
+        self.assertTrue(meta.is_valid_field_value("title", "x" * (64 * 1024)))
+        self.assertFalse(meta.is_valid_field_value("title", "x" * (64 * 1024 + 1)))
+        # Bytes, not characters.
+        self.assertFalse(meta.is_valid_field_value("title", "\u65e5" * 30000))
+
+        code, result = self.send("title", "A Renamed Work")
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertTrue(result["value_omitted"])
+        self.assertNotIn("value", result)
+        self.assertEqual(self.value("title"), "A Renamed Work")
+        # The projection carries the revision alone; the Work record has the value.
+        self.assertEqual(self.state()["title"], {"revision": 1})
+        self.assertEqual(self.db.get_work(self.work)["title"], "A Renamed Work")
+
+    def test_a_large_title_conflict_is_bounded(self):
+        self.db.update_work_metadata(self.work, {"title": "S" * 40000})
+        code, result = self.send("title", "D" * 40000, base=0)
+        self.assertEqual((code, result["code"]), (409, "REVISION_CONFLICT"))
+        self.assertNotIn("current_value", result)
+        self.assertEqual(result["current_bytes"], 40000)
+        self.assertLessEqual(self.durable_bytes(result), meta.MAX_DURABLE_RESULT_BYTES)
+
+    def test_title_revisions_and_independence(self):
+        self.db.update_work_metadata(self.work, {"title": "First"})
+        base = self.state()["title"]["revision"]
+        self.assertEqual(self.send("title", "First", base=base)[1]["changed"], False)
+        self.assertEqual(self.send("title", "Second", base=base)[1]["changed"], True)
+        self.db.update_work_metadata(self.work, {"title": "Third"})
+        self.assertEqual(self.send("title", "Third", base=base)[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual(self.send("title", "Mine", base=base)[1]["code"], "REVISION_CONFLICT")
+        # A Title conflict blocks nothing else.
+        self.assertEqual(self.send("doi", "10.1/x", base=0)[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual(self.send("doc_type", "book", base=0)[1]["code"], "ACKNOWLEDGED")
+
+    def test_search_finds_a_renamed_work_after_synchronization(self):
+        """`title` is an FTS column kept current by the trigger on `works`, so
+        a synchronized write needs no manual index maintenance -- worth proving
+        against the real engine rather than assuming."""
+        self.db.update_work_metadata(self.work, {"title": "Alpha Treatise"})
+        self.assertIn(self.work, [r["id"] for r in self.db.search_works("Alpha Treatise")])
+        base = self.state()["title"]["revision"]
+        self.assertEqual(self.send("title", "Beta Treatise", base=base)[1]["code"],
+                         "ACKNOWLEDGED")
+        self.assertIn(self.work, [r["id"] for r in self.db.search_works("Beta Treatise")])
+        self.assertNotIn(self.work, [r["id"] for r in self.db.search_works("Alpha Treatise")])
+
+    def test_creation_does_not_manufacture_a_title_revision(self):
+        created = self.db.add_work("Fresh Title")
+        self.assertEqual(self.db.get_work_metadata_state(created)["fields"]["title"],
+                         {"revision": 0})
+        self.assertEqual(self.db.get_work(created)["title"], "Fresh Title")
+
+    # ---- doc_type: normalized by PATCH, canonical on the wire (2L) ----
+
+    def test_doc_type_normalizes_on_patch_and_is_strict_on_the_wire(self):
+        """Two paths, one stored result, and neither changes behaviour the
+        product already had. PATCH has always turned an unrecognized type into
+        "misc" rather than refusing it, so that stays. The WIRE is strict,
+        because the editor's control offers nothing else -- and because an
+        acknowledgement must echo the value the operation carried, which a
+        silently rewritten one could not."""
+        self.assertEqual(sorted(meta.DOC_TYPE_SET), sorted(meta.DOC_TYPES))
+        self.assertIn("misc", meta.DOC_TYPE_SET)
+        self.assertEqual(meta.normalize_doc_type("BOOK"), "book")
+        self.assertEqual(meta.normalize_doc_type("  Article "), "article")
+        for unknown in ("bogus", "", None, "  ", 7):
+            self.assertEqual(meta.normalize_doc_type(unknown), "misc", repr(unknown))
+
+        # PATCH normalizes.
+        self.db.update_work_metadata(self.work, {"doc_type": "BOOK"})
+        self.assertEqual(self.value("doc_type"), "book")
+        self.db.update_work_metadata(self.work, {"doc_type": "nonsense"})
+        self.assertEqual(self.value("doc_type"), "misc")
+        # The wire refuses.
+        for bad in ("BOOK", "bogus", "", "  article"):
+            with self.subTest(wire=bad):
+                self.assertEqual(sync_protocol.process_operation(
+                    self.db, self.op("doc_type", bad)), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.value("doc_type"), "misc", "no refusal reached the column")
+
+    def test_doc_type_revisions_behave_like_every_other_scalar(self):
+        self.db.update_work_metadata(self.work, {"doc_type": "article"})
+        base = self.state()["doc_type"]["revision"]
+        code, result = self.send("doc_type", "book", base=base)
+        self.assertEqual((code, result["code"], result["changed"]), (200, "ACKNOWLEDGED", True))
+        self.assertEqual(result["value"], "book", "the ACK echoes what was sent")
+        self.assertEqual(self.state()["doc_type"]["revision"], base + 1)
+        # A no-op advances nothing.
+        self.assertEqual(self.send("doc_type", "book", base=base + 1)[1]["changed"], False)
+        self.assertEqual(self.state()["doc_type"]["revision"], base + 1)
+        # Stale + same desired state converges; stale + different conflicts.
+        self.db.update_work_metadata(self.work, {"doc_type": "online"})
+        stale = base
+        self.assertEqual(self.send("doc_type", "online", base=stale)[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual(self.send("doc_type", "manual", base=stale)[1]["code"],
+                         "REVISION_CONFLICT")
+        # And it does not block another field.
+        self.assertEqual(self.send("doi", "10.1/x", base=0)[1]["code"], "ACKNOWLEDGED")
+
+    def test_creation_does_not_manufacture_a_doc_type_revision(self):
+        created = self.db.add_work("Fresh", doc_type="book")
+        self.assertEqual(self.db.get_work_metadata_state(created)["fields"]["doc_type"],
+                         {"value": "book", "revision": 0})
+
     # ---- thumb_page: the wire is not the column (2J) ----
 
     def column_type(self, field):
@@ -789,7 +950,15 @@ class WorkMetadataSyncTests(unittest.TestCase):
         # These are the only sanctioned writers: the synchronization handler
         # itself, and the PATCH path, which routes synchronized fields through
         # it. Creation is exempt -- a brand-new Work has no revision to overtake.
-        sanctioned = {"work_metadata_sync.py"}
+        # Schema MIGRATIONS are not a runtime mutation path: they run once at
+        # startup, before the server accepts connections, and backfill columns
+        # that had no value at all. A revision records a change made by a
+        # device; nobody held one for a row that was empty before the upgrade.
+        # `work_source_sync.py` owns the SOURCE aggregate, whose columns
+        # overlap the field registry at `source_url`. It is revision-aware in
+        # its own scope, which is precisely why the field-scoped path refuses
+        # to touch a video Work's URL.
+        sanctioned = {"work_metadata_sync.py", "db_migrations.py", "work_source_sync.py"}
         pattern = re.compile(r"UPDATE\s+works\s+SET\s+([^\n]*)", re.IGNORECASE)
         offenders = []
         for path in sorted(backend_dir.rglob("*.py")):
@@ -807,10 +976,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.send("doi", "10.1/keep")
         before = self.state()
         self.db.update_work_metadata(self.work, {
-            "title": "Renamed", "doc_type": "book"})
+            "text_content": "Notes"})
         self.assertEqual(self.state(), before)
-        self.assertEqual(self.db.execute_query(
-            "SELECT title FROM works WHERE id = ?", (self.work,))[0]["title"], "Renamed")
 
     def test_patch_commits_values_and_revisions_together(self):
         """One transaction: a stored value whose revision did not advance is
@@ -887,19 +1054,21 @@ class WorkMetadataSyncTests(unittest.TestCase):
         value into one list; Abstract DERIVES one; Year and Published Date are
         on every Work card and so reach all three."""
         self.assertEqual(sorted(meta.FIELD_PROJECTIONS),
-                         ["abstract", "author_text", "published_date", "publisher",
-                          "status", "thumb_page", "year"])
+                         ["abstract", "author_text", "doc_type", "published_date",
+                          "publisher", "source_url", "status", "thumb_page", "title",
+                          "year"])
         self.assertEqual(meta.FIELD_PROJECTIONS["abstract"], ("works-browse",))
         self.assertEqual(meta.FIELD_PROJECTIONS["publisher"], ("recently-added",))
         # Status is the strongest case for reaching all three: it does not only
         # change what a card SAYS, it changes which Progress group the card
         # belongs to, and Progress reads `works-browse:index`.
-        for field in ("year", "published_date", "status", "author_text", "thumb_page"):
+        for field in ("year", "published_date", "status", "author_text", "thumb_page",
+                      "doc_type", "title", "source_url"):
             self.assertEqual(meta.FIELD_PROJECTIONS[field],
                              ("works-browse", "recent", "recently-added"), field)
         for field in meta.SYNCED_FIELDS:
             if field in ("publisher", "abstract", "year", "published_date", "status",
-                         "author_text", "thumb_page"):
+                         "author_text", "thumb_page", "doc_type", "title", "source_url"):
                 continue
             self.assertNotIn(field, meta.FIELD_PROJECTIONS, field)
 
@@ -907,8 +1076,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """Folder, Person and Playlist details embed Work summaries. A field
         those rows carry has to reach them too -- rendering AND local search."""
         self.assertEqual(sorted(meta.SUMMARY_FIELDS),
-                         ["author_text", "published_date", "publisher", "status",
-                          "thumb_page", "year"])
+                         ["author_text", "doc_type", "published_date", "publisher",
+                          "source_url", "status", "thumb_page", "title", "year"])
         self.assertEqual(meta.SUMMARY_ENTITY_KINDS, ("folder", "person", "playlist"))
         for field in meta.SUMMARY_FIELDS:
             self.assertIn(field, meta.SYNCED_FIELDS, field)
@@ -1055,7 +1224,8 @@ class WorkMetadataSyncTests(unittest.TestCase):
         """Switching them to bytes would quietly shorten every one by a factor
         of three for anyone writing CJK, which nothing here asked for."""
         self.assertNotIn("journal", meta.BYTE_LIMITED_FIELDS)
-        self.assertEqual(sorted(meta.BYTE_LIMITED_FIELDS), ["abstract", "author_text"])
+        self.assertEqual(sorted(meta.BYTE_LIMITED_FIELDS),
+                         ["abstract", "author_text", "source_url", "title"])
         # Membership of BYTE_LIMITS is what makes a field byte-limited; the two
         # registries cannot drift because one is derived from the other.
         self.assertEqual(sorted(meta.BYTE_LIMITS), sorted(meta.BYTE_LIMITED_FIELDS))

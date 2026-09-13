@@ -53,15 +53,15 @@
         STATUS_PENDING, STATUS_SYNCING, STATUS_ACKNOWLEDGED, STATUS_CONFLICT, STATUS_FAILED,
     ]);
 
-    /* Prototype allow-list. An operation type reaches durable storage only if
-     * it is registered here, so a typo or a half-built feature cannot persist
-     * an envelope no coordinator knows how to send. Milestone 2A registers the
-     * two operations whose design is settled; the rest arrive with 2B. */
+    /* Allow-list. An operation type reaches durable storage only if it is
+     * registered here, so a typo or a half-built feature cannot persist an
+     * envelope no coordinator knows how to send. */
     const OPERATION_TYPES = Object.freeze([
         'MARK_WORK_OPENED',
         'ADD_WORK_TAG',
         'REMOVE_WORK_TAG',
         'SET_WORK_METADATA_FIELD',
+        'SET_WORK_SOURCE',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -81,6 +81,8 @@
     const WORK_FIELD_VALUE_BYTES = Object.freeze({
         abstract: 1024 * 1024,
         author_text: 64 * 1024,
+        title: 64 * 1024,
+        source_url: 64 * 1024,
     });
     const MAX_ABSTRACT_VALUE_BYTES = WORK_FIELD_VALUE_BYTES.abstract;
     const MAX_ERROR_CHARS = 500;

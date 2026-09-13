@@ -184,6 +184,9 @@
             REMOVE_WORK_TAG: root.prksWorkTagSyncHandler,
             MARK_WORK_OPENED: root.prksWorkOpenSyncHandler,
             SET_WORK_METADATA_FIELD: root.prksWorkMetadataSyncHandler,
+            // Source identity is an AGGREGATE, not a field: one decision, one
+            // revision, one conflict, four columns.
+            SET_WORK_SOURCE: root.prksWorkSourceSyncHandler,
         },
         lock: root.navigator.locks ? fn => root.navigator.locks.request('prks-sync', { ifAvailable: true }, lock => lock ? fn() : undefined) : null,
     });

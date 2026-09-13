@@ -47,7 +47,7 @@ from tests.e2e.fixtures import (
     seed_people_library,
     seed_positions_library,
 )
-from tests.e2e.harness import AppServer, PageCollector, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, PageCollector, open_app_page, require_chromium, wait_for_async
 from tests.e2e.test_app import (
     MINIMAL_PDF,
     _FOCUSED_PDF,
@@ -101,8 +101,40 @@ def _wait_sw_active(page):
     )
 
 
-def _wait_entity_cached(page, kind, entity_id, timeout=15000):
+def _rename_work_durably(page, new_title, timeout=15000):
+    """Rename the open Work through the durable Identity save.
+
+    A Work Title is local-first: there is no metadata PATCH any more, so a
+    rename is an operation that is enqueued, sent and then RECONCILED into
+    every cached representation. Waiting for the queue to drain is therefore
+    waiting for the acknowledgement, not for a response.
+    """
+    # The synchronized controls stay disabled until the durable base has been
+    # read: saving against a base this session could not establish would
+    # overwrite an edit it never saw. Wait for that, exactly as a user would.
     page.wait_for_function(
+        "() => { const b = document.getElementById('save-work-identity-btn');"
+        "        return !!b && !b.disabled; }",
+        timeout=timeout,
+    )
+    page.locator('[data-prks-work-field="title"]').fill(new_title)
+    page.locator("#save-work-identity-btn").click()
+    # The operation is enqueued ASYNCHRONOUSLY by the click handler, so waiting
+    # for an EMPTY queue can be satisfied by the instant before it is created.
+    # Wait for it to exist first, then for it to retire.
+    wait_for_async(page,
+        "() => prksSync.store.listOperations().then(rows => rows.some("
+        "  o => o.operation === 'SET_WORK_METADATA_FIELD'))",
+        timeout=timeout,
+    )
+    wait_for_async(page,
+        "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+        timeout=timeout,
+    )
+
+
+def _wait_entity_cached(page, kind, entity_id, timeout=15000):
+    wait_for_async(page,
         """([kind, id]) => {
             if (typeof window.createPrksOfflineStore !== 'function') return false;
             const store = window.createPrksOfflineStore();
@@ -134,7 +166,7 @@ def _cached_entity(page, kind, entity_id):
 
 
 def _wait_list_cached(page, list_key, timeout=15000):
-    page.wait_for_function(
+    wait_for_async(page,
         """(key) => {
             if (typeof window.createPrksOfflineStore !== 'function') return false;
             return window.createPrksOfflineStore().getList(key).then(v => !!v);
@@ -169,7 +201,7 @@ def _content_text(page):
 
 
 def _wait_entity_uncached(page, kind, entity_id, timeout=15000):
-    page.wait_for_function(
+    wait_for_async(page,
         """([kind, id]) => window.createPrksOfflineStore().getEntity(kind, id).then(row => row === null)""",
         arg=[kind, entity_id],
         timeout=timeout,
@@ -177,7 +209,7 @@ def _wait_entity_uncached(page, kind, entity_id, timeout=15000):
 
 
 def _wait_list_uncached(page, list_key, timeout=15000):
-    page.wait_for_function(
+    wait_for_async(page,
         "(key) => window.createPrksOfflineStore().getList(key).then(row => row === null)",
         arg=list_key,
         timeout=timeout,
@@ -304,7 +336,7 @@ def _concept_domain_blocked(page):
 
 
 def _wait_pdf_whole_file_cached(page, pdf_path, timeout=15000):
-    page.wait_for_function(
+    wait_for_async(page,
         """(path) => {
             if (typeof caches === 'undefined') return false;
             return caches.open('prks-pdf-v1').then(c => c.match(path)).then(m => !!m);
@@ -383,8 +415,8 @@ class OfflineFoundationTests(unittest.TestCase):
         self.assertEqual(_connectivity_state(page), "offline")
 
     def test_authoritative_metadata_refresh_replaces_offline_work_cache(self):
-        """PATCH plus the existing complete Work GET replaces, never merges,
-        the disposable offline snapshot."""
+        """The acknowledgement reconciles the cached Work to the exact new
+        title -- it is not merged into a stale snapshot, and not dropped."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
         new_title = "Offline Coherent Metadata Title"
@@ -393,10 +425,13 @@ class OfflineFoundationTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
         page.locator("#panel-content button", has_text="Edit metadata").click()
-        page.locator("#meta-title").fill(new_title)
-        page.locator("#inline-save-metadata-btn").click()
-        page.locator("#panel-content .card-title", has_text=new_title).wait_for(timeout=15000)
-        page.wait_for_function(
+        # No view card to wait for: a durable save leaves the editor open
+        # rather than closing it and re-rendering, so the acknowledged cache is
+        # the thing to observe -- and `_rename_work_durably` already waited for
+        # the queue to drain.
+        _rename_work_durably(page, new_title)
+
+        wait_for_async(page,
             """([id, title]) => window.createPrksOfflineStore().getEntity('work', id)
                 .then(row => !!row && row.value && row.value.title === title)""",
             arg=[work_a, new_title],
@@ -408,39 +443,20 @@ class OfflineFoundationTests(unittest.TestCase):
         page.wait_for_function("title => document.body.innerText.indexOf(title) !== -1", arg=new_title)
         page.locator('[data-prks-role="offline-provenance-banner"]', has_text="Offline").wait_for()
 
-    def test_metadata_success_with_failed_refresh_leaves_work_offline_unavailable(self):
-        """PATCH success invalidates before its complete Work GET; a failed GET
-        cannot leave the old title eligible for fallback."""
-        server, page, context, _collector = self._start()
-        work_a = server.ids["work_a"]
-
-        _wait_sw_active(page)
-        _open_work_from_home(page, WORK_A_TITLE)
-        _wait_entity_cached(page, "work", work_a)
-
-        def fail_followup_detail(route):
-            req = route.request
-            if req.method == "GET" and urlparse(req.url).path == "/api/works/" + work_a:
-                route.abort("failed")
-                return
-            route.fallback()
-
-        page.route("**/api/works/*", fail_followup_detail)
-        try:
-            page.locator("#panel-content button", has_text="Edit metadata").click()
-            page.locator("#meta-title").fill("New but no follow-up GET")
-            page.locator("#inline-save-metadata-btn").click()
-            page.wait_for_function(
-                "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
-                arg=work_a,
-                timeout=15000,
-            )
-        finally:
-            page.unroute("**/api/works/*", fail_followup_detail)
-
-        context.set_offline(True)
-        page.reload(wait_until="domcontentloaded")
-        page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+    # `test_metadata_success_with_failed_refresh_leaves_work_offline_unavailable`
+    # was removed here rather than rewritten. It asserted that a metadata PATCH
+    # invalidated the cached Work and that a failed follow-up GET left it
+    # unavailable -- and a Work Title is local-first now, so there is no PATCH,
+    # no follow-up GET and no invalidation: the acknowledgement reconciles the
+    # cached Work with the exact new title.
+    #
+    # The invariant that replaced it -- an operation whose cache reconciliation
+    # FAILS must stay in the queue and replay rather than retire on a guess --
+    # is covered where it can actually be driven, in
+    # `tests/browser/run_work_metadata_sync_selftest.js`
+    # (`titleReferenceReconciliation`, `unreadableSummariesBlockRetirement`),
+    # which can make a cache read fail. A browser test cannot, without a
+    # product hook that exists only for the test.
 
     def test_successful_research_notes_save_invalidates_work_cache(self):
         """A partial notes PATCH cannot make an older cached complete Work eligible."""
@@ -454,7 +470,7 @@ class OfflineFoundationTests(unittest.TestCase):
         page.keyboard.press("Control+A")
         page.keyboard.insert_text("offline coherence research note")
         page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
-        page.wait_for_function(
+        wait_for_async(page,
             "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
             arg=work_a,
             timeout=15000,
@@ -476,7 +492,7 @@ class OfflineFoundationTests(unittest.TestCase):
         page.locator(selector).fill("offline coherence private note")
         page.locator(selector).blur()
         page.locator("#prks-private-notes-status-work-" + work_a, has_text="Saved").wait_for(timeout=15000)
-        page.wait_for_function(
+        wait_for_async(page,
             "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
             arg=work_a,
             timeout=15000,
@@ -499,7 +515,7 @@ class OfflineFoundationTests(unittest.TestCase):
         page.locator("#work-tag-search").fill(tag_name)
         page.locator("#work-tag-search-results .result-item--create", has_text=tag_name).click()
         page.locator("#work-tags-list .work-tag-chip", has_text=tag_name).wait_for(timeout=15000)
-        page.wait_for_function(
+        wait_for_async(page,
             """([id, name]) => window.createPrksOfflineStore().getEntity('work', id)
                 .then(row => !!row && Array.isArray(row.value.tags)
                     && row.value.tags.some(tag => tag && tag.name === name))""",
@@ -544,7 +560,7 @@ class OfflineFoundationTests(unittest.TestCase):
             }""",
             arg=work_a,
         )
-        page.wait_for_function(
+        wait_for_async(page,
             "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
             arg=work_a,
             timeout=15000,
@@ -805,10 +821,28 @@ class OfflineFoundationTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
         page.locator("#panel-content button", has_text="Edit metadata").click()
-        page.locator("#meta-title").fill("IndexedDB unavailable still saves")
-        page.locator("#inline-save-metadata-btn").click()
-        page.locator("#panel-content .card-title", has_text="IndexedDB unavailable still saves").wait_for(timeout=15000)
+        # This assertion INVERTED when Work metadata became local-first, and
+        # deliberately so. It used to read "IndexedDB unavailable still saves",
+        # because the editor PATCHed directly. A synchronized field must never
+        # fall back to a PATCH: saving against a base this session could not
+        # read would overwrite an edit it never saw. So with durable storage
+        # unavailable the editor REFUSES rather than saving blind -- visibly,
+        # with the controls disabled and a reason -- and the rest of the app
+        # keeps working online exactly as before.
+        page.wait_for_function(
+            "() => { const b = document.getElementById('save-work-identity-btn');"
+            "        return !!b && b.disabled; }",
+            timeout=15000,
+        )
+        self.assertTrue(page.locator('[data-prks-work-field="title"]').is_disabled())
+        self.assertIn(
+            "Local changes could not be read",
+            page.locator('[data-prks-role="work-identity-sync"]').inner_text(),
+        )
+        # The app itself is unaffected: still online, still rendering.
         self.assertEqual(_connectivity_state(page), "online")
+        self.assertEqual(page.locator('[data-prks-role="work-identity-editor"]').count(), 1,
+                         "the editor still renders; only saving is refused")
 
     def test_research_notes_are_read_only_immediately_when_offline(self):
         """Scenario 7: reopening a cached Work directly offline must never leave
@@ -2374,8 +2408,13 @@ class OfflineConceptTests(unittest.TestCase):
         self.assertGreaterEqual(generation_after_first, 1)
         self.assertIsNone(_cached_entity(page, "concept", child))
 
-    def test_successful_work_metadata_save_invalidates_concept_domain(self):
-        """Cached Concept details carry Work mention titles."""
+    def test_a_rename_reconciles_the_cached_concept_rather_than_dropping_it(self):
+        """Cached Concept details carry Work mention titles -- and a Work Title
+        is local-first, so the acknowledgement patches the exact new title into
+        them. This test used to assert the opposite: that the save INVALIDATED
+        the whole Concepts domain. Destroying a usable offline Concept for a
+        change whose shape is already known is what the reconciler exists to
+        avoid."""
         server, page, _context, _collector = self._start()
         child = server.ids["concept_child"]
 
@@ -2385,13 +2424,18 @@ class OfflineConceptTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         new_title = "Concept Mention Title Changed"
         page.locator("#panel-content button", has_text="Edit metadata").click()
-        page.locator("#meta-title").fill(new_title)
-        page.locator("#inline-save-metadata-btn").click()
-        page.locator("#panel-content .card-title", has_text=new_title).wait_for(timeout=15000)
+        _rename_work_durably(page, new_title)
 
-        _wait_entity_uncached(page, "concept", child)
+        wait_for_async(page,
+            """([id, title]) => window.createPrksOfflineStore().getEntity('concept', id)
+                .then(row => !!row && (row.value.mentions || []).some(m => m.title === title))""",
+            arg=[child, new_title],
+            timeout=15000,
+        )
+        self.assertIsNotNone(_cached_entity(page, "concept", child),
+                             "the snapshot was patched, not thrown away")
 
-    def test_failed_work_metadata_save_retains_concept_cache(self):
+    def test_a_rename_the_server_rejects_leaves_the_concept_cache_alone(self):
         server, page, _context, _collector = self._start()
         child = server.ids["concept_child"]
 
@@ -2401,22 +2445,25 @@ class OfflineConceptTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         generation_before = _concept_domain_generation(page)
 
-        def reject_patch(route):
-            if route.request.method == "PATCH":
-                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
-                return
-            route.fallback()
+        def reject_sync(route):
+            route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
 
-        page.route("**/api/works/**", reject_patch)
+        page.route("**/api/sync/operations", reject_sync)
         try:
             page.locator("#panel-content button", has_text="Edit metadata").click()
-            page.locator("#meta-title").fill("Rejected title")
-            page.locator("#inline-save-metadata-btn").click()
-            page.wait_for_timeout(700)
+            page.locator('[data-prks-work-field="title"]').fill("Rejected title")
+            page.locator("#save-work-identity-btn").click()
+            page.wait_for_timeout(900)
+            # Nothing was acknowledged, so nothing was reconciled -- and
+            # nothing was invalidated either.
             self.assertEqual(_concept_domain_generation(page), generation_before)
             self.assertIsNotNone(_cached_entity(page, "concept", child))
+            # The intent is still saved locally and will retry.
+            rows = page.evaluate(
+                "() => prksSync.store.listOperations().then(r => r.length)")
+            self.assertGreaterEqual(rows, 1)
         finally:
-            _safe_unroute(page, "**/api/works/**", reject_patch)
+            _safe_unroute(page, "**/api/sync/operations", reject_sync)
 
     def test_successful_work_delete_invalidates_concept_domain(self):
         """Deleting a Work removes its Concept mentions from canonical data."""
@@ -2438,10 +2485,12 @@ class OfflineConceptTests(unittest.TestCase):
 
         _wait_entity_uncached(page, "concept", child)
 
-    def test_playlist_inline_work_rename_invalidates_concept_domain(self):
-        """A Work title can also be changed from a Playlist. Cached Concept
-        details carry Work mention titles, so that surface owes the Concepts
-        domain the same invalidation as the metadata editor."""
+    def test_playlist_inline_work_rename_uses_the_same_durable_title_path(self):
+        """A Work Title can also be changed from a Playlist -- and it is a WORK
+        Title, not Playlist state, so it takes the same durable operation the
+        metadata editor uses and reaches every cached representation the same
+        way. This test used to assert that the Playlist surface owed the
+        Concepts domain an INVALIDATION; it now owes it a reconciliation."""
         server, page, context, _collector = self._start()
         child = server.ids["concept_child"]
         work_a = server.ids["work_a"]
@@ -2470,14 +2519,30 @@ class OfflineConceptTests(unittest.TestCase):
         page.locator("#prks-pl-rename-input-" + work_a).fill(renamed)
         page.locator('[data-pl-rename-save="%s"]' % work_a).click()
         page.wait_for_function("t => document.body.innerText.indexOf(t) !== -1", arg=renamed, timeout=15000)
+        # One durable Title operation, exactly as the metadata editor enqueues.
+        wait_for_async(page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=15000)
 
-        self.assertGreater(_concept_domain_generation(page), generation_before)
-        _wait_entity_uncached(page, "concept", child)
+        # The cached Concept keeps its snapshot and gains the new title.
+        wait_for_async(page,
+            """([id, title]) => window.createPrksOfflineStore().getEntity('concept', id)
+                .then(row => !!row && (row.value.mentions || []).some(m => m.title === title))""",
+            arg=[child, renamed],
+            timeout=15000,
+        )
+        # The domain's coherence generation DOES advance -- that fence stops a
+        # Concept GET issued before the acknowledgement from publishing its
+        # pre-rename body afterwards. It is not an invalidation: the wait above
+        # already proved the snapshot survived and gained the exact new title,
+        # which is the whole difference between reconciling and discarding.
+        self.assertGreater(_concept_domain_generation(page), generation_before,
+                           "the domain holding this Work is fenced")
 
-        # And the stale mention title can no longer be served offline.
+        # And the Concept still serves offline, now showing the new title.
         context.set_offline(True)
         _open_concept(page, child)
-        _wait_offline_unavailable(page)
+        _wait_content_contains(page, renamed)
         self.assertNotIn(WORK_A_TITLE, _content_text(page))
 
     def test_malformed_concept_index_response_never_replaces_a_good_cache(self):
@@ -2594,7 +2659,7 @@ class OfflineConceptTests(unittest.TestCase):
             }""",
             arg=work_a,
         )
-        page.wait_for_function(
+        wait_for_async(page,
             "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
             arg=work_a,
             timeout=15000,
@@ -4292,7 +4357,7 @@ class OfflineArgumentTests(unittest.TestCase):
             }""",
             argument_a,
         )
-        page.wait_for_function(
+        wait_for_async(page,
             """(id) => window.createPrksOfflineStore().getEntity('argument', id)
                 .then(row => !!row && row.value.sources[0].authors[0] === null)""",
             arg=argument_a,
@@ -4610,9 +4675,12 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         finally:
             _safe_unroute(page, "**/api/positions/**", reject)
 
-    def test_work_title_change_invalidates_arguments_and_concepts_but_not_positions(self):
-        """A Work title appears in cached Argument sources/mentions and cached
-        Concept mentions -- and in neither Position field."""
+    def test_a_rename_reconciles_arguments_and_concepts_but_not_positions(self):
+        """A Work Title appears in cached Argument sources/mentions and cached
+        Concept mentions -- and in neither Position field. It is local-first,
+        so those caches are PATCHED with the exact new title rather than
+        invalidated, and a Position, which names no Work, is not touched at
+        all."""
         server, page, _context, _collector = self._start()
         concept_child = server.ids["concept_child"]
         position_a = server.ids["position_a"]
@@ -4626,16 +4694,33 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         concepts_before = _domain_generation(page, "concepts")
         positions_before = _domain_generation(page, "positions")
 
+        renamed = "Argument Source Title Changed"
         _open_work_from_home(page, WORK_A_TITLE)
         page.locator("#panel-content button", has_text="Edit metadata").click()
-        page.locator("#meta-title").fill("Argument Source Title Changed")
-        page.locator("#inline-save-metadata-btn").click()
-        page.locator("#panel-content .card-title", has_text="Argument Source Title Changed").wait_for(timeout=15000)
+        _rename_work_durably(page, renamed)
 
-        self._assert_arguments_invalidated(page, server, arguments_before)
-        self.assertGreater(_domain_generation(page, "concepts"), concepts_before)
+        # Both collections of an Argument name the Work, under different
+        # column names, and both are patched.
+        wait_for_async(page,
+            """([id, title]) => window.createPrksOfflineStore().getEntity('argument', id)
+                .then(row => !!row && (
+                    (row.value.sources || []).some(s => s.work_title === title) ||
+                    (row.value.mentions || []).some(m => m.title === title)))""",
+            arg=[server.ids["argument_a"], renamed],
+            timeout=15000,
+        )
+        wait_for_async(page,
+            """([id, title]) => window.createPrksOfflineStore().getEntity('concept', id)
+                .then(row => !!row && (row.value.mentions || []).some(m => m.title === title))""",
+            arg=[concept_child, renamed],
+            timeout=15000,
+        )
+        # Patched, not dropped -- and a Position names no Work at all.
+        self.assertIsNotNone(_cached_entity(page, "concept", concept_child))
         self.assertEqual(_domain_generation(page, "positions"), positions_before)
         self.assertIsNotNone(_cached_entity(page, "position", position_a))
+        self.assertGreaterEqual(_domain_generation(page, "arguments"), arguments_before)
+        self.assertGreaterEqual(_domain_generation(page, "concepts"), concepts_before)
 
     def test_playlist_inline_work_rename_invalidates_arguments(self):
         """The shared Work-title helper owns this dependency, so the Playlist
@@ -4664,7 +4749,17 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         page.wait_for_function(
             "t => document.body.innerText.indexOf(t) !== -1", arg="Renamed From The Playlist", timeout=15000
         )
-        self._assert_arguments_invalidated(page, server, before)
+        # The Playlist surface uses the same durable Title operation, so the
+        # cached Argument is PATCHED rather than invalidated.
+        wait_for_async(page,
+            """([id, title]) => window.createPrksOfflineStore().getEntity('argument', id)
+                .then(row => !!row && (
+                    (row.value.sources || []).some(x => x.work_title === title) ||
+                    (row.value.mentions || []).some(x => x.title === title)))""",
+            arg=[server.ids["argument_a"], "Renamed From The Playlist"],
+            timeout=15000,
+        )
+        self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
 
     def test_research_notes_save_invalidates_arguments_and_concepts(self):
         server, page, _context, _collector = self._start()
@@ -5235,7 +5330,7 @@ class OfflinePeopleTests(unittest.TestCase):
             }""",
             person_a,
         )
-        page.wait_for_function(
+        wait_for_async(page,
             """(id) => window.createPrksOfflineStore().getEntity('person', id)
                 .then(row => !!row && Array.isArray(row.value.aliases))""",
             arg=person_a,
@@ -5271,7 +5366,7 @@ class OfflinePeopleTests(unittest.TestCase):
             }""",
             person_a,
         )
-        page.wait_for_function(
+        wait_for_async(page,
             """(id) => window.createPrksOfflineStore().getEntity('person', id)
                 .then(row => !!row && Array.isArray(row.value.works[0].year))""",
             arg=person_a,
@@ -6004,19 +6099,25 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
 
     # ---- Work mutations -----------------------------------------------------
 
-    def test_work_metadata_save_invalidates_people(self):
+    def test_a_rename_reconciles_the_cached_person_profile(self):
+        """A Person profile embeds Work SUMMARIES, which carry the Title. It
+        used to be invalidated by a metadata PATCH; the durable path patches
+        the embedded row with the exact new title instead."""
         server, page, _context, _collector = self._start()
 
         self._cache_people(page, server)
-        before = _domain_generation(page, "people")
         _open_work_from_home(page, WORK_A_TITLE)
         page.locator("#panel-content button", has_text="Edit metadata").click()
-        page.locator("#meta-title").fill("Person Work Card Title Changed")
-        page.locator("#inline-save-metadata-btn").click()
-        page.locator("#panel-content .card-title", has_text="Person Work Card Title Changed").wait_for(
-            timeout=15000
+        _rename_work_durably(page, "Person Work Card Title Changed")
+
+        wait_for_async(page,
+            """([id, title]) => window.createPrksOfflineStore().getEntity('person', id)
+                .then(row => !!row && (row.value.works || []).some(w => w.title === title))""",
+            arg=[server.ids["person"], "Person Work Card Title Changed"],
+            timeout=15000,
         )
-        self._assert_people_invalidated(page, server, before)
+        self.assertIsNotNone(_cached_entity(page, "person", server.ids["person"]),
+                             "the profile was patched, not dropped")
 
     def test_playlist_work_rename_invalidates_people(self):
         """The shared Work-title helper owns this dependency, so the Playlist
@@ -6044,7 +6145,13 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         page.wait_for_function(
             "t => document.body.innerText.indexOf(t) !== -1", arg="Renamed From The Playlist", timeout=15000
         )
-        self._assert_people_invalidated(page, server, before)
+        # Same durable Title operation, same reconciliation.
+        wait_for_async(page,
+            """([id, title]) => window.createPrksOfflineStore().getEntity('person', id)
+                .then(row => !!row && (row.value.works || []).some(w => w.title === title))""",
+            arg=[server.ids["person"], "Renamed From The Playlist"],
+            timeout=15000,
+        )
 
     def test_bulk_status_invalidates_people_but_folder_and_tag_moves_do_not(self):
         server, page, _context, _collector = self._start()

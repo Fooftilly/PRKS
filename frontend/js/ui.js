@@ -2379,6 +2379,7 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     if (typeof initPrksPrivateNotesEditor === 'function') initPrksPrivateNotesEditor('work', work.id, ctx);
     if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id, ctx);
     if (typeof prksMountWorkMetadataEditor === 'function') prksMountWorkMetadataEditor(ctx, work.id);
+    if (typeof prksMountWorkSourceEditor === 'function') prksMountWorkSourceEditor(ctx, work.id);
     if (mode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
         void mountPlaylistAttachControls(work, ctx);
     }
@@ -2747,6 +2748,7 @@ function updatePanelContent(tabId) {
             }
             initWorkTagCombobox(_cw.id, focusedCtx);
             if (typeof prksMountWorkMetadataEditor === 'function') prksMountWorkMetadataEditor(focusedCtx, _cw.id);
+            if (typeof prksMountWorkSourceEditor === 'function') prksMountWorkSourceEditor(focusedCtx, _cw.id);
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(_cw, focusedCtx);
             }
@@ -3222,6 +3224,7 @@ function prksMountWorkMetaEditor(ownerCtx, work) {
     const panel = document.getElementById('panel-content');
     if (panel && typeof prksBindAutosizeTextareas === 'function') prksBindAutosizeTextareas(panel);
     if (typeof prksMountWorkMetadataEditor === 'function') prksMountWorkMetadataEditor(ownerCtx, work.id, { editing: true });
+    if (typeof prksMountWorkSourceEditor === 'function') prksMountWorkSourceEditor(ownerCtx, work.id, { editing: true });
 }
 
 function toggleWorkMetaEdit(isEditing) {
@@ -3340,176 +3343,13 @@ async function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
     }
 }
 
-/**
- * A successful Work metadata save must settle the OWNING TabContext's own edit-mode/draft
- * runtime (workDetailsMode / workMetaDraft / workMetaDraftWorkId) even when that context is
- * no longer focused and no longer owns the shared #panel-content -- those are ctx-local
- * runtime fields, not shared-panel DOM, so leaving them stuck at 'metadata' with a stale draft
- * would resurface a discarded editor (and a false dirty-draft prompt) the next time this tab
- * is refocused. Re-rendering the shared panel itself is a completely separate,
- * ownership-gated concern that must only happen while this ctx still genuinely owns
- * #panel-content right now -- otherwise a currently-focused tab B's right-panel UI must not be
- * touched at all. toggleWorkMetaEditForContext() itself refuses an unfocused ctx, which is
- * exactly why settlement (a ctx-local concern) cannot be routed through it unconditionally.
+/* `submitWorkMetaEdit()` and its post-save settle helper are gone. Every
+ * user-editable Work metadata value they used to PATCH now belongs to a
+ * durable save group -- Identity, Progress, Video source and Bibliographic
+ * details -- so the editor has no online-only mutation path left. The last
+ * version of that function sent an EMPTY payload, which is what finishing
+ * the program looks like from the inside.
  */
-function prksSettleWorkMetaEditAfterSave(ownerCtx, panel) {
-    if (!ownerCtx || ownerCtx.destroyed || !ownerCtx.ui) return;
-    ownerCtx.ui.workDetailsMode = 'view';
-    ownerCtx.ui.workMetaDraft = null;
-    ownerCtx.ui.workMetaDraftWorkId = null;
-    if (typeof prksRightPanelOwnedBy === 'function' && prksRightPanelOwnedBy(ownerCtx, panel)) {
-        void toggleWorkMetaEditForContext(ownerCtx, false);
-    }
-}
-
-async function submitWorkMetaEdit(workId) {
-    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    const generation = ownerCtx && ownerCtx.generation;
-    /* The Work metadata editor lives in the shared #panel-content, not beneath ownerCtx.root,
-     * so every lookup that refers to it must be panel-local -- the same pattern
-     * prksCaptureWorkMetaDraft() already uses -- never ownerCtx.query().
-     *
-     * Two distinct ownership predicates are needed, not one:
-     *   ownsWorkContext() -- this ctx/generation still legitimately owns the Work entity/route,
-     *     regardless of focus or the shared panel. True even while another tile owns the panel.
-     *   ownsWorkPanel() -- ownsWorkContext() AND this ctx currently owns #panel-content (which
-     *     implies focused). Only true while this tab's metadata UI is the one on screen.
-     * The save itself originates from the shared panel, so the initial boundary and any DOM
-     * feedback that mutates the shared panel require ownsWorkPanel(). Once the PATCH is in
-     * flight, background completion must still update the owning ctx's own entity/runtime/
-     * tile-local DOM via ownsWorkContext() alone -- it must NOT require panel ownership, and it
-     * must NEVER touch #panel-content if a different tab now owns it. */
-    const panel = document.getElementById('panel-content');
-    const ownsWorkContext = function () {
-        return !!(
-            typeof prksTabContextOwnsEntityRoute === 'function' &&
-            prksTabContextOwnsEntityRoute(ownerCtx, generation, 'work', workId, 'work')
-        );
-    };
-    const ownsWorkPanel = function () {
-        return (
-            ownsWorkContext() &&
-            typeof prksRightPanelOwnedBy === 'function' &&
-            prksRightPanelOwnedBy(ownerCtx, panel)
-        );
-    };
-    // The save originated from the shared panel -- require full panel ownership here.
-    if (!ownsWorkPanel()) return;
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
-    prksCaptureWorkMetaDraft(ownerCtx);
-    const draft = ownerCtx && ownerCtx.ui && ownerCtx.ui.workMetaDraftWorkId === String(workId)
-        ? ownerCtx.ui.workMetaDraft : null;
-    if (!draft) return;
-    const payload = {
-        title: draft.title,
-        doc_type: draft.doc_type || 'article',
-    };
-    // Thumbnail page is deliberately absent: it takes the durable semantic
-    // queue through the synchronized section, online and offline. It also has
-    // its own wire representation -- a decimal string, "" for the default
-    // page -- which the field codec owns; this payload used to convert it to
-    // an integer here, which is precisely the second implementation the codec
-    // exists to remove.
-    // Status is deliberately absent: it takes the durable semantic queue
-    // through "Save status", online and offline, because a pending Status has
-    // to move the Work between Progress groups before the server has heard
-    // about it.
-    // Year and Published Date are deliberately absent: they take the durable
-    // semantic queue through "Save bibliographic details", online and offline.
-    // Sending them here as well would give the same fields two mutation paths,
-    // and the one that is not revision-aware would overwrite the other's
-    // conflicts.
-    // Publisher, Location, edition, journal, volume, issue, pages, ISBN and
-    // DOI are deliberately absent: they take the durable semantic queue
-    // through "Save bibliographic details", online and offline. Sending them
-    // here as well would give the same fields two mutation paths, and the one
-    // that is not revision-aware would overwrite the other's conflicts.
-    // author_text is deliberately absent: it takes the durable semantic queue
-    // through the synchronized section, online and offline. Sending it here as
-    // well would give one field two mutation paths, and the one that is not
-    // revision-aware would overwrite the other's conflicts.
-    if (draft.source_url != null) payload.source_url = String(draft.source_url || '').trim();
-    
-    // Disable save button to prevent double submission
-    const saveBtn = panel ? panel.querySelector('#inline-save-metadata-btn') : null;
-    if (saveBtn && typeof prksSetButtonBusy === 'function') {
-        prksSetButtonBusy(saveBtn, true, { busyLabel: 'Saving…' });
-    }
-
-    try {
-        const saveRes = await prksRequest(`/api/works/${workId}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        if (!saveRes.ok) {
-            const errData = await saveRes.json().catch(() => ({}));
-            throw new Error(errData.error || `Server error ${saveRes.status}`);
-        }
-        // The metadata save can change the title, so it goes through the shared
-        // Work-title coherence helper: it evicts this Work's snapshot AND
-        // invalidates the Concepts domain, whose cached details carry Work
-        // mention titles. Phase 1 stays deliberately conservative here rather
-        // than field-diffing which edits actually matter.
-        const coherenceToken =
-            typeof prksMarkWorkTitleChanged === 'function' ? prksMarkWorkTitleChanged(workId) : null;
-        // From here on, background completion must proceed as long as this ctx still owns the
-        // Work/route -- NOT gated on panel ownership. Another tile may already own the shared
-        // panel by the time this PATCH resolves.
-        const _saved = await fetchWorkDetails(workId, {
-            signal: ownerCtx && ownerCtx.abortController && ownerCtx.abortController.signal,
-        });
-        if (_saved && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
-            void prksOfflineCacheEntityIfCurrent('work', workId, _saved, coherenceToken);
-        }
-        if (!ownsWorkContext()) return;
-        const applied =
-            typeof prksApplyOwnedWorkEntity === 'function'
-                ? prksApplyOwnedWorkEntity(ownerCtx, workId, _saved)
-                : false;
-        if (!applied) return;
-        // Tile-local DOM beneath ownerCtx.root (page header, PDF toolbar) -- not shared-panel
-        // DOM -- so it is updated unconditionally, even while another tab owns the panel.
-        const headerTitle = ownerCtx && ownerCtx.query ? ownerCtx.query('.page-header--work-title') : null;
-        if (headerTitle && _saved) headerTitle.innerText = _saved.title;
-        const typeSlot =
-            ownerCtx && ownerCtx.query ? ownerCtx.query('[data-prks-role="work-header-doc-type-slot"]') : null;
-        if (typeSlot && typeof prksDocTypeBadgeHtml === 'function' && _saved) {
-            typeSlot.innerHTML = prksDocTypeBadgeHtml(_saved.doc_type);
-        }
-        const toolbarTitle = ownerCtx && ownerCtx.query ? ownerCtx.query('.prks-pdf-toolbar__title') : null;
-        if (toolbarTitle && _saved) {
-            const nextTitle = String(_saved.title || '').trim() || 'Document';
-            toolbarTitle.textContent = nextTitle;
-            toolbarTitle.setAttribute('title', nextTitle);
-        }
-        const toolbarType = ownerCtx && ownerCtx.query ? ownerCtx.query('.prks-pdf-toolbar__type') : null;
-        if (toolbarType && typeof prksDocTypeMeta === 'function' && _saved) {
-            const meta = prksDocTypeMeta(_saved.doc_type);
-            toolbarType.textContent = meta.label || '';
-            toolbarType.setAttribute('title', meta.label || '');
-            if (meta.color) toolbarType.style.background = meta.color;
-            if (meta.border) toolbarType.style.borderColor = meta.border;
-        }
-        // Settle this ctx's own edit-mode/draft runtime unconditionally; only re-render the
-        // shared panel if this ctx still owns it right now (never touches a different owner's).
-        prksSettleWorkMetaEditAfterSave(ownerCtx, panel);
-    } catch (err) {
-        /* A failed save must NOT settle the draft/edit mode (it must survive for retry) and
-         * must not touch another tab's panel -- ownsWorkContext() alone is enough here since
-         * nothing below mutates the shared panel, only logs. */
-        if (!ownsWorkContext()) return;
-        console.error("Failed to save metadata", err);
-    } finally {
-        /* Only restore the captured button if the same panel/editor still owns it -- a stale
-         * completion (focus moved to a different Work while this PATCH was pending) must not
-         * touch the new owner's button, and panel.contains(saveBtn) guards against mutating a
-         * detached old button after a panel rerender (e.g. the success settlement above). */
-        if (saveBtn && typeof prksSetButtonBusy === 'function' && ownsWorkPanel() && panel && panel.contains(saveBtn)) {
-            prksSetButtonBusy(saveBtn, false);
-        }
-    }
-}
 
 function prksWorkHasRoleLink(roles, personId, roleType) {
     const pid = String(personId || '').trim();
@@ -3521,6 +3361,8 @@ function prksWorkHasRoleLink(roles, personId, roleType) {
             String(r.role_type || '').trim() === rt
     );
 }
+
+/** Linked persons on the work details panel, grouped by role (order follows DB order_index). */
 
 /** Linked persons on the work details panel, grouped by role (order follows DB order_index). */
 function buildWorkLinkedPersonsHtml(work, options = {}) {
@@ -3665,6 +3507,13 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToke
 function renderWorkMetaTab(work, mode = 'view') {
     const managingPeople = mode === 'people';
     const managingTags = mode === 'tags';
+    /* The synchronized rows below are repainted from the overlay by the
+     * metadata editor module, but the Original URL row is rendered HERE, from
+     * this Work -- and `source_url` is a synchronized field. Rendering it from
+     * the acknowledged record would hide a pending provenance edit and, worse,
+     * point the link at the address the user just replaced. Same overlay,
+     * same answer. */
+    if (typeof prksEffectiveWorkSync === 'function') work = prksEffectiveWorkSync(work);
 
     const renderRow = (label, val) =>
         val ? `<p class="meta-row"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(val)}</p>` : '';
@@ -4551,7 +4400,8 @@ function renderWorkMetaEditTab(work, draft) {
             : 'misc';
     const metaDocMenu =
         typeof prksDocTypeMenuShellHtml === 'function'
-            ? prksDocTypeMenuShellHtml('meta-doc-type', metaDocNorm, isVideo)
+            ? prksDocTypeMenuShellHtml('meta-doc-type', metaDocNorm, isVideo,
+                { workField: 'doc_type' })
             : '';
     const dateLabel = isVideo ? 'Published date' : 'Published Date';
     const publishedDateValue =
@@ -4566,15 +4416,32 @@ function renderWorkMetaEditTab(work, draft) {
     const bibFields = isVideo
         ? ''
         : `
-            <label for="meta-source-url">Original URL (optional)</label>
-            <input type="url" id="meta-source-url" placeholder="https://…" value="${safeStr(work.source_url)}" autocomplete="off">
-            <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web.</p>
         `;
     /* Status has its own bounded Save. It is not a bibliographic detail -- it
      * decides which Progress group the Work appears in -- so it must not ride
      * along on a button labelled "Save bibliographic details", and the
      * bibliographic fields must not ride along on this one. Both are durable
      * and behave identically online and offline. */
+    /* Video source is its own bounded save, deliberately NOT part of the
+     * bibliographic group. It is not a scalar: one decision rewrites
+     * `source_kind`, `provider`, `provider_id` and `source_url` together, so
+     * it has its own operation, its own revision and its own conflict. Putting
+     * it beside the scalars would say it was one of them. */
+    const videoSourceSection = !isVideo
+        ? ''
+        : `
+            <section class="work-meta-editor__section" data-prks-role="work-source-editor">
+                <h4>Video source</h4>
+                <label for="meta-video-url">YouTube URL</label>
+                <input type="url" id="meta-video-url" placeholder="https://www.youtube.com/watch?v=…" value="${safeStr(work.source_url)}" autocomplete="off" aria-describedby="meta-video-url-error">
+                <p id="meta-video-url-error" class="field-error" aria-live="polite"></p>
+                <p class="meta-row meta-row--hint">Replaces which video this file is. Different links to the same video are the same source.</p>
+                <div class="prks-form-actions form-actions">
+                    <button type="button" id="save-work-source-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkSource('${work.id}')">Save video source</button>
+                </div>
+                <div class="meta-row" data-prks-role="work-source-sync" aria-live="polite"></div>
+            </section>
+        `;
     const statusSection = `
             <section class="work-meta-editor__section" data-prks-role="work-status-editor">
                 <h4>Progress</h4>
@@ -4644,6 +4511,10 @@ function renderWorkMetaEditTab(work, draft) {
                 <label for="meta-doi">DOI</label>
                 <input type="text" id="meta-doi" data-prks-work-field="doi" value="${safeStr(work.doi)}">
 
+                <label for="meta-source-url">Original URL (optional)</label>
+                <input type="url" id="meta-source-url" data-prks-work-field="source_url" placeholder="https://…" value="${safeStr(work.source_url)}" autocomplete="off">
+                <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web. This is provenance only: it does not change what kind of file PRKS treats this as.</p>
+
                 <label for="meta-abstract">Abstract</label>
                 <textarea id="meta-abstract" class="textarea-md" data-prks-work-field="abstract">${safeStr(work.abstract)}</textarea>
 
@@ -4669,11 +4540,18 @@ function renderWorkMetaEditTab(work, draft) {
                 <button type="button" onclick="void prksCancelWorkMetaEdit()" class="prks-icon-btn prks-icon-btn--ghost inline-action-btn inline-action-btn--close">&times;</button>
             </div>
             
-            <section class="work-meta-editor__section"><h4>Identity &amp; progress</h4><label for="meta-title">Title</label>
-            <input type="text" id="meta-title" value="${safeStr(work.title)}">
-            
-            <label for="meta-doc-type-trigger">Document type (BibLaTeX)</label>
-            ${metaDocMenu}
+            <section class="work-meta-editor__section" data-prks-role="work-identity-editor">
+                <h4>Identity</h4>
+                <label for="meta-title">Title</label>
+                <input type="text" id="meta-title" data-prks-work-field="title" value="${safeStr(work.title)}" aria-describedby="meta-title-error">
+                <p id="meta-title-error" class="field-error" aria-live="polite"></p>
+
+                <label for="meta-doc-type-trigger">Document type (BibLaTeX)</label>
+                ${metaDocMenu}
+                <div class="prks-form-actions form-actions">
+                    <button type="button" id="save-work-identity-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}', 'identity')">Save identity</button>
+                </div>
+                <div class="meta-row" data-prks-role="work-identity-sync" aria-live="polite"></div>
             </section>
             
             <section class="work-meta-editor__section"><h4>Publication</h4>
@@ -4682,15 +4560,11 @@ function renderWorkMetaEditTab(work, draft) {
             ${bibFields}
             </section>
             ${statusSection}
+            ${videoSourceSection}
             ${syncedBibSection}
-            <section class="work-meta-editor__section"><h4>Presentation</h4>
-            ${thumbField}
-            </section>
             <div class="prks-form-actions prks-form-actions--split form-actions work-meta-editor__sticky-actions">
-                <button type="button" class="prks-btn prks-btn--secondary" onclick="void prksCancelWorkMetaEdit()">Cancel</button>
-                <button id="inline-save-metadata-btn" class="prks-btn prks-btn--primary" onclick="submitWorkMetaEdit('${work.id}')">Save Changes</button>
+                <button type="button" class="prks-btn prks-btn--secondary" onclick="void prksCancelWorkMetaEdit()">Close</button>
             </div>
-            <p class="meta-row" data-prks-role="work-meta-online-only" hidden>The fields above Bibliographic details are saved on the PRKS server and need a connection.</p>
         </div>
     `;
 }

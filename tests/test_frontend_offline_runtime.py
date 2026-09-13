@@ -512,12 +512,19 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         create_at = app.index("if (res.ok && String(payload.playlist_id || '').trim()) {")
         self.assertIn("prksMarkPlaylistsDomainChanged();", app[create_at : create_at + 700])
-        # The Playlist inline Work rename inherits the dependency from the
-        # shared title helper rather than adding a second hook.
+        # The Playlist inline Work rename no longer invalidates anything: a
+        # Work Title is local-first, so the rename enqueues a durable
+        # operation and the acknowledgement RECONCILES every cached
+        # representation with the exact new value. Destroying usable offline
+        # snapshots for a change whose shape is already known would be the
+        # opposite of what the reconciler exists to do -- and there is no
+        # PATCH left here to invalidate after.
         pl = _read(os.path.join(_FRONTEND, "js", "components", "playlists.js"))
         rename_at = pl.index("if (renSave) {")
         rename_body = pl[rename_at : rename_at + 2200]
-        self.assertIn("prksMarkWorkTitleChanged(wid);", rename_body)
+        self.assertIn("prksSaveWorkFieldDurably(wid, 'title'", rename_body)
+        self.assertNotIn("prksMarkWorkTitleChanged", rename_body)
+        self.assertNotIn("method: 'PATCH'", rename_body)
         self.assertNotIn("prksPlaylistsChanged()", rename_body)
 
     def test_group_mutations_invalidate_people_except_bare_creation(self):

@@ -1,7 +1,11 @@
 # Work source / video identity — 2K design report
 
-Design and audit only. **No source synchronization was implemented**, no rows
-were migrated, no viewer precedence changed, no UI semantics changed.
+Written as design and audit for 2K, and **implemented in 2O** along the lines
+it recommends: §9's Model B with Model C's boundary is what
+`backend/work_source_sync.py` and `frontend/js/work-source-state.js` now
+do. The audit sections below are preserved as the evidence for that choice and
+still describe the data as it was measured. No rows were migrated and viewer
+precedence is unchanged; §10 records what the implementation had to propagate.
 
 The question this answers: *what is the canonical identity of a Work's source*,
 and can its fields safely become independent synchronized scalars? The short
@@ -277,6 +281,21 @@ The browse projections would need `provider`/`provider_id` added, or the
 overlay must write a *derived* `source_kind` — the same
 "convert-at-the-boundary" decision `thumb_page` faced, and a reason to prefer
 extending the projection over teaching cards to re-derive.
+
+### Only a video's render may wait on the overlay
+
+The viewer must never be handed a URL naming one video and an id naming
+another, so the Work detail resolves the effective source before it renders —
+and that read is asynchronous, because pending intent lives in IndexedDB.
+
+That wait is scoped to Works that are ALREADY videos. The aggregate refuses
+every other transition (`UNSUPPORTED_SOURCE_TRANSITION`) and no control offers
+one, so a PDF cannot have a pending source and has nothing to wait for. Making
+every Work detail block on a durable-store read would mean a slow or stuck
+IndexedDB leaves the user looking at an empty panel — for a value that Work
+could not have had. The acknowledged `source_kind` is what decides, and it is
+authoritative for this question precisely because the kind itself is not
+editable.
 
 ## 11. Migration and compatibility
 

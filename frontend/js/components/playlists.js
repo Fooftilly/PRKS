@@ -70,10 +70,12 @@ const PRKS_PLAYLIST_MUTATION_SELECTOR = [
     '[data-pl-up]',
     '[data-pl-down]',
     '[data-pl-remove]',
-    '[data-pl-rename]',
-    '[data-pl-rename-save]',
-    '.prks-playlist-item__rename-input',
 ].join(', ');
+
+/* The inline Work rename is deliberately ABSENT from that list. It changes a
+ * Work Title, not Playlist state, and Work Titles are local-first -- so it
+ * works offline exactly as the metadata editor does. Every genuine Playlist
+ * mutation above stays online-only. */
 
 /* The Work detail page's own Playlist card ("Set playlist" / Clear / New…)
  * is a Playlist mutation surface living on a *Work* route, so it needs its own
@@ -569,33 +571,37 @@ function renderPlaylistDetail(ctx, pl, container) {
             const inp = container.querySelector('#prks-pl-rename-input-' + wid);
             const nextTitle = inp ? String(inp.value || '').trim() : '';
             if (!wid || !nextTitle) return;
-            // The connection can drop while an inline rename input is open, so
-            // re-check immediately before the canonical Work PATCH rather than
-            // trusting the disabled Save button alone.
-            if (prksPlaylistMutationBlocked()) return;
+            /* A Work Title, not Playlist state -- so it takes the same durable
+             * Title operation the metadata editor uses, rather than a PATCH.
+             * A second mutation path for one field is the contract every
+             * milestone since 2D has removed: the non-revision-aware one
+             * silently overwrites the other's conflicts.
+             *
+             * This is deliberately NOT a Playlist mutation, so it is NOT
+             * gated by `prksPlaylistMutationBlocked()`: renaming works
+             * offline exactly as it does in the metadata editor. The other
+             * Playlist controls remain online-only. */
             try {
-                const res = await prksRequest(`/api/works/${encodeURIComponent(wid)}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: nextTitle }),
-                });
-                if (!res.ok) throw new Error('save failed');
-                // Same canonical Work-title change as the metadata editor, so
-                // the shared helper owns every domain it stales -- Concepts
-                // (mention titles), Arguments, People, and Playlists (this very
-                // list renders the title). Deliberately no Playlist-specific
-                // hook here: a second one would drift from the helper.
-                if (typeof prksMarkWorkTitleChanged === 'function') {
-                    prksMarkWorkTitleChanged(wid);
-                } else if (typeof prksOfflineMarkEntityChanged === 'function') {
-                    prksOfflineMarkEntityChanged('work', wid);
+                const result = await prksSaveWorkFieldDurably(wid, 'title', nextTitle,
+                    { label: 'Title' });
+                if (result.code === 'unavailable') {
+                    await prksAlertMessage(
+                        'This video\u2019s title cannot be renamed right now. Open it once while '
+                        + 'connected to PRKS so its details are prepared.', 'Rename unavailable');
+                    return;
                 }
+                if (result.code === 'too-long') {
+                    await prksAlertMessage(result.error, 'Title too long');
+                    return;
+                }
+                if (result.code === 'failed') throw new Error('save failed');
                 delete playlistRenameMap()[wid];
                 if (!ownsPlaylist()) return;
-                const fresh = await fetchPlaylistDetails(pl.id, {
-                    signal: ctx && ctx.abortController && ctx.abortController.signal,
-                });
-                applyFreshPlaylist(fresh);
+                /* The overlay is what makes the new title visible here; the
+                 * cached Playlist keeps exactly what the server said until the
+                 * operation is acknowledged. */
+                await prksRefreshPendingWorkMetadata();
+                if (ownsPlaylist()) renderPlaylistDetail(ctx, pl, container);
             } catch (_e) {
                 if (ownsPlaylist()) await prksAlertMessage('Could not rename video.', 'Error');
             }

@@ -27,7 +27,7 @@ import unittest
 from urllib.parse import urlparse
 
 from tests.e2e.fixtures import MINIMAL_PDF, PERSON_DISPLAY, WORK_A_TITLE, WORK_B_TITLE
-from tests.e2e.harness import require_chromium
+from tests.e2e.harness import require_chromium, wait_for_async
 from tests.e2e.test_app import (
     _click_graph_node,
     _click_workspace_menu,
@@ -583,14 +583,14 @@ class WorkPdfTourTest(_UXTour):
             page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")
             page.wait_for_selector(".CodeMirror")
 
-            tour.step("Edit metadata, cancel a dirty edit")
+            tour.step("Edit metadata, discard a dirty edit")
             page.locator("#panel-content button", has_text="Edit metadata").click()
             page.locator("#meta-title").wait_for()
             original_title = page.locator("#meta-title").input_value()
             page.locator("#meta-title").fill("Unsaved UX Tour Title")
             page.locator('#panel-content .prks-segmented__btn[data-value="In Progress"]').click()
             tour.checkpoint(page, "metadata-edit")
-            page.locator("#panel-content button", has_text="Cancel").click()
+            page.locator("#panel-content button", has_text="Close").click()
             page.locator("#prks-modal-confirm").wait_for()
             page.locator("#prks-modal-confirm-ok").click()
             page.locator("#panel-content .card-title", has_text=original_title).wait_for()
@@ -598,8 +598,22 @@ class WorkPdfTourTest(_UXTour):
             tour.step("Edit metadata and save")
             page.locator("#panel-content button", has_text="Edit metadata").click()
             page.locator("#meta-title").wait_for()
+            page.wait_for_function(
+                "() => { const b = document.getElementById('save-work-identity-btn');"
+                "        return !!b && !b.disabled; }"
+            )
             page.locator("#meta-title").fill("Saved UX Tour Title")
-            page.locator("#inline-save-metadata-btn").click()
+            page.locator("#save-work-identity-btn").click()
+            # A Title is local-first: the save is durable immediately and the
+            # editor stays open, so the tour waits for the operation to retire
+            # and then closes the editor to photograph the settled card.
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(r => r.length === 0)",
+                timeout=20000,
+                message="the Title operation never retired",
+            )
+            page.locator("#panel-content button", has_text="Close").click()
             page.locator("#panel-content .card-title", has_text="Saved UX Tour Title").wait_for()
 
             tour.step("Link and unlink Second UX Author")

@@ -148,6 +148,37 @@ _ADDRESS_IN_USE_MARKERS = (
 )
 
 
+def wait_for_async(page, expression, arg=None, timeout: float = 15000, message: str = ""):
+    """Wait until an ASYNCHRONOUS page predicate resolves to a truthy value.
+
+    `page.wait_for_function` cannot express this. It does await a returned
+    Promise, but it then treats the SETTLED PROMISE as the value to test for
+    truthiness -- and a promise object is always truthy. So a gate written as
+
+        page.wait_for_function("() => store.listOperations().then(r => !r.length)")
+
+    passes on its first poll whether the queue is empty or not: it waits one
+    round trip and reports success. Every durable-queue gate in this suite is
+    asynchronous, so they are polled from here instead, where `page.evaluate`
+    returns the RESOLVED value and the answer can actually be read.
+
+    Kept API-compatible with `wait_for_function` (`arg`, `timeout` in ms) so a
+    call site converts by swapping the call, not by being rewritten.
+    """
+    deadline = time.monotonic() + (timeout / 1000.0)
+    last = None
+    while True:
+        last = page.evaluate(expression, arg)
+        if last:
+            return last
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                (message or "condition never became true")
+                + " after %.1fs; last value was %r\n%s" % (timeout / 1000.0, last, expression)
+            )
+        page.wait_for_timeout(50)
+
+
 def _port_window():
     """(start, span) when the parent runner assigned this worker a port range.
 

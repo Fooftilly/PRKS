@@ -7,6 +7,7 @@ const { createFakeIndexedDBFactory } = require('./lib/fake_indexeddb.js');
 const { createPrksLocalStore } = require('../../frontend/js/local-store.js');
 const { createPrksOfflineStore } = require('../../frontend/js/offline-store.js');
 const { createPrksOfflineRuntime } = require('../../frontend/js/offline-runtime.js');
+require('../../frontend/js/doc-types.js');
 require('../../frontend/js/work-tag-state.js');
 require('../../frontend/js/work-metadata-state.js');
 require('../../frontend/js/sync-runtime.js');
@@ -543,6 +544,168 @@ async function projectionReconciliation() {
     assert.equal(await cache.getList('recently-added:index'), null);
 }
 
+/* ---- source_url: provenance, and only where it IS provenance ---- */
+function provenanceSourceUrl() {
+    const op = { operation: 'SET_WORK_METADATA_FIELD', entity_id: 'W-P',
+        payload: { field: 'source_url', value: 'https://example.com/a' } };
+    /* The server refuses a field-scoped write to a VIDEO Work's URL. That is
+     * terminal and well formed -- retrying would be refused identically
+     * forever -- and it is not a conflict: there are not two values to choose
+     * between. */
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(
+        { code: 'WRONG_OPERATION_FOR_SOURCE', work_id: 'W-P', field: 'source_url' }, op), true);
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(
+        { code: 'SOMETHING_ELSE', work_id: 'W-P', field: 'source_url' }, op), false);
+
+    // It is byte-limited, so it gets the compact acknowledgement like the rest.
+    assert.equal(globalThis.prksWorkMetadataSyncHandler.isResult(
+        { code: 'ACKNOWLEDGED', work_id: 'W-P', field: 'source_url', server_revision: 1,
+          changed: true, value_omitted: true }, op), true);
+    assert.deepEqual(globalThis.prksMetadataStateAckPatch('source_url', 3, 'https://x'),
+        { revision: 3 });
+
+    // And it overlays the ordinary Work-shaped surfaces.
+    globalThis.prksSetPendingWorkMetadata([{ operation: 'SET_WORK_METADATA_FIELD',
+        entity_type: 'work', entity_id: 'W-P', status: 'pending',
+        payload: { field: 'source_url', value: 'https://example.com/new' } }]);
+    assert.equal(globalThis.prksEffectiveWorkSync({ id: 'W-P', source_url: 'https://old' })
+        .source_url, 'https://example.com/new');
+    /* A PDF stays a PDF: an explicit `source_kind` outranks the URL, so
+     * editing provenance cannot turn the card or the viewer into a video. */
+    const pdf = globalThis.prksEffectiveWorkSync(
+        { id: 'W-P', source_kind: 'pdf', file_path: '/api/pdfs/x.pdf', source_url: 'https://old' });
+    assert.equal(globalThis.prksInferWorkSourceKind(pdf), 'pdf',
+        'provenance never changes what kind of Work this is');
+    globalThis.prksSetPendingWorkMetadata([]);
+}
+
+/* ---- title: a Work value held by REFERENCE inside other entity families ----
+ *
+ * Every earlier field lived on Work-shaped rows. A Title also lives inside a
+ * Concept's backlinks, an Argument's sources and mentions, and a Graph node's
+ * `label` -- entities that are not Works, keyed by a foreign column, under
+ * property names that disagree with each other. One registry describes all of
+ * them so no component learns what a durable operation is.
+ */
+function titleReferenceOverlays() {
+    globalThis.prksSetPendingWorkMetadata([{ operation: 'SET_WORK_METADATA_FIELD',
+        entity_type: 'work', entity_id: 'W-T', status: 'pending',
+        payload: { field: 'title', value: 'New Title' } }]);
+
+    // The ordinary Work-shaped surfaces.
+    assert.equal(globalThis.prksEffectiveWorkSync({ id: 'W-T', title: 'Old' }).title, 'New Title');
+    for (const projection of ['works-browse', 'recent', 'recently-added']) {
+        assert.equal(globalThis.prksEffectiveProjectionRows(
+            [{ id: 'W-T', title: 'Old' }], projection)[0].title, 'New Title', projection);
+    }
+    assert.equal(globalThis.prksEffectiveWorkSummaries(
+        [{ id: 'W-T', title: 'Old' }])[0].title, 'New Title');
+
+    // A Concept's backlinks: `mentions[].title`.
+    const concept = { id: 'C1', name: 'Idea', mentions: [
+        { work_id: 'W-T', title: 'Old', occurrences: 3 },
+        { work_id: 'W-OTHER', title: 'Other' },
+    ] };
+    const conceptFrozen = JSON.stringify(concept);
+    const effConcept = globalThis.prksEffectiveWorkReferences('concept', concept);
+    assert.equal(effConcept.mentions[0].title, 'New Title');
+    assert.equal(effConcept.mentions[0].occurrences, 3, 'other columns survive');
+    assert.equal(effConcept.mentions[1].title, 'Other', 'and only the edited Work');
+    assert.equal(JSON.stringify(concept), conceptFrozen, 'the cached Concept is never mutated');
+
+    /* An Argument holds TWO collections that disagree about the column name:
+     * `sources[].work_title` and `mentions[].title`. */
+    const argument = { id: 'A1',
+        sources: [{ work_id: 'W-T', work_title: 'Old', pages: '1-2' }],
+        mentions: [{ work_id: 'W-T', title: 'Old' }] };
+    const argumentFrozen = JSON.stringify(argument);
+    const effArgument = globalThis.prksEffectiveWorkReferences('argument', argument);
+    assert.equal(effArgument.sources[0].work_title, 'New Title', 'sources use work_title');
+    assert.equal(effArgument.sources[0].pages, '1-2');
+    assert.equal(effArgument.mentions[0].title, 'New Title', 'mentions use title');
+    assert.equal(JSON.stringify(argument), argumentFrozen, 'the cached Argument is untouched');
+
+    // A Graph node's `label`.
+    const snapshot = { nodes: [
+        { id: 'work:W-T', record_id: 'W-T', type: 'work', label: 'Old', doc_type: 'article' },
+        { id: 'concept:C1', record_id: 'W-T', type: 'concept', label: 'Idea' },
+    ], edges: [] };
+    for (const kind of ['research-graph-core', 'research-graph-people']) {
+        const eff = globalThis.prksEffectiveWorkReferences(kind, snapshot);
+        assert.equal(eff.nodes[0].label, 'New Title', kind + ' relabels the Work node');
+        assert.equal(eff.nodes[0].doc_type, 'article', 'without touching its other columns');
+        assert.equal(eff.nodes[1].label, 'Idea',
+            'a CONCEPT node sharing a record id is not a Work node');
+    }
+
+    // An entity with no reference collections at all is returned unchanged.
+    const bare = { id: 'C2', name: 'Empty' };
+    assert.equal(globalThis.prksEffectiveWorkReferences('concept', bare), bare);
+
+    globalThis.prksSetPendingWorkMetadata([]);
+}
+
+/* ---- doc_type: Types membership, and a Work value inside the Graph ---- */
+function docTypeMembershipAndGraph() {
+    const pend = value => globalThis.prksSetPendingWorkMetadata([{
+        operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-D',
+        status: 'pending', payload: { field: 'doc_type', value } }]);
+
+    // Only canonical values become operations; the control offers no others.
+    assert.equal(globalThis.prksWorkFieldToCanonical('doc_type', 'book'), 'book');
+    for (const bad of ['BOOK', 'bogus', '', '  ']) {
+        assert.equal(globalThis.prksWorkFieldToCanonical('doc_type', bad), null, bad);
+    }
+
+    /* MEMBERSHIP. Types groups on the value in the row, exactly as Progress
+     * groups on Status, so the Work has to leave one group and join another
+     * before anything is sent. */
+    pend('book');
+    const catalog = [
+        { id: 'W-D', doc_type: 'article' },
+        { id: 'W-STAY', doc_type: 'article' },
+        { id: 'W-BOOK', doc_type: 'book' },
+    ];
+    const frozen = JSON.stringify(catalog);
+    const group = type => globalThis.prksEffectiveProjectionRows(catalog, 'works-browse')
+        .filter(w => w.doc_type === type).map(w => w.id);
+    assert.deepEqual(group('article'), ['W-STAY'], 'the edited Work left Articles');
+    assert.deepEqual(group('book'), ['W-D', 'W-BOOK'], 'and joined Books');
+    assert.equal(JSON.stringify(catalog), frozen, 'the snapshot is untouched');
+    for (const projection of ['recent', 'recently-added']) {
+        assert.equal(globalThis.prksEffectiveProjectionRows(
+            [{ id: 'W-D', doc_type: 'article' }], projection)[0].doc_type, 'book', projection);
+    }
+    assert.equal(globalThis.prksEffectiveWorkSummaries(
+        [{ id: 'W-D', doc_type: 'article' }])[0].doc_type, 'book', 'embedded summaries too');
+
+    /* THE GRAPH. A cached snapshot holds Work metadata on nodes identified by
+     * `record_id`, inside an entity that is not a Work. */
+    const snapshot = { nodes: [
+        { id: 'work:W-D', record_id: 'W-D', type: 'work', doc_type: 'article', label: 'Paper' },
+        { id: 'work:W-OTHER', record_id: 'W-OTHER', type: 'work', doc_type: 'article' },
+        { id: 'person:P1', record_id: 'W-D', type: 'person', doc_type: 'article' },
+    ], edges: [] };
+    const snapFrozen = JSON.stringify(snapshot);
+    for (const kind of ['research-graph-core', 'research-graph-people']) {
+        const eff = globalThis.prksEffectiveWorkReferences(kind, snapshot);
+        assert.equal(eff.nodes[0].doc_type, 'book', kind + ' patches the Work node');
+        assert.equal(eff.nodes[1].doc_type, 'article', 'and only the edited Work');
+        assert.equal(eff.nodes[2].doc_type, 'article',
+            'a PERSON node sharing a record id is not a Work node');
+        assert.equal(eff.nodes[0].label, 'Paper', 'untouched columns survive');
+        assert.equal(JSON.stringify(snapshot), snapFrozen, 'the cached snapshot is never mutated');
+    }
+    assert.deepEqual(globalThis.PRKS_WORK_REFERENCE_KINDS,
+        ['research-graph-core', 'research-graph-people', 'concept', 'argument']);
+    // A field no reference shape carries touches none of them.
+    assert.deepEqual(globalThis.prksWorkReferencePatches('research-graph-core', 'doi', 'x'), []);
+    assert.deepEqual(globalThis.prksWorkReferencePatches('concept', 'doc_type', 'book'), [],
+        'a Concept backlink shows a Title, never a doc type');
+
+    globalThis.prksSetPendingWorkMetadata([]);
+}
+
 /* ---- thumb_page: the wire value is not the entity value ----
  *
  * Every synchronized field before this one was a string in the editor, on the
@@ -1050,6 +1213,127 @@ async function unreadableSummariesBlockRetirement() {
         'and nothing was half-written');
 }
 
+/* An acknowledgement reaches Work values held by REFERENCE in other entity
+ * families -- the cached Research Graph snapshots -- and an older graph GET
+ * cannot publish over it. */
+async function graphReferenceReconciliation() {
+    const factory = createFakeIndexedDBFactory();
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const snapshot = () => ({ nodes: [
+        { id: 'work:W-G', record_id: 'W-G', type: 'work', doc_type: 'article', label: 'Paper' },
+        { id: 'work:W-OTHER', record_id: 'W-OTHER', type: 'work', doc_type: 'article' },
+        { id: 'concept:C1', record_id: 'C1', type: 'concept' },
+    ], edges: [] });
+    await cache.putEntity('work', 'W-G', { id: 'W-G', doc_type: 'article' });
+    await cache.putEntity('research-graph-core', 'snapshot', snapshot());
+    await cache.putEntity('research-graph-people', 'snapshot', snapshot());
+    const offline = createPrksOfflineRuntime({ store: cache, window: null,
+        prksRequest: async () => { throw new Error('no reads in this scenario'); } });
+
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-G',
+        field: 'doc_type', value: 'book', server_revision: 1, changed: true }), true);
+    for (const kind of ['research-graph-core', 'research-graph-people']) {
+        const nodes = (await cache.getEntity(kind, 'snapshot')).value.nodes;
+        assert.equal(nodes[0].doc_type, 'book', kind + ' Work node was patched');
+        assert.equal(nodes[1].doc_type, 'article', 'and only the acknowledged Work');
+        assert.equal(nodes[2].type, 'concept', 'other node kinds are untouched');
+        assert.equal(nodes[0].label, 'Paper', 'and so are other columns');
+    }
+
+    /* A field no Graph node carries must not drag those domains into its
+     * reconciliation -- DOI is the control case. */
+    const before = ['research-graph-core', 'research-graph-people']
+        .map(d => offline.currentDomainGeneration(d));
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-G',
+        field: 'doi', value: '10.1/x', server_revision: 1, changed: true }), true);
+    assert.deepEqual(['research-graph-core', 'research-graph-people']
+        .map(d => offline.currentDomainGeneration(d)), before,
+        'a field the Graph does not render leaves both graph domains alone');
+
+    // A missing snapshot is nothing to reconcile, not a failure.
+    await cache.deleteEntity('research-graph-people', 'snapshot');
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-G',
+        field: 'doc_type', value: 'online', server_revision: 2, changed: true }), true);
+    assert.equal(await cache.getEntity('research-graph-people', 'snapshot'), null,
+        'and nothing is fabricated');
+}
+
+/* A Title acknowledgement reaches Concept and Argument caches too. */
+async function titleReferenceReconciliation() {
+    const factory = createFakeIndexedDBFactory();
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    await cache.putEntity('work', 'W-T', { id: 'W-T', title: 'Old' });
+    await cache.putEntity('concept', 'C1', { id: 'C1', mentions: [
+        { work_id: 'W-T', title: 'Old' }, { work_id: 'W-OTHER', title: 'Other' }] });
+    await cache.putEntity('concept', 'C2', { id: 'C2', mentions: [{ work_id: 'W-OTHER', title: 'x' }] });
+    await cache.putEntity('argument', 'A1', {
+        id: 'A1', sources: [{ work_id: 'W-T', work_title: 'Old' }],
+        mentions: [{ work_id: 'W-T', title: 'Old' }] });
+    await cache.putEntity('research-graph-core', 'snapshot', { nodes: [
+        { id: 'work:W-T', record_id: 'W-T', type: 'work', label: 'Old' }], edges: [] });
+    const offline = createPrksOfflineRuntime({ store: cache, window: null,
+        prksRequest: async () => { throw new Error('no reads in this scenario'); } });
+
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-T',
+        field: 'title', value: 'New Title', server_revision: 1, changed: true }), true);
+
+    const concept = (await cache.getEntity('concept', 'C1')).value;
+    assert.equal(concept.mentions[0].title, 'New Title', 'the Concept backlink was patched');
+    assert.equal(concept.mentions[1].title, 'Other', 'and only the acknowledged Work');
+    assert.equal((await cache.getEntity('concept', 'C2')).value.mentions[0].title, 'x',
+        'a Concept that does not reference the Work is left alone');
+    const argument = (await cache.getEntity('argument', 'A1')).value;
+    assert.equal(argument.sources[0].work_title, 'New Title', 'both Argument collections');
+    assert.equal(argument.mentions[0].title, 'New Title');
+    assert.equal((await cache.getEntity('research-graph-core', 'snapshot')).value.nodes[0].label,
+        'New Title', 'and the Graph label');
+
+    /* A field no reference shape carries must not drag those domains into its
+     * reconciliation. */
+    const before = ['concepts', 'arguments'].map(d => offline.currentDomainGeneration(d));
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-T',
+        field: 'doi', value: '10.1/x', server_revision: 1, changed: true }), true);
+    assert.deepEqual(['concepts', 'arguments'].map(d => offline.currentDomainGeneration(d)),
+        before, 'a DOI reaches no Concept or Argument');
+
+    /* An unreadable reference cache blocks retirement: the operation must be
+     * replayed rather than retired believing it patched what it could not read. */
+    const unreadable = Object.assign(Object.create(Object.getPrototypeOf(cache)), cache, {
+        getEntitiesByKind: async kind => (kind === 'concept' ? null : []),
+    });
+    const blocked = createPrksOfflineRuntime({ store: unreadable, window: null,
+        prksRequest: async () => { throw new Error('no reads'); } });
+    assert.equal(await blocked.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-T',
+        field: 'title', value: 'Later', server_revision: 2, changed: true }), false);
+}
+
+/* A graph GET that began before the acknowledgement must lose. */
+async function staleGraphRead() {
+    const factory = createFakeIndexedDBFactory();
+    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const stale = { nodes: [{ id: 'work:W-G', record_id: 'W-G', type: 'work',
+        doc_type: 'article', label: 'Paper' }], edges: [] };
+    await cache.putEntity('research-graph-core', 'snapshot', JSON.parse(JSON.stringify(stale)));
+    await cache.putEntity('work', 'W-G', { id: 'W-G', doc_type: 'article' });
+    let release = null;
+    const inFlight = new Promise(resolve => { release = resolve; });
+    const offline = createPrksOfflineRuntime({ store: cache, window: null, prksRequest: async () => {
+        await inFlight;
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(stale)) };
+    } });
+
+    const reading = offline.readThroughEntity('research-graph-core', 'snapshot',
+        '/api/research-graph', { domain: 'research-graph-core' });
+    await settle();
+    assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-G',
+        field: 'doc_type', value: 'book', server_revision: 1, changed: true }), true);
+    release();
+    await reading;
+    await settle();
+    assert.equal((await cache.getEntity('research-graph-core', 'snapshot')).value.nodes[0].doc_type,
+        'book', 'a stale graph response cannot beat the acknowledgement');
+}
+
 /* An embedded-entity GET that began before the acknowledgement must lose. */
 async function staleEmbeddedRead() {
     const factory = createFakeIndexedDBFactory();
@@ -1505,7 +1789,8 @@ async function highFanOut() {
     assert.equal(effectiveSummaries[0].publisher, 'Elsevier', 'untouched fields survive');
     assert.deepEqual(summaries, frozenSummaries, 'the cached entity is never mutated');
     assert.deepEqual(globalThis.PRKS_WORK_SUMMARY_FIELDS,
-        ['status', 'thumb_page', 'author_text', 'year', 'published_date', 'publisher']);
+        ['title', 'status', 'doc_type', 'thumb_page', 'author_text', 'year',
+         'published_date', 'publisher', 'source_url']);
 
     /* The Published Date codec: the editor spells it dd/mm/yyyy, the wire and
      * the column are ISO, and comparing the spellings would make an untouched
@@ -1556,6 +1841,9 @@ async function main() {
     await highFanOut();
     statusMembership();
     authorTextComposition();
+    provenanceSourceUrl();
+    titleReferenceOverlays();
+    docTypeMembershipAndGraph();
     thumbPageCodec();
     thumbPageKeepsRowsValid();
     thumbnailResourceIdentity();
@@ -1564,6 +1852,9 @@ async function main() {
     await embeddedReconciliation();
     await unreadableSummariesBlockRetirement();
     await staleEmbeddedRead();
+    await graphReferenceReconciliation();
+    await titleReferenceReconciliation();
+    await staleGraphRead();
     console.log('All ' + checks + ' Work metadata checks passed');
 }
 

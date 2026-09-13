@@ -42,6 +42,9 @@
         { name: 'status', role: 'work-status-editor', saveId: 'save-work-status-btn',
           syncRole: 'work-status-sync',
           failure: 'Could not save the status locally. Please retry.' },
+        { name: 'identity', role: 'work-identity-editor', saveId: 'save-work-identity-btn',
+          syncRole: 'work-identity-sync',
+          failure: 'Could not save the identity locally. Please retry.' },
     ]);
 
     function groupSection(group) {
@@ -149,15 +152,10 @@
                 status.appendChild(conflictRow(ctx, state, op, group));
             }
         }
-        // Everything outside the synchronized groups still saves over HTTP.
-        const note = panel.querySelector('[data-prks-role="work-meta-online-only"]');
-        const offline = root.prksOfflineRuntimeState() !== 'online';
-        if (note) note.hidden = !offline;
-        const onlineSave = panel.querySelector('#inline-save-metadata-btn');
-        if (onlineSave) {
-            onlineSave.disabled = offline;
-            onlineSave.title = offline ? 'These fields require a connection to PRKS.' : '';
-        }
+        /* There is nothing left here that saves over HTTP: every user-editable
+         * Work metadata value belongs to one of the durable groups above, so
+         * the editor has no online-only mutation path to gate on connectivity
+         * and no note to show about one. */
     }
 
     /* Painting must never become an unhandled rejection. The durable store
@@ -237,6 +235,13 @@
             }
         } else if (result.code === 'ENTITY_NOT_FOUND') {
             item.appendChild(document.createTextNode('This Work no longer exists on the server. '));
+        } else if (result.code === 'WRONG_OPERATION_FOR_SOURCE') {
+            /* Not a disagreement about a value -- the value simply is not a
+             * field-scoped one on this Work. Nothing to choose between, so the
+             * only offer is to discard the local edit. */
+            item.appendChild(document.createTextNode(
+                'This file\u2019s source is a video, so its URL is part of the video\u2019s '
+                + 'identity and is changed from the Video source section instead. '));
         } else {
             item.appendChild(document.createTextNode(
                 label + ' could not synchronize (' + (result.code || 'protocol error') + '). '));
@@ -301,7 +306,14 @@
             state.observed.fields[ack.field] =
                 root.prksMetadataStateAckPatch(ack.field, ack.server_revision, ack.value);
         }
-        const input = document.querySelector('[data-prks-work-field="' + ack.field + '"]');
+        /* The entity write above is scoped to THIS ctx, but the panel is
+         * shared: a global lookup would find whichever Work's editor is on
+         * screen right now, which is not necessarily this one. An unfocused
+         * Work's acknowledgement writing its value into the focused Work's
+         * input is the acknowledgement publishing into another Work. Only the
+         * owner of the panel may touch the panel, and only within it. */
+        const panel = owns(ctx, state) ? panelOf() : null;
+        const input = panel && panel.querySelector('[data-prks-work-field="' + ack.field + '"]');
         if (input && !input.disabled && document.activeElement !== input) input.value = ack.value;
     }
 

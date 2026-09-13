@@ -60,6 +60,19 @@ MAX_ABSTRACT_UTF8_BYTES = 1024 * 1024
 # impossible offline. That is the split contract this architecture removes.
 MAX_AUTHOR_TEXT_UTF8_BYTES = 64 * 1024
 
+# A Title is one line of text. 64 KiB is far beyond any real one -- which is
+# again the point: the number exists so the field has a stated contract rather
+# than inheriting whichever storage layer refuses first. The column has no
+# length constraint and the ordinary PATCH accepted any length, so this is the
+# first bound Title has ever had, chosen to match `author_text` rather than to
+# restrict anything a user would type.
+MAX_TITLE_UTF8_BYTES = 64 * 1024
+
+# A provenance URL. Same reasoning and same number as the two above: the bound
+# exists so the field has a contract rather than inheriting whichever storage
+# layer refuses first.
+MAX_SOURCE_URL_UTF8_BYTES = 64 * 1024
+
 # Fields measured in UTF-8 BYTES rather than code points, and their limits.
 # A byte bound is a STORAGE and TRANSPORT concern -- how much a durable
 # operation, a cached projection and every read of them may cost -- so it is
@@ -75,6 +88,8 @@ MAX_AUTHOR_TEXT_UTF8_BYTES = 64 * 1024
 BYTE_LIMITS = {
     "abstract": MAX_ABSTRACT_UTF8_BYTES,
     "author_text": MAX_AUTHOR_TEXT_UTF8_BYTES,
+    "title": MAX_TITLE_UTF8_BYTES,
+    "source_url": MAX_SOURCE_URL_UTF8_BYTES,
 }
 
 # The canonical Work statuses. This lives HERE, in the field-synchronization
@@ -91,12 +106,42 @@ WORK_STATUSES = (
 )
 WORK_STATUS_SET = frozenset(WORK_STATUSES)
 
+# The BibLaTeX entry types a Work may claim. Here for the same reason the
+# statuses are: PATCH, the bulk action and the synchronization handler must all
+# decide validity the same way, and db_manager already imports this module.
+# `db_manager` re-exports it as PRKS_BIBTEX_DOC_TYPES.
+#
+# Unlike the statuses, the ordinary PATCH NORMALIZES rather than refuses --
+# anything unrecognized becomes "misc", and that is long-standing product
+# behaviour this milestone does not get to change. The two paths still converge:
+# PATCH normalizes first and then validates, so what it stores is always
+# canonical, while the synchronization wire requires an already-canonical value
+# because the editor's control offers nothing else. A wire value the server
+# silently rewrote would also break the acknowledgement contract, which requires
+# the echoed value to equal the one the operation carried.
+DOC_TYPES = (
+    "article", "book", "booklet", "inbook", "incollection", "inproceedings",
+    "proceedings", "manual", "mastersthesis", "phdthesis", "techreport",
+    "unpublished", "misc", "online",
+)
+DOC_TYPE_SET = frozenset(DOC_TYPES)
+DEFAULT_DOC_TYPE = "misc"
+
+
+def normalize_doc_type(value):
+    """User/API input -> a whitelisted entry type; anything unknown -> misc."""
+    if value is None:
+        return DEFAULT_DOC_TYPE
+    text = str(value).strip().lower()
+    return text if text in DOC_TYPE_SET else DEFAULT_DOC_TYPE
+
 # A synchronized field is validated either by SIZE or by an ALLOWLIST. Status
 # is the first of the second kind: its legal values are an enumeration the
 # whole application shares, and a free-text length bound would say nothing
 # about whether a value is meaningful.
 FIELD_ALLOWLISTS = {
     "status": WORK_STATUS_SET,
+    "doc_type": DOC_TYPE_SET,
 }
 
 # A field's entry is its size limit -- in UTF-8 BYTES for a field listed in
@@ -105,6 +150,16 @@ FIELD_ALLOWLISTS = {
 # and asking a five-value enumeration how long it may be is meaningless.
 SYNCED_FIELDS = {
     "status": None,
+    "title": MAX_TITLE_UTF8_BYTES,
+    # PROVENANCE ONLY, and only on a Work whose kind is explicitly non-video.
+    # See `guard_field_on_conn`: on a video Work this same column is one
+    # spelling of an identity that spans several columns, and changing it
+    # alone would leave the stored URL naming one video while `provider_id`
+    # still plays another.
+    "source_url": MAX_SOURCE_URL_UTF8_BYTES,
+    # Validated by allowlist; canonicalized by `normalize_doc_type` on the
+    # PATCH path, which is where unrecognized input has always become "misc".
+    "doc_type": None,
     # Validated by its CODEC rather than by size or allowlist: a page number
     # is not long or short, it is a page number or it is not one.
     "thumb_page": None,
@@ -178,13 +233,21 @@ FIELD_PROJECTIONS = {
     # Every Work card derives its thumbnail URL from this, so a pending page
     # has to reach the cached rows those cards are rendered from.
     "thumb_page": BROWSE_LISTS,
+    # Every Work card shows a doc-type badge, and Types groups on it -- the
+    # same shape `status` has for Progress.
+    "doc_type": BROWSE_LISTS,
+    # The widest field of all: every Work card shows a Title.
+    "title": BROWSE_LISTS,
+    # Browse rows carry it; `prksInferWorkSourceKind` consults it when a Work
+    # has no explicit kind and no file.
+    "source_url": BROWSE_LISTS,
 }
 
 # Fields that cached ENTITY snapshots embed as part of a Work summary:
 # `folder.works[]`, `person.works[]`, `playlist.items[]`. A pending value has to
 # reach those rows too, and an acknowledgement has to patch them.
-SUMMARY_FIELDS = frozenset({"status", "thumb_page", "author_text", "year",
-                           "published_date", "publisher"})
+SUMMARY_FIELDS = frozenset({"status", "title", "doc_type", "thumb_page", "author_text",
+                           "year", "published_date", "publisher", "source_url"})
 SUMMARY_ENTITY_KINDS = ("folder", "person", "playlist")
 
 
@@ -376,6 +439,11 @@ def canonical_wire(field, value):
     Canonicalizing here is what makes "003" and "3" the same state rather than
     two devices disagreeing about a page they both chose.
     """
+    if field == "doc_type":
+        # Long-standing PATCH behaviour: unknown becomes "misc" rather than
+        # being refused. Applied here so PATCH and the sync handler still reach
+        # the same stored value from the same input.
+        return normalize_doc_type(value)
     return codec_for(field).to_wire(value)
 
 
@@ -439,6 +507,32 @@ def get_revision(conn, work_id, field):
         "SELECT revision FROM sync_entity_revisions WHERE scope_type = 'work-field' AND scope_id = ?",
         (scope_key(work_id, field),)).fetchone()
     return row[0] if row else 0
+
+
+# A field-scoped operation is the wrong semantic unit for some (field, Work)
+# pairs. `source_url` is the first: on a Work whose canonical kind is video it
+# is one spelling of an identity spanning `source_kind`, `provider` and
+# `provider_id`, and `provider_id` outranks it -- so changing the column alone
+# would leave the stored URL naming one video while the viewer plays another.
+# The guard lives HERE, on the mutation boundary, because a guard that lives
+# only in a form is not a contract: the UI already hides the control for
+# videos, and that has never stopped an API client.
+FIELD_KIND_GUARDS = {
+    "source_url": "video",
+}
+
+
+def guarded_field_refusal(conn, work_id, field):
+    """The reason this field may not be set on this Work, or None."""
+    forbidden_kind = FIELD_KIND_GUARDS.get(field)
+    if forbidden_kind is None:
+        return None
+    row = conn.execute("SELECT source_kind FROM works WHERE id = ?", (work_id,)).fetchone()
+    if row is None:
+        return None   # a missing Work is ENTITY_NOT_FOUND, decided elsewhere
+    if canonical(row[0]).strip().lower() != forbidden_kind:
+        return None
+    return "WRONG_OPERATION_FOR_SOURCE"
 
 
 def set_field_on_conn(conn, work_id, field, value):
@@ -595,6 +689,13 @@ def apply(db, conn, op, received_at):
     # is the value unchanged; for `thumb_page` it is what makes column 3, wire
     # "3" and wire "003" one state rather than three, so two devices that chose
     # the same page are never told they disagreed.
+    refusal = guarded_field_refusal(conn, work_id, field)
+    if refusal is not None:
+        # Terminal, and deliberately not a conflict: there is nothing for the
+        # user to choose between. A video's source is changed by the aggregate
+        # source operation, which keeps every identity column consistent.
+        result["code"] = refusal
+        return 409, result
     current = database_to_wire(field, row[0])
     desired = canonical_wire(field, desired)
     revision = get_revision(conn, work_id, field)

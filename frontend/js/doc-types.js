@@ -72,14 +72,19 @@ function prksDocTypeVisGroups() {
  * @param {string} selectedValue
  * @param {boolean} [disabled]
  */
-function prksDocTypeMenuShellHtml(prefix, selectedValue, disabled) {
+function prksDocTypeMenuShellHtml(prefix, selectedValue, disabled, options) {
     const sel = prksNormalizeDocType(selectedValue);
     const meta = prksDocTypeMeta(sel);
     const dis = disabled ? ' disabled' : '';
     const ariaDis = disabled ? ' aria-disabled="true"' : '';
+    /* The hidden input IS the field control as far as the synchronized
+     * metadata editor is concerned: it holds the value, and the menu is its
+     * presentation. */
+    const workField = options && options.workField
+        ? ` data-prks-work-field="${prksEscapeDocTypeAttr(options.workField)}"` : '';
     return (
         `<div class="prks-doc-type-menu combobox-container">` +
-        `<input type="hidden" id="${prefix}" name="${prefix}" value="${prksEscapeDocTypeAttr(sel)}">` +
+        `<input type="hidden" id="${prefix}" name="${prefix}" value="${prksEscapeDocTypeAttr(sel)}"${workField}>` +
         `<button type="button" class="prks-doc-type-menu__trigger" id="${prefix}-trigger"${dis}${ariaDis} ` +
         `aria-haspopup="listbox" aria-expanded="false" aria-controls="${prefix}-listbox" ` +
         `aria-label="BibLaTeX document type">` +
@@ -207,4 +212,18 @@ function initPrksDocTypeMenu(hiddenInputId, opts) {
             }
         }
     });
+}
+
+/* Also published as a property of the global object, not only as a script-scope
+ * binding. A classic script's top-level `const` is visible to later scripts by
+ * bare identifier but is NOT reachable as `window.PRKS_DOC_TYPES`, so anything
+ * that wants the canonical list without depending on script order -- or that
+ * runs under a module loader, as the Node selftests do -- has nothing to read.
+ * One list, two ways to reach it; never a second copy. */
+if (typeof window !== 'undefined') {
+    window.PRKS_DOC_TYPES = PRKS_DOC_TYPES;
+    window.prksNormalizeDocType = prksNormalizeDocType;
+} else if (typeof globalThis !== 'undefined') {
+    globalThis.PRKS_DOC_TYPES = PRKS_DOC_TYPES;
+    globalThis.prksNormalizeDocType = prksNormalizeDocType;
 }

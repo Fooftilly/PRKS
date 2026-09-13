@@ -1,3 +1,4 @@
+from backend import work_source_sync
 from backend.sync_protocol import process_operation
 import http.server
 import socketserver
@@ -603,61 +604,15 @@ _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _SAVE_TOKEN_LOCK = threading.Lock()
 
-# Explicit recognized YouTube hostnames. Never substring-match (rejects
-# "notyoutube.com" / "youtube.com.example.org"). Shared contract with
-# frontend prksIsRecognizedYoutubeHost() and works-video.js.
-_YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
-
-
-def _youtube_host(netloc: str) -> str:
-    host = (netloc or "").lower()
-    if "@" in host:
-        host = host.rsplit("@", 1)[-1]
-    if ":" in host:
-        host = host.rsplit(":", 1)[0]
-    return host
-
-
-def _is_youtube_host(netloc: str) -> bool:
-    return _youtube_host(netloc) in _YOUTUBE_HOSTS
-
-
-def _youtube_video_id(url: str) -> str | None:
-    try:
-        u = urlparse(url)
-    except Exception:
-        return None
-    host = _youtube_host(u.netloc)
-    if not _is_youtube_host(host):
-        return None
-    if host == "youtu.be":
-        vid = (u.path or "").strip("/").split("/")[0].strip()
-        return vid or None
-    qs = parse_qs(u.query or "")
-    vid = (qs.get("v") or [""])[0].strip()
-    if vid:
-        return vid
-    # /embed/<id>
-    parts = (u.path or "").strip("/").split("/")
-    if len(parts) >= 2 and parts[0] == "embed" and parts[1].strip():
-        return parts[1].strip()
-    return None
-
-
-def _validate_youtube_url(url: str) -> str | None:
-    """Return the extracted video ID for a supported YouTube URL, else None."""
-    u = str(url or "").strip()
-    if not u:
-        return None
-    try:
-        parsed = urlparse(u)
-    except Exception:
-        return None
-    if parsed.scheme not in ("http", "https"):
-        return None
-    if not _is_youtube_host(parsed.netloc):
-        return None
-    return _youtube_video_id(u)
+# Work creation and source synchronization share ONE parser, in the source
+# domain module. A second one here would eventually disagree with it, and the
+# disagreement would surface as a Work whose stored URL and stored provider_id
+# name different videos.
+_YOUTUBE_HOSTS = work_source_sync.YOUTUBE_HOSTS
+_youtube_host = work_source_sync.youtube_host
+_is_youtube_host = work_source_sync.is_youtube_host
+_youtube_video_id = work_source_sync.youtube_video_id
+_validate_youtube_url = work_source_sync.validate_youtube_url
 
 
 def _fetch_youtube_oembed(url: str) -> dict | None:
@@ -2007,6 +1962,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(404, {"error": "Work not found"})
                 else:
                     etag = db.etag_for_representation("work-metadata-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/works/') and path.endswith('/source-state') and len(path.split('/')) == 5:
+                # A REVISION ONLY. The Work record already carries every
+                # canonical source value, so duplicating a URL here would
+                # double what this endpoint sends and what IndexedDB stores
+                # for values the client already holds.
+                data = work_source_sync.get_source_state(db, path.split('/')[3])
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    etag = db.etag_for_representation("work-source-state", data)
                     if self._prks_if_none_match(etag):
                         self._send_json_not_modified(etag)
                         return

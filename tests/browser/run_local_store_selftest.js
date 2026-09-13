@@ -583,8 +583,8 @@ async function run() {
             payload: { field: 'author_text', value }, base_revision: 0,
         });
         const limits = mod.PRKS_LOCAL_WORK_FIELD_VALUE_BYTES;
-        assertEq('the registry holds both byte-limited fields',
-            Object.keys(limits).sort().join(','), 'abstract,author_text');
+        assertEq('the registry holds every byte-limited field',
+            Object.keys(limits).sort().join(','), 'abstract,author_text,source_url,title');
         const limit = limits.author_text;
         assertEq('the author_text allowance is the product limit', limit, 64 * 1024);
 

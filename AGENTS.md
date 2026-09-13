@@ -1648,10 +1648,56 @@ The families are deliberately different in kind, and that is the point:
 - **Offline suppression is decided BEFORE any URL is derived.** A cached card
   emits no source at all; a pending edit is never a reason to request bytes
   that cannot arrive.
-- `source_url` is deliberately NOT synchronized: `prksYoutubeEmbedUrl()`
-  short-circuits on `provider_id`, so changing the URL alone would move the
-  stored value while the video that plays stays the same. It is an identity
-  aggregate, not a scalar.
+- `source_url` is synchronized only as PROVENANCE, and the server REFUSES a
+  field-scoped write to it on a video Work (`FIELD_KIND_GUARDS`). There it is
+  one spelling of an identity spanning four columns, and `prksYoutubeEmbedUrl()`
+  short-circuits on `provider_id` -- so changing the URL alone would move the
+  stored value while the video that plays stays the same.
+
+### Source identity is an AGGREGATE (Milestone 2O)
+
+- **`SET_WORK_SOURCE`, scope `work-source / <work id>`.** One user decision ->
+  one operation -> one revision -> one conflict, rewriting `source_kind`,
+  `provider`, `provider_id` and `source_url` together. Three field-scoped
+  operations would let two ordinary edits reach "the stored URL names video B
+  while the viewer plays video A".
+- **The payload carries INTENT, not columns**: `{source: {kind, url}}`.
+  `provider` and `provider_id` are DERIVED inside the mutation boundary. A
+  client able to assert them could assert an identity its own URL contradicts.
+- **Identity is `provider` + `provider_id`, never the URL spelling.**
+  `watch?v=A`, `youtu.be/A` and `embed/A` are ONE source: moving between them
+  is no revision, no conflict and no write.
+- **ONE parser**, in `work_source_sync`. Work creation imports it from there.
+  Two parsers would eventually disagree, and the disagreement would surface as
+  a Work whose stored URL and stored id name different videos. A cross-language
+  test drives 14 URL spellings through both implementations.
+- **`thumb_url` is cleared on an identity change**, never re-derived: deriving
+  it means a network call, and no canonical mutation may depend on one -- a
+  failed image fetch must never fail a source change. A row claiming video B
+  while serving video A's picture is a lie the user can see.
+- **Only video -> video is supported.** PDF -> video, video -> PDF and
+  video -> no source are refused with `UNSUPPORTED_SOURCE_TRANSITION`: no UI,
+  and no defined semantics for `file_path` or viewer selection. Refused, not
+  invented.
+- **Online, a pending source plays immediately**: the embed URL is fully
+  determined by `provider_id`, which the client derives itself. Offline, the
+  intent still saves durably but no remote request is made -- saved local
+  intent is not resource availability, exactly as with thumbnails.
+
+### Work values held by REFERENCE in other entities (Milestone 2M)
+
+- `title` lives inside caches that are not Work rows: Concept backlinks,
+  Argument `sources[]`/`mentions[]`, and Graph node `label`s -- keyed by a
+  foreign column, under property names that disagree with each other.
+  `WORK_REFERENCE_SHAPES` describes all of them; a component never learns what
+  a durable operation is, and the next field is a registry entry.
+- **Patch, never invalidate.** `prksMarkWorkTitleChanged()` used to stale four
+  domains after a Title PATCH. The durable ACK reconciles exact values instead
+  -- destroying usable offline snapshots for a change whose shape is known is
+  the opposite of the reconciler's purpose.
+- The Playlist inline rename is a WORK TITLE change, not Playlist state: it
+  uses the same durable operation and therefore works offline, while every
+  genuine Playlist mutation stays online-only.
 
 ### Local-first Work opens (Milestone 2C)
 
@@ -1981,6 +2027,35 @@ Measured on the Concept-detail transition with
 6–9/20 fail without it. There is no page-observable "durable across teardown"
 signal to wait on instead, so the delay stays. Re-run that script before
 believing any claim to the contrary.
+
+## `wait_for_function` cannot express an async condition
+
+`page.wait_for_function` **awaits a returned Promise and then tests the settled
+promise for truthiness** — and a promise is always truthy. So this gate
+
+```python
+page.wait_for_function("() => prksSync.store.listOperations().then(r => r.length === 0)")
+```
+
+passes on its first poll whether the queue is empty or not: it waits one round
+trip and reports success. It does not fail loudly; it silently stops being a
+gate, which is worse than either passing or failing. Verified directly:
+a predicate returning `Promise.resolve(false)` passes in 0.01 s, and one
+resolving to `false` after 3 s passes in 3.03 s — the delay comes from awaiting
+the promise, not from the answer.
+
+Almost every durable-queue, IndexedDB and offline-store condition in this suite
+is asynchronous, so **use `wait_for_async(page, expression, arg=..., timeout=...)`
+from `tests/e2e/harness.py` for any predicate whose body contains `.then(`,
+`async` or `await`.** It polls with `page.evaluate`, which does return the
+resolved value, and raises an `AssertionError` naming the last value it saw.
+`wait_for_function` remains correct — and preferred — for a synchronous
+predicate (DOM state, a global, `location.hash`).
+
+This was found when a Title save appeared to reach an empty queue instantly
+while its operation was in fact still `syncing`. Forty gates across seven
+modules were vacuous; converting them exposed two real defects that had been
+passing.
 
 ## UX Interaction Tour
 

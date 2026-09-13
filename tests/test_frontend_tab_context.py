@@ -439,17 +439,12 @@ class TestWorkRefreshHelpersUseOwnedEntity(unittest.TestCase):
             self.assertTrue(body, name + " missing")
             self.assertIn("prksApplyOwnedWorkEntity", body, name + " must apply owned Work")
             self.assertNotIn("ctx.setEntity('work'", body, name + " still sets work unconditionally")
-        submit = _js_function_source(ui, "submitWorkMetaEdit")
-        # A successful save must settle the owning ctx's edit-mode/draft runtime through the
-        # extracted helper (which itself only re-renders #panel-content when this ctx still
-        # owns it) rather than toggleWorkMetaEdit(false), which always re-derives the
-        # *currently focused* context and so would silently no-op for a background save whose
-        # owning tab is no longer focused.
-        self.assertIn("prksSettleWorkMetaEditAfterSave", submit)
-        self.assertNotIn("toggleWorkMetaEdit(false)", submit)
-        settle = _js_function_source(ui, "prksSettleWorkMetaEditAfterSave")
-        self.assertTrue(settle, "prksSettleWorkMetaEditAfterSave missing")
-        self.assertIn("toggleWorkMetaEditForContext", settle)
+        # `submitWorkMetaEdit` and its post-save settle helper are gone with the
+        # online-only metadata save: every Work metadata value is now written
+        # by a durable group, and those repaint through the editor's own
+        # ownership-checked paint rather than through a save callback.
+        self.assertNotIn("async function submitWorkMetaEdit(", ui)
+        self.assertNotIn("prksSettleWorkMetaEditAfterSave", ui)
 
     def test_work_render_and_route_right_panel_require_focus(self):
         works_path = os.path.join(FRONTEND_JS, "components", "works.js")

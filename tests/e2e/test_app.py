@@ -22,6 +22,7 @@ from tests.e2e.harness import (
     FixtureServer,
     open_app_page,
     require_chromium,
+    wait_for_async,
 )
 from tests.ux_tour.fixtures import TAG_NAMES, seed_ux_tour_library
 
@@ -135,6 +136,15 @@ def _focused_back_href(page, timeout=30000):
             return back ? back.getAttribute('href') : null;
         }"""
     )
+
+
+def _server_work_title(server, work_id):
+    """The title the server actually stores, read from the database rather
+    than from the page -- the point of a durable-first assertion is that the
+    two can legitimately disagree until an operation is acknowledged."""
+    from backend.db_manager import PRKSDatabase
+    from backend.storage.config import StorageConfig
+    return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root)).get_work(work_id)["title"]
 
 
 def _open_work_from_home(page, title):
@@ -1028,11 +1038,13 @@ class WorkDetailsPolishTests(_BrowserE2E):
         page.locator("#meta-doc-type-trigger").click()
         page.locator('#panel-content .prks-doc-type-menu__option[data-value="phdthesis"]').click()
         self.assertEqual(page.locator("#meta-doc-type").input_value(), "phdthesis")
-        page.locator("#panel-content button", has_text="Cancel").click()
+        # The editor's only leave control is "Close" -- the durable groups
+        # each own their own Save, so there is no form-wide Cancel to press.
+        page.locator("#panel-content button", has_text="Close").click()
         page.locator("#prks-modal-confirm").wait_for()
         page.locator("#prks-modal-confirm-cancel").click()
         self.assertEqual(page.locator("#meta-title").input_value(), "Unsaved Work Title")
-        page.locator("#panel-content button", has_text="Cancel").click()
+        page.locator("#panel-content button", has_text="Close").click()
         page.locator("#prks-modal-confirm-ok").click()
         page.locator("#panel-content .card-title", has_text=WORK_A_TITLE).wait_for()
 
@@ -1091,58 +1103,75 @@ class WorkDetailsPolishTests(_BrowserE2E):
             except Exception:
                 pass
 
-    def test_metadata_save_busy_state_blocks_duplicate_submit(self):
-        """Save Changes must go aria-busy/disabled with a visible "Saving..." label while its
-        PATCH is pending -- and stay that way (no second PATCH) if clicked again -- then
-        restore once the request completes."""
-        server, page, _collector = self._start_app()
-        work_a = server.ids["work_a"]
-        held = []
+    def test_repeated_identity_saves_enqueue_exactly_one_operation(self):
+        """The durable replacement for the old "busy button" guard.
 
-        def hold_patch(route):
-            req = route.request
-            if req.method == "PATCH" and urlparse(req.url).path == "/api/works/" + work_a:
-                held.append(route)
-                return
-            route.fallback()
+        A Title save is local-first: the click writes an operation and returns,
+        so there is no in-flight request for a button to be busy *during*. What
+        must not happen is a second operation for a value already queued -- and
+        the queue, not a disabled button, is what decides that. This holds the
+        send so the first operation is still unacknowledged, clicks Save again,
+        and requires that the second click add nothing: the same guard then
+        survives a reload, which a button state never could."""
+        server, page, collector = self._start_app()
+        work_a = server.ids["work_a"]
+        sends = []
+
+        def hold_send(route):
+            sends.append(route.request.url)
+            route.abort("failed")
 
         _open_work_from_home(page, WORK_A_TITLE)
         page.locator("#panel-content button", has_text="Edit metadata").click()
         page.locator("#meta-title").wait_for()
-        page.fill("#meta-title", "Busy Save Title")
-        page.route("**/api/works/*", hold_patch)
+        page.wait_for_function(
+            "() => { const b = document.getElementById('save-work-identity-btn');"
+            "        return !!b && !b.disabled; }"
+        )
+        page.route("**/api/sync/operations", hold_send)
         try:
-            page.locator("#inline-save-metadata-btn").click()
+            page.fill("#meta-title", "Busy Save Title")
+            page.locator("#save-work-identity-btn").click()
+            wait_for_async(page,
+                "() => prksSync.store.listOperations().then(r => r.length === 1)"
+            )
             deadline = time.time() + 8
-            while time.time() < deadline and not held:
+            while time.time() < deadline and not sends:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "metadata PATCH was not intercepted")
-            page.wait_for_function(
-                "() => document.getElementById('inline-save-metadata-btn').getAttribute('aria-busy') === 'true'"
-            )
-            self.assertTrue(
-                page.evaluate("() => document.getElementById('inline-save-metadata-btn').disabled")
-            )
-            self.assertEqual(page.locator("#inline-save-metadata-btn").inner_text(), "Saving…")
-            # A disabled button never dispatches a click to its handler -- forcing the pointer
-            # event through Playwright still must not produce a second PATCH.
-            page.locator("#inline-save-metadata-btn").click(force=True)
+            self.assertTrue(sends, "the queued operation was never sent")
+
+            # The field the operation owns is not editable while it is in
+            # flight: a second value typed over an unresolved one would be an
+            # edit against a base this session cannot state.
+            self.assertTrue(page.evaluate("() => document.getElementById('meta-title').disabled"))
+            page.locator("#save-work-identity-btn").click()
             page.wait_for_timeout(200)
-            self.assertEqual(len(held), 1)
-            _continue_held_routes(held)
-            page.wait_for_function(
-                """() => {
-                    const b = document.getElementById('inline-save-metadata-btn');
-                    return !b || b.getAttribute('aria-busy') !== 'true';
-                }"""
+            self.assertEqual(
+                page.evaluate("() => prksSync.store.listOperations().then(r => r.length)"),
+                1,
+                "a second Save for an already-queued value enqueues nothing",
             )
-            page.locator("#panel-content .card-title", has_text="Busy Save Title").wait_for()
+            self.assertEqual(
+                _server_work_title(server, work_a),
+                WORK_A_TITLE,
+                "and the server has still not been told anything",
+            )
         finally:
-            _continue_held_routes(held)
             try:
-                page.unroute("**/api/works/*", hold_patch)
+                page.unroute("**/api/sync/operations", hold_send)
             except Exception:
                 pass
+
+        wait_for_async(page,
+            "() => prksSync.store.listOperations().then(r => r.length === 0)", timeout=20000,
+            message="the Title operation never retired once the send was released",
+        )
+        self.assertEqual(_server_work_title(server, work_a), "Busy Save Title")
+        # The aborted sends were the point of the test -- the operation
+        # survived them and retried, which is exactly what a durable queue is
+        # for. They must not fail teardown's clean-browser check.
+        collector.console_errors.clear()
+        collector.failed_requests.clear()
 
 
 class PeopleSearchEmptyRoleTests(_BrowserE2E):
@@ -3825,116 +3854,122 @@ class TabContextHostRootTests(_BrowserE2E):
             }"""
         )
 
-    def test_work_meta_save_does_not_publish_into_other_work(self):
+    def test_an_acknowledgement_never_publishes_into_another_works_editor(self):
+        """One panel is shared by every tab, so an acknowledgement that arrives
+        while a DIFFERENT Work owns it must not write into what is on screen.
+
+        Work A's Title is saved with the send held, so its operation is still
+        unacknowledged. A second tab opens Work B and its own metadata editor
+        -- the same `#meta-title` element id, now belonging to B. Releasing the
+        send acknowledges A. A's own cached record must take the new title; B's
+        input, entity and panel must be untouched."""
         server, page, _collector = self._start_app()
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
         held = []
 
-        def hold_patch(route):
-            req = route.request
-            path = urlparse(req.url).path
-            if req.method == "PATCH" and path == "/api/works/" + work_a:
-                held.append(route)
+        def hold_send(route):
+            # Hold the FIRST send only. A retry after the release must be
+            # allowed through, or the operation can never retire and the test
+            # would be waiting on its own route handler.
+            if held:
+                route.fallback()
                 return
-            route.fallback()
+            held.append(route)
 
         _open_work_from_home(page, WORK_A_TITLE)
         page.wait_for_selector(".work-detail")
         page.locator("#panel-content button.inline-action-btn", has_text="Edit").click()
         page.wait_for_selector("#meta-title")
-        page.fill("#meta-title", "E2E Research Work Saved")
-        page.route("**/api/works/*", hold_patch)
+        page.wait_for_function(
+            "() => { const b = document.getElementById('save-work-identity-btn');"
+            "        return !!b && !b.disabled; }"
+        )
+        page.route("**/api/sync/operations", hold_send)
         try:
-            page.locator("#inline-save-metadata-btn").click()
+            page.fill("#meta-title", "E2E Research Work Saved")
+            page.locator("#save-work-identity-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "Work A metadata PATCH was not intercepted")
+            self.assertTrue(held, "Work A's operation was never sent")
+
+            # A durable save leaves nothing unsaved, so leaving A must not ask
+            # to discard anything -- the edit is already safe.
             page.evaluate(
                 """(id) => { void window.prksNavigate('#/works/' + id, { target: 'new-tab', activate: true }); }""",
                 arg=work_b,
             )
-            page.locator(
-                "#prks-modal-confirm:not(.hidden)", has_text="Discard metadata changes?"
-            ).wait_for()
-            page.locator("#prks-modal-confirm-ok").click()
             page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
-            page.wait_for_function(
-                "id => location.hash.indexOf('#/works/' + id) === 0",
-                arg=work_b,
-            )
+            self.assertEqual(page.locator("#prks-modal-confirm:not(.hidden)").count(), 0)
+            page.wait_for_function("id => location.hash.indexOf('#/works/' + id) === 0", arg=work_b)
             page.wait_for_selector(".work-detail")
-            page.get_by_text(WORK_B_TITLE).first.wait_for()
-            before = page.evaluate(
-                """() => {
-                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
-                    const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
-                    const panel = document.getElementById('panel-content');
-                    return {
-                        workId: work && work.id,
-                        title: work && work.title,
-                        tab: ctx && ctx.ui ? ctx.ui.rightPanelTab : null,
-                        panel: panel ? panel.innerText : '',
-                    };
-                }"""
+            page.locator("#panel-content button.inline-action-btn", has_text="Edit").click()
+            page.wait_for_selector("#meta-title")
+            page.wait_for_function(
+                "() => { const b = document.getElementById('save-work-identity-btn');"
+                "        return !!b && !b.disabled; }"
             )
-            self.assertEqual(before["workId"], work_b)
-            self.assertEqual(before["title"], WORK_B_TITLE)
+            self.assertEqual(page.input_value("#meta-title"), WORK_B_TITLE)
+
             _continue_held_routes(held)
-            page.wait_for_timeout(400)
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(r => r.length === 0)",
+                timeout=20000,
+                message="Work A's operation never retired",
+            )
+            page.wait_for_timeout(300)
+
+            # B's on-screen editor, entity and panel are untouched by A's ACK.
+            self.assertEqual(page.input_value("#meta-title"), WORK_B_TITLE)
             after = page.evaluate(
                 """() => {
-                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const ctx = window.prksGetFocusedTabContext();
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
-                    const panel = document.getElementById('panel-content');
-                    return {
-                        hash: location.hash,
-                        workId: work && work.id,
-                        title: work && work.title,
-                        tab: ctx && ctx.ui ? ctx.ui.rightPanelTab : null,
-                        panel: panel ? panel.innerText : '',
-                    };
+                    return { workId: work && work.id, title: work && work.title };
                 }"""
             )
-            self.assertIn(work_b, after["hash"])
             self.assertEqual(after["workId"], work_b)
             self.assertEqual(after["title"], WORK_B_TITLE)
-            self.assertEqual(after["tab"], before["tab"])
-            self.assertEqual(after["panel"], before["panel"])
-            self.assertNotIn("E2E Research Work Saved", after["panel"])
+            self.assertEqual(_server_work_title(server, work_b), WORK_B_TITLE)
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/works/*", hold_patch)
+                page.unroute("**/api/sync/operations", hold_send)
             except Exception:
                 pass
-        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
-        page.wait_for_function(
-            "id => location.hash.indexOf('#/works/' + id) === 0",
-            arg=work_a,
-        )
-        page.wait_for_selector(".work-detail")
-        self.assertGreaterEqual(page.locator(".work-detail").count(), 1)
 
-    def test_work_meta_save_settles_unfocused_owner_without_touching_new_panel_owner(self):
-        """The pure-focus race (no navigation/park involved): Work A is Main, Work B a visible
-        tiled Secondary. A enters metadata edit and Save is clicked while A is still focused
-        (and so still owns #panel-content) -- then, purely by refocusing B (never navigating or
-        parking A), B becomes the panel owner before A's PATCH resolves. Completion must still
-        settle A's own entity/runtime/tile-local DOM, must NEVER touch B's now-owned panel, and
-        must leave A's editor fully closed (no stale draft/dirty prompt) when A is refocused."""
+        # A kept its own acknowledgement: its record, and the server, hold it.
+        self.assertEqual(_server_work_title(server, work_a), "E2E Research Work Saved")
+        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("id => location.hash.indexOf('#/works/' + id) === 0", arg=work_a)
+        page.wait_for_selector(".work-detail")
+        page.wait_for_function(
+            "() => { const ctx = window.prksGetFocusedTabContext();"
+            "        const w = ctx && ctx.getEntity('work');"
+            "        return !!w && w.title === 'E2E Research Work Saved'; }"
+        )
+
+    def test_an_unfocused_owner_settles_its_own_work_and_not_the_panel(self):
+        """The pure-focus race, on the durable path.
+
+        Work A is Main and Work B a tiled Secondary. A's Title is saved while A
+        still owns the shared panel; then focus moves to B -- no navigation, no
+        parking -- so B owns the panel before A's operation is acknowledged.
+        A's acknowledgement must still settle A's own tab context, and must
+        touch nothing that now belongs to B."""
         server, page, _collector = self._start_app()
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
         held = []
 
-        def hold_patch(route):
-            req = route.request
-            if req.method == "PATCH" and urlparse(req.url).path == "/api/works/" + work_a:
-                held.append(route)
+        def hold_send(route):
+            # The first send only; a retry after the release must get through.
+            if held:
+                route.fallback()
                 return
-            route.fallback()
+            held.append(route)
 
         _open_work_from_home(page, WORK_A_TITLE)
         main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
@@ -3960,15 +3995,19 @@ class TabContextHostRootTests(_BrowserE2E):
         page.wait_for_function("() => document.body.classList.contains('prks-right-panel-open')")
         page.locator("#panel-content button", has_text="Edit metadata").click()
         page.locator("#meta-title").wait_for()
-        page.fill("#meta-title", "Saved While Unfocused")
+        page.wait_for_function(
+            "() => { const b = document.getElementById('save-work-identity-btn');"
+            "        return !!b && !b.disabled; }"
+        )
 
-        page.route("**/api/works/*", hold_patch)
+        page.route("**/api/sync/operations", hold_send)
         try:
-            page.locator("#inline-save-metadata-btn").click()
+            page.fill("#meta-title", "Saved While Unfocused")
+            page.locator("#save-work-identity-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "Work A metadata PATCH was not intercepted")
+            self.assertTrue(held, "Work A's operation was never sent")
 
             # Focus B by pure focus switch -- no navigate/park/close touches A at all.
             page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=work_b_tab_id)
@@ -3995,9 +4034,9 @@ class TabContextHostRootTests(_BrowserE2E):
                 "(id) => { const w = window.prksGetTabContext(id).getEntity('work'); return w && w.title === 'Saved While Unfocused'; }",
                 arg=main_id,
             )
-            page.wait_for_timeout(200)
+            page.wait_for_timeout(300)
 
-            # B's panel/entity are completely untouched by A's background completion.
+            # B's panel/entity are completely untouched by A's background acknowledgement.
             after = page.evaluate(
                 """(id) => {
                     const ctx = window.prksGetTabContext(id);
@@ -4015,7 +4054,6 @@ class TabContextHostRootTests(_BrowserE2E):
             self.assertEqual(after["panel"], before["panel"])
             self.assertEqual(after["ownerTabId"], work_b_tab_id)
 
-            # A's own ctx/runtime settled correctly even while unfocused.
             state_a = page.evaluate(
                 """(id) => {
                     const ctx = window.prksGetTabContext(id);
@@ -4024,9 +4062,6 @@ class TabContextHostRootTests(_BrowserE2E):
                         routeHash: ctx && ctx.route ? ctx.route.hash : null,
                         destroyed: !!(ctx && ctx.destroyed),
                         title: work && work.title,
-                        workDetailsMode: ctx && ctx.ui ? ctx.ui.workDetailsMode : null,
-                        workMetaDraft: ctx && ctx.ui ? ctx.ui.workMetaDraft : null,
-                        workMetaDraftWorkId: ctx && ctx.ui ? ctx.ui.workMetaDraftWorkId : null,
                     };
                 }""",
                 arg=main_id,
@@ -4034,23 +4069,22 @@ class TabContextHostRootTests(_BrowserE2E):
             self.assertFalse(state_a["destroyed"])
             self.assertEqual(state_a["routeHash"], "#/works/" + work_a)
             self.assertEqual(state_a["title"], "Saved While Unfocused")
-            self.assertEqual(state_a["workDetailsMode"], "view")
-            self.assertIsNone(state_a["workMetaDraft"])
-            self.assertIsNone(state_a["workMetaDraftWorkId"])
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/works/*", hold_patch)
+                page.unroute("**/api/sync/operations", hold_send)
             except Exception:
                 pass
 
-        # Refocusing A must show the saved title with the editor closed -- no stale draft.
+        self.assertEqual(_server_work_title(server, work_a), "Saved While Unfocused")
+        # Refocusing A shows the saved title, and leaving carries no stale draft:
+        # a durable save left nothing unsaved to confirm about.
         page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", arg=main_id)
         page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=main_id)
-        page.locator("#panel-content .card-title", has_text="Saved While Unfocused").wait_for()
-        self.assertEqual(page.locator("#meta-title").count(), 0)
-
-        # No stale dirty draft/discard prompt: navigating A's own Main away must not confirm.
+        page.wait_for_function(
+            "() => { const el = document.getElementById('meta-title');"
+            "        return !!el && el.value === 'Saved While Unfocused'; }"
+        )
         page.evaluate("() => { void window.prksNavigate('#/folders'); }")
         page.wait_for_function("() => location.hash === '#/folders'")
         self.assertEqual(page.locator("#prks-modal-confirm:not(.hidden)").count(), 0)

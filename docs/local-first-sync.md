@@ -490,7 +490,7 @@ The deferred fields do not share that property:
 
 | Field | Also rendered or matched by |
 | --- | --- |
-| `source_url` | every Work card, via `prksInferWorkSourceKind()` deciding the thumbnail kind |
+| `source_url` | every Work card, via `prksInferWorkSourceKind()` deciding the thumbnail kind, and the Work detail's clickable "Original URL" row |
 | `thumb_page` | every Work card, via the thumbnail URL |
 | `author_text` | every Work card's credit line, in all three browse catalogs and in cached Folder / Person / Playlist details |
 | `status` | Work card badges, the Progress route's grouping, and the same cached details |
@@ -810,6 +810,56 @@ The audit found no other writer. `prune_orphan_pdf_thumbnails()` reads
 `thumb_page`, but runs once at startup before the server accepts connections,
 so it cannot race a pending client request.
 
+## The metadata editor: four durable groups, no online-only save
+
+The editor has no direct-PATCH mutation path left. Every user-editable Work
+metadata value belongs to exactly one bounded save:
+
+| Group | Fields | Operation |
+| --- | --- | --- |
+| **Identity** | `title`, `doc_type` | `SET_WORK_METADATA_FIELD` |
+| **Progress** | `status` | `SET_WORK_METADATA_FIELD` |
+| **Bibliographic details** | `year`, `published_date`, `author_text`, `publisher`, `location`, `edition`, `journal`, `volume`, `issue`, `pages`, `isbn`, `doi`, `abstract`, `thumb_page`, `source_url` (non-video) | `SET_WORK_METADATA_FIELD` |
+| **Video source** (video Works) | the whole identity | `SET_WORK_SOURCE` |
+
+Each group saves only its own fields, read from the DOM, and reports only its
+own conflicts -- so a DOI conflict never tells the user their Status needs a
+decision. One button covering several groups would rebuild the mixed-atomicity
+contract 2D removed from the online save, inside the durable path.
+
+`submitWorkMetaEdit()` is gone. Its last version sent an EMPTY payload, which
+is what finishing the program looks like from the inside. A static test scans
+every PATCH body in the frontend for a synchronized field name, because this
+mistake has been made twice: the Playlist inline rename PATCHed `title`, and
+the metadata editor PATCHed the whole bibliographic block.
+
+## Work values held by reference in other entity families
+
+`title` is the first field that lives inside caches which are not Work rows at
+all. A Concept's backlinks, an Argument's sources and mentions, and a Research
+Graph node each hold a Work value under their own key names, identified by a
+foreign column:
+
+| Cache | Collection | Key | Columns |
+| --- | --- | --- | --- |
+| `concept` | `mentions[]` | `work_id` | `title` |
+| `argument` | `sources[]` | `work_id` | `title` -> **`work_title`** |
+| `argument` | `mentions[]` | `work_id` | `title` |
+| `research-graph-core` / `-people` | `nodes[]` (where `type === 'work'`) | `record_id` | `title` -> **`label`**, `doc_type` |
+
+One registry (`WORK_REFERENCE_SHAPES`) describes all of them, so a component
+never learns what a durable operation is and the next field is an entry rather
+than another traversal. The same registry drives acknowledgement
+reconciliation: a Title ACK patches every cached Concept, Argument and Graph
+snapshot that names the Work, generation-fenced like every other domain, and
+an unreadable cache blocks retirement rather than retiring on a guess.
+
+**Patched, never invalidated.** `prksMarkWorkTitleChanged()` used to stale
+Concepts, Arguments, People and Playlists after a Title PATCH. Destroying
+usable offline snapshots for a change whose exact shape is already known is
+the opposite of what the reconciler exists to do, so the durable ACK path
+reconciles values instead.
+
 ## Every canonical mutation advances revisions
 
 Public add/remove, transactional bulk add/remove, Processing import, Tag merge
@@ -886,6 +936,27 @@ on the server is the durable idempotency history, so the browser keeps no
 growing record of completed work. Retirement is strictly last, so a crash
 anywhere earlier leaves a replayable row rather than a lost edit.
 
+### An acknowledgement may only write the panel it owns
+
+The right panel is shared by every workspace tab, so `#panel-content` and every
+id inside it — `#meta-title` among them — belong to whichever tab currently owns
+it, not to the tab whose operation is being acknowledged. The cached record and
+the tab's own entity are addressed by id and are safe to patch from anywhere;
+the DOM is not. An acknowledgement for an unfocused Work therefore writes its
+entity and cache unconditionally, and touches an input **only** when its own ctx
+still owns and focuses the panel, and then only by querying inside that panel.
+A global `document.querySelector` there would let a background acknowledgement
+publish one Work's value into the editor of another — which is the same
+cross-Work publication the online PATCH path had to be guarded against, arriving
+by a different route.
+
+The same rule applies to reading: any Work value the detail panel renders
+itself, rather than through the synchronized rows the editor repaints, must be
+read from the EFFECTIVE Work (`prksEffectiveWorkSync`). `source_url` is the case
+that made this concrete — the detail's "Original URL" row is a second rendering
+of a synchronized field, and rendering it from the acknowledged record would
+have shown a stale address in a link the user can click.
+
 ## User controls
 
 Open a Work's **Manage tags** panel online once to prepare its catalog and
@@ -915,27 +986,36 @@ editing, and no synchronization for the Work fields still listed as deferred
 below. No CRDT, multi-user sync, batching, server push or automatic lifecycle
 retargeting.
 
-The Work fields still outside `SYNCED_FIELDS` -- `title`, `doc_type`,
-`source_url`, `thumb_page` -- are a separate problem. Every one is rendered on
-Work cards across three browse catalogs and inside cached Folder, Person and
-Playlist details, and `title` additionally reaches Concept mention titles,
-Argument source Works, Graph snapshots and the command palette. Each also
-brings something the registry has not had to answer yet:
+Every user-editable Work metadata value is now local-first. What remains
+outside `SYNCED_FIELDS` is not a field but an **identity**: `source_kind`,
+`provider` and `provider_id` describe, together with `source_url`, which video
+a Work *is* -- and `provider_id` outranks the URL when the viewer builds its
+embed. Three field-scoped operations would let two ordinary edits reach "the
+stored URL names video B while the viewer plays video A", and would ask the
+user to resolve one decision three times. So they are owned by the
+`SET_WORK_SOURCE` aggregate instead; see below and
+[work-source-identity.md](work-source-identity.md).
 
-- `doc_type` decides which *group* a card belongs to on Types -- the problem 2H
-  solved for `status` and Progress -- and additionally propagates to the
-  Research Graph.
-- `thumb_page` is the first NON-STRING canonical value: nullable and integer,
-  where the protocol currently assumes `payload.value` is a string on both
-  sides. It also changes a derived RESOURCE identity, the thumbnail URL, so a
-  pending value must never make a cached offline card request bytes it cannot
-  obtain.
-- `source_url` is not self-contained: what a Work *is* derives from
-  `source_kind`, `file_path`, `provider` and `provider_id` as well, and
-  `provider_id` short-circuits what a changed URL would imply. Synchronizing it
-  alone could leave a video's identity inconsistent. Audited in full in
-  [work-source-identity.md](work-source-identity.md), which recommends one
-  aggregate operation rather than independent scalars.
+`source_url` itself is in the registry, but **guarded**: a field-scoped write
+is refused on a Work whose kind is explicitly video, because there it is one
+spelling of that identity rather than provenance.
 
-The registry is the authority on what synchronizes; this list is a note on why
-these four have not.
+### Source transitions this milestone deliberately does not support
+
+`SET_WORK_SOURCE` replaces one YouTube video with another on an existing video
+Work. It refuses, with `UNSUPPORTED_SOURCE_TRANSITION`, everything else:
+
+| Transition | Status |
+| --- | --- |
+| YouTube A -> YouTube B | supported |
+| A different URL spelling of the same video | a no-op: same identity, no revision |
+| PDF -> video | **refused** |
+| video -> PDF | **refused** |
+| video -> no source | **refused** |
+
+None of those has a UI, and none has defined product semantics for what should
+happen to `file_path`, to which viewer renders, or to the PDF's own thumbnail
+cache. They are refused rather than invented.
+
+The registry is the authority on what synchronizes; this section is a note on
+what is deliberately not a field.

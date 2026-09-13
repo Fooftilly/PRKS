@@ -4,10 +4,13 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
-SYNCED = ('status', 'thumb_page', 'author_text', 'year', 'published_date', 'abstract',
-          'publisher', 'location', 'edition', 'journal', 'volume', 'issue', 'pages',
-          'isbn', 'doi')
-DEFERRED = ('title', 'doc_type', 'source_url')
+SYNCED = ('title', 'status', 'doc_type', 'thumb_page', 'author_text', 'year',
+          'published_date', 'abstract', 'publisher', 'location', 'edition', 'journal',
+          'volume', 'issue', 'pages', 'isbn', 'doi', 'source_url')
+# Nothing user-editable remains outside the registry. `provider`, `provider_id`
+# and `source_kind` are canonical VIDEO IDENTITY, which is an aggregate rather
+# than a set of field-scoped scalars -- see work-source-identity.md.
+DEFERRED = ('provider', 'provider_id', 'source_kind')
 
 _REGISTRY_JS = """
 require(process.argv[1] + '/frontend/js/date-format.js');
@@ -53,18 +56,76 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
                          sorted(work_metadata_sync.SYNCED_FIELDS))
         self.assertEqual(sorted(work_metadata_sync.SYNCED_FIELDS), sorted(SYNCED))
 
-    def test_the_synchronized_fields_left_the_online_patch_payload(self):
-        """One Save must not secretly mean "ten fields into the durable queue
-        and the rest over HTTP, either half able to fail alone"."""
+    def test_no_user_editable_work_metadata_saves_over_http_any_more(self):
+        """The end state of the local-first metadata program.
+
+        This replaces five separate "field X left the legacy payload" tests.
+        Each of those asserted an absence from `submitWorkMetaEdit`, and that
+        function is now gone entirely -- its last version sent an EMPTY
+        payload. What remains to pin is stronger and says it once: there is no
+        online-only Work metadata save, and every synchronized field has a
+        control that belongs to a durable group."""
         ui = (FRONTEND / 'ui.js').read_text()
-        at = ui.index('async function submitWorkMetaEdit(')
-        body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]
+        self.assertNotIn('async function submitWorkMetaEdit(', ui)
+        self.assertNotIn('inline-save-metadata-btn', ui)
+        self.assertNotIn('data-prks-role="work-meta-online-only"', ui)
+
+        # Four durable groups, each with its own bounded save.
+        for role, button in (
+            ('work-identity-editor', 'save-work-identity-btn'),
+            ('work-status-editor', 'save-work-status-btn'),
+            ('work-bib-editor', 'save-work-bib-btn'),
+            ('work-source-editor', 'save-work-source-btn'),
+        ):
+            with self.subTest(group=role):
+                self.assertIn('data-prks-role="%s"' % role, ui)
+                self.assertIn('id="%s"' % button, ui)
+
+        # Every synchronized field is reachable through one of them. The
+        # segmented and doc-type controls stamp their marker from a helper, so
+        # the call is what proves it rather than a literal attribute.
+        markers = ui.count('data-prks-work-field=')
+        self.assertGreaterEqual(markers, 10)
         for field in SYNCED:
-            self.assertNotIn('%s: draft.%s' % (field, field), body, field)
-            self.assertNotIn('%s: draft' % field, body, field)
-        # The fields this milestone deliberately leaves online-only are still there.
-        for field in ('title', 'status'):
-            self.assertIn(field, body, field)
+            if field in ('status', 'doc_type'):
+                continue   # emitted by prksSegmentedControlHtml / the doc-type menu
+            with self.subTest(field=field):
+                self.assertIn('data-prks-work-field="%s"' % field, ui, field)
+        self.assertIn("{ workField: 'status' }", ui)
+        self.assertIn("{ workField: 'doc_type' }", ui)
+
+    def test_no_frontend_code_patches_a_local_first_work_field(self):
+        """The regression this exists to catch, in the general case.
+
+        Every field below has ONE durable mutation path. A second one -- a
+        PATCH body carrying the field name -- would not be revision-aware, so
+        it would silently overwrite whatever the durable path had conflicted
+        over. That mistake has been made twice already in this program: the
+        Playlist inline rename PATCHed `title`, and the metadata editor
+        PATCHed the whole bibliographic block.
+
+        Scans the PATCH REQUEST BODIES rather than whole files, so a component
+        may still mention a field it renders.
+        """
+        import re
+        from backend import work_metadata_sync
+        synced = set(work_metadata_sync.SYNCED_FIELDS)
+        # Creating a NEW Work legitimately sends these; only mutation of an
+        # existing one is forbidden, and creation is a POST.
+        offenders = []
+        for path in sorted((FRONTEND).rglob('*.js')):
+            source = path.read_text(encoding='utf-8')
+            for match in re.finditer(r"method:\s*'PATCH'", source):
+                # The body literal that accompanies this PATCH, if any.
+                window = source[match.start(): match.start() + 900]
+                body = re.search(r'JSON\.stringify\(\s*\{(.*?)\}\s*\)', window, re.S)
+                if not body:
+                    continue
+                for field in synced:
+                    if re.search(r'\b%s\s*:' % re.escape(field), body.group(1)):
+                        offenders.append('%s: PATCH body carries %s' % (path.name, field))
+        self.assertEqual(sorted(set(offenders)), [],
+                         'a synchronized Work field is being PATCHed directly')
 
     def test_high_fan_out_fields_are_not_synchronized(self):
         """These need their pending values to propagate through several cached
@@ -130,12 +191,14 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         # Every Work card shows a year, a Status badge and a credit line, and
         # Status additionally decides Progress group membership -- so all four
         # reach every browse catalog.
-        for field in ('year', 'published_date', 'status', 'author_text', 'thumb_page'):
+        for field in ('year', 'published_date', 'status', 'author_text', 'thumb_page',
+                      'doc_type', 'title', 'source_url'):
             self.assertEqual(server[field], ('works-browse', 'recent', 'recently-added'), field)
         # And nothing else claims a projection on either side.
         for field in SYNCED:
             if field not in ('publisher', 'abstract', 'year', 'published_date',
-                             'status', 'author_text', 'thumb_page'):
+                             'status', 'author_text', 'thumb_page', 'doc_type', 'title',
+                             'source_url'):
                 self.assertNotIn(field, client['projections'], field)
                 self.assertNotIn(field, server, field)
 
@@ -224,22 +287,6 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
             at = app.index(marker)   # missing marker is a failure, not a skip
             self.assertIn('prksHydratePendingWorkMetadata', app[at: at + 1400], marker)
 
-    def test_author_text_left_the_legacy_save_and_has_one_control(self):
-        """Two mutation paths for one field means the path that is not
-        revision-aware silently overwrites the other's conflicts. The control
-        also has to live INSIDE the synchronized section: a second copy outside
-        it would be exactly that second path, wearing the same label."""
-        ui = (FRONTEND / 'ui.js').read_text()
-        at = ui.index('async function submitWorkMetaEdit(')
-        body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]
-        self.assertNotIn('payload.author_text', body)
-        self.assertNotIn('draft.author_text', body)
-        # Exactly one control, and it is marked as a synchronized field. The
-        # editor renders one of two shapes (video "Channel name", otherwise the
-        # textual Author), so both markers are expected -- but never a bare one.
-        self.assertEqual(ui.count('id="meta-author-text"'), 2)
-        self.assertEqual(ui.count('id="meta-author-text" data-prks-work-field="author_text"'), 2)
-
     def test_credit_is_composed_after_the_overlay_not_before(self):
         """`author_text` is only one of three possible sources of a credit: a
         linked Author outranks it, a linked Editor stands in when it is empty.
@@ -268,14 +315,6 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         credit_fn = credit_fn[: credit_fn.index('\n}')]
         self.assertLess(credit_fn.index('linked_authors'), credit_fn.index('author_text'))
         self.assertLess(credit_fn.index('author_text'), credit_fn.index('primary_editor'))
-
-    def test_thumb_page_left_the_legacy_save_and_has_one_control(self):
-        ui = (FRONTEND / 'ui.js').read_text()
-        at = ui.index('async function submitWorkMetaEdit(')
-        body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]
-        self.assertNotIn('thumb_page', body)
-        self.assertEqual(ui.count('id="meta-thumb-page"'), 1)
-        self.assertIn('id="meta-thumb-page" data-prks-work-field="thumb_page"', ui)
 
     def test_the_thumbnail_url_always_states_its_page(self):
         """A URL with no page means "whatever the server currently stores",
@@ -358,16 +397,17 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
                     self.assertEqual(canonical, server.to_wire(server.to_database(value)))
                     self.assertEqual(entity, server.to_database(value))
 
-    def test_source_url_is_deliberately_not_synchronized(self):
-        """Left out of 2J on purpose: `prksYoutubeEmbedUrl` short-circuits on
-        `provider_id`, so changing the URL alone would change the stored value
-        while the video that plays stays the same. That is an identity
-        aggregate (`source_url` + `provider` + `provider_id` + `source_kind`),
-        not another scalar field."""
+    def test_video_identity_columns_are_deliberately_not_field_scoped(self):
+        """`prksYoutubeEmbedUrl` short-circuits on `provider_id`, so changing a
+        video's URL alone would move the stored value while the video that
+        plays stays the same. Identity is an aggregate; only PROVENANCE is
+        field-scoped, and the server refuses a field-scoped write to a video
+        Work's URL."""
         from backend import work_metadata_sync
-        for field in ('source_url', 'provider', 'provider_id', 'source_kind', 'doc_type', 'title'):
+        for field in ('provider', 'provider_id', 'source_kind'):
             self.assertNotIn(field, work_metadata_sync.SYNCED_FIELDS, field)
-        self.assertNotIn('source_url', client_registries()['fields'])
+            self.assertNotIn(field, client_registries()['fields'], field)
+        self.assertEqual(work_metadata_sync.FIELD_KIND_GUARDS, {'source_url': 'video'})
 
     def test_recently_added_search_filters_the_effective_rows(self):
         """Rendering the overlay but filtering the acknowledged array is a real
@@ -426,7 +466,8 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         from backend import work_metadata_sync
         client = client_registries()
         server = dict(work_metadata_sync.BYTE_LIMITS)
-        self.assertEqual(server, {'abstract': 1024 * 1024, 'author_text': 64 * 1024})
+        self.assertEqual(server, {'abstract': 1024 * 1024, 'author_text': 64 * 1024,
+                                  'title': 64 * 1024, 'source_url': 64 * 1024})
         self.assertEqual(client['byteLimits'], server, 'client registry drifted')
         self.assertEqual(client['storeLimits'], server, 'durable store registry drifted')
         # The byte-limited SET is derived from the registry, never listed twice.
@@ -479,43 +520,10 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertEqual(sorted(client_registries()['summary']),
                          sorted(work_metadata_sync.SUMMARY_FIELDS))
         self.assertEqual(sorted(work_metadata_sync.SUMMARY_FIELDS),
-                         ['author_text', 'published_date', 'publisher', 'status',
-                          'thumb_page', 'year'])
+                         ['author_text', 'doc_type', 'published_date', 'publisher',
+                          'source_url', 'status', 'thumb_page', 'title', 'year'])
         for field in work_metadata_sync.SUMMARY_FIELDS:
             self.assertIn(field, work_metadata_sync.SYNCED_FIELDS, field)
-
-    def test_status_left_the_legacy_save(self):
-        """Status had exactly the defect this milestone removes: an online
-        PATCH and, once synchronized, a durable queue -- two mutation paths for
-        one field, the non-revision-aware one silently overwriting the other's
-        conflicts. It now has one path, online and offline."""
-        ui = (FRONTEND / 'ui.js').read_text()
-        at = ui.index('async function submitWorkMetaEdit(')
-        body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]
-        self.assertNotIn('status: draft.status', body)
-        # The control is a segmented button group whose VALUE lives on a hidden
-        # input, so the marker is emitted by the helper rather than written
-        # literally -- pin the call that asks for it.
-        self.assertIn("{ workField: 'status' }", ui)
-        self.assertIn('opts.workField ? ` data-prks-work-field=', ui)
-        # And its Save is its OWN, not the bibliographic one: a button labelled
-        # "Save bibliographic details" must not also move a Work between
-        # Progress groups.
-        self.assertIn('data-prks-role="work-status-editor"', ui)
-        self.assertIn('save-work-status-btn', ui)
-        self.assertIn("prksSaveWorkMetadataFields('${work.id}', 'status')", ui)
-
-    def test_year_and_published_date_left_the_legacy_save(self):
-        """Two mutation paths for one field means the path that is not
-        revision-aware silently overwrites the other's conflicts."""
-        ui = (FRONTEND / 'ui.js').read_text()
-        at = ui.index('async function submitWorkMetaEdit(')
-        body = ui[at: ui.index('const saveBtn = panel ? panel.querySelector', at)]
-        for fragment in ('year: draft.year', 'published_date:', 'metaDateIso'):
-            self.assertNotIn(fragment, body, fragment)
-        # ...and both now carry the synchronized-field marker in the editor.
-        for field in ('year', 'published_date'):
-            self.assertIn('data-prks-work-field="%s"' % field, ui, field)
 
     def test_published_date_conversion_lives_in_the_field_codec(self):
         """The durable store stores what it is handed and must never learn what

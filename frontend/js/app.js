@@ -1519,7 +1519,17 @@ async function prksOfflineResearchGraphFetch(includePeople, signal) {
         if (typeof prksOfflineInvalidateEntity === 'function') void prksOfflineInvalidateEntity(kind, 'snapshot');
         return { snapshot: null, source: 'unavailable', cachedAt: null };
     }
-    return { snapshot: result.value, source: result.source, cachedAt: result.cachedAt };
+    /* Work nodes carry Work metadata, so a pending edit has to reach them --
+     * the Graph renders a doc-type colour and a Title label from values the
+     * server sent before the user changed them. The overlay is applied HERE,
+     * so `research-graph.js` receives an effective snapshot and never learns
+     * what a durable operation is. The cached snapshot is not rewritten.
+     *
+     * The pending map is hydrated by the ROUTE, which is where staleness is
+     * re-checked after awaiting; this helper only reads it. */
+    const snapshot = typeof prksEffectiveWorkReferences === 'function'
+        ? prksEffectiveWorkReferences(kind, result.value) : result.value;
+    return { snapshot, source: result.source, cachedAt: result.cachedAt };
 }
 
 const PRKS_CONCEPTS_LIST_KEY =
@@ -1961,6 +1971,7 @@ function prksIsBrowseCardRowShape(row) {
         prksIsOptionalString(row.doc_type) && prksIsOptionalString(row.file_path) &&
         prksIsOptionalString(row.source_kind) && prksIsOptionalString(row.source_url) &&
         prksIsOptionalString(row.thumb_url) && prksIsOptionalString(row.author_text) &&
+        prksIsOptionalString(row.provider) && prksIsOptionalString(row.provider_id) &&
         prksIsOptionalString(row.year) && prksIsOptionalString(row.published_date) &&
         prksIsOptionalString(row.linked_authors) && prksIsOptionalString(row.primary_author) &&
         prksIsOptionalString(row.primary_editor) &&
@@ -3169,10 +3180,18 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concept not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Concept not found' };
                 } else {
-                    ctx.setEntity('concept', item);
-                    if (typeof renderConceptDetail === 'function') renderConceptDetail(ctx, item, contentDiv);
+                    /* Backlink rows name a Work's Title, so a pending rename
+                     * has to reach them. The overlay is applied here, so the
+                     * component stays ignorant of durable operations and the
+                     * cached Concept is never rewritten. */
+                    await prksHydratePendingWorkMetadata();
+                    if (stale()) return;
+                    const effective = typeof prksEffectiveWorkReferences === 'function'
+                        ? prksEffectiveWorkReferences('concept', item) : item;
+                    ctx.setEntity('concept', effective);
+                    if (typeof renderConceptDetail === 'function') renderConceptDetail(ctx, effective, contentDiv);
                     prksOfflinePrependBanner(contentDiv, offlineConcept);
-                    titleOpts = { entityTitle: item.name || 'Concept' };
+                    titleOpts = { entityTitle: effective.name || 'Concept' };
                 }
                 break;
             }
@@ -3282,17 +3301,26 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Argument not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Argument not found' };
                 } else {
-                    ctx.setEntity('argument', item);
+                    // Source and mention rows both name a Work's Title.
+                    await prksHydratePendingWorkMetadata();
+                    if (stale()) return;
+                    const effectiveArgument = typeof prksEffectiveWorkReferences === 'function'
+                        ? prksEffectiveWorkReferences('argument', item) : item;
+                    ctx.setEntity('argument', effectiveArgument);
                     // A freshly rendered route always starts read-only, even if a
                     // previous mount left an edit session behind.
                     ctx.ui.argumentEditing = false;
-                    if (typeof renderArgumentDetail === 'function') renderArgumentDetail(ctx, item, contentDiv);
+                    if (typeof renderArgumentDetail === 'function') renderArgumentDetail(ctx, effectiveArgument, contentDiv);
                     prksOfflinePrependBanner(contentDiv, offlineArgument);
                     titleOpts = { entityTitle: item.name || 'Argument' };
                 }
                 break;
             }
             case 'research-graph': {
+                // Work nodes carry Work metadata; the snapshot is overlaid
+                // with pending edits, which needs the map read first.
+                await prksHydratePendingWorkMetadata();
+                if (stale()) return;
                 if (typeof renderResearchGraph === 'function') {
                     await renderResearchGraph(contentDiv, {
                         ctx: ctx,

@@ -35,7 +35,7 @@ if str(REPO) not in sys.path:
 os.environ["PRKS_E2E"] = "1"
 
 from tests.e2e.fixtures import CONCEPT_CHILD_NAME, WORK_A_TITLE, seed_concepts_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 CASES = ("work", "entity", "list")
 
@@ -58,7 +58,7 @@ def _wait_entity_cached(page, kind, entity_id, settle_ms=0, timeout=15000):
     the same failure: if a failure rate is identical with and without it, the
     delay was never what made the transition safe.
     """
-    page.wait_for_function(
+    wait_for_async(page,
         """([kind, id]) => {
             if (typeof window.createPrksOfflineStore !== 'function') return false;
             const store = window.createPrksOfflineStore();
@@ -73,7 +73,7 @@ def _wait_entity_cached(page, kind, entity_id, settle_ms=0, timeout=15000):
 
 
 def _wait_list_cached(page, list_key, settle_ms=0, timeout=15000):
-    page.wait_for_function(
+    wait_for_async(page,
         """(key) => {
             if (typeof window.createPrksOfflineStore !== 'function') return false;
             return window.createPrksOfflineStore().getList(key).then(v => !!v);

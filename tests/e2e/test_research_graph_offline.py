@@ -6,7 +6,7 @@ import unittest
 
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import seed_arguments_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 CORE = 'research-graph-core'
 PEOPLE = 'research-graph-people'
@@ -41,7 +41,16 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         page.evaluate("h => prksNavigate(h)", '#/graph' + ('?focus=' + focus if focus else ''))
 
     def mounted(self, page):
-        page.wait_for_function("() => !!prksGetResearchGraphDebug().cy")
+        """Wait for the Cytoscape instance to exist.
+
+        Null-safe on purpose: `prksGetResearchGraphDebug()` returns null until
+        the graph module has mounted, and a predicate that dereferences it
+        THROWS rather than returning false -- which aborts the wait instead of
+        retrying it. The condition asserted is unchanged; only the moment
+        before it becomes observable is handled.
+        """
+        page.wait_for_function(
+            "() => { const d = prksGetResearchGraphDebug(); return !!(d && d.cy); }")
 
     def cache(self, page, ids, variants=(False, True)):
         for people in variants:
@@ -236,7 +245,7 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         page.route('**/api/research-graph**', handler)
         self.graph(page)
         page.get_by_text('Note-mention edges unavailable. Canonical relationships still shown.', exact=True).wait_for()
-        page.wait_for_function('async () => (await createPrksOfflineStore().getEntity("research-graph-core", "snapshot")).value.meta.derived_note_edges_available === false')
+        wait_for_async(page, 'async () => (await createPrksOfflineStore().getEntity("research-graph-core", "snapshot")).value.meta.derived_note_edges_available === false')
         page.unroute('**/api/research-graph**', handler)
         self.offline(page, context)
         self.graph(page)
@@ -382,17 +391,41 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         page.locator('[data-prks-role="editor-status"]', has_text='All changes saved').wait_for()
         self.changed(page, before)
 
-    def test_work_metadata_and_delete(self):
+    def test_a_renamed_work_is_reconciled_into_the_cached_graph(self):
+        """A Work Title is local-first, so a rename no longer INVALIDATES the
+        Graph -- it reconciles the exact new label into the cached snapshots.
+        Destroying a usable offline Graph for a change whose shape is already
+        known is the opposite of what the reconciler is for."""
         server, page, context = self.start()
         self.cache(page, server.ids)
-        before = self.generations(page)
+        work = server.ids['work_a']
+        node_label = lambda: page.evaluate("""id => window.createPrksOfflineStore()
+            .getEntity('research-graph-core', 'snapshot').then(row => {
+                if (!row) return null;
+                const node = (row.value.nodes || []).find(
+                    n => n.type === 'work' && n.record_id === id);
+                return node ? node.label : null;
+            })""", work)
+        self.assertEqual(node_label(), o.WORK_A_TITLE)
+
         o._open_work_from_home(page, o.WORK_A_TITLE)
         o._open_details_drawer_if_tiled(page)
         page.locator('#panel-content button', has_text='Edit metadata').click()
-        page.locator('#meta-title').fill('Graph Work renamed')
-        page.locator('#inline-save-metadata-btn').click()
-        page.locator('#panel-content .card-title', has_text='Graph Work renamed').wait_for()
-        self.changed(page, before)
+        page.locator('[data-prks-work-field="title"]').fill('Graph Work renamed')
+        page.locator('#save-work-identity-btn').click()
+        wait_for_async(page,
+            "() => prksSync.store.listOperations().then(r => r.length === 0)")
+        wait_for_async(page, """id => window.createPrksOfflineStore()
+            .getEntity('research-graph-core', 'snapshot').then(row => {
+                if (!row) return false;
+                const node = (row.value.nodes || []).find(
+                    n => n.type === 'work' && n.record_id === id);
+                return !!node && node.label === 'Graph Work renamed';
+            })""", arg=work)
+        self.assertIsNotNone(node_label(), 'the snapshot was patched, not dropped')
+
+    def test_work_delete_invalidates_the_graph(self):
+        server, page, context = self.start()
         self.cache(page, server.ids)
         before = self.generations(page)
         page.evaluate('id => prksNavigate("#/works/" + id)', server.ids['work_a'])

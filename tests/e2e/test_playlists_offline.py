@@ -17,7 +17,7 @@ from tests.e2e.fixtures import (
     StorageConfig,
     seed_playlists_library,
 )
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -90,6 +90,36 @@ class PlaylistsOfflineTests(unittest.TestCase):
             o._wait_list_uncached(page, 'playlists:index')
         else:
             self.assertIsNotNone(o._cached_list(page, 'playlists:index'))
+
+    def reconciled(self, page, before, fenced, ids, title):
+        """A Title acknowledgement PATCHES the caches that named the Work.
+
+        Two different things are easy to confuse here. The coherence
+        GENERATION of a domain that holds the Work does advance -- that is the
+        fence which stops a GET issued before the acknowledgement from
+        publishing its pre-rename body afterwards. It is not an invalidation:
+        the snapshots stay, and gain the exact new title in place. A domain
+        that holds no reference to this Work is not fenced at all.
+        """
+        for domain, generation in before.items():
+            with self.subTest(domain=domain):
+                now = o._domain_generation(page, domain)
+                if domain in fenced:
+                    self.assertGreater(now, generation,
+                                       'a domain holding this Work is fenced')
+                else:
+                    self.assertEqual(now, generation,
+                                     'a domain that never named this Work is untouched')
+        # Nothing was thrown away: every cached representation survives and
+        # carries the new title.
+        self.assertIsNotNone(o._cached_list(page, 'playlists:index'))
+        playlist = o._cached_entity(page, 'playlist', ids['playlist_a'])
+        self.assertIsNotNone(playlist)
+        self.assertIn(title, [w.get('title') for w in playlist['value']['items']])
+
+    def db_for(self, server):
+        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root),
+                            schema_path=str(SCHEMA))
 
     def offline(self, page, context):
         context.set_offline(True)
@@ -440,7 +470,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
                 self.assertIn('not available offline', o._content_text(page))
                 # The unusable entity is dropped rather than left to poison the
                 # next read.
-                page.wait_for_function(
+                wait_for_async(page,
                     "id => window.createPrksOfflineStore().getEntity('playlist', id).then(r => r === null)",
                     arg=pid, timeout=15000,
                 )
@@ -496,9 +526,15 @@ class PlaylistsOfflineTests(unittest.TestCase):
                          '#prks-playlist-edit-original-url', '#prks-playlist-edit-save',
                          '#prks-playlist-add-search'):
             self.assertTrue(page.locator(selector).is_disabled(), selector)
-        # Item mutation controls in the main list freeze too...
-        for selector in ('[data-pl-up]', '[data-pl-down]', '[data-pl-remove]', '[data-pl-rename]'):
+        # Playlist-scoped item controls freeze too: order and membership are
+        # Playlist mutations and stay online-only in this phase.
+        for selector in ('[data-pl-up]', '[data-pl-down]', '[data-pl-remove]'):
             self.assertTrue(page.locator(selector).first.is_disabled(), selector)
+        # Rename is the exception, and deliberately so: a video's Title is a
+        # WORK field with a durable path of its own, so it is not gated by the
+        # Playlist mutation block. Covered end to end by
+        # `test_an_inline_rename_is_durable_offline_and_never_patches_the_work`.
+        self.assertFalse(page.locator('[data-pl-rename]').first.is_disabled())
         # ... while the draft itself and Cancel/Close stay usable.
         self.assertEqual(page.locator('#prks-playlist-edit-title').input_value(), 'Unsaved playlist title')
         self.assertEqual(page.locator('#prks-playlist-edit-desc').input_value(), 'Unsaved description')
@@ -517,31 +553,71 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.assertFalse(page.locator('#prks-playlist-edit-save').is_disabled())
         self.assertEqual(page.locator('#prks-playlist-edit-desc').input_value(), 'Unsaved description')
 
-    def test_inline_rename_state_survives_disconnect_without_a_work_patch(self):
+    def test_an_inline_rename_is_durable_offline_and_never_patches_the_work(self):
+        """A video's Title is a Work field, not Playlist state.
+
+        So renaming one from inside a Playlist takes the same durable Title
+        operation the metadata editor takes -- which means it keeps working
+        offline, while every genuinely Playlist-scoped control here stays
+        online-only. It must never reach `PATCH /api/works`: a second,
+        non-revision-aware mutation path for one field silently overwrites the
+        conflicts the durable one detects.
+        """
         server, page, context = self.start()
         ids = server.ids
+        work = ids['playlist_video_one']
+        # Renaming offline needs a base to measure the edit against, and that
+        # base is prepared by opening the video's own metadata editor once
+        # while connected -- which is exactly what the refusal message tells
+        # the user to do. Do it the way a user would.
+        o._open_work_from_home(page, PLAYLIST_VIDEO_ONE_TITLE)
+        o._open_details_drawer_if_tiled(page)
+        page.locator('#panel-content button', has_text='Edit metadata').click()
+        o._wait_entity_cached(page, 'work-metadata-state', work)
+
         self.detail(page, ids['playlist_a'])
         o._wait_content_contains(page, PLAYLIST_A_DESCRIPTION)
         self.open_details_panel(page)
         page.locator('#prks-playlist-edit-btn').click()
         page.wait_for_selector('[data-pl-rename]')
-        page.locator('[data-pl-rename="%s"]' % ids['playlist_video_one']).click()
-        rename_input = '#prks-pl-rename-input-%s' % ids['playlist_video_one']
+        page.locator('[data-pl-rename="%s"]' % work).click()
+        rename_input = '#prks-pl-rename-input-%s' % work
         page.wait_for_selector(rename_input)
-        page.locator(rename_input).fill('Renamed while connected')
+        page.locator(rename_input).fill('Renamed while disconnected')
 
         self.offline(page, context)
-        work_writes = self.watch(page, ('PATCH',), fragment='/api/works')
-        self.assertTrue(page.locator(rename_input).is_disabled())
-        self.assertTrue(page.locator('[data-pl-rename-save="%s"]' % ids['playlist_video_one']).is_disabled())
-        # Rename Cancel stays live so the user can always leave.
-        self.assertFalse(page.locator('[data-pl-rename-cancel="%s"]' % ids['playlist_video_one']).is_disabled())
-        self.assertEqual(page.locator(rename_input).input_value(), 'Renamed while connected')
-        page.locator('[data-pl-rename-save="%s"]' % ids['playlist_video_one']).click(force=True)
-        page.wait_for_timeout(400)
-        self.assertEqual(work_writes, [])
+        work_writes = self.watch(page, ('PATCH', 'POST', 'PUT'), fragment='/api/works')
+        # The rename controls stay live: a durable save needs no server.
+        self.assertFalse(page.locator(rename_input).is_disabled())
+        self.assertFalse(page.locator('[data-pl-rename-save="%s"]' % work).is_disabled())
+        # A Playlist-scoped control beside it is still offline-blocked, so this
+        # is a distinction the UI actually draws rather than a blanket unlock.
+        self.assertTrue(page.locator('#prks-playlist-edit-save').is_disabled())
+
+        page.locator('[data-pl-rename-save="%s"]' % work).click()
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'SET_WORK_METADATA_FIELD' && o.payload.field === 'title'))",
+            message='the rename never became a durable Title operation',
+        )
+        self.assertEqual(work_writes, [], 'no Work write of any kind left the browser')
+        o._wait_content_contains(page, 'Renamed while disconnected')
+        self.assertEqual(
+            self.db_for(server).get_work(work)['title'], PLAYLIST_VIDEO_ONE_TITLE,
+            'the server has not been told anything yet')
+
+        self.online(page, context)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=25000,
+            message='the Title operation never retired',
+        )
+        self.assertEqual(work_writes, [], 'and synchronizing still used no Work PATCH')
+        self.assertEqual(self.db_for(server).get_work(work)['title'], 'Renamed while disconnected')
         titles = page.evaluate("() => fetchWorks().then(ws => ws.map(w => w.title))")
-        self.assertNotIn('Renamed while connected', titles)
+        self.assertIn('Renamed while disconnected', titles)
 
     def test_cached_work_playlist_card_is_read_only_offline(self):
         """A cached video Work still shows its Playlist card, but Phase 1 is
@@ -686,7 +762,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
             ids,
         )
         self.changed(page, before, {'playlists'})
-        page.wait_for_function(
+        wait_for_async(page,
             "id => window.createPrksOfflineStore().getEntity('work', id).then(r => r === null)",
             arg=ids['playlist_video_one'], timeout=15000,
         )
@@ -776,9 +852,11 @@ class PlaylistsOfflineTests(unittest.TestCase):
 
     # ---- Work -> Playlist coherence ----------------------------------------
 
-    def test_work_metadata_save_invalidates_playlists(self):
-        """A Playlist row renders the Work's title, channel and date, so the
-        shared Work-title helper owns this dependency."""
+    def test_work_metadata_save_reconciles_playlists_rather_than_dropping_them(self):
+        """A Playlist row renders the Work's title, so a rename has to reach
+        it -- but by RECONCILIATION, not invalidation: the exact new title is
+        patched into the cached Playlist rather than the snapshot being
+        thrown away."""
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids, all_domains=True)
@@ -786,10 +864,22 @@ class PlaylistsOfflineTests(unittest.TestCase):
         o._open_work_from_home(page, PLAYLIST_VIDEO_ONE_TITLE)
         self.open_details_panel(page)
         page.locator('#panel-content button', has_text='Edit metadata').click()
-        page.locator('#meta-title').fill('Playlist Video Renamed')
-        page.locator('#inline-save-metadata-btn').click()
-        page.locator('#panel-content .card-title', has_text='Playlist Video Renamed').wait_for(timeout=15000)
-        self.changed(page, before, {'concepts', 'arguments', 'people', 'playlists'})
+        page.locator('[data-prks-work-field="title"]').fill('Playlist Video Renamed')
+        page.locator('#save-work-identity-btn').click()
+        wait_for_async(page,
+            "() => prksSync.store.listOperations().then(r => r.length === 0)")
+        # A Work Title is local-first now, so the rename RECONCILES the exact
+        # new title into every cached representation instead of invalidating
+        # four domains. The cached Playlist keeps its snapshot and gains the
+        # new title in place.
+        wait_for_async(page, '''id => window.createPrksOfflineStore()
+            .getEntity('playlist', id).then(row => {
+                if (!row) return false;
+                return (row.value.items || []).some(
+                    w => w.title === 'Playlist Video Renamed');
+            })''', arg=ids['playlist_a'])
+        self.reconciled(page, before, {'concepts', 'arguments', 'people', 'playlists'},
+                        ids, 'Playlist Video Renamed')
 
     def test_playlist_inline_rename_inherits_the_shared_title_helper(self):
         server, page, context = self.start()
@@ -806,9 +896,16 @@ class PlaylistsOfflineTests(unittest.TestCase):
         page.wait_for_selector(rename_input)
         page.locator(rename_input).fill('Inline Renamed Video')
         page.locator('[data-pl-rename-save="%s"]' % ids['playlist_video_one']).click()
+        # The overlay shows the new title at once; reconciliation is what the
+        # ACKNOWLEDGEMENT does, so wait for the operation to retire before
+        # asking what happened to the caches.
         page.wait_for_function("t => document.body.innerText.indexOf(t) !== -1",
                                arg='Inline Renamed Video', timeout=15000)
-        self.changed(page, before, {'concepts', 'arguments', 'people', 'playlists'})
+        wait_for_async(page,
+            "() => prksSync.store.listOperations().then(r => r.length === 0)",
+            timeout=25000, message='the inline rename never retired')
+        self.reconciled(page, before, {'concepts', 'arguments', 'people', 'playlists'},
+                        ids, 'Inline Renamed Video')
 
     def test_work_deletion_invalidates_playlists(self):
         server, page, context = self.start()

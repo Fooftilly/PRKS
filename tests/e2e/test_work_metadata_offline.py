@@ -7,7 +7,7 @@ from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PERSON_DISPLAY, WORK_A_TITLE, WORK_B_TITLE, seed_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -346,7 +346,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 1)
 
         self.reconnect(page, context)
-        page.wait_for_function("""() => prksSync.store.listOperations().then(rows =>
+        wait_for_async(page, """() => prksSync.store.listOperations().then(rows =>
             rows.length === 1 && rows[0].status === 'conflict' && !!rows[0].server_result)""", timeout=20000)
         panel = page.locator('#prks-settings-panel-diagnostics')
         panel.locator('#prks-offline-cache-refresh-btn').click()
@@ -362,7 +362,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertIn('device-doi', text, 'the local value is visible')
         self.assertIn('server-doi', text, 'so is the server value')
         panel.get_by_role('button', name='Discard local change', exact=True).click()
-        page.wait_for_function("() => prksSync.store.listOperations().then(rows => rows.length === 0)")
+        wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)")
         self.assertEqual(self.server_fields(server, work)['doi'],
                          {'value': 'server-doi', 'revision': 1})
 
@@ -1251,6 +1251,149 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 0)
         self.assertEqual(self.server_value(server, work, 'author_text'), 'My Author')
 
+    def test_a_rename_saves_durably_and_synchronizes(self):
+        """Title is the widest synchronized field; this is the smoke test that
+        its durable group works end to end."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        self.field(page, 'title', 'A Durable Rename')
+        page.locator('#save-work-identity-btn').click()
+        self.pending(page, 0)
+        self.assertEqual(self.db_for(server).get_work(work)['title'], 'A Durable Rename')
+        self.assertEqual(self.server_fields(server, work)['title'], {'revision': 1})
+
+    def pick_doc_type(self, page, value):
+        """Choose a document type through the real menu.
+
+        The field's value lives on a hidden input, so filling it directly would
+        bypass the presentation the user actually operates -- and the menu is
+        exactly what 2L had to keep in step with the synchronized value.
+        """
+        page.locator('#meta-doc-type-trigger').click()
+        page.locator('#meta-doc-type-listbox [role="option"][data-value="%s"]' % value).click()
+        page.wait_for_function(
+            "v => document.getElementById('meta-doc-type').value === v", arg=value)
+
+    def type_group_ids(self, page, doc_type):
+        """The Work ids File Types files under one type.
+
+        Read from the type's own page rather than the index, because the index
+        shows counts: the assertion is about which group a Work is IN, and a
+        count that happens to match would not say that.
+        """
+        page.evaluate("r => prksNavigate(r)", '#/types/' + doc_type)
+        page.wait_for_selector('.types-page')
+        return page.evaluate("""() => Array.from(
+            document.querySelectorAll('.types-page [data-work-id]'))
+            .map(el => el.getAttribute('data-work-id'))""")
+
+    def test_a_pending_doc_type_moves_the_work_between_type_groups(self):
+        """doc_type is a grouping key, not a label: a pending change has to
+        move the Work in the surface that groups on it, before it syncs."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        before = self.db_for(server).get_work(work)['doc_type']
+        self.assertNotEqual(before, 'phdthesis')
+        # Types reads the browse catalog, so that catalog has to be cached
+        # before the network goes away or there is nothing to group at all.
+        self.warm_browse(page)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+        self.offline(page, context)
+        self.pick_doc_type(page, 'phdthesis')
+        page.locator('#save-work-identity-btn').click()
+        self.pending(page, 1)
+
+        self.assertIn(work, self.type_group_ids(page, 'phdthesis'),
+                      'the pending type decides where the Work is filed')
+        self.assertNotIn(work, self.type_group_ids(page, before),
+                         'and it has left the group it was filed under')
+        self.assertEqual(self.db_for(server).get_work(work)['doc_type'], before,
+                         'while the server still holds the old one')
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.db_for(server).get_work(work)['doc_type'], 'phdthesis')
+        self.assertIn(work, self.type_group_ids(page, 'phdthesis'),
+                      'and the acknowledged type keeps it there')
+
+    def test_a_pending_title_reaches_every_surface_that_names_the_work(self):
+        """A Title is the most widely copied Work value there is: browse rows,
+        embedded summaries and the labels other domains hold by reference. One
+        offline rename has to be true on all of them at once, or the library
+        shows a user two different names for one file."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        renamed = 'A Rename Seen Everywhere'
+        self.warm_browse(page)
+        o._open_person(page, server.ids['person'])
+        o._wait_entity_cached(page, 'person', server.ids['person'])
+        o._open_work_from_home(page, WORK_A_TITLE)
+        self.edit(page)
+
+        self.offline(page, context)
+        self.field(page, 'title', renamed)
+        page.locator('#save-work-identity-btn').click()
+        self.pending(page, 1)
+
+        for route in (self.PROGRESS, '#/recent'):
+            page.evaluate("r => prksNavigate(r)", route)
+            page.wait_for_selector('[data-work-id="%s"]' % work)
+            self.assertIn(renamed, page.evaluate(
+                "id => document.querySelector('[data-work-id=\"' + id + '\"]').textContent", work),
+                'the pending title is the name on ' + route)
+        self.recently_added(page)
+        self.assertIn(work, self.filter_recently_added(page, renamed))
+        o._open_person(page, server.ids['person'])
+        o._wait_content_contains(page, renamed)
+
+        # The cached rows themselves still hold what the server said: pending
+        # intent is an overlay, never a write into the disposable cache.
+        self.assertEqual(
+            self.cached_list_field(page, 'works-browse:index', work, 'title'), WORK_A_TITLE)
+        self.assertEqual(
+            self.cached_person_work_field(page, server.ids['person'], work, 'title'), WORK_A_TITLE)
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.db_for(server).get_work(work)['title'], renamed)
+        self.assertEqual(
+            self.cached_list_field(page, 'works-browse:index', work, 'title'), renamed,
+            'the acknowledgement patches the cached row rather than dropping the catalog')
+        self.assertEqual(
+            self.cached_person_work_field(page, server.ids['person'], work, 'title'), renamed)
+
+    def test_a_pending_provenance_url_is_the_link_the_detail_offers(self):
+        """`source_url` on a PDF is its provenance -- the Original URL row on
+        the Work detail. A pending value has to be the link that row actually
+        offers, because a user who edits it and then clicks through would
+        otherwise be sent to the address they just replaced."""
+        server, page, context = self.start()
+        work = server.ids['work_a']
+        provenance = 'https://example.org/papers/the-corrected-source.pdf'
+        self.offline(page, context)
+        self.field(page, 'source_url', provenance)
+        self.save(page)
+        self.pending(page, 1)
+
+        self.wait_for_bib_rows(page, provenance)
+        self.assertEqual(
+            page.evaluate("""() => {
+                const a = Array.from(document.querySelectorAll('#panel-content a'))
+                    .find(el => el.textContent.indexOf('example.org') !== -1);
+                return a ? a.getAttribute('href') : null;
+            }"""),
+            provenance,
+            'the link goes where the pending value says, not where the cache does')
+        self.assertFalse(self.db_for(server).get_work(work)['source_url'],
+                         'and the server still holds the old provenance')
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.db_for(server).get_work(work)['source_url'], provenance)
+        self.assertEqual(self.server_fields(server, work)['source_url'], {'revision': 1},
+                         'a byte-limited field carries its revision alone')
+
     # ---- thumb_page: a typed value and a derived resource (2J) -------------
 
     def thumb_requests(self, page_obj):
@@ -1361,8 +1504,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             self.edit(page)
             self.field(page, 'thumb_page', '')
             self.save(page)
-            page.wait_for_function(
-                "() => prksSync.store.listOperations().then(r => r.length === 1)")
+            # The FIELD operation, not the whole queue: opening the Work
+            # enqueued a MARK_WORK_OPENED that this same blocked send is also
+            # holding, and counting both would be counting the wrong thing.
+            self.pending(page, 1)
 
             page.evaluate("r => prksNavigate(r)", self.PROGRESS)
             page.wait_for_selector('[data-work-id="%s"]' % work)
@@ -1400,8 +1545,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             self.edit(page)
             self.field(page, 'thumb_page', '5')
             self.save(page)
-            page.wait_for_function(
-                "() => prksSync.store.listOperations().then(r => r.length === 1)")
+            # The FIELD operation, not the whole queue: opening the Work
+            # enqueued a MARK_WORK_OPENED that this same blocked send is also
+            # holding, and counting both would be counting the wrong thing.
+            self.pending(page, 1)
             page.evaluate("r => prksNavigate(r)", self.PROGRESS)
             page.wait_for_selector('[data-work-id="%s"]' % work)
             self.assertIn('page=5', self.thumb_src(page, work))
@@ -1876,16 +2023,20 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertEqual(state['publisher'], {'value': 'Durable Press', 'revision': 1})
         self.assertEqual(state['location'], {'value': 'Durable City', 'revision': 1})
 
-    def test_unsupported_metadata_stays_explicitly_online_only(self):
+    def test_the_editor_has_no_online_only_save_left(self):
+        """The end state of the program. Every user-editable Work metadata
+        value belongs to a durable group, so there is no button to disable
+        when the connection drops and no note to show about one."""
         server, page, context = self.start()
-        self.assertFalse(page.locator('#inline-save-metadata-btn').is_disabled())
+        self.assertEqual(page.locator('#inline-save-metadata-btn').count(), 0)
+        self.assertEqual(page.locator('[data-prks-role="work-meta-online-only"]').count(), 0)
         self.offline(page, context)
-        page.wait_for_function(
-            "() => document.getElementById('inline-save-metadata-btn').disabled")
-        self.assertFalse(page.locator('[data-prks-role="work-meta-online-only"]').is_hidden())
-        # ...while the synchronized group stays fully usable.
-        self.assertFalse(page.locator('#save-work-bib-btn').is_disabled())
-        self.assertFalse(page.locator('[data-prks-work-field="doi"]').is_disabled())
+        # Every durable group stays fully usable offline.
+        for button in ('#save-work-identity-btn', '#save-work-status-btn', '#save-work-bib-btn'):
+            self.assertFalse(page.locator(button).is_disabled(), button)
+        for field in ('title', 'doi', 'thumb_page', 'source_url'):
+            self.assertFalse(page.locator('[data-prks-work-field="%s"]' % field).is_disabled(),
+                             field)
 
     def test_without_a_cached_projection_the_group_refuses_to_guess(self):
         """No observed base means no way to say what a save is relative to, so

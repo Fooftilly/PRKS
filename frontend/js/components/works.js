@@ -860,6 +860,26 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         return;
     }
     work.text_content = prksResearchNotesTextForWork(work.id, work.text_content);
+    /* The EFFECTIVE source: a pending identity change decides which video
+     * plays before the server has heard about it. All four columns move
+     * together, so the viewer can never be handed a URL naming one video and
+     * an id naming another. The acknowledged Work is not mutated. */
+    /* Only a Work that is ALREADY a video can have a pending source: the
+     * aggregate refuses every other transition, and nothing renders a control
+     * to attempt one. So the acknowledged kind is enough to decide whether
+     * this read is needed -- and for everything else the detail must not wait
+     * on the durable queue at all. Blocking every Work's render on an
+     * IndexedDB read means a slow or stuck durable store leaves the user
+     * looking at nothing, for a value that Work could not have. */
+    const acknowledgedKind =
+        typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
+    if (acknowledgedKind === 'video' && typeof prksRefreshPendingWorkSources === 'function') {
+        await prksRefreshPendingWorkSources();
+        if (!isCurrent()) return;
+    }
+    if (acknowledgedKind === 'video' && typeof prksEffectiveWorkSource === 'function') {
+        work = prksEffectiveWorkSource(work);
+    }
     let pdfModule = null;
     const inferredKind =
         typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';

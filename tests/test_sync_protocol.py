@@ -25,7 +25,7 @@ class SyncProtocolTests(unittest.TestCase):
     def test_registered_families(self):
         self.assertEqual(sorted(sync_protocol.supported_operations()),
                          ["ADD_WORK_TAG", "MARK_WORK_OPENED", "REMOVE_WORK_TAG",
-                          "SET_WORK_METADATA_FIELD"])
+                          "SET_WORK_METADATA_FIELD", "SET_WORK_SOURCE"])
 
     def test_unregistered_operation_is_refused_and_unledgered(self):
         """A family the server does not implement must not reach a handler, and

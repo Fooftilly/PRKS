@@ -40,22 +40,8 @@ LOGGER = logging.getLogger("prks.db")
 # Current schema ceiling. Restore refuses backups newer than this.
 PRKS_SCHEMA_VERSION = LATEST_SCHEMA_VERSION
 
-PRKS_BIBTEX_DOC_TYPES = frozenset({
-    "article",
-    "book",
-    "booklet",
-    "inbook",
-    "incollection",
-    "inproceedings",
-    "proceedings",
-    "manual",
-    "mastersthesis",
-    "phdthesis",
-    "techreport",
-    "unpublished",
-    "misc",
-    "online",
-})
+# One definition, in the module that decides whether a field value is valid.
+PRKS_BIBTEX_DOC_TYPES = work_metadata_sync.DOC_TYPE_SET
 
 # Optional BibTeX/BibLaTeX lines (title + entry shell always exported).
 PRKS_BIBTEX_EXPORT_FIELD_IDS: Tuple[str, ...] = (
@@ -280,6 +266,12 @@ _PRKS_WORK_BROWSE_COLUMNS: Tuple[str, ...] = (
     "author_text",
     "year",
     "published_date",
+    # Video identity, so an effective browse row can represent a coherent
+    # source on its own. Without these a row carries the URL but not the id
+    # that outranks it, and a pending source change could not be shown here
+    # without contradicting itself.
+    "provider",
+    "provider_id",
 )
 
 # Length of the excerpt #/progress renders under each card.
@@ -384,12 +376,7 @@ def _prks_fts_prefix_clause(tokens: List[str]) -> str:
 
 def normalize_doc_type(value: Any) -> str:
     """Map user/API input to a whitelisted BibLaTeX entry type; unknown → misc."""
-    if value is None:
-        return "misc"
-    s = str(value).strip().lower()
-    if s in PRKS_BIBTEX_DOC_TYPES:
-        return s
-    return "misc"
+    return work_metadata_sync.normalize_doc_type(value)
 
 
 def prks_thumb_cache_safe_wid(work_id: str) -> str:
@@ -2408,6 +2395,15 @@ class PRKSDatabase:
         synced = {k: work_metadata_sync.canonical_wire(k, v) for k, v in synced.items()}
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            # The same guard the synchronization handler applies: a field-scoped
+            # write may not touch a video Work's source identity, whichever
+            # path it arrives by.
+            for field in synced:
+                refusal = work_metadata_sync.guarded_field_refusal(conn, work_id, field)
+                if refusal is not None:
+                    raise ValueError(
+                        "%s cannot be set on this Work: its source identity is not a "
+                        "field-scoped value" % field)
             if plain:
                 set_clause = ", ".join(f"{k} = ?" for k in plain)
                 conn.execute(

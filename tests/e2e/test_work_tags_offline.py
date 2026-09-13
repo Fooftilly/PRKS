@@ -7,7 +7,7 @@ from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -418,7 +418,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         discard = panel.get_by_role('button', name='Discard local change', exact=True)
         discard.wait_for()
         discard.click()
-        page.wait_for_function(
+        wait_for_async(page,
             "() => prksSync.store.listOperations().then(rows => rows.every(r => !%s))" % self.TAG_OPS)
         self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
         self.assertEqual([r['status'] for r in self.tag_ledger(server, 'status')], ['REVISION_CONFLICT'])

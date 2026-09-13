@@ -30,22 +30,48 @@
  */
 (function (root) {
     'use strict';
-    const FIELDS = Object.freeze(['status', 'thumb_page', 'author_text', 'year',
-        'published_date', 'abstract', 'publisher', 'location', 'edition', 'journal',
-        'volume', 'issue', 'pages', 'isbn', 'doi']);
+    const FIELDS = Object.freeze(['title', 'status', 'doc_type', 'thumb_page',
+        'author_text', 'year', 'published_date', 'abstract', 'publisher', 'location',
+        'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi', 'source_url']);
     const FIELD_SET = new Set(FIELDS);
     /* Mirrors `work_metadata_sync.WORK_STATUSES`. Status is the first
      * synchronized field validated by an ALLOWLIST rather than a length: a
      * value outside it is not "too long", it is not a status at all. */
     const WORK_STATUSES = Object.freeze(
         ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused']);
-    const FIELD_ALLOWLISTS = Object.freeze({ status: new Set(WORK_STATUSES) });
+    /* The canonical doc-type list lives in `doc-types.js`, which also owns the
+     * labels and colours the control shows. A second copy here would drift
+     * from what the user can actually pick, so it is read from there --
+     * LAZILY, by bare identifier: a classic script's top-level `const` is a
+     * script-scope binding, not a property of `window`, and resolving it at
+     * load time would depend on script order. Memoized after the first
+     * successful read. */
+    let docTypeSet = null;
+    function allowedDocTypes() {
+        if (docTypeSet) return docTypeSet;
+        const source = Array.isArray(root.PRKS_DOC_TYPES) ? root.PRKS_DOC_TYPES
+            : (typeof PRKS_DOC_TYPES !== 'undefined' && Array.isArray(PRKS_DOC_TYPES)
+                ? PRKS_DOC_TYPES : null);
+        const list = source ? source.map(d => d && d.value).filter(Boolean) : [];
+        if (!list.length) return null;   // not loaded yet; do not memoize an empty answer
+        docTypeSet = new Set(list);
+        return docTypeSet;
+    }
+    const FIELD_ALLOWLISTS = Object.freeze({
+        status: { has: value => new Set(WORK_STATUSES).has(value) },
+        doc_type: { has: value => {
+            const allowed = allowedDocTypes();
+            return allowed ? allowed.has(value) : false;
+        } },
+    });
     const LABELS = Object.freeze({
-        status: 'Progress', thumb_page: 'Thumbnail page', author_text: 'Author', year: 'Year',
+        title: 'Title', status: 'Progress', doc_type: 'Document type',
+        thumb_page: 'Thumbnail page',
+        author_text: 'Author', year: 'Year',
         published_date: 'Published date', abstract: 'Abstract',
         publisher: 'Publisher', location: 'Location', edition: 'Edition',
         journal: 'Journal', volume: 'Volume', issue: 'Issue',
-        pages: 'Pages', isbn: 'ISBN', doi: 'DOI',
+        pages: 'Pages', isbn: 'ISBN', doi: 'DOI', source_url: 'Original URL',
     });
     /* Cached projections other than the Work that carry a synchronized field.
      * Mirrors `work_metadata_sync.FIELD_PROJECTIONS`; the parity is pinned by
@@ -72,6 +98,12 @@
         /* Every Work card builds its thumbnail URL from this, so a pending
          * page has to reach the cached rows the cards are rendered from. */
         thumb_page: BROWSE_LISTS,
+        /* Every Work card shows a doc-type badge, and Types groups on it --
+         * the same membership shape `status` has for Progress. */
+        doc_type: BROWSE_LISTS,
+        // The widest field of all: every Work card shows a Title.
+        title: BROWSE_LISTS,
+        source_url: BROWSE_LISTS,
     });
 
     /* Fields that cached ENTITY snapshots embed verbatim as part of a Work
@@ -79,8 +111,8 @@
      * rows are rendered as Work cards and searched locally, so a pending value
      * has to reach them. `abstract` is deliberately absent: summaries carry it,
      * but nothing there renders or searches it. */
-    const SUMMARY_FIELDS = Object.freeze(
-        ['status', 'thumb_page', 'author_text', 'year', 'published_date', 'publisher']);
+    const SUMMARY_FIELDS = Object.freeze(['title', 'status', 'doc_type', 'thumb_page',
+        'author_text', 'year', 'published_date', 'publisher', 'source_url']);
 
     /* Mirrors `backend/work_metadata_sync.BYTE_LIMITS`: fields whose bound is a
      * storage limit rather than a display one, measured in UTF-8 BYTES because
@@ -96,6 +128,8 @@
     const BYTE_LIMITS = Object.freeze({
         abstract: 1024 * 1024,
         author_text: 64 * 1024,
+        title: 64 * 1024,
+        source_url: 64 * 1024,
     });
     const BYTE_LIMITED_FIELDS = new Set(Object.keys(BYTE_LIMITS));
     const MAX_ABSTRACT_UTF8_BYTES = BYTE_LIMITS.abstract;
@@ -114,15 +148,16 @@
      * like a copy for four milestones. */
     const copy = field => ({ field, column: field, derive: value => toEntityValue(field, value) });
     const PROJECTION_COLUMNS = Object.freeze({
-        'recently-added': [copy('status'), copy('thumb_page'), copy('author_text'),
-            copy('publisher'), copy('year'), copy('published_date')],
+        'recently-added': [copy('title'), copy('status'), copy('doc_type'),
+            copy('thumb_page'), copy('author_text'), copy('publisher'),
+            copy('year'), copy('published_date'), copy('source_url')],
         'works-browse': [
             { field: 'abstract', column: 'abstract_excerpt', derive: text => abstractExcerpt(text) },
-            copy('status'), copy('thumb_page'), copy('author_text'),
-            copy('year'), copy('published_date'),
+            copy('title'), copy('status'), copy('doc_type'), copy('thumb_page'),
+            copy('author_text'), copy('year'), copy('published_date'), copy('source_url'),
         ],
-        'recent': [copy('status'), copy('thumb_page'), copy('author_text'),
-            copy('year'), copy('published_date')],
+        'recent': [copy('title'), copy('status'), copy('doc_type'), copy('thumb_page'),
+            copy('author_text'), copy('year'), copy('published_date'), copy('source_url')],
     });
 
     /* The excerpt Progress shows under each Work card.
@@ -460,6 +495,53 @@
         return Object.assign({}, data, { value: op.payload.value });
     }
 
+    /**
+     * Save ONE Work field durably, from outside the metadata editor.
+     *
+     * The Playlist detail renames a Work inline, which is a Work Title change
+     * and not Playlist state -- so it takes this, the same durable path the
+     * editor uses, rather than a PATCH. Keeping it here means the component
+     * never touches the operation store or learns what an observed base is:
+     * it asks for a save and is told what happened.
+     *
+     * Resolves to one of:
+     *   'saved'        an operation was enqueued
+     *   'unchanged'    the value already matched what was observed
+     *   'unavailable'  the acknowledged base could not be established -- a
+     *                  REFUSAL, never an empty base, because saving against a
+     *                  base this session could not read would overwrite an
+     *                  edit it never saw
+     *   'too-long'     refused by the field's own limit; `error` says so
+     *   'failed'       durable storage refused the write
+     */
+    async function saveWorkField(workId, field, draftValue, options) {
+        const label = (options && options.label) || LABELS[field] || field;
+        if (!root.prksSync || !FIELD_SET.has(field)) return { code: 'unavailable' };
+        let observed;
+        try {
+            const state = await readState(workId);
+            const work = await root.prksOfflineReadEntity(
+                'work', workId, '/api/works/' + encodeURIComponent(workId), {});
+            if (!state || !state.value || !work || work.source === 'unavailable') {
+                return { code: 'unavailable' };
+            }
+            observed = { fields: observedFields(state.value, work.value) };
+        } catch (_) {
+            return { code: 'unavailable' };
+        }
+        const changes = dirtyFields({ [field]: draftValue }, observed);
+        if (!Object.prototype.hasOwnProperty.call(changes, field)) return { code: 'unchanged' };
+        const tooLong = fieldLimitError(field, changes[field], label);
+        if (tooLong) return { code: 'too-long', error: tooLong };
+        try {
+            await root.prksSync.store.saveWorkMetadataFields(workId, changes, observed.fields);
+        } catch (_) {
+            return { code: 'failed' };
+        }
+        root.prksSync.changed();
+        return { code: 'saved' };
+    }
+
     /* ---- sync handler ---- */
     function isResult(data, op) {
         if (!data || data.work_id !== op.entity_id || data.field !== op.payload.field) return false;
@@ -504,6 +586,11 @@
                     !has('requested_bytes'));
             }
             case 'ENTITY_NOT_FOUND': return true;
+            /* The server refused this FIELD on this Work because the value is
+             * not a field-scoped one there -- a video's source URL is one
+             * spelling of an identity spanning several columns. Terminal and
+             * well-formed: retrying would refuse identically forever. */
+            case 'WRONG_OPERATION_FOR_SOURCE': return true;
             default: return false;
         }
     }
@@ -628,6 +715,95 @@
         return effectiveRows([work], FIELDS)[0];
     }
 
+    /* ---- Work values embedded by REFERENCE in other entity families ----
+     *
+     * A Work summary is a Work-shaped row, and `SUMMARY_FIELDS` covers those.
+     * These are different: a cached Research Graph node, a Concept backlink
+     * and an Argument source each hold a FEW Work values under their own key
+     * names, inside an entity that is not a Work at all. The Work is
+     * identified by a foreign key rather than by `id`, and the column name
+     * usually differs from the field name -- a Graph node's Title is `label`.
+     *
+     * One registry, so a component never learns what a durable operation is
+     * and the next field is an entry rather than another traversal.
+     *
+     *   rows(entity)  -> the array of Work-reference rows it holds
+     *   key           -> the property naming the Work
+     *   columns       -> field -> property on that row
+     */
+    const GRAPH_NODES = Object.freeze({
+        path: 'nodes',
+        key: 'record_id',
+        // A Graph node is only a Work when it says so; a Person node can share
+        // a record id with nothing in common.
+        accepts: row => row && row.type === 'work',
+        columns: Object.freeze({ doc_type: 'doc_type', title: 'label' }),
+    });
+
+    const WORK_REFERENCE_SHAPES = Object.freeze({
+        'research-graph-core': [GRAPH_NODES],
+        'research-graph-people': [GRAPH_NODES],
+        // A Concept's backlinks name the Work's Title plainly...
+        concept: [{ path: 'mentions', key: 'work_id',
+            columns: Object.freeze({ title: 'title' }) }],
+        // ...while an Argument holds two collections that disagree about the
+        // column name. That disagreement is exactly why this is a registry.
+        argument: [
+            { path: 'sources', key: 'work_id', columns: Object.freeze({ title: 'work_title' }) },
+            { path: 'mentions', key: 'work_id', columns: Object.freeze({ title: 'title' }) },
+        ],
+    });
+
+    /**
+     * Acknowledged entity + pending Work metadata = what the user should see.
+     *
+     * Never mutates: a row an edit touches is copied, and so is the array and
+     * the entity around it, so the caller's acknowledged snapshot -- in memory
+     * or in IndexedDB -- stays exactly what the server said.
+     */
+    function effectiveWorkReferences(kind, value) {
+        const shapes = WORK_REFERENCE_SHAPES[kind];
+        if (!shapes || !value || !pendingByWork.size) return value;
+        let out = value;
+        shapes.forEach(shape => {
+            const rows = out[shape.path];
+            if (!Array.isArray(rows)) return;
+            let touched = false;
+            const next = rows.map(row => {
+                if (!row || (shape.accepts && !shape.accepts(row))) return row;
+                const pending = pendingByWork.get(row[shape.key]);
+                if (!pending) return row;
+                let copy = row;
+                Object.keys(shape.columns).forEach(field => {
+                    if (!Object.prototype.hasOwnProperty.call(pending, field)) return;
+                    if (copy === row) copy = Object.assign({}, row);
+                    copy[shape.columns[field]] = toEntityValue(field, pending[field]);
+                });
+                if (copy !== row) touched = true;
+                return copy;
+            });
+            if (!touched) return;
+            if (out === value) out = Object.assign({}, value);
+            out[shape.path] = next;
+        });
+        return out;
+    }
+
+    /**
+     * The acknowledged counterpart: every place in one entity kind that names
+     * this field, so a reconciler can patch without knowing any shapes.
+     */
+    function workReferencePatches(kind, field, wireValue) {
+        const shapes = WORK_REFERENCE_SHAPES[kind] || [];
+        return shapes.filter(shape => shape.columns[field]).map(shape => ({
+            path: shape.path,
+            key: shape.key,
+            accepts: shape.accepts || null,
+            column: shape.columns[field],
+            value: toEntityValue(field, wireValue),
+        }));
+    }
+
     /**
      * The same overlay for a LIST of full Work records -- server-backed search
      * and Saved View results, which are fetched fresh and therefore still
@@ -739,12 +915,16 @@
         prksSetPendingWorkMetadata: setPending,
         prksEffectiveWorkSync: effectiveWorkSync,
         prksEffectiveWorksSync: effectiveWorksSync,
+        PRKS_WORK_REFERENCE_KINDS: Object.freeze(Object.keys(WORK_REFERENCE_SHAPES)),
+        prksEffectiveWorkReferences: effectiveWorkReferences,
+        prksWorkReferencePatches: workReferencePatches,
         prksPendingWorkMetadataGeneration: () => pendingGeneration,
         prksEffectiveWorkMetadataRows: effectiveRows,
         PRKS_SYNCED_WORK_FIELD_LABELS: LABELS,
         prksCanonicalWorkField: canonical,
         prksIsWorkMetadataStateShape: stateShape,
         prksReadWorkMetadataState: readState,
+        prksSaveWorkFieldDurably: saveWorkField,
         prksEffectiveWorkMetadata: effectiveWork,
         prksWorkMetadataFieldOperations: fieldOperations,
         prksDirtyWorkMetadataFields: dirtyFields,

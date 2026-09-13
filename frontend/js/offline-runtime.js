@@ -457,7 +457,8 @@
                 if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
             }
             if (!await reconcileFieldProjections(result)) return false;
-            return reconcileEmbeddedSummaries(result);
+            if (!await reconcileEmbeddedSummaries(result)) return false;
+            return reconcileWorkReferences(result);
         }
 
         /* Cached Folder, Person and Playlist details embed Work SUMMARIES, so a
@@ -471,11 +472,133 @@
          * afterwards. The domain is NOT blocked -- we are replacing rows with
          * known-good values, not invalidating them.
          */
+        /* A reference kind's coherence DOMAIN, where it differs from the
+         * entity kind: `concept` entities live in the `concepts` domain. The
+         * Graph snapshots are their own domain and kind at once. */
+        const REFERENCE_DOMAINS = {
+            concept: DOMAIN_CONCEPTS,
+            argument: DOMAIN_ARGUMENTS,
+        };
+
         const SUMMARY_ENTITIES = [
             { kind: 'folder', domain: DOMAIN_FOLDERS, rows: value => value.works },
             { kind: 'person', domain: DOMAIN_PEOPLE, rows: value => value.works },
             { kind: 'playlist', domain: DOMAIN_PLAYLISTS, rows: value => value.items },
         ];
+
+        /* Work values held by REFERENCE inside other entity families -- today
+         * the two Research Graph snapshots. The rows are not Work summaries:
+         * they name the Work by a foreign key and often under a different
+         * column, so the shape registry in `work-metadata-state.js` owns the
+         * traversal and this only drives it.
+         *
+         * Patched rather than invalidated, for the same reason as the embedded
+         * summaries: dropping a Graph snapshot would cost the user the whole
+         * cached Graph for a one-field edit whose exact new value is known.
+         * Each domain's generation advances BEFORE its snapshot is read, so a
+         * GET that began earlier cannot publish its pre-acknowledgement body
+         * afterwards. */
+        /* An acknowledged SOURCE identity, patched into every cached
+         * representation that carries source columns.
+         *
+         * All four columns are written TOGETHER, per row. A row that briefly
+         * said `source_url = B` while `provider_id` still said A would be the
+         * contradiction the aggregate exists to prevent, and "briefly" is not
+         * a defence when a render can happen in between.
+         */
+        async function reconcileWorkSource(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.work_id;
+            const source = result.source;
+            if (!source) return false;
+            const kinds = ['work'];
+            const tokens = kinds.map(function (kind) {
+                const token = currentEntityGeneration(kind, id) + 1;
+                entityCoherence.set(entityKey(kind, id), token);
+                return token;
+            });
+            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
+            const work = snapshots[0] && snapshots[0].value;
+            if (work) {
+                Object.assign(work, source);
+                if (!await cacheEntityIfCurrent('work', id, work, tokens[0])) return false;
+            }
+            for (const [domain, listKey] of Object.entries(FIELD_PROJECTION_LISTS)) {
+                const token = currentDomainGeneration(domain) + 1;
+                domainGeneration.set(domain, token);
+                const cached = await store.getList(listKey).catch(function () { return null; });
+                if (!cached) continue;   // a missing snapshot is nothing to patch
+                const rows = cached.value;
+                if (!Array.isArray(rows)) return false;
+                if (!rows.some(row => row && row.id === id)) continue;
+                const merged = rows.map(row => (row && row.id === id
+                    ? Object.assign({}, row, source) : row));
+                if (!await cacheListForDomain(listKey, merged, domain, token)) return false;
+            }
+            for (const spec of SUMMARY_ENTITIES) {
+                if (typeof store.getEntitiesByKind !== 'function') continue;
+                const token = currentDomainGeneration(spec.domain) + 1;
+                domainGeneration.set(spec.domain, token);
+                const cached = await store.getEntitiesByKind(spec.kind)
+                    .catch(function () { return null; });
+                if (!Array.isArray(cached)) return false;
+                for (const row of cached) {
+                    if (!row || !row.value) continue;
+                    const summaries = spec.rows(row.value);
+                    if (!Array.isArray(summaries)) continue;
+                    let touched = false;
+                    summaries.forEach(function (summary, index) {
+                        if (!summary || summary.id !== id) return;
+                        summaries[index] = Object.assign({}, summary, source);
+                        touched = true;
+                    });
+                    if (!touched) continue;
+                    const entityToken = currentEntityGeneration(spec.kind, row.id) + 1;
+                    entityCoherence.set(entityKey(spec.kind, row.id), entityToken);
+                    if (!await cacheEntityIfCurrent(spec.kind, row.id, row.value, entityToken)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        async function reconcileWorkReferences(result) {
+            const kinds = root.PRKS_WORK_REFERENCE_KINDS || [];
+            for (const kind of kinds) {
+                const patches = root.prksWorkReferencePatches(kind, result.field, result.value);
+                if (!patches.length) continue;   // this field reaches no row of this kind
+                const domain = REFERENCE_DOMAINS[kind] || kind;
+                const token = currentDomainGeneration(domain) + 1;
+                domainGeneration.set(domain, token);
+                const cached = typeof store.getEntitiesByKind === 'function'
+                    ? await store.getEntitiesByKind(kind).catch(function () { return null; })
+                    : null;
+                // Nothing cached of this kind is nothing to reconcile; a
+                // FAILED read is not the same answer and must not retire the
+                // operation.
+                if (!Array.isArray(cached)) return false;
+                for (const row of cached) {
+                    if (!row || !row.value) continue;
+                    let touched = false;
+                    for (const patch of patches) {
+                        const rows = row.value[patch.path];
+                        if (!Array.isArray(rows)) continue;
+                        rows.forEach(function (item, index) {
+                            if (!item || item[patch.key] !== result.work_id) return;
+                            if (patch.accepts && !patch.accepts(item)) return;
+                            rows[index] = Object.assign({}, item, { [patch.column]: patch.value });
+                            touched = true;
+                        });
+                    }
+                    if (!touched) continue;
+                    const entityToken = currentEntityGeneration(kind, row.id) + 1;
+                    entityCoherence.set(entityKey(kind, row.id), entityToken);
+                    if (!await cacheEntityIfCurrent(kind, row.id, row.value, entityToken)) return false;
+                }
+            }
+            return true;
+        }
 
         async function reconcileEmbeddedSummaries(result) {
             const fields = root.PRKS_WORK_SUMMARY_FIELDS || [];
@@ -861,6 +984,7 @@
             readThroughList: readThroughList,
             reconcileWorkTag,
             reconcileWorkField,
+            reconcileWorkSource,
             reconcileRecentOpen,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
@@ -1064,6 +1188,7 @@
         prksOfflineCacheEntity: prksOfflineCacheEntity,
         prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
+        prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineMarkTagsChanged: () => production.markDomainChanged('tags', { entityKinds: [], listKeys: ['tags:index'] }),
         prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,
