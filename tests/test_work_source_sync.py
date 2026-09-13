@@ -291,6 +291,23 @@ class WorkSourceSyncTests(unittest.TestCase):
                 "Ok", source_kind=" VIDEO ", source_url=WATCH % "AAA"))["source_kind"],
             "video")
 
+    def test_every_new_work_with_a_source_states_its_kind(self):
+        """The invariant reads "new canonical Work: source_kind = pdf | video",
+        and an inferred PDF left it NULL -- so the documented rule was not
+        literal and every reader had to keep inferring."""
+        filed = self.db.add_work("Filed", file_path="/api/pdfs/a.pdf")
+        self.assertEqual(self.db.get_work(filed)["source_kind"], "pdf")
+        declared = self.db.add_work("Declared", source_kind="pdf",
+                                    file_path="/api/pdfs/b.pdf")
+        self.assertEqual(self.db.get_work(declared)["source_kind"], "pdf")
+        video = self.db.add_work("Video", source_url=WATCH % "AAA")
+        self.assertEqual(self.db.get_work(video)["source_kind"], "video")
+
+    def test_a_work_with_no_source_at_all_states_nothing(self):
+        """Inventing a kind there would be a claim about a file it does not
+        have."""
+        self.assertIsNone(self.db.get_work(self.db.add_work("Bare"))["source_kind"])
+
     def test_creation_is_construction_and_advances_no_revision(self):
         """A Work begins at revision 0 like every other scope. Creation writing
         one would make every device's first read look like a missed change."""

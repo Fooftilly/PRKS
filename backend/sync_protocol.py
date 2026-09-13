@@ -148,3 +148,6 @@ register("SET_WORK_SOURCE", work_source_sync.HANDLER)
 # work_role_sync's module docstring for the schema evidence behind that.
 register("ADD_WORK_PERSON_ROLE", work_role_sync.HANDLER)
 register("REMOVE_WORK_PERSON_ROLE", work_role_sync.HANDLER)
+# Editing the credit override on an existing link shares the relationship's
+# scope and revision: it changes the same element's semantic state.
+register("SET_WORK_PERSON_ROLE_CREDIT", work_role_sync.HANDLER)

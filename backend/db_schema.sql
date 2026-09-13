@@ -460,6 +460,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_parent_title_nocase
     ON folders(COALESCE(parent_id, ''), LOWER(TRIM(title)));
 
 -- Performance indexes for frequently queried FK columns
+-- One relationship per (person, work, role): the identity the sync
+-- protocol scopes a revision by. The table's PK includes order_index,
+-- so without this the database would permit two rows for one scope.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roles_person_work_role_unique
+    ON roles(person_id, work_id, role_type);
 CREATE INDEX IF NOT EXISTS idx_roles_work_id ON roles(work_id);
 CREATE INDEX IF NOT EXISTS idx_roles_person_id ON roles(person_id);
 CREATE INDEX IF NOT EXISTS idx_annotations_work_id ON annotations(work_id);

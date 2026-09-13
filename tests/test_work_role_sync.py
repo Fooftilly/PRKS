@@ -19,12 +19,16 @@ class WorkRoleSyncTests(unittest.TestCase):
         self.jane = self.db.add_person("Jane", "Doe")
         self.ed = self.db.add_person("Ed", "Smith")
 
-    def op(self, present, person=None, role="Author", base=0, **changes):
+    def op(self, present, person=None, role="Author", base=0, credit="",
+           operation=None, **changes):
+        payload = {"person_id": person or self.jane, "role_type": role}
+        operation = operation or ("ADD_WORK_PERSON_ROLE" if present
+                                  else "REMOVE_WORK_PERSON_ROLE")
+        if operation in roles.CARRIES_CREDIT:
+            payload["credit_name"] = credit
         envelope = dict(
-            op_id=str(uuid.uuid4()), device_id=str(uuid.uuid4()),
-            operation="ADD_WORK_PERSON_ROLE" if present else "REMOVE_WORK_PERSON_ROLE",
-            entity_type="work", entity_id=self.work,
-            payload={"person_id": person or self.jane, "role_type": role},
+            op_id=str(uuid.uuid4()), device_id=str(uuid.uuid4()), operation=operation,
+            entity_type="work", entity_id=self.work, payload=payload,
             base_revision=base, occurred_at="2026-09-13T10:00:00Z",
             created_at="2026-09-13T10:00:00Z", depends_on=[])
         envelope.update(changes)
@@ -32,6 +36,10 @@ class WorkRoleSyncTests(unittest.TestCase):
 
     def send(self, present, **kw):
         return sync_protocol.process_operation(self.db, self.op(present, **kw))
+
+    def state(self, person=None, role="Author"):
+        with self.db.connection() as conn:
+            return roles.current_state(conn, self.work, person or self.jane, role)
 
     def revision(self, person=None, role="Author"):
         with self.db.connection() as conn:
@@ -45,7 +53,7 @@ class WorkRoleSyncTests(unittest.TestCase):
     def test_add_and_remove_each_advance_one_revision(self):
         code, result = self.send(True)
         self.assertEqual((code, result["code"], result["changed"]), (200, "ACKNOWLEDGED", True))
-        self.assertEqual(result["server_revision"], 1)
+        self.assertEqual((result["server_revision"], result["present"]), (1, True))
         self.assertIn((self.jane, "Author"), self.linked())
 
         code, result = self.send(False, base=1)
@@ -76,7 +84,8 @@ class WorkRoleSyncTests(unittest.TestCase):
         self.send(True)                       # another device links Jane
         code, result = self.send(False, base=0)   # this one, from before that
         self.assertEqual((code, result["code"]), (409, "REVISION_CONFLICT"))
-        self.assertEqual((result["current_state"], result["requested_state"]), (True, False))
+        self.assertEqual((result["current"]["present"], result["requested"]["present"]),
+                         (True, False))
         self.assertEqual(result["current_revision"], 1)
         self.assertIn((self.jane, "Author"), self.linked(), "the server's state stands")
 
@@ -151,10 +160,22 @@ class WorkRoleSyncTests(unittest.TestCase):
             with self.subTest(role=good):
                 self.assertEqual(self.send(True, role=good)[1]["code"], "ACKNOWLEDGED")
 
+    def test_every_write_path_agrees_about_the_role_domain(self):
+        """The durable validator refused unknown roles while `add_role()` took
+        anything, so `Producer` was impossible offline and fine online -- and
+        the accepted row then matched no filter, icon or BibTeX mapping."""
+        with self.assertRaises(ValueError):
+            self.db.add_role(self.jane, self.work, "Producer")
+        with self.assertRaises(ValueError):
+            self.db.insert_initial_role(self.work, self.jane, "Producer")
+        self.assertEqual(self.send(True, role="Producer")[1], {"code": "INVALID_ENVELOPE"})
+        self.assertEqual(self.linked(), set())
+
     def test_the_envelope_carries_exactly_the_relationship(self):
         for payload in ({"person_id": "P-1"}, {"role_type": "Author"},
                         {"person_id": "P-1", "role_type": "Author", "order_index": 3},
-                        {"person_id": "", "role_type": "Author"}):
+                        {"person_id": "P-1", "role_type": "Author"},
+                        {"person_id": "", "role_type": "Author", "credit_name": ""}):
             with self.subTest(payload=payload):
                 envelope = self.op(True)
                 envelope["payload"] = payload
@@ -200,16 +221,149 @@ class WorkRoleSyncTests(unittest.TestCase):
 
     def test_relationships_a_work_is_born_with_are_revision_zero(self):
         """Construction is not mutation. Manufacturing revision 1 for a Work
-        created with an Author would make every device's first read look like a
-        missed change."""
-        with self.db.connection() as conn:
-            conn.execute(
-                "INSERT INTO roles (person_id, work_id, role_type, order_index) VALUES (?, ?, ?, 0)",
-                (self.jane, self.work, "Author"))
-        state = roles.get_roles_state(self.db, self.work)
-        self.assertEqual(state["scopes"],
-                         [{"person_id": self.jane, "role_type": "Author",
-                           "revision": 0, "present": True}])
+        created with two Authors would make every device's first read look like
+        two missed changes it has to reconcile.
+
+        Through the real construction boundary, not a direct INSERT: routing
+        construction at `add_role()` made every created Work start at revision
+        1 and threw away the importer's author order, and a SQL fixture would
+        have proved only that the projection understands revision-zero rows.
+        """
+        self.db.insert_initial_role(self.work, self.jane, "Author", order_index=0)
+        self.db.insert_initial_role(self.work, self.ed, "Author", order_index=1)
+        state = {(s["person_id"], s["role_type"]): s
+                 for s in roles.get_roles_state(self.db, self.work)["scopes"]}
+        self.assertEqual(state[(self.jane, "Author")]["revision"], 0)
+        self.assertEqual(state[(self.ed, "Author")]["revision"], 0)
+        row = next(w for w in self.db.get_all_works() if w["id"] == self.work)
+        self.assertEqual(row["linked_authors"], "Jane Doe, Ed Smith",
+                         "the caller's author order is preserved at construction")
+
+        # Mutating one moves only that element.
+        self.send(False, person=self.jane, base=0)
+        self.assertEqual(self.revision(self.jane, "Author"), 1)
+        self.assertEqual(self.revision(self.ed, "Author"), 0, "the other is untouched")
+
+    def test_construction_preserves_the_order_the_caller_states(self):
+        """An importer replaying a BibTeX author list means the order it
+        states. `add_role()` ignored `order_index` and appended, so an import
+        that placed an author second could silently become first."""
+        self.db.insert_initial_role(self.work, self.ed, "Author", order_index=1)
+        self.db.insert_initial_role(self.work, self.jane, "Author", order_index=0)
+        row = next(w for w in self.db.get_all_works() if w["id"] == self.work)
+        self.assertEqual(row["linked_authors"], "Jane Doe, Ed Smith")
+        self.assertEqual(row["primary_author"], "Jane Doe")
+
+    def test_mutation_appends_and_never_takes_a_callers_placement(self):
+        """After the Work exists, order is server-owned: an index chosen by one
+        device is a claim about placement it cannot coordinate with others."""
+        self.db.insert_initial_role(self.work, self.jane, "Author", order_index=0)
+        self.db.add_role(self.ed, self.work, "Author", order_index=0)
+        row = next(w for w in self.db.get_all_works() if w["id"] == self.work)
+        self.assertEqual(row["linked_authors"], "Jane Doe, Ed Smith",
+                         "appended after what was already there")
+
+    # ---- credit_name is part of the element's state ----
+
+    def test_a_link_carries_its_credit_override(self):
+        """"The name on THIS file". It reaches linked_authors, the card credit,
+        BibTeX and Person aliases -- so a durable ADD that dropped it would
+        silently lose a value the user typed."""
+        code, result = self.send(True, credit="Mark Twain")
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(result["credit_name"], "Mark Twain")
+        self.assertEqual(self.state(), "Mark Twain")
+        row = next(w for w in self.db.get_all_works() if w["id"] == self.work)
+        self.assertEqual(row["linked_authors"], "Mark Twain",
+                         "the override is what the card credits")
+
+    def test_the_credit_override_becomes_a_person_alias(self):
+        """A long-standing side effect of linking with an override, and People
+        search depends on it. At the canonical boundary now, so every write
+        path does it rather than the one handler that remembered."""
+        self.send(True, credit="Mark Twain")
+        self.assertIn("Mark Twain", self.db.get_person(self.jane)["aliases"])
+
+    def test_two_devices_choosing_different_credits_have_not_converged(self):
+        """Presence alone was not the state. A boolean model would have called
+        this agreement and silently kept one device's name."""
+        self.send(True, credit="Mark Twain")
+        code, result = self.send(True, base=0, credit="S. Clemens")
+        self.assertEqual((code, result["code"]), (409, "REVISION_CONFLICT"))
+        self.assertEqual(result["current"], {"present": True, "credit_name": "Mark Twain"})
+        self.assertEqual(result["requested"], {"present": True, "credit_name": "S. Clemens"})
+
+    def test_two_devices_choosing_the_same_credit_have_converged(self):
+        self.send(True, credit="Mark Twain")
+        code, result = self.send(True, base=0, credit="Mark Twain")
+        self.assertEqual((code, result["code"], result["changed"]),
+                         (200, "ACKNOWLEDGED", False))
+
+    def test_the_credit_can_be_edited_and_cleared_revision_aware(self):
+        self.send(True, credit="Mark Twain")
+        code, result = sync_protocol.process_operation(self.db, self.op(
+            True, base=1, credit="M. Twain", operation="SET_WORK_PERSON_ROLE_CREDIT"))
+        self.assertEqual((code, result["code"], result["changed"]),
+                         (200, "ACKNOWLEDGED", True))
+        self.assertEqual((self.state(), self.revision()), ("M. Twain", 2))
+
+        # Clearing it reveals the canonical Person name again.
+        sync_protocol.process_operation(self.db, self.op(
+            True, base=2, credit="", operation="SET_WORK_PERSON_ROLE_CREDIT"))
+        self.assertEqual(self.state(), "")
+        row = next(w for w in self.db.get_all_works() if w["id"] == self.work)
+        self.assertEqual(row["linked_authors"], "Jane Doe")
+
+    def test_editing_the_credit_of_a_link_that_is_not_there_is_said_plainly(self):
+        """Not a revision disagreement: there is nothing to edit, so the client
+        re-reads rather than being offered a choice between two states one of
+        which does not exist."""
+        code, result = sync_protocol.process_operation(self.db, self.op(
+            True, base=0, credit="X", operation="SET_WORK_PERSON_ROLE_CREDIT"))
+        self.assertEqual((code, result["code"]), (409, "ROLE_NOT_PRESENT"))
+
+    def test_a_credit_name_is_bounded(self):
+        code, result = self.send(True, credit="x" * (roles.MAX_CREDIT_NAME_BYTES + 1))
+        self.assertEqual((code, result), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.linked(), set())
+
+    # ---- the structured projection the overlay reads ----
+
+    def test_a_browse_row_carries_enough_to_undo_a_credit_override(self):
+        """`display_name` alone is lossy in the direction the overlay needs.
+
+        "Mark Twain" cannot be turned back into "Samuel Clemens", so a pending
+        edit that CLEARS an override could not render its own result -- the row
+        would have to go and find a Person cache to do it. A browse row is
+        self-sufficient for the fields it promises to render.
+        """
+        self.send(True, credit="Mark Twain")
+        row = next(w for w in self.db.get_all_works() if w["id"] == self.work)
+        link = row["linked_people"][0]
+        self.assertEqual(link["person_id"], self.jane)
+        self.assertEqual(link["role_type"], "Author")
+        self.assertEqual(link["credit_name"], "Mark Twain")
+        self.assertEqual(link["display_name"], "Mark Twain")
+        self.assertEqual(link["canonical_name"], "Jane Doe",
+                         "the Person's own name, so clearing the override is reconstructible")
+        self.assertEqual(row["linked_authors"], "Mark Twain")
+
+        # Clearing it locally must reach exactly the canonical name.
+        self.assertEqual(
+            link["canonical_name"],
+            next(w for w in self.db.get_all_works() if w["id"] == self.work)["linked_people"][0]["canonical_name"])
+
+    def test_the_structured_links_carry_the_order_the_flattened_columns_use(self):
+        """The overlay recomputes `linked_authors` from these, so they have to
+        agree with it about order -- otherwise a pending change would silently
+        reorder the credit line."""
+        self.db.insert_initial_role(self.work, self.jane, "Author", order_index=0)
+        self.db.insert_initial_role(self.work, self.ed, "Author", order_index=1)
+        row = next(w for w in self.db.get_all_works() if w["id"] == self.work)
+        names = [l["display_name"] for l in row["linked_people"]
+                 if l["role_type"] == "Author"]
+        self.assertEqual(", ".join(names), row["linked_authors"])
+        self.assertEqual([l["order_index"] for l in row["linked_people"]], [0, 1])
 
     # ---- the state projection ----
 
@@ -233,7 +387,7 @@ class WorkRoleSyncTests(unittest.TestCase):
         other = self.db.add_work("Other")
         self.send(True)
         with self.db.connection() as conn:
-            roles.set_state(conn, other, self.ed, "Author", True)
+            roles.set_role_state(conn, other, self.ed, "Author", True)
         state = roles.get_roles_state(self.db, self.work)
         self.assertEqual([s["person_id"] for s in state["scopes"]], [self.jane])
 

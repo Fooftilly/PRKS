@@ -358,9 +358,21 @@ def _prks_sql_linked_people_json(work_alias: str, column_alias: str = "linked_pe
     wid = f"{work_alias}.id"
     ca = (column_alias or "linked_people").replace('"', "")
     disp = _prks_sql_role_display_name_expr("p", "r")
+    canonical = ("TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,''))")
     return (
         "(SELECT json_group_array(json_object("
-        "'person_id', r.person_id, 'role_type', r.role_type, 'display_name', " + disp + ")) "
+        "'person_id', r.person_id, "
+        "'role_type', r.role_type, "
+        "'order_index', r.order_index, "
+        # The Person's own name and the per-link override are carried
+        # SEPARATELY, not just the resolved display name. Clearing an override
+        # has to reveal the canonical name, and "Mark Twain" cannot be turned
+        # back into "Samuel Clemens" -- so a row that promised to render the
+        # credit would have had to go and find a Person cache to do it. A
+        # browse row is self-sufficient for what it renders.
+        "'canonical_name', " + canonical + ", "
+        "'credit_name', COALESCE(NULLIF(TRIM(r.credit_name), ''), ''), "
+        "'display_name', " + disp + ")) "
         "FROM (SELECT * FROM roles r2 "
         f"WHERE r2.work_id = {wid} ORDER BY r2.order_index ASC, r2.rowid ASC) r "
         f"JOIN persons p ON p.id = r.person_id) AS {ca}"
@@ -482,11 +494,16 @@ def _canonical_new_source(source_kind, source_url, provider, provider_id, file_p
             raise ValueError(
                 "provider and provider_id belong to a video source; this Work is "
                 "not one")
-        # The DECLARED kind, canonically spelled. Storing "PDF" and having every
-        # consumer lower-case it later means the canonical representation lives
-        # in each reader rather than in the column -- and a reader that forgets
-        # sees a kind that matches nothing.
-        return declared, source_url, provider, provider_id
+        # The EFFECTIVE kind, canonically spelled -- so a new row always states
+        # what it is rather than leaving every reader to infer it. Storing
+        # "PDF", or NULL for a file-backed Work, means the canonical
+        # representation lives in each reader instead of in the column, and a
+        # reader that forgets sees a kind matching nothing.
+        #
+        # `kind` is "" only when there is no source at all: no declared kind, no
+        # file and no URL. That Work genuinely has no source classification, and
+        # inventing one would be a claim about a file it does not have.
+        return (kind or None), source_url, provider, provider_id
 
     canonical = work_source_sync.canonical_source({"kind": "video", "url": url})
     if canonical is None:
@@ -1707,7 +1724,16 @@ class PRKSDatabase:
                     order_index = int(role.get("order_index") or 0)
                 except (TypeError, ValueError):
                     order_index = 0
-                self.add_role(person_id, work_id, role_type, order_index=order_index)
+                # CONSTRUCTION: this Work was created moments ago in this same
+                # import, and the importer is the authority on author order.
+                try:
+                    with self.connection() as conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        work_role_sync.insert_initial_role(
+                            conn, work_id, person_id, role_type,
+                            order_index=order_index)
+                except ValueError:
+                    continue
             for tag in self._get_processing_tags(processing_file_id):
                 tag_id = str(tag.get("id") or "").strip()
                 if tag_id:
@@ -3750,19 +3776,34 @@ class PRKSDatabase:
         order_index: int = 0,
         credit_name: str = "",
     ):
+        work_role_sync.validate_role_type(role_type)
         if self.has_work_role(person_id, work_id, role_type):
             raise ValueError(
                 f"This person is already linked to this file as {role_type}."
             )
-        # ONE revision-aware boundary, whichever path the change arrives by.
-        # A relationship written here without advancing its revision would be
-        # invisible to every offline device -- which would then overwrite it
-        # believing itself current. `order_index` is assigned there, by the
-        # server, as "append after what is already on this Work".
+        # MUTATION of an existing Work. One revision-aware boundary, whichever
+        # path the change arrives by: a relationship written without advancing
+        # its revision is invisible to every offline device, which would then
+        # overwrite it believing itself current.
+        #
+        # `order_index` is deliberately ignored here and assigned by the server
+        # as "append after what is already on this Work". A caller's index
+        # would be a claim about placement it cannot coordinate with other
+        # devices. Construction, where the caller IS the authority on author
+        # order, goes through `insert_initial_role()` instead.
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            work_role_sync.set_state(conn, work_id, person_id, role_type, True,
-                                     credit_name=credit_name)
+            work_role_sync.set_role_state(conn, work_id, person_id, role_type, True,
+                                          credit_name=credit_name)
+
+    def insert_initial_role(self, work_id: str, person_id: str, role_type: str,
+                            order_index: int = 0, credit_name: str = "") -> None:
+        """A relationship a NEW Work is born with. Creates no revision."""
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            work_role_sync.insert_initial_role(
+                conn, work_id, person_id, role_type, order_index=order_index,
+                credit_name=credit_name)
 
     def next_role_order_index(self, work_id: str) -> int:
         """Next order_index for a new role on this work (append after existing links)."""
@@ -3823,7 +3864,7 @@ class PRKSDatabase:
         """
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            return work_role_sync.set_state(conn, work_id, person_id, role_type, False)
+            return work_role_sync.set_role_state(conn, work_id, person_id, role_type, False)
 
     # --- Concepts & Arguments ---
     def add_concept(self, name: str, description: str = "") -> str:

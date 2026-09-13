@@ -2619,16 +2619,17 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         if credit_name is not None and not isinstance(credit_name, str):
                             credit_name = ''
                         try:
-                            db.add_role(
-                                p_id,
+                            # CONSTRUCTION: these are the relationships this
+                            # Work is born with, so they carry no revision and
+                            # the caller's author order is preserved. The alias
+                            # side effect happens at that boundary.
+                            db.insert_initial_role(
                                 w_id,
+                                p_id,
                                 r_type,
                                 order_index=idx,
                                 credit_name=credit_name or '',
                             )
-                            cn = (credit_name or '').strip()
-                            if cn:
-                                db.append_person_alias_if_new(p_id, cn)
                         except ValueError:
                             continue
                         

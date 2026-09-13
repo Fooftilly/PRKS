@@ -46,6 +46,12 @@ ROLE_TYPES = ("Author", "Editor", "Reviewer", "Mentioned", "Translator",
               "Introduction", "Foreword", "Afterword")
 ROLE_TYPE_SET = frozenset(ROLE_TYPES)
 
+# A credit override is a person's name as printed on one work. Bounded so the
+# field has a contract rather than inheriting whichever layer refuses first,
+# and small enough that a terminal result carrying two of them still fits the
+# client's 2 KiB durable bound without truncation.
+MAX_CREDIT_NAME_BYTES = 500
+
 
 def scope_key(work_id, person_id, role_type):
     # Structural encoding, like every other scope: no id has to exclude a
@@ -61,10 +67,45 @@ def get_revision(conn, work_id, person_id, role_type):
     return row[0] if row else 0
 
 
+def canonical_credit_name(credit_name):
+    """'' means no override. NULL and whitespace are the same intent."""
+    return (credit_name or "").strip()
+
+
+def validate_role_type(role_type):
+    """The one place a role name is judged.
+
+    The durable envelope validator rejected unknown roles while `add_role()`
+    accepted anything, so `Producer` was refused offline and accepted online --
+    a split contract in the direction that matters least to catch and most to
+    live with, since the accepted row then matched no filter, icon or BibTeX
+    mapping forever.
+    """
+    if role_type not in ROLE_TYPE_SET:
+        raise ValueError(
+            "%r is not a Work role; use one of %s"
+            % (role_type, ", ".join(ROLE_TYPES)))
+
+
+def current_state(conn, work_id, person_id, role_type):
+    """The element's canonical state: None when absent, else its credit name.
+
+    Presence alone is not the state. A link carries `credit_name` -- "the name
+    on THIS file" -- and that value reaches `linked_authors`, the card credit,
+    BibTeX and Person aliases. Two devices that both make the relationship
+    present but choose different credit names have not converged, and a model
+    that compared only booleans would have called that agreement.
+    """
+    row = conn.execute(
+        "SELECT credit_name FROM roles WHERE work_id = ? AND person_id = ? "
+        "AND role_type = ? LIMIT 1", (work_id, person_id, role_type)).fetchone()
+    if row is None:
+        return None
+    return canonical_credit_name(row[0])
+
+
 def is_present(conn, work_id, person_id, role_type):
-    return bool(conn.execute(
-        "SELECT 1 FROM roles WHERE work_id = ? AND person_id = ? AND role_type = ? LIMIT 1",
-        (work_id, person_id, role_type)).fetchone())
+    return current_state(conn, work_id, person_id, role_type) is not None
 
 
 def next_order_index(conn, work_id):
@@ -75,8 +116,59 @@ def next_order_index(conn, work_id):
     return int(row[0]) + 1
 
 
-def set_state(conn, work_id, person_id, role_type, present, credit_name=None):
-    """Write the relationship and advance its revision together.
+def _append_person_alias(conn, person_id, alias):
+    """"Mark Twain" typed on a link becomes one of Samuel Clemens's aliases.
+
+    A long-standing side effect of linking with a credit override, and People
+    search depends on it. It lives at this boundary now so it happens for every
+    canonical write rather than only the one HTTP handler that remembered it.
+    """
+    alias = canonical_credit_name(alias)
+    if not alias:
+        return False
+    row = conn.execute(
+        "SELECT aliases, first_name, last_name FROM persons WHERE id = ?",
+        (person_id,)).fetchone()
+    if row is None:
+        return False
+    parts = [x.strip() for x in (row[0] or "").split(",") if x.strip()]
+    if any(p.lower() == alias.lower() for p in parts):
+        return False
+    canonical = ("%s %s" % ((row[1] or "").strip(), (row[2] or "").strip())).strip()
+    if canonical and canonical.lower() == alias.lower():
+        return False
+    parts.append(alias)
+    conn.execute(
+        "UPDATE persons SET aliases = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (", ".join(parts), person_id))
+    return True
+
+
+def insert_initial_role(conn, work_id, person_id, role_type, order_index=0,
+                        credit_name=""):
+    """CONSTRUCTION. A relationship a Work is BORN with.
+
+    Deliberately not `set_role_state()`. Construction is not mutation: a Work
+    created with two Authors has not "changed" twice, and manufacturing
+    revision 1 for each would make every device's first read look like a missed
+    change it has to reconcile.
+
+    It also preserves the caller's `order_index`, because at construction the
+    caller IS the authority on author order -- an importer replaying a BibTeX
+    author list means the order it states. (After the Work exists, order is
+    server-owned placement and mutations append.)
+    """
+    validate_role_type(role_type)
+    conn.execute(
+        "INSERT INTO roles (person_id, work_id, role_type, order_index, credit_name) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (person_id, work_id, role_type, int(order_index),
+         canonical_credit_name(credit_name) or None))
+    _append_person_alias(conn, person_id, credit_name)
+
+
+def set_role_state(conn, work_id, person_id, role_type, present, credit_name=""):
+    """MUTATION of an existing Work's relationship, with its revision.
 
     ONE boundary for the sync handler and for the ordinary HTTP endpoints, so a
     relationship can never change without its revision -- an offline device
@@ -88,31 +180,41 @@ def set_state(conn, work_id, person_id, role_type, present, credit_name=None):
     based on the current state. This is why the revision lives in
     `sync_entity_revisions` keyed by the triple rather than being inferred from
     whether the row exists.
+
+    `order_index` is server-owned here: a new link appends after what is already
+    on the Work. Nothing in the product reorders, and a caller's index would be
+    a claim about placement it cannot coordinate with other devices.
     """
-    if present:
-        if is_present(conn, work_id, person_id, role_type):
-            changed = False
-        else:
-            cn = (credit_name or "").strip() or None
-            conn.execute(
-                "INSERT INTO roles (person_id, work_id, role_type, order_index, credit_name) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (person_id, work_id, role_type, next_order_index(conn, work_id), cn))
-            changed = True
-    else:
-        changed = conn.execute(
-            "DELETE FROM roles WHERE work_id = ? AND person_id = ? AND role_type = ?",
-            (work_id, person_id, role_type)).rowcount > 0
-    if changed:
+    validate_role_type(role_type)
+    desired = canonical_credit_name(credit_name) if present else None
+    existing = current_state(conn, work_id, person_id, role_type)
+    if existing == desired:
+        return False
+    if desired is None:
         conn.execute(
-            """INSERT INTO sync_entity_revisions (scope_type, scope_id, revision)
-               VALUES (?, ?, 1) ON CONFLICT (scope_type, scope_id)
-               DO UPDATE SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP""",
-            (SCOPE_TYPE, scope_key(work_id, person_id, role_type)))
-        # The catalog ETag counts role rows, and cards render the credit.
-        conn.execute("UPDATE works SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                     (work_id,))
-    return changed
+            "DELETE FROM roles WHERE work_id = ? AND person_id = ? AND role_type = ?",
+            (work_id, person_id, role_type))
+    elif existing is None:
+        conn.execute(
+            "INSERT INTO roles (person_id, work_id, role_type, order_index, credit_name) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (person_id, work_id, role_type, next_order_index(conn, work_id),
+             desired or None))
+        _append_person_alias(conn, person_id, desired)
+    else:
+        conn.execute(
+            "UPDATE roles SET credit_name = ? WHERE work_id = ? AND person_id = ? "
+            "AND role_type = ?", (desired or None, work_id, person_id, role_type))
+        _append_person_alias(conn, person_id, desired)
+    conn.execute(
+        """INSERT INTO sync_entity_revisions (scope_type, scope_id, revision)
+           VALUES (?, ?, 1) ON CONFLICT (scope_type, scope_id)
+           DO UPDATE SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP""",
+        (SCOPE_TYPE, scope_key(work_id, person_id, role_type)))
+    # The catalog ETag counts role rows, and cards render the credit.
+    conn.execute("UPDATE works SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                 (work_id,))
+    return True
 
 
 def get_roles_state(db, work_id):
@@ -159,20 +261,42 @@ def get_roles_state(db, work_id):
         return {"work_id": work_id, "scopes": scopes}
 
 
+# `REMOVE` names absence and carries no credit; the other two name a PRESENT
+# state, which includes the credit override.
+CARRIES_CREDIT = ("ADD_WORK_PERSON_ROLE", "SET_WORK_PERSON_ROLE_CREDIT")
+
+
 def validate(op):
     payload = op["payload"]
-    if set(payload) != {"person_id", "role_type"}:
+    expected = {"person_id", "role_type"}
+    if op["operation"] in CARRIES_CREDIT:
+        expected.add("credit_name")
+    if set(payload) != expected:
         raise ValueError("INVALID_ENVELOPE")
     person_id, role_type = payload["person_id"], payload["role_type"]
     if not isinstance(person_id, str) or not person_id.strip():
         raise ValueError("INVALID_ENVELOPE")
     if role_type not in ROLE_TYPE_SET:
         raise ValueError("INVALID_ENVELOPE")
+    if op["operation"] in CARRIES_CREDIT:
+        credit = payload["credit_name"]
+        if not isinstance(credit, str) or len(credit.encode("utf-8")) > MAX_CREDIT_NAME_BYTES:
+            raise ValueError("INVALID_ENVELOPE")
     # Optimistic concurrency: a null base revision is a client that cannot
     # detect a conflict, and would silently overwrite whatever another device
     # decided this relationship was.
     if op["base_revision"] is None:
         raise ValueError("INVALID_BASE_REVISION")
+
+
+def _reported(state):
+    """A state, in the two scalars a terminal result carries.
+
+    Kept as two fields rather than one nullable string because a client has to
+    render "linked, credited as X" and "not linked" differently, and a `null`
+    credit would otherwise be ambiguous with "linked, no override".
+    """
+    return {"present": state is not None, "credit_name": state or ""}
 
 
 def apply(db, conn, op, received_at):
@@ -190,23 +314,35 @@ def apply(db, conn, op, received_at):
         return 404, result
 
     revision = get_revision(conn, work_id, person_id, role_type)
-    present = is_present(conn, work_id, person_id, role_type)
-    desired = op["operation"] == "ADD_WORK_PERSON_ROLE"
+    existing = current_state(conn, work_id, person_id, role_type)
+    operation = op["operation"]
+    desired = (canonical_credit_name(op["payload"].get("credit_name"))
+               if operation in CARRIES_CREDIT else None)
     base = op["base_revision"]
+
     if base > revision:
         result.update(code="FUTURE_REVISION", current_revision=revision,
-                      current_state=present, requested_state=desired)
+                      current=_reported(existing), requested=_reported(desired))
         return 400, result
-    # A stale base is only a conflict when the two devices actually disagree.
-    # Two people who both linked Jane as Author have converged, however many
-    # revisions apart they started.
-    if base < revision and present != desired:
-        result.update(code="REVISION_CONFLICT", current_revision=revision,
-                      current_state=present, requested_state=desired)
+    if operation == "SET_WORK_PERSON_ROLE_CREDIT" and existing is None:
+        # Editing the credit on a link that is not there. Not a revision
+        # disagreement to resolve -- there is nothing to edit -- so it is said
+        # plainly and the client re-reads rather than being offered a choice
+        # between two states one of which does not exist.
+        result.update(code="ROLE_NOT_PRESENT", current_revision=revision)
         return 409, result
-    changed = set_state(conn, work_id, person_id, role_type, desired)
-    result.update(code="ACKNOWLEDGED", present=desired, changed=changed,
-                  server_revision=revision + int(changed))
+    # A stale base is only a conflict when the two devices actually DISAGREE.
+    # Two that both linked Jane as Author with the same credit have converged,
+    # however many revisions apart they started; two that chose different
+    # credit names have not.
+    if base < revision and existing != desired:
+        result.update(code="REVISION_CONFLICT", current_revision=revision,
+                      current=_reported(existing), requested=_reported(desired))
+        return 409, result
+    changed = set_role_state(conn, work_id, person_id, role_type,
+                             desired is not None, credit_name=desired or "")
+    result.update(code="ACKNOWLEDGED", changed=changed,
+                  server_revision=revision + int(changed), **_reported(desired))
     return 200, result
 
 

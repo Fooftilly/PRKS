@@ -288,7 +288,11 @@ Two distinct things, and the difference matters when reading the tables above.
 
 **Canonical new rows.** Everything `add_work()` creates stores an explicit,
 lower-case `source_kind` (`pdf` or `video`) and, for a video, the full derived
-identity. `PDF`/`Pdf`/`VIDEO` are normalized at the boundary rather than left
+identity. That includes an *inferred* PDF: a file-backed Work created without a
+declared kind stores `pdf`, so the rule is literal rather than "unless the
+caller omitted it". The one row that stores nothing is the one with no source
+at all — no declared kind, no file, no URL — where inventing a kind would be a
+claim about a file it does not have. `PDF`/`Pdf`/`VIDEO` are normalized at the boundary rather than left
 for every consumer to lower-case — a reader that forgets sees a kind matching
 nothing. An unknown kind is refused.
 

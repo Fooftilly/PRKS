@@ -1172,6 +1172,71 @@ that made this concrete — the detail's "Original URL" row is a second renderin
 of a synchronized field, and rendering it from the acknowledged record would
 have shown a stale address in a link the user can click.
 
+## Work-Person roles: an element, and what an element contains
+
+The conflict unit is `work-person-role / [work_id, person_id, role_type]`, chosen
+from the schema rather than from convenience. `roles`'s primary key includes
+`order_index`, so ordering had to be ruled out deliberately: `add_role()` already
+refused a second row for an existing triple, `order_index` is assigned by the
+server as "append after what is there", **nothing in the product updates it** —
+there is no reorder operation — and nothing requires the values to be
+contiguous. Independent element operations therefore cannot produce an invalid
+author order, and an aggregate would have made every unrelated link on one Work
+a single conflict. The database now enforces that identity too: a unique index
+on `(person_id, work_id, role_type)`, because the primary key alone would permit
+two rows for one revision scope.
+
+### The element's state is not a boolean
+
+A link carries `credit_name` — the name as printed on *this* work — and that
+value reaches `linked_authors`, the card credit, BibTeX and the Person's
+aliases. So an element's canonical state is **absent**, or **present with a
+credit override**. Two devices that both link Jane as Author with the same
+credit have converged; two that choose different names have not, and a model
+comparing only presence would have called that agreement and silently kept one.
+
+`ADD_WORK_PERSON_ROLE` therefore carries `credit_name` — linking with a custom
+credit must not need two operations, which would briefly display the wrong name
+— and `SET_WORK_PERSON_ROLE_CREDIT` edits it later under the same scope and
+revision. An operation named ADD that silently edited an existing link would be
+harder to reason about than a second named operation.
+
+### Construction is not mutation
+
+A Work born with two Authors has not changed twice. `insert_initial_role()` is
+the construction boundary: it validates, preserves the order the caller states —
+at creation the caller *is* the authority on author order — and creates **no
+revision**. `set_role_state()` is the mutation boundary: it validates, appends
+server-side, and advances the revision on any semantic change. Work creation and
+processing-file import use the first; `POST /api/roles`, the role DELETE, the
+annotation `Mentioned` link and every durable operation use the second.
+
+Routing construction through the mutation boundary made every created Work start
+at revision 1 and discarded the importer's author order.
+
+### One role vocabulary
+
+Eight roles, validated at the canonical boundary rather than in the envelope
+validator alone — `Producer` used to be refused offline and accepted online, and
+the accepted row then matched no filter, icon or BibTeX mapping. Refused, never
+normalized: turning an unknown role into `Author` would assert a relationship
+the user never described.
+
+### What a browse row has to carry
+
+The flattened credit columns (`linked_authors` joined, `primary_author`,
+`primary_editor`) cannot support local relationship arithmetic: a pending
+removal cannot be subtracted from `"Ann Lee, Bo Ng"` because names contain
+commas, and a pending addition cannot tell whether an Author remains — which is
+what decides Author vs `author_text`. So rows also carry `linked_people` with
+`person_id`, `role_type`, `order_index`, `canonical_name`, `credit_name` and
+`display_name`, in the same order the flattened columns use.
+
+Both names, not just the resolved one: clearing an override has to reveal the
+canonical name, and `"Mark Twain"` cannot be turned back into `"Samuel
+Clemens"`. A row is self-sufficient for what it promises to render rather than
+depending on a Person cache being present.
+
 ## User controls
 
 Open a Work's **Manage tags** panel online once to prepare its catalog and

@@ -3250,6 +3250,77 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         return [w.get("title") for w in works]
 
+    def test_work_creation_with_initial_roles_is_construction(self):
+        """A Work born with two Authors has not "changed" twice. Revision 1 for
+        each would make every device's first read look like missed changes, and
+        routing construction through the mutation boundary also threw away the
+        author order the caller stated."""
+        pa = self._sv_json("POST", "/api/persons",
+                           {"first_name": "Ann", "last_name": "Lee"})[1]["id"]
+        pb = self._sv_json("POST", "/api/persons",
+                           {"first_name": "Bo", "last_name": "Ng"})[1]["id"]
+        # The array IS the author order -- a JSON list is how the request
+        # states it -- and creation preserves it rather than appending.
+        status, created = self._sv_json("POST", "/api/works", {
+            "title": "Co-authored", "roles": [
+                {"person_id": pa, "role_type": "Author", "credit_name": "A. Lee"},
+                {"person_id": pb, "role_type": "Author"},
+            ]})
+        self.assertEqual(status, 200, created)
+        work = created["id"]
+
+        state = self._sv_json("GET", "/api/works/%s/people-state" % work, None)[1]
+        self.assertEqual(sorted(s["revision"] for s in state["scopes"]), [0, 0],
+                         "construction creates no revisions")
+
+        detail = self._sv_json("GET", "/api/works/" + work, None)[1]
+        self.assertEqual([r["role_type"] for r in detail["roles"]], ["Author", "Author"])
+        self.assertEqual([r["id"] for r in detail["roles"]], [pa, pb],
+                         "the order the caller stated is preserved")
+
+        # ... and mutating one moves only that element.
+        self.assertEqual(self._sv_json(
+            "DELETE", "/api/works/%s/roles?person_id=%s&role_type=Author" % (work, pa),
+            None)[0], 200)
+        state = {s["person_id"]: s for s in self._sv_json(
+            "GET", "/api/works/%s/people-state" % work, None)[1]["scopes"]}
+        self.assertEqual(state[pa], {"person_id": pa, "role_type": "Author",
+                                     "revision": 1, "present": False})
+        self.assertEqual(state[pb]["revision"], 0, "the other is untouched")
+
+    def test_the_role_api_refuses_a_role_outside_the_domain(self):
+        """`POST /api/roles` took any string while the durable operation
+        refused unknown roles -- so `Producer` was impossible offline and fine
+        online, and the accepted row matched no filter, icon or BibTeX
+        mapping."""
+        person = self._sv_json("POST", "/api/persons",
+                               {"first_name": "Pro", "last_name": "Ducer"})[1]["id"]
+        work = self._sv_json("POST", "/api/works", {"title": "Roleless"})[1]["id"]
+        status, body = self._sv_json("POST", "/api/roles", {
+            "person_id": person, "work_id": work, "role_type": "Producer"})
+        self.assertEqual(status, 400)
+        self.assertIn("not a Work role", body.get("error", ""))
+        self.assertEqual(self._sv_json("GET", "/api/works/" + work, None)[1]["roles"], [])
+
+    def test_linking_through_the_api_advances_the_relationship_revision(self):
+        """The ordinary endpoint and the durable operation are the same
+        canonical write; a link made here must be discoverable by an offline
+        device."""
+        person = self._sv_json("POST", "/api/persons",
+                               {"first_name": "Samuel", "last_name": "Clemens"})[1]["id"]
+        work = self._sv_json("POST", "/api/works", {"title": "Huck"})[1]["id"]
+        self.assertEqual(self._sv_json("POST", "/api/roles", {
+            "person_id": person, "work_id": work, "role_type": "Author",
+            "credit_name": "Mark Twain"})[0], 200)
+        state = self._sv_json("GET", "/api/works/%s/people-state" % work, None)[1]
+        self.assertEqual(state["scopes"],
+                         [{"person_id": person, "role_type": "Author",
+                           "revision": 1, "present": True}])
+        detail = self._sv_json("GET", "/api/works/" + work, None)[1]
+        self.assertEqual(detail["roles"][0]["credit_name"], "Mark Twain")
+        self.assertIn("Mark Twain",
+                      self._sv_json("GET", "/api/persons/" + person, None)[1]["aliases"])
+
     def test_an_inferred_video_is_enriched_exactly_like_a_declared_one(self):
         """`source_kind` is not what makes a Work a video -- the inference is.
 

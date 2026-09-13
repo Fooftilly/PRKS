@@ -303,6 +303,12 @@ INDEX_SPECS: Tuple[IndexSpec, ...] = (
         collations=("NOCASE",),
     ),
     IndexSpec(
+        "idx_roles_person_work_role_unique",
+        "roles",
+        True,
+        columns=("person_id", "work_id", "role_type"),
+    ),
+    IndexSpec(
         "idx_saved_views_name_nocase",
         "saved_views",
         True,
@@ -477,6 +483,14 @@ _INDEX_SQL: Dict[str, str] = {
         "ON publisher_aliases(alias COLLATE NOCASE)"
     ),
     "idx_roles_work_id": "CREATE INDEX idx_roles_work_id ON roles(work_id)",
+    # The relationship identity the whole product uses. The table's primary key
+    # includes `order_index`, so SQLite would happily hold two rows for one
+    # (person, work, role) -- one revision scope describing two rows. Only
+    # application code prevented it, which a direct or legacy write bypasses.
+    "idx_roles_person_work_role_unique": (
+        "CREATE UNIQUE INDEX idx_roles_person_work_role_unique "
+        "ON roles(person_id, work_id, role_type)"
+    ),
     "idx_roles_person_id": "CREATE INDEX idx_roles_person_id ON roles(person_id)",
     "idx_annotations_work_id": (
         "CREATE INDEX idx_annotations_work_id ON annotations(work_id)"
@@ -559,6 +573,12 @@ _UNIQUE_PREFLIGHT: Tuple[Tuple[str, str, str], ...] = (
         "tag_aliases",
         "idx_tag_aliases_alias_nocase",
         "SELECT 1 FROM tag_aliases GROUP BY alias COLLATE NOCASE HAVING COUNT(*) > 1 LIMIT 1",
+    ),
+    (
+        "roles",
+        "idx_roles_person_work_role_unique",
+        "SELECT 1 FROM roles GROUP BY person_id, work_id, role_type "
+        "HAVING COUNT(*) > 1 LIMIT 1",
     ),
 )
 
