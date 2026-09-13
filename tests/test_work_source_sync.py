@@ -211,8 +211,35 @@ class WorkSourceSyncTests(unittest.TestCase):
         self.assertIn("current_preview", result)
         self.assertNotIn("current_value", result)
         self.assertLessEqual(len(json.dumps(result).encode("utf-8")), 2048)
+        # The IDENTITY is reported exactly, beside the bounded preview. A
+        # client that resolved by reapplying its own choice would otherwise
+        # have to parse the identity out of a value designed to be truncated --
+        # and without it, its next edit is still measured against the video the
+        # conflict replaced.
+        self.assertEqual(result["current_provider"], "youtube")
+        self.assertEqual(result["current_provider_id"], "BBB")
         # The server's choice stands until the user decides.
         self.assertEqual(self.columns()["provider_id"], "BBB")
+
+    def test_a_conflict_reports_the_identity_even_when_the_preview_is_truncated(self):
+        """The preview shrinks to keep the whole result inside the client's
+        durable bound; the identity never does. It is tens of bytes and it is
+        what the source actually IS."""
+        long_id = "B" * 300
+        self.db.execute_query(
+            "UPDATE works SET source_url = ?, provider_id = ? WHERE id = ?",
+            (WATCH % long_id + "&pad=" + "x" * 1800, long_id, self.work))
+        base = self.revision()
+        self.db.execute_query(
+            "INSERT INTO sync_entity_revisions (scope_type, scope_id, revision) "
+            "VALUES (?, ?, 1) ON CONFLICT (scope_type, scope_id) DO UPDATE SET revision = 1",
+            (src.SCOPE_TYPE, src.scope_key(self.work)))
+        code, result = self.send(WATCH % "CCC", base=base)
+        self.assertEqual((code, result["code"]), (409, "SOURCE_REVISION_CONFLICT"))
+        self.assertLessEqual(len(json.dumps(result).encode("utf-8")), 2048)
+        self.assertEqual(result["current_provider_id"], long_id,
+                         "the identity is exact even where the URL was cut")
+        self.assertLess(len(result["current_preview"]), 2048)
 
     def test_a_stale_but_convergent_choice_is_not_a_conflict(self):
         base = self.revision()

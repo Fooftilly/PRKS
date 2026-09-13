@@ -45,7 +45,7 @@
         const section = sectionOf();
         if (!section) return;
 
-        const editable = state.observed !== null && state.observed !== undefined;
+        const editable = !!state.observed;
         const busy = state.operations.some(o => o.status !== 'pending' || o.attempt_count > 0);
         const input = section.querySelector('#meta-video-url');
         if (input) {
@@ -112,21 +112,64 @@
             button.disabled = true;
             try {
                 if (!apply) {
-                    /* Only a bounded preview came back, so there is no
-                     * authoritative source to write: drop the local intent and
-                     * let the next read re-establish what the server holds. */
-                    root.prksOfflineMarkEntityChanged('work', state.workId);
+                    /* "Use server" is a decision to adopt a source this device
+                     * has never held, and the terminal result cannot supply
+                     * it: the URL came back as a BOUNDED PREVIEW, deliberately
+                     * shortenable, so fabricating a Work from it could store a
+                     * truncated URL as though it were canonical.
+                     *
+                     * So both representations are dropped and re-read
+                     * authoritatively. Dropping only the Work left the cached
+                     * source REVISION at its pre-conflict value, which is the
+                     * base the next save would have been measured against. */
                     state.observed = null;
+                    root.prksOfflineMarkEntityChanged('work', state.workId);
+                    root.prksOfflineMarkEntityChanged('work-source-state', state.workId);
                 }
                 await root.prksSync.store.resolveConflict(op.op_id, apply);
                 state.error = null;
+                if (apply) {
+                    /* The replacement operation was created against the
+                     * revision the server reported, so the editor's base has
+                     * to move there too -- BOTH halves. The replacement is
+                     * still never-sent and therefore still coalescible: with a
+                     * stale base, changing one's mind again would rewrite it
+                     * against a revision the server has already passed, and
+                     * returning to the server's own video would read as a
+                     * change rather than as a cancellation. */
+                    state.observed = baseOf(op.server_result.current_revision,
+                        root.prksWorkSourceConflictIdentity(op.server_result));
+                }
                 root.prksSync.changed();
             } catch (_) {
                 state.error = 'Could not save that resolution locally. Please retry.';
+                await safePaint(ctx, state);
+                return;
             }
+            /* After the discard, and only then: re-establish the authoritative
+             * source. If it cannot be read -- offline, say -- the base stays
+             * null and the editor stays explicitly unavailable rather than
+             * falling back to the stale pre-conflict Work. */
+            if (!apply) await readBase(ctx, state, { adopt: true });
             await safePaint(ctx, state);
         };
         item.appendChild(button);
+    }
+
+    /**
+     * Put an authoritative URL into the control.
+     *
+     * Deliberately NOT conditioned on the control being enabled: it is
+     * disabled precisely BECAUSE an operation is in flight, so an enabled-only
+     * write would never run and the editor would keep showing the URL the user
+     * typed after the server had answered with another. What must not be
+     * overwritten is text the user is typing right now -- and only the owner
+     * of the shared panel may write into it at all.
+     */
+    function writeInput(ctx, state, url) {
+        const section = owns(ctx, state) ? sectionOf() : null;
+        const input = section && section.querySelector('#meta-video-url');
+        if (input && document.activeElement !== input) input.value = url;
     }
 
     /**
@@ -142,43 +185,90 @@
         if (!live(ctx, state) || ack.work_id !== state.workId) return;
         if (!Number.isSafeInteger(ack.server_revision)) return;
         state.readVersion = (state.readVersion || 0) + 1;
-        if (Number.isSafeInteger(state.observed) && state.observed > ack.server_revision) return;
-        state.observed = ack.server_revision;
+        if (state.observed && state.observed.revision > ack.server_revision) return;
+        state.observed = baseOf(ack.server_revision,
+            root.prksWorkSourceIdentity(root.prksAcknowledgedWorkSource(ack)));
         ctx.setEntity('work', Object.assign({}, ctx.getEntity('work'),
             root.prksAcknowledgedWorkSource(ack)));
         /* Only the owner of the shared panel may write the panel, and only
          * inside it: this Work's acknowledgement must never be published into
          * whichever Work's editor happens to be on screen. */
-        const section = owns(ctx, state) ? sectionOf() : null;
-        const input = section && section.querySelector('#meta-video-url');
-        /* Deliberately NOT conditioned on the control being enabled: it is
-         * disabled precisely BECAUSE this operation is in flight, so an
-         * enabled-only write would never run and the editor would keep showing
-         * the URL the user typed after the server had answered with another.
-         * What must not be overwritten is text the user is typing right now.
-         *
-         * The value written is the STORED spelling. On a convergent write the
-         * server kept its own and stored nothing of ours; showing what we
-         * asked for would claim a value the server does not have. */
-        if (input && document.activeElement !== input) input.value = ack.source_url;
+        /* The STORED spelling. On a convergent write the server kept its own
+         * and stored nothing of ours; showing what we asked for would claim a
+         * value the server does not have. */
+        writeInput(ctx, state, ack.source_url);
     }
 
-    async function prepare(ctx, state) {
+    function sourceStateShape(workId) {
+        return value => !!value && typeof value === 'object' && value.work_id === workId &&
+            Number.isSafeInteger(value.revision) && value.revision >= 0;
+    }
+
+    /**
+     * The base the next save is measured against: a REVISION and an IDENTITY.
+     *
+     * Both are needed and neither is derivable from the other. The revision
+     * decides staleness; the identity decides whether there is anything to
+     * save at all, because returning to the video the server already holds is
+     * a cancellation rather than a change. Keeping only the revision meant the
+     * identity was re-read from the tab's Work every time -- correct until a
+     * resolution moved the server somewhere that Work had never been.
+     */
+    function baseOf(revision, identity) {
+        return { revision, identity: identity || '' };
+    }
+
+    /**
+     * Read the base: the source revision and the identity it belongs to.
+     *
+     * Nothing here asks for an "authoritative" read, because there is no such
+     * flag and there does not need to be. A read-through always tries the
+     * server first; what decides whether a STALE answer may stand in when it
+     * fails is whether the entity has been invalidated. "Use server"
+     * invalidates both representations before calling this, which is exactly
+     * what makes the read authoritative -- and what makes an unreachable
+     * server report `unavailable` instead of handing back the pre-conflict
+     * Work the user just decided against.
+     *
+     * `options.adopt` says this read follows a discard, so its result replaces
+     * what the tab is holding rather than merely establishing a base.
+     */
+    async function readBase(ctx, state, options) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
+        const adopt = !!(options && options.adopt);
         try {
-            const result = await root.prksOfflineReadEntity('work-source-state', state.workId,
-                '/api/works/' + encodeURIComponent(state.workId) + '/source-state', {
-                    validate: value => !!value && typeof value === 'object' &&
-                        value.work_id === state.workId &&
-                        Number.isSafeInteger(value.revision) && value.revision >= 0,
-                });
+            const [stateResult, workResult] = await Promise.all([
+                root.prksOfflineReadEntity('work-source-state', state.workId,
+                    '/api/works/' + encodeURIComponent(state.workId) + '/source-state',
+                    { validate: sourceStateShape(state.workId) }),
+                root.prksOfflineReadEntity('work', state.workId,
+                    '/api/works/' + encodeURIComponent(state.workId),
+                    { validate: value => !!value && value.id === state.workId }),
+            ]);
             if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            const usable = stateResult && stateResult.source !== 'unavailable' &&
+                stateResult.value && workResult && workResult.source !== 'unavailable' &&
+                workResult.value;
             /* "Not read" is not "revision 0". Saving against a base this
              * session could not establish would overwrite a decision it never
              * saw, so the control stays disabled instead. */
-            state.observed = result && result.source !== 'unavailable' && result.value
-                ? result.value.revision : null;
+            if (!usable) { state.observed = null; return; }
+            state.observed = baseOf(stateResult.value.revision,
+                root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value)));
+            /* The server's Work replaces what this tab was holding. After
+             * "Use server" the tab's copy is the source the user just decided
+             * AGAINST, and leaving it would show them video A while the server
+             * holds video C -- with the pending overlay gone, nothing else
+             * would ever correct it. */
+            if (adopt) {
+                ctx.setEntity('work', workResult.value);
+                writeInput(ctx, state, workResult.value.source_url || '');
+            }
         } catch (_) { state.observed = null; }
+    }
+
+    async function prepare(ctx, state) {
+        await readBase(ctx, state);
         await safePaint(ctx, state);
     }
 
@@ -194,6 +284,16 @@
                 void safePaint(ctx, state);
             });
             const stopConnectivity = root.prksOfflineRuntimeSubscribe(() => {
+                /* A base that could not be established is not a permanent
+                 * state. "Use server" while unreachable leaves the editor
+                 * deliberately unavailable rather than falling back to the
+                 * source the user just rejected -- so when the server comes
+                 * back, the editor has to go and get it, or the control stays
+                 * dead until the user navigates away and returns. */
+                if (!state.observed && root.prksOfflineRuntimeState() === 'online') {
+                    void readBase(ctx, state, { adopt: true }).then(() => safePaint(ctx, state));
+                    return;
+                }
                 void safePaint(ctx, state);
             });
             ctx.setResource('workSourceEditor', state, () => { stopSync(); stopConnectivity(); });
@@ -217,9 +317,7 @@
         }
         try {
             if (state.preparing) await state.preparing;
-            if (state.observed === null || state.observed === undefined) {
-                throw new Error('no observed base');
-            }
+            if (!state.observed) throw new Error('no observed base');
             if (error) error.textContent = '';
             if (input) input.removeAttribute('aria-invalid');
             const source = root.prksCanonicalWorkSource(input ? input.value : '');
@@ -249,11 +347,7 @@
                 kind: 'video',
                 url: source.source_url,
                 identity: root.prksWorkSourceIdentity(source),
-            }, {
-                identity: root.prksWorkSourceIdentity(
-                    root.prksWorkSourceOf(ctx.getEntity('work'))),
-                revision: state.observed,
-            });
+            }, state.observed);
             state.error = null;
             await safePaint(ctx, state);
             root.prksSync.changed();

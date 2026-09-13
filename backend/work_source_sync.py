@@ -275,8 +275,24 @@ CONFLICT_PREVIEW_CHARS = 400
 
 
 def disagreement(current, desired):
+    """What the two devices disagree about, in a form the client can act on.
+
+    The URL is reported as a BOUNDED PREVIEW, so it is display text and nothing
+    may be derived from it -- `fit_terminal_result` is free to shorten it
+    further to keep the whole object inside the client's durable result limit.
+
+    The IDENTITY is reported exactly. `provider` and `provider_id` are a
+    provider name and a video id: tens of bytes, never shortened, and they are
+    what the source actually IS. A client that resolves the conflict by
+    reapplying its own choice needs the server's identity to measure its NEXT
+    edit against -- without it the editor keeps comparing against the
+    pre-conflict video, and returning to the server's video reads as a change
+    rather than as a cancellation.
+    """
     from backend import work_metadata_sync as meta
     return {
+        "current_provider": current["provider"],
+        "current_provider_id": current["provider_id"],
         "current_preview": meta.preview(current["source_url"])[:CONFLICT_PREVIEW_CHARS],
         "current_bytes": len(current["source_url"].encode("utf-8")),
         "requested_bytes": len(desired["source_url"].encode("utf-8")),

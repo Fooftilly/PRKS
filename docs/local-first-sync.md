@@ -987,6 +987,59 @@ ledgered, so it stays immutable and the save refuses with `scope_busy`.
 Identity, not URL text, decides all of this — `A -> B -> A` is no change even
 when the two spellings of A differ.
 
+### Resolving a conflict has to converge the resolver too
+
+Retiring the conflicting operation is the smaller half of a resolution. The
+device that raised it is still holding the state it raised it *from*, and the
+source aggregate makes that visible in a way small scalar conflicts do not: its
+terminal result carries a **bounded URL preview**, which `fit_terminal_result`
+may shorten further to keep the whole object inside the client's durable limit.
+There is deliberately not enough there to rebuild an authoritative source.
+
+**Use server** therefore discards the local intent and then *re-reads*:
+both the Work and `work-source-state` are invalidated — invalidating only the
+Work left the cached source REVISION at its pre-conflict value, which is the
+base the next save would be measured against — and the result replaces what the
+tab is holding. Without that, the pending overlay disappeared and the user was
+left looking at video A while the server held video C, with nothing remaining to
+correct it.
+
+Nothing asks for a "force" flag, because invalidation is what makes the read
+authoritative: a read-through always tries the server first, and an invalidated
+entity reports `unavailable` rather than falling back to a stale row. So if the
+server is unreachable at that moment the discard still stands and the editor
+stays **explicitly unavailable** — it must not fall back to the source the user
+just decided against. It re-establishes the base by itself when connectivity
+returns, because the editor is still on screen.
+
+**Apply my source** creates a replacement against the revision the server
+reported, and that replacement is still never-sent — so it is still coalescible.
+The editor's base has to move with it, **both halves**:
+
+- the *revision*, or changing one's mind again rewrites the replacement against
+  a revision the server has already passed, and it conflicts a second time with
+  the same edit;
+- the *identity*, or returning to the server's own video reads as a change
+  rather than as the cancellation it is — and gets sent, colliding with the very
+  video it was converging on.
+
+This is why the editor's observed base is `{revision, identity}` rather than a
+bare revision, and why `SOURCE_REVISION_CONFLICT` reports `current_provider` and
+`current_provider_id` beside the preview. Identity is a provider name and a video
+id: tens of bytes, never truncated, and it is what the source actually *is*.
+Deriving it by parsing the preview would mean deriving identity from a value
+designed to be shortened.
+
+### An ambiguous local history is refused, not guessed
+
+One active `SET_WORK_SOURCE` per Work is the invariant, but a store written
+before coalescing existed can already hold several. `getAll()` order is not a
+decision, so acting on whichever row comes back first would resolve that history
+differently on different devices. `saveWorkSource()` refuses with the count
+instead, and repairs nothing: the rows are immutable user intent, and collapsing
+them by guesswork here would destroy a choice nobody reviewed. Each conflict or
+send ahead of them reduces the history to one on its own.
+
 ### Reappliability is a per-family registry
 
 "Apply my value" re-sends the same intent against the revision the server

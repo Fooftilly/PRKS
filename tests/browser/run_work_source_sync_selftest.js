@@ -114,10 +114,23 @@ function handlerContract() {
     assert.equal(handler.isResult(convergent, operation), true);
 
     const conflict = { work_id: 'W-1', code: 'SOURCE_REVISION_CONFLICT', current_revision: 3,
+        current_provider: 'youtube', current_provider_id: 'CCC',
         current_preview: WATCH('CCC'), current_bytes: 43, requested_bytes: 43 };
     assert.equal(handler.isResult(conflict, operation), true);
     assert.equal(handler.isResult(Object.assign({ source_url: 'x' }, conflict), operation), false,
         'a conflict reports a bounded preview, never the value');
+    /* The IDENTITY is reported exactly and is required. The preview is display
+     * text that `fit_terminal_result` may shorten, so a client that had to
+     * parse it to learn which video the server holds would be deriving
+     * identity from a value designed to be truncated. */
+    for (const missing of ['current_provider', 'current_provider_id']) {
+        const partial = Object.assign({}, conflict);
+        delete partial[missing];
+        assert.equal(handler.isResult(partial, operation), false, missing);
+    }
+    assert.equal(globalThis.prksWorkSourceConflictIdentity(conflict),
+        globalThis.prksWorkSourceIdentity(globalThis.prksCanonicalWorkSource(WATCH('CCC'))),
+        'and it is spelled the same way an identity from a Work record is');
     for (const code of ['ENTITY_NOT_FOUND', 'UNSUPPORTED_SOURCE_TRANSITION']) {
         assert.equal(handler.isResult({ work_id: 'W-1', code }, operation), true, code);
     }
@@ -126,6 +139,7 @@ function handlerContract() {
     // Every terminal outcome is the user's to resolve.
     assert.deepEqual(handler.terminal(conflict).conflict, {
         code: 'SOURCE_REVISION_CONFLICT', current_revision: 3,
+        current_provider: 'youtube', current_provider_id: 'CCC',
         current_preview: WATCH('CCC'), current_bytes: 43, requested_bytes: 43 });
 }
 
@@ -178,6 +192,23 @@ async function coalescing() {
     assert.equal(rows.length, 1);
     assert.equal(rows[0].payload.source.url, WATCH('BBB'), 'the sent intent is untouched');
 
+    /* A history with more than one active row is AMBIGUOUS, not a choice.
+     * `getAll()` order is not a decision, so a store written before coalescing
+     * existed must refuse rather than resolve it differently per device. */
+    const legacy = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    for (const url of [WATCH('BBB'), WATCH('CCC')]) {
+        await legacy.enqueueOperation({
+            operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: 'W-9',
+            payload: { source: { kind: 'video', url } }, base_revision: 0,
+        });
+    }
+    await assert.rejects(() => legacy.saveWorkSource('W-9',
+        { kind: 'video', url: WATCH('DDD'), identity: identity(WATCH('DDD')) },
+        { identity: identity(WATCH('AAA')), revision: 0 }),
+        e => e.prksLocalStoreCode === 'scope_busy' && /2 unsynchronized/.test(e.message));
+    assert.equal((await legacy.listOperations()).length, 2,
+        'and it repairs nothing by guesswork -- the rows are user intent');
+
     delete globalThis.prksSync;
     globalThis.prksSetPendingWorkSources([]);
 }
@@ -198,6 +229,7 @@ async function conflictResolution() {
     let row = await enqueue();
     await store.updateOperationSyncState(row.op_id, { status: 'conflict',
         server_result: { code: 'SOURCE_REVISION_CONFLICT', current_revision: 7,
+            current_provider: 'youtube', current_provider_id: 'CCC',
             current_preview: WATCH('CCC'), current_bytes: 43, requested_bytes: 43 } });
     const replacement = await store.resolveConflict(row.op_id, true);
     assert.ok(replacement, 'the conflict is reappliable');
@@ -212,9 +244,38 @@ async function conflictResolution() {
         { identity: identity(WATCH('BBB')), revision: 7 });
     await store.updateOperationSyncState(row.op_id, { status: 'conflict',
         server_result: { code: 'SOURCE_REVISION_CONFLICT', current_revision: 9,
+            current_provider: 'youtube', current_provider_id: 'EEE',
             current_preview: WATCH('EEE'), current_bytes: 43, requested_bytes: 43 } });
     assert.equal(await store.resolveConflict(row.op_id, false), null);
     assert.equal((await store.listOperations()).length, 0);
+
+    /* After Apply, the replacement is still NEVER SENT -- so it is still
+     * coalescible, and the base it must coalesce against is the SERVER's, not
+     * the one the editor started from. */
+    row = await store.saveWorkSource('W-2',
+        { kind: 'video', url: WATCH('BBB'), identity: identity(WATCH('BBB')) },
+        { identity: identity(WATCH('AAA')), revision: 0 });
+    await store.updateOperationSyncState(row.op_id, { status: 'conflict',
+        server_result: { code: 'SOURCE_REVISION_CONFLICT', current_revision: 4,
+            current_provider: 'youtube', current_provider_id: 'CCC',
+            current_preview: WATCH('CCC'), current_bytes: 43, requested_bytes: 43 } });
+    const applied = await store.resolveConflict(row.op_id, true);
+    const serverBase = { identity: identity(WATCH('CCC')), revision: applied.base_revision };
+
+    // Changing one's mind again rewrites it against the SERVER's revision.
+    const rewritten = await store.saveWorkSource('W-2',
+        { kind: 'video', url: WATCH('DDD'), identity: identity(WATCH('DDD')) }, serverBase);
+    assert.equal(rewritten.base_revision, 4,
+        'not the revision the editor held before the conflict');
+    assert.equal((await store.listOperations())
+        .filter(r => r.entity_id === 'W-2').length, 1, 'still one intent');
+
+    /* And choosing the SERVER's own video is now a cancellation. With a stale
+     * base the editor would have read it as a change and sent it, conflicting
+     * with C all over again. */
+    assert.equal(await store.saveWorkSource('W-2',
+        { kind: 'video', url: SHORT('CCC'), identity: identity(SHORT('CCC')) }, serverBase), null);
+    assert.equal((await store.listOperations()).filter(r => r.entity_id === 'W-2').length, 0);
 
     /* Codes that name no revision to overwrite are NOT reappliable: there is
      * nothing to apply against, and offering it would loop forever. */

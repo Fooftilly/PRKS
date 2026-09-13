@@ -218,6 +218,12 @@
         'code', 'current_revision', 'current_state', 'requested_state', 'target_tag_id',
         'current_value', 'requested_value',
         'current_preview', 'current_bytes', 'requested_bytes',
+        /* The source aggregate's conflict reports the server's IDENTITY
+         * exactly, alongside the bounded URL preview. The preview is display
+         * text that may be shortened to keep the whole result inside
+         * MAX_RESULT_BYTES; identity is what the next edit is measured
+         * against, so it is carried as its own small, never-truncated pair. */
+        'current_provider', 'current_provider_id',
     ]);
     const MAX_RESULT_BYTES = 2048;
 
@@ -892,9 +898,29 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
-                const existing = rows.find(r => r.operation === 'SET_WORK_SOURCE' &&
+                const active = rows.filter(r => r.operation === 'SET_WORK_SOURCE' &&
                     r.entity_type === 'work' && r.entity_id === workId &&
-                    r.status !== STATUS_ACKNOWLEDGED);
+                    r.status !== STATUS_ACKNOWLEDGED)
+                    .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+                /* One active intent per Work is the invariant, but a store
+                 * written before coalescing existed can already hold several.
+                 * `getAll()` order is not a decision, so acting on whichever
+                 * row came back first would resolve that history differently
+                 * on different devices. Refuse instead, deterministically and
+                 * with the count, rather than silently picking one: the rows
+                 * are immutable user intent and repairing them by guesswork
+                 * here would destroy a choice nobody reviewed.
+                 *
+                 * The last never-sent row is the only one that could be
+                 * rewritten anyway, so refusing costs nothing a user can do
+                 * from the editor -- the conflicts and sends ahead of it have
+                 * to settle first, and each of them reduces this to one. */
+                if (active.length > 1) {
+                    throw localStoreError('scope_busy',
+                        'This source has ' + active.length + ' unsynchronized changes; ' +
+                        'let them finish or resolve them before editing it again.');
+                }
+                const existing = active[0];
                 if (existing) {
                     if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
                         throw localStoreError('scope_busy', 'This source is syncing or needs resolution.');

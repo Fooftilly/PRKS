@@ -68,6 +68,19 @@
         };
     }
 
+    /**
+     * The identity a conflict result reports, in the SAME spelling
+     * `identityOf` produces -- so a base established from a conflict and a
+     * base established from a Work record are comparable strings rather than
+     * two shapes a caller has to know apart.
+     */
+    function conflictIdentity(result) {
+        if (!result || typeof result.current_provider !== 'string' ||
+            typeof result.current_provider_id !== 'string') return '';
+        return identityOf({ provider: result.current_provider,
+            provider_id: result.current_provider_id });
+    }
+
     /** What makes two sources THE SAME source. Never the URL spelling. */
     function identityOf(source) {
         if (!source) return '';
@@ -178,7 +191,13 @@
                 return !!requested && identityOf(stored) === identityOf(requested);
             }
             case 'SOURCE_REVISION_CONFLICT': case 'FUTURE_REVISION':
+                /* The preview is DISPLAY TEXT -- bounded, and shortened further
+                 * whenever the whole result would not fit the durable limit --
+                 * so nothing may be derived from it. The IDENTITY is exact and
+                 * is what a reapply measures its next edit against. */
                 return Number.isSafeInteger(data.current_revision) &&
+                    typeof data.current_provider === 'string' &&
+                    typeof data.current_provider_id === 'string' &&
                     typeof data.current_preview === 'string' &&
                     Number.isSafeInteger(data.current_bytes) &&
                     Number.isSafeInteger(data.requested_bytes) && !has('source_url');
@@ -192,8 +211,8 @@
      * deliberately, so discarding it silently would lose a real decision. */
     function terminal(data) {
         const out = { code: data.code };
-        for (const key of ['current_revision', 'current_preview', 'current_bytes',
-            'requested_bytes']) {
+        for (const key of ['current_revision', 'current_provider', 'current_provider_id',
+            'current_preview', 'current_bytes', 'requested_bytes']) {
             if (Object.prototype.hasOwnProperty.call(data, key)) out[key] = data[key];
         }
         return { conflict: out };
@@ -230,6 +249,7 @@
         prksYoutubeVideoId: youtubeVideoId,
         prksCanonicalWorkSource: canonicalSource,
         prksWorkSourceIdentity: identityOf,
+        prksWorkSourceConflictIdentity: conflictIdentity,
         prksWorkSourceOf: sourceOfWork,
         prksSetPendingWorkSources: setPending,
         prksRefreshPendingWorkSources: refreshPending,

@@ -23,6 +23,7 @@ SHORT_ONE = "https://youtu.be/e2e0000001"
 WATCH_TWO = "https://www.youtube.com/watch?v=e2e0000099"
 SHORT_TWO = "https://youtu.be/e2e0000099"
 OTHER_VIDEO = "https://www.youtube.com/watch?v=e2e0000055"
+SHORT_OTHER = "https://youtu.be/e2e0000055"
 THIRD_VIDEO = "https://www.youtube.com/watch?v=e2e0000077"
 
 
@@ -134,6 +135,13 @@ class OfflineWorkSourceTests(unittest.TestCase):
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
         }""", count)
+
+    def source_operations(self, page):
+        """Every unacknowledged source operation as (url, base_revision)."""
+        return [tuple(row) for row in page.evaluate(
+            "() => prksSync.store.listOperations().then(r => r"
+            "  .filter(o => o.operation === 'SET_WORK_SOURCE')"
+            "  .map(o => [o.payload.source.url, o.base_revision]))")]
 
     def cached_source_revision(self, page, work_id):
         return page.evaluate(
@@ -391,7 +399,79 @@ class OfflineWorkSourceTests(unittest.TestCase):
                          'the user\'s own video, applied against the server\'s revision')
         self.assertEqual(self.columns(server, work)['source_url'], WATCH_TWO)
 
-    def test_use_server_discards_the_local_intent(self):
+    def test_after_apply_the_editor_measures_against_the_servers_video(self):
+        """The replacement operation is created against the server's revision
+        and is still NEVER SENT -- so it is still coalescible, and the base it
+        coalesces against has to be the server's too.
+
+        With the editor left on its pre-conflict base, changing one's mind
+        again rewrote the replacement against a revision the server had already
+        passed, so it conflicted with the same edit a second time."""
+        server, page, context = self.start()
+        work = server.ids['playlist_video_one']
+        self.edit(page)
+        self.offline(page, context)
+        self.url(page, WATCH_TWO)                 # local B
+        self.save(page)
+        self.pending(page, 1)
+        self.other_device_sets_source(server, work, OTHER_VIDEO)   # server C
+
+        self.reconnect(page, context)
+        self.conflicts(page, 1)
+        self.offline(page, context)               # hold the replacement unsent
+        page.locator('[data-prks-role="work-source-sync"] button',
+                     has_text='Apply my source').click()
+        self.pending(page, 1)
+        self.assertEqual(self.source_operations(page), [(WATCH_TWO, 1)],
+                         'B, against the revision the server reported')
+
+        # B -> D before it sends: ONE operation, still on the server's base.
+        self.url(page, THIRD_VIDEO)
+        self.save(page)
+        self.pending(page, 1)
+        self.assertEqual(self.source_operations(page), [(THIRD_VIDEO, 1)],
+                         'one intent, still measured against the server')
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.columns(server, work)['provider_id'], 'e2e0000077',
+                         'and it lands rather than conflicting a second time')
+
+    def test_after_apply_choosing_the_servers_own_video_cancels(self):
+        """Returning to the identity the server reported is a cancellation.
+        On the pre-conflict base the editor read it as a change and sent it,
+        colliding with the very video it was converging on."""
+        server, page, context = self.start()
+        work = server.ids['playlist_video_one']
+        self.edit(page)
+        self.offline(page, context)
+        self.url(page, WATCH_TWO)
+        self.save(page)
+        self.pending(page, 1)
+        self.other_device_sets_source(server, work, OTHER_VIDEO)
+
+        self.reconnect(page, context)
+        self.conflicts(page, 1)
+        self.offline(page, context)
+        page.locator('[data-prks-role="work-source-sync"] button',
+                     has_text='Apply my source').click()
+        self.pending(page, 1)
+
+        self.url(page, SHORT_OTHER)               # the server's video, respelled
+        self.save(page)
+        self.pending(page, 0)
+        self.assertEqual(self.source_operations(page), [],
+                         'nothing left to send: this IS the server\'s video')
+
+    def test_use_server_moves_this_device_to_the_servers_video(self):
+        """Discarding the local intent is only half of "Use server".
+
+        The tab still held the source from BEFORE the conflict, and the
+        terminal result carries only a bounded URL preview -- deliberately
+        shortenable, so nothing authoritative can be built from it. Dropping
+        the overlay without re-reading left the user looking at video A while
+        the server held video C, with nothing left to correct it.
+        """
         server, page, context = self.start()
         work = server.ids['playlist_video_one']
         self.edit(page)
@@ -406,8 +486,65 @@ class OfflineWorkSourceTests(unittest.TestCase):
         page.locator('[data-prks-role="work-source-sync"] button',
                      has_text='Use server').click()
         self.pending(page, 0)
+
         self.assertEqual(self.columns(server, work)['provider_id'], 'e2e0000055',
                          'the server keeps what it had')
+        page.wait_for_function(
+            "() => { const el = document.getElementById('meta-video-url');"
+            "        return !!el && el.value === '%s'; }" % OTHER_VIDEO)
+        self.assertEqual(self.cached_work(page, work)['provider_id'], 'e2e0000055',
+                         'and the cached Work is the server\'s video')
+        self.assertEqual(
+            page.evaluate("() => { const ctx = prksGetFocusedTabContext();"
+                          "        const w = ctx && ctx.getEntity('work');"
+                          "        return w && w.provider_id; }"),
+            'e2e0000055',
+            'the open tab holds it too -- not the source it had before')
+        self.assertEqual(self.cached_source_revision(page, work), 1,
+                         'and the base is the server\'s revision, not the stale one')
+
+        # The editor is immediately usable again against that new base.
+        self.url(page, THIRD_VIDEO)
+        self.save(page)
+        self.pending(page, 0)
+        self.assertEqual(self.columns(server, work)['provider_id'], 'e2e0000077',
+                         'a further edit lands rather than conflicting')
+
+    def test_use_server_stays_unavailable_rather_than_showing_the_stale_source(self):
+        """If the server cannot be reached between the conflict arriving and
+        the decision being made, the discard still stands -- but the editor
+        must not fall back to the pre-conflict Work, which is precisely the
+        source the user just decided against."""
+        server, page, context = self.start()
+        work = server.ids['playlist_video_one']
+        self.edit(page)
+        self.offline(page, context)
+        self.url(page, WATCH_TWO)
+        self.save(page)
+        self.pending(page, 1)
+        self.other_device_sets_source(server, work, OTHER_VIDEO)
+
+        self.reconnect(page, context)
+        self.conflicts(page, 1)
+        self.offline(page, context)
+        page.locator('[data-prks-role="work-source-sync"] button',
+                     has_text='Use server').click()
+        self.pending(page, 0)
+        page.wait_for_function(
+            "() => { const b = document.getElementById('save-work-source-btn');"
+            "        return !!b && b.disabled; }")
+        self.assertIn('not available offline',
+                      page.locator('[data-prks-role="work-source-sync"]').inner_text())
+
+        # And it recovers by itself once the server is reachable again -- the
+        # editor is still open, so waiting for the user to navigate away and
+        # back would leave a dead control on screen.
+        self.reconnect(page, context)
+        page.wait_for_function(
+            "() => { const b = document.getElementById('save-work-source-btn');"
+            "        return !!b && !b.disabled; }", timeout=20000)
+        self.assertEqual(page.input_value('#meta-video-url'), OTHER_VIDEO)
+        self.assertEqual(self.cached_source_revision(page, work), 1)
 
     def test_a_convergent_acknowledgement_never_publishes_an_unstored_url(self):
         """Two devices choosing the same video in different spellings.
