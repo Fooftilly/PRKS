@@ -39,6 +39,28 @@ function canonicalIdentity() {
         'https://www.youtube.com/watch', 'https://youtu.be/']) {
         assert.equal(c(bad), null, bad);
     }
+    /* An id is an IDENTIFIER: a bounded token, not "whatever sat after v=".
+     * A conflict reports the server's identity EXACTLY while the whole
+     * terminal result still has to fit the durable 2 KiB bound, and those two
+     * promises only hold together if identity is bounded here, where an id
+     * comes into existence. */
+    const max = globalThis.PRKS_MAX_PROVIDER_ID_CHARS;
+    assert.equal(globalThis.prksYoutubeVideoId(WATCH('B'.repeat(max))), 'B'.repeat(max));
+    assert.equal(globalThis.prksYoutubeVideoId(WATCH('dQw4-_9WgXcQ')), 'dQw4-_9WgXcQ',
+        'the safe alphabet itself stays accepted');
+    for (const bad of ['B'.repeat(max + 1), 'B'.repeat(3000), '%01'.repeat(400),
+        'a%20b', 'ab%22cd', 'ab%5Ccd', 'a.b', 'a+b']) {
+        assert.equal(globalThis.prksYoutubeVideoId(WATCH(bad)), '',
+            'an id that could not be reported back intact is no id: ' + bad.slice(0, 12));
+        assert.equal(c(WATCH(bad)), null);
+    }
+    /* Every spelling is bounded, not only the query one -- `searchParams`
+     * decodes percent-escapes and `pathname` does not, so a bound applied to
+     * one and not the other would be two parsers again. */
+    assert.equal(globalThis.prksYoutubeVideoId(SHORT('B'.repeat(max + 1))), '');
+    assert.equal(globalThis.prksYoutubeVideoId(
+        'https://www.youtube.com/embed/' + 'B'.repeat(max + 1)), '');
+
     // Identity ignores spelling entirely.
     const id = globalThis.prksWorkSourceIdentity;
     assert.equal(id(c(WATCH('ABC'))), id(c('https://youtu.be/ABC')));

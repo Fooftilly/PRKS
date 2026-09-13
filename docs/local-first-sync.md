@@ -1025,10 +1025,38 @@ The editor's base has to move with it, **both halves**:
 
 This is why the editor's observed base is `{revision, identity}` rather than a
 bare revision, and why `SOURCE_REVISION_CONFLICT` reports `current_provider` and
-`current_provider_id` beside the preview. Identity is a provider name and a video
-id: tens of bytes, never truncated, and it is what the source actually *is*.
-Deriving it by parsing the preview would mean deriving identity from a value
-designed to be shortened.
+`current_provider_id` beside the preview. Deriving identity by parsing the
+preview would mean deriving it from a value designed to be shortened.
+
+### Identity is exact *because* it is bounded
+
+The conflict makes two promises: identity is reported **exactly** — a truncated
+video id names a different video, or none — and the whole terminal result
+**always fits** the client's 2 KiB durable bound, so a conflict can always be
+stored and therefore always be resolved.
+
+Those are not independently grantable. While `provider_id` was "whatever
+followed `v=`", a 3000-character id produced a ~3.2 KB conflict that stayed over
+the limit *with the preview deleted entirely* — an acknowledgement that could
+neither be stored nor shown, on a Work the user could then never fix. 400
+percent-encoded control characters did the same at ~2.6 KB, because each one
+serializes to six bytes as `\u0001`.
+
+So identity has a canonical representation: `MAX_PROVIDER_ID_CHARS` (512) over
+`[A-Za-z0-9_-]`, enforced in the one YouTube parser on each side — the point
+where an id comes into existence. A URL whose id is not a well-formed
+identifier has no video id at all and is refused at the boundary, rather than
+stored and discovered later by a conflict that cannot be delivered. The alphabet
+also settles percent-encoding, which is where the two parsers could most easily
+diverge (a query value is decoded on both sides, a path segment on neither):
+`%` is not a legal identifier character, so every such spelling is refused by
+both.
+
+512 is generous on purpose — a real YouTube id is 11 characters, and the
+arithmetic ceiling where a worst-case conflict stops fitting is 1842. The margin
+is checked by a test that builds the largest legal id on both sides together
+with a preview long enough to be capped, and requires the fitted result to fit
+anyway; raising the constant into the danger zone fails it.
 
 ### An ambiguous local history is refused, not guessed
 

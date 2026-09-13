@@ -4,6 +4,8 @@ import re
 import subprocess
 import unittest
 
+from backend import work_source_sync
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
 
@@ -21,6 +23,7 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         and a Work's stored URL and stored id could name different videos."""
         import json
         from backend import work_source_sync
+        from backend.work_source_sync import MAX_PROVIDER_ID_CHARS
         urls = [
             'https://www.youtube.com/watch?v=ABC', 'https://youtu.be/ABC',
             'https://www.youtube.com/embed/ABC', 'https://m.youtube.com/watch?v=ABC',
@@ -28,6 +31,36 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
             'https://notyoutube.com/watch?v=ABC', 'https://youtube.com.evil.org/watch?v=ABC',
             'https://example.com/v', 'ftp://youtube.com/watch?v=ABC', '', '   ',
             'https://www.youtube.com/watch', 'https://youtu.be/', 'nonsense',
+            # The provider-id contract. `provider_id` is an IDENTIFIER, and a
+            # conflict promises to report it EXACTLY while the whole terminal
+            # result still fits the client's durable 2 KiB bound. Those two
+            # promises are only simultaneously keepable if the identifier is
+            # bounded, so the parsers -- which is where an id comes into
+            # existence -- are what bound it. Both sides must draw the line in
+            # exactly the same place, or one stores an identity the other
+            # cannot even name.
+            'https://www.youtube.com/watch?v=' + 'B' * 300,
+            'https://www.youtube.com/watch?v=' + 'B' * MAX_PROVIDER_ID_CHARS,
+            'https://www.youtube.com/watch?v=' + 'B' * (MAX_PROVIDER_ID_CHARS + 1),
+            'https://www.youtube.com/watch?v=' + 'B' * 3000,
+            'https://youtu.be/' + 'B' * (MAX_PROVIDER_ID_CHARS + 1),
+            'https://www.youtube.com/embed/' + 'B' * (MAX_PROVIDER_ID_CHARS + 1),
+            # Percent-escapes are where the two parsers could most easily
+            # diverge: a query value is decoded on both sides and a path
+            # segment on neither. `%` is not a legal identifier character, so
+            # every spelling of this is refused by both.
+            'https://www.youtube.com/watch?v=' + '%01' * 400,
+            'https://www.youtube.com/watch?v=%01%02',
+            'https://youtu.be/%01%02',
+            'https://www.youtube.com/watch?v=a%20b',
+            # Characters that inflate under JSON escaping, or end a token.
+            'https://www.youtube.com/watch?v=ab%22cd',
+            'https://www.youtube.com/watch?v=ab%5Ccd',
+            'https://www.youtube.com/watch?v=ab+cd',
+            'https://www.youtube.com/watch?v=ab.cd',
+            'https://www.youtube.com/watch?v=ab/cd',
+            # ... and the safe alphabet itself, which must stay accepted.
+            'https://www.youtube.com/watch?v=dQw4-_9WgXcQ',
         ]
         js = """
         require(process.argv[1] + '/frontend/js/work-source-state.js');
@@ -47,6 +80,38 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
                 source = work_source_sync.canonical_source({'kind': 'video', 'url': url})
                 server = source['provider_id'] if source else None
                 self.assertEqual(client[url], server, url)
+
+    def test_both_sides_bound_the_identifier_at_the_same_place(self):
+        """The constant itself, not only its effects.
+
+        Two parsers that agreed on every URL in the list above but disagreed on
+        the limit would pass that test and still let one side store an identity
+        the other cannot name.
+        """
+        import json
+        from backend.work_source_sync import MAX_PROVIDER_ID_CHARS
+
+        js = """
+        require(process.argv[1] + '/frontend/js/work-source-state.js');
+        process.stdout.write(JSON.stringify({
+            max: globalThis.PRKS_MAX_PROVIDER_ID_CHARS,
+            accepts: ['dQw4w9WgXcQ', 'a-b_C9', 'B'.repeat(512), '', 'a b', 'a"b',
+                      'a.b', 'a/b', 'a%01b', 'B'.repeat(513)]
+                .map(v => globalThis.prksIsProviderId(v)),
+        }));
+        """
+        proc = subprocess.run(['node', '-e', js, str(ROOT)],
+                              cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        client = json.loads(proc.stdout)
+        self.assertEqual(client['max'], MAX_PROVIDER_ID_CHARS)
+        self.assertEqual(
+            client['accepts'],
+            [work_source_sync.is_provider_id(v) for v in
+             ['dQw4w9WgXcQ', 'a-b_C9', 'B' * 512, '', 'a b', 'a"b',
+              'a.b', 'a/b', 'a%01b', 'B' * 513]])
+        self.assertEqual(client['accepts'][:3], [True, True, True])
+        self.assertEqual(client['accepts'][3:], [False] * 7)
 
     def test_the_source_family_is_registered_everywhere_it_must_be(self):
         from backend import sync_protocol

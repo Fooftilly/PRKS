@@ -21,12 +21,36 @@
      * `backend/work_source_sync.YOUTUBE_HOSTS` and works-video.js. */
     const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 
+    /* The canonical provider-id contract. Mirrors
+     * `backend/work_source_sync.MAX_PROVIDER_ID_CHARS` and its alphabet.
+     *
+     * `provider_id` is an IDENTIFIER, and this is what makes it one. Two
+     * promises depend on it being bounded, and they are only simultaneously
+     * keepable if it is: a conflict reports the server's identity EXACTLY
+     * (a truncated video id names a different video, or none), and a terminal
+     * result always fits the durable 2 KiB bound so it can always be stored
+     * and therefore always be resolved. Unbounded, those contradict.
+     *
+     * The alphabet also settles percent-encoding: `searchParams` decodes and
+     * `pathname` does not, so a spelling the two sides might read differently
+     * contains `%`, which is not a legal identifier character on either. */
+    const MAX_PROVIDER_ID_CHARS = 512;
+    const PROVIDER_ID_RE = new RegExp('^[A-Za-z0-9_-]{1,' + MAX_PROVIDER_ID_CHARS + '}$');
+
+    /** True for a value this system is willing to call a video identity. */
+    function isProviderId(value) {
+        return typeof value === 'string' && PROVIDER_ID_RE.test(value);
+    }
+
     /**
      * The video id in any URL spelling PRKS accepts, or ''.
      *
      * Mirrors the server parser exactly. Two parsers that disagree would show
      * up as a Work whose stored URL and stored id name different videos --
-     * which is the whole reason this is an aggregate.
+     * which is the whole reason this is an aggregate. A URL whose id is not a
+     * well-formed identifier has no video id here: it is refused rather than
+     * carried, so nothing can hold an identity the protocol cannot report back
+     * intact.
      */
     function youtubeVideoId(url) {
         let parsed;
@@ -38,13 +62,14 @@
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
         const host = String(parsed.hostname || '').toLowerCase();
         if (!YOUTUBE_HOSTS.has(host)) return '';
+        const bounded = id => (isProviderId(id) ? id : '');
         if (host === 'youtu.be') {
-            return parsed.pathname.replace(/^\//, '').split('/')[0].trim();
+            return bounded(parsed.pathname.replace(/^\//, '').split('/')[0].trim());
         }
         const v = String(parsed.searchParams.get('v') || '').trim();
-        if (v) return v;
+        if (v) return bounded(v);
         const parts = parsed.pathname.replace(/^\//, '').split('/');
-        if (parts[0] === 'embed' && parts[1]) return parts[1].trim();
+        if (parts[0] === 'embed' && parts[1]) return bounded(parts[1].trim());
         return '';
     }
 
@@ -246,6 +271,8 @@
 
     Object.assign(root, {
         PRKS_YOUTUBE_HOSTS: YOUTUBE_HOSTS,
+        PRKS_MAX_PROVIDER_ID_CHARS: MAX_PROVIDER_ID_CHARS,
+        prksIsProviderId: isProviderId,
         prksYoutubeVideoId: youtubeVideoId,
         prksCanonicalWorkSource: canonicalSource,
         prksWorkSourceIdentity: identityOf,

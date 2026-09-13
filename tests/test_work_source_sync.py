@@ -4,7 +4,7 @@ import tempfile
 import unittest
 import uuid
 
-from backend import sync_protocol, work_source_sync as src
+from backend import sync_protocol, work_metadata_sync as meta, work_source_sync as src
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 
@@ -221,10 +221,76 @@ class WorkSourceSyncTests(unittest.TestCase):
         # The server's choice stands until the user decides.
         self.assertEqual(self.columns()["provider_id"], "BBB")
 
+    def test_the_largest_representable_conflict_still_fits_the_durable_bound(self):
+        """The invariant the bounded identifier exists for.
+
+        A conflict promises two things at once: the server's identity is
+        reported EXACTLY -- a truncated video id names a different video, or
+        none -- and the whole terminal result fits the client's durable 2 KiB
+        limit, so it can always be stored and therefore always be resolved.
+
+        Those are only simultaneously keepable if identity has a bounded
+        representation. Unbounded, a 3000-character id produced a ~3.2 KB
+        result that stayed over the limit with the preview deleted entirely:
+        an acknowledgement that could neither be stored nor shown. So this
+        takes the worst case on every axis at once -- the longest legal id on
+        both sides, and a URL long enough to force the preview to its cap --
+        and requires the fitted result to fit anyway.
+        """
+        biggest = "B" * src.MAX_PROVIDER_ID_CHARS
+        current = src.canonical_source({
+            "kind": "video",
+            "url": WATCH % biggest + "&pad=" + "x" * 4000})
+        desired = src.canonical_source({
+            "kind": "video",
+            "url": "https://youtu.be/" + "C" * src.MAX_PROVIDER_ID_CHARS + "?pad=" + "y" * 4000})
+        self.assertIsNotNone(current)
+        self.assertIsNotNone(desired)
+
+        result = {"work_id": self.work, "code": "SOURCE_REVISION_CONFLICT",
+                  "current_revision": 2 ** 53 - 1}
+        result.update(src.disagreement(current, desired))
+        fitted = meta.fit_terminal_result(
+            result, current["source_url"], desired["source_url"])
+
+        self.assertLessEqual(meta.serialized_result_bytes(fitted),
+                             meta.MAX_DURABLE_RESULT_BYTES,
+                             "a conflict the client cannot store is one it cannot resolve")
+        self.assertEqual(fitted["current_provider_id"], biggest,
+                         "and the identity survives intact, whatever the preview lost")
+        self.assertEqual(fitted["current_provider"], "youtube")
+        self.assertLess(len(fitted["current_preview"]), len(current["source_url"]),
+                        "the preview is what gives way")
+
+    def test_an_identifier_too_large_to_report_is_never_stored(self):
+        """The bound lives in the PARSER, so a URL whose id could not be
+        reported back intact has no video id at all -- it is refused at the
+        boundary rather than stored and discovered later."""
+        for bad, why in (
+            ("B" * (src.MAX_PROVIDER_ID_CHARS + 1), "one character over the bound"),
+            ("B" * 3000, "far over"),
+            ("%01" * 400, "percent-encoded control characters"),
+            ("ab%22cd", "a quotation mark, which doubles under JSON escaping"),
+            ("ab%5Ccd", "a backslash"),
+            ("a%20b", "whitespace"),
+            ("a.b", "outside the identifier alphabet"),
+        ):
+            with self.subTest(why=why):
+                self.assertIsNone(
+                    src.canonical_source({"kind": "video", "url": WATCH % bad}), why)
+                code, result = self.send(WATCH % bad)
+                self.assertEqual((code, result["code"]), (400, "INVALID_ENVELOPE"))
+        self.assertEqual(self.columns()["provider_id"], "AAA", "and nothing was written")
+
+    def test_the_largest_legal_identifier_is_accepted(self):
+        biggest = "B" * src.MAX_PROVIDER_ID_CHARS
+        code, result = self.send(WATCH % biggest)
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(self.columns()["provider_id"], biggest)
+
     def test_a_conflict_reports_the_identity_even_when_the_preview_is_truncated(self):
         """The preview shrinks to keep the whole result inside the client's
-        durable bound; the identity never does. It is tens of bytes and it is
-        what the source actually IS."""
+        durable bound; the identity never does."""
         long_id = "B" * 300
         self.db.execute_query(
             "UPDATE works SET source_url = ?, provider_id = ? WHERE id = ?",
