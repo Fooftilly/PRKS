@@ -1265,16 +1265,26 @@ function prksMarkWorkTitleChanged(workId) {
  * that Work's Authors. Routing every role surface through one helper is what
  * stops a new one from silently reopening either gap.
  */
-function prksMarkWorkRoleChanged(workId, roleType) {
+/**
+ * Everything OTHER than the Work record that a role change stales.
+ *
+ * Split out from `prksMarkWorkRoleChanged` because the durable path patches
+ * the Work, the browse catalogs and the embedded summaries with the exact new
+ * values rather than evicting them -- reconciling and then invalidating would
+ * throw away the patch. What remains here are the projections whose author
+ * rendering is not in the reference-shape registry, so the exact new value
+ * cannot be written into them and re-reading is the honest answer.
+ */
+function prksMarkWorkRoleDependenciesChanged(roleType) {
     prksMarkPersonGroupsDomainChanged();
-    const token =
-        typeof prksOfflineMarkEntityChanged === 'function'
-            ? prksOfflineMarkEntityChanged('work', workId)
-            : null;
     prksMarkPeopleDomainChanged();
     const role = String(roleType || '').trim();
     if (role === 'Author') {
-        prksMarkResearchGraphPeopleChanged();
+        /* NOT the Graph's People snapshot: a role acknowledgement patches that
+         * edge exactly -- the node and edge shapes are fully determined -- and
+         * invalidating here would throw the patch away and leave the Graph
+         * unavailable offline for a change PRKS could draw. Cached Argument
+         * source authors have no such exact projection, so they are re-read. */
         prksMarkArgumentsDomainChanged();
     }
     // A Folder Work card's credit line is linked_authors -> author_text ->
@@ -1284,6 +1294,14 @@ function prksMarkWorkRoleChanged(workId, roleType) {
         prksMarkFoldersDomainChanged();
         prksMarkWorkBrowseDisplayChanged();
     }
+}
+
+function prksMarkWorkRoleChanged(workId, roleType) {
+    const token =
+        typeof prksOfflineMarkEntityChanged === 'function'
+            ? prksOfflineMarkEntityChanged('work', workId)
+            : null;
+    prksMarkWorkRoleDependenciesChanged(roleType);
     return token;
 }
 
@@ -1598,6 +1616,7 @@ window.deletePersonGroup = deletePersonGroup;
 window.addPersonGroupMember = addPersonGroupMember;
 window.removePersonGroupMember = removePersonGroupMember;
 window.prksMarkWorkRoleChanged = prksMarkWorkRoleChanged;
+window.prksMarkWorkRoleDependenciesChanged = prksMarkWorkRoleDependenciesChanged;
 window.prksMarkWorkAuthorDisplayChanged = prksMarkWorkAuthorDisplayChanged;
 window.fetchConcepts = fetchConcepts;
 window.fetchConcept = fetchConcept;

@@ -187,6 +187,12 @@
             // Source identity is an AGGREGATE, not a field: one decision, one
             // revision, one conflict, four columns.
             SET_WORK_SOURCE: root.prksWorkSourceSyncHandler,
+            // A Work-Person link is an ELEMENT: one person, one role, its own
+            // revision. All three name that element's state, so they share a
+            // handler and a scope.
+            ADD_WORK_PERSON_ROLE: root.prksWorkRoleSyncHandler,
+            REMOVE_WORK_PERSON_ROLE: root.prksWorkRoleSyncHandler,
+            SET_WORK_PERSON_ROLE_CREDIT: root.prksWorkRoleSyncHandler,
         },
         lock: root.navigator.locks ? fn => root.navigator.locks.request('prks-sync', { ifAvailable: true }, lock => lock ? fn() : undefined) : null,
     });

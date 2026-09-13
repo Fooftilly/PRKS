@@ -1369,10 +1369,14 @@ function renderPersonDetails(ctx, person, container) {
     const offlineCached = !!(ctx && ctx.ui && ctx.ui.personOfflineCached);
     const rolesByWork = prksPersonWorkRolesById(person);
     let worksHtml = '';
-    // Acknowledged summaries + pending Work-field edits; the cached Person is
-    // left exactly as the server sent it.
-    const personWorks = typeof prksEffectiveWorkSummaries === 'function'
-        ? prksEffectiveWorkSummaries(person.works || []) : (person.works || []);
+    /* Acknowledged summaries + pending Work-field edits + pending RELATIONSHIP
+     * intents; the cached Person is left exactly as the server sent it.
+     * Membership first: a Work this Person was just linked to has to appear
+     * before its own fields are overlaid onto it. */
+    const membership = typeof prksEffectivePersonWorks === 'function'
+        ? prksEffectivePersonWorks(person, person.works || []) : (person.works || []);
+    const personWorks = typeof prksEffectiveWorkSummaryRows === 'function'
+        ? prksEffectiveWorkSummaryRows(membership) : membership;
     if (personWorks.length > 0) {
         if (worksEditing) {
             const groupedWorks = personWorks.reduce((acc, w) => {
@@ -1399,8 +1403,10 @@ function renderPersonDetails(ctx, person, container) {
             }
         } else {
             // Same overlay on the read-only path.
-            const uniqueWorks = typeof prksEffectiveWorkSummaries === 'function'
-                ? prksEffectiveWorkSummaries(prksUniquePersonWorks(person))
+            const uniqueWorks = typeof prksEffectiveWorkSummaryRows === 'function'
+                ? prksEffectiveWorkSummaryRows(typeof prksEffectivePersonWorks === 'function'
+                    ? prksEffectivePersonWorks(person, prksUniquePersonWorks(person))
+                    : prksUniquePersonWorks(person))
                 : prksUniquePersonWorks(person);
             const groupedUnique = {};
             uniqueWorks.forEach((w) => {

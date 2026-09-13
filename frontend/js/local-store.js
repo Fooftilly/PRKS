@@ -62,6 +62,9 @@
         'REMOVE_WORK_TAG',
         'SET_WORK_METADATA_FIELD',
         'SET_WORK_SOURCE',
+        'ADD_WORK_PERSON_ROLE',
+        'REMOVE_WORK_PERSON_ROLE',
+        'SET_WORK_PERSON_ROLE_CREDIT',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -91,6 +94,18 @@
      * URL. They are equal today and are free to diverge. */
     const WORK_SOURCE_URL_BYTES = 64 * 1024;
     const MAX_ERROR_CHARS = 500;
+
+    /* The Work-Person role family. All three name one element's state, so they
+     * coalesce against each other within one scope. */
+    const WORK_ROLE_OPERATIONS = Object.freeze([
+        'ADD_WORK_PERSON_ROLE', 'REMOVE_WORK_PERSON_ROLE', 'SET_WORK_PERSON_ROLE_CREDIT',
+    ]);
+
+    /** The canonical state an enqueued role operation names. */
+    function workPersonRoleState(row) {
+        if (row.operation === 'REMOVE_WORK_PERSON_ROLE') return null;
+        return typeof row.payload.credit_name === 'string' ? row.payload.credit_name : '';
+    }
 
     function defaultIndexedDB() {
         if (typeof indexedDB !== 'undefined') return indexedDB;
@@ -297,6 +312,9 @@
      * unresolvable -- the UI offered "Apply my source" and the store threw.
      */
     const REAPPLIABLE_RESULTS = Object.freeze({
+        ADD_WORK_PERSON_ROLE: Object.freeze(['REVISION_CONFLICT']),
+        REMOVE_WORK_PERSON_ROLE: Object.freeze(['REVISION_CONFLICT']),
+        SET_WORK_PERSON_ROLE_CREDIT: Object.freeze(['REVISION_CONFLICT']),
         ADD_WORK_TAG: Object.freeze(['REVISION_CONFLICT']),
         REMOVE_WORK_TAG: Object.freeze(['REVISION_CONFLICT']),
         SET_WORK_METADATA_FIELD: Object.freeze(['REVISION_CONFLICT']),
@@ -764,6 +782,80 @@
             });
         }
 
+        /**
+         * Save the intent "this Work's link to this Person in this role is
+         * now <state>", coalescing within the scope.
+         *
+         * The element's canonical state is `null` (absent) or a credit-name
+         * string (present; `''` means no override). That is not a boolean:
+         * `credit_name` is the name printed on THIS work, and it reaches
+         * `linked_authors`, the card credit, BibTeX and the Person's aliases.
+         *
+         * `observed` is the base this edit was measured against -- its `state`
+         * in the same spelling, and its `revision`. Editing back to that state
+         * leaves NO intent: add-then-remove is not two changes, it is none.
+         *
+         * Only a NEVER SENT row may be rewritten. A row that has been
+         * attempted might already be ledgered, and a conflicted one is the
+         * user's to resolve, so either stays immutable and this refuses with
+         * `scope_busy`.
+         */
+        function saveWorkPersonRole(workId, link, observed, localContext) {
+            const valid = link && typeof link === 'object' &&
+                isNonBlankString(link.person_id) && isNonBlankString(link.role_type) &&
+                (link.state === null || typeof link.state === 'string');
+            if (!isNonBlankString(workId) || !valid) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid role save.'));
+            }
+            if (!isPlainObject(observed) ||
+                !(observed.state === null || typeof observed.state === 'string') ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_base', 'Invalid observed role state.'));
+            }
+            const desired = link.state;
+            const matches = row => row.entity_type === 'work' && row.entity_id === workId &&
+                WORK_ROLE_OPERATIONS.indexOf(row.operation) !== -1 &&
+                row.payload.person_id === link.person_id &&
+                row.payload.role_type === link.role_type &&
+                row.status !== STATUS_ACKNOWLEDGED;
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const rows = (await request(STORE_OPERATIONS, s => s.getAll())).filter(matches)
+                    .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+                /* One active intent per scope is the invariant, but a store
+                 * written before coalescing existed can hold several. Order
+                 * from `getAll()` is not a decision, so this refuses with the
+                 * count rather than resolving that history differently on
+                 * different devices. The rows are immutable user intent. */
+                if (rows.length > 1) {
+                    throw localStoreError('scope_busy',
+                        'This link has ' + rows.length + ' unsynchronized changes; ' +
+                        'let them finish or resolve them before editing it again.');
+                }
+                const existing = rows[0];
+                if (existing) {
+                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                        throw localStoreError('scope_busy', 'This link is syncing or needs resolution.');
+                    }
+                    if (workPersonRoleState(existing) === desired) { setResult(existing); return; }
+                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                }
+                if (desired === observed.state) { setResult(null); return; }
+                /* ADD names a present state from absence; SET_CREDIT names a
+                 * present state that was already present. Using ADD for both
+                 * would make an operation called ADD silently edit an existing
+                 * link, which is harder to reason about on replay. */
+                const operation = desired === null ? 'REMOVE_WORK_PERSON_ROLE'
+                    : (observed.state === null ? 'ADD_WORK_PERSON_ROLE'
+                        : 'SET_WORK_PERSON_ROLE_CREDIT');
+                const payload = { person_id: link.person_id, role_type: link.role_type };
+                if (operation !== 'REMOVE_WORK_PERSON_ROLE') payload.credit_name = desired;
+                setResult(await insertEnvelopeIn(request, {
+                    operation, entity_type: 'work', entity_id: workId, payload,
+                    base_revision: observed.revision,
+                }, localContext || null));
+            });
+        }
+
         /* One effective never-sent open event per Work.
          *
          * Opening the same Work three times offline is one fact -- "last opened
@@ -1201,6 +1293,7 @@
             getOrCreateDeviceId: getOrCreateDeviceId,
             enqueueOperation: enqueueOperation,
             coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, saveWorkSource,
+            saveWorkPersonRole,
             resolveConflict, claimOperation,
             getOperation: getOperation,
             listOperations: listOperations,
@@ -1221,6 +1314,8 @@
         PRKS_LOCAL_OPERATION_STATUSES: STATUSES,
         PRKS_LOCAL_REAPPLIABLE_RESULTS: REAPPLIABLE_RESULTS,
         PRKS_LOCAL_WORK_SOURCE_URL_BYTES: WORK_SOURCE_URL_BYTES,
+        PRKS_LOCAL_WORK_ROLE_OPERATIONS: WORK_ROLE_OPERATIONS,
+        prksWorkPersonRoleState: workPersonRoleState,
         PRKS_LOCAL_MAX_PAYLOAD_BYTES: MAX_PAYLOAD_BYTES,
         PRKS_LOCAL_MAX_ABSTRACT_VALUE_BYTES: MAX_ABSTRACT_VALUE_BYTES,
         PRKS_LOCAL_WORK_FIELD_VALUE_BYTES: WORK_FIELD_VALUE_BYTES,

@@ -1436,13 +1436,10 @@ async function prksPatchRoleCreditName(workId, personId, roleType, orderIndex, c
 }
 
 async function prksEditRoleCreditOnWork(btn) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
-    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
     const personId = (btn.getAttribute('data-person-id') || '').trim();
     const roleType = (btn.getAttribute('data-role-type') || '').trim();
-    const orderIndex = (btn.getAttribute('data-order-index') || '0').trim();
     const canonical = (btn.getAttribute('data-canonical-name') || '').trim();
     const currentDisplay = (btn.getAttribute('data-display-name') || '').trim();
     if (!workId || !personId || !roleType) return;
@@ -1464,49 +1461,24 @@ async function prksEditRoleCreditOnWork(btn) {
     });
     if (next === null) return;
 
-    const { ok, data } = await prksPatchRoleCreditName(
-        workId,
-        personId,
-        roleType,
-        parseInt(orderIndex, 10) || 0,
-        next
-    );
-    if (!ok) {
-        await prksAlertMessage(data.error || 'Could not update name on file.', 'Could not save');
-        return;
+    /* The credit override is part of the LINK's state, not a separate record,
+     * so it travels under the same revision scope as the link itself. */
+    const result = await prksSaveWorkPersonRoleDurably(
+        workId, personId, roleType, String(next).trim(), null);
+    if (result.code === 'unavailable') {
+        await prksAlertMessage(
+            'This file\u2019s linked people cannot be changed right now. Open it once while '
+            + 'connected to PRKS so its link state is prepared.', 'Unavailable');
+    } else if (result.code === 'too-long') {
+        await prksAlertMessage('That name is too long for this file.', 'Could not save');
+    } else if (result.code === 'busy') {
+        await prksAlertMessage('This link is syncing or needs a decision. Try again shortly.',
+            'Still syncing');
+    } else if (result.code !== 'saved') {
+        await prksAlertMessage('Could not update name on file.', 'Could not save');
     }
-    // Every role type stales People; Author additionally stales cached
-    // Argument source authors. One helper owns both dependencies.
-    const coherenceToken =
-        typeof prksMarkWorkRoleChanged === 'function'
-            ? prksMarkWorkRoleChanged(workId, roleType)
-            : typeof prksOfflineMarkEntityChanged === 'function'
-              ? prksOfflineMarkEntityChanged('work', workId)
-              : null;
-    await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToken);
 }
 
-window.prksRoleDisplayName = prksRoleDisplayName;
-window.prksEditRoleCreditOnWork = prksEditRoleCreditOnWork;
-
-/** Split typed display name: mononym->last, otherwise all-but-last->first and last token->last. */
-function prksSplitTypedPersonName(name) {
-    const parts = String(name || '')
-        .trim()
-        .split(/\s+/);
-    if (parts.length === 0 || (parts.length === 1 && !parts[0])) {
-        return { first_name: '', last_name: '' };
-    }
-    if (parts.length === 1) {
-        return { first_name: '', last_name: parts[0] };
-    }
-    return {
-        first_name: parts.slice(0, -1).join(' '),
-        last_name: parts[parts.length - 1],
-    };
-}
-
-/** Create a person from the Link Person to Work modal and select them for linking. */
 async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText) {
     if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const trimmed = String(typedName || '').trim();
@@ -1636,48 +1608,46 @@ async function addRoleToWorkFromMetaEditor(workId) {
             personId,
             'meta-role-person-search'
         );
-        const res = await prksRequest('/api/roles', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                person_id: personId,
-                work_id: resolvedWorkId,
-                role_type: roleType,
-                credit_name: creditName,
-            }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            await prksNotifyRoleLinkFailure(data.error, roleType);
+        /* The Person row this link will be rendered from, captured WITH the
+         * intent. A pending link has to draw a name before any acknowledgement
+         * carries one, and the Person cache may simply not be present. */
+        const cached = typeof prksFindPersonInCache === 'function'
+            ? prksFindPersonInCache(personId) : null;
+        const context = cached ? {
+            id: personId,
+            first_name: cached.first_name || '',
+            last_name: cached.last_name || '',
+            aliases: cached.aliases || '',
+            canonical_name: prksPersonCanonicalName(cached) || '',
+        } : null;
+        /* A BOUNDED card-shaped summary of this Work, so the Person's own page
+         * can gain it before acknowledgement. Deliberately a subset: the whole
+         * Work record would carry an abstract that can reach a megabyte into
+         * durable storage for a value no card renders. */
+        const workSummary = prksWorkCardSummaryForRoleIntent(_cw, resolvedWorkId);
+        const result = await prksSaveWorkPersonRoleDurably(
+            resolvedWorkId, personId, roleType, String(creditName || '').trim(),
+            context, workSummary);
+        if (result.code === 'unavailable') {
+            await prksAlertMessage(
+                'This file\u2019s linked people cannot be changed right now. Open it once while '
+                + 'connected to PRKS so its link state is prepared.', 'Unavailable');
             return;
         }
-        // Every role type stales People (assigned_roles, the Person's linked
-        // Work rows, and aliases via credit names); Author additionally stales
-        // cached Argument source authors.
-        const coherenceToken =
-            typeof prksMarkWorkRoleChanged === 'function'
-                ? prksMarkWorkRoleChanged(resolvedWorkId, roleType)
-                : typeof prksOfflineMarkEntityChanged === 'function'
-                  ? prksOfflineMarkEntityChanged('work', resolvedWorkId)
-                  : null;
-        if (typeof fetchWorkDetails === 'function') {
-            const _refreshed = await fetchWorkDetails(resolvedWorkId);
-            if (_refreshed && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
-                void prksOfflineCacheEntityIfCurrent('work', resolvedWorkId, _refreshed, coherenceToken);
-            }
-            const applied =
-                typeof prksApplyOwnedWorkEntity === 'function'
-                    ? prksApplyOwnedWorkEntity(ownerCtx, resolvedWorkId, _refreshed)
-                    : false;
-            if (applied && prksOwnerTabIsFocused(ownerCtx) && list && _refreshed) {
-                list.innerHTML = buildWorkLinkedPersonsHtml(_refreshed);
-            }
-            if (applied && prksOwnerTabIsFocused(ownerCtx)) {
-                if (personHidden) personHidden.value = '';
-                if (personSearch) personSearch.value = '';
-                prksRefreshRoleCreditPicker('meta-role', null);
-            }
-        } else if (prksOwnerTabIsFocused(ownerCtx)) {
+        if (result.code === 'too-long') {
+            await prksAlertMessage('That name is too long for this file.', 'Could not save');
+            return;
+        }
+        if (result.code === 'busy') {
+            await prksAlertMessage('This link is syncing or needs a decision. Try again shortly.',
+                'Still syncing');
+            return;
+        }
+        if (result.code !== 'saved') {
+            await prksAlertMessage('Could not create link.', 'Could not link');
+            return;
+        }
+        if (prksOwnerTabIsFocused(ownerCtx)) {
             if (personHidden) personHidden.value = '';
             if (personSearch) personSearch.value = '';
             prksRefreshRoleCreditPicker('meta-role', null);
@@ -1697,8 +1667,23 @@ async function addRoleToWorkFromMetaEditor(workId) {
 }
 
 async function prepareRoleModal() {
-    allPersons = await fetchPersons();
-    allWorks = await fetchWorks();
+    /* Cached People, not a bare network fetch.
+     *
+     * Linking an EXISTING Person to an existing Work is durable-first, so the
+     * picker has to work without the server -- `fetchPersons()` returns an
+     * empty list offline, which made the one action this milestone enables
+     * impossible to perform precisely when it matters. Creating a NEW Person
+     * stays online-only and is refused separately.
+     */
+    const people = typeof prksOfflinePeopleFetch === 'function'
+        ? await prksOfflinePeopleFetch() : null;
+    allPersons = people && Array.isArray(people.value) ? people.value : await fetchPersons();
+    /* The same for files: `fetchWorks()` returns an empty list offline, which
+     * left the modal unable to name the Work the user opened it from. The
+     * browse catalog carries id and title, which is all this picker reads. */
+    const works = typeof prksOfflineWorksBrowseFetch === 'function'
+        ? await prksOfflineWorksBrowseFetch() : null;
+    allWorks = works && Array.isArray(works.value) ? works.value : await fetchWorks();
     window.allPersons = allPersons;
 
     initSearchableCombobox('role-person-search', 'role-person-results', 'role-person-id', 'person', {
@@ -1754,7 +1739,11 @@ async function prepareRoleModal() {
         workId = _cwModal.id;
     }
     if (workId) {
-        const w = allWorks.find(x => String(x.id) === String(workId));
+        /* The focused Work itself is the fallback, not only the catalog: the
+         * user opened this modal FROM that file, so failing to name it because
+         * a list could not be read would refuse the one action they asked for. */
+        const w = allWorks.find(x => String(x.id) === String(workId)) ||
+            (_cwModal && String(_cwModal.id) === String(workId) ? _cwModal : null);
         if (w) {
             workHidden.value = w.id;
             workSearch.value = w.title || '';
@@ -2380,6 +2369,9 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     if (typeof initWorkTagCombobox === 'function') initWorkTagCombobox(work.id, ctx);
     if (typeof prksMountWorkMetadataEditor === 'function') prksMountWorkMetadataEditor(ctx, work.id);
     if (typeof prksMountWorkSourceEditor === 'function') prksMountWorkSourceEditor(ctx, work.id);
+    if (typeof prksMountWorkRoleEditor === 'function') {
+        prksMountWorkRoleEditor(ctx, work.id, { editable: prksWorkDetailsMode(ctx, work) === 'people' });
+    }
     if (mode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
         void mountPlaylistAttachControls(work, ctx);
     }
@@ -2749,6 +2741,9 @@ function updatePanelContent(tabId) {
             initWorkTagCombobox(_cw.id, focusedCtx);
             if (typeof prksMountWorkMetadataEditor === 'function') prksMountWorkMetadataEditor(focusedCtx, _cw.id);
             if (typeof prksMountWorkSourceEditor === 'function') prksMountWorkSourceEditor(focusedCtx, _cw.id);
+            if (typeof prksMountWorkRoleEditor === 'function') {
+                prksMountWorkRoleEditor(focusedCtx, _cw.id, { editable: mode === 'people' });
+            }
             if (typeof initWorkDetailRightPanelActions === 'function') {
                 initWorkDetailRightPanelActions(_cw, focusedCtx);
             }
@@ -3225,6 +3220,7 @@ function prksMountWorkMetaEditor(ownerCtx, work) {
     if (panel && typeof prksBindAutosizeTextareas === 'function') prksBindAutosizeTextareas(panel);
     if (typeof prksMountWorkMetadataEditor === 'function') prksMountWorkMetadataEditor(ownerCtx, work.id, { editing: true });
     if (typeof prksMountWorkSourceEditor === 'function') prksMountWorkSourceEditor(ownerCtx, work.id, { editing: true });
+    if (typeof prksMountWorkRoleEditor === 'function') prksMountWorkRoleEditor(ownerCtx, work.id, { editable: true });
 }
 
 function toggleWorkMetaEdit(isEditing) {
@@ -3351,6 +3347,26 @@ async function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
  * the program looks like from the inside.
  */
 
+/**
+ * The card-shaped subset of a Work that a pending role intent carries.
+ *
+ * Bounded on purpose: the whole Work record holds an abstract that can reach a
+ * megabyte, and no card renders it. What is here is what a Work card and the
+ * credit line read.
+ */
+function prksWorkCardSummaryForRoleIntent(work, workId) {
+    if (!work || String(work.id || '') !== String(workId || '')) return null;
+    const fields = ['id', 'title', 'doc_type', 'status', 'year', 'published_date',
+        'author_text', 'file_path', 'source_kind', 'source_url', 'thumb_url',
+        'thumb_page', 'linked_authors', 'primary_author', 'primary_editor',
+        'linked_people', 'folder_id'];
+    const out = {};
+    fields.forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(work, key)) out[key] = work[key];
+    });
+    return out;
+}
+
 function prksWorkHasRoleLink(roles, personId, roleType) {
     const pid = String(personId || '').trim();
     const rt = String(roleType || '').trim();
@@ -3409,14 +3425,20 @@ function buildWorkLinkedPersonsHtml(work, options = {}) {
         .join('');
 }
 
+/**
+ * Unlink a Person from this file, durably.
+ *
+ * No offline guard and no direct DELETE: the operation is written locally
+ * first whether or not the server is reachable, and the same path runs online.
+ * A semantic action that is durable offline and a direct API call online is
+ * two mutation boundaries for one decision, and only one of them advances the
+ * relationship revision other devices measure staleness against.
+ */
 async function prksRemoveWorkRoleLink(btn) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
-    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
     const personId = (btn.getAttribute('data-person-id') || '').trim();
     const roleType = (btn.getAttribute('data-role-type') || '').trim();
-    const orderIndex = (btn.getAttribute('data-order-index') || '0').trim();
     if (!workId || !personId || !roleType) {
         await prksAlertMessage('Missing link data.', 'Error');
         return;
@@ -3427,33 +3449,17 @@ async function prksRemoveWorkRoleLink(btn) {
         confirmLabel: 'Remove',
     });
     if (!confirmed) return;
-    const params = new URLSearchParams({
-        person_id: personId,
-        role_type: roleType,
-        order_index: orderIndex || '0',
-    });
-    let res;
-    try {
-        res = await prksRequest(`/api/works/${encodeURIComponent(workId)}/roles?${params}`, { method: 'DELETE' });
-    } catch (e) {
-        console.error(e);
+    const result = await prksSaveWorkPersonRoleDurably(workId, personId, roleType, null, null);
+    if (result.code === 'unavailable') {
+        await prksAlertMessage(
+            'This file\u2019s linked people cannot be changed right now. Open it once while '
+            + 'connected to PRKS so its link state is prepared.', 'Unavailable');
+    } else if (result.code === 'busy') {
+        await prksAlertMessage('This link is syncing or needs a decision. Try again shortly.',
+            'Still syncing');
+    } else if (result.code !== 'saved') {
         await prksAlertMessage('Could not remove link.', 'Error');
-        return;
     }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        await prksAlertMessage(data.error || 'Could not remove link.', 'Could not save');
-        return;
-    }
-    // Every role type stales People; Author additionally stales cached
-    // Argument source authors. One helper owns both dependencies.
-    const coherenceToken =
-        typeof prksMarkWorkRoleChanged === 'function'
-            ? prksMarkWorkRoleChanged(workId, roleType)
-            : typeof prksOfflineMarkEntityChanged === 'function'
-              ? prksOfflineMarkEntityChanged('work', workId)
-              : null;
-    await prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToken);
 }
 
 async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToken) {
@@ -3580,7 +3586,8 @@ function renderWorkMetaTab(work, mode = 'view') {
                 <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('${managingPeople ? 'view' : 'people'}')">${managingPeople ? 'Done' : 'Manage relationships'}</button>
             </div>
             ${managingPeople ? '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm work-link-person-btn" onclick="openModal(\'role-modal\')" title="Link a person to this file">Link person</button>' : ''}
-            <div class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(work, { editable: managingPeople })}</div>
+            <div class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(typeof prksEffectiveWorkDetailRoles === 'function' ? prksEffectiveWorkDetailRoles(work) : work, { editable: managingPeople })}</div>
+            <div class="meta-row" data-prks-role="work-people-sync" aria-live="polite"></div>
         </div>
         <div class="doc-meta-card">
             <div class="card-heading-row card-heading-row--wrap"><h3>Tags</h3><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('${managingTags ? 'view' : 'tags'}')">${managingTags ? 'Done' : 'Manage tags'}</button></div>

@@ -155,10 +155,15 @@ async function run() {
             assert.equal(e.ctx.prksOfflineDomainGeneration(people),expected,fn);
         }
     }
+    /* A role change never stales the CORE graph, and no longer stales the
+     * People graph either: a role acknowledgement patches that edge exactly --
+     * both node and edge shapes are fully determined -- so invalidating would
+     * throw the patch away and leave the Graph unavailable offline for a
+     * change PRKS can draw. */
     for(const role of ['Author','Reviewer','Editor','Translator','Mentioned']) {
         const e=environment();e.ctx.prksMarkWorkRoleChanged('W',role);
         assert.equal(e.ctx.prksOfflineDomainGeneration(core),0);
-        assert.equal(e.ctx.prksOfflineDomainGeneration(people),role==='Author'?1:0);
+        assert.equal(e.ctx.prksOfflineDomainGeneration(people),0,role);
     }
     const e=environment();e.ctx.prksMarkWorkTitleChanged('W');
     assert.equal(e.ctx.prksOfflineDomainGeneration(core),1);assert.equal(e.ctx.prksOfflineDomainGeneration(people),1);

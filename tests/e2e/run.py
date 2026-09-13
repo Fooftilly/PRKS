@@ -64,6 +64,7 @@ E2E_MODULES = (
     "tests.e2e.test_work_opens_offline",
     "tests.e2e.test_work_metadata_offline",
     "tests.e2e.test_work_source_offline",
+    "tests.e2e.test_work_people_offline",
 )
 
 SLOWEST_LIMIT = 25

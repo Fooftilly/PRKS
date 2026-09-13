@@ -506,14 +506,18 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
                 for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations',
                                   'prksSync.store', 'payload.field'):
                     self.assertNotIn(forbidden, source, forbidden)
-        self.assertIn('prksEffectiveWorkSummaries',
-                      (FRONTEND / 'components' / 'folders.js').read_text())
-        self.assertIn('prksEffectiveWorkSummaries',
-                      (FRONTEND / 'components' / 'people.js').read_text())
-        self.assertIn('prksEffectiveWorkSummaries',
-                      (FRONTEND / 'components' / 'playlists.js').read_text())
+        # One composed entry point, so a component never learns which families
+        # exist and the overlays are always applied in the same order.
+        for name in ('folders.js', 'people.js', 'playlists.js'):
+            self.assertIn('prksEffectiveWorkSummaryRows',
+                          (FRONTEND / 'components' / name).read_text(), name)
         self.assertIn('prksEffectiveWorkSync',
                       (FRONTEND / 'command-palette.js').read_text())
+        app = (FRONTEND / 'app.js').read_text()
+        composed = app[app.index('function prksEffectiveWorkSummaryRows('):]
+        composed = composed[: composed.index('\n}')]
+        self.assertIn('prksEffectiveWorkRows', composed, 'relationships first')
+        self.assertIn('prksEffectiveWorkSummaries', composed, 'then metadata')
 
     def test_summary_field_registries_agree(self):
         from backend import work_metadata_sync

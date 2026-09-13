@@ -627,7 +627,13 @@
          * empty, so a pending value read off the acknowledged row would both
          * miss the edit and, in the other direction, be unable to reveal the
          * Editor when the field is cleared. */
-        const work = typeof prksEffectiveWorkSync === 'function' ? prksEffectiveWorkSync(w) : w;
+        /* BOTH overlays, in the same fixed order every other surface uses:
+         * relationships decide who is linked and recompute the flattened
+         * credit columns, then metadata decides what `author_text` is. */
+        const linked = typeof prksEffectiveWorkRoles === 'function'
+            ? prksEffectiveWorkRoles(w) : w;
+        const work = typeof prksEffectiveWorkSync === 'function'
+            ? prksEffectiveWorkSync(linked) : linked;
         const author = String(work.linked_authors || work.primary_author ||
             work.author_text || work.primary_editor || '').trim();
         let year = String(work.year || '').trim();

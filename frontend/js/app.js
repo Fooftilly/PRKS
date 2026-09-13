@@ -1527,8 +1527,14 @@ async function prksOfflineResearchGraphFetch(includePeople, signal) {
      *
      * The pending map is hydrated by the ROUTE, which is where staleness is
      * re-checked after awaiting; this helper only reads it. */
-    const snapshot = typeof prksEffectiveWorkReferences === 'function'
+    const withFields = typeof prksEffectiveWorkReferences === 'function'
         ? prksEffectiveWorkReferences(kind, result.value) : result.value;
+    /* Pending Work-Person links are the Graph's other pending truth: a link
+     * made offline has to draw its edge, and an unlink has to hide one. Only
+     * the Author role produces edges, and only where the node data to draw
+     * them exactly is available -- see `effectiveResearchGraph`. */
+    const snapshot = typeof prksEffectiveResearchGraphRoles === 'function'
+        ? prksEffectiveResearchGraphRoles(withFields) : withFields;
     return { snapshot, source: result.source, cachedAt: result.cachedAt };
 }
 
@@ -2037,12 +2043,49 @@ async function prksOfflineWorksBrowseFetch(signal) {
 async function prksHydratePendingWorkMetadata() {
     if (typeof prksRefreshPendingWorkMetadata !== 'function') return;
     await prksRefreshPendingWorkMetadata();
+    /* Relationship intents hydrate here too. A Work's displayed credit is
+     * composed from BOTH families -- linked people, then `author_text` -- so a
+     * route that hydrated only one would render a credit built half from
+     * pending state and half from acknowledged state. */
+    if (typeof prksRefreshPendingWorkRoles === 'function') {
+        await prksRefreshPendingWorkRoles();
+    }
+}
+
+/* Two overlays, applied in a fixed order and never by each other.
+ *
+ * The relationship overlay decides WHO is linked and recomputes the flattened
+ * credit columns from that; the metadata overlay decides what `author_text`
+ * and the scalar fields are. The card's credit helper then applies the one
+ * precedence rule to the result. Neither overlay knows the rule, so a pending
+ * change cannot reorder it. */
+function prksEffectiveWorkRows(rows) {
+    let out = rows;
+    if (out && typeof prksEffectiveWorkRolesRows === 'function') {
+        out = prksEffectiveWorkRolesRows(out);
+    }
+    return out;
+}
+
+/**
+ * Embedded Work SUMMARIES -- `folder.works[]`, `person.works[]`,
+ * `playlist.items[]` -- made effective by both overlays.
+ *
+ * One entry point so a component never learns which families exist, and so the
+ * two overlays are always applied in the same order.
+ */
+function prksEffectiveWorkSummaryRows(rows) {
+    const withRoles = prksEffectiveWorkRows(rows);
+    return withRoles && typeof prksEffectiveWorkSummaries === 'function'
+        ? prksEffectiveWorkSummaries(withRoles)
+        : withRoles;
 }
 
 function prksEffectiveBrowseRows(rows, projection) {
-    return rows && typeof prksEffectiveProjectionRows === 'function'
-        ? prksEffectiveProjectionRows(rows, projection)
-        : rows;
+    const withRoles = prksEffectiveWorkRows(rows);
+    return withRoles && typeof prksEffectiveProjectionRows === 'function'
+        ? prksEffectiveProjectionRows(withRoles, projection)
+        : withRoles;
 }
 
 function prksResolveOfflineWorksBrowse(result) {
@@ -4160,7 +4203,8 @@ function initForms() {
 
     const saveRoleBtn = document.getElementById('save-role-btn');
     saveRoleBtn.onclick = async () => {
-        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
+        /* No offline guard: linking an existing Person to an existing Work is
+         * durable-first, so it works with or without the server. */
         const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
         const person_id = document.getElementById('role-person-id').value;
         const work_id = document.getElementById('role-work-id').value;
@@ -4200,27 +4244,40 @@ function initForms() {
         if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, true, { busyLabel: 'Linking…' });
         let coherenceToken = null;
         try {
-            const res = await prksRequest('/api/roles', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                if (typeof prksNotifyRoleLinkFailure === 'function') {
-                    await prksNotifyRoleLinkFailure(data.error, role_type);
+            /* The SAME durable path the Work panel's Link button takes. This
+             * modal can target a Work other than the one on screen, which is
+             * why the save reads the base for whichever Work it is given --
+             * not because the action is different. One semantic decision must
+             * not be durable on one surface and a direct POST on another. */
+            const cachedPerson = typeof prksFindPersonInCache === 'function'
+                ? prksFindPersonInCache(person_id) : null;
+            const personContext = cachedPerson ? {
+                id: person_id,
+                first_name: cachedPerson.first_name || '',
+                last_name: cachedPerson.last_name || '',
+                aliases: cachedPerson.aliases || '',
+                canonical_name: typeof prksPersonCanonicalName === 'function'
+                    ? prksPersonCanonicalName(cachedPerson) : '',
+            } : null;
+            const workSummary = typeof prksWorkCardSummaryForRoleIntent === 'function'
+                ? prksWorkCardSummaryForRoleIntent(_cwDupCheck, work_id) : null;
+            const result = await prksSaveWorkPersonRoleDurably(
+                work_id, person_id, role_type, String(credit_name || '').trim(),
+                personContext, workSummary);
+            if (result.code !== 'saved') {
+                const message = result.code === 'unavailable'
+                    ? 'This file\u2019s linked people cannot be changed right now. Open it once '
+                      + 'while connected to PRKS so its link state is prepared.'
+                    : result.code === 'too-long'
+                      ? 'That name is too long for this file.'
+                      : result.code === 'busy'
+                        ? 'This link is syncing or needs a decision. Try again shortly.'
+                        : 'Could not create link.';
+                if (typeof prksAlertDialog === 'function') {
+                    await prksAlertDialog({ title: 'Could not link', message });
                 }
                 return;
             }
-            // Role links appear in cached Person read models (every role type) and
-            // in cached Argument sources (Author only); the shared helper owns
-            // both so every role surface stays consistent.
-            coherenceToken =
-                typeof prksMarkWorkRoleChanged === 'function'
-                    ? prksMarkWorkRoleChanged(work_id, role_type)
-                    : typeof prksOfflineMarkEntityChanged === 'function'
-                      ? prksOfflineMarkEntityChanged('work', work_id)
-                      : null;
         } catch (e) {
             console.error(e);
             if (typeof prksAlertDialog === 'function') {

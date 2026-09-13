@@ -307,7 +307,9 @@ def apply(db, conn, op, received_at):
     if not conn.execute("SELECT 1 FROM works WHERE id = ?", (work_id,)).fetchone():
         result["code"] = "ENTITY_NOT_FOUND"
         return 404, result
-    if not conn.execute("SELECT 1 FROM persons WHERE id = ?", (person_id,)).fetchone():
+    person = conn.execute(
+        "SELECT first_name, last_name FROM persons WHERE id = ?", (person_id,)).fetchone()
+    if person is None:
         # A relationship to someone who does not exist is not a conflict the
         # user can resolve here -- Person creation is not part of this family.
         result["code"] = "PERSON_NOT_FOUND"
@@ -343,6 +345,13 @@ def apply(db, conn, op, received_at):
                              desired is not None, credit_name=desired or "")
     result.update(code="ACKNOWLEDGED", changed=changed,
                   server_revision=revision + int(changed), **_reported(desired))
+    # The Person's own name travels with the acknowledgement. A client whose
+    # cached Work detail does not yet hold this link cannot build its row
+    # without it -- the panel renders a profile name, and the alternative is
+    # either a blank chip or discarding the whole cached Work to re-read it.
+    # Two short strings, and the client already displays them everywhere.
+    result["first_name"] = person[0] or ""
+    result["last_name"] = person[1] or ""
     return 200, result
 
 

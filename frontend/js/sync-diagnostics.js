@@ -22,6 +22,7 @@
     function payloadValue(op) {
         if (op.operation === 'SET_WORK_METADATA_FIELD') return op.payload.value;
         if (op.operation === 'SET_WORK_SOURCE') return op.payload.source && op.payload.source.url;
+        if (op.operation === 'SET_WORK_PERSON_ROLE_CREDIT') return op.payload.credit_name;
         return null;
     }
 
@@ -57,6 +58,17 @@
         if (op.operation === 'SET_WORK_SOURCE') {
             return 'Video source = "' + bounded(payloadValue(op)) + '"';
         }
+        if (root.PRKS_WORK_ROLE_OPERATION_TYPES &&
+            root.PRKS_WORK_ROLE_OPERATION_TYPES.indexOf(op.operation) !== -1) {
+            const who = (context.person && context.person.canonical_name) || op.payload.person_id;
+            const role = op.payload.role_type;
+            if (op.operation === 'REMOVE_WORK_PERSON_ROLE') return 'Unlink ' + who + ' (' + role + ')';
+            if (op.operation === 'SET_WORK_PERSON_ROLE_CREDIT') {
+                return 'Credit ' + who + ' (' + role + ') as "' +
+                    bounded(op.payload.credit_name) + '"';
+            }
+            return 'Link ' + who + ' as ' + role;
+        }
         if (op.operation === 'ADD_WORK_TAG' || op.operation === 'REMOVE_WORK_TAG') {
             return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') +
                 ((context.tag && context.tag.name) || 'Tag');
@@ -76,6 +88,9 @@
         SET_WORK_SOURCE: 'work-source-state',
         ADD_WORK_TAG: 'work-tag-options',
         REMOVE_WORK_TAG: 'work-tag-options',
+        ADD_WORK_PERSON_ROLE: 'work-people-state',
+        REMOVE_WORK_PERSON_ROLE: 'work-people-state',
+        SET_WORK_PERSON_ROLE_CREDIT: 'work-people-state',
     });
 
     /** The cached read models a discarded operation's intent was overlaying. */

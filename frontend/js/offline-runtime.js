@@ -527,6 +527,219 @@
             return touched ? next : null;
         }
 
+        /**
+         * A Work-Person role acknowledgement, applied to every acknowledged
+         * representation that carries the relationship.
+         *
+         * The structured `linked_people` list is the source of truth on a row;
+         * the flattened credit columns are DERIVED from it by the same helper
+         * the overlay uses, so a patched row cannot disagree with itself about
+         * who is credited.
+         */
+        /* The Work DETAIL entity's `roles[]`. The shape differs from a browse
+         * row's `linked_people[]` -- whole Person rows keyed by `id`, because
+         * the panel renders profile links from them -- and the patch lives in
+         * `work-role-state.js` so the live editor's tab entity and this cache
+         * cannot disagree about the same acknowledged link. */
+        function patchedDetailRoles(row, result) {
+            return typeof root.prksPatchWorkDetailRoles === 'function'
+                ? root.prksPatchWorkDetailRoles(row, result) : null;
+        }
+
+        function patchedWithRole(row, result) {
+            if (!row) return null;
+            if (!Array.isArray(row.linked_people)) return patchedDetailRoles(row, result);
+            const links = row.linked_people.filter(link => !(link &&
+                link.person_id === result.person_id && link.role_type === result.role_type));
+            const previous = row.linked_people.find(link => link &&
+                link.person_id === result.person_id && link.role_type === result.role_type);
+            if (result.present) {
+                const canonical = (previous && previous.canonical_name) ||
+                    result.canonical_name || '';
+                links.push({
+                    person_id: result.person_id, role_type: result.role_type,
+                    order_index: previous ? previous.order_index : null,
+                    canonical_name: canonical,
+                    credit_name: result.credit_name,
+                    display_name: result.credit_name || canonical,
+                });
+                /* Re-sorted the way the server orders: existing placement
+                 * first, a new link appended after everything. */
+                links.sort((a, b) => {
+                    const ai = Number.isInteger(a.order_index) ? a.order_index : Infinity;
+                    const bi = Number.isInteger(b.order_index) ? b.order_index : Infinity;
+                    return ai - bi;
+                });
+            }
+            const flattened = typeof root.prksFlattenedWorkCredit === 'function'
+                ? root.prksFlattenedWorkCredit(links) : {};
+            return Object.assign({}, row, { linked_people: links }, flattened);
+        }
+
+        /**
+         * The Graph's Work-Person edge, patched in the cached snapshots.
+         *
+         * Only the `Author` role produces one, and only in the snapshot built
+         * with people included -- both facts come from the builder, not from
+         * the edge's name. A snapshot that does not hold the Work has no edge
+         * to draw, and one that does not already hold the Person cannot gain
+         * an exact node from an acknowledgement alone, so those are left for
+         * the next read rather than drawn approximately.
+         */
+        async function reconcileGraphAuthorEdge(result) {
+            if (result.role_type !== 'Author') return true;
+            const kind = DOMAIN_RESEARCH_GRAPH_PEOPLE;
+            const token = currentDomainGeneration(kind) + 1;
+            domainGeneration.set(kind, token);
+            const cached = await store.getEntity(kind, 'snapshot').catch(function () {
+                return undefined;
+            });
+            if (cached === undefined) return false;   // a FAILED read is not "nothing to do"
+            if (cached === null) return true;         // no snapshot is nothing to patch
+            const snapshot = cached.value;
+            if (!snapshot || !Array.isArray(snapshot.nodes) || !Array.isArray(snapshot.edges)) {
+                return true;
+            }
+            const source = 'person:' + result.person_id;
+            const target = 'work:' + result.work_id;
+            const edgeId = 'work_author:' + source + '>' + target;
+            const hasWork = snapshot.nodes.some(n => n && n.id === target);
+            const hasPerson = snapshot.nodes.some(n => n && n.id === source);
+            const present = snapshot.edges.some(e => e && e.id === edgeId);
+            if (!hasWork) return true;
+            let edges = snapshot.edges;
+            if (result.present && !present) {
+                if (!hasPerson) return true;          // no exact node to attach it to
+                edges = snapshot.edges.concat([{ id: edgeId, type: 'work_author',
+                    source, target }]).sort((a, b) =>
+                        a.type.localeCompare(b.type) || a.source.localeCompare(b.source) ||
+                        a.target.localeCompare(b.target) || a.id.localeCompare(b.id));
+            } else if (!result.present && present) {
+                edges = snapshot.edges.filter(e => !(e && e.id === edgeId));
+            } else {
+                return true;
+            }
+            const next = Object.assign({}, snapshot, { edges,
+                meta: Object.assign({}, snapshot.meta, { edge_count: edges.length }) });
+            const entityToken = currentEntityGeneration(kind, 'snapshot') + 1;
+            entityCoherence.set(entityKey(kind, 'snapshot'), entityToken);
+            return cacheEntityIfCurrent(kind, 'snapshot', next, entityToken);
+        }
+
+        async function reconcileWorkRole(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.work_id;
+            /* The relationship-state projection carries the base the NEXT edit
+             * is measured against. Left behind, a second change is created
+             * against a revision the server has already passed -- so the user
+             * conflicts with their own previous acknowledgement. */
+            const kinds = ['work', 'work-people-state'];
+            const tokens = kinds.map(function (kind) {
+                const token = currentEntityGeneration(kind, id) + 1;
+                entityCoherence.set(entityKey(kind, id), token);
+                return token;
+            });
+            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
+            const work = snapshots[0] && snapshots[0].value;
+            const state = snapshots[1] && snapshots[1].value;
+            if (work) {
+                /* The Work entity carries BOTH shapes: the browse-style
+                 * `linked_people[]` and the detail's `roles[]`. Patch each that
+                 * is present, so the panel and the cards cannot disagree. */
+                let patched = patchedWithRole(work, result) || work;
+                patched = patchedDetailRoles(patched, result) || patched;
+                if (patched !== work &&
+                    !await cacheEntityIfCurrent('work', id, patched, tokens[0])) {
+                    return false;
+                }
+            }
+            if (state && Array.isArray(state.scopes) &&
+                Number.isSafeInteger(result.server_revision)) {
+                const scopes = state.scopes.filter(scope => !(scope &&
+                    scope.person_id === result.person_id &&
+                    scope.role_type === result.role_type));
+                scopes.push({ person_id: result.person_id, role_type: result.role_type,
+                    revision: result.server_revision, present: !!result.present });
+                scopes.sort((a, b) => (a.person_id + a.role_type)
+                    .localeCompare(b.person_id + b.role_type));
+                const next = Object.assign({}, state, { scopes });
+                if (!await cacheEntityIfCurrent('work-people-state', id, next, tokens[1])) {
+                    return false;
+                }
+            }
+            for (const [domain, listKey] of Object.entries(FIELD_PROJECTION_LISTS)) {
+                const token = currentDomainGeneration(domain) + 1;
+                domainGeneration.set(domain, token);
+                const cached = await store.getList(listKey).catch(function () { return null; });
+                if (!cached) continue;   // a missing snapshot is nothing to patch
+                const rows = cached.value;
+                if (!Array.isArray(rows)) return false;
+                let touched = false;
+                const merged = rows.map(row => {
+                    if (!row || row.id !== id) return row;
+                    const patched = patchedWithRole(row, result);
+                    if (!patched) return row;
+                    touched = true;
+                    return patched;
+                });
+                if (!touched) continue;
+                if (!await cacheListForDomain(listKey, merged, domain, token)) return false;
+            }
+            for (const spec of SUMMARY_ENTITIES) {
+                if (typeof store.getEntitiesByKind !== 'function') continue;
+                const token = currentDomainGeneration(spec.domain) + 1;
+                domainGeneration.set(spec.domain, token);
+                const cached = await store.getEntitiesByKind(spec.kind)
+                    .catch(function () { return null; });
+                // Nothing cached of this kind is nothing to reconcile; a FAILED
+                // read is not the same answer and must not retire the operation.
+                if (!Array.isArray(cached)) return false;
+                for (const row of cached) {
+                    if (!row || !row.value) continue;
+                    const summaries = spec.rows(row.value);
+                    if (!Array.isArray(summaries)) continue;
+                    let touched = false;
+                    summaries.forEach(function (summary, index) {
+                        if (!summary || summary.id !== id) return;
+                        const patched = patchedWithRole(summary, result);
+                        if (!patched) return;
+                        summaries[index] = patched;
+                        touched = true;
+                    });
+                    if (!touched) continue;
+                    const entityToken = currentEntityGeneration(spec.kind, row.id) + 1;
+                    entityCoherence.set(entityKey(spec.kind, row.id), entityToken);
+                    if (!await cacheEntityIfCurrent(spec.kind, row.id, row.value, entityToken)) {
+                        return false;
+                    }
+                }
+            }
+            /* The Person's own cached detail lists the Works they are credited
+             * on, and that membership is exactly what just changed. The rows
+             * there are Work summaries, so the loop above already patched the
+             * ones this Work appears in -- what remains is the case where the
+             * Work is NOT in that list and now should be, or the reverse. That
+             * cannot be built from a role acknowledgement alone (the summary
+             * would have to be invented), so the Person is marked changed and
+             * re-read rather than guessed at. */
+            markEntityChanged('person', result.person_id);
+            if (!await reconcileGraphAuthorEdge(result)) return false;
+            /* The remaining dependencies, through the ONE helper that owns what
+             * a role change stales -- Person Groups, and for an Author the
+             * cached Argument source authors. Those render a credit from
+             * projections the reference-shape registry does not cover, so the
+             * exact new value cannot be written into them and re-reading is the
+             * honest answer. Deliberately NOT the helper that also evicts the
+             * Work: this pass just patched it with the exact new links, and
+             * invalidating would throw that away. */
+            if (typeof root.prksMarkWorkRoleDependenciesChanged === 'function') {
+                root.prksMarkWorkRoleDependenciesChanged(result.role_type);
+            } else {
+                markDomainChanged(DOMAIN_PEOPLE);
+            }
+            return true;
+        }
+
         async function reconcileWorkSource(result) {
             if (!store || !await store.isAvailable()) return false;
             const id = result.work_id;
@@ -1027,6 +1240,7 @@
             reconcileWorkTag,
             reconcileWorkField,
             reconcileWorkSource,
+            reconcileWorkRole,
             reconcileRecentOpen,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
@@ -1231,6 +1445,7 @@
         prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
         prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
+        prksOfflineReconcileWorkRole: result => production.reconcileWorkRole(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineMarkTagsChanged: () => production.markDomainChanged('tags', { entityKinds: [], listKeys: ['tags:index'] }),
         prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,

@@ -341,7 +341,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         hook being moved off the canonical-success path by a refactor."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
         # Role coherence is owned by the one shared helper.
-        role_at = api.index("function prksMarkWorkRoleChanged(")
+        role_at = api.index("function prksMarkWorkRoleDependenciesChanged(")
         role_body = api[role_at : api.index("\nasync function ", role_at)]
         self.assertIn("prksMarkPersonGroupsDomainChanged();", role_body)
         # Work title/metadata and bulk status are People-only: a Group's name,
@@ -480,7 +480,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         title_body = api[title_at : api.index("\nfunction prksMarkWorkAuthorDisplayChanged(", title_at)]
         self.assertIn("prksMarkPlaylistsDomainChanged();", title_body)
         # Roles are not rendered by the Playlist UI.
-        role_at = api.index("function prksMarkWorkRoleChanged(")
+        role_at = api.index("function prksMarkWorkRoleDependenciesChanged(")
         role_body = api[role_at : api.index("\nasync function ", role_at)]
         self.assertNotIn("Playlists", role_body)
         # Neither is Work status, nor folders/tags.
@@ -742,24 +742,36 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         Work rows, and aliases via credit names); only Author additionally
         stales cached Argument source authors."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        start = api.index("function prksMarkWorkRoleChanged(")
-        body = api[start : start + 1000]
-        self.assertIn("prksOfflineMarkEntityChanged('work', workId)", body)
+        start = api.index("function prksMarkWorkRoleDependenciesChanged(")
+        body = api[start : start + 1200]
         # People is unconditional, Arguments is gated on Author.
         people_at = body.index("prksMarkPeopleDomainChanged();")
         author_at = body.index("=== 'Author'")
         self.assertLess(people_at, author_at, "People must not be inside the Author branch")
         self.assertLess(author_at, body.index("prksMarkArgumentsDomainChanged();"))
+        # The Work-evicting variant is a thin wrapper, never a second copy.
+        evicting = api[api.index("function prksMarkWorkRoleChanged(") :][:500]
+        self.assertIn("prksOfflineMarkEntityChanged('work', workId)", evicting)
+        self.assertIn("prksMarkWorkRoleDependenciesChanged(roleType);", evicting)
+        self.assertNotIn("prksMarkPeopleDomainChanged();", evicting)
         # The old name survives only as a delegate, never a second implementation.
         legacy = api[api.index("function prksMarkWorkAuthorDisplayChanged(") :][:400]
         self.assertIn("return prksMarkWorkRoleChanged(workId, roleType);", legacy)
         self.assertNotIn("prksOfflineMarkEntityChanged", legacy)
-        # Every role surface routes through it rather than evicting only the Work.
+
+        # Role mutations are durable-first now, so the dependency sweep happens
+        # at ACK reconciliation rather than at each UI call site -- and it must
+        # be the variant that does NOT evict the Work the pass just patched.
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        reconcile = runtime[runtime.index("async function reconcileWorkRole(") :]
+        reconcile = reconcile[: reconcile.index("\n        async function ")]
+        self.assertIn("prksMarkWorkRoleDependenciesChanged(result.role_type)", reconcile)
+        self.assertNotIn("prksMarkWorkRoleChanged(", reconcile)
+
+        # ... and no role surface writes through the old direct-API path.
         ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
-        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
-        self.assertIn("prksMarkWorkRoleChanged", app)
-        # link, credit-name edit and unlink: three call sites.
-        self.assertGreaterEqual(ui.count("prksMarkWorkRoleChanged("), 3)
+        self.assertNotIn("prksMarkWorkRoleChanged(", ui,
+                         "role UI is durable-first; invalidation belongs to the ACK")
 
     def test_research_notes_and_work_delete_invalidate_arguments_too(self):
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
@@ -972,7 +984,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
         title_at = api.index("function prksMarkWorkTitleChanged(")
         self.assertIn("prksMarkFoldersDomainChanged();", api[title_at : title_at + 1200])
-        role_at = api.index("function prksMarkWorkRoleChanged(")
+        role_at = api.index("function prksMarkWorkRoleDependenciesChanged(")
         role_body = api[role_at : role_at + 1200]
         # Author AND Editor -- the card credit line falls back to primary_editor.
         self.assertIn("role === 'Author' || role === 'Editor'", role_body)

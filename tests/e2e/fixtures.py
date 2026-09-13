@@ -79,6 +79,50 @@ def seed_library(storage_root: str) -> dict:
     }
 
 
+PEOPLE_WORK_TITLE = "E2E People Work"
+PEOPLE_CREDITED_TITLE = "E2E Credited Work"
+PEOPLE_EDITOR_TITLE = "E2E Editor Fallback Work"
+JANE_DISPLAY = "Jane Doe"
+ED_DISPLAY = "Ed Smith"
+
+
+def seed_work_people_library(storage_root: str) -> dict:
+    """Three Works chosen for the credit precedence rule, plus two Persons.
+
+    Each Work isolates one branch of `Authors -> author_text -> Editor`, so a
+    test about one branch cannot pass because another happened to supply the
+    same string.
+    """
+    ids = seed_library(storage_root)
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    jane = db.add_person(first_name="Jane", last_name="Doe")
+    ed = db.add_person(first_name="Ed", last_name="Smith")
+
+    # No linked Author: `author_text` is what the credit shows today.
+    people_work = db.add_work(
+        title=PEOPLE_WORK_TITLE, author_text="Text Author", doc_type="article",
+        file_path="/api/pdfs/e2e-people.pdf")
+    # A linked Author AND `author_text`, so removing the Author must reveal it.
+    credited = db.add_work(
+        title=PEOPLE_CREDITED_TITLE, author_text="Text Author", doc_type="article",
+        file_path="/api/pdfs/e2e-credited.pdf")
+    db.insert_initial_role(credited, jane, "Author", order_index=0)
+    # An Author and an Editor with NO `author_text`, so removing the Author
+    # must fall through to the Editor rather than to an empty credit.
+    editor_work = db.add_work(
+        title=PEOPLE_EDITOR_TITLE, doc_type="article",
+        file_path="/api/pdfs/e2e-editor.pdf")
+    db.insert_initial_role(editor_work, jane, "Author", order_index=0)
+    db.insert_initial_role(editor_work, ed, "Editor", order_index=1)
+
+    ids.update({
+        "jane": jane, "ed": ed, "people_work": people_work,
+        "credited_work": credited, "editor_work": editor_work,
+    })
+    return ids
+
+
 def seed_person_profile_draft_library(storage_root: str) -> dict:
     """Two independently editable Persons and four deterministic Groups."""
     ids = seed_library(storage_root)

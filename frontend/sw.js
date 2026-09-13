@@ -105,6 +105,8 @@
         '/js/work-open-state.js',
         '/js/work-metadata-state.js',
     '/js/work-source-state.js',
+    '/js/work-role-state.js',
+    '/js/work-role-editor.js',
         '/js/work-metadata-editor.js',
     '/js/work-source-editor.js',
         '/js/sync-diagnostics.js',
