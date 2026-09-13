@@ -154,6 +154,48 @@ def current_source(conn, work_id):
     }
 
 
+# Presentation columns `set_source_on_conn` also rewrites. They are not
+# identity, but they belong to the same decision: a row claiming video B while
+# serving video A's thumbnail is a lie the user can see, and `urldate` is the
+# access date of the source that is there now.
+DERIVED_COLUMNS = ("thumb_url", "urldate")
+
+# The columns that MAY NOT be written independently on an existing Work. They
+# are not a list of "source-ish" names: each one either carries identity
+# (`source_kind`, `provider`, `provider_id`) or is derived from it
+# (`thumb_url`), so writing any of them alone can make the row describe a
+# different video than it plays. `source_url` is absent because the
+# field-scoped registry already guards it per Work kind -- on a PDF it is
+# provenance and stays editable, on a video it is refused there.
+SOURCE_AGGREGATE_COLUMNS = frozenset(
+    {"source_kind", "provider", "provider_id", "thumb_url"})
+
+
+def stored_source(conn, work_id):
+    """Every column this aggregate owns, exactly as the row holds it.
+
+    This is what an acknowledgement reports. The alternative -- letting the
+    client rebuild the stored state from its own operation -- is only correct
+    while the two agree, and the case where they DO NOT is precisely the
+    interesting one: a convergent write stores nothing, so a client
+    reconstructing "what I asked for" would publish a value the server does not
+    have. Reading the row back costs one query and cannot be wrong.
+    """
+    row = conn.execute(
+        "SELECT source_kind, provider, provider_id, source_url, thumb_url, urldate "
+        "FROM works WHERE id = ?", (work_id,)).fetchone()
+    if row is None:
+        return None
+    return {
+        "source_kind": (row[0] or "").strip().lower(),
+        "provider": (row[1] or "").strip().lower(),
+        "provider_id": (row[2] or "").strip(),
+        "source_url": row[3] or "",
+        "thumb_url": row[4],
+        "urldate": row[5],
+    }
+
+
 def get_revision(conn, work_id):
     row = conn.execute(
         "SELECT revision FROM sync_entity_revisions WHERE scope_type = ? AND scope_id = ?",
@@ -274,12 +316,23 @@ def apply(db, conn, op, received_at):
         return 409, meta.fit_terminal_result(
             result, existing["source_url"], desired["source_url"])
     changed, after = set_source_on_conn(conn, work_id, desired)
+    # The acknowledgement STATES the stored row rather than describing the
+    # request, and the client copies it rather than deriving anything.
+    #
+    # Two of these columns the client CANNOT derive: `urldate` is the server's
+    # own date and `thumb_url` is cleared by the write. And on a convergent
+    # write -- same video, different spelling, so nothing is stored -- a client
+    # reconstructing "what I asked for" would publish a `source_url` the server
+    # does not have, and worse, would keep whatever identity it last cached
+    # while the server has moved to the one it converged on.
+    #
+    # Echoing the URL does put a second copy of it in the ledger, which holds
+    # only a request HASH otherwise. That is a real cost, accepted knowingly:
+    # the value is bounded by MAX_SOURCE_URL_UTF8_BYTES, one row per operation,
+    # and the alternative is a client that publishes acknowledged values the
+    # server never stored.
     result.update(code="ACKNOWLEDGED", server_revision=after, changed=changed,
-                  provider=desired["provider"], provider_id=desired["provider_id"],
-                  source_kind=desired["source_kind"])
-    # The URL itself is omitted: the ledger has no retention policy, and the
-    # client already holds the authoritative copy in its immutable payload.
-    result["value_omitted"] = True
+                  **stored_source(conn, work_id))
     return 200, result
 
 

@@ -506,12 +506,38 @@
          * contradiction the aggregate exists to prevent, and "briefly" is not
          * a defence when a render can happen in between.
          */
+        /* Patch ONLY the columns a row already carries.
+         *
+         * The acknowledgement states six: the four identity columns plus
+         * `thumb_url` and `urldate`, which the write also rewrites. Different
+         * cached representations carry different subsets -- a browse row has
+         * `thumb_url` but no `urldate` -- and writing a column the server never
+         * sends to that projection would make the row fail its own shape
+         * validator, which discards the whole catalog. So the row's existing
+         * keys decide what is patched.
+         */
+        function patchedWithSource(row, source) {
+            const next = Object.assign({}, row);
+            let touched = false;
+            for (const column of Object.keys(source)) {
+                if (!Object.prototype.hasOwnProperty.call(row, column)) continue;
+                next[column] = source[column];
+                touched = true;
+            }
+            return touched ? next : null;
+        }
+
         async function reconcileWorkSource(result) {
             if (!store || !await store.isAvailable()) return false;
             const id = result.work_id;
             const source = result.source;
             if (!source) return false;
-            const kinds = ['work'];
+            /* The source-state projection is a REVISION and nothing else, and
+             * it is the base the next edit is measured against. Leaving it at
+             * the old number means a second change is created against a
+             * revision the server has already moved past -- and the user's own
+             * previous edit becomes the thing they conflict with. */
+            const kinds = ['work', 'work-source-state'];
             const tokens = kinds.map(function (kind) {
                 const token = currentEntityGeneration(kind, id) + 1;
                 entityCoherence.set(entityKey(kind, id), token);
@@ -519,9 +545,23 @@
             });
             const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
             const work = snapshots[0] && snapshots[0].value;
+            const state = snapshots[1] && snapshots[1].value;
             if (work) {
-                Object.assign(work, source);
-                if (!await cacheEntityIfCurrent('work', id, work, tokens[0])) return false;
+                const patched = patchedWithSource(work, source);
+                if (patched && !await cacheEntityIfCurrent('work', id, patched, tokens[0])) {
+                    return false;
+                }
+            }
+            if (state && Number.isSafeInteger(result.server_revision)) {
+                // An acknowledgement older than the cache has been superseded;
+                // applying it would move the base backwards.
+                if (!Number.isSafeInteger(state.revision) ||
+                    state.revision <= result.server_revision) {
+                    const next = Object.assign({}, state, { revision: result.server_revision });
+                    if (!await cacheEntityIfCurrent('work-source-state', id, next, tokens[1])) {
+                        return false;
+                    }
+                }
             }
             for (const [domain, listKey] of Object.entries(FIELD_PROJECTION_LISTS)) {
                 const token = currentDomainGeneration(domain) + 1;
@@ -532,7 +572,7 @@
                 if (!Array.isArray(rows)) return false;
                 if (!rows.some(row => row && row.id === id)) continue;
                 const merged = rows.map(row => (row && row.id === id
-                    ? Object.assign({}, row, source) : row));
+                    ? (patchedWithSource(row, source) || row) : row));
                 if (!await cacheListForDomain(listKey, merged, domain, token)) return false;
             }
             for (const spec of SUMMARY_ENTITIES) {
@@ -549,7 +589,9 @@
                     let touched = false;
                     summaries.forEach(function (summary, index) {
                         if (!summary || summary.id !== id) return;
-                        summaries[index] = Object.assign({}, summary, source);
+                        const patched = patchedWithSource(summary, source);
+                        if (!patched) return;
+                        summaries[index] = patched;
                         touched = true;
                     });
                     if (!touched) continue;

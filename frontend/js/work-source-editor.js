@@ -129,6 +129,40 @@
         item.appendChild(button);
     }
 
+    /**
+     * An acknowledgement moves the base this editor measures its NEXT save
+     * against.
+     *
+     * Without this, a second change is created against the revision the first
+     * one already superseded, and the user conflicts with their own previous
+     * edit -- on a Work nobody else touched. The cached projection is patched
+     * by the runtime; this is the same fact for the editor that is open.
+     */
+    function acceptAck(ctx, state, ack) {
+        if (!live(ctx, state) || ack.work_id !== state.workId) return;
+        if (!Number.isSafeInteger(ack.server_revision)) return;
+        state.readVersion = (state.readVersion || 0) + 1;
+        if (Number.isSafeInteger(state.observed) && state.observed > ack.server_revision) return;
+        state.observed = ack.server_revision;
+        ctx.setEntity('work', Object.assign({}, ctx.getEntity('work'),
+            root.prksAcknowledgedWorkSource(ack)));
+        /* Only the owner of the shared panel may write the panel, and only
+         * inside it: this Work's acknowledgement must never be published into
+         * whichever Work's editor happens to be on screen. */
+        const section = owns(ctx, state) ? sectionOf() : null;
+        const input = section && section.querySelector('#meta-video-url');
+        /* Deliberately NOT conditioned on the control being enabled: it is
+         * disabled precisely BECAUSE this operation is in flight, so an
+         * enabled-only write would never run and the editor would keep showing
+         * the URL the user typed after the server had answered with another.
+         * What must not be overwritten is text the user is typing right now.
+         *
+         * The value written is the STORED spelling. On a convergent write the
+         * server kept its own and stored nothing of ours; showing what we
+         * asked for would claim a value the server does not have. */
+        if (input && document.activeElement !== input) input.value = ack.source_url;
+    }
+
     async function prepare(ctx, state) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         try {
@@ -156,6 +190,7 @@
                 error: null };
             const stopSync = root.prksSync.subscribe(event => {
                 if (event && event.operation && event.operation !== 'SET_WORK_SOURCE') return;
+                if (event && event.acknowledged) acceptAck(ctx, state, event.acknowledged);
                 void safePaint(ctx, state);
             });
             const stopConnectivity = root.prksOfflineRuntimeSubscribe(() => {
@@ -198,15 +233,26 @@
             const work = ctx.getEntity('work');
             const current = root.prksWorkSourceOf(root.prksEffectiveWorkSource(work));
             if (root.prksWorkSourceIdentity(current) === root.prksWorkSourceIdentity(source)) {
-                // The same video, however it is spelled. Nothing to record.
+                // The same video the user is already looking at, however it is
+                // spelled. Nothing to record. (Returning to the ACKNOWLEDGED
+                // video over a pending change is a different case and is the
+                // store's to cancel -- it owns the durable row.)
                 state.error = null;
                 await safePaint(ctx, state);
                 return;
             }
-            await root.prksSync.store.enqueueOperation({
-                operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: workId,
-                payload: { source: { kind: 'video', url: source.source_url } },
-                base_revision: state.observed,
+            /* Coalescing, not a bare enqueue: a source is an aggregate, so
+             * there is at most one unsynchronized intent for a Work. Choosing
+             * B and then C must leave ONE operation naming C, and returning to
+             * the acknowledged video must leave none. */
+            await root.prksSync.store.saveWorkSource(workId, {
+                kind: 'video',
+                url: source.source_url,
+                identity: root.prksWorkSourceIdentity(source),
+            }, {
+                identity: root.prksWorkSourceIdentity(
+                    root.prksWorkSourceOf(ctx.getEntity('work'))),
+                revision: state.observed,
             });
             state.error = null;
             await safePaint(ctx, state);

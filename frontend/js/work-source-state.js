@@ -151,19 +151,31 @@
                 if (typeof data.changed !== 'boolean' ||
                     !Number.isSafeInteger(data.server_revision) ||
                     data.server_revision < 0) return false;
-                /* The URL is never echoed -- the ledger has no retention
-                 * policy and the client already holds it. The DERIVED values
-                 * are, and they must match what this operation's own URL
-                 * parses to: a server answering with a different video than
-                 * the one requested is a protocol error, not an
-                 * acknowledgement. */
-                if (data.value_omitted !== true || has('source_url')) return false;
+                /* The acknowledgement STATES the stored row, and the client
+                 * copies it. Two of these columns cannot be derived here at
+                 * all -- `urldate` is the server's date, `thumb_url` is
+                 * cleared by the write -- and on a convergent write the stored
+                 * URL is deliberately NOT the one this operation asked for. */
+                const nullableString = v => v === null || typeof v === 'string';
+                if (typeof data.source_url !== 'string' ||
+                    !nullableString(data.urldate) ||
+                    !nullableString(data.thumb_url)) return false;
+                /* The echoed columns must be internally coherent: a row whose
+                 * URL and whose id name different videos is the exact
+                 * contradiction this aggregate exists to prevent, and it is
+                 * not made acceptable by arriving from the server. */
+                const stored = canonicalSource(data.source_url);
+                if (!stored || data.provider !== stored.provider ||
+                    data.provider_id !== stored.provider_id ||
+                    data.source_kind !== stored.source_kind) return false;
+                /* And the server must have converged on the video THIS
+                 * operation named. It answers `changed: false` only when the
+                 * identities already match, so this holds either way; a
+                 * different video is a protocol error, not an acknowledgement.
+                 */
                 const requested = canonicalSource(op.payload && op.payload.source &&
                     op.payload.source.url);
-                if (!requested) return false;
-                return data.provider === requested.provider &&
-                    data.provider_id === requested.provider_id &&
-                    data.source_kind === requested.source_kind;
+                return !!requested && identityOf(stored) === identityOf(requested);
             }
             case 'SOURCE_REVISION_CONFLICT': case 'FUTURE_REVISION':
                 return Number.isSafeInteger(data.current_revision) &&
@@ -187,15 +199,29 @@
         return { conflict: out };
     }
 
+    /** The acknowledged row, as the columns a cached Work carries. */
+    function acknowledgedSource(data) {
+        return {
+            source_kind: data.source_kind,
+            provider: data.provider,
+            provider_id: data.provider_id,
+            source_url: data.source_url,
+            thumb_url: data.thumb_url,
+            urldate: data.urldate,
+        };
+    }
+
     const handler = {
         isResult,
         terminal,
-        /* The acknowledged identity is reconstructed from the immutable
-         * operation, which the server has just confirmed it applied -- no
-         * second request, and replay stays exact. */
-        reconcile: (data, op) => root.prksOfflineReconcileWorkSource({
+        /* Straight from the acknowledgement, never rebuilt from the local
+         * operation: the two differ exactly when it matters, and the server is
+         * the one that knows. No second request either -- the ACK already
+         * carries the whole row. */
+        reconcile: data => root.prksOfflineReconcileWorkSource({
             work_id: data.work_id,
-            source: canonicalSource(op.payload && op.payload.source && op.payload.source.url),
+            source: acknowledgedSource(data),
+            server_revision: data.server_revision,
         }),
     };
 
@@ -211,6 +237,7 @@
         prksWorkSourceOperations: sourceOperations,
         prksEffectiveWorkSource: effectiveWorkSource,
         prksEffectiveWorkSources: effectiveWorkSources,
+        prksAcknowledgedWorkSource: acknowledgedSource,
         prksWorkSourceSyncHandler: handler,
     });
 })(typeof window === 'undefined' ? globalThis : window);

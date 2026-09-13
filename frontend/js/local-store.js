@@ -85,6 +85,11 @@
         source_url: 64 * 1024,
     });
     const MAX_ABSTRACT_VALUE_BYTES = WORK_FIELD_VALUE_BYTES.abstract;
+    /* Mirrors `backend/work_source_sync.MAX_SOURCE_URL_UTF8_BYTES`. Deliberately
+     * a separate constant from WORK_FIELD_VALUE_BYTES.source_url: that one
+     * bounds PROVENANCE on a non-video Work, this one bounds the aggregate's
+     * URL. They are equal today and are free to diverge. */
+    const WORK_SOURCE_URL_BYTES = 64 * 1024;
     const MAX_ERROR_CHARS = 500;
 
     function defaultIndexedDB() {
@@ -237,9 +242,17 @@
      * reason no user could see. The rest of the payload is two short keys, so
      * nothing meaningful is left unbounded.
      *
-     * The shape is checked EXACTLY. An envelope with a third key, a non-string
-     * value or a field outside the registry falls through to the ordinary
-     * bound, so the exception cannot be used to smuggle an unbounded payload.
+     * SET_WORK_SOURCE gets the same allowance for the same reason. The server
+     * accepts a source URL of up to `MAX_SOURCE_URL_UTF8_BYTES`, so measuring
+     * the serialized envelope here would refuse a URL the server would have
+     * taken -- an edit impossible offline and possible online, which is the
+     * split contract local-first exists to remove. Its payload is a fixed
+     * two-key object around the URL.
+     *
+     * The shape is checked EXACTLY in both cases. An envelope with an extra
+     * key, a non-string value or a field outside the registry falls through to
+     * the ordinary bound, so the exception cannot be used to smuggle an
+     * unbounded payload.
      */
     function payloadWithinLimit(operation, payload) {
         if (operation === 'SET_WORK_METADATA_FIELD') {
@@ -251,8 +264,38 @@
                 return utf8ByteLength(payload.value) <= limit;
             }
         }
+        if (operation === 'SET_WORK_SOURCE') {
+            const source = payload.source;
+            if (Object.keys(payload).length === 1 && isPlainObject(source) &&
+                Object.keys(source).length === 2 && source.kind === 'video' &&
+                typeof source.url === 'string') {
+                return utf8ByteLength(source.url) <= WORK_SOURCE_URL_BYTES;
+            }
+        }
         return jsonByteLength(payload) <= MAX_PAYLOAD_BYTES;
     }
+
+    /**
+     * The terminal results a user may answer with "apply mine anyway".
+     *
+     * Reapplying re-sends the SAME intent against the revision the server
+     * reported, so a code qualifies only when it names one: a stale base the
+     * user can decide to overwrite. ENTITY_NOT_FOUND and
+     * UNSUPPORTED_SOURCE_TRANSITION never do -- there is nothing to overwrite,
+     * or the Work is no longer the kind of thing the operation applies to --
+     * and offering reapply for them would loop forever.
+     *
+     * Keyed by FAMILY, because each names its own conflict: the field-scoped
+     * code says which field is stale, the aggregate's says the whole source
+     * is. One hard-coded string here made every source conflict silently
+     * unresolvable -- the UI offered "Apply my source" and the store threw.
+     */
+    const REAPPLIABLE_RESULTS = Object.freeze({
+        ADD_WORK_TAG: Object.freeze(['REVISION_CONFLICT']),
+        REMOVE_WORK_TAG: Object.freeze(['REVISION_CONFLICT']),
+        SET_WORK_METADATA_FIELD: Object.freeze(['REVISION_CONFLICT']),
+        SET_WORK_SOURCE: Object.freeze(['SOURCE_REVISION_CONFLICT']),
+    });
 
     /** Thrown for anything the caller could have prevented; carries a code. */
     function localStoreError(code, message) {
@@ -808,6 +851,76 @@
             });
         }
 
+        /**
+         * Save the intent "this Work's video is now <source>", coalescing.
+         *
+         * A source is an AGGREGATE, so there is at most one unsynchronized
+         * intent per Work -- and a generic `enqueueOperation` per save is not
+         * that. Choosing B and then C left TWO immutable operations sharing
+         * one base revision: the coordinator sends B, the revision advances,
+         * and the user's own C then arrives stale and conflicts with an edit
+         * they had already replaced. The visible state was C the whole time.
+         *
+         * `observed` is the base this edit was measured against: its
+         * `identity` (provider + provider_id, never the URL spelling) and its
+         * `revision`. Editing back to that identity leaves NO intent at all --
+         * A -> B -> A is not two changes, it is none.
+         *
+         * Both identities arrive from the caller and are compared as opaque
+         * strings. This module does not parse video URLs and must not start:
+         * the canonical parser lives in one place per side, and the SERVER
+         * derives identity itself and never trusts a client's. So a caller
+         * that computed the identity wrongly can only coalesce redundantly or
+         * fail to coalesce -- it cannot cause a wrong canonical write. The
+         * identity is a coalescing hint and never reaches the envelope, whose
+         * payload stays exactly `{source: {kind, url}}`.
+         *
+         * Only a NEVER SENT row may be rewritten. A row that has been
+         * attempted might already be ledgered on the server, and a conflicted
+         * one is the user's to resolve; either way it stays immutable and this
+         * refuses with `scope_busy` rather than guessing.
+         */
+        function saveWorkSource(workId, source, observed) {
+            if (!isNonBlankString(workId) || !isPlainObject(source) ||
+                !isNonBlankString(source.url) || source.kind !== 'video' ||
+                !isNonBlankString(source.identity)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid source save.'));
+            }
+            if (!isPlainObject(observed) || typeof observed.identity !== 'string' ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_base', 'Invalid observed source state.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                const existing = rows.find(r => r.operation === 'SET_WORK_SOURCE' &&
+                    r.entity_type === 'work' && r.entity_id === workId &&
+                    r.status !== STATUS_ACKNOWLEDGED);
+                if (existing) {
+                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                        throw localStoreError('scope_busy', 'This source is syncing or needs resolution.');
+                    }
+                    /* The same video in the same spelling is the same intent:
+                     * keep the row rather than minting a new op_id, so a
+                     * retry cannot become a second ledger entry. */
+                    if (existing.payload.source.url === source.url) { setResult(existing); return; }
+                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                }
+                if (source.identity === observed.identity) { setResult(null); return; }
+                setResult(await insertEnvelopeIn(request, {
+                    operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: workId,
+                    payload: { source: { kind: 'video', url: source.url } },
+                    base_revision: observed.revision,
+                }, null));
+            });
+        }
+
+        function reappliable(row) {
+            const codes = REAPPLIABLE_RESULTS[row.operation];
+            return !!codes && !!row.server_result &&
+                codes.indexOf(row.server_result.code) !== -1 &&
+                Number.isSafeInteger(row.server_result.current_revision);
+        }
+
         /* Explicit user resolution, atomically retires the conflict and, when
          * requested, creates a NEW envelope against the observed server base. */
         function resolveConflict(opId, apply) {
@@ -816,7 +929,7 @@
                 if (!row || row.status !== STATUS_CONFLICT) throw localStoreError('not_conflict', 'Conflict no longer available.');
                 let replacement = null;
                 if (apply) {
-                    if (!row.server_result || row.server_result.code !== 'REVISION_CONFLICT') {
+                    if (!reappliable(row)) {
                         throw localStoreError('invalid_resolution', 'This conflict cannot be reapplied.');
                     }
                     replacement = await insertEnvelopeIn(request, {
@@ -1061,7 +1174,8 @@
         return {
             getOrCreateDeviceId: getOrCreateDeviceId,
             enqueueOperation: enqueueOperation,
-            coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, resolveConflict, claimOperation,
+            coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, saveWorkSource,
+            resolveConflict, claimOperation,
             getOperation: getOperation,
             listOperations: listOperations,
             updateOperationSyncState: updateOperationSyncState,
@@ -1079,6 +1193,8 @@
         PRKS_LOCAL_DB_VERSION: DB_VERSION,
         PRKS_LOCAL_OPERATION_TYPES: OPERATION_TYPES,
         PRKS_LOCAL_OPERATION_STATUSES: STATUSES,
+        PRKS_LOCAL_REAPPLIABLE_RESULTS: REAPPLIABLE_RESULTS,
+        PRKS_LOCAL_WORK_SOURCE_URL_BYTES: WORK_SOURCE_URL_BYTES,
         PRKS_LOCAL_MAX_PAYLOAD_BYTES: MAX_PAYLOAD_BYTES,
         PRKS_LOCAL_MAX_ABSTRACT_VALUE_BYTES: MAX_ABSTRACT_VALUE_BYTES,
         PRKS_LOCAL_WORK_FIELD_VALUE_BYTES: WORK_FIELD_VALUE_BYTES,

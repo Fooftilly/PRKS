@@ -1,5 +1,6 @@
 """Work source identity on the client: the aggregate family's selftests."""
 import pathlib
+import re
 import subprocess
 import unittest
 
@@ -59,15 +60,65 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         for leaked in ('SET_WORK_SOURCE', 'provider_id', 'youtube'):
             self.assertNotIn(leaked, coordinator, leaked)
 
-    def test_the_source_editor_never_asserts_derived_values(self):
+    def test_diagnostics_describes_and_invalidates_the_source_family(self):
+        """Diagnostics is the only place a conflict on a Work whose page is no
+        longer cached can be reached, so an unknown family there is a change
+        the user cannot decide about.
+
+        `describe()` ended in an unconditional Tag branch, so a source
+        operation was labelled "Remove Tag"; `invalidate()` ended in an
+        unconditional `else`, so discarding one invalidated `work-tag-options`
+        and left the stale source projection in place.
+        """
+        source = (FRONTEND / 'sync-diagnostics.js').read_text()
+        self.assertIn("'Video source = \"'", source, 'a source operation names itself')
+        self.assertIn('SET_WORK_SOURCE: \'work-source-state\'', source,
+                      'and discarding it invalidates its own projection')
+
+        # No family may be described or invalidated by falling off the end.
+        for function in ('function describe(', 'function invalidate('):
+            at = source.index(function)
+            body = source[at: source.index('\n    }', at)]
+            self.assertNotIn(' else {', body,
+                             'an unknown family must not inherit another family\'s answer')
+
+        # Every durable family the store accepts is handled explicitly.
+        store = (FRONTEND / 'local-store.js').read_text()
+        listed = store[store.index('const OPERATION_TYPES = Object.freeze(['):]
+        families = re.findall(r"'([A-Z_]+)'", listed[: listed.index(']')])
+        self.assertIn('SET_WORK_SOURCE', families)
+        for family in families:
+            with self.subTest(family=family):
+                self.assertIn(family, source,
+                              'sync-diagnostics.js must describe every durable family')
+
+    def test_the_envelope_never_asserts_derived_values(self):
         """A payload able to carry `provider_id` could assert an identity its
-        own URL contradicts -- the defect the aggregate exists to prevent."""
-        editor = (FRONTEND / 'work-source-editor.js').read_text()
-        at = editor.index('await root.prksSync.store.enqueueOperation(')
-        body = editor[at: at + 400]
-        self.assertIn("source: { kind: 'video', url: source.source_url }", body)
-        for derived in ('provider_id:', 'provider:', 'thumb_url'):
+        own URL contradicts -- the defect the aggregate exists to prevent.
+
+        The envelope is built in the STORE now, because saving a source
+        coalesces rather than blindly enqueueing. So the shape is pinned where
+        it is written, and the editor is checked for what it hands over: a URL
+        and an identity used only to decide whether to coalesce.
+        """
+        store = (FRONTEND / 'local-store.js').read_text()
+        at = store.index('function saveWorkSource(')
+        body = store[at: store.index('function reappliable(', at)]
+        self.assertIn(
+            "payload: { source: { kind: 'video', url: source.url } },", body,
+            'the envelope carries intent and nothing derived')
+        for derived in ('provider_id', 'provider:', 'thumb_url', 'youtube'):
             self.assertNotIn(derived, body, derived)
+        self.assertNotIn('identity', body[body.index('insertEnvelopeIn'):],
+                         'the coalescing hint never reaches the envelope')
+
+        editor = (FRONTEND / 'work-source-editor.js').read_text()
+        at = editor.index('await root.prksSync.store.saveWorkSource(')
+        call = editor[at: at + 500]
+        for derived in ('provider_id:', 'provider:', 'thumb_url'):
+            self.assertNotIn(derived, call, derived)
+        self.assertNotIn('enqueueOperation', editor,
+                         'a bare enqueue would leave two intents for one aggregate')
 
     def test_components_do_not_interpret_source_operations(self):
         for name in ('components/works.js', 'components/works-video.js',

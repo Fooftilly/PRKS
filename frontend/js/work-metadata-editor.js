@@ -314,7 +314,12 @@
          * owner of the panel may touch the panel, and only within it. */
         const panel = owns(ctx, state) ? panelOf() : null;
         const input = panel && panel.querySelector('[data-prks-work-field="' + ack.field + '"]');
-        if (input && !input.disabled && document.activeElement !== input) input.value = ack.value;
+        /* Not conditioned on the control being enabled: it is disabled
+         * precisely BECAUSE this operation is in flight, so an enabled-only
+         * write would never run -- and the field would keep showing the text
+         * the user typed even where the server canonicalizes it. Text the user
+         * is typing right now is what must not be overwritten. */
+        if (input && document.activeElement !== input) input.value = ack.value;
     }
 
     async function prepare(ctx, state) {

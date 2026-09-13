@@ -9,6 +9,7 @@ from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 
 WATCH = "https://www.youtube.com/watch?v=%s"
+SHORT = "https://youtu.be/%s"
 
 
 class WorkSourceSyncTests(unittest.TestCase):
@@ -112,15 +113,91 @@ class WorkSourceSyncTests(unittest.TestCase):
         self.send(WATCH % "BBB")
         self.assertIsNone(self.columns()["thumb_url"])
 
-    def test_the_acknowledgement_does_not_echo_the_url(self):
+    def test_the_acknowledgement_states_the_stored_row(self):
+        """Every column the aggregate owns, read back after the write.
+
+        The client copies these rather than deriving them -- it cannot derive
+        `urldate` at all, and deriving the rest is only correct while the
+        request and the stored row agree.
+        """
         code, result = self.send(WATCH % "BBB")
-        self.assertTrue(result["value_omitted"])
-        self.assertNotIn("source_url", result)
-        self.assertEqual(result["provider_id"], "BBB", "derived values ARE reported")
-        stored = self.db.execute_query(
-            "SELECT result_json FROM sync_operations WHERE operation_type = 'SET_WORK_SOURCE'"
-        )[0]["result_json"]
-        self.assertNotIn("watch?v=BBB", stored, "the ledger is not a second copy of the URL")
+        self.assertEqual((code, result["code"], result["changed"]), (200, "ACKNOWLEDGED", True))
+        row = self.db.get_work(self.work)
+        self.assertEqual(result["source_url"], row["source_url"])
+        self.assertEqual(result["provider_id"], "BBB")
+        self.assertEqual(result["provider"], "youtube")
+        self.assertEqual(result["source_kind"], "video")
+        self.assertIsNone(result["thumb_url"], "the previous video's image is cleared")
+        self.assertEqual(result["urldate"], row["urldate"])
+        self.assertNotIn("value_omitted", result)
+
+    def test_a_convergent_acknowledgement_reports_what_is_stored_not_what_was_asked(self):
+        """The same video in another spelling stores nothing -- so the URL the
+        client asked for is NOT the URL the server holds, and the
+        acknowledgement has to say the second one."""
+        base = self.revision()
+        self.send(WATCH % "BBB", base=base)                       # another device
+        code, result = self.send(SHORT % "BBB", base=base)        # this one, converging
+        self.assertEqual((code, result["code"], result["changed"]), (200, "ACKNOWLEDGED", False))
+        self.assertEqual(result["source_url"], WATCH % "BBB",
+                         "the stored spelling, not the requested one")
+        self.assertEqual(result["provider_id"], "BBB")
+        self.assertEqual(result["server_revision"], self.revision(),
+                         "a convergent write advances nothing")
+
+    # ---- the legacy PATCH surface ----
+
+    def test_patch_cannot_write_source_identity_columns_independently(self):
+        """The aggregate is only a boundary if nothing else can cross it.
+
+        `PATCH /api/works/:id` accepted every one of these by name and
+        validated none, so a client could write `provider_id` alone and
+        recreate exactly the contradiction SET_WORK_SOURCE prevents -- the
+        stored URL naming video B while the viewer, which reads `provider_id`
+        first, plays video A -- without advancing the source revision, so no
+        other device could ever discover it.
+        """
+        for column, value in (("provider_id", "CCC"), ("provider", "vimeo"),
+                              ("source_kind", "pdf"), ("thumb_url", "https://img/CCC.jpg")):
+            with self.subTest(column=column):
+                with self.assertRaises(ValueError) as caught:
+                    self.db.update_work_metadata(self.work, {column: value})
+                self.assertIn(column, str(caught.exception))
+                self.assertIn("SET_WORK_SOURCE", str(caught.exception))
+        self.assertEqual(self.columns(), {
+            "source_kind": "video", "provider": "youtube", "provider_id": "AAA",
+            "source_url": WATCH % "AAA", "thumb_url": "https://img/AAA.jpg",
+        }, "and nothing was written")
+        self.assertEqual(self.revision(), 0)
+
+    def test_the_refusal_names_every_identity_column_at_once(self):
+        """A PATCH carrying the whole identity is still the wrong path: it
+        advances no revision, so the change is invisible to every other
+        device."""
+        with self.assertRaises(ValueError) as caught:
+            self.db.update_work_metadata(self.work, {
+                "source_kind": "video", "provider": "youtube", "provider_id": "BBB",
+                "title": "Renamed too"})
+        message = str(caught.exception)
+        for column in ("provider", "provider_id", "source_kind"):
+            self.assertIn(column, message)
+        self.assertEqual(self.db.get_work(self.work)["title"], "Clip",
+                         "the whole PATCH is refused, never half-applied")
+
+    def test_fields_beside_the_identity_columns_still_patch(self):
+        """The bound is on source IDENTITY, not on editing video Works."""
+        self.db.update_work_metadata(self.work, {"title": "Renamed", "year": "2021"})
+        self.assertEqual(self.db.get_work(self.work)["title"], "Renamed")
+
+    def test_creation_still_establishes_the_whole_identity(self):
+        """The bound is on EDITING an existing Work. Creation and import write
+        these columns through `add_work`, where the identity is established at
+        once and there is no prior value to contradict."""
+        made = self.db.add_work("New clip", source_kind="video", source_url=WATCH % "ZZZ",
+                                provider="youtube", provider_id="ZZZ")
+        row = self.db.get_work(made)
+        self.assertEqual(row["provider_id"], "ZZZ")
+        self.assertEqual(row["source_kind"], "video")
 
     # ---- conflicts ----
 

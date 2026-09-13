@@ -18,9 +18,16 @@
         return points.slice(0, PREVIEW_CHARS).join('') + '…';
     }
 
+    /** The value a family's payload carries, for preview and sizing. */
+    function payloadValue(op) {
+        if (op.operation === 'SET_WORK_METADATA_FIELD') return op.payload.value;
+        if (op.operation === 'SET_WORK_SOURCE') return op.payload.source && op.payload.source.url;
+        return null;
+    }
+
     function sizeNote(op) {
-        if (op.operation !== 'SET_WORK_METADATA_FIELD') return '';
-        const value = String(op.payload.value == null ? '' : op.payload.value);
+        if (payloadValue(op) == null) return '';
+        const value = String(payloadValue(op));
         if (value.length <= PREVIEW_CHARS) return '';
         const bytes = typeof root.prksWorkFieldUtf8Bytes === 'function'
             ? root.prksWorkFieldUtf8Bytes(value) : value.length;
@@ -47,18 +54,35 @@
             // status list, not a place to render -- or log -- a whole value.
             return (labels[field] || field) + ' = "' + bounded(op.payload.value) + '"';
         }
-        return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') +
-            ((context.tag && context.tag.name) || 'Tag');
+        if (op.operation === 'SET_WORK_SOURCE') {
+            return 'Video source = "' + bounded(payloadValue(op)) + '"';
+        }
+        if (op.operation === 'ADD_WORK_TAG' || op.operation === 'REMOVE_WORK_TAG') {
+            return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') +
+                ((context.tag && context.tag.name) || 'Tag');
+        }
+        /* Never a guess. Describing an unknown family as a Tag edit is how a
+         * source operation came to be labelled "Remove Tag" -- and to
+         * invalidate the Tag options cache when it was discarded. */
+        return op.operation;
     }
+
+    /* The projection each family's intent was overlaying. Explicit per family
+     * and never an `else`: a family this list does not know invalidates the
+     * Work alone, which is always true, rather than some other family's
+     * projection, which is always wrong. */
+    const DISCARD_INVALIDATES = Object.freeze({
+        SET_WORK_METADATA_FIELD: 'work-metadata-state',
+        SET_WORK_SOURCE: 'work-source-state',
+        ADD_WORK_TAG: 'work-tag-options',
+        REMOVE_WORK_TAG: 'work-tag-options',
+    });
 
     /** The cached read models a discarded operation's intent was overlaying. */
     function invalidate(op) {
         root.prksOfflineMarkEntityChanged('work', op.entity_id);
-        if (op.operation === 'SET_WORK_METADATA_FIELD') {
-            root.prksOfflineMarkEntityChanged('work-metadata-state', op.entity_id);
-        } else {
-            root.prksOfflineMarkEntityChanged('work-tag-options', op.entity_id);
-        }
+        const projection = DISCARD_INVALIDATES[op.operation];
+        if (projection) root.prksOfflineMarkEntityChanged(projection, op.entity_id);
     }
 
     function conflictDetail(op) {

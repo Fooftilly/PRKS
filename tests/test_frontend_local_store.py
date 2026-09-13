@@ -163,6 +163,41 @@ class FrontendLocalStoreTests(unittest.TestCase):
         self.assertIn("isParsableTimestamp(occurredAt)", src)
         self.assertIn("dependsOn.every(isOperationId)", src)
 
+    def test_every_conflict_a_surface_offers_to_reapply_is_reappliable(self):
+        """A conflict the UI offers to reapply and the store refuses is worse
+        than one it never offered.
+
+        `resolveConflict` used to hard-code the single string
+        `REVISION_CONFLICT`, so the aggregate's `SOURCE_REVISION_CONFLICT`
+        reached the user with an "Apply my source" button that threw
+        `invalid_resolution` when pressed. Reappliability is a per-family
+        registry now, and this pins it to the surfaces: every code an editor
+        decides is reappliable must be one the store will actually reapply.
+
+        Deliberately NOT "every code carrying a revision". `FUTURE_REVISION`
+        carries one and is not offered for reapply by anything: a base ahead of
+        the server is not a stale edit the user can choose to win.
+        """
+        import re
+
+        store = _read(_LOCAL)
+        registry = store[store.index("REAPPLIABLE_RESULTS = Object.freeze({"):]
+        registry = registry[: registry.index("});")]
+        listed = set(re.findall(r"'([A-Z_]+)'", registry))
+
+        editors = ("work-metadata-editor.js", "work-source-editor.js")
+        offered = set()
+        for name in editors:
+            src = _read(os.path.join(_FRONTEND, "js", name))
+            at = src.index("const reappliable =")
+            offered.update(re.findall(r"'([A-Z_]+)'", src[at: src.index(";", at)]))
+        self.assertTrue(offered, "no reapply decisions were found to check")
+        self.assertEqual(
+            offered - listed,
+            set(),
+            "an editor offers to reapply these; the store would refuse them",
+        )
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for local store tests")

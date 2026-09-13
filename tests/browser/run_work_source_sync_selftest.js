@@ -15,6 +15,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 1));
 async function settle() { for (let i = 0; i < 5; i++) await tick(); }
 
 const WATCH = id => 'https://www.youtube.com/watch?v=' + id;
+const SHORT = id => 'https://youtu.be/' + id;
 const op = (workId, url, extra) => Object.assign({
     operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: workId,
     status: 'pending', payload: { source: { kind: 'video', url } },
@@ -81,21 +82,36 @@ function effectiveSourceOverlay() {
 function handlerContract() {
     const handler = globalThis.prksWorkSourceSyncHandler;
     const operation = op('W-1', WATCH('BBB'));
+    /* The acknowledgement STATES the stored row. The client copies it rather
+     * than rebuilding it from its own operation -- `urldate` it cannot derive
+     * at all, and on a convergent write the stored URL is deliberately not the
+     * one that was asked for. */
     const ack = { work_id: 'W-1', code: 'ACKNOWLEDGED', server_revision: 2, changed: true,
-        provider: 'youtube', provider_id: 'BBB', source_kind: 'video', value_omitted: true };
+        provider: 'youtube', provider_id: 'BBB', source_kind: 'video',
+        source_url: WATCH('BBB'), thumb_url: null, urldate: '2026-09-13' };
     assert.equal(handler.isResult(ack, operation), true);
 
-    // The URL is never echoed: the ledger is not a second copy of it.
-    assert.equal(handler.isResult(Object.assign({ source_url: WATCH('BBB') }, ack), operation),
-        false);
-    assert.equal(handler.isResult(Object.assign({}, ack, { value_omitted: undefined }), operation),
-        false, 'an omission must be DECLARED, never merely absent');
-    /* A server answering with a DIFFERENT video than the one requested is a
-     * protocol error, not an acknowledgement -- accepting it would let the
-     * client believe it applied an identity it never asked for. */
+    for (const missing of ['source_url', 'thumb_url', 'urldate']) {
+        const partial = Object.assign({}, ack);
+        delete partial[missing];
+        assert.equal(handler.isResult(partial, operation), false,
+            'every column the write touches must be stated: ' + missing);
+    }
+    /* An echoed row whose URL and id name different videos is the exact
+     * contradiction this aggregate exists to prevent, and it is not made
+     * acceptable by arriving from the server. */
     assert.equal(handler.isResult(Object.assign({}, ack, { provider_id: 'CCC' }), operation),
         false);
+    assert.equal(handler.isResult(
+        Object.assign({}, ack, { source_url: WATCH('CCC'), provider_id: 'CCC' }), operation),
+        false, 'and it must be the video THIS operation named');
     assert.equal(handler.isResult(Object.assign({}, ack, { work_id: 'W-OTHER' }), operation), false);
+
+    /* A convergent write: the same video, the server's own spelling. The
+     * client must be able to accept a URL it did not send. */
+    const convergent = Object.assign({}, ack, { changed: false, source_url: SHORT('BBB'),
+        thumb_url: 'https://img/BBB.jpg' });
+    assert.equal(handler.isResult(convergent, operation), true);
 
     const conflict = { work_id: 'W-1', code: 'SOURCE_REVISION_CONFLICT', current_revision: 3,
         current_preview: WATCH('CCC'), current_bytes: 43, requested_bytes: 43 };
@@ -117,61 +133,203 @@ function handlerContract() {
 async function coalescing() {
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store };
-    const enqueue = url => store.enqueueOperation({
-        operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: 'W-1',
-        payload: { source: { kind: 'video', url } }, base_revision: 0,
-    });
-    await enqueue(WATCH('BBB'));
-    await enqueue(WATCH('CCC'));
-    const rows = (await store.listOperations())
+    const identity = url => globalThis.prksWorkSourceIdentity(
+        globalThis.prksCanonicalWorkSource(url));
+    const save = url => store.saveWorkSource('W-1',
+        { kind: 'video', url, identity: identity(url) },
+        { identity: identity(WATCH('AAA')), revision: 0 });
+    const sourceRows = async () => (await store.listOperations())
         .filter(r => r.operation === 'SET_WORK_SOURCE');
-    assert.equal(rows.length, 2, 'the durable store keeps envelopes immutable');
-    /* The pending MAP is what the UI reads, and it holds one intent per Work:
-     * the last one wins, so a user who changed their mind twice before the
-     * first send sees one answer rather than two. */
+
+    /* A -> B -> C is ONE intent naming C. Two rows sharing one base revision
+     * is the defect: the coordinator sends B, the revision advances, and the
+     * user's own C then arrives stale and conflicts with an edit they had
+     * already replaced -- while the screen said C the whole time. */
+    await save(WATCH('BBB'));
+    await save(WATCH('CCC'));
+    let rows = await sourceRows();
+    assert.equal(rows.length, 1, 'one unsent intent per Work');
+    assert.equal(rows[0].payload.source.url, WATCH('CCC'));
+    assert.equal(rows[0].base_revision, 0, 'still measured against the acknowledged base');
     globalThis.prksSetPendingWorkSources(rows);
     assert.equal(globalThis.prksEffectiveWorkSource({ id: 'W-1' }).provider_id, 'CCC');
+
+    // The same video in the same spelling keeps the row rather than minting a
+    // second op_id -- a retry must not become a second ledger entry.
+    const before = rows[0].op_id;
+    await save(WATCH('CCC'));
+    rows = await sourceRows();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].op_id, before);
+
+    // A -> B -> A is not two changes; it is none.
+    await save(SHORT('AAA'));
+    assert.equal((await sourceRows()).length, 0,
+        'returning to the acknowledged video leaves no intent at all');
+
+    /* A POSSIBLY SENT row is immutable. It may already be in the server's
+     * ledger, so rewriting it would make one operation mean two things. */
+    await save(WATCH('BBB'));
+    const claimed = (await sourceRows())[0];
+    await store.updateOperationSyncState(claimed.op_id, { status: 'pending', last_error: 'x' });
+    await store.claimOperation(claimed.op_id);
+    await assert.rejects(() => save(WATCH('DDD')), e => e.prksLocalStoreCode === 'scope_busy');
+    rows = await sourceRows();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].payload.source.url, WATCH('BBB'), 'the sent intent is untouched');
+
     delete globalThis.prksSync;
     globalThis.prksSetPendingWorkSources([]);
+}
+
+/* ---- a source conflict the user can actually answer ---- */
+async function conflictResolution() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const identity = url => globalThis.prksWorkSourceIdentity(
+        globalThis.prksCanonicalWorkSource(url));
+    const enqueue = () => store.saveWorkSource('W-1',
+        { kind: 'video', url: WATCH('BBB'), identity: identity(WATCH('BBB')) },
+        { identity: identity(WATCH('AAA')), revision: 0 });
+
+    /* "Apply my source" re-sends the SAME intent against the revision the
+     * server reported. The reappliable codes are per FAMILY: this conflict is
+     * SOURCE_REVISION_CONFLICT, and a store that only knew the field-scoped
+     * REVISION_CONFLICT offered the button and then threw. */
+    let row = await enqueue();
+    await store.updateOperationSyncState(row.op_id, { status: 'conflict',
+        server_result: { code: 'SOURCE_REVISION_CONFLICT', current_revision: 7,
+            current_preview: WATCH('CCC'), current_bytes: 43, requested_bytes: 43 } });
+    const replacement = await store.resolveConflict(row.op_id, true);
+    assert.ok(replacement, 'the conflict is reappliable');
+    assert.equal(replacement.payload.source.url, WATCH('BBB'), 'the same intent');
+    assert.equal(replacement.base_revision, 7, 'against the revision the server reported');
+    assert.notEqual(replacement.op_id, row.op_id, 'a new operation, never a rewritten one');
+    assert.equal(await store.getOperation(row.op_id), null, 'and the conflict is retired');
+
+    // "Use server" discards the intent and creates nothing.
+    row = await store.saveWorkSource('W-1',
+        { kind: 'video', url: WATCH('DDD'), identity: identity(WATCH('DDD')) },
+        { identity: identity(WATCH('BBB')), revision: 7 });
+    await store.updateOperationSyncState(row.op_id, { status: 'conflict',
+        server_result: { code: 'SOURCE_REVISION_CONFLICT', current_revision: 9,
+            current_preview: WATCH('EEE'), current_bytes: 43, requested_bytes: 43 } });
+    assert.equal(await store.resolveConflict(row.op_id, false), null);
+    assert.equal((await store.listOperations()).length, 0);
+
+    /* Codes that name no revision to overwrite are NOT reappliable: there is
+     * nothing to apply against, and offering it would loop forever. */
+    for (const code of ['ENTITY_NOT_FOUND', 'UNSUPPORTED_SOURCE_TRANSITION']) {
+        const stuck = await store.saveWorkSource('W-1',
+            { kind: 'video', url: WATCH('FFF'), identity: identity(WATCH('FFF')) },
+            { identity: identity(WATCH('BBB')), revision: 7 });
+        await store.updateOperationSyncState(stuck.op_id,
+            { status: 'conflict', server_result: { code } });
+        await assert.rejects(() => store.resolveConflict(stuck.op_id, true),
+            e => e.prksLocalStoreCode === 'invalid_resolution', code);
+        assert.equal(await store.resolveConflict(stuck.op_id, false), null);
+    }
+}
+
+/* ---- the exact payload shape gets the URL's own allowance ---- */
+async function payloadAllowance() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const limit = globalThis.PRKS_LOCAL_WORK_SOURCE_URL_BYTES;
+    /* The server accepts a URL up to this many BYTES, so the durable store has
+     * to accept the same one: a value savable online and impossible offline is
+     * the split contract local-first exists to remove. What is bounded is the
+     * URL ITSELF -- the envelope's own keys, and any JSON escaping, must not
+     * eat into the user's allowance. */
+    const base = WATCH('BBB') + '&x=';
+    const padded = base + 'p'.repeat(limit - base.length);
+    assert.equal(Buffer.byteLength(padded, 'utf8'), limit, 'exactly at the stated limit');
+    assert.ok(Buffer.byteLength(JSON.stringify({ source: { kind: 'video', url: padded } }), 'utf8')
+        > limit, 'while the serialized envelope is over the generic bound');
+    const saved = await store.enqueueOperation({
+        operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: 'W-1',
+        payload: { source: { kind: 'video', url: padded } }, base_revision: 0,
+    });
+    assert.equal(saved.payload.source.url, padded);
+
+    // The allowance belongs to an exact SHAPE, so it cannot be used to smuggle
+    // an unbounded payload.
+    await assert.rejects(() => store.enqueueOperation({
+        operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: 'W-2',
+        payload: { source: { kind: 'video', url: padded }, extra: 'x'.repeat(1024) },
+        base_revision: 0,
+    }), e => e.prksLocalStoreCode === 'payload_too_large');
+    await assert.rejects(() => store.enqueueOperation({
+        operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: 'W-3',
+        payload: { source: { kind: 'video', url: 'u'.repeat(limit + 1) } }, base_revision: 0,
+    }), e => e.prksLocalStoreCode === 'payload_too_large');
 }
 
 /* ---- acknowledgement reaches every cached representation, coherently ---- */
 async function reconciliation() {
     const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    /* A cached video row carries the identity AND the presentation the server
+     * derives from it: the thumbnail of the video it is, and the date it was
+     * accessed. Both are rewritten by a source change. */
     const videoRow = () => ({ id: 'W-1', title: 'Clip', source_kind: 'video',
-        provider: 'youtube', provider_id: 'AAA', source_url: WATCH('AAA') });
+        provider: 'youtube', provider_id: 'AAA', source_url: WATCH('AAA'),
+        thumb_url: 'https://img/AAA.jpg', urldate: '2024-01-01' });
+    // A browse row carries `thumb_url` but has no `urldate` column at all.
+    const browseRow = () => { const r = videoRow(); delete r.urldate; return r; };
     await cache.putEntity('work', 'W-1', videoRow());
-    await cache.putList('works-browse:index', [videoRow(), { id: 'W-2', provider_id: 'ZZZ' }], '');
-    await cache.putList('recent:index', [videoRow()], '');
-    await cache.putList('recently-added:index', [videoRow()], '');
+    await cache.putList('works-browse:index', [browseRow(), { id: 'W-2', provider_id: 'ZZZ' }], '');
+    await cache.putList('recent:index', [browseRow()], '');
+    await cache.putList('recently-added:index', [browseRow()], '');
     await cache.putEntity('playlist', 'PL1', { id: 'PL1', items: [videoRow()] });
     await cache.putEntity('folder', 'F1', { id: 'F1', works: [videoRow()] });
+    await cache.putEntity('work-source-state', 'W-1', { work_id: 'W-1', revision: 4 });
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
         prksRequest: async () => { throw new Error('no reads in this scenario'); } });
 
-    const source = globalThis.prksCanonicalWorkSource(WATCH('BBB'));
-    assert.equal(await offline.reconcileWorkSource({ work_id: 'W-1', source }), true);
+    // Exactly the shape an acknowledgement carries.
+    const ack = { work_id: 'W-1', source: { source_kind: 'video', provider: 'youtube',
+        provider_id: 'BBB', source_url: WATCH('BBB'), thumb_url: null, urldate: '2026-09-13' },
+        server_revision: 5 };
+    assert.equal(await offline.reconcileWorkSource(ack), true);
 
     const coherent = row => {
         assert.equal(row.provider_id, 'BBB');
         assert.equal(row.source_url, WATCH('BBB'));
         assert.equal(globalThis.prksYoutubeVideoId(row.source_url), row.provider_id,
             'no row ever names one video while identifying another');
+        /* The PREVIOUS video's image is not presentation that may lag: a row
+         * claiming video B while showing video A's picture is a lie the user
+         * can see, and the server has already cleared it. */
+        assert.equal(row.thumb_url, null, 'the old video\'s thumbnail is gone');
     };
-    coherent((await cache.getEntity('work', 'W-1')).value);
+    const work = (await cache.getEntity('work', 'W-1')).value;
+    coherent(work);
+    assert.equal(work.urldate, '2026-09-13', 'the server\'s own access date, copied');
     for (const key of ['works-browse:index', 'recent:index', 'recently-added:index']) {
         const rows = (await cache.getList(key)).value;
-        coherent(rows.find(r => r.id === 'W-1'));
+        const row = rows.find(r => r.id === 'W-1');
+        coherent(row);
+        assert.equal('urldate' in row, false,
+            'a column this projection does not carry is never invented');
     }
     assert.equal((await cache.getList('works-browse:index')).value
         .find(r => r.id === 'W-2').provider_id, 'ZZZ', 'other Works are untouched');
     coherent((await cache.getEntity('playlist', 'PL1')).value.items[0]);
     coherent((await cache.getEntity('folder', 'F1')).value.works[0]);
 
+    /* The base the NEXT edit is measured against. Left at 4, a second change
+     * would be created against a revision the server has already moved past,
+     * and the user would conflict with their own previous edit. */
+    assert.equal((await cache.getEntity('work-source-state', 'W-1')).value.revision, 5);
+
+    // An acknowledgement older than the cache has been superseded.
+    await offline.reconcileWorkSource(Object.assign({}, ack, { server_revision: 2 }));
+    assert.equal((await cache.getEntity('work-source-state', 'W-1')).value.revision, 5,
+        'the base never moves backwards');
+
     // A missing cache is nothing to patch, not a failure.
     await cache.deleteEntity('folder', 'F1');
-    assert.equal(await offline.reconcileWorkSource(
-        { work_id: 'W-1', source: globalThis.prksCanonicalWorkSource(WATCH('CCC')) }), true);
+    assert.equal(await offline.reconcileWorkSource({ work_id: 'W-1', server_revision: 6,
+        source: { source_kind: 'video', provider: 'youtube', provider_id: 'CCC',
+            source_url: WATCH('CCC'), thumb_url: null, urldate: '2026-09-13' } }), true);
 
     /* An UNREADABLE cache is a different answer: the operation must be
      * replayed rather than retired believing it patched what it could not
@@ -181,8 +339,9 @@ async function reconciliation() {
     });
     const blocked = createPrksOfflineRuntime({ store: unreadable, window: null,
         prksRequest: async () => { throw new Error('no reads'); } });
-    assert.equal(await blocked.reconcileWorkSource(
-        { work_id: 'W-1', source: globalThis.prksCanonicalWorkSource(WATCH('DDD')) }), false);
+    assert.equal(await blocked.reconcileWorkSource({ work_id: 'W-1', server_revision: 7,
+        source: { source_kind: 'video', provider: 'youtube', provider_id: 'DDD',
+            source_url: WATCH('DDD'), thumb_url: null, urldate: '2026-09-13' } }), false);
 }
 
 /* ---- a GET that began before the acknowledgement must lose ---- */
@@ -201,8 +360,9 @@ async function staleRead() {
     const reading = offline.readThroughList('works-browse:index', '/api/works?projection=browse',
         { domain: 'works-browse', validate: rows => Array.isArray(rows) });
     await settle();
-    assert.equal(await offline.reconcileWorkSource({ work_id: 'W-1',
-        source: globalThis.prksCanonicalWorkSource(WATCH('BBB')) }), true);
+    assert.equal(await offline.reconcileWorkSource({ work_id: 'W-1', server_revision: 1,
+        source: { source_kind: 'video', provider: 'youtube', provider_id: 'BBB',
+            source_url: WATCH('BBB'), thumb_url: null, urldate: '2026-09-13' } }), true);
     release();
     await reading;
     await settle();
@@ -216,6 +376,8 @@ async function main() {
     effectiveSourceOverlay();
     handlerContract();
     await coalescing();
+    await conflictResolution();
+    await payloadAllowance();
     await reconciliation();
     await staleRead();
     console.log('All ' + checks + ' Work source checks passed');

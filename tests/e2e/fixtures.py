@@ -376,12 +376,19 @@ def seed_playlists_library(storage_root: str) -> dict:
     ids = seed_people_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    # `provider_id` is written here because Work creation writes it: the server
+    # derives it from the URL before the row exists, and the audit in
+    # docs/work-source-identity.md found it populated on every video Work in
+    # the real library. A fixture that left it blank would be testing a row
+    # shape the product cannot produce -- and video IDENTITY is
+    # provider + provider_id, so tests of it would be testing nothing.
     video_one = db.add_work(
         title=PLAYLIST_VIDEO_ONE_TITLE,
         doc_type="online",
         source_kind="video",
         source_url="https://www.youtube.com/watch?v=e2e0000001",
         provider="youtube",
+        provider_id="e2e0000001",
         author_text=PLAYLIST_CHANNEL,
         published_date=PLAYLIST_VIDEO_ONE_DATE,
     )
@@ -391,6 +398,7 @@ def seed_playlists_library(storage_root: str) -> dict:
         source_kind="video",
         source_url="https://www.youtube.com/watch?v=e2e0000002",
         provider="youtube",
+        provider_id="e2e0000002",
         author_text=PLAYLIST_CHANNEL,
     )
     playlist_a = db.add_playlist(

@@ -14,7 +14,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import work_metadata_sync, work_open_sync, work_tag_sync
+from backend import work_metadata_sync, work_open_sync, work_source_sync, work_tag_sync
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_annotations import (
@@ -2341,6 +2341,24 @@ class PRKSDatabase:
                    'source_kind', 'source_url', 'source_mime', 'thumb_url', 'provider', 'provider_id', 'urldate',
                    'file_path', 'hide_pdf_link_annotations'}
         updates = {k: v for k, v in fields.items() if k in allowed}
+        # A Work's video source is an AGGREGATE with one revision, not a set of
+        # independent columns. Letting PATCH write `provider_id` on its own
+        # recreates exactly the contradiction SET_WORK_SOURCE exists to
+        # prevent -- a row whose stored URL names video B while the viewer,
+        # which reads `provider_id` first, plays video A -- and it does so
+        # without advancing the source revision, so no other device can
+        # discover it. `source_url` is already refused on a video Work by
+        # FIELD_KIND_GUARDS; these are the columns that carry identity with it.
+        #
+        # This is a bound on EDITING AN EXISTING WORK. Creation and import
+        # write these columns through `add_work`, where the whole identity is
+        # established at once and there is no prior value to contradict.
+        identity_writes = sorted(set(updates) & work_source_sync.SOURCE_AGGREGATE_COLUMNS)
+        if identity_writes:
+            raise ValueError(
+                "%s cannot be set directly: a Work's source identity changes as one "
+                "aggregate. Use the SET_WORK_SOURCE operation."
+                % ", ".join(identity_writes))
         if 'hide_pdf_link_annotations' in updates:
             raw = updates['hide_pdf_link_annotations']
             if raw is True or raw == 1 or (isinstance(raw, str) and raw.strip().lower() in ('1', 'true', 'yes')):

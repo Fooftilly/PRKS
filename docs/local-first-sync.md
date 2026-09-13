@@ -936,6 +936,78 @@ on the server is the durable idempotency history, so the browser keeps no
 growing record of completed work. Retirement is strictly last, so a crash
 anywhere earlier leaves a replayable row rather than a lost edit.
 
+### An acknowledgement states the stored row; the client never rebuilds it
+
+A field acknowledgement can omit a byte-limited value because the client
+already holds the authoritative copy in its own immutable operation. The source
+aggregate is the case where that reasoning **stops being true**, and it stops in
+two ways at once:
+
+- **Derived columns.** The write also clears `thumb_url` and rewrites `urldate`.
+  `urldate` is the server's own date; there is nothing for the client to
+  reconstruct it from. A cached row that kept the old thumbnail shows video A's
+  picture on a card that says video B.
+- **Convergent writes.** Two devices choosing the same video in different
+  spellings is not a change, so the server stores *nothing*. A client writing
+  back "what I asked for" would then hold an acknowledged `source_url` the
+  server does not have — and, worse, would keep the identity it last cached
+  while the server has already moved to the converged one.
+
+So `SET_WORK_SOURCE` acknowledges with the row as stored: all four identity
+columns plus `thumb_url` and `urldate`, read back after the write. The client
+copies them. This does put a second copy of the URL in the ledger, which holds
+only a request hash otherwise — a real cost, accepted knowingly, because the
+alternative is publishing acknowledged values the server never stored.
+
+Reconciliation patches **only the columns a row already carries**: a browse row
+has `thumb_url` but no `urldate`, and writing a column that projection never
+receives makes the row fail its own shape validator, which discards the whole
+catalog.
+
+### The base a second edit is measured against has to move
+
+An acknowledgement advances the source revision, and two places hold that
+number: the cached `work-source-state` projection, and `state.observed` in an
+editor that is still open. Leave either behind and the *second* change is
+created against a revision the server has already passed — so the user
+conflicts with their own previous edit, on a Work nobody else has touched. Both
+are updated on ACK, and the cached one never moves backwards.
+
+### One unsynchronized intent per aggregate
+
+Choosing video B and then video C before either is sent must leave **one**
+operation naming C. A bare `enqueueOperation` per save left two immutable rows
+sharing one base revision: the coordinator sends B, the revision advances, and
+the user's own C then arrives stale — while the screen said C the whole time.
+`saveWorkSource()` coalesces on the same rule the field and tag writers use:
+only a NEVER SENT row may be rewritten, and editing back to the acknowledged
+identity leaves no intent at all. A row that has been attempted might already be
+ledgered, so it stays immutable and the save refuses with `scope_busy`.
+
+Identity, not URL text, decides all of this — `A -> B -> A` is no change even
+when the two spellings of A differ.
+
+### Reappliability is a per-family registry
+
+"Apply my value" re-sends the same intent against the revision the server
+reported, so a terminal code qualifies only when it names one. The store
+hard-coded the single string `REVISION_CONFLICT`, which meant the aggregate's
+`SOURCE_REVISION_CONFLICT` reached the user with a button that threw when
+pressed — a decision the UI offered and the store refused. `REAPPLIABLE_RESULTS`
+lists the codes per family, and a static test pins it to what the editors
+actually offer. `FUTURE_REVISION` is deliberately absent: a base *ahead* of the
+server is not a stale edit the user can choose to win.
+
+### The aggregate boundary binds the legacy PATCH too
+
+`PATCH /api/works/:id` accepted `source_kind`, `provider`, `provider_id` and
+`thumb_url` by name and validated none of them, so a client could write
+`provider_id` alone and recreate exactly the contradiction this aggregate
+prevents — with no revision advanced, so no other device could discover it.
+Editing an existing Work now refuses those columns and says which operation to
+use. Creation and import are unaffected: they write the whole identity at once
+through `add_work`, where there is no prior value to contradict.
+
 ### An acknowledgement may only write the panel it owns
 
 The right panel is shared by every workspace tab, so `#panel-content` and every
