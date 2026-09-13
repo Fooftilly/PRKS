@@ -1040,9 +1040,13 @@ carrying video B's URL and video A's id — so the viewer, which reads
 it into `current_provider_id` and `fit_terminal_result` cannot shorten an
 identity.
 
-So `add_work()` enforces the same canonical parser. It is the right boundary
-rather than the HTTP handler because it also covers scripts, fixtures, imports
-and any future internal caller. A contradictory pair is **refused, not
+So `add_work()` enforces the same canonical parser, for every Work the product
+will *treat* as a video rather than only those whose caller said so —
+`effective_source_kind()` mirrors the runtime's own `prksInferWorkSourceKind()`,
+and `source_kind = "video"` is persisted rather than left NULL, so a row the UI
+calls a video is one the aggregate can act on. It is the right boundary rather
+than the HTTP handler because it also covers scripts, fixtures, imports and any
+future internal caller. A contradictory pair is **refused, not
 repaired**: a caller passing video B's URL with video A's id has a bug, and
 rewriting it silently would hide that bug while leaving the caller believing it
 had asserted an identity. `provider`/`provider_id` are refused outright on a

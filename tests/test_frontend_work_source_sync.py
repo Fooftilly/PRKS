@@ -145,6 +145,58 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         self.assertEqual(client['accepts'][:3], [True, True, True])
         self.assertEqual(client['accepts'][3:], [False] * 7)
 
+    def test_creation_and_the_runtime_classify_a_work_the_same_way(self):
+        """Two inference rules that drift are two answers about one row.
+
+        Creation has to decide what a Work IS by the rule the product later
+        reads it with -- `prksInferWorkSourceKind()`. When they differed, a
+        Work with no kind, no file and a YouTube URL was created as "no kind"
+        and then displayed as a Video, offered the Video source editor, and
+        refused by the aggregate.
+        """
+        import json
+        from backend.db_manager import effective_source_kind
+
+        rows = [
+            {'source_kind': 'video', 'file_path': '', 'source_url': ''},
+            {'source_kind': 'pdf', 'file_path': '', 'source_url': ''},
+            {'source_kind': 'pdf', 'file_path': '/api/pdfs/a.pdf',
+             'source_url': 'https://www.youtube.com/watch?v=ABC'},
+            {'source_kind': 'video', 'file_path': '/api/pdfs/a.pdf', 'source_url': ''},
+            {'source_kind': '', 'file_path': '/api/pdfs/a.pdf', 'source_url': ''},
+            {'source_kind': '', 'file_path': '/api/pdfs/a.pdf',
+             'source_url': 'https://example.org/p.pdf'},
+            {'source_kind': '', 'file_path': '', 'source_url': 'https://youtu.be/ABC'},
+            {'source_kind': '', 'file_path': '', 'source_url': 'https://example.com/x'},
+            {'source_kind': '', 'file_path': '', 'source_url': ''},
+            {'source_kind': '  VIDEO  ', 'file_path': '', 'source_url': ''},
+            {'source_kind': '', 'file_path': '   ', 'source_url': 'https://youtu.be/ABC'},
+        ]
+        # `api.js` is a browser script that touches `window` at load time, so
+        # the real function's source is lifted out and evaluated rather than
+        # the module being required. It is still the shipped text, not a copy.
+        js = """
+        const fs = require('fs');
+        const src = fs.readFileSync(process.argv[1] + '/frontend/js/api.js', 'utf8');
+        const at = src.indexOf('function prksInferWorkSourceKind(');
+        if (at === -1) { throw new Error('prksInferWorkSourceKind not found'); }
+        const end = src.indexOf('\\n}', at) + 2;
+        const infer = (0, eval)('(' + src.slice(at, end) + ')');
+        const rows = JSON.parse(process.argv[2]);
+        process.stdout.write(JSON.stringify(rows.map(r => infer(r))));
+        """
+        proc = subprocess.run(['node', '-e', js, str(ROOT), json.dumps(rows)],
+                              cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        runtime = json.loads(proc.stdout)
+        for row, seen in zip(rows, runtime):
+            with self.subTest(row=row):
+                self.assertEqual(
+                    effective_source_kind(row['source_kind'], row['source_url'],
+                                          row['file_path']),
+                    seen,
+                    'creation and the runtime must agree about this row')
+
     def test_the_source_family_is_registered_everywhere_it_must_be(self):
         from backend import sync_protocol
         self.assertIn('SET_WORK_SOURCE', sync_protocol.supported_operations())

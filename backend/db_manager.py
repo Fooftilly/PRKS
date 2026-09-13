@@ -374,7 +374,36 @@ def _prks_fts_prefix_clause(tokens: List[str]) -> str:
     return " ".join(parts)
 
 
-def _canonical_new_source(source_kind, source_url, provider, provider_id):
+# The source kinds a Work may be created with. `source_kind` is not free text:
+# the schema, the viewer and the source aggregate all describe exactly these
+# two, and anything else falls through the runtime inference below into a
+# branch it was never classified as. "web" with a YouTube URL reached the video
+# viewer while the creation boundary treated it as not-a-video.
+NEW_WORK_SOURCE_KINDS = ("pdf", "video")
+
+
+def effective_source_kind(source_kind, source_url, file_path):
+    """What a Work IS, by the same rule the runtime uses.
+
+    Mirrors `prksInferWorkSourceKind()` in frontend/js/api.js. An explicit kind
+    wins; otherwise a file makes it a PDF and a URL makes it a video. Creation
+    has to classify a row the same way the product later reads it, or the two
+    disagree about the same row -- which is how a Work with no kind, no file
+    and a YouTube URL came to be shown as a Video, offered the Video source
+    editor, and then refused by `SET_WORK_SOURCE` as
+    UNSUPPORTED_SOURCE_TRANSITION because its stored `source_kind` was NULL.
+    """
+    kind = (source_kind or "").strip().lower()
+    if kind in ("video", "pdf"):
+        return kind
+    if (file_path or "").strip():
+        return "pdf"
+    if (source_url or "").strip():
+        return "video"
+    return kind
+
+
+def _canonical_new_source(source_kind, source_url, provider, provider_id, file_path):
     """The source columns a NEW Work may be created with, or a refusal.
 
     Creation is the other point where a source identity comes into existence.
@@ -386,8 +415,12 @@ def _canonical_new_source(source_kind, source_url, provider, provider_id):
     `fit_terminal_result` cannot shorten an identity. The row would be accepted
     happily and become unresolvable months later.
 
-    So the same canonical parser decides here. `provider` and `provider_id` are
-    DERIVED from the URL, exactly as they are on the synchronization path.
+    So the same canonical parser decides here, for every Work the product will
+    treat as a video -- not only those whose caller said so. `provider` and
+    `provider_id` are DERIVED from the URL, exactly as on the synchronization
+    path, and `source_kind` is PERSISTED as "video" rather than left NULL: a
+    row the UI calls a video and the aggregate calls something else is the
+    disagreement this whole boundary exists to remove.
 
     A contradictory pair is REFUSED rather than repaired. A caller passing
     video B's URL with video A's id has a bug, and silently rewriting it to B
@@ -397,16 +430,21 @@ def _canonical_new_source(source_kind, source_url, provider, provider_id):
     Nothing here creates a source revision: construction is not mutation, and a
     Work begins at revision 0 like every other scope.
     """
-    kind = (source_kind or "").strip().lower()
+    declared = (source_kind or "").strip().lower()
+    if declared and declared not in NEW_WORK_SOURCE_KINDS:
+        raise ValueError(
+            "%s is not a source kind; use one of %s"
+            % (declared, ", ".join(NEW_WORK_SOURCE_KINDS)))
     url = (source_url or "").strip()
     supplied_provider = (provider or "").strip().lower()
     supplied_id = (provider_id or "").strip()
+    kind = effective_source_kind(declared, url, file_path)
 
     if kind != "video":
         # These columns ARE video identity. On anything else they would be a
-        # claim about a video this Work is not -- and `prksInferWorkSourceKind`
-        # can still reach a video branch for a Work with no explicit kind and
-        # no file, at which point `provider_id` would outrank the URL again.
+        # claim about a video this Work is not. A PDF's `source_url` is
+        # PROVENANCE -- where the file came from -- and stays untouched even
+        # when it happens to be YouTube-shaped.
         if supplied_provider or supplied_id:
             raise ValueError(
                 "provider and provider_id belong to a video source; this Work is "
@@ -1699,7 +1737,7 @@ class PRKSDatabase:
                  private_notes: str = "") -> str:
         work_id = self.generate_id("W")
         source_kind, source_url, provider, provider_id = _canonical_new_source(
-            source_kind, source_url, provider, provider_id)
+            source_kind, source_url, provider, provider_id, file_path)
         dt = normalize_doc_type(doc_type)
         tp = thumb_page
         if tp is None or tp == "":

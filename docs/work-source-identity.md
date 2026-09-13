@@ -141,7 +141,7 @@ Derived from the precedence above. "Viewer" is what the user would see
 
 | Transition | Allowed today | Fields that must change together | Viewer result if only `source_url` changes |
 | --- | --- | --- | --- |
-| no source → URL, kind NULL, no file | via PATCH | `source_kind`, `provider`, `provider_id` | becomes video (step 4); embed parses the URL — **coherent** |
+| no source → URL, kind NULL, no file | **no longer creatable** (see §10) | `source_kind`, `provider`, `provider_id` | becomes video (step 4); embed parses the URL — coherent, but identity-less |
 | URL A → URL B (generic, no provider_id) | via PATCH | — | follows the URL — coherent |
 | YouTube A → YouTube B | via PATCH | **`provider_id` too** | **stored URL says B, viewer plays A** ← the defect |
 | YouTube → blank URL | via PATCH | `provider_id`, `provider`, `source_kind`, `thumb_url` | viewer *still plays A* from `provider_id`; card keeps A's thumbnail |
@@ -281,6 +281,35 @@ The browse projections would need `provider`/`provider_id` added, or the
 overlay must write a *derived* `source_kind` — the same
 "convert-at-the-boundary" decision `thumb_page` faced, and a reason to prefer
 extending the projection over teaching cards to re-derive.
+
+### Creation classifies by the same rule the runtime reads by
+
+`source_kind` was never required for a Work to BE a video: §3's precedence
+infers one, and "no file, has a URL" is step 4. Creation originally canonicalized
+only what the caller *declared*, so a Work created with a URL and no kind was
+stored with `source_kind` NULL and no provider identity — and then displayed as
+a Video, offered the Video source editor, and refused by `SET_WORK_SOURCE` as
+`UNSUPPORTED_SOURCE_TRANSITION`. The UI and the mutation boundary disagreed
+about the same row.
+
+`PRKSDatabase.add_work()` now decides with `effective_source_kind()`, which
+mirrors `prksInferWorkSourceKind()` (a test pins the two against the shipped
+function text). Whenever the effective kind is video, the canonical parser runs
+and `source_kind = "video"` is **persisted** rather than left NULL — deriving the
+id alone would leave the row un-actionable by the aggregate, which is the whole
+problem.
+
+`source_kind` is also a domain now, not free text: `pdf` or `video`. Anything
+else — `web`, say — fell through step 4 of the inference into the video viewer
+while the creation boundary treated it as not-a-video.
+
+An inferred **PDF** is unaffected: a file makes it a PDF, and its `source_url`
+stays provenance even when YouTube-shaped. Treating that as identity would turn
+a paper into a video because of where it was downloaded from.
+
+The row shape in §6's first transition — kind NULL, no file, a URL — therefore
+remains possible as **legacy data**, but is no longer a state new creation can
+produce.
 
 ### Only a video's render may wait on the overlay
 

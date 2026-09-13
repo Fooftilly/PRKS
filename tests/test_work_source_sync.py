@@ -211,12 +211,85 @@ class WorkSourceSyncTests(unittest.TestCase):
             self.db.add_work("PDF", source_kind="pdf", file_path="/api/pdfs/x.pdf",
                              provider_id="AAA")
         with self.assertRaises(ValueError):
-            self.db.add_work("Kindless", source_url=WATCH % "AAA", provider_id="AAA")
+            # Inferred a PDF -- it has a file -- so its URL is provenance and
+            # an identity asserted beside it is a claim about a video this Work
+            # is not.
+            self.db.add_work("Filed", file_path="/api/pdfs/x.pdf",
+                             source_url="https://example.org/p.pdf", provider_id="AAA")
         # Provenance on a PDF is untouched by any of this.
         made = self.db.add_work("PDF", source_kind="pdf", file_path="/api/pdfs/x.pdf",
                                 source_url="https://example.org/paper.pdf")
         self.assertEqual(self.db.get_work(made)["source_url"],
                          "https://example.org/paper.pdf")
+
+    def test_creation_classifies_a_work_the_way_the_product_reads_it(self):
+        """An explicit `source_kind` was never required to make a Work a video.
+
+        The runtime infers one: no file plus a URL IS a video, to the viewer
+        and to the metadata editor. Creation classified only what the caller
+        declared, so a Work with no kind, no file and a YouTube URL was stored
+        with `source_kind` NULL and no identity -- then shown as a Video, given
+        the Video source editor, and refused by the aggregate as
+        UNSUPPORTED_SOURCE_TRANSITION. The UI and the mutation boundary
+        disagreed about the same row.
+
+        So creation uses the same effective-kind rule, and PERSISTS "video"
+        rather than merely deriving the id: a row the product calls a video has
+        to be one the aggregate can act on.
+        """
+        made = self.db.add_work("Kindless", source_url=WATCH % "KKK")
+        row = self.db.get_work(made)
+        self.assertEqual(row["source_kind"], "video", "stored, not merely inferred later")
+        self.assertEqual((row["provider"], row["provider_id"]), ("youtube", "KKK"))
+
+        # And the aggregate accepts it, which is the point of persisting it.
+        code, result = sync_protocol.process_operation(self.db, self.op(
+            WATCH % "LLL", base=0, entity_id=made))
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(self.db.get_work(made)["provider_id"], "LLL")
+
+        # A kindless, fileless Work whose URL names no supported video is not a
+        # video PRKS can represent, so it is refused rather than stored as one.
+        with self.assertRaises(ValueError):
+            self.db.add_work("Kindless", source_url="https://example.com/clip")
+
+    def test_an_inferred_pdf_keeps_its_url_as_provenance(self):
+        """A file makes it a PDF, whatever the URL looks like. Treating a
+        YouTube-shaped provenance URL as identity would turn a paper into a
+        video because of where it was downloaded from."""
+        for label, fields in (
+            ("inferred", {"file_path": "/api/pdfs/a.pdf",
+                          "source_url": "https://example.org/paper.pdf"}),
+            ("inferred, YouTube-shaped URL", {"file_path": "/api/pdfs/a.pdf",
+                                              "source_url": WATCH % "AAA"}),
+            ("explicit, YouTube-shaped URL", {"source_kind": "pdf",
+                                              "file_path": "/api/pdfs/a.pdf",
+                                              "source_url": WATCH % "AAA"}),
+        ):
+            with self.subTest(case=label):
+                row = self.db.get_work(self.db.add_work("Paper", **fields))
+                self.assertNotEqual(row["source_kind"], "video")
+                self.assertIsNone(row["provider"])
+                self.assertIsNone(row["provider_id"])
+                self.assertEqual(row["source_url"], fields["source_url"],
+                                 "the URL is kept, as provenance")
+
+    def test_source_kind_is_a_domain_not_free_text(self):
+        """Anything outside the domain falls through the runtime inference into
+        a branch it was never classified as: `web` with a YouTube URL reached
+        the video viewer while creation treated it as not-a-video."""
+        for bad in ("web", "audio", "VIDEO ", "pdf ", "html"):
+            with self.subTest(kind=bad):
+                if bad.strip().lower() in ("video", "pdf"):
+                    continue
+                with self.assertRaises(ValueError) as caught:
+                    self.db.add_work("Odd", source_kind=bad, source_url=WATCH % "AAA")
+                self.assertIn("not a source kind", str(caught.exception))
+        # The domain itself keeps working, including with surrounding space.
+        self.assertEqual(
+            self.db.get_work(self.db.add_work(
+                "Ok", source_kind=" VIDEO ", source_url=WATCH % "AAA"))["source_kind"],
+            "video")
 
     def test_creation_is_construction_and_advances_no_revision(self):
         """A Work begins at revision 0 like every other scope. Creation writing
