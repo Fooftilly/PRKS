@@ -301,6 +301,94 @@ class WorkSourceSyncTests(unittest.TestCase):
                 "SELECT COUNT(*) AS n FROM sync_entity_revisions WHERE scope_type = ? "
                 "AND scope_id = ?", (src.SCOPE_TYPE, src.scope_key(made)))[0]["n"], 0)
 
+    # ---- legacy inferred-video rows ----
+
+    def legacy_row(self, url, **columns):
+        """A row canonical creation can no longer produce, written directly.
+
+        Deliberately bypassing `add_work()`: the point is a shape that exists
+        in older databases and must still be readable, not one the current
+        boundary would accept.
+        """
+        work = self.db.add_work("Legacy", source_kind="video", source_url=WATCH % "AAA")
+        fields = {"source_kind": None, "provider": None, "provider_id": None,
+                  "file_path": "", "source_url": url}
+        fields.update(columns)
+        self.db.execute_query(
+            "UPDATE works SET " + ", ".join(k + " = ?" for k in fields) + " WHERE id = ?",
+            tuple(list(fields.values()) + [work]))
+        return work
+
+    def test_a_legacy_inferred_video_is_readable_and_mutable(self):
+        """The product reads "no kind, no file, has a URL" as a video -- the
+        viewer, the cards and the metadata editor all do. This module read the
+        COLUMN instead, so the same row was shown as a Video, offered the Video
+        source editor, and then refused here as UNSUPPORTED_SOURCE_TRANSITION.
+        """
+        work = self.legacy_row(WATCH % "LEG")
+        self.assertEqual(src.get_source_state(self.db, work), {"work_id": work, "revision": 0},
+                         "source-state must not claim the row is unreadable")
+
+        code, result = sync_protocol.process_operation(self.db, self.op(
+            WATCH % "NEW", base=0, entity_id=work))
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        row = self.db.get_work(work)
+        self.assertEqual(
+            {k: row[k] for k in ("source_kind", "provider", "provider_id", "source_url")},
+            {"source_kind": "video", "provider": "youtube", "provider_id": "NEW",
+             "source_url": WATCH % "NEW"},
+            "the first successful mutation leaves the canonical shape")
+
+    def test_a_convergent_write_upgrades_a_legacy_row_without_a_revision(self):
+        """Naming the video the row already has stores nothing semantic -- but
+        it is the moment the classification columns can be filled in from the
+        URL that row already carries. Nothing any device believes about which
+        video this is changes, so no revision is manufactured."""
+        work = self.legacy_row(WATCH % "LEG")
+        code, result = sync_protocol.process_operation(self.db, self.op(
+            SHORT % "LEG", base=0, entity_id=work))
+        self.assertEqual((code, result["code"], result["changed"]), (200, "ACKNOWLEDGED", False))
+        self.assertEqual(src.get_source_state(self.db, work)["revision"], 0,
+                         "a repair is not a change")
+        row = self.db.get_work(work)
+        self.assertEqual((row["source_kind"], row["provider"], row["provider_id"]),
+                         ("video", "youtube", "LEG"))
+        self.assertEqual(row["source_url"], WATCH % "LEG",
+                         "and the stored spelling is left alone")
+
+    def test_a_legacy_row_with_an_unreadable_url_is_refused_not_guessed(self):
+        """Inventing an id from an unparseable URL would be asserting which
+        video this is. Both APIs say the same thing, so the editor is never
+        told "this is a video, here is its revision" by one and refused by the
+        other."""
+        for url in ("https://example.com/clip", "https://www.youtube.com/watch",
+                    WATCH % ("B" * (src.MAX_PROVIDER_ID_CHARS + 1))):
+            with self.subTest(url=url[:60]):
+                work = self.legacy_row(url)
+                self.assertEqual(src.get_source_state(self.db, work), src.INVALID_SOURCE_STATE)
+                code, result = sync_protocol.process_operation(self.db, self.op(
+                    WATCH % "NEW", base=0, entity_id=work))
+                self.assertEqual((code, result["code"]), (409, src.INVALID_SOURCE_STATE))
+                self.assertIsNone(self.db.get_work(work)["provider_id"],
+                                  "and nothing was repaired by guessing")
+
+    def test_a_legacy_row_with_an_unreportable_stored_identity_is_refused(self):
+        """A stored id too large to appear in a conflict would make every later
+        conflict on that Work undeliverable -- the 2 KiB durable bound cannot
+        be met by shortening an identity."""
+        work = self.legacy_row(WATCH % "LEG", source_kind="video", provider="youtube",
+                               provider_id="B" * 3000)
+        self.assertEqual(src.get_source_state(self.db, work), src.INVALID_SOURCE_STATE)
+
+    def test_a_file_backed_legacy_row_stays_a_pdf(self):
+        """A file makes it a PDF whatever the URL looks like, so its video-shaped
+        provenance never enters the aggregate."""
+        work = self.legacy_row(WATCH % "LEG", file_path="/api/pdfs/a.pdf")
+        code, result = sync_protocol.process_operation(self.db, self.op(
+            WATCH % "NEW", base=0, entity_id=work))
+        self.assertEqual((code, result["code"]), (409, "UNSUPPORTED_SOURCE_TRANSITION"))
+        self.assertEqual(self.db.get_work(work)["source_url"], WATCH % "LEG")
+
     # ---- the legacy PATCH surface ----
 
     def test_patch_cannot_write_source_identity_columns_independently(self):

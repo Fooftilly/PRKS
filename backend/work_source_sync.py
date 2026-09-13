@@ -178,18 +178,81 @@ def identity_of(source):
     return (source["provider"], source["provider_id"])
 
 
+# A stored row that the product treats as a video but whose identity cannot be
+# established -- no usable provider fields AND a `source_url` today's parser
+# refuses. Nothing is guessed or repaired: an id invented from an unparseable
+# URL would be a claim about which video this is, and a stored id too large or
+# malformed to report back would make every later conflict undeliverable.
+INVALID_SOURCE_STATE = "INVALID_SOURCE_STATE"
+
+
 def current_source(conn, work_id):
+    """The source a stored row actually represents, or None / a refusal.
+
+    Returns `INVALID_SOURCE_STATE` for a Work the product classifies as a video
+    but whose identity this module cannot state.
+
+    Classification uses the EFFECTIVE kind, not the stored column. Canonical
+    creation always stores `video` now, but older databases hold rows with
+    `source_kind` NULL, no file and a valid video URL -- which the viewer, the
+    cards and the metadata editor all treat as videos. Reading only the column
+    made this module disagree with the rest of the product about the same row:
+    it was shown as a Video, offered the Video source editor, and then refused
+    here as UNSUPPORTED_SOURCE_TRANSITION.
+
+    Where the stored provider fields are absent, identity is DERIVED from the
+    URL the row already has -- the one canonical parser, the same answer every
+    other reader of that row reaches.
+    """
+    from backend import db_manager
     row = conn.execute(
-        "SELECT source_kind, provider, provider_id, source_url FROM works WHERE id = ?",
-        (work_id,)).fetchone()
+        "SELECT source_kind, provider, provider_id, source_url, file_path "
+        "FROM works WHERE id = ?", (work_id,)).fetchone()
     if row is None:
         return None
-    return {
-        "source_kind": (row[0] or "").strip().lower(),
+    stored_url = row[3] or ""
+    kind = db_manager.effective_source_kind(row[0], stored_url, row[4])
+    source = {
+        "source_kind": kind,
         "provider": (row[1] or "").strip().lower(),
         "provider_id": (row[2] or "").strip(),
-        "source_url": row[3] or "",
+        "source_url": stored_url,
     }
+    if kind != "video":
+        return source
+    if source["provider"] or source["provider_id"]:
+        # An identity IS stored. Either it is one this module can state, or the
+        # row contradicts itself -- and that is not resolved by preferring the
+        # URL: `provider_id` OUTRANKS the URL in the viewer, so deriving over
+        # a stored id would change which video plays. A contradiction the user
+        # has to see.
+        if source["provider"] == "youtube" and is_provider_id(source["provider_id"]):
+            return source
+        return INVALID_SOURCE_STATE
+    # No identity stored at all -- the legacy shape. Deriving from the URL this
+    # row already carries overrides nothing; it is the same answer every other
+    # reader of the row reaches.
+    derived = canonical_source({"kind": "video", "url": stored_url})
+    if derived is None:
+        return INVALID_SOURCE_STATE
+    return derived
+
+
+def stored_row_is_canonical(conn, work_id):
+    """True when the row's OWN columns already are what this module writes.
+
+    Deliberately the raw columns rather than `current_source()`'s answer: that
+    one derives a legacy row's identity, so asking it would report every legacy
+    row as already canonical and the repair below would never run.
+    """
+    row = conn.execute(
+        "SELECT source_kind, provider, provider_id FROM works WHERE id = ?",
+        (work_id,)).fetchone()
+    if row is None:
+        return False
+    return ((row[0] or "").strip().lower() == "video"
+            and (row[1] or "").strip().lower() == "youtube"
+            and is_provider_id((row[2] or "").strip()))
 
 
 # Presentation columns `set_source_on_conn` also rewrites. They are not
@@ -253,6 +316,13 @@ def get_source_state(db, work_id):
         row = conn.execute("SELECT id FROM works WHERE id = ?", (work_id,)).fetchone()
         if row is None:
             return None
+        # The SAME classification the mutation uses. Telling the editor "this is
+        # a video, here is its revision" while the mutation answers
+        # "unsupported transition" is the disagreement this shares a function
+        # to prevent.
+        existing = current_source(conn, work_id)
+        if existing == INVALID_SOURCE_STATE:
+            return INVALID_SOURCE_STATE
         return {"work_id": work_id, "revision": get_revision(conn, work_id)}
 
 
@@ -271,7 +341,7 @@ def set_source_on_conn(conn, work_id, source):
     source change. The next oEmbed refresh fills it in.
     """
     existing = current_source(conn, work_id)
-    if existing is None:
+    if existing is None or existing == INVALID_SOURCE_STATE:
         return False, 0
     revision = get_revision(conn, work_id)
     if existing["source_kind"] == source["source_kind"] and \
@@ -280,6 +350,19 @@ def set_source_on_conn(conn, work_id, source):
         # not rewrite the column either -- that would be a write with no
         # revision, which is exactly what makes another device's staleness
         # check lie.
+        #
+        # A LEGACY row is the one exception, and it is not an exception to that
+        # rule: its identity columns are absent, and what goes in is what this
+        # very row's URL already says. Nothing any device believes about which
+        # video this is changes, so no revision is manufactured -- the row
+        # simply stops being the shape that made the rest of the product
+        # disagree with this module about it.
+        if not stored_row_is_canonical(conn, work_id):
+            conn.execute(
+                "UPDATE works SET source_kind = ?, provider = ?, provider_id = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (existing["source_kind"], existing["provider"],
+                 existing["provider_id"], work_id))
         return False, revision
     conn.execute(
         "UPDATE works SET source_kind = ?, provider = ?, provider_id = ?, source_url = ?, "
@@ -352,6 +435,12 @@ def apply(db, conn, op, received_at):
     if existing is None:
         result["code"] = "ENTITY_NOT_FOUND"
         return 404, result
+    # A Work the product calls a video but whose identity cannot be stated.
+    # Guessing one from an unparseable URL would be asserting which video this
+    # is; the user has to fix the row instead.
+    if existing == INVALID_SOURCE_STATE:
+        result["code"] = INVALID_SOURCE_STATE
+        return 409, result
     # Only an existing VIDEO Work may have its source replaced. Turning a PDF
     # into a video, or the reverse, is a different decision with different
     # consequences for `file_path` and for which viewer renders -- there is no

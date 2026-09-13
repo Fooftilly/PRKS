@@ -92,6 +92,13 @@
         } else if (result.code === 'UNSUPPORTED_SOURCE_TRANSITION') {
             item.appendChild(document.createTextNode(
                 'This file is no longer a video on the server, so its video source cannot be changed. '));
+        } else if (result.code === 'INVALID_SOURCE_STATE') {
+            /* An older row the product reads as a video but whose stored link
+             * names no video PRKS can resolve. Nothing is guessed on the
+             * user's behalf -- saying which video it is, is the user's to do. */
+            item.appendChild(document.createTextNode(
+                'This file\u2019s existing video link cannot be read, so it cannot be '
+                + 'changed from here yet. '));
         } else {
             item.appendChild(document.createTextNode(
                 'The video source could not synchronize (' + (result.code || 'protocol error') + '). '));

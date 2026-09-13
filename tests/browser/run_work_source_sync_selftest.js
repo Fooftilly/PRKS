@@ -166,7 +166,8 @@ function handlerContract() {
     assert.equal(globalThis.prksWorkSourceConflictIdentity(conflict),
         globalThis.prksWorkSourceIdentity(globalThis.prksCanonicalWorkSource(WATCH('CCC'))),
         'and it is spelled the same way an identity from a Work record is');
-    for (const code of ['ENTITY_NOT_FOUND', 'UNSUPPORTED_SOURCE_TRANSITION']) {
+    for (const code of ['ENTITY_NOT_FOUND', 'UNSUPPORTED_SOURCE_TRANSITION',
+        'INVALID_SOURCE_STATE']) {
         assert.equal(handler.isResult({ work_id: 'W-1', code }, operation), true, code);
     }
     assert.equal(handler.isResult({ work_id: 'W-1', code: 'SOMETHING' }, operation), false);

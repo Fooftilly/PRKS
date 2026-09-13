@@ -3250,6 +3250,86 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         return [w.get("title") for w in works]
 
+    def test_an_inferred_video_is_enriched_exactly_like_a_declared_one(self):
+        """`source_kind` is not what makes a Work a video -- the inference is.
+
+        Enrichment was gated on the caller having said "video", so two requests
+        with identical canonical identity got different titles, authors and
+        thumbnails purely because one of them said so twice. Both go down the
+        same path now, decided by the same authoritative function `add_work()`
+        classifies with.
+        """
+        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        seen = []
+
+        def fake_oembed(requested):
+            seen.append(requested)
+            return {"title": "Enriched Title", "author_name": "Enriched Channel",
+                    "thumbnail_url": "https://img.example/thumb.jpg"}
+
+        with patch.object(server_module, "_fetch_youtube_oembed", fake_oembed):
+            status_declared, declared = self._sv_json(
+                "POST", "/api/works",
+                {"source_kind": "video", "source_url": url})
+            status_inferred, inferred = self._sv_json(
+                "POST", "/api/works", {"source_url": url})
+
+        self.assertEqual((status_declared, status_inferred), (200, 200))
+        self.assertEqual(seen, [url, url], "the same enrichment boundary, twice")
+
+        rows = [self._sv_json("GET", "/api/works/" + w["id"], None)[1]
+                for w in (declared, inferred)]
+        for row in rows:
+            self.assertEqual(row["source_kind"], "video")
+            self.assertEqual(row["provider"], "youtube")
+            self.assertEqual(row["provider_id"], "dQw4w9WgXcQ")
+            self.assertEqual(row["title"], "Enriched Title")
+            self.assertEqual(row["author_text"], "Enriched Channel")
+            self.assertEqual(row["thumb_url"], "https://img.example/thumb.jpg")
+
+    def test_a_file_backed_work_is_not_enriched_however_its_url_looks(self):
+        """A file makes it a PDF; its URL is provenance. Enriching there would
+        retitle a paper after the video page it was cited from."""
+        seen = []
+        with patch.object(server_module, "_fetch_youtube_oembed",
+                          lambda u: seen.append(u)):
+            status, created = self._sv_json(
+                "POST", "/api/works",
+                {"title": "Paper", "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode(),
+                 "file_name": "paper.pdf",
+                 "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+        self.assertEqual(status, 200, created)
+        self.assertEqual(seen, [], "no video enrichment for a file-backed Work")
+        row = self._sv_json("GET", "/api/works/" + created["id"], None)[1]
+        self.assertEqual(row["title"], "Paper")
+        self.assertIsNone(row["provider_id"])
+
+    def test_source_kind_is_stored_canonically(self):
+        for sent, stored in (("PDF", "pdf"), ("Pdf", "pdf"), ("VIDEO", "video")):
+            with self.subTest(sent=sent):
+                payload = {"title": "Cased", "source_kind": sent}
+                if stored == "video":
+                    payload["source_url"] = "https://youtu.be/dQw4w9WgXcQ"
+                else:
+                    payload["file_b64"] = base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode()
+                    payload["file_name"] = "c.pdf"
+                status, created = self._sv_json("POST", "/api/works", payload)
+                self.assertEqual(status, 200, created)
+                row = self._sv_json("GET", "/api/works/" + created["id"], None)[1]
+                self.assertEqual(row["source_kind"], stored,
+                                 "the column holds the canonical spelling, "
+                                 "not one every reader has to normalize")
+
+    def test_an_unknown_source_kind_is_refused(self):
+        before = self._work_titles()
+        status, body = self._sv_json(
+            "POST", "/api/works",
+            {"title": "Web Work", "source_kind": "web",
+             "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+        self.assertEqual(status, 400)
+        self.assertIn("not a source kind", body.get("error", ""))
+        self.assertEqual(self._work_titles(), before)
+
     def test_video_work_malformed_url_rejected_no_work_created(self):
         before = self._work_titles()
         status, body = self._sv_json(

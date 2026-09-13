@@ -1063,6 +1063,17 @@ conflict:
 > No video Work can enter canonical storage unless its URL, provider and
 > provider_id describe one parser-validated, bounded source identity.
 
+### Legacy rows are read, not migrated
+
+Canonical creation can no longer produce a video Work without an explicit kind
+and a derived identity, but older databases can. Those rows are classified by
+the same `effective_source_kind()` the product reads them with, and their
+identity is derived from the URL they already carry when none is stored — so
+the source endpoint and the source mutation never disagree about whether a row
+is a video. A row whose identity cannot be stated at all answers
+`INVALID_SOURCE_STATE` on both, rather than one inventing an answer the other
+refuses. See docs/work-source-identity.md for what is deliberately not guessed.
+
 ### The URL has a bound too, on both sides
 
 `canonical_source()` bounds the URL at `MAX_SOURCE_URL_UTF8_BYTES`, and the

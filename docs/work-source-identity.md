@@ -282,6 +282,42 @@ overlay must write a *derived* `source_kind` — the same
 "convert-at-the-boundary" decision `thumb_page` faced, and a reason to prefer
 extending the projection over teaching cards to re-derive.
 
+### Canonical new rows vs legacy inferred-video rows
+
+Two distinct things, and the difference matters when reading the tables above.
+
+**Canonical new rows.** Everything `add_work()` creates stores an explicit,
+lower-case `source_kind` (`pdf` or `video`) and, for a video, the full derived
+identity. `PDF`/`Pdf`/`VIDEO` are normalized at the boundary rather than left
+for every consumer to lower-case — a reader that forgets sees a kind matching
+nothing. An unknown kind is refused.
+
+**Legacy inferred-video rows.** Older databases may hold `source_kind` NULL, no
+file and a valid video URL. The product reads that as a video (§3, step 4), so
+the source APIs must too — reading the *column* made this module disagree with
+the rest of the product about the same row: shown as a Video, offered the Video
+source editor, then refused as `UNSUPPORTED_SOURCE_TRANSITION`.
+
+`current_source()` therefore classifies with `effective_source_kind()` and, when
+no identity is stored at all, derives it from the URL the row already carries.
+That overrides nothing — it is the same answer every other reader reaches.
+
+Three things it deliberately does **not** do:
+
+- **Guess.** A video-classified row whose URL today's parser refuses has no
+  identity, and both the state endpoint and the mutation answer
+  `INVALID_SOURCE_STATE` rather than inventing one.
+- **Resolve a contradiction.** If an identity *is* stored but is not one this
+  module can state — a malformed or unreportably large `provider_id` — that is
+  `INVALID_SOURCE_STATE` too. Preferring the URL there would change which video
+  plays, because `provider_id` outranks the URL in the viewer (§3).
+- **Migrate.** The data audit found no such rows, so there is no startup
+  migration and no bulk rewrite. A legacy row is upgraded to the canonical
+  shape by its first successful `SET_WORK_SOURCE`. A convergent write — naming
+  the video the row already has — fills in the classification columns from that
+  row's own URL and advances **no revision**: nothing any device believes about
+  which video this is has changed.
+
 ### Creation classifies by the same rule the runtime reads by
 
 `source_kind` was never required for a Work to BE a video: §3's precedence

@@ -14,7 +14,8 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import work_metadata_sync, work_open_sync, work_source_sync, work_tag_sync
+from backend import (work_metadata_sync, work_open_sync, work_role_sync,
+                     work_source_sync, work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_annotations import (
@@ -337,12 +338,44 @@ def _prks_sql_linked_authors_concat(work_alias: str, column_alias: str = "linked
     )
 
 
+def _prks_sql_linked_people_json(work_alias: str, column_alias: str = "linked_people") -> str:
+    """Scalar subquery: the Work's people as an ordered structured list.
+
+    The three columns above are FLATTENED -- a comma-joined name string and two
+    first-name scalars -- and flattening is lossy in exactly the way a local
+    relationship overlay needs: a pending removal cannot be subtracted from
+    "Ann Lee, Bo Ng" without guessing where one name ends, and names legitimately
+    contain commas. Nor can a pending addition know whether an Author already
+    remains, which is what decides between showing a linked name and falling
+    back to `author_text`.
+
+    So the row also carries the relationship itself: person id, role and the
+    display name that link resolves to, in the same order the flattened columns
+    use. Small -- a few tens of bytes per link -- and it is what lets the
+    overlay recompute the flattened columns EXACTLY rather than approximately,
+    so the existing credit helper keeps deciding what the user sees.
+    """
+    wid = f"{work_alias}.id"
+    ca = (column_alias or "linked_people").replace('"', "")
+    disp = _prks_sql_role_display_name_expr("p", "r")
+    return (
+        "(SELECT json_group_array(json_object("
+        "'person_id', r.person_id, 'role_type', r.role_type, 'display_name', " + disp + ")) "
+        "FROM (SELECT * FROM roles r2 "
+        f"WHERE r2.work_id = {wid} ORDER BY r2.order_index ASC, r2.rowid ASC) r "
+        f"JOIN persons p ON p.id = r.person_id) AS {ca}"
+    )
+
+
 def _prks_sql_work_summary_person_extras(work_alias: str) -> str:
-    """Append to work-summary SELECTs: first author/editor + full author list for cards."""
+    """Append to work-summary SELECTs: first author/editor, the full author list
+    for cards, and the structured links the relationship overlay recomputes
+    those from."""
     pa = _prks_sql_first_linked_person_for_role(work_alias, "Author", "primary_author")
     pe = _prks_sql_first_linked_person_for_role(work_alias, "Editor", "primary_editor")
     la = _prks_sql_linked_authors_concat(work_alias)
-    return f"{pa}, {pe}, {la}"
+    lp = _prks_sql_linked_people_json(work_alias)
+    return f"{pa}, {pe}, {la}, {lp}"
 
 
 def _prks_search_tokens(q: str) -> List[str]:
@@ -449,7 +482,11 @@ def _canonical_new_source(source_kind, source_url, provider, provider_id, file_p
             raise ValueError(
                 "provider and provider_id belong to a video source; this Work is "
                 "not one")
-        return source_kind, source_url, provider, provider_id
+        # The DECLARED kind, canonically spelled. Storing "PDF" and having every
+        # consumer lower-case it later means the canonical representation lives
+        # in each reader rather than in the column -- and a reader that forgets
+        # sees a kind that matches nothing.
+        return declared, source_url, provider, provider_id
 
     canonical = work_source_sync.canonical_source({"kind": "video", "url": url})
     if canonical is None:
@@ -744,8 +781,27 @@ def _processing_safe_dest_name(filename: str) -> str:
     return safe
 
 
-def enrich_work_rows_pdf_file_size(rows: Optional[List[dict]], pdfs_dir: str) -> None:
-    """Set file_size_bytes on each row for on-disk PDFs under the PDF storage dir; else None."""
+def _decode_linked_people(rows: Optional[List[dict]]) -> None:
+    for row in rows or ():
+        raw = row.get("linked_people")
+        if isinstance(raw, str):
+            try:
+                row["linked_people"] = json.loads(raw)
+            except (ValueError, TypeError):
+                row["linked_people"] = []
+        elif raw is None and "linked_people" in row:
+            row["linked_people"] = []
+
+
+def finish_work_summary_rows(rows: Optional[List[dict]], pdfs_dir: str) -> None:
+    """Complete a work-summary row: on-disk PDF size, and structured links.
+
+    `linked_people` arrives from SQLite as JSON TEXT. Decoded here rather than
+    left for the client: a nested JSON string would make every consumer parse
+    it again per row per render, and a row validator would have to accept a
+    string where the shape is actually a list.
+    """
+    _decode_linked_people(rows)
     if not rows:
         return
     t0 = clock_ns()
@@ -1776,7 +1832,7 @@ class PRKSDatabase:
         sel = _prks_work_summary_select_with_folder("works")
         pex = _prks_sql_work_summary_person_extras("works")
         rows = list(self.execute_query(f"SELECT {sel}, {pex} FROM works ORDER BY created_at DESC"))
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         return rows
 
     def etag_works_catalog(self) -> str:
@@ -1811,7 +1867,7 @@ class PRKSDatabase:
                 "ORDER BY works.title COLLATE NOCASE ASC, works.id ASC"
             )
         )
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         return rows
 
     def get_recent_browse(self, limit: int = 30) -> List[dict]:
@@ -1837,7 +1893,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         return rows
 
     def get_recently_added_browse(self, limit: int = 50) -> List[dict]:
@@ -1859,7 +1915,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         return rows
 
     @staticmethod
@@ -1984,7 +2040,7 @@ class PRKSDatabase:
                 tuple(ordered_ids),
             )
         )
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ordered_ids if i in by_id]
 
@@ -2211,7 +2267,7 @@ class PRKSDatabase:
                     tuple(id_list),
                 )
             )
-            enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+            finish_work_summary_rows(rows, self.storage.pdfs_dir)
             return rows
 
         if not ordered_ids:
@@ -2225,7 +2281,7 @@ class PRKSDatabase:
                 tuple(ordered_ids),
             )
         )
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ordered_ids if i in by_id]
 
@@ -2275,7 +2331,7 @@ class PRKSDatabase:
                 tuple(id_list),
             )
         )
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         ordered.extend(rows)
         return ordered
 
@@ -2296,7 +2352,7 @@ class PRKSDatabase:
         ORDER BY w.created_at DESC
         """
         rows = list(self.execute_query(query, (tid,)))
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         return rows
 
     def get_work(self, work_id: str) -> Optional[dict]:
@@ -2357,7 +2413,7 @@ class PRKSDatabase:
         # save, notes save) silently reordered Recent, and left `recent:index`
         # eligible while the server representation had changed. Marking a Work
         # opened is now the explicit `mark_work_opened()` operation below.
-        enrich_work_rows_pdf_file_size([work], self.storage.pdfs_dir)
+        finish_work_summary_rows([work], self.storage.pdfs_dir)
         return work
 
     def mark_work_opened(self, work_id: str) -> bool:
@@ -2400,7 +2456,7 @@ class PRKSDatabase:
         ]
         if not rows:
             return None
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         return rows[0]
 
     def get_recent_works(self, limit: int = 30) -> List[dict]:
@@ -2412,7 +2468,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         return rows
 
     def get_recently_added_works(self, limit: int = 50) -> List[dict]:
@@ -2424,7 +2480,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        enrich_work_rows_pdf_file_size(rows, self.storage.pdfs_dir)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         return rows
 
     def update_work_metadata(self, work_id: str, fields: dict):
@@ -2599,7 +2655,7 @@ class PRKSDatabase:
             """.format(wsel=wsel, pex=pex),
             (playlist_id,),
         )
-        enrich_work_rows_pdf_file_size(p["items"], self.storage.pdfs_dir)
+        finish_work_summary_rows(p["items"], self.storage.pdfs_dir)
         return p
 
     def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
@@ -2949,7 +3005,7 @@ class PRKSDatabase:
         ORDER BY w.created_at DESC
         """
         folder["works"] = list(self.execute_query(query, (folder_id,)))
-        enrich_work_rows_pdf_file_size(folder["works"], self.storage.pdfs_dir)
+        finish_work_summary_rows(folder["works"], self.storage.pdfs_dir)
         folder['tags'] = self.get_folder_tags(folder_id)
         return folder
 
@@ -3321,7 +3377,7 @@ class PRKSDatabase:
         ORDER BY r.order_index ASC, r.rowid ASC
         """
         person["works"] = list(self.execute_query(query, (person_id,)))
-        enrich_work_rows_pdf_file_size(person["works"], self.storage.pdfs_dir)
+        finish_work_summary_rows(person["works"], self.storage.pdfs_dir)
         person["groups"] = self.get_groups_for_person(person_id)
         return person
 
@@ -3698,17 +3754,15 @@ class PRKSDatabase:
             raise ValueError(
                 f"This person is already linked to this file as {role_type}."
             )
-        cn = (credit_name or "").strip() or None
-        query = """
-        INSERT INTO roles (person_id, work_id, role_type, order_index, credit_name)
-        VALUES (?, ?, ?, ?, ?)
-        """
-        self.execute_query(query, (person_id, work_id, role_type, order_index, cn))
-        # Bust /api/works ETag: catalog etag includes roles row count; also bump work row for clients/UI.
-        self.execute_query(
-            "UPDATE works SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (work_id,),
-        )
+        # ONE revision-aware boundary, whichever path the change arrives by.
+        # A relationship written here without advancing its revision would be
+        # invisible to every offline device -- which would then overwrite it
+        # believing itself current. `order_index` is assigned there, by the
+        # server, as "append after what is already on this Work".
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            work_role_sync.set_state(conn, work_id, person_id, role_type, True,
+                                     credit_name=credit_name)
 
     def next_role_order_index(self, work_id: str) -> int:
         """Next order_index for a new role on this work (append after existing links)."""
@@ -3757,24 +3811,19 @@ class PRKSDatabase:
             )
         return updated
 
-    def delete_work_role(self, work_id: str, person_id: str, role_type: str, order_index: int) -> bool:
-        """Remove one role row (composite PK). Returns True if a row was deleted."""
+    def delete_work_role(self, work_id: str, person_id: str, role_type: str,
+                         order_index: int = 0) -> bool:
+        """Remove one Work-Person role. Returns True if a row was deleted.
+
+        `order_index` is accepted for URL compatibility and deliberately NOT
+        matched on: at most one row exists per `(person, work, role_type)`, and
+        a caller passing a stale index would otherwise silently remove nothing.
+        The same revision-aware boundary the durable operation uses, so a
+        removal made here is visible to every offline device.
+        """
         with self.connection() as conn:
-            cur = conn.execute(
-                """
-                DELETE FROM roles
-                WHERE work_id = ? AND person_id = ? AND role_type = ? AND order_index = ?
-                """,
-                (work_id, person_id, role_type, int(order_index)),
-            )
-            deleted = cur.rowcount > 0
-            conn.commit()
-        if deleted:
-            self.execute_query(
-                "UPDATE works SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (work_id,),
-            )
-        return deleted
+            conn.execute("BEGIN IMMEDIATE")
+            return work_role_sync.set_state(conn, work_id, person_id, role_type, False)
 
     # --- Concepts & Arguments ---
     def add_concept(self, name: str, description: str = "") -> str:

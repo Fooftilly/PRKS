@@ -1,4 +1,4 @@
-from backend import work_source_sync
+from backend import work_role_sync, work_source_sync
 from backend.sync_protocol import process_operation
 import http.server
 import socketserver
@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.db_manager import (
     PRKSDatabase,
     BulkWorkError,
+    effective_source_kind,
     SavedViewError,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
@@ -1974,8 +1975,32 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 data = work_source_sync.get_source_state(db, path.split('/')[3])
                 if data is None:
                     self.send_json(404, {"error": "Work not found"})
+                elif data == work_source_sync.INVALID_SOURCE_STATE:
+                    # The product reads this row as a video, but its identity
+                    # cannot be stated. Said plainly rather than answered with
+                    # a revision the mutation would then refuse to act on.
+                    self.send_json(409, {
+                        "error": "This file's video source cannot be read. Its link is not a "
+                                 "supported video URL.",
+                        "code": work_source_sync.INVALID_SOURCE_STATE})
                 else:
                     etag = db.etag_for_representation("work-source-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/works/') and path.endswith('/people-state') and len(path.split('/')) == 5:
+                # Relationship REVISIONS, including tombstones. The Work detail
+                # already carries the linked people themselves; duplicating
+                # Person objects here would double what every read costs for
+                # values the client already holds. A scope with a revision and
+                # no live relationship is what tells an offline device its own
+                # pending removal is current rather than stale.
+                data = work_role_sync.get_roles_state(db, path.split('/')[3])
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    etag = db.etag_for_representation("work-people-state", data)
                     if self._prks_if_none_match(etag):
                         self._send_json_not_modified(etag)
                         return
@@ -2467,8 +2492,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 source_mime = (data.get('source_mime') or '').strip()
                 urldate = (data.get('urldate') or '').strip()
 
-                # Video ingest: URL + oEmbed metadata
-                if source_kind == 'video' and source_url:
+                # Video ingest: URL + oEmbed metadata.
+                #
+                # Decided by the EFFECTIVE kind, using the same authoritative
+                # function `add_work()` classifies with. A caller that omitted
+                # a redundant `source_kind` still created a video -- the
+                # inference makes "no file, has a URL" one -- and enriching only
+                # the explicitly labelled ones meant two Works with identical
+                # canonical identity got different titles, authors and
+                # thumbnails purely because one request said so twice.
+                if effective_source_kind(source_kind, source_url, file_path) == 'video':
                     if not provider:
                         try:
                             host = (urlparse(source_url).netloc or '').lower()

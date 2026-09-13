@@ -253,6 +253,7 @@
                     Number.isSafeInteger(data.current_bytes) &&
                     Number.isSafeInteger(data.requested_bytes) && !has('source_url');
             case 'ENTITY_NOT_FOUND': case 'UNSUPPORTED_SOURCE_TRANSITION':
+            case 'INVALID_SOURCE_STATE':
                 return true;
             default: return false;
         }
