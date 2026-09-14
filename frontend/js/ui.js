@@ -1470,6 +1470,8 @@ async function prksEditRoleCreditOnWork(btn) {
     } else if (result.code === 'busy') {
         await prksAlertMessage('This link is syncing or needs a decision. Try again shortly.',
             'Still syncing');
+    } else if (result.code === 'dependency-failed') {
+        await prksAlertMessage('This person could not be created on PRKS, so they cannot be linked to a file. Discard that creation in Sync Diagnostics and add them again.', 'Could not save');
     } else if (result.code !== 'saved') {
         await prksAlertMessage('Could not update name on file.', 'Could not save');
     }
@@ -1646,6 +1648,10 @@ async function addRoleToWorkFromMetaEditor(workId) {
         if (result.code === 'busy') {
             await prksAlertMessage('This link is syncing or needs a decision. Try again shortly.',
                 'Still syncing');
+            return;
+        }
+        if (result.code === 'dependency-failed') {
+            await prksAlertMessage('This person could not be created on PRKS, so they cannot be linked to a file. Discard that creation in Sync Diagnostics and add them again.', 'Could not link');
             return;
         }
         if (result.code !== 'saved') {
@@ -3462,6 +3468,8 @@ async function prksRemoveWorkRoleLink(btn) {
     } else if (result.code === 'busy') {
         await prksAlertMessage('This link is syncing or needs a decision. Try again shortly.',
             'Still syncing');
+    } else if (result.code === 'dependency-failed') {
+        await prksAlertMessage('This person could not be created on PRKS, so they cannot be linked to a file. Discard that creation in Sync Diagnostics and add them again.', 'Could not remove');
     } else if (result.code !== 'saved') {
         await prksAlertMessage('Could not remove link.', 'Error');
     }

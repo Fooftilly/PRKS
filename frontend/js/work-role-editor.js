@@ -218,9 +218,14 @@
                 { person_id: personId, role_type: roleType, state: desired },
                 base, (person || work) ? { person: person || undefined, work: work || undefined } : null);
         } catch (error) {
-            return {
-                code: error && error.prksLocalStoreCode === 'scope_busy' ? 'busy' : 'failed',
-            };
+            /* Named codes, never one bucket. `dependency-failed` is not a
+             * failure of THIS save at all -- the link is fine, the Person it
+             * names is the thing the server refused -- and "Could not create
+             * link" would send the user looking in the wrong place. */
+            const code = error && error.prksLocalStoreCode;
+            if (code === 'scope_busy') return { code: 'busy' };
+            if (code === 'dependency_failed') return { code: 'dependency-failed' };
+            return { code: 'failed' };
         }
         if (mounted) {
             state.error = null;

@@ -140,15 +140,18 @@ async function failedPrerequisite() {
 async function readinessJudgesOutcome() {
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
     const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
-    /* A prerequisite the server REFUSED. It is marked `acknowledged` because
-     * nothing further is owed on it -- that is what the status means here --
-     * and it records why. A dependent enqueued against it must still not run:
-     * reading the status alone cannot tell "applied" from "refused". */
-    await store.updateOperationSyncState(created.op_id, {
-        status: 'acknowledged', server_result: { code: 'INVALID_ENVELOPE' } });
+    /* The dependent is enqueued while the creation is still in flight -- which
+     * is the only way it can be, now that the enqueue boundary refuses a
+     * prerequisite that has already failed. The refusal lands afterwards. */
     await store.saveWorkPersonRole('W-1',
         { person_id: created.entity_id, role_type: 'Author', state: '' },
         { state: null, revision: 0 }, null);
+    /* A prerequisite the server REFUSED. It is marked `acknowledged` because
+     * nothing further is owed on it -- that is what the status means here --
+     * and it records why. The dependent already sitting behind it must still
+     * not run: reading the status alone cannot tell "applied" from "refused". */
+    await store.updateOperationSyncState(created.op_id, {
+        status: 'acknowledged', server_result: { code: 'INVALID_ENVELOPE' } });
 
     const sent = [];
     const runtime = runtimeFor(store, async (_path, options) => {
@@ -377,6 +380,129 @@ async function resolutionDoesNotOrphanDependents() {
     assert.equal(moved.status, 'pending', 'and is still the user’s live intent, not a conflict');
 }
 
+/* ---- a failed prerequisite cannot acquire NEW dependents ---- */
+async function failedPrerequisiteRefusesNewDependents() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const a = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+    /* A dependent is what KEEPS the refused row in the store: retirement waits
+     * for dependents, so a failed prerequisite is exactly the kind of row that
+     * is still there to be named by mistake. */
+    const b = await store.saveWorkPersonRole('W-1',
+        { person_id: a.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    assert.deepEqual(b.depends_on, [a.op_id]);
+    await store.updateOperationSyncState(a.op_id, {
+        status: 'acknowledged', server_result: { code: 'INVALID_ENVELOPE' } });
+
+    const before = (await store.listOperations()).length;
+    await assert.rejects(
+        () => store.enqueueOperation({
+            operation: 'SET_WORK_PERSON_ROLE_CREDIT', entity_type: 'work', entity_id: 'W-1',
+            payload: { person_id: a.entity_id, role_type: 'Author', credit_name: 'J. Doe' },
+            base_revision: 0, depends_on: [a.op_id],
+        }),
+        e => {
+            /* A code of its own, not `invalid_envelope`: the envelope is
+             * perfectly well formed, and the caller can only explain this to
+             * the user if it can tell the two apart. */
+            assert.equal(e.prksLocalStoreCode, 'dependency_failed');
+            assert.ok(e.message.indexOf(a.op_id) !== -1, 'it names WHICH prerequisite');
+            assert.ok(e.message.indexOf('INVALID_ENVELOPE') !== -1, 'and what happened to it');
+            return true;
+        });
+    /* Nothing written. Persisting it as `pending` would be a row that can never
+     * become eligible: invisible in the queue's own terms, and not a decision
+     * the user was ever offered. */
+    assert.equal((await store.listOperations()).length, before,
+        'the doomed operation is refused, not stored and settled afterwards');
+
+    /* Mixed prerequisites: one succeeded, one failed. The whole enqueue goes. */
+    const healthy = await store.createPerson({ first_name: 'Ada', last_name: 'Lovelace' });
+    await store.updateOperationSyncState(healthy.op_id, {
+        status: 'acknowledged', server_result: null });
+    await assert.rejects(
+        () => store.enqueueOperation({
+            operation: 'SET_WORK_PERSON_ROLE_CREDIT', entity_type: 'work', entity_id: 'W-2',
+            payload: { person_id: a.entity_id, role_type: 'Author', credit_name: 'J. Doe' },
+            base_revision: 0, depends_on: [healthy.op_id, a.op_id],
+        }),
+        e => e.prksLocalStoreCode === 'dependency_failed');
+
+    /* Control: a prerequisite still IN FLIGHT is a perfectly ordinary
+     * dependency. The rule is about a terminal outcome, not about being
+     * unacknowledged -- a guard that refused this would forbid the entire
+     * feature. */
+    const live = await store.createPerson({ first_name: 'Grace', last_name: 'Hopper' });
+    const ok = await store.enqueueOperation({
+        operation: 'ADD_WORK_PERSON_ROLE', entity_type: 'work', entity_id: 'W-3',
+        payload: { person_id: live.entity_id, role_type: 'Author', credit_name: '' },
+        base_revision: 0, depends_on: [live.op_id],
+    });
+    assert.deepEqual(ok.depends_on, [live.op_id]);
+    assert.equal(ok.status, 'pending');
+
+    /* And an already-SUCCEEDED prerequisite may still be named: it is satisfied
+     * the moment it is read, so nothing is stranded. */
+    const alsoOk = await store.enqueueOperation({
+        operation: 'ADD_WORK_PERSON_ROLE', entity_type: 'work', entity_id: 'W-4',
+        payload: { person_id: healthy.entity_id, role_type: 'Author', credit_name: '' },
+        base_revision: 0, depends_on: [healthy.op_id],
+    });
+    assert.deepEqual(alsoOk.depends_on, [healthy.op_id]);
+}
+
+/* ---- the family writer does not hand the boundary a dead prerequisite ---- */
+async function roleSaveRejectsAFailedCreation() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const create = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+    await store.saveWorkPersonRole('W-1',
+        { person_id: create.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    await store.updateOperationSyncState(create.op_id, {
+        status: 'acknowledged', server_result: { code: 'INVALID_ENVELOPE' } });
+
+    const before = (await store.listOperations()).length;
+    /* The creation row is still present -- retained for the dependent that
+     * already names it -- so a lookup that asks only "is there a CREATE_PERSON
+     * for this id" finds it and attaches a dependency that can never clear.
+     * Nor is silently dropping the dependency an answer: the link would then be
+     * sent for a Person the server has never heard of. */
+    await assert.rejects(
+        () => store.saveWorkPersonRole('W-2',
+            { person_id: create.entity_id, role_type: 'Editor', state: '' },
+            { state: null, revision: 0 }, null),
+        e => {
+            assert.equal(e.prksLocalStoreCode, 'dependency_failed');
+            /* The FAMILY's diagnosis, not the boundary's. Letting the lookup
+             * hand a dead prerequisite to the enqueue guard would also reject
+             * -- with a message naming an op_id and a protocol code, which
+             * tells the user nothing about the Person they were trying to
+             * link. The writer knows what the dependency MEANS here. */
+            assert.ok(/person/i.test(e.message) && !/depends_on/.test(e.message),
+                'the refusal explains the Person, not the envelope');
+            return true;
+        });
+    assert.equal((await store.listOperations()).length, before,
+        'and no role operation is written for a Person that cannot exist');
+
+    /* Control: the same save against a creation still in flight is ordinary. */
+    const live = await store.createPerson({ first_name: 'Ada', last_name: 'Lovelace' });
+    const role = await store.saveWorkPersonRole('W-2',
+        { person_id: live.entity_id, role_type: 'Editor', state: '' },
+        { state: null, revision: 0 }, null);
+    assert.deepEqual(role.depends_on, [live.op_id]);
+
+    /* Control: once creation has SUCCEEDED the Person is canonical, so a later
+     * role names no prerequisite at all. */
+    await store.updateOperationSyncState(live.op_id, {
+        status: 'acknowledged', server_result: null });
+    const later = await store.saveWorkPersonRole('W-3',
+        { person_id: live.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    assert.deepEqual(later.depends_on, [],
+        'an acknowledged creation needs no dependency and must not keep the row alive');
+}
+
 async function main() {
     await ordering();
     await retention();
@@ -386,6 +512,8 @@ async function main() {
     await failurePropagatesThroughAChain();
     await failureFansOutWithoutRepeating();
     await resolutionDoesNotOrphanDependents();
+    await failedPrerequisiteRefusesNewDependents();
+    await roleSaveRejectsAFailedCreation();
     console.log('All ' + checks + ' operation dependency checks passed');
 }
 

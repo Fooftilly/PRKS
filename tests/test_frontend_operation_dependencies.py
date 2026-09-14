@@ -94,3 +94,50 @@ class OperationDependencyTests(unittest.TestCase):
         self.assertIn('### Which operations may be prerequisites', doc)
         section = doc[doc.index('### Which operations may be prerequisites'):]
         self.assertIn('**Any operation may be a prerequisite.**', section)
+
+    def test_a_failed_prerequisite_cannot_acquire_new_dependents(self):
+        """Existence is not enough at the enqueue boundary.
+
+        A terminally refused operation is retained exactly because something
+        already depends on it, so it is the row a later operation is most
+        likely to name -- and the result would be a `pending` row that can
+        never become eligible and was never offered to the user as a decision.
+        """
+        store = (FRONTEND / 'local-store.js').read_text()
+        at = store.index('async function assertDependenciesUsableIn(')
+        body = store[at: store.index('\n        }\n', at)]
+        self.assertIn('dependencyTerminallyFailed(', body)
+        self.assertIn("'dependency_failed'", body)
+
+        # One definition of failure, expressed as the negation of the one
+        # definition of success, so the two cannot drift apart.
+        at = store.index('function dependencyTerminallyFailed(')
+        predicate = store[at: store.index('\n        }\n', at)]
+        self.assertIn('!dependencySucceeded(row)', predicate)
+
+    def test_the_role_writer_uses_the_stores_definition_of_a_healthy_dependency(self):
+        store = (FRONTEND / 'local-store.js').read_text()
+        at = store.index('function saveWorkPersonRole(')
+        body = store[at: store.index('\n        function ', at + 10)]
+        self.assertIn('dependencyTerminallyFailed(', body,
+                      'the role writer must not select a refused creation')
+        self.assertIn("'dependency_failed'", body,
+                      'and must refuse rather than silently drop the dependency')
+
+    def test_every_role_surface_names_the_failed_dependency_explicitly(self):
+        """G8: a refused prerequisite is not "could not save".
+
+        The link itself is fine; the Person it names is what the server
+        refused, and collapsing that into the generic bucket sends the user
+        looking in the wrong place.
+        """
+        editor = (FRONTEND / 'work-role-editor.js').read_text()
+        self.assertIn("'dependency_failed'", editor)
+        self.assertIn("'dependency-failed'", editor)
+        for name in ('ui.js', 'app.js'):
+            source = (FRONTEND / name).read_text()
+            with self.subTest(module=name):
+                handled = source.count("'dependency-failed'")
+                calls = source.count('prksSaveWorkPersonRoleDurably(')
+                self.assertEqual(handled, calls,
+                                 'every role-save call site must name this outcome')

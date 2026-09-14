@@ -4310,7 +4310,9 @@ function initForms() {
                       ? 'That name is too long for this file.'
                       : result.code === 'busy'
                         ? 'This link is syncing or needs a decision. Try again shortly.'
-                        : 'Could not create link.';
+                        : result.code === 'dependency-failed'
+                          ? 'This person could not be created on PRKS, so they cannot be linked to a file. Discard that creation in Sync Diagnostics and add them again.'
+                          : 'Could not create link.';
                 if (typeof prksAlertDialog === 'function') {
                     await prksAlertDialog({ title: 'Could not link', message });
                 }

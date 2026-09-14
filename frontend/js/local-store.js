@@ -794,7 +794,7 @@
                                     createdAt: nowIso(),
                                     sequence: next,
                                 });
-                                return assertDependenciesExistIn(request, prepared).then(function () {
+                                return assertDependenciesUsableIn(request, prepared).then(function () {
                                     return request(STORE_OPERATIONS, function (store) {
                                         return store.get(prepared.op_id);
                                     });
@@ -824,25 +824,47 @@
         }
 
         /**
-         * Every prerequisite must ALREADY EXIST in the store.
+         * Every prerequisite must already exist AND still be able to succeed.
          *
          * An unknown id is not a dependency, it is a permanent block: nothing
          * will ever acknowledge it, so its dependent can never be sent and the
-         * user's change is stranded with no way to see why.
+         * user's change is stranded with no way to see why. An id that names an
+         * operation the server already refused is the same block wearing a
+         * different face, which is why existence alone is not the test.
+         *
+         * The single boundary for both enqueue paths. Writing a doomed row and
+         * settling it afterwards would be strictly worse than refusing it: the
+         * caller is inside a save the user is watching, so it can say so.
          *
          * This is also what makes cycles impossible without a graph walk. A
          * prerequisite has to exist before anything can name it, so a later
          * operation can only ever depend on an earlier one -- there is no
          * ordering in which two operations could name each other.
          */
-        async function assertDependenciesExistIn(request, prepared) {
+        async function assertDependenciesUsableIn(request, prepared) {
             const deps = prepared.depends_on || [];
             if (!deps.length) return;
             const existing = await request(STORE_OPERATIONS, s => s.getAll());
-            const known = new Set((Array.isArray(existing) ? existing : []).map(r => r && r.op_id));
+            const byId = new Map((Array.isArray(existing) ? existing : [])
+                .filter(Boolean).map(r => [r.op_id, r]));
             for (let i = 0; i < deps.length; i += 1) {
-                if (!known.has(deps[i])) {
+                const prerequisite = byId.get(deps[i]);
+                if (!prerequisite) {
                     throw localStoreError('invalid_envelope', 'depends_on names an unknown operation.');
+                }
+                /* Existence is necessary but NOT sufficient. A terminally
+                 * refused prerequisite is still in the store -- it is retained
+                 * precisely because something already depends on it -- and
+                 * naming it would mint an operation that is born unsendable:
+                 * readiness can never be satisfied, so it would sit as
+                 * `pending` forever with nothing to explain it. Refusing at
+                 * enqueue is the only point where the user is still there to
+                 * be told. */
+                if (dependencyTerminallyFailed(prerequisite)) {
+                    throw localStoreError('dependency_failed',
+                        'depends_on names an operation that already failed: ' +
+                        prerequisite.op_id + ' (' +
+                        String((prerequisite.server_result || {}).code || 'unknown') + ').');
                 }
             }
         }
@@ -854,7 +876,7 @@
             const prepared = normalizeOperationEnvelope(envelope, {
                 opId: uuid(), deviceId, sequence, createdAt: nowIso(),
             });
-            await assertDependenciesExistIn(request, prepared);
+            await assertDependenciesUsableIn(request, prepared);
             if (localContext != null) {
                 if (jsonByteLength(localContext) > 4096) throw localStoreError('invalid_context', 'Local context too large.');
                 prepared.local_context = JSON.parse(JSON.stringify(localContext));
@@ -971,9 +993,27 @@
                  * be sent before the Person existed and the server would refuse
                  * it. A link to a Person this device created and has not yet
                  * synchronized MUST wait for that creation. */
-                const createOp = allRows.find(r => r && r.operation === 'CREATE_PERSON' &&
-                    r.entity_type === 'person' && r.entity_id === link.person_id &&
-                    !dependencySucceeded(r));
+                const creates = allRows.filter(r => r && r.operation === 'CREATE_PERSON' &&
+                    r.entity_type === 'person' && r.entity_id === link.person_id);
+                /* Three states, three different answers -- and the store's own
+                 * definitions of them, not this family's.
+                 *
+                 * Creation already SUCCEEDED: the Person is canonical, so there
+                 * is nothing to wait for and naming it would only keep a
+                 * retirable row alive. Creation is still IN FLIGHT: the link
+                 * must wait for it. Creation was REFUSED: the Person will never
+                 * exist, and a link to it is not a change that can be saved --
+                 * selecting that row merely because it is still in the store
+                 * would hand the enqueue boundary a dependency it has to reject
+                 * anyway, and omitting it would send the link on its own for
+                 * the server to refuse in turn. Say so here instead. */
+                const createOp = creates.find(r => !dependencySucceeded(r) &&
+                    !dependencyTerminallyFailed(r));
+                if (!createOp && !creates.some(dependencySucceeded) &&
+                        creates.some(dependencyTerminallyFailed)) {
+                    throw localStoreError('dependency_failed',
+                        'This person could not be created on the server, so they cannot be linked.');
+                }
                 setResult(await insertEnvelopeIn(request, {
                     operation, entity_type: 'work', entity_id: workId, payload,
                     base_revision: observed.revision,
@@ -1223,6 +1263,19 @@
                     });
                 });
             });
+        }
+
+        /* The opposite terminal outcome, and the ONE definition of it.
+         *
+         * Expressed as the negation of `dependencySucceeded` rather than as a
+         * second rule about `server_result`, so the two can never drift: every
+         * `acknowledged` row is exactly one of "applied" or "refused", and a
+         * row that is neither is still in flight. Callers that pick a
+         * prerequisite and the boundary that validates one both ask this,
+         * rather than each deciding for itself what a healthy dependency is.
+         */
+        function dependencyTerminallyFailed(row) {
+            return !!row && row.status === STATUS_ACKNOWLEDGED && !dependencySucceeded(row);
         }
 
         function reappliable(row) {

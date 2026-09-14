@@ -1388,7 +1388,32 @@ them:
   the resolution if a waiter has ever been attempted.
 
 At enqueue, every named `op_id` must already exist in the store, must not repeat,
-and must not be this operation. Requiring the prerequisite to exist first is
+and must not be this operation. **Existence is necessary but not sufficient**: a
+prerequisite that has already reached an unsuccessful terminal result cannot
+acquire new dependents. Such a row is still in the store precisely because
+something already depends on it -- retirement waits for dependents -- so it is
+exactly the row a later operation can name by mistake, and naming it would mint
+an operation that is born unsendable: readiness can never be satisfied, so it
+sits as `pending` forever with nothing to explain it. The enqueue is refused
+instead, with `dependency_failed` rather than `invalid_envelope`, because the
+envelope is perfectly well formed and only a distinct code lets the caller say
+what actually went wrong. Enqueue is also the last moment the user is still there
+to be told.
+
+"Already failed" is the exact negation of the success predicate above -- an
+`acknowledged` row with a recorded result -- and not a second rule about
+`server_result`, so the two cannot drift. A prerequisite that is pending,
+syncing, or in an unresolved conflict is still a legal dependency: none of those
+is a terminal outcome.
+
+Family writers ask the store for that judgement rather than defining dependency
+health themselves. `saveWorkPersonRole` distinguishes all three states of a
+`CREATE_PERSON` for the same `person_id`: succeeded (the Person is canonical, so
+no dependency is named and the row stays retirable), in flight (the link waits
+for it), refused (the link is not a change that can be saved, and the save is
+refused *there* with a message about the Person -- the enqueue boundary would
+reject it too, but with an op_id and a protocol code that tell the user nothing
+about what they were trying to do). Requiring the prerequisite to exist first is
 also what makes cycles impossible without walking a graph: an operation can only
 name one that is already stored, so a later operation can only ever depend on an
 earlier one and no ordering lets two name each other. Both the generic
