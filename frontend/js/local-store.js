@@ -49,6 +49,10 @@
     const STATUS_ACKNOWLEDGED = 'acknowledged';
     const STATUS_CONFLICT = 'conflict';
     const STATUS_FAILED = 'failed';
+    /* The result recorded on an operation whose prerequisite can never
+     * succeed. Written in one place: the store owns the dependency graph, so
+     * it owns what a broken link in that graph looks like. */
+    const DEPENDENCY_FAILED = 'DEPENDENCY_FAILED';
     const STATUSES = Object.freeze([
         STATUS_PENDING, STATUS_SYNCING, STATUS_ACKNOWLEDGED, STATUS_CONFLICT, STATUS_FAILED,
     ]);
@@ -345,6 +349,55 @@
         SET_WORK_METADATA_FIELD: Object.freeze(['REVISION_CONFLICT']),
         SET_WORK_SOURCE: Object.freeze(['SOURCE_REVISION_CONFLICT']),
     });
+
+    /**
+     * Every UNRESOLVED operation that transitively depends on `opId`.
+     *
+     * Failure travels the whole graph, not one edge of it. A chain A -> B -> C
+     * that stops at B leaves C waiting on a prerequisite that has itself become
+     * unresolvable: C is never eligible to send, never surfaced as a decision,
+     * and never retired -- durable state the user cannot see or clear.
+     *
+     * Breadth-first with a visited set, so a row appears at most once however
+     * many paths reach it. A diamond (A -> B, A -> C, B -> D, C -> D) must not
+     * mark D twice, and the visited set is also what bounds the walk if a cycle
+     * ever became representable.
+     *
+     * `acknowledged` rows end their branch and are not returned. The server has
+     * already spoken on them: if it applied the operation, its dependents are
+     * legitimately unblocked and nothing below it is doomed; if it refused, the
+     * refusal did its own walk from there. Either way there is nothing to
+     * revisit. Rows already in `conflict` ARE traversed -- their own dependents
+     * are still stranded -- but the caller leaves their recorded result alone,
+     * because the reason they are unresolvable is already more specific than
+     * "something upstream failed".
+     */
+    function unresolvedDependentClosure(rows, opId) {
+        const dependents = new Map();
+        (Array.isArray(rows) ? rows : []).forEach(function (row) {
+            if (!row || !Array.isArray(row.depends_on)) return;
+            row.depends_on.forEach(function (dep) {
+                if (!dependents.has(dep)) dependents.set(dep, []);
+                dependents.get(dep).push(row);
+            });
+        });
+        const seen = new Set([opId]);
+        const found = [];
+        const queue = [opId];
+        while (queue.length) {
+            const current = queue.shift();
+            const waiting = dependents.get(current) || [];
+            for (let i = 0; i < waiting.length; i += 1) {
+                const row = waiting[i];
+                if (seen.has(row.op_id)) continue;
+                seen.add(row.op_id);
+                if (row.status === STATUS_ACKNOWLEDGED) continue;
+                found.push(row);
+                queue.push(row.op_id);
+            }
+        }
+        return found;
+    }
 
     /** Thrown for anything the caller could have prevented; carries a code. */
     function localStoreError(code, message) {
@@ -1129,6 +1182,49 @@
             return !!row && row.status === STATUS_ACKNOWLEDGED && !row.server_result;
         }
 
+        /**
+         * A prerequisite has failed: every unresolved descendant is doomed.
+         *
+         * The store owns this because the store owns the dependency graph --
+         * and because it has to happen atomically. A partial walk is the same
+         * defect as no walk: whatever it missed is left waiting on a chain that
+         * can never complete.
+         *
+         * Marked as a conflict rather than deleted. The user's intent was real,
+         * and the only honest thing to do with an intent that can no longer be
+         * carried out is show it to them; Diagnostics is where they discard it.
+         *
+         * Returns the op ids actually marked -- each at most once.
+         */
+        function markDependentsFailed(opId) {
+            return runTransaction(STORE_OPERATIONS, 'readwrite', function (request, setResult) {
+                return request(STORE_OPERATIONS, function (store) {
+                    return store.getAll();
+                }).then(function (rows) {
+                    const doomed = unresolvedDependentClosure(rows, String(opId));
+                    const marked = [];
+                    return doomed.reduce(function (chain, row) {
+                        return chain.then(function () {
+                            // Its own conflict already says something more
+                            // specific than "something upstream failed".
+                            if (row.status === STATUS_CONFLICT) return null;
+                            const next = Object.assign({}, row, {
+                                status: STATUS_CONFLICT,
+                                last_error: null,
+                                server_result: { code: DEPENDENCY_FAILED },
+                            });
+                            marked.push(row.op_id);
+                            return request(STORE_OPERATIONS, function (store) {
+                                return store.put(next);
+                            });
+                        });
+                    }, Promise.resolve()).then(function () {
+                        setResult(marked);
+                    });
+                });
+            });
+        }
+
         function reappliable(row) {
             const codes = REAPPLIABLE_RESULTS[row.operation];
             return !!codes && !!row.server_result &&
@@ -1137,20 +1233,72 @@
         }
 
         /* Explicit user resolution, atomically retires the conflict and, when
-         * requested, creates a NEW envelope against the observed server base. */
+         * requested, creates a NEW envelope against the observed server base.
+         *
+         * Resolving is the one place an operation LEAVES the graph while other
+         * operations may still be waiting behind it, so both answers have to
+         * account for them or the resolution strands somebody:
+         *
+         *   discard  -- the intent is gone for good, so everything downstream
+         *               of it is unreachable and becomes a decision of its own.
+         *   reapply  -- the intent survives under a NEW op_id, so the waiters
+         *               are repointed at that envelope. Dropping the old id
+         *               would leave them naming an operation the store no
+         *               longer has: never eligible, never surfaced, never
+         *               retired.
+         */
         function resolveConflict(opId, apply) {
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const row = await request(STORE_OPERATIONS, s => s.get(opId));
                 if (!row || row.status !== STATUS_CONFLICT) throw localStoreError('not_conflict', 'Conflict no longer available.');
+                const all = await request(STORE_OPERATIONS, s => s.getAll());
+                const waiting = (Array.isArray(all) ? all : []).filter(
+                    r => r && Array.isArray(r.depends_on) && r.depends_on.indexOf(opId) !== -1);
                 let replacement = null;
                 if (apply) {
                     if (!reappliable(row)) {
                         throw localStoreError('invalid_resolution', 'This conflict cannot be reapplied.');
                     }
+                    /* Rewriting a dependent's envelope is only sound because it
+                     * cannot have been sent: an operation is eligible only once
+                     * every prerequisite has SUCCEEDED, and this one is sitting
+                     * in conflict. Asserted rather than assumed -- if it were
+                     * ever false, silently repointing an envelope the server
+                     * has already seen is the worse of the two failures. */
+                    if (waiting.some(r => r.status === STATUS_SYNCING ||
+                            (Number.isInteger(r.attempt_count) && r.attempt_count > 0))) {
+                        throw localStoreError('invalid_resolution',
+                            'An operation waiting on this one has already been sent.');
+                    }
+                    /* The replacement carries no `depends_on` of its own, and
+                     * does not need to: this row reached a conflict by being
+                     * SENT, which means every prerequisite it had already
+                     * succeeded. Copying them forward would instead keep
+                     * retired-eligible rows alive for a condition that is
+                     * already met. */
                     replacement = await insertEnvelopeIn(request, {
                         operation: row.operation, entity_type: row.entity_type, entity_id: row.entity_id,
                         payload: row.payload, base_revision: row.server_result.current_revision,
                     }, row.local_context);
+                    for (const dependent of waiting) {
+                        const next = Object.assign({}, dependent, {
+                            depends_on: dependent.depends_on.map(
+                                dep => (dep === opId ? replacement.op_id : dep)),
+                        });
+                        await request(STORE_OPERATIONS, s => s.put(next));
+                    }
+                } else {
+                    /* Read AFTER the delete would be too late and before it is
+                     * too early: the walk must not stop at this row merely
+                     * because it is itself a conflict. */
+                    const doomed = unresolvedDependentClosure(all, opId);
+                    for (const dependent of doomed) {
+                        if (dependent.status === STATUS_CONFLICT) continue;
+                        await request(STORE_OPERATIONS, s => s.put(Object.assign({}, dependent, {
+                            status: STATUS_CONFLICT, last_error: null,
+                            server_result: { code: DEPENDENCY_FAILED },
+                        })));
+                    }
                 }
                 await request(STORE_OPERATIONS, s => s.delete(opId));
                 setResult(replacement);
@@ -1393,6 +1541,7 @@
             saveWorkPersonRole,
             createPerson,
             resolveConflict, claimOperation,
+            markDependentsFailed: markDependentsFailed,
             getOperation: getOperation,
             listOperations: listOperations,
             updateOperationSyncState: updateOperationSyncState,
@@ -1406,6 +1555,7 @@
     const api = {
         createPrksLocalStore: createPrksLocalStore,
         prksNormalizeOperationEnvelope: normalizeOperationEnvelope,
+        prksUnresolvedDependentClosure: unresolvedDependentClosure,
         PRKS_LOCAL_DB_NAME: DB_NAME,
         PRKS_LOCAL_DB_VERSION: DB_VERSION,
         PRKS_LOCAL_OPERATION_TYPES: OPERATION_TYPES,

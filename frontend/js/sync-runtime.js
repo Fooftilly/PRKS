@@ -128,19 +128,19 @@
             }
             return true;
         }
-        /** Mark everything waiting on a failed prerequisite as unresolvable. */
+        /* Everything waiting on a failed prerequisite becomes unresolvable --
+         * TRANSITIVELY, and in one atomic step, which is why the store does the
+         * walk rather than this module.
+         *
+         * Marking only the direct dependents was a half-propagation: in a chain
+         * A -> B -> C, refusing A turned B into a conflict but left C pending
+         * forever, waiting on a prerequisite that had itself become a decision
+         * the user still has to make. The store owns the dependency graph, so
+         * it is the only place that can settle all of it at once. */
         async function blockDependents(opId) {
-            const all = await store.listOperations();
-            for (const row of all) {
-                if (!row || !Array.isArray(row.depends_on)) continue;
-                if (row.depends_on.indexOf(opId) === -1) continue;
-                if (row.status === 'acknowledged' || row.status === 'conflict') continue;
-                try {
-                    await store.updateOperationSyncState(row.op_id, {
-                        status: 'conflict', last_error: null,
-                        server_result: { code: 'DEPENDENCY_FAILED' } });
-                } catch (_) { /* a row that changed underneath is re-read next drain */ }
-            }
+            try {
+                await store.markDependentsFailed(opId);
+            } catch (_) { /* a row that changed underneath is re-read next drain */ }
         }
         async function drain() {
             if (!recovered) await recover();

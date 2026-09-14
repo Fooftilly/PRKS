@@ -1346,6 +1346,47 @@ settled as conflicts carrying `DEPENDENCY_FAILED`, so the user's intent survives
 and is resolvable in Diagnostics rather than waiting forever on something that
 can never arrive.
 
+That settlement is **transitive**. Failure is propagated breadth-first from the
+failed `op_id` over the whole stored graph with a visited set, so every
+unresolved descendant is settled, and each one exactly once however many paths
+reach it. Marking only the direct dependents was a half-propagation: in a chain
+`A -> B -> C`, refusing `A` turned `B` into a conflict but left `C` pending
+forever behind a prerequisite that had itself become a decision the user still
+had to make -- durable state they could neither see the reason for nor clear.
+Branches that end at an `acknowledged` row stop there: the server has already
+spoken on it, so either its dependents are legitimately unblocked or its own
+refusal did this same walk. Rows already in `conflict` are walked *through* but
+not rewritten -- their recorded result is more specific than "something upstream
+failed". The walk lives in the store, not the coordinator, because the store owns
+the operation graph and can settle all of it in one transaction; a partial walk
+is the same defect as no walk.
+
+### Which operations may be prerequisites
+
+**Any operation may be a prerequisite.** `depends_on` is deliberately *not*
+restricted to construction families. Chains beyond one hop are already real --
+crediting a role that was itself created offline against a Person created
+offline is `CREATE_PERSON -> ADD_WORK_PERSON_ROLE ->
+SET_WORK_PERSON_ROLE_CREDIT` -- and a restriction to `CREATE_*` would only push
+that ordering into a family-specific mechanism that the coordinator could not
+see.
+
+The price of that generality is that **conflict resolution is part of the
+dependency lifecycle**, because resolving is the one place an operation leaves
+the graph while others may still be waiting behind it. Both answers account for
+them:
+
+* **Discard** -- the intent is gone for good, so the unresolved descendants
+  become `DEPENDENCY_FAILED` conflicts of their own by the same walk. Dropping
+  the row alone would leave them naming an operation the store no longer has:
+  never eligible, never surfaced, never retired.
+* **Reapply** -- the intent survives under a *new* `op_id`, so every operation
+  that named the old one is repointed at the replacement and stays pending.
+  Rewriting an envelope is sound only because a dependent of a conflicted
+  operation cannot have been sent (eligibility requires every prerequisite to
+  have *succeeded*); the store asserts that rather than assuming it, and refuses
+  the resolution if a waiter has ever been attempted.
+
 At enqueue, every named `op_id` must already exist in the store, must not repeat,
 and must not be this operation. Requiring the prerequisite to exist first is
 also what makes cycles impossible without walking a graph: an operation can only

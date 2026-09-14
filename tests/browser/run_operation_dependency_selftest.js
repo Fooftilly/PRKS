@@ -39,6 +39,8 @@ function runtimeFor(store, respond, reconciled) {
             { reconcile: async () => { reconciled.push('person'); return true; } }),
         ADD_WORK_PERSON_ROLE: Object.assign({}, globalThis.prksWorkRoleSyncHandler,
             { reconcile: async () => { reconciled.push('role'); return true; } }),
+        SET_WORK_PERSON_ROLE_CREDIT: Object.assign({}, globalThis.prksWorkRoleSyncHandler,
+            { reconcile: async () => { reconciled.push('credit'); return true; } }),
     };
     return globalThis.createPrksSyncRuntime({ store, online: () => true, handlers,
         request: respond });
@@ -207,12 +209,183 @@ async function unsatisfiedDependencyIsTerminal() {
     assert.equal(role.last_error, null, 'and not recorded as a transport failure');
 }
 
+/* ---- A chain of three: failure travels the WHOLE graph ---- */
+async function failurePropagatesThroughAChain() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    /* A realistic chain, not a contrived one. The Person does not exist on the
+     * server yet, so the link waits for its creation; the credit names a role
+     * that does not exist there either, so it waits for the link. */
+    const create = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+    const link = await store.saveWorkPersonRole('W-1',
+        { person_id: create.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    const credit = await store.enqueueOperation({
+        operation: 'SET_WORK_PERSON_ROLE_CREDIT', entity_type: 'work', entity_id: 'W-1',
+        payload: { person_id: create.entity_id, role_type: 'Author', credit_name: 'J. Doe' },
+        base_revision: 0, depends_on: [link.op_id],
+    });
+    assert.deepEqual(link.depends_on, [create.op_id]);
+    assert.deepEqual(credit.depends_on, [link.op_id]);
+
+    const sent = [];
+    const runtime = runtimeFor(store, async (_path, options) => {
+        const body = JSON.parse(options.body);
+        sent.push(body.operation);
+        if (body.operation === 'CREATE_PERSON') {
+            return { ok: false, status: 400, json: async () => ({ code: 'INVALID_ENVELOPE' }) };
+        }
+        return { ok: true, status: 200, json: async () => roleAck(body) };
+    }, []);
+    await runtime.wake();
+    await settle();
+    runtime.stop();
+
+    assert.deepEqual(sent, ['CREATE_PERSON'], 'nothing downstream of the refusal is attempted');
+    const rows = await store.listOperations();
+    const byId = new Map(rows.map(r => [r.op_id, r]));
+
+    const refused = byId.get(create.op_id);
+    assert.ok(refused, 'the refused prerequisite is kept while anything still names it');
+    assert.equal(refused.status, 'acknowledged', 'the server has spoken and nothing more is owed');
+    assert.equal(refused.server_result.code, 'INVALID_ENVELOPE', 'and it records WHAT it said');
+
+    /* The direct dependent was always handled. The one BEHIND it was not:
+     * marking a single edge left the tail of every chain pending forever,
+     * waiting on an operation that had itself become a decision the user has
+     * not made -- invisible in the queue and impossible to clear. */
+    assert.equal(byId.get(link.op_id).status, 'conflict');
+    assert.equal(byId.get(link.op_id).server_result.code, 'DEPENDENCY_FAILED');
+    assert.equal(byId.get(credit.op_id).status, 'conflict',
+        'the second hop is settled too, not left waiting behind the first');
+    assert.equal(byId.get(credit.op_id).server_result.code, 'DEPENDENCY_FAILED');
+    assert.equal(byId.get(credit.op_id).last_error, null,
+        'and not dressed up as a transport failure it could retry out of');
+
+    assert.equal(rows.filter(r => r.status === 'pending' || r.status === 'syncing').length, 0,
+        'no operation is left waiting on a chain that can never complete');
+}
+
+/* ---- branching: every descendant blocked, each exactly once ---- */
+async function failureFansOutWithoutRepeating() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    //  A -> B -> D
+    //   \-> C
+    const a = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+    const b = await store.saveWorkPersonRole('W-1',
+        { person_id: a.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    const c = await store.saveWorkPersonRole('W-2',
+        { person_id: a.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    const d = await store.enqueueOperation({
+        operation: 'SET_WORK_PERSON_ROLE_CREDIT', entity_type: 'work', entity_id: 'W-1',
+        payload: { person_id: a.entity_id, role_type: 'Author', credit_name: 'J. Doe' },
+        base_revision: 0, depends_on: [b.op_id],
+    });
+    assert.deepEqual(b.depends_on, [a.op_id]);
+    assert.deepEqual(c.depends_on, [a.op_id]);
+
+    /* Driven through the store directly: the RETURN of the walk is what proves
+     * "exactly once", and a status check afterwards cannot -- writing the same
+     * conflict twice leaves an indistinguishable row. */
+    await store.updateOperationSyncState(a.op_id, {
+        status: 'acknowledged', server_result: { code: 'INVALID_ENVELOPE' } });
+    const marked = await store.markDependentsFailed(a.op_id);
+    assert.equal(marked.length, 3, 'both branches and the far side of one of them');
+    assert.equal(new Set(marked).size, 3, 'and no operation is marked twice');
+    assert.deepEqual([...marked].sort(), [b.op_id, c.op_id, d.op_id].sort());
+
+    const byId = new Map((await store.listOperations()).map(r => [r.op_id, r]));
+    [b, c, d].forEach(op => {
+        assert.equal(byId.get(op.op_id).status, 'conflict');
+        assert.equal(byId.get(op.op_id).server_result.code, 'DEPENDENCY_FAILED');
+    });
+
+    // Idempotent: a second pass has nothing left to say about the same rows.
+    assert.deepEqual(await store.markDependentsFailed(a.op_id), [],
+        'a repeated walk does not restate conflicts it already recorded');
+
+    /* A DIAMOND is what actually exercises the visited set: the tree above
+     * reaches every row by exactly one path, so it would pass without one.
+     * Here the last operation is reachable through both branches. */
+    const store2 = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const root = await store2.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+    const left = await store2.saveWorkPersonRole('W-1',
+        { person_id: root.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    const right = await store2.saveWorkPersonRole('W-2',
+        { person_id: root.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    const joined = await store2.enqueueOperation({
+        operation: 'SET_WORK_PERSON_ROLE_CREDIT', entity_type: 'work', entity_id: 'W-1',
+        payload: { person_id: root.entity_id, role_type: 'Author', credit_name: 'J. Doe' },
+        base_revision: 0, depends_on: [left.op_id, right.op_id],
+    });
+    await store2.updateOperationSyncState(root.op_id, {
+        status: 'acknowledged', server_result: { code: 'INVALID_ENVELOPE' } });
+    const fromDiamond = await store2.markDependentsFailed(root.op_id);
+    assert.equal(fromDiamond.length, 3, 'three rows, however many paths lead to them');
+    assert.equal(fromDiamond.filter(id => id === joined.op_id).length, 1,
+        'the row both branches reach is marked once, not once per path');
+}
+
+/* ---- resolving a conflict must not orphan what waits behind it ---- */
+async function resolutionDoesNotOrphanDependents() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const a = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+    const b = await store.saveWorkPersonRole('W-1',
+        { person_id: a.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    const c = await store.enqueueOperation({
+        operation: 'SET_WORK_PERSON_ROLE_CREDIT', entity_type: 'work', entity_id: 'W-1',
+        payload: { person_id: a.entity_id, role_type: 'Author', credit_name: 'J. Doe' },
+        base_revision: 0, depends_on: [b.op_id],
+    });
+
+    /* DISCARD. The row leaves the store entirely, so anything naming it would
+     * be left pointing at an operation that no longer exists -- never eligible,
+     * never shown, never retired. */
+    await store.updateOperationSyncState(b.op_id, {
+        status: 'conflict', server_result: { code: 'ENTITY_NOT_FOUND' } });
+    await store.resolveConflict(b.op_id, false);
+    let rows = await store.listOperations();
+    assert.equal(rows.some(r => r.op_id === b.op_id), false, 'the discarded row is gone');
+    const stranded = rows.find(r => r.op_id === c.op_id);
+    assert.equal(stranded.status, 'conflict', 'and what waited on it became a decision of its own');
+    assert.equal(stranded.server_result.code, 'DEPENDENCY_FAILED');
+
+    /* REAPPLY. The intent survives under a NEW op_id, so its waiters follow it
+     * there rather than keeping the id of an envelope the store discarded. */
+    const store2 = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const p = await store2.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+    const role = await store2.saveWorkPersonRole('W-1',
+        { person_id: p.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    const dependent = await store2.enqueueOperation({
+        operation: 'SET_WORK_PERSON_ROLE_CREDIT', entity_type: 'work', entity_id: 'W-1',
+        payload: { person_id: p.entity_id, role_type: 'Author', credit_name: 'J. Doe' },
+        base_revision: 0, depends_on: [role.op_id],
+    });
+    await store2.updateOperationSyncState(role.op_id, {
+        status: 'conflict',
+        server_result: { code: 'REVISION_CONFLICT', current_revision: 7 } });
+    const replacement = await store2.resolveConflict(role.op_id, true);
+    assert.ok(replacement && replacement.op_id !== role.op_id);
+    const moved = (await store2.listOperations()).find(r => r.op_id === dependent.op_id);
+    assert.deepEqual(moved.depends_on, [replacement.op_id],
+        'the waiter is repointed at the envelope that carries the intent now');
+    assert.equal(moved.status, 'pending', 'and is still the user’s live intent, not a conflict');
+}
+
 async function main() {
     await ordering();
     await retention();
     await failedPrerequisite();
     await readinessJudgesOutcome();
     await unsatisfiedDependencyIsTerminal();
+    await failurePropagatesThroughAChain();
+    await failureFansOutWithoutRepeating();
+    await resolutionDoesNotOrphanDependents();
     console.log('All ' + checks + ' operation dependency checks passed');
 }
 

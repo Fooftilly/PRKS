@@ -116,6 +116,13 @@
 
     function conflictDetail(op) {
         const result = op.server_result || {};
+        /* Named, not left blank. This operation never reached the server at
+         * all, so there is no "server currently has" to report -- and a bare
+         * "Needs a decision" with no reason is exactly the stranded state the
+         * dependency walk exists to prevent the user from being left in. */
+        if (result.code === 'DEPENDENCY_FAILED') {
+            return ' It was waiting on another change that could not be saved.';
+        }
         if (typeof result.current_preview === 'string') {
             return ' Server currently has "' + bounded(result.current_preview) + '" (' +
                 Math.ceil((result.current_bytes || 0) / 1024) + ' KB).';
