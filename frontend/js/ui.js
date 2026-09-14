@@ -1479,6 +1479,17 @@ async function prksEditRoleCreditOnWork(btn) {
     }
 }
 
+/** Split a typed Person name into the first/last fields the create API stores. */
+function prksSplitTypedPersonName(raw) {
+    const trimmed = String(raw || '').trim();
+    const sp = trimmed.indexOf(' ');
+    if (sp < 0) return { first_name: trimmed, last_name: '' };
+    return {
+        first_name: trimmed.slice(0, sp).trim(),
+        last_name: trimmed.slice(sp + 1).trim(),
+    };
+}
+
 async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText) {
     if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const trimmed = String(typedName || '').trim();

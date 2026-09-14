@@ -3321,6 +3321,43 @@ class TestServerAPI(unittest.TestCase):
         self.assertIn("Mark Twain",
                       self._sv_json("GET", "/api/persons/" + person, None)[1]["aliases"])
 
+        self.assertEqual(self._sv_json("PATCH", "/api/works/%s/roles" % work, {
+            "person_id": person, "role_type": "Author", "order_index": 99,
+            "credit_name": "M. Twain"})[0], 200)
+        state = self._sv_json("GET", "/api/works/%s/people-state" % work, None)[1]
+        self.assertEqual(state["scopes"][0]["revision"], 2,
+                         "ordinary credit PATCH must advance the revision")
+        self.assertEqual(self._sv_json("GET", "/api/works/" + work, None)[1]
+                         ["roles"][0]["credit_name"], "M. Twain")
+        self.assertEqual(self._sv_json("PATCH", "/api/works/%s/roles" % work, {
+            "person_id": person, "role_type": "Author", "credit_name": ""})[0], 200)
+        self.assertEqual(self._sv_json("GET", "/api/works/%s/people-state" % work,
+                                       None)[1]["scopes"][0]["revision"], 3)
+
+    def test_the_role_api_refuses_an_oversized_credit_name(self):
+        """Ordinary add/edit accepted 501 bytes while the durable envelope
+        refused them -- a split contract the write boundary now closes."""
+        from backend.work_role_sync import MAX_CREDIT_NAME_BYTES
+        person = self._sv_json("POST", "/api/persons",
+                               {"first_name": "Long", "last_name": "Name"})[1]["id"]
+        work = self._sv_json("POST", "/api/works", {"title": "Bound"})[1]["id"]
+        too_long = "x" * (MAX_CREDIT_NAME_BYTES + 1)
+        status, body = self._sv_json("POST", "/api/roles", {
+            "person_id": person, "work_id": work, "role_type": "Author",
+            "credit_name": too_long})
+        self.assertEqual(status, 400)
+        self.assertIn("credit_name", body.get("error", ""))
+        self.assertEqual(self._sv_json("GET", "/api/works/" + work, None)[1]["roles"], [])
+
+        self.assertEqual(self._sv_json("POST", "/api/roles", {
+            "person_id": person, "work_id": work, "role_type": "Author"})[0], 200)
+        status, body = self._sv_json("PATCH", "/api/works/%s/roles" % work, {
+            "person_id": person, "role_type": "Author", "credit_name": too_long})
+        self.assertEqual(status, 400)
+        self.assertIn("credit_name", body.get("error", ""))
+        self.assertEqual(self._sv_json("GET", "/api/works/" + work, None)[1]
+                         ["roles"][0].get("credit_name"), None)
+
     def test_an_inferred_video_is_enriched_exactly_like_a_declared_one(self):
         """`source_kind` is not what makes a Work a video -- the inference is.
 

@@ -84,6 +84,52 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                 self.assertEqual(o._domain_generation(page, d), old)
                 self.assertIsNotNone(o._cached_entity(page, d, 'snapshot'))
 
+    def open_people(self, page, work_id):
+        """Manage relationships, after its revision base is actually readable.
+
+        The role modal hiding, or the Unlink button existing, does not mean
+        `work-people-state` has been read. Durable save refuses without that
+        base, and a waiter on an empty operation queue then succeeds vacuously.
+        """
+        o._open_work_from_home(page, o.WORK_A_TITLE)
+        o._open_details_drawer_if_tiled(page)
+        page.evaluate("() => { void prksSetWorkDetailsMode('people'); }")
+        page.wait_for_selector('.work-link-person-btn')
+        o._wait_entity_cached(page, 'work-people-state', work_id)
+        page.wait_for_function(
+            "() => { const b = document.querySelector('.work-link-person-btn');"
+            "        return !!b && !b.disabled; }")
+
+    def people_graph_author(self, page, person_id, work_id):
+        """Cached People Graph membership for one Author edge. Scalars only."""
+        return page.evaluate("""([pid, wid]) => window.createPrksOfflineStore()
+            .getEntity('research-graph-people', 'snapshot').then(row => {
+                if (!row) return {cached: false};
+                const id = 'work_author:person:' + pid + '>work:' + wid;
+                const nodes = row.value.nodes || [];
+                return {
+                    cached: true,
+                    hasPerson: nodes.some(n => n && n.id === 'person:' + pid),
+                    hasWork: nodes.some(n => n && n.id === 'work:' + wid),
+                    hasEdge: (row.value.edges || []).some(e => e && e.id === id),
+                };
+            })""", [person_id, work_id])
+
+    def wait_people_author_edge(self, page, person_id, work_id, present):
+        """Author ACK patches the People Graph snapshot in place; it is not deleted.
+
+        Return a non-empty sentinel only on match: `wait_for_async` treats any
+        truthy value as success, so returning the live `has` boolean would pass
+        the instant the edge was in the wrong state.
+        """
+        wait_for_async(page, """([pid, wid, want]) => window.createPrksOfflineStore()
+            .getEntity('research-graph-people', 'snapshot').then(row => {
+                if (!row) return '';
+                const id = 'work_author:person:' + pid + '>work:' + wid;
+                const has = (row.value.edges || []).some(e => e && e.id === id);
+                return has === want ? 'match' : '';
+            })""", arg=[person_id, work_id, bool(present)])
+
     def test_core_cache_and_local_interactions(self):
         server, page, context = self.start()
         seen = []
@@ -327,33 +373,40 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids)
+        seeded = self.people_graph_author(page, ids['person'], ids['work_a'])
+        self.assertTrue(seeded.get('cached') and seeded.get('hasPerson') and
+                        seeded.get('hasWork') and seeded.get('hasEdge'),
+                        'seeded Author must already be in the People Graph snapshot: %r' % (seeded,))
         before = self.generations(page)
-        o._open_work_from_home(page, o.WORK_A_TITLE)
-        o._open_details_drawer_if_tiled(page)
-        page.locator('#panel-content button', has_text='Manage relationships').click()
+        self.open_people(page, ids['work_a'])
         page.locator('.work-link-person-btn').click()
         page.wait_for_selector('#role-modal:not(.hidden)')
         page.locator('#role-role-seg-mount .prks-segmented__btn[data-value="Reviewer"]').click()
         page.evaluate('''ids => {
             document.getElementById('role-person-id').value = ids.person;
-            document.getElementById('role-person-search').value = 'E2E Author';
             document.getElementById('role-work-id').value = ids.work_a;
+            document.getElementById('role-person-search').value = 'E2E Author';
             document.getElementById('role-work-search').value = 'E2E Research Work';
         }''', ids)
         page.locator('#save-role-btn').click()
         page.locator('#role-modal').wait_for(state='hidden')
+        page.wait_for_selector('.work-linked-persons__unlink[data-role-type="Reviewer"]')
         self.changed(page, before, (False, False))
         # Unlink the existing Author, then link again through the same modal.
+        # Author ACK patches the People Graph edge in place: the snapshot stays
+        # cached, unlike a Person rename which still invalidates it.
+        # Do not re-fetch the Graph between the two: the server projection drops
+        # a Person with no remaining Author role, and ACK will not invent a
+        # node that the cached snapshot no longer holds.
         for linking in (False, True):
-            self.cache(page, ids)
             before = self.generations(page)
-            o._open_work_from_home(page, o.WORK_A_TITLE)
-            o._open_details_drawer_if_tiled(page)
-            page.locator('#panel-content button', has_text='Manage relationships').click()
+            self.open_people(page, ids['work_a'])
             if not linking:
                 page.locator('.work-linked-persons__unlink[data-role-type="Author"]').click()
                 page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
                 page.locator('#prks-modal-confirm-ok').click()
+                page.wait_for_selector('.work-linked-persons__unlink[data-role-type="Author"]',
+                                       state='detached')
             else:
                 page.locator('.work-link-person-btn').click()
                 page.wait_for_selector('#role-modal:not(.hidden)')
@@ -366,7 +419,16 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                 }''', ids)
                 page.locator('#save-role-btn').click()
                 page.locator('#role-modal').wait_for(state='hidden')
-            self.changed(page, before, (False, True))
+                page.wait_for_selector('.work-linked-persons__unlink[data-role-type="Author"]')
+            self.assertEqual(o._domain_generation(page, CORE), before[0])
+            self.assertIsNotNone(o._cached_entity(page, PEOPLE, 'snapshot'),
+                                 'Author ACK must patch the People Graph, not discard it')
+            self.wait_people_author_edge(page, ids['person'], ids['work_a'], linking)
+            membership = self.people_graph_author(page, ids['person'], ids['work_a'])
+            self.assertTrue(membership.get('hasPerson') and membership.get('hasWork'),
+                            'ACK patches the edge; it does not drop the Person node: %r'
+                            % (membership,))
+            self.assertEqual(membership.get('hasEdge'), linking)
 
     def test_research_notes_success_and_failure(self):
         server, page, context = self.start()

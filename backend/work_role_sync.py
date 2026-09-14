@@ -87,6 +87,22 @@ def validate_role_type(role_type):
             % (role_type, ", ".join(ROLE_TYPES)))
 
 
+def validate_credit_name(credit_name):
+    """The 500-byte contract, at the write boundary.
+
+    Durable envelopes already refuse oversized credits. Ordinary HTTP and
+    construction went through this function's callers without the check, so a
+    501-byte credit was impossible offline and fine online.
+    """
+    if credit_name is None:
+        return
+    if not isinstance(credit_name, str):
+        raise ValueError("credit_name must be a string")
+    if len(credit_name.encode("utf-8")) > MAX_CREDIT_NAME_BYTES:
+        raise ValueError(
+            "credit_name exceeds %d bytes" % MAX_CREDIT_NAME_BYTES)
+
+
 def current_state(conn, work_id, person_id, role_type):
     """The element's canonical state: None when absent, else its credit name.
 
@@ -159,6 +175,7 @@ def insert_initial_role(conn, work_id, person_id, role_type, order_index=0,
     server-owned placement and mutations append.)
     """
     validate_role_type(role_type)
+    validate_credit_name(credit_name)
     conn.execute(
         "INSERT INTO roles (person_id, work_id, role_type, order_index, credit_name) "
         "VALUES (?, ?, ?, ?, ?)",
@@ -186,6 +203,8 @@ def set_role_state(conn, work_id, person_id, role_type, present, credit_name="")
     a claim about placement it cannot coordinate with other devices.
     """
     validate_role_type(role_type)
+    if present:
+        validate_credit_name(credit_name)
     desired = canonical_credit_name(credit_name) if present else None
     existing = current_state(conn, work_id, person_id, role_type)
     if existing == desired:

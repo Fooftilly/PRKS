@@ -3833,24 +3833,24 @@ class PRKSDatabase:
         order_index: int,
         credit_name: str,
     ) -> bool:
-        """Update credit_name on one role row. Empty string clears override."""
-        cn = (credit_name or "").strip() or None
+        """Update credit_name on one role row. Empty string clears override.
+
+        `order_index` is accepted for body compatibility and deliberately NOT
+        matched on: at most one row exists per `(person, work, role_type)`, and
+        a caller passing a stale index would otherwise silently update nothing.
+        The same revision-aware boundary the durable operation uses, so a
+        credit change made here is visible to every offline device.
+
+        Returns False when the triple does not exist, so PATCH keeps its 404
+        rather than creating a relationship the caller did not ask to add.
+        """
         with self.connection() as conn:
-            cur = conn.execute(
-                """
-                UPDATE roles SET credit_name = ?
-                WHERE work_id = ? AND person_id = ? AND role_type = ? AND order_index = ?
-                """,
-                (cn, work_id, person_id, role_type, int(order_index)),
-            )
-            updated = cur.rowcount > 0
-            conn.commit()
-        if updated:
-            self.execute_query(
-                "UPDATE works SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (work_id,),
-            )
-        return updated
+            conn.execute("BEGIN IMMEDIATE")
+            if work_role_sync.current_state(conn, work_id, person_id, role_type) is None:
+                return False
+            work_role_sync.set_role_state(
+                conn, work_id, person_id, role_type, True, credit_name=credit_name)
+            return True
 
     def delete_work_role(self, work_id: str, person_id: str, role_type: str,
                          order_index: int = 0) -> bool:

@@ -41,6 +41,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
     BROWSE = '#/progress?status=Not%20Started'
     ROLE_OPS = ("['ADD_WORK_PERSON_ROLE','REMOVE_WORK_PERSON_ROLE',"
                 "'SET_WORK_PERSON_ROLE_CREDIT'].indexOf(r.operation) !== -1")
+    FIELD_OPS = "r.operation === 'SET_WORK_METADATA_FIELD'"
 
     # ---- harness ------------------------------------------------------------
 
@@ -130,7 +131,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
                      % (person_id, role)).click()
         page.locator('#prks-modal-confirm-ok').click()
 
-    def pending(self, page, count):
+    def pending(self, page, count, pred=None):
         page.evaluate("""async ([n, pred]) => {
             const matches = new Function('r', 'return ' + pred);
             const deadline = Date.now() + 25000;
@@ -140,14 +141,30 @@ class OfflineWorkPeopleTests(unittest.TestCase):
                 if (Date.now() > deadline) throw new Error('Sync did not settle: ' + JSON.stringify(rows));
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
-        }""", [count, self.ROLE_OPS])
+        }""", [count, pred or self.ROLE_OPS])
 
     def credit_line(self, page, work_id):
-        """The card credit as the shipped helper renders it, for any surface."""
+        """The Progress card credit, scoped to the visible Main tile.
+
+        The Work detail's `.work-workspace` also carries `data-work-id`, and a
+        PDF Work is warm-parked there when we navigate away. A page-wide
+        selector matches that survivor before the browse card paints.
+        """
         return page.evaluate("""id => {
-            const el = document.querySelector('[data-work-id="' + id + '"] .work-card__meta');
+            const el = document.querySelector(
+                '.prks-tile--main .project-card--work-card[data-work-id="' + id + '"] .work-card__meta');
             return el ? el.textContent : '';
         }""", work_id)
+
+    def wait_browse_credit(self, page, work_id, text):
+        """Navigate is fire-and-forget; wait until the Progress card shows `text`."""
+        page.wait_for_function(
+            """([id, text]) => {
+                const el = document.querySelector(
+                    '.prks-tile--main .project-card--work-card[data-work-id="' + id + '"] .work-card__meta');
+                return !!el && el.textContent.indexOf(text) !== -1;
+            }""",
+            arg=[work_id, text])
 
     def detail_people(self, page):
         return page.evaluate(
@@ -189,8 +206,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.assertIn(JANE_DISPLAY, self.detail_people(page))
 
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
-        page.wait_for_selector('[data-work-id="%s"]' % work)
-        self.assertIn(JANE_DISPLAY, self.credit_line(page, work))
+        self.wait_browse_credit(page, work, JANE_DISPLAY)
         self.assertNotIn('Text Author', self.credit_line(page, work),
                          'a linked Author outranks author_text at once')
 
@@ -209,9 +225,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.pending(page, 0)
         self.assertEqual(self.roles(server, work), {(server.ids['jane'], 'Author')})
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
-        page.wait_for_selector('[data-work-id="%s"]' % work)
-        self.assertIn(JANE_DISPLAY, self.credit_line(page, work),
-                      'and nothing visibly reverts at acknowledgement')
+        self.wait_browse_credit(page, work, JANE_DISPLAY)
 
     # ---- 2: offline remove last Author -------------------------------------
 
@@ -226,8 +240,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.assertEqual(self.detail_people(page), [])
 
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
-        page.wait_for_selector('[data-work-id="%s"]' % work)
-        self.assertIn('Text Author', self.credit_line(page, work))
+        self.wait_browse_credit(page, work, 'Text Author')
         self.assertNotIn(JANE_DISPLAY, self.credit_line(page, work))
 
         o._open_person(page, server.ids['jane'])
@@ -251,16 +264,14 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.unlink(page, server.ids['jane'])
         self.pending(page, 1)
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
-        page.wait_for_selector('[data-work-id="%s"]' % work)
+        self.wait_browse_credit(page, work, ED_DISPLAY)
         credit = self.credit_line(page, work)
-        self.assertIn(ED_DISPLAY, credit)
         self.assertIn('Editor', credit, 'and it is labelled as an Editor credit')
 
         self.reconnect(page, context)
         self.pending(page, 0)
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
-        page.wait_for_selector('[data-work-id="%s"]' % work)
-        self.assertIn(ED_DISPLAY, self.credit_line(page, work))
+        self.wait_browse_credit(page, work, ED_DISPLAY)
 
     # ---- 4: composition with pending author_text ----------------------------
 
@@ -286,19 +297,21 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.metadata_editor(page, work)
         page.locator('[data-prks-work-field="author_text"]').fill('New Text Author')
         page.locator('#save-work-bib-btn').click()
+        self.pending(page, 1, self.FIELD_OPS)
+        operations = page.evaluate(
+            "pred => prksSync.store.listOperations().then(r => r"
+            "  .filter(new Function('r', 'return ' + pred))"
+            "  .map(o => o.payload))", self.FIELD_OPS)
+        self.assertEqual(operations, [{'field': 'author_text', 'value': 'New Text Author'}])
 
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
-        page.wait_for_selector('[data-work-id="%s"]' % work)
-        page.wait_for_function(
-            """id => { const el = document.querySelector(
-                   '[data-work-id="' + id + '"] .work-card__meta');
-               return !!el && el.textContent.indexOf('New Text Author') !== -1; }""",
-            arg=work)
+        self.wait_browse_credit(page, work, 'New Text Author')
         credit = self.credit_line(page, work)
         self.assertNotIn(JANE_DISPLAY, credit, 'the removed Author is gone')
 
         self.reconnect(page, context)
         self.pending(page, 0)
+        self.pending(page, 0, self.FIELD_OPS)
         self.assertEqual(self.roles(server, work), set())
         self.assertEqual(self.db_for(server).get_work(work)['author_text'], 'New Text Author')
 

@@ -1001,12 +1001,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if credit_name is not None and not isinstance(credit_name, str):
                     self.send_json(400, {'error': 'credit_name must be a string'})
                     return
-                if db.update_role_credit_name(
-                    w_id, person_id, role_type, order_index, credit_name or ''
-                ):
-                    cn = (credit_name or '').strip()
-                    if cn:
-                        db.append_person_alias_if_new(person_id, cn)
+                try:
+                    updated = db.update_role_credit_name(
+                        w_id, person_id, role_type, order_index, credit_name or ''
+                    )
+                except ValueError as e:
+                    self.send_json(400, {'error': str(e)})
+                    return
+                if updated:
                     self.send_json(200, {'status': 'updated'})
                 else:
                     self.send_json(404, {'error': 'role link not found'})
@@ -2913,9 +2915,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         order_index=oi,
                         credit_name=credit_name or '',
                     )
-                    cn = (credit_name or '').strip()
-                    if cn:
-                        db.append_person_alias_if_new(p_id, cn)
                 except ValueError as e:
                     self.send_json(400, {'error': str(e)})
                     return

@@ -197,17 +197,25 @@ class WorkRoleSyncTests(unittest.TestCase):
     # ---- one write boundary ----
 
     def test_the_ordinary_endpoints_share_the_revision_boundary(self):
-        """`POST /api/roles` and the durable operation are the same canonical
-        write. A relationship changed without its revision would be invisible
-        to every offline device, which would then overwrite it."""
+        """`POST /api/roles`, credit PATCH, and the durable operation are the
+        same canonical write. A relationship changed without its revision would
+        be invisible to every offline device, which would then overwrite it."""
         self.db.add_role(self.jane, self.work, "Author")
         self.assertEqual(self.revision(), 1, "the ordinary path advances it too")
+        self.assertTrue(self.db.update_role_credit_name(
+            self.work, self.jane, "Author", 0, "Jane D."))
+        self.assertEqual((self.state(), self.revision()), ("Jane D.", 2))
+        self.assertIn("Jane D.", self.db.get_person(self.jane)["aliases"],
+                      "the write boundary owns the alias side effect")
+        self.assertTrue(self.db.update_role_credit_name(
+            self.work, self.jane, "Author", 0, ""))
+        self.assertEqual((self.state(), self.revision()), ("", 3))
         self.db.delete_work_role(self.work, self.jane, "Author")
-        self.assertEqual(self.revision(), 2)
+        self.assertEqual(self.revision(), 4)
 
         # ... and a durable operation measured against that revision lands.
-        self.assertEqual(self.send(True, base=2)[1]["code"], "ACKNOWLEDGED")
-        self.assertEqual(self.revision(), 3)
+        self.assertEqual(self.send(True, base=4)[1]["code"], "ACKNOWLEDGED")
+        self.assertEqual(self.revision(), 5)
 
     def test_a_stale_order_index_does_not_silently_remove_nothing(self):
         """The old delete matched on `order_index`, so a caller holding a stale
@@ -216,6 +224,30 @@ class WorkRoleSyncTests(unittest.TestCase):
         self.db.add_role(self.jane, self.work, "Author", order_index=7)
         self.assertTrue(self.db.delete_work_role(self.work, self.jane, "Author", 0))
         self.assertEqual(self.linked(), set())
+
+    def test_a_stale_order_index_still_updates_the_credit(self):
+        """The ordinary credit PATCH had the same identity bug as delete: it
+        matched `order_index`, so a caller holding 0 against a row at 1 was
+        told the relationship did not exist."""
+        self.db.add_role(self.jane, self.work, "Author")
+        self.db.add_role(self.ed, self.work, "Author")
+        ed_index = next(r["order_index"] for r in self.db.get_work_roles(self.work)
+                        if r["id"] == self.ed)
+        self.assertNotEqual(ed_index, 0)
+        self.assertTrue(self.db.update_role_credit_name(
+            self.work, self.ed, "Author", 0, "E. Smith"))
+        self.assertEqual(self.state(self.ed), "E. Smith")
+        self.assertEqual(self.revision(self.ed), 2)
+        self.assertEqual(self.revision(self.jane), 1, "the other triple is untouched")
+
+    def test_credit_patch_on_a_missing_triple_does_not_create_it(self):
+        """PATCH is an edit, not an add. Routing it through set_role_state
+        without an existence check would insert the relationship and report
+        success for a 404."""
+        self.assertFalse(self.db.update_role_credit_name(
+            self.work, self.jane, "Author", 0, "Jane D."))
+        self.assertEqual(self.linked(), set())
+        self.assertEqual(self.revision(), 0)
 
     # ---- construction vs mutation ----
 
@@ -326,6 +358,33 @@ class WorkRoleSyncTests(unittest.TestCase):
         code, result = self.send(True, credit="x" * (roles.MAX_CREDIT_NAME_BYTES + 1))
         self.assertEqual((code, result), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.linked(), set())
+
+    def test_ordinary_writes_also_bound_the_credit_name(self):
+        """The durable envelope was the only layer that enforced 500 bytes, so
+        ordinary add/edit/construction accepted a value no offline device
+        could ever store."""
+        too_long = "x" * (roles.MAX_CREDIT_NAME_BYTES + 1)
+        with self.assertRaises(ValueError):
+            self.db.add_role(self.jane, self.work, "Author", credit_name=too_long)
+        self.assertEqual(self.linked(), set())
+        self.assertEqual(self.revision(), 0)
+
+        self.db.add_role(self.jane, self.work, "Author")
+        with self.assertRaises(ValueError):
+            self.db.update_role_credit_name(
+                self.work, self.jane, "Author", 0, too_long)
+        self.assertEqual((self.state(), self.revision()), ("", 1))
+
+        other = self.db.add_work("Born with a credit")
+        with self.assertRaises(ValueError):
+            self.db.insert_initial_role(
+                other, self.jane, "Author", credit_name=too_long)
+        self.assertEqual(self.db.get_work_roles(other), [])
+
+        self.db.add_role(self.ed, self.work, "Editor",
+                         credit_name="x" * roles.MAX_CREDIT_NAME_BYTES)
+        self.assertEqual(len(self.state(self.ed, "Editor")),
+                         roles.MAX_CREDIT_NAME_BYTES)
 
     # ---- the structured projection the overlay reads ----
 
