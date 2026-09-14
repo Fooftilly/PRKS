@@ -214,11 +214,24 @@
      * the optimistic row is withheld rather than drawn blank; the intent is
      * still durable and still synchronizes.
      */
+    /** Pending Person renames applied to a role list, whoever is in it. */
+    function withPendingNames(work, roles) {
+        const named = typeof root.prksApplyPendingPersonNames === 'function'
+            ? root.prksApplyPendingPersonNames(roles) : roles;
+        return named === roles ? work : Object.assign({}, work, { roles: named });
+    }
+
     function effectiveWorkDetailRoles(work) {
-        if (!work || typeof work.id !== 'string' || !pendingByScope.size) return work;
+        if (!work || typeof work.id !== 'string') return work;
         if (!Array.isArray(work.roles)) return work;
-        const intents = pendingForWork(work.id);
-        if (!intents.length) return work;
+        const intents = pendingByScope.size ? pendingForWork(work.id) : [];
+        /* A rename is independent of whether anything was LINKED offline.
+         * Returning early on an empty relationship map skipped the name
+         * overlay entirely, so a Person renamed offline still appeared under
+         * their old name on every Work crediting them -- the one surface the
+         * acknowledgement path cannot patch, and therefore the one that has
+         * only this overlay. */
+        if (!intents.length) return withPendingNames(work, work.roles);
         const byScope = new Map();
         intents.forEach(entry => {
             byScope.set(scopeKey(entry.work_id, entry.person_id, entry.role_type), entry);
@@ -248,10 +261,7 @@
          * renamed offline is still the person this Work is credited to. The
          * relationship overlay decides who is here; the profile overlay
          * decides what they are called, and never the other way round. */
-        return Object.assign({}, work, {
-            roles: typeof root.prksApplyPendingPersonNames === 'function'
-                ? root.prksApplyPendingPersonNames(out) : out,
-        });
+        return withPendingNames(Object.assign({}, work, { roles: out }), out);
     }
 
     /** Effective links for one Work, for surfaces that render them directly. */

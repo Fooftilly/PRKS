@@ -16,6 +16,7 @@ const { createPrksLocalStore } = require('../../frontend/js/local-store.js');
 require('../../frontend/js/sync-runtime.js');
 require('../../frontend/js/person-state.js');
 require('../../frontend/js/person-metadata-state.js');
+require('../../frontend/js/work-role-state.js');
 
 let sequence = 0;
 const uuid = () => '00000000-0000-4000-8000-' + (++sequence).toString(16).padStart(12, '0');
@@ -211,6 +212,26 @@ async function pendingRenamesReachCreditRows() {
     assert.equal(globalThis.prksApplyPendingPersonNames(untouched), untouched);
 }
 
+/* ---- a rename is independent of whether anything was linked offline ---- */
+async function renamesApplyWithNoPendingLinks() {
+    const store = newStore();
+    await store.savePersonMetadataFields('P-1', { last_name: 'Byron' }, baseAt());
+    globalThis.prksSetPendingPersonNames(await store.listOperations());
+    /* No relationship intents at all -- the ordinary case for a rename. The
+     * Work-detail overlay used to return the Work untouched whenever its
+     * pending-link map was empty, which skipped the name overlay entirely and
+     * left every Work still crediting the OLD name. That surface has no other
+     * source for a pending rename: the acknowledgement path invalidates those
+     * rows rather than patching them, because they are keyed by Work. */
+    globalThis.prksSetPendingWorkRoles([]);
+    const work = { id: 'W-1', roles: [
+        { person_id: 'P-1', role_type: 'Author', first_name: 'Ada', last_name: 'Lovelace' },
+    ] };
+    const effective = globalThis.prksEffectiveWorkDetailRoles(work);
+    assert.equal(effective.roles[0].last_name, 'Byron');
+    assert.equal(work.roles[0].last_name, 'Lovelace', 'and the cached Work is untouched');
+}
+
 /* ---- the observed base, and what makes one unknowable ---- */
 async function observedBaseIsValueAndRevision() {
     const person = { id: 'P-1', about: 'Server biography', last_name: 'Lovelace' };
@@ -249,6 +270,7 @@ async function main() {
     await aRefusedCreationBlocksItsEdits();
     await effectiveProfileComposes();
     await pendingRenamesReachCreditRows();
+    await renamesApplyWithNoPendingLinks();
     await observedBaseIsValueAndRevision();
     await onlyProfileFieldsAreWritable();
     console.log('All ' + checks + ' person profile checks passed');

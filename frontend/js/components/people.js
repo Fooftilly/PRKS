@@ -156,9 +156,17 @@ const PERSON_CONTROL_SELECTOR = '[data-prks-role="' + PERSON_MUTATION_ROLE + '"]
 /* The profile editor's own inputs: disabled while offline so a draft is held
  * rather than silently discarded. Cancel is deliberately excluded so the user
  * can always leave edit mode. */
+/* Controls inside an OPEN editor that still require the server.
+ *
+ * The profile fields and Save are deliberately absent: they are durable now,
+ * so an editor that went inert the moment PRKS stopped answering would be the
+ * old "two features" behaviour wearing a different shape -- the user would
+ * lose the ability to record a change that this device can perfectly well
+ * keep. What remains is group membership, which is a relationship rather than
+ * a profile scalar and is not in this milestone's durable vocabulary. */
 const PERSON_EDITOR_SELECTOR =
-    '.person-panel-edit input, .person-panel-edit textarea, .person-panel-edit select,' +
-    ' .person-panel-edit button:not(#pd-cancel-btn):not([data-prks-person-cancel])';
+    '.person-panel-edit #pd-group-search, .person-panel-edit #pd-group-add-btn,' +
+    ' .person-panel-edit .pd-group-chip-remove';
 
 function prksPersonRuntimeState() {
     return typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : 'online';
@@ -991,7 +999,20 @@ function openPersonProfileEdit() {
         ctx.ui.personDetailEditing = true;
     }
     prksEnsurePersonProfileDraft(ctx, person);
+    /* Warm the revisions this edit will be measured against, the way the Work
+     * metadata editor prepares its own base. Opening the editor is the moment
+     * the user declares an intent to change something, and it is the last
+     * moment the device is reliably able to ask: a save attempted after a
+     * disconnect can only use what was cached before it. */
+    if (typeof prksReadPersonMetadataState === 'function' && person.id) {
+        void prksReadPersonMetadataState(person.id);
+    }
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
+    /* Settle the freshly rendered editor against the CURRENT connectivity.
+     * The binding only reacts to changes, so an editor opened while already
+     * offline would otherwise show its group controls live until connectivity
+     * happened to change again. */
+    prksApplyPersonPanelOfflineState(ctx);
 }
 
 function closePersonProfileEdit() {
@@ -1261,8 +1282,8 @@ async function prksObservedPersonProfileBase(personId, ctx) {
  * happens at acknowledgement.
  */
 async function prksSavePersonGroupMemberships(ctx, personId, groupIds) {
-    if (prksPersonRuntimeState() !== 'online') return;
-    if (!prksPersonGroupsDiffer(ctx, groupIds)) return;
+    if (prksPersonRuntimeState() !== 'online') return true;
+    if (!prksPersonGroupsDiffer(ctx, groupIds)) return true;
     const res = await prksRequest(`/api/persons/${personId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1274,12 +1295,13 @@ async function prksSavePersonGroupMemberships(ctx, personId, groupIds) {
          * before this ran, so "could not save" would be wrong twice over. */
         await prksAlertMessage(body.error || 'The profile was saved, but its groups could not '
             + 'be updated.', 'Groups not updated');
-        return;
+        return false;
     }
     if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
     if (typeof prksMarkPersonGroupsDomainChanged === 'function') {
         prksMarkPersonGroupsDomainChanged();
     }
+    return true;
 }
 
 /** Whether the draft's group selection differs from what the cache holds. */
@@ -1381,8 +1403,15 @@ async function savePersonProfile(personId) {
          * request -- and the controls that change it are disabled offline --
          * so the two never half-apply: the profile is already durable by the
          * time this runs, and a failure here reports only what it owns. */
-        await prksSavePersonGroupMemberships(ctx, personId,
-            (Array.isArray(draft.groups) ? draft.groups : []).map(g => g.id));
+        /* The editor stays OPEN when only the membership half failed. The
+         * profile is already durable, so re-saving it costs nothing -- there
+         * is no second intent to create for a value that is already the
+         * observed one -- and keeping the draft is what lets the user retry
+         * the part that actually failed. */
+        if (!await prksSavePersonGroupMemberships(ctx, personId,
+                (Array.isArray(draft.groups) ? draft.groups : []).map(g => g.id))) {
+            return;
+        }
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
             !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')

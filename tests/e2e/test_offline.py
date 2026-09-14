@@ -309,6 +309,21 @@ def _person_row_names(page):
     )
 
 
+def _wait_sync_settled(page, timeout_ms=30000):
+    """Every durable operation sent and retired."""
+    page.evaluate("""async ms => {
+        const deadline = Date.now() + ms;
+        for (;;) {
+            const rows = await prksSync.store.listOperations();
+            if (!rows.length) return;
+            if (Date.now() > deadline) {
+                throw new Error('sync did not settle: ' + JSON.stringify(rows));
+            }
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+    }""", timeout_ms)
+
+
 def _domain_generation(page, domain):
     return page.evaluate(
         "d => (typeof prksOfflineDomainGeneration === 'function' ? prksOfflineDomainGeneration(d) : null)",
@@ -4882,6 +4897,12 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         page.locator(field).fill(value)
         page.locator("#pd-save-btn").click()
         page.wait_for_selector(".person-panel-edit", state="detached", timeout=15000)
+        # Coherence follows the CANONICAL change, which for a profile field is
+        # now the acknowledgement rather than the Save click: Save writes the
+        # intent, the coordinator sends it, and the reconciler is what patches
+        # and invalidates. So the queue has to drain before any domain
+        # assertion means anything.
+        _wait_sync_settled(page)
 
     def test_person_rename_invalidates_arguments_but_other_profile_edits_do_not(self):
         """Cached Argument sources show each author by canonical first/last name,
@@ -5607,16 +5628,19 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         _wait_offline_banner(page)
         _open_details_drawer_if_tiled(page)
 
-        # Deleting a Person is still a canonical request, so its control is
-        # disabled; editing the PROFILE is durable now, so its control is not.
-        page.wait_for_function(
-            "() => { const b = document.querySelector('#panel-content"
-            " [data-prks-role=\"person-mutation-control\"]'); return !!b && b.disabled; }",
-            timeout=20000,
-        )
+        # Editing the PROFILE is durable now, so its control is enabled ...
         page.wait_for_function(
             "() => { const b = document.querySelector('#panel-content"
             " [data-prks-role=\"person-edit-control\"]'); return !!b && !b.disabled; }",
+            timeout=20000,
+        )
+        # ... while every control that still needs the server is not. Asserted
+        # over ALL of them rather than the first: the delete action lives
+        # behind a menu, so which one `querySelector` happens to find is a
+        # detail of the panel's markup rather than of this rule.
+        page.wait_for_function(
+            "() => Array.from(document.querySelectorAll('#panel-content"
+            " [data-prks-role=\"person-mutation-control\"]')).every(b => b.disabled)",
             timeout=20000,
         )
         self.assertFalse(page.locator("#prks-person-view-graph").is_disabled())
@@ -5673,7 +5697,7 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         _wait_offline_unavailable(page)
         self.assertIn("#/graph?focus=person:", page.evaluate("decodeURIComponent(location.hash)"))
 
-    def test_open_profile_editor_survives_disconnect_without_losing_the_draft(self):
+    def test_open_profile_editor_stays_usable_after_a_disconnect(self):
         server, page, _context, _collector = self._start()
         person_a = server.ids["person_a"]
 
@@ -5701,28 +5725,45 @@ class OfflinePeopleMutationTests(unittest.TestCase):
                 timeout=20000,
             )
             page.wait_for_function(
-                "() => !!document.querySelector('#pd-about[disabled]')", timeout=20000
+                "() => !!document.querySelector('#pd-group-add-btn[disabled]')", timeout=20000
             )
             # The draft is still there ...
-            self.assertEqual(page.locator("#pd-about").input_value(), draft)
-            self.assertTrue(page.locator("#pd-first-name").is_disabled())
-            self.assertTrue(page.locator("#pd-save-btn").is_disabled())
+            self.assertEqual(
+                page.evaluate("() => document.getElementById('pd-about').value"), draft)
+            # ... and so is the ability to save it. Profile fields are durable,
+            # so an editor that went inert on disconnect would take away a
+            # change this device can perfectly well record. Group membership is
+            # a relationship rather than a profile scalar and stays
+            # connection-required.
+            self.assertFalse(page.locator("#pd-first-name").is_disabled())
+            self.assertFalse(page.locator("#pd-save-btn").is_disabled())
             self.assertTrue(page.locator("#pd-group-add-btn").is_disabled())
             # ... Cancel stays usable ...
             self.assertFalse(
                 page.locator('.person-panel-edit [data-prks-person-cancel]').is_disabled()
             )
-            # ... and Save cannot reach the network.
-            page.locator("#pd-save-btn").click(force=True)
-            page.wait_for_timeout(400)
+            # ... and saving records the intent WITHOUT any canonical request:
+            # the durable queue is the only mutation boundary now.
+            page.locator("#pd-save-btn").click()
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'SET_PERSON_METADATA_FIELD'))",
+                message='the offline profile edit was never recorded durably')
             self.assertEqual(mutations, [])
         finally:
             _safe_unroute(page, "**/api/**", block_api)
 
+        # Reconnecting sends what was recorded. The editor is already closed --
+        # the save completed when it was written, not when it reached the
+        # server -- so what is checked here is that the change actually
+        # arrived, and that nothing was left pending behind it.
         page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
-        page.wait_for_function("() => !document.querySelector('#pd-about[disabled]')", timeout=20000)
-        self.assertEqual(page.locator("#pd-about").input_value(), draft)
-        self.assertFalse(page.locator("#pd-save-btn").is_disabled())
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function'"
+            " ? prksOfflineRuntimeState() : null) === 'online'", timeout=20000)
+        _wait_sync_settled(page)
+        _wait_content_contains(page, draft)
 
     def test_relationship_editor_becomes_inert_on_disconnect(self):
         server, page, _context, _collector = self._start()
@@ -5818,6 +5859,24 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         _open_person(page, server.ids["person_a"])
         _wait_entity_cached(page, "person", server.ids["person_a"])
 
+    def _assert_people_reconciled(self, page, server, before):
+        """A profile edit PATCHES the People read model rather than dropping it.
+
+        The acknowledgement carries the exact new value, so discarding the
+        cached Person and the cached index would cost the user both for a
+        change already known in full -- and offline there is nothing to read
+        them back from. The generation still advances, so a GET that began
+        before the acknowledgement cannot publish its older body afterwards.
+        """
+        page.wait_for_function(
+            "n => (typeof prksOfflineDomainGeneration === 'function'"
+            " ? prksOfflineDomainGeneration('people') : 0) > n",
+            arg=before,
+            timeout=20000,
+        )
+        self.assertIsNotNone(_cached_entity(page, "person", server.ids["person_a"]))
+        self.assertIsNotNone(_cached_list(page, "people:index"))
+
     def _assert_people_invalidated(self, page, server, before):
         page.wait_for_function(
             "n => (typeof prksOfflineDomainGeneration === 'function'"
@@ -5907,7 +5966,7 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         before = _domain_generation(page, "people")
         arguments_before = _domain_generation(page, "arguments")
         self._save_person_profile(page, person_a, "#pd-about", "A revised biography, same name.")
-        self._assert_people_invalidated(page, server, before)
+        self._assert_people_reconciled(page, server, before)
         self.assertEqual(_domain_generation(page, "arguments"), arguments_before)
         self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
 
@@ -5916,7 +5975,7 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         before = _domain_generation(page, "people")
         arguments_before = _domain_generation(page, "arguments")
         self._save_person_profile(page, person_a, "#pd-first-name", "Renamed")
-        self._assert_people_invalidated(page, server, before)
+        self._assert_people_reconciled(page, server, before)
         self.assertGreater(_domain_generation(page, "arguments"), arguments_before)
 
         # Delete an unlinked Person.

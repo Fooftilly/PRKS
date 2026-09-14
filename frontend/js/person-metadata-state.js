@@ -234,6 +234,13 @@
             throw new Error('Profile editing is not available.');
         }
         const written = await sync.store.savePersonMetadataFields(personId, changes, base);
+        /* Refresh the synchronous name map HERE, not only at route hydration.
+         * A rename made on the Person page has to be visible the moment the
+         * user reaches a Work that credits them, and the surfaces that render
+         * a credit read the map synchronously -- so a map refreshed only when
+         * a route next hydrates would show the old name until something else
+         * happened to read the queue. */
+        await refreshPendingPersonNames();
         if (typeof sync.changed === 'function') sync.changed();
         return written;
     }

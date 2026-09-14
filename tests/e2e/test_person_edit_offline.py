@@ -77,8 +77,14 @@ class OfflinePersonEditTests(unittest.TestCase):
     def edit_field(self, page, selector, value):
         page.locator(selector).fill(value)
 
-    def save_editor(self, page):
+    def save_editor(self, page, closes=True):
         page.locator('#pd-save-btn').click()
+        # A successful save closes the editor. Reopening before it has closed
+        # would match the OLD panel, which then re-renders underneath the next
+        # fill -- and the field detaches mid-typing. A REFUSED save leaves it
+        # open on purpose, so the caller says which it expects.
+        if closes:
+            page.locator('.person-panel-edit').wait_for(state='detached', timeout=30000)
 
     def operations(self, page):
         return [tuple(row) for row in page.evaluate(
@@ -266,7 +272,15 @@ class OfflinePersonEditTests(unittest.TestCase):
         o._open_details_drawer_if_tiled(page)
         page.wait_for_selector('.work-detail')
         page.evaluate("() => { void prksSetWorkDetailsMode('people'); }")
-        o._wait_content_contains(page, 'Renamed')
+        # The linked-people chips live in the details panel, not the main
+        # content area -- the Work route's content is the document itself.
+        page.wait_for_function(
+            """text => {
+                const chips = Array.from(document.querySelectorAll(
+                    '#panel-content .work-linked-persons__chip-link'));
+                return chips.some(el => el.textContent.indexOf(text) !== -1);
+            }""",
+            arg='Renamed', timeout=30000)
 
     def test_reconnecting_applies_the_edit_once_with_no_rollback(self):
         server, page, context = self.start()
@@ -303,8 +317,13 @@ class OfflinePersonEditTests(unittest.TestCase):
 
         self.open_editor(page)
         self.edit_field(page, '#pd-about', 'Saved while connected')
-        self.save_editor(page)
-        self.wait_until_synced(page, 'SET_PERSON_METADATA_FIELD')
+        # The queue is not polled for the row: online it can be enqueued, sent
+        # and retired between two polls. What proves the durable path was used
+        # is the sync request itself.
+        with page.expect_response(
+                lambda r: '/api/sync/operations' in r.url and r.status == 200):
+            self.save_editor(page)
+        self.settled(page)
         self.assertEqual(self.stored(server, person, 'about'), 'Saved while connected')
         # The revision moved, which is what an offline device needs in order to
         # discover it was overtaken.
@@ -439,6 +458,7 @@ class OfflinePersonEditTests(unittest.TestCase):
         self.offline(page, context)
         person = self.create_person(page, 'Doomed', 'Person')
         o._open_person(page, person)
+        o._wait_content_contains(page, 'Doomed Person')
         self.open_editor(page)
         self.edit_field(page, '#pd-about', 'Never reaches the server')
         self.save_editor(page)
@@ -461,9 +481,12 @@ class OfflinePersonEditTests(unittest.TestCase):
         # And a NEW edit cannot be enqueued against that creation either.
         self.open_editor(page)
         self.edit_field(page, '#pd-about', 'Another attempt')
-        self.save_editor(page)
-        page.wait_for_selector('.prks-modal:not(.hidden), #prks-alert-modal:not(.hidden)',
-                               timeout=15000)
+        self.save_editor(page, closes=False)
+        page.wait_for_function(
+            "() => { const el = document.getElementById('prks-modal-confirm');"
+            "        return !!el && !el.classList.contains('hidden'); }",
+            timeout=15000)
+        page.locator('#prks-modal-confirm-ok').click()
         self.assertEqual(len(self.profile_operations(page)), 1,
                          'no second doomed operation is written')
 

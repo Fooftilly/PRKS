@@ -517,6 +517,9 @@ class PersonGroupsOfflineTests(unittest.TestCase):
             before = self.generations(page)
             page.locator('#pd-save-btn').click()
             page.wait_for_selector('.person-panel-edit', state='detached')
+            # Coherence follows the CANONICAL change, and for a profile field
+            # that is now the acknowledgement rather than the Save click.
+            o._wait_sync_settled(page)
             self.changed(page, before, expected)
 
     def test_person_create_exclusion_and_delete_membership_coherence(self):

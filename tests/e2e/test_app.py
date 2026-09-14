@@ -583,13 +583,15 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
         held = []
 
         def hold_a_patch(route):
+            # The save's in-flight window is now the read of the revision base
+            # it measures against, not a canonical PATCH.
             req = route.request
-            if req.method == "PATCH" and urlparse(req.url).path == "/api/persons/" + person_a:
+            if urlparse(req.url).path == "/api/persons/%s/metadata-state" % person_a:
                 held.append(route)
                 return
             route.fallback()
 
-        page.route("**/api/persons/*", hold_a_patch)
+        page.route("**/api/persons/**", hold_a_patch)
         try:
             _focus_workspace_tab(page, tab_a)
             _open_focused_person_editor(page, person_a)
@@ -598,7 +600,7 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "A PATCH was not intercepted")
+            self.assertTrue(held, "the profile save never read its revision base")
             _focus_workspace_tab(page, tab_b)
             page.locator(".person-sidebar-summary").wait_for()
             held.pop().continue_()
@@ -624,7 +626,7 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             self.assertIn("Ada Background Saved", heading)
         finally:
             _continue_held_routes(held)
-            page.unroute("**/api/persons/*", hold_a_patch)
+            page.unroute("**/api/persons/**", hold_a_patch)
 
     def test_delayed_new_group_updates_only_live_originating_draft(self):
         server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
@@ -693,6 +695,11 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
         failed = []
 
         def fail_once(route):
+            # Profile fields cannot fail a save any more -- they are durable.
+            # Group membership is a relationship, still a canonical request,
+            # and still the half that can be refused. A refusal there keeps the
+            # editor open, because the part that failed is the part the user
+            # has to retry.
             req = route.request
             if req.method == "PATCH" and urlparse(req.url).path == "/api/persons/" + person_a and not failed:
                 failed.append(True)
@@ -4788,14 +4795,17 @@ class WorkspaceTilingTests(_BrowserE2E):
         held = []
 
         def hold_person_patch(route):
+            # A profile save is durable-first: there is no canonical PATCH to
+            # hold any more. What it DOES await is the revision base this edit
+            # is measured against, so that read is the save's in-flight window.
             req = route.request
-            if req.method == "PATCH" and urlparse(req.url).path == "/api/persons/" + person_id:
+            if urlparse(req.url).path == "/api/persons/%s/metadata-state" % person_id:
                 held.append(route)
                 return
             route.fallback()
 
         saved_about = "PERSON-CROSS-FOCUS-%s" % int(time.time() * 1000)
-        page.route("**/api/persons/*", hold_person_patch)
+        page.route("**/api/persons/**", hold_person_patch)
         try:
             _open_details_drawer_if_tiled(page)
             page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
@@ -4805,7 +4815,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "Person PATCH was not intercepted")
+            self.assertTrue(held, "the profile save never read its revision base")
             save_btn = page.locator("#pd-save-btn")
             self.assertTrue(save_btn.is_disabled())
             self.assertEqual(save_btn.get_attribute("aria-busy"), "true")
@@ -4888,7 +4898,7 @@ class WorkspaceTilingTests(_BrowserE2E):
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/persons/*", hold_person_patch)
+                page.unroute("**/api/persons/**", hold_person_patch)
             except Exception:
                 pass
 
@@ -5029,14 +5039,17 @@ class WorkspaceTilingTests(_BrowserE2E):
         held = []
 
         def hold_person_patch(route):
+            # A profile save is durable-first: there is no canonical PATCH to
+            # hold any more. What it DOES await is the revision base this edit
+            # is measured against, so that read is the save's in-flight window.
             req = route.request
-            if req.method == "PATCH" and urlparse(req.url).path == "/api/persons/" + person_id:
+            if urlparse(req.url).path == "/api/persons/%s/metadata-state" % person_id:
                 held.append(route)
                 return
             route.fallback()
 
         saved_about = "PERSON-FOCUSED-SAVE-%s" % int(time.time() * 1000)
-        page.route("**/api/persons/*", hold_person_patch)
+        page.route("**/api/persons/**", hold_person_patch)
         try:
             _open_details_drawer_if_tiled(page)
             page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
@@ -5046,7 +5059,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "Person PATCH was not intercepted")
+            self.assertTrue(held, "the profile save never read its revision base")
             self.assertEqual(
                 page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId"),
                 ids["secondaryTabId"],
@@ -5074,7 +5087,7 @@ class WorkspaceTilingTests(_BrowserE2E):
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/persons/*", hold_person_patch)
+                page.unroute("**/api/persons/**", hold_person_patch)
             except Exception:
                 pass
 

@@ -1065,9 +1065,13 @@
                     return false;
                 }
             }
+            /* A cached Group detail embeds WHOLE People index rows, so ANY
+             * profile field stales it -- this reconciler patches the People
+             * index itself, but not the copies of those rows held inside
+             * Group snapshots. Ungated for that reason, unlike the rest. */
+            prksOfflineMarkPersonGroupsChanged();
             const displayed = root.PRKS_PERSON_DISPLAY_FIELDS || [];
             if (displayed.indexOf(field) !== -1) {
-                prksOfflineMarkPersonGroupsChanged();
                 prksOfflineMarkResearchGraphPeopleChanged();
                 prksOfflineMarkArgumentsChanged();
                 prksOfflineMarkWorksBrowseChanged();
