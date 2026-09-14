@@ -69,6 +69,11 @@
             }
             return 'Link ' + who + ' as ' + role;
         }
+        if (op.operation === 'CREATE_PERSON') {
+            const who = [op.payload.first_name, op.payload.last_name].filter(Boolean).join(' ') ||
+                op.entity_id;
+            return 'Create ' + who;
+        }
         if (op.operation === 'ADD_WORK_TAG' || op.operation === 'REMOVE_WORK_TAG') {
             return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') +
                 ((context.tag && context.tag.name) || 'Tag');
@@ -91,10 +96,19 @@
         ADD_WORK_PERSON_ROLE: 'work-people-state',
         REMOVE_WORK_PERSON_ROLE: 'work-people-state',
         SET_WORK_PERSON_ROLE_CREDIT: 'work-people-state',
+        CREATE_PERSON: 'person',
     });
 
     /** The cached read models a discarded operation's intent was overlaying. */
     function invalidate(op) {
+        if (op.entity_type === 'person') {
+            if (typeof root.prksOfflineMarkPeopleChanged === 'function') {
+                root.prksOfflineMarkPeopleChanged();
+            } else {
+                root.prksOfflineMarkEntityChanged('person', op.entity_id);
+            }
+            return;
+        }
         root.prksOfflineMarkEntityChanged('work', op.entity_id);
         const projection = DISCARD_INVALIDATES[op.operation];
         if (projection) root.prksOfflineMarkEntityChanged(projection, op.entity_id);
@@ -123,7 +137,9 @@
         for (const op of operations) {
             const row = document.createElement('p');
             const link = document.createElement('a');
-            link.href = '#/works/' + encodeURIComponent(op.entity_id);
+            link.href = op.entity_type === 'person'
+                ? '#/people/' + encodeURIComponent(op.entity_id)
+                : '#/works/' + encodeURIComponent(op.entity_id);
             link.textContent = describe(op);
             row.append(link, document.createTextNode(
                 ' · ' + op.entity_id + sizeNote(op) + ' · ' + status(op) + conflictDetail(op) + ' '));

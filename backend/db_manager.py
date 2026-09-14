@@ -17,6 +17,7 @@ from pathlib import Path
 from backend import (work_metadata_sync, work_open_sync, work_role_sync,
                      work_source_sync, work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
+from backend.entity_ids import generate as generate_entity_id, is_distributed
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_annotations import (
     WorkAnnotationError,
@@ -913,9 +914,12 @@ class PRKSDatabase:
             conn.close()
 
     def generate_id(self, prefix: str) -> str:
-        """Generates a short, readable persistent unique ID, e.g., W-A1B2C3D4"""
-        u_hex = str(uuid.uuid4().hex)
-        return f"{prefix}-{u_hex[:8].upper()}"
+        """A collision-resistant persistent id: `{prefix}-` plus 32 UUID hex.
+
+        Historical rows used eight hex characters. New ids never copy that
+        scheme: offline clients mint the same strings SQLite will store.
+        """
+        return generate_entity_id(prefix)
 
     def execute_query(self, query: str, params: tuple = ()) -> List[dict]:
         t0 = clock_ns()
@@ -3278,6 +3282,45 @@ class PRKSDatabase:
         return list(self.execute_query(query, (work_id, work_id)))
 
     # --- Persons ---
+    def insert_person_on_conn(
+        self,
+        conn,
+        person_id: str,
+        first_name: str = "",
+        last_name: str = "",
+        aliases: str = "",
+        about: str = "",
+        image_url: str = "",
+        link_wikipedia: str = "",
+        link_stanford_encyclopedia: str = "",
+        link_iep: str = "",
+        links_other: str = "",
+        birth_date: str = "",
+        death_date: str = "",
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO persons (id, first_name, last_name, aliases, about,
+                image_url, link_wikipedia, link_stanford_encyclopedia, link_iep, links_other,
+                birth_date, death_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                person_id,
+                first_name,
+                last_name if last_name is not None else "",
+                aliases,
+                about,
+                image_url,
+                link_wikipedia,
+                link_stanford_encyclopedia,
+                link_iep,
+                links_other,
+                birth_date,
+                death_date,
+            ),
+        )
+
     def add_person(
         self,
         first_name: str,
@@ -3291,31 +3334,28 @@ class PRKSDatabase:
         links_other: str = "",
         birth_date: str = "",
         death_date: str = "",
+        person_id: str | None = None,
     ) -> str:
-        person_id = self.generate_id("P")
-        query = """
-        INSERT INTO persons (id, first_name, last_name, aliases, about,
-            image_url, link_wikipedia, link_stanford_encyclopedia, link_iep, links_other,
-            birth_date, death_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        self.execute_query(
-            query,
-            (
+        if person_id is None:
+            person_id = self.generate_id("P")
+        elif not is_distributed(person_id, "P"):
+            raise ValueError("invalid person id")
+        with self.connection() as conn:
+            self.insert_person_on_conn(
+                conn,
                 person_id,
-                first_name,
-                last_name,
-                aliases,
-                about,
-                image_url,
-                link_wikipedia,
-                link_stanford_encyclopedia,
-                link_iep,
-                links_other,
-                birth_date,
-                death_date,
-            ),
-        )
+                first_name=first_name,
+                last_name=last_name,
+                aliases=aliases,
+                about=about,
+                image_url=image_url,
+                link_wikipedia=link_wikipedia,
+                link_stanford_encyclopedia=link_stanford_encyclopedia,
+                link_iep=link_iep,
+                links_other=links_other,
+                birth_date=birth_date,
+                death_date=death_date,
+            )
         return person_id
 
     PERSON_METADATA_FIELDS = frozenset(

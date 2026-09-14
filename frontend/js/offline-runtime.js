@@ -968,6 +968,35 @@
             return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token);
         }
 
+        async function reconcileCreatedPerson(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const person = result && result.person;
+            if (!person || person.id !== result.person_id) return false;
+            const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
+            domainGeneration.set(DOMAIN_PEOPLE, token);
+            const cached = await store.getList(PEOPLE_LIST_KEY).catch(function () { return null; });
+            if (cached) {
+                const rows = cached.value;
+                if (typeof root.prksIsPeopleIndexShape === 'function' &&
+                    Array.isArray(rows) && !root.prksIsPeopleIndexShape(rows)) {
+                    return false;
+                }
+                const merged = typeof root.prksMergeCreatedPerson === 'function'
+                    ? root.prksMergeCreatedPerson(rows, result) : null;
+                if (!merged) return false;
+                if (!await cacheListForDomain(PEOPLE_LIST_KEY, merged, DOMAIN_PEOPLE, token)) {
+                    return false;
+                }
+            }
+            if (typeof root.prksIsPersonShape === 'function' &&
+                !root.prksIsPersonShape(person, result.person_id)) {
+                return true;
+            }
+            const entityToken = currentEntityGeneration('person', result.person_id) + 1;
+            entityCoherence.set(entityKey('person', result.person_id), entityToken);
+            return cacheEntityIfCurrent('person', result.person_id, person, entityToken);
+        }
+
         /** Remove a disposable entity snapshot. Never changes connectivity or server state. */
         function invalidateEntity(kind, id) {
             if (!store || typeof store.deleteEntity !== 'function') return Promise.resolve(false);
@@ -1242,6 +1271,7 @@
             reconcileWorkSource,
             reconcileWorkRole,
             reconcileRecentOpen,
+            reconcileCreatedPerson,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
             invalidateEntity: invalidateEntity,
@@ -1447,6 +1477,7 @@
         prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
         prksOfflineReconcileWorkRole: result => production.reconcileWorkRole(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
+        prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
         prksOfflineMarkTagsChanged: () => production.markDomainChanged('tags', { entityKinds: [], listKeys: ['tags:index'] }),
         prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,
         prksOfflineInvalidateEntity: prksOfflineInvalidateEntity,

@@ -65,6 +65,7 @@
         'ADD_WORK_PERSON_ROLE',
         'REMOVE_WORK_PERSON_ROLE',
         'SET_WORK_PERSON_ROLE_CREDIT',
+        'CREATE_PERSON',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -97,6 +98,30 @@
 
     /* The Work-Person role family. All three name one element's state, so they
      * coalesce against each other within one scope. */
+    const PERSON_FIELDS = Object.freeze([
+        'first_name', 'last_name', 'aliases', 'about', 'image_url',
+        'link_wikipedia', 'link_stanford_encyclopedia', 'link_iep',
+        'links_other', 'birth_date', 'death_date',
+    ]);
+
+    function generateEntityId(prefix, uuidFn) {
+        const hex = String(uuidFn()).replace(/-/g, '').toUpperCase();
+        if (!/^[0-9A-F]{32}$/.test(hex)) {
+            throw localStoreError('invalid_envelope', 'Could not generate entity id.');
+        }
+        return prefix + '-' + hex;
+    }
+
+    function canonicalPersonPayload(input) {
+        const src = isPlainObject(input) ? input : {};
+        const payload = {};
+        PERSON_FIELDS.forEach(function (name) {
+            const value = src[name];
+            payload[name] = value == null ? '' : String(value);
+        });
+        return payload;
+    }
+
     const WORK_ROLE_OPERATIONS = Object.freeze([
         'ADD_WORK_PERSON_ROLE', 'REMOVE_WORK_PERSON_ROLE', 'SET_WORK_PERSON_ROLE_CREDIT',
     ]);
@@ -742,6 +767,14 @@
             const prepared = normalizeOperationEnvelope(envelope, {
                 opId: uuid(), deviceId, sequence, createdAt: nowIso(),
             });
+            const existing = await request(STORE_OPERATIONS, s => s.getAll());
+            const known = new Set((Array.isArray(existing) ? existing : []).map(r => r && r.op_id));
+            const deps = prepared.depends_on || [];
+            for (let i = 0; i < deps.length; i += 1) {
+                if (!known.has(deps[i])) {
+                    throw localStoreError('invalid_envelope', 'depends_on names an unknown operation.');
+                }
+            }
             if (localContext != null) {
                 if (jsonByteLength(localContext) > 4096) throw localStoreError('invalid_context', 'Local context too large.');
                 prepared.local_context = JSON.parse(JSON.stringify(localContext));
@@ -849,10 +882,25 @@
                         : 'SET_WORK_PERSON_ROLE_CREDIT');
                 const payload = { person_id: link.person_id, role_type: link.role_type };
                 if (operation !== 'REMOVE_WORK_PERSON_ROLE') payload.credit_name = desired;
+                const createOp = rows.find(r => r && r.operation === 'CREATE_PERSON' &&
+                    r.entity_id === link.person_id);
                 setResult(await insertEnvelopeIn(request, {
                     operation, entity_type: 'work', entity_id: workId, payload,
                     base_revision: observed.revision,
+                    depends_on: createOp ? [createOp.op_id] : [],
                 }, localContext || null));
+            });
+        }
+
+        function createPerson(fields) {
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                setResult(await insertEnvelopeIn(request, {
+                    operation: 'CREATE_PERSON',
+                    entity_type: 'person',
+                    entity_id: generateEntityId('P', uuid),
+                    payload: canonicalPersonPayload(fields),
+                    base_revision: null,
+                }));
             });
         }
 
@@ -1294,6 +1342,7 @@
             enqueueOperation: enqueueOperation,
             coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, saveWorkSource,
             saveWorkPersonRole,
+            createPerson,
             resolveConflict, claimOperation,
             getOperation: getOperation,
             listOperations: listOperations,
@@ -1315,6 +1364,8 @@
         PRKS_LOCAL_REAPPLIABLE_RESULTS: REAPPLIABLE_RESULTS,
         PRKS_LOCAL_WORK_SOURCE_URL_BYTES: WORK_SOURCE_URL_BYTES,
         PRKS_LOCAL_WORK_ROLE_OPERATIONS: WORK_ROLE_OPERATIONS,
+        PRKS_LOCAL_PERSON_FIELDS: PERSON_FIELDS,
+        prksGenerateEntityId: generateEntityId,
         prksWorkPersonRoleState: workPersonRoleState,
         PRKS_LOCAL_MAX_PAYLOAD_BYTES: MAX_PAYLOAD_BYTES,
         PRKS_LOCAL_MAX_ABSTRACT_VALUE_BYTES: MAX_ABSTRACT_VALUE_BYTES,

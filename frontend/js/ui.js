@@ -564,9 +564,11 @@ function openModal(id) {
     // added later -- instead of relying on each surface to remember.
     // `person-template-modal` is deliberately exempt: it only edits an unsaved
     // local draft and performs no canonical mutation of its own.
-    if (id === 'person-modal' && typeof prksOfflineGuardMutation === 'function') {
-        if (prksOfflineGuardMutation('Creating a Person requires a connection to PRKS.')) return;
-    }
+    // `person-template-modal` is deliberately exempt: it only edits an unsaved
+    // local draft and performs no canonical mutation of its own.
+    if (id === 'person-modal') {
+        // CREATE_PERSON is durable-first; the modal itself may open offline.
+    } else if (false) {
     if (typeof window.prksCloseTagsAliasModal === 'function') {
         window.prksCloseTagsAliasModal();
     }

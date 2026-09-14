@@ -1824,10 +1824,23 @@ const PRKS_PEOPLE_DOMAIN =
  * introduce a second, role-filtered cache.
  */
 async function prksOfflinePeopleFetch(signal) {
-    return await prksOfflineListFetch(PRKS_PEOPLE_LIST_KEY, '/api/persons', signal, {
+    const result = await prksOfflineListFetch(PRKS_PEOPLE_LIST_KEY, '/api/persons', signal, {
         domain: PRKS_PEOPLE_DOMAIN,
         validate: prksIsPeopleIndexShape,
     });
+    if (!result || result.source === 'unavailable' || typeof prksEffectivePeople !== 'function') {
+        return result;
+    }
+    let ops = [];
+    try {
+        if (typeof prksSync !== 'undefined' && prksSync && prksSync.store) {
+            ops = await prksSync.store.listOperations();
+        }
+    } catch (_e) {
+        ops = [];
+    }
+    const value = prksEffectivePeople(result.value, ops);
+    return value ? Object.assign({}, result, { value: value }) : result;
 }
 
 function prksIsPersonGroupRowShape(row) {
@@ -2302,6 +2315,22 @@ function prksResolveOfflinePerson(offlineResult, personId) {
         void prksOfflineInvalidateEntity('person', personId);
     }
     return { person: null, unavailable: true };
+}
+
+async function prksPendingCreatedPerson(personId) {
+    if (typeof prksSync === 'undefined' || !prksSync || !prksSync.store ||
+        typeof prksPendingPersonDetail !== 'function') {
+        return null;
+    }
+    try {
+        const ops = await prksSync.store.listOperations();
+        const op = (ops || []).find(row => row && row.operation === 'CREATE_PERSON' &&
+            row.entity_id === personId && row.status !== 'acknowledged');
+        const detail = op ? prksPendingPersonDetail(op) : null;
+        return detail && prksIsPersonShape(detail, personId) ? detail : null;
+    } catch (_e) {
+        return null;
+    }
 }
 
 function prksOfflineProvenanceBannerHtml(offlineResult) {
@@ -3399,6 +3428,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 );
                 if (stale()) return;
                 const resolvedPerson = prksResolveOfflinePerson(offlinePerson, personId);
+                if (resolvedPerson.unavailable) {
+                    const pendingPerson = await prksPendingCreatedPerson(personId);
+                    if (stale()) return;
+                    if (pendingPerson) {
+                        resolvedPerson.unavailable = false;
+                        resolvedPerson.person = pendingPerson;
+                    }
+                }
                 if (resolvedPerson.unavailable) {
                     prksOfflineRenderUnavailable(contentDiv, 'Person not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Person not available offline' };

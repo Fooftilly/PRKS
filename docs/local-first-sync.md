@@ -9,6 +9,7 @@ PRKS has one semantic-operation protocol and several families on it:
 | `SET_WORK_METADATA_FIELD` | 2D–2J, 2M | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
 | `SET_WORK_SOURCE` | 2O | Revisioned aggregate. `source_kind`, `provider`, `provider_id` and `source_url` are one identity, so they share one revision and one conflict. |
 | `ADD_WORK_PERSON_ROLE` / `REMOVE_WORK_PERSON_ROLE` / `SET_WORK_PERSON_ROLE_CREDIT` | 3A | Revisioned element. The unit is `(work, person, role_type)`, present with a credit override or absent; `order_index` is not identity. |
+| `CREATE_PERSON` | 3B | Construction. Client-generated collision-resistant id; `depends_on` lets a later role link wait until this Person exists. |
 
 All of them commit to durable browser storage before the UI acts on them, survive
 reloads and offline periods, and synchronize idempotently on reconnect. Other
@@ -48,6 +49,8 @@ operations both use.
 | `backend/work_metadata_sync.py` | The synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |
 | `backend/work_source_sync.py` | Source-identity aggregate, YouTube parser, SET_WORK_SOURCE handler |
 | `backend/work_role_sync.py` | Role-element revisions, credit validation, ADD/REMOVE/CREDIT handler |
+| `backend/person_sync.py` | CREATE_PERSON handler, shared Person-field contract |
+| `backend/entity_ids.py` | Collision-resistant `{prefix}-` + 32 hex ids; legacy 8-hex still valid |
 | `frontend/js/sync-runtime.js` | Transport, claiming, backoff, locks, replay, status transitions, retirement |
 | `frontend/js/work-tag-state.js` | Work-Tag overlay and sync handler |
 | `frontend/js/work-open-state.js` | Recent overlay, acknowledged merge, sync handler |
@@ -57,6 +60,7 @@ operations both use.
 | `frontend/js/work-source-editor.js` | Video-source save and conflict UI |
 | `frontend/js/work-role-state.js` | Role overlay, credit composition, sync handler |
 | `frontend/js/work-role-editor.js` | Work–Person linking, unlinking, credit editing |
+| `frontend/js/person-state.js` | Pending Person overlay, CREATE_PERSON handler |
 | `frontend/js/sync-diagnostics.js` | Settings -> Diagnostics, for every family |
 
 A client handler answers three questions and nothing else: `isResult` (is this
@@ -119,14 +123,22 @@ Restoring a backup restores its ledger, revisions and lifecycle together.
 
 Registered operations are `ADD_WORK_TAG`, `REMOVE_WORK_TAG`, `MARK_WORK_OPENED`,
 `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, `ADD_WORK_PERSON_ROLE`,
-`REMOVE_WORK_PERSON_ROLE` and `SET_WORK_PERSON_ROLE_CREDIT`. An unregistered
-operation is `INVALID_ENVELOPE` and never reaches a handler. Today every one of
-those is scoped to a Work (`entity_type` is `work`).
+`REMOVE_WORK_PERSON_ROLE`, `SET_WORK_PERSON_ROLE_CREDIT` and `CREATE_PERSON`. An
+unregistered operation is `INVALID_ENVELOPE` and never reaches a handler.
+`entity_type` is registered with the operation (`work` or `person`), not inferred
+from the ID prefix -- Persons and Positions both use `P-`.
 UUIDs, bounded IDs and timezone-aware timestamps are validated generically.
-Unknown envelope fields are rejected. `depends_on` is already a durable envelope
-field, but it must be empty: a non-empty array is `UNSUPPORTED_DEPENDENCIES` and
-never executes. There is no batch or dependency executor yet. Hashes cover the
-normalized immutable semantic envelope, with sorted JSON keys and UTC timestamps.
+Unknown envelope fields are rejected.
+
+`depends_on` is a list of other `op_id`s from the same device. Empty is the
+common case. A non-empty list is executed only after every named operation is
+already ledgered with `ACKNOWLEDGED`; otherwise the server answers
+`UNSATISFIED_DEPENDENCY` and does **not** ledger the dependent. That 400 is
+retryable, not terminal: the client must not have sent yet, and a premature send
+must be able to try again. Self-dependency, duplicates, and non-UUID entries are
+`INVALID_ENVELOPE`. There is still no batch endpoint; one HTTP request is one
+operation. Hashes cover the normalized immutable semantic envelope, with sorted
+JSON keys and UTC timestamps.
 
 `base_revision` is structurally either a nonnegative safe integer or null, and
 **which one is legal is the family's decision**. A Work-Tag edit requires a
@@ -1280,6 +1292,68 @@ change. Deleted/unknown Tags are never recreated. Diagnostics also permits
 explicit conflict discard when the original Work is no longer available.
 Structured terminal results are allowlisted and size-bounded, separate from
 short retry error messages. None of this content belongs in logs.
+
+## Entity identity (3B)
+
+Distributed creation cannot copy `PRKSDatabase.generate_id()`'s historical
+`{prefix}-` plus eight UUID hex characters. That was acceptable when one server
+allocated IDs; eight hex digits are 32 bits, and several offline clients minting
+the same prefix would eventually collide. New IDs are `{prefix}-` plus the full
+32-character uppercase UUID hex (`uuid4().hex`). Existing eight-hex IDs stay
+valid forever and are never rewritten.
+
+The client generates the ID. SQLite stores that same string. There is no
+temporary-ID → server-ID remapping. `CREATE_PERSON` requires the 32-hex form;
+`ADD_WORK_PERSON_ROLE` still accepts any existing Person id.
+
+Do not read type from the prefix. Positions also use `P-`. Graph nodes stay
+namespaced (`person:` / `position:`). Argument markup still fits
+`A-[A-Za-z0-9]{1,32}` because the 32 hex characters are the id body.
+
+Tests and fixtures may still invent non-hex ids (`W-gone`, `PF-KEEPIMP`). Those
+are not a production generator and are not a licence to keep minting 8-hex ids
+from `generate_id()`.
+
+## Dependencies (3B)
+
+The first creation family is `CREATE_PERSON`. The first dependent operation is
+`ADD_WORK_PERSON_ROLE` onto that new Person. The coordinator does not know
+either name: it will not claim or send an operation whose `depends_on` entries
+are not all `acknowledged` in the local store, and it will not retire an
+acknowledged row while a stored operation still names it. Missing a dependency
+row means "not yet satisfied", never "already done" -- treating a retired
+prerequisite as success is only safe because retirement itself waits for
+dependents. A conflicted prerequisite blocks its dependents; it does not send
+them.
+
+At enqueue, every named `op_id` must already exist in the store, must not be
+this operation, and must not close a cycle. `saveWorkPersonRole` attaches a
+pending `CREATE_PERSON` for that `person_id` automatically, so the role editor
+cannot forget. If creation has already been acknowledged and retired, the Person
+is canonical and `depends_on` is empty.
+
+Server defense matches that: same-device, already-`ACKNOWLEDGED` ledger rows,
+checked after idempotent replay and before `apply`. A dependent sent too early
+is not burned into the ledger.
+
+Deterministic order is the store's existing `sequence`, skipping unready rows
+rather than stalling the queue on `pending[0]`. One in-flight operation remains.
+
+## Offline Person creation (3B)
+
+`CREATE_PERSON` has the same field contract as `POST /api/persons` and is the
+one UI path online and offline. Construction is not mutation: `base_revision`
+is null, and a replay of the same `op_id` is the ledger. A second envelope for
+an id that already exists acknowledges the stored row without overwriting it.
+
+The pending Person is an overlay on `people:index` and on Person detail, never
+written into the disposable cache until acknowledgement. The role picker can
+link that overlay Person; the link is a dependent `ADD_WORK_PERSON_ROLE`. After
+reconnect the coordinator creates the Person, then the role, and the UI must
+not roll back or duplicate.
+
+This milestone does **not** add offline Work, Tag, Folder, Playlist or Concept
+creation. Those reuse this identity and dependency machinery later.
 
 ## Deferred beyond the current milestone
 

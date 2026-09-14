@@ -20,20 +20,28 @@ FIELDS = frozenset(("op_id", "device_id", "operation", "entity_type", "entity_id
                     "payload", "base_revision", "occurred_at", "created_at", "depends_on"))
 MAX_REVISION = 9007199254740991
 MAX_ID_CHARS = 200
+MAX_DEPENDENCIES = 16
+ACKNOWLEDGED = "ACKNOWLEDGED"
 
 _HANDLERS = {}
+_ENTITY_TYPES = {}
 
 
-def register(operation, handler):
-    """Bind one operation name to its domain handler.
+def register(operation, handler, *, entity_type="work"):
+    """Bind one operation name to its domain handler and entity type.
 
     A handler provides `validate(op)` -- raising ValueError(code) for anything
     this family forbids -- and `apply(db, conn, op, received_at)` returning
     `(http_status, result)`. Nothing else about the family is visible here.
+    `entity_type` is registered with the operation because prefixes are not
+    unique across record families (Persons and Positions both use `P-`).
     """
     if operation in _HANDLERS:
         raise RuntimeError("duplicate sync operation handler: " + operation)
+    if not isinstance(entity_type, str) or not entity_type.strip():
+        raise RuntimeError("sync operation entity_type is required")
     _HANDLERS[operation] = handler
+    _ENTITY_TYPES[operation] = entity_type
 
 
 def supported_operations():
@@ -57,7 +65,7 @@ def normalize_envelope(data):
         out[field] = data[field].lower()
     if not isinstance(data["operation"], str) or data["operation"] not in _HANDLERS:
         raise ValueError("INVALID_ENVELOPE")
-    if data["entity_type"] != "work":
+    if data["entity_type"] != _ENTITY_TYPES[data["operation"]]:
         raise ValueError("INVALID_ENVELOPE")
     if not isinstance(data["payload"], dict):
         raise ValueError("INVALID_ENVELOPE")
@@ -70,9 +78,7 @@ def normalize_envelope(data):
     revision = data["base_revision"]
     if revision is not None and (type(revision) is not int or not 0 <= revision <= MAX_REVISION):
         raise ValueError("INVALID_BASE_REVISION")
-    # v1 deliberately supports no dependency execution.
-    if data["depends_on"] != []:
-        raise ValueError("UNSUPPORTED_DEPENDENCIES")
+    out["depends_on"] = normalize_dependencies(data["depends_on"], out["op_id"])
     for field in ("occurred_at", "created_at"):
         out[field] = normalize_timestamp(data[field])
     return out
@@ -89,6 +95,38 @@ def normalize_timestamp(value):
         return timestamp.astimezone(timezone.utc).isoformat()
     except ValueError:
         raise ValueError("INVALID_ENVELOPE") from None
+
+
+def normalize_dependencies(value, op_id):
+    """Same-device prerequisite op ids; empty is the common case.
+
+    Self-dependency, duplicates and non-UUIDs are envelope errors. Whether
+    those ops have actually been acknowledged is checked after the ledger
+    lookup, because a retry of a well-formed dependent must not burn a new
+    op_id merely because it arrived a moment too soon.
+    """
+    if not isinstance(value, list) or len(value) > MAX_DEPENDENCIES:
+        raise ValueError("INVALID_ENVELOPE")
+    seen = []
+    for item in value:
+        if not isinstance(item, str) or not UUID.fullmatch(item):
+            raise ValueError("INVALID_ENVELOPE")
+        canon = item.lower()
+        if canon == op_id or canon in seen:
+            raise ValueError("INVALID_ENVELOPE")
+        seen.append(canon)
+    return seen
+
+
+def dependencies_satisfied(conn, op):
+    for dep_id in op["depends_on"]:
+        row = conn.execute(
+            "SELECT device_id, status FROM sync_operations WHERE op_id = ?",
+            (dep_id,),
+        ).fetchone()
+        if row is None or row[0] != op["device_id"] or row[1] != ACKNOWLEDGED:
+            return False
+    return True
 
 
 def request_hash(op):
@@ -126,6 +164,8 @@ def process_operation(db, data):
             if seen[0] != digest:
                 return 409, {"code": "OP_ID_REUSE"}
             return seen[1], json.loads(seen[2])
+        if not dependencies_satisfied(conn, op):
+            return 400, {"code": "UNSATISFIED_DEPENDENCY"}
         status, result = handler.apply(db, conn, op, received_at)
         insert_result(conn, op, digest, status, result)
         return status, result
@@ -134,7 +174,7 @@ def process_operation(db, data):
 # Registration is explicit and lives here so the set of families PRKS accepts
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
-    work_metadata_sync, work_open_sync, work_role_sync, work_source_sync, work_tag_sync,
+    person_sync, work_metadata_sync, work_open_sync, work_role_sync, work_source_sync, work_tag_sync,
 )
 
 register("ADD_WORK_TAG", work_tag_sync.HANDLER)
@@ -151,3 +191,4 @@ register("REMOVE_WORK_PERSON_ROLE", work_role_sync.HANDLER)
 # Editing the credit override on an existing link shares the relationship's
 # scope and revision: it changes the same element's semantic state.
 register("SET_WORK_PERSON_ROLE_CREDIT", work_role_sync.HANDLER)
+register("CREATE_PERSON", person_sync.HANDLER, entity_type="person")

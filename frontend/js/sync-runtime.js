@@ -53,7 +53,18 @@
          * history; the browser keeps no record of completed operations. A
          * failed retirement is harmless residue the next startup clears. */
         async function retire(opId) {
+            const all = await store.listOperations();
+            const row = all.find(op => op && op.op_id === opId);
+            if (all.some(op => op && op.op_id !== opId &&
+                    Array.isArray(op.depends_on) && op.depends_on.indexOf(opId) !== -1)) {
+                return;
+            }
             try { await store.deleteAcknowledgedOperation(opId); } catch (_) { /* cleared on next startup */ }
+            if (row && Array.isArray(row.depends_on)) {
+                for (let i = 0; i < row.depends_on.length; i += 1) {
+                    await retire(row.depends_on[i]);
+                }
+            }
         }
         /* A terminal semantic outcome is not a transport failure, and what it
          * is worth to the user is the family's call. A deliberate edit becomes
@@ -82,12 +93,23 @@
             discarded.length = Math.min(discarded.length, MAX_DISCARD_NOTES);
             emit();
         }
+        function dependenciesReady(op, byId) {
+            const deps = Array.isArray(op.depends_on) ? op.depends_on : [];
+            for (let i = 0; i < deps.length; i += 1) {
+                const dep = byId.get(deps[i]);
+                if (!dep || dep.status !== 'acknowledged') return false;
+            }
+            return true;
+        }
         async function drain() {
             if (!recovered) await recover();
             while (deps.online()) {
-                const pending = (await store.listOperations({ status: 'pending' })).filter(supported);
+                const all = (await store.listOperations()).filter(supported);
+                const pending = all.filter(op => op.status === 'pending');
                 if (!pending.length) break;
-                const candidate = pending[0];
+                const byId = new Map(all.map(op => [op.op_id, op]));
+                const candidate = pending.find(op => dependenciesReady(op, byId));
+                if (!candidate) break;
                 const backoff = Math.min(60000, 1000 * 2 ** Math.min(candidate.attempt_count, 6));
                 const elapsed = Date.now() - Date.parse(candidate.last_attempt_at || '1970-01-01');
                 if (candidate.attempt_count && elapsed < backoff) { schedule(backoff - elapsed + Math.random() * 500); break; }
@@ -177,7 +199,7 @@
         root.prksOfflineRuntimeState, () => { if (runtime) runtime.changed(); });
     runtime = createRuntime({ store, online,
         request: (...args) => root.prksRequest(...args),
-        // The registry, in one readable place. Two families share a handler
+        // The registry, in one readable place. Families share a handler
         // when they share meaning, not when they share a code path.
         handlers: {
             ADD_WORK_TAG: root.prksWorkTagSyncHandler,
@@ -193,6 +215,7 @@
             ADD_WORK_PERSON_ROLE: root.prksWorkRoleSyncHandler,
             REMOVE_WORK_PERSON_ROLE: root.prksWorkRoleSyncHandler,
             SET_WORK_PERSON_ROLE_CREDIT: root.prksWorkRoleSyncHandler,
+            CREATE_PERSON: root.prksPersonSyncHandler,
         },
         lock: root.navigator.locks ? fn => root.navigator.locks.request('prks-sync', { ifAvailable: true }, lock => lock ? fn() : undefined) : null,
     });
