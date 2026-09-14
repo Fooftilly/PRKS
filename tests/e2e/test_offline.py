@@ -5092,8 +5092,13 @@ class OfflinePeopleTests(unittest.TestCase):
         )
         self.assertEqual(seen, [], "offline People search must issue zero API requests")
 
+        # Editing an existing Person still needs the server, so its controls
+        # stay disabled. CREATING one does not any more, and its control is
+        # deliberately a different role for exactly that reason.
         page.wait_for_function(
-            "() => !!document.querySelector('[data-prks-role=\"person-mutation-control\"][disabled]')",
+            "() => { const create = document.querySelector("
+            "          '[data-prks-role=\"person-create-control\"]');"
+            "        return !!create && !create.disabled; }",
             timeout=20000,
         )
 
@@ -5149,8 +5154,13 @@ class OfflinePeopleTests(unittest.TestCase):
         _wait_content_contains(page, "No people yet.")
         _wait_offline_banner(page)
         self.assertNotIn("not available offline", _content_text(page))
+        # Editing an existing Person still needs the server, so its controls
+        # stay disabled. CREATING one does not any more, and its control is
+        # deliberately a different role for exactly that reason.
         page.wait_for_function(
-            "() => !!document.querySelector('[data-prks-role=\"person-mutation-control\"][disabled]')",
+            "() => { const create = document.querySelector("
+            "          '[data-prks-role=\"person-create-control\"]');"
+            "        return !!create && !create.disabled; }",
             timeout=20000,
         )
 
@@ -5518,9 +5528,16 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         )
         return lambda: _safe_unroute(page, "**/api/**", abort_api)
 
-    def test_new_person_is_blocked_from_every_surface_offline(self):
-        """Guarding is centralized in openModal('person-modal'), so the People
-        page, the ribbon and the command palette all fail safely at once."""
+    def test_new_person_is_creatable_from_every_surface_offline(self):
+        """Creating a Person is durable-first: the identity is chosen on this
+        device, so the record is complete the moment it is written locally and
+        the server never renames it.
+
+        This replaces two tests that asserted the opposite -- that the modal
+        could not open and that no create could be attempted. Both were correct
+        before Person creation became local-first, and both would now pass only
+        if the milestone had not shipped.
+        """
         server, page, context, _collector = self._start()
 
         _wait_sw_active(page)
@@ -5537,65 +5554,42 @@ class OfflinePeopleMutationTests(unittest.TestCase):
             timeout=20000,
         )
 
-        mutations = []
+        sends = []
 
         def record_mutation(route):
             if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
-                mutations.append((route.request.method, urlparse(route.request.url).path))
+                sends.append((route.request.method, urlparse(route.request.url).path))
             route.fallback()
 
         page.route("**/api/persons**", record_mutation)
         try:
-            btn = page.locator('[data-prks-role="person-mutation-control"]').first
-            self.assertTrue(btn.is_disabled())
-            btn.click(force=True)
-            page.wait_for_timeout(200)
-            self.assertEqual(page.locator("#person-modal:not(.hidden)").count(), 0)
-            # The central guard covers every other caller of the same modal.
-            page.evaluate("() => { try { openModal('person-modal'); } catch (_e) {} }")
-            page.wait_for_timeout(200)
-            self.assertEqual(page.locator("#person-modal:not(.hidden)").count(), 0)
-            self.assertEqual(mutations, [])
+            btn = page.locator('[data-prks-role="person-create-control"]').first
+            self.assertFalse(btn.is_disabled(), "creating a Person no longer needs a server")
+            btn.click()
+            page.locator("#person-modal:not(.hidden)").wait_for()
+            page.locator("#person-lname").fill("Offline")
+            page.locator("#person-fname").fill("Created")
+            page.locator("#save-person-btn").click()
+
+            # One durable operation, and no direct write of any kind.
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'CREATE_PERSON'))",
+                message="the Person was not recorded durably",
+            )
+            self.assertEqual(sends, [], "creation goes through the queue, never a direct POST")
         finally:
             _safe_unroute(page, "**/api/persons**", record_mutation)
 
-    def test_disconnect_while_new_person_modal_open_blocks_the_post(self):
-        server, page, _context, _collector = self._start()
-
-        _wait_sw_active(page)
+        # The Person exists for the user immediately, and survives a reload
+        # while still offline -- it is durable local state, not screen state.
         _open_people_index(page)
-        _wait_content_contains(page, PERSON_DISPLAY)
-        page.evaluate("() => openModal('person-modal')")
-        page.locator("#person-modal:not(.hidden)").wait_for()
-        page.locator("#person-lname").fill("Disconnected")
-
-        mutations = []
-
-        def block_api(route):
-            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
-                mutations.append((route.request.method, urlparse(route.request.url).path))
-            route.abort("connectionrefused")
-
-        page.route("**/api/**", block_api)
-        try:
-            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-            page.wait_for_function(
-                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
-                timeout=20000,
-            )
-            page.locator("#save-person-btn").click()
-            page.wait_for_timeout(500)
-            self.assertEqual(mutations, [], "no Person create may be attempted after disconnect")
-        finally:
-            _safe_unroute(page, "**/api/**", block_api)
-
-        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-        page.wait_for_function(
-            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
-            timeout=20000,
-        )
-        names = page.evaluate("() => fetchPersons().then(items => items.map(p => p.last_name))")
-        self.assertNotIn("Disconnected", names)
+        _wait_content_contains(page, "Created Offline")
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        _open_people_index(page)
+        _wait_content_contains(page, "Created Offline")
 
     def test_cached_person_detail_is_read_only_offline(self):
         server, page, context, _collector = self._start()

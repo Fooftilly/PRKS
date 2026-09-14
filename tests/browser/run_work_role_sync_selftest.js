@@ -415,6 +415,42 @@ async function coalescing() {
     assert.equal((await rows()).length, 2);
 }
 
+/* ---- a link to a Person this device has not synchronized yet ---- */
+async function creationDependency() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+
+    /* The role must WAIT for the creation. Without the dependency the
+     * coordinator is free to send the link first, and the server refuses a
+     * relationship to a Person it has never heard of -- so the user's link is
+     * lost for a reason they cannot see or fix.
+     *
+     * This is the case the first implementation could never produce: the
+     * prerequisite was searched for inside an array already filtered to the
+     * three role operation types, so `depends_on` was silently always empty. */
+    const role = await store.saveWorkPersonRole('W-1',
+        { person_id: created.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    assert.deepEqual(role.depends_on, [created.op_id],
+        'the link depends on the creation that gives its Person an identity');
+
+    // A Person the server already knows needs no prerequisite at all.
+    const existing = await store.saveWorkPersonRole('W-1',
+        { person_id: 'P-' + 'a'.repeat(32), role_type: 'Editor', state: '' },
+        { state: null, revision: 0 }, null);
+    assert.deepEqual(existing.depends_on, [],
+        'an ordinary link carries no dependency to wait on');
+
+    /* An ACKNOWLEDGED creation is no longer a prerequisite: the server holds
+     * that Person, so a later link stands on its own. Keeping the dependency
+     * would pin a retired row in the store forever. */
+    await store.updateOperationSyncState(created.op_id, { status: 'acknowledged' });
+    const later = await store.saveWorkPersonRole('W-2',
+        { person_id: created.entity_id, role_type: 'Author', state: '' },
+        { state: null, revision: 0 }, null);
+    assert.deepEqual(later.depends_on, []);
+}
+
 /* ---- the handler's result contract ---- */
 function handlerContract() {
     const handler = globalThis.prksWorkRoleSyncHandler;
@@ -543,6 +579,7 @@ async function main() {
     detailRoles();
     personPage();
     await coalescing();
+    await creationDependency();
     handlerContract();
     await reconciliation();
     graphOverlay();

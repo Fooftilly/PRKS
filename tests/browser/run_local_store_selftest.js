@@ -464,10 +464,34 @@ async function run() {
         await assertRejects('a non-UUID dependency is refused',
             store.enqueueOperation(tagOp('W-3', 'T-3', { depends_on: ['not-an-op-id'] })),
             'invalid_envelope');
-        const dep = '22222222-3333-4444-8555-666666666666';
-        assertEq('a UUID dependency is accepted',
-            (await store.enqueueOperation(tagOp('W-3', 'T-3', { depends_on: [dep] }))).depends_on,
-            [dep]);
+        /* A well-formed id that names NOTHING is refused too.
+         *
+         * It used to be accepted, which contradicted the documented invariant
+         * and was worse than a typo: nothing will ever acknowledge an operation
+         * that does not exist, so its dependent could never be sent and the
+         * user's change was stranded with no way to see why. Requiring the
+         * prerequisite to exist already is also what makes cycles impossible
+         * without walking a graph -- a later operation can only ever name an
+         * earlier one. */
+        await assertRejects('a dependency that names nothing is refused',
+            store.enqueueOperation(tagOp('W-3', 'T-3',
+                { depends_on: ['22222222-3333-4444-8555-666666666666'] })),
+            'invalid_envelope');
+
+        const prerequisite = await store.enqueueOperation(tagOp('W-4', 'T-4'));
+        assertEq('a dependency on an existing operation is accepted',
+            (await store.enqueueOperation(tagOp('W-3', 'T-3',
+                { depends_on: [prerequisite.op_id] }))).depends_on,
+            [prerequisite.op_id]);
+        await assertRejects('a repeated dependency is refused',
+            store.enqueueOperation(tagOp('W-5', 'T-5',
+                { depends_on: [prerequisite.op_id, prerequisite.op_id] })),
+            'invalid_envelope');
+        const selfId = '33333333-4444-4555-8666-777777777777';
+        await assertRejects('an operation cannot wait for itself',
+            store.enqueueOperation(tagOp('W-6', 'T-6',
+                { op_id: selfId, depends_on: [selfId] })),
+            'invalid_envelope');
     }
 
     /* Real transactional coalescing, including a new store after reload. */

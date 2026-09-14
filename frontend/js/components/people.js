@@ -134,6 +134,13 @@ function safeHttpUrl(url) {
  * them all, including markup rerendered after the initial bind. */
 const PERSON_MUTATION_ROLE = 'person-mutation-control';
 
+/* Creating a Person is durable-first, so its controls are NEVER disabled: the
+ * identity is chosen on this device and the record is complete the moment it is
+ * written locally. Editing and deleting an existing Person still require the
+ * server, so they keep `PERSON_MUTATION_ROLE` and its offline disable. Two roles
+ * rather than one, because the two decisions genuinely differ now. */
+const PERSON_CREATE_ROLE = 'person-create-control';
+
 /* Group chips keep this role for styling/test identification only: since Person
  * Groups became offline-capable they are ordinary links and are deliberately
  * absent from PERSON_CONTROL_SELECTOR. */
@@ -699,7 +706,7 @@ function prksPeopleListEmptyHtml(persons, filterQuery, roleFilter) {
     if (q) {
         return '<p class="prks-inline-message prks-people-list__empty">No people match your search.</p>';
     }
-    return '<div class="prks-people-list__empty-state"><p class="prks-inline-message prks-people-list__empty">No people yet.</p><button type="button" class="prks-btn prks-btn--primary" data-prks-role="' + PERSON_MUTATION_ROLE + '" onclick="openModal(\'person-modal\')">New Person</button></div>';
+    return '<div class="prks-people-list__empty-state"><p class="prks-inline-message prks-people-list__empty">No people yet.</p><button type="button" class="prks-btn prks-btn--primary" data-prks-role="' + PERSON_CREATE_ROLE + '" onclick="openModal(\'person-modal\')">New Person</button></div>';
 }
 
 function prksPeopleListInnerHtml(persons, filterQuery, roleFilter) {
@@ -808,7 +815,7 @@ function renderPeopleList(ctx, persons, container, options = {}) {
         <div class="prks-people-library">
         <div class="prks-page-header page-header prks-people-library__header">
             <h2 class="prks-page-title">People${escapeHtmlPerson(titleExtra)}</h2>
-            <button type="button" class="prks-btn prks-btn--primary" data-prks-role="${PERSON_MUTATION_ROLE}" onclick="openModal('person-modal')">New Person</button>
+            <button type="button" class="prks-btn prks-btn--primary" data-prks-role="${PERSON_CREATE_ROLE}" onclick="openModal('person-modal')">New Person</button>
         </div>
         ${searchToolbar}
         ${listHost}

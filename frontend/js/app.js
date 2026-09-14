@@ -4174,29 +4174,30 @@ function initForms() {
                 await prksAlertMessage('Last name is required.', 'Validation');
                 return;
             }
-            // The modal was guarded when it opened; connectivity can change
-            // while it is open, so re-check immediately before the POST.
-            if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
+            /* Durable-first, with or without the server. No connectivity
+             * guard: the identity is chosen HERE, so the creation is complete
+             * the moment it is written locally and the server never renames it.
+             * A direct POST would have been a second mutation boundary for the
+             * same decision -- online through one path, offline through
+             * another, with only one of them producing an operation. */
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(personBtn, true, { busyLabel: 'Saving…' });
+            let created;
             try {
-                const res = await prksRequest('/api/persons', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                    await prksAlertMessage(data.error || `Could not save person (${res.status})`, 'Could not save');
-                    return;
-                }
-                if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
+                created = await prksCreatePersonDurably(payload);
             } catch (e) {
-                await prksAlertMessage('Network error — could not save person.', 'Error');
+                await prksAlertMessage(
+                    'Could not save this person locally. Please retry.', 'Could not save');
                 return;
             } finally {
                 if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(personBtn, false);
             }
-            closeModals(); window.location.reload();
+            closeModals();
+            /* Navigate to the Person that now exists. No reload: a reload
+             * would throw away every other pending change on the page and, at
+             * this point, there is nothing to fetch -- the record is local. */
+            if (created && created.entity_id && typeof prksNavigate === 'function') {
+                void prksNavigate('#/people/' + encodeURIComponent(created.entity_id));
+            }
         };
     }
 

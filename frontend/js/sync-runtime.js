@@ -19,7 +19,13 @@
         'base_revision', 'occurred_at', 'created_at', 'depends_on'];
     /* Envelope-level refusals: the server never executed the operation, so no
      * family can salvage it by retrying the same bytes. */
-    const PROTOCOL_ERRORS = ['OP_ID_REUSE', 'INVALID_ENVELOPE', 'INVALID_BASE_REVISION', 'UNSUPPORTED_DEPENDENCIES'];
+    /* Terminal protocol refusals: the server will answer the same way forever,
+     * so retrying is a loop rather than a recovery. UNSATISFIED_DEPENDENCY
+     * belongs here for the same reason -- the coordinator only sends an
+     * operation whose prerequisites it believes are ACKed, so a server that
+     * disagrees is describing a state this device cannot argue its way out of. */
+    const PROTOCOL_ERRORS = ['OP_ID_REUSE', 'INVALID_ENVELOPE', 'INVALID_BASE_REVISION',
+        'UNSUPPORTED_DEPENDENCIES', 'UNSATISFIED_DEPENDENCY'];
     const MAX_DISCARD_NOTES = 10;
     function createRuntime(deps) {
         const store = deps.store;
@@ -84,7 +90,22 @@
                 emit();
                 return;
             }
-            await store.updateOperationSyncState(op.op_id, { status: 'acknowledged', last_error: null });
+            /* The consumed row records WHY it was consumed.
+             *
+             * `acknowledged` here means "the server has spoken and nothing
+             * further is owed", which covers both a successful apply and a
+             * terminal refusal -- and a dependent operation must be able to
+             * tell those apart. Without this marker a FAILED prerequisite
+             * looked exactly like a successful one, so a link to a Person
+             * whose creation the server refused became eligible to send, and
+             * the server then refused that too. */
+            await store.updateOperationSyncState(op.op_id, {
+                status: 'acknowledged', last_error: null,
+                server_result: { code: String(outcome.discard || 'unknown') } });
+            /* Anything waiting on it can never succeed now. Surfaced as a
+             * conflict rather than left silently stuck: the user's intent is
+             * still real, and Diagnostics is where they can discard it. */
+            await blockDependents(op.op_id);
             await retire(op.op_id);
             // In-memory and bounded: worth surfacing in Diagnostics, not worth
             // durable storage of its own.
@@ -93,13 +114,33 @@
             discarded.length = Math.min(discarded.length, MAX_DISCARD_NOTES);
             emit();
         }
+        /* A prerequisite that SUCCEEDED. `acknowledged` alone is not enough:
+         * a terminally refused operation is also marked acknowledged on its way
+         * out, and treating that as ready would send a dependent the server is
+         * certain to reject. The recorded result is what separates them. */
+        function dependencySucceeded(dep) {
+            return !!dep && dep.status === 'acknowledged' && !dep.server_result;
+        }
         function dependenciesReady(op, byId) {
             const deps = Array.isArray(op.depends_on) ? op.depends_on : [];
             for (let i = 0; i < deps.length; i += 1) {
-                const dep = byId.get(deps[i]);
-                if (!dep || dep.status !== 'acknowledged') return false;
+                if (!dependencySucceeded(byId.get(deps[i]))) return false;
             }
             return true;
+        }
+        /** Mark everything waiting on a failed prerequisite as unresolvable. */
+        async function blockDependents(opId) {
+            const all = await store.listOperations();
+            for (const row of all) {
+                if (!row || !Array.isArray(row.depends_on)) continue;
+                if (row.depends_on.indexOf(opId) === -1) continue;
+                if (row.status === 'acknowledged' || row.status === 'conflict') continue;
+                try {
+                    await store.updateOperationSyncState(row.op_id, {
+                        status: 'conflict', last_error: null,
+                        server_result: { code: 'DEPENDENCY_FAILED' } });
+                } catch (_) { /* a row that changed underneath is re-read next drain */ }
+            }
         }
         async function drain() {
             if (!recovered) await recover();

@@ -225,11 +225,24 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
                       'and discarding it invalidates its own projection')
 
         # No family may be described or invalidated by falling off the end.
+        #
+        # Expressed as "the last word is not a family's": a trailing `else` that
+        # names a specific family is how a source operation came to be labelled
+        # "Remove Tag" and to invalidate the Tag options cache. Ordinary
+        # feature-detection fallbacks are not what this forbids, so the check is
+        # on the family vocabulary rather than on the token `else`.
+        families = ('WORK_TAG', 'WORK_PERSON_ROLE', 'WORK_SOURCE', 'WORK_METADATA',
+                    'work-tag-options', 'work-source-state', 'work-metadata-state',
+                    'work-people-state')
         for function in ('function describe(', 'function invalidate('):
             at = source.index(function)
             body = source[at: source.index('\n    }', at)]
-            self.assertNotIn(' else {', body,
-                             'an unknown family must not inherit another family\'s answer')
+            tail = body[body.rindex('\n        '):]
+            for family in families:
+                self.assertNotIn(
+                    family, tail,
+                    'the last branch of %s names a family, so an unknown one '
+                    'inherits its answer' % function)
 
         # Every durable family the store accepts is handled explicitly.
         store = (FRONTEND / 'local-store.js').read_text()

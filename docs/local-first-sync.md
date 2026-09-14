@@ -133,10 +133,14 @@ Unknown envelope fields are rejected.
 `depends_on` is a list of other `op_id`s from the same device. Empty is the
 common case. A non-empty list is executed only after every named operation is
 already ledgered with `ACKNOWLEDGED`; otherwise the server answers
-`UNSATISFIED_DEPENDENCY` and does **not** ledger the dependent. That 400 is
-retryable, not terminal: the client must not have sent yet, and a premature send
-must be able to try again. Self-dependency, duplicates, and non-UUID entries are
-`INVALID_ENVELOPE`. There is still no batch endpoint; one HTTP request is one
+`UNSATISFIED_DEPENDENCY` and does **not** ledger the dependent.
+
+The client treats that answer as **terminal**, not retryable. The coordinator
+only sends an operation whose prerequisites it believes have succeeded, so a
+server that disagrees is describing a state this device cannot argue its way out
+of -- retrying it forever burns the queue behind it. The operation settles for
+the user to resolve instead. Self-dependency, duplicates, and non-UUID entries
+are `INVALID_ENVELOPE`. There is still no batch endpoint; one HTTP request is one
 operation. Hashes cover the normalized immutable semantic envelope, with sorted
 JSON keys and UTC timestamps.
 
@@ -1319,15 +1323,37 @@ from `generate_id()`.
 The first creation family is `CREATE_PERSON`. The first dependent operation is
 `ADD_WORK_PERSON_ROLE` onto that new Person. The coordinator does not know
 either name: it will not claim or send an operation whose `depends_on` entries
-are not all `acknowledged` in the local store, and it will not retire an
+have not all **succeeded** in the local store, and it will not retire an
 acknowledged row while a stored operation still names it. Missing a dependency
 row means "not yet satisfied", never "already done" -- treating a retired
 prerequisite as success is only safe because retirement itself waits for
-dependents. A conflicted prerequisite blocks its dependents; it does not send
-them.
+dependents.
 
-At enqueue, every named `op_id` must already exist in the store, must not be
-this operation, and must not close a cycle. `saveWorkPersonRole` attaches a
+"Succeeded" is deliberately narrower than the `acknowledged` status. A
+terminally REFUSED operation is also marked `acknowledged` on its way out --
+that status means "the server has spoken and nothing further is owed", which is
+true of a refusal too -- so it records the refusal alongside it, and readiness
+requires the absence of that record. Without the distinction a creation the
+server rejected unlocked the very relationship it could never support, and the
+server then rejected that in turn.
+
+Both the coordinator and `saveWorkPersonRole` apply that same rule, because both
+decide whether a prerequisite is satisfied: one when choosing what to send, the
+other when deciding whether a dependency is still needed at all.
+
+A prerequisite that fails does not leave its dependents silently stuck. They are
+settled as conflicts carrying `DEPENDENCY_FAILED`, so the user's intent survives
+and is resolvable in Diagnostics rather than waiting forever on something that
+can never arrive.
+
+At enqueue, every named `op_id` must already exist in the store, must not repeat,
+and must not be this operation. Requiring the prerequisite to exist first is
+also what makes cycles impossible without walking a graph: an operation can only
+name one that is already stored, so a later operation can only ever depend on an
+earlier one and no ordering lets two name each other. Both the generic
+`enqueueOperation` and the family writers enforce this through one helper -- the
+generic path once did not, which contradicted this paragraph and allowed a
+permanently unsendable operation to be created. `saveWorkPersonRole` attaches a
 pending `CREATE_PERSON` for that `person_id` automatically, so the role editor
 cannot forget. If creation has already been acknowledged and retired, the Person
 is canonical and `depends_on` is empty.

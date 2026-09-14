@@ -403,9 +403,17 @@
         if (!Array.isArray(dependsOn) || !dependsOn.every(isOperationId)) {
             throw localStoreError('invalid_envelope', 'depends_on must be an array of op ids.');
         }
+        if (new Set(dependsOn).size !== dependsOn.length) {
+            throw localStoreError('invalid_envelope', 'depends_on repeats an operation.');
+        }
         const opId = Object.prototype.hasOwnProperty.call(input, 'op_id') ? input.op_id : ctx.opId;
         if (!isOperationId(opId)) {
             throw localStoreError('invalid_envelope', 'op_id must be a UUID.');
+        }
+        // An operation cannot wait for itself. Only reachable when a caller
+        // supplies its own op_id, and it would be permanently unsendable.
+        if (dependsOn.indexOf(opId) !== -1) {
+            throw localStoreError('invalid_envelope', 'depends_on names the operation itself.');
         }
         // Durable state must never carry an anonymous operation: the store
         // supplies this, so its absence is an internal error, not user input.
@@ -733,8 +741,10 @@
                                     createdAt: nowIso(),
                                     sequence: next,
                                 });
-                                return request(STORE_OPERATIONS, function (store) {
-                                    return store.get(prepared.op_id);
+                                return assertDependenciesExistIn(request, prepared).then(function () {
+                                    return request(STORE_OPERATIONS, function (store) {
+                                        return store.get(prepared.op_id);
+                                    });
                                 }).then(function (existing) {
                                     if (existing) {
                                         throw localStoreError(
@@ -760,6 +770,30 @@
             );
         }
 
+        /**
+         * Every prerequisite must ALREADY EXIST in the store.
+         *
+         * An unknown id is not a dependency, it is a permanent block: nothing
+         * will ever acknowledge it, so its dependent can never be sent and the
+         * user's change is stranded with no way to see why.
+         *
+         * This is also what makes cycles impossible without a graph walk. A
+         * prerequisite has to exist before anything can name it, so a later
+         * operation can only ever depend on an earlier one -- there is no
+         * ordering in which two operations could name each other.
+         */
+        async function assertDependenciesExistIn(request, prepared) {
+            const deps = prepared.depends_on || [];
+            if (!deps.length) return;
+            const existing = await request(STORE_OPERATIONS, s => s.getAll());
+            const known = new Set((Array.isArray(existing) ? existing : []).map(r => r && r.op_id));
+            for (let i = 0; i < deps.length; i += 1) {
+                if (!known.has(deps[i])) {
+                    throw localStoreError('invalid_envelope', 'depends_on names an unknown operation.');
+                }
+            }
+        }
+
         async function insertEnvelopeIn(request, envelope, localContext) {
             const deviceId = await resolveDeviceIdIn(request);
             const row = await request(STORE_METADATA, s => s.get(META_SEQUENCE));
@@ -767,14 +801,7 @@
             const prepared = normalizeOperationEnvelope(envelope, {
                 opId: uuid(), deviceId, sequence, createdAt: nowIso(),
             });
-            const existing = await request(STORE_OPERATIONS, s => s.getAll());
-            const known = new Set((Array.isArray(existing) ? existing : []).map(r => r && r.op_id));
-            const deps = prepared.depends_on || [];
-            for (let i = 0; i < deps.length; i += 1) {
-                if (!known.has(deps[i])) {
-                    throw localStoreError('invalid_envelope', 'depends_on names an unknown operation.');
-                }
-            }
+            await assertDependenciesExistIn(request, prepared);
             if (localContext != null) {
                 if (jsonByteLength(localContext) > 4096) throw localStoreError('invalid_context', 'Local context too large.');
                 prepared.local_context = JSON.parse(JSON.stringify(localContext));
@@ -852,7 +879,8 @@
                 row.payload.role_type === link.role_type &&
                 row.status !== STATUS_ACKNOWLEDGED;
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
-                const rows = (await request(STORE_OPERATIONS, s => s.getAll())).filter(matches)
+                const allRows = await request(STORE_OPERATIONS, s => s.getAll());
+                const rows = allRows.filter(matches)
                     .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
                 /* One active intent per scope is the invariant, but a store
                  * written before coalescing existed can hold several. Order
@@ -882,8 +910,17 @@
                         : 'SET_WORK_PERSON_ROLE_CREDIT');
                 const payload = { person_id: link.person_id, role_type: link.role_type };
                 if (operation !== 'REMOVE_WORK_PERSON_ROLE') payload.credit_name = desired;
-                const createOp = rows.find(r => r && r.operation === 'CREATE_PERSON' &&
-                    r.entity_id === link.person_id);
+                /* Searched over EVERY row, not the role-scoped ones.
+                 *
+                 * `rows` is filtered to this element's own three operation
+                 * types, so a CREATE_PERSON could never appear in it and the
+                 * dependency was silently always empty -- the role would then
+                 * be sent before the Person existed and the server would refuse
+                 * it. A link to a Person this device created and has not yet
+                 * synchronized MUST wait for that creation. */
+                const createOp = allRows.find(r => r && r.operation === 'CREATE_PERSON' &&
+                    r.entity_type === 'person' && r.entity_id === link.person_id &&
+                    !dependencySucceeded(r));
                 setResult(await insertEnvelopeIn(request, {
                     operation, entity_type: 'work', entity_id: workId, payload,
                     base_revision: observed.revision,
@@ -1078,6 +1115,18 @@
                     base_revision: observed.revision,
                 }, null));
             });
+        }
+
+        /* A prerequisite that actually SUCCEEDED on the server.
+         *
+         * `acknowledged` alone does not mean that: a terminally refused
+         * operation is also marked acknowledged, because nothing further is
+         * owed on it. Treating the two alike here would drop the dependency
+         * from a link whose Person the server refused to create -- and the
+         * link would then be sent on its own and refused in turn. The
+         * coordinator judges readiness by the same rule. */
+        function dependencySucceeded(row) {
+            return !!row && row.status === STATUS_ACKNOWLEDGED && !row.server_result;
         }
 
         function reappliable(row) {

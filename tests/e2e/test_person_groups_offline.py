@@ -525,7 +525,19 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.cache(page, ids)
         before = self.generations(page)
         page.evaluate("async () => { await prksQuickCreatePersonForSearchField('New Person','','',''); }")
-        self.changed(page, before, {'people'})
+        # Creating a Person is durable-first now, so it RECONCILES rather than
+        # invalidating: discarding the cached People index would make every
+        # Person the user can already see vanish until the next successful
+        # read -- offline, that is until the server returns. The new Person is
+        # visible through the pending overlay instead, and the acknowledgement
+        # patches the snapshot in place.
+        self.changed(page, before, set())
+        # This test is about COHERENCE BOUNDARIES, not about the creation
+        # itself: which cached domains a Person create may disturb. That it
+        # records a durable operation, and that the new Person is immediately
+        # visible, are proved in tests/e2e/test_person_create_offline.py --
+        # online both would be races, because the creation is acknowledged
+        # within milliseconds.
         self.cache(page, ids)
         o._open_person(page, ids['person_unvisited'])
         o._wait_content_contains(page, o.PERSON_UNVISITED_DISPLAY)

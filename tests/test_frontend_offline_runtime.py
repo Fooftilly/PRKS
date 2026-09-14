@@ -289,10 +289,19 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         delete_at = people.index("async function deletePerson(")
         delete_body = people[delete_at : delete_at + 2500]
         self.assertIn("prksMarkPeopleDomainChanged();", delete_body)
-        # Creation surfaces (modal + quick-create) invalidate too.
+        # Creation is durable-first now, so it RECONCILES instead of
+        # invalidating: the acknowledgement carries the created Person, and
+        # discarding the People cache would make a Person the user created
+        # offline disappear until the next successful read. Both creation
+        # surfaces go through the one durable writer.
         for path in (os.path.join(_FRONTEND, "js", "app.js"), os.path.join(_FRONTEND, "js", "ui.js")):
             src = _read(path)
-            self.assertIn("prksMarkPeopleDomainChanged", src)
+            with self.subTest(module=os.path.basename(path)):
+                self.assertIn("prksCreatePersonDurably(", src)
+                self.assertNotIn("'/api/persons', {", src.replace(" ", ""),
+                                 "Person creation must not POST directly")
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        self.assertIn("reconcileCreatedPerson", runtime)
 
     def test_work_side_people_coherence_hooks(self):
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))

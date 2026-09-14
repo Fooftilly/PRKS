@@ -559,16 +559,10 @@ function openModal(id) {
     if (id === 'playlist-modal' && typeof prksOfflineGuardMutation === 'function') {
         if (prksOfflineGuardMutation('Creating a Playlist requires a connection to PRKS.')) return;
     }
-    // `person-modal` is creation-only, so guarding here covers every caller at
-    // once -- the People page, the ribbon, the command palette and anything
-    // added later -- instead of relying on each surface to remember.
-    // `person-template-modal` is deliberately exempt: it only edits an unsaved
-    // local draft and performs no canonical mutation of its own.
-    // `person-template-modal` is deliberately exempt: it only edits an unsaved
-    // local draft and performs no canonical mutation of its own.
-    if (id === 'person-modal') {
-        // CREATE_PERSON is durable-first; the modal itself may open offline.
-    } else if (false) {
+    // `person-modal` has NO connectivity guard: creating a Person is
+    // durable-first, so the modal opens and saves with or without the server.
+    // `person-template-modal` never had one either -- it edits an unsaved local
+    // draft and performs no canonical mutation of its own.
     if (typeof window.prksCloseTagsAliasModal === 'function') {
         window.prksCloseTagsAliasModal();
     }
@@ -1493,61 +1487,59 @@ function prksSplitTypedPersonName(raw) {
 }
 
 async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const trimmed = String(typedName || '').trim();
     if (!trimmed) {
         await prksAlertMessage('Type a name in the Person field first.', 'Validation');
         return;
     }
     const { first_name, last_name } = prksSplitTypedPersonName(trimmed);
-    // Connectivity can change between the guard above and the request.
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
+    /* Durable-first, with no connectivity guard. The identity is chosen here,
+     * so the Person exists the moment it is written locally -- and a role saved
+     * against it immediately afterwards carries a dependency on this creation,
+     * which is what keeps the two in order on the wire. */
+    let created;
     try {
-        const res = await prksRequest('/api/persons', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                first_name,
-                last_name,
-                aliases: '',
-                about: aboutText || 'Quick-created person',
-            }),
+        created = await prksCreatePersonDurably({
+            first_name,
+            last_name,
+            aliases: '',
+            about: aboutText || 'Quick-created person',
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            await prksAlertMessage(data.error || 'Could not create person.', 'Could not save');
-            return;
-        }
-        // Canonical success owns coherence -- never the fetchPersons() refresh
-        // below, which is only UI state.
-        if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
-        allPersons = await fetchPersons();
-        window.allPersons = allPersons;
-        window.__prksProcessingPeople = allPersons;
-        const newPerson = allPersons.find((p) => String(p.id) === String(data.id));
-        const personSearch =
-            typeof searchInputRef === 'string' ? document.getElementById(searchInputRef) : searchInputRef;
-        const personHidden =
-            typeof hiddenInputRef === 'string' ? document.getElementById(hiddenInputRef) : hiddenInputRef;
-        if (personHidden) personHidden.value = data.id;
-        if (personSearch) {
-            personSearch.value = newPerson ? personDisplayName(newPerson) : trimmed;
-        }
-        const hiddenId =
-            typeof hiddenInputRef === 'string' ? hiddenInputRef : hiddenInputRef && hiddenInputRef.id;
-        const prefix = prksCreditPickerPrefixForHiddenId(hiddenId);
-        if (prefix && newPerson) {
-            prksRefreshRoleCreditPicker(prefix, newPerson);
-            const canonical = prksPersonCanonicalName(newPerson);
-            if (trimmed && canonical && trimmed.toLowerCase() !== canonical.toLowerCase()) {
-                prksSetRoleCreditPickerValue(prefix, trimmed);
-            }
-        }
     } catch (e) {
         console.error(e);
         await prksAlertMessage('Could not create person.', 'Error');
+        return;
+    }
+    const newPerson = typeof prksPendingPersonDetail === 'function'
+        ? prksPendingPersonDetail(created) : null;
+    /* Selected from the operation itself, not from a re-fetched catalogue: the
+     * server has not heard of this Person yet, and the picker must be able to
+     * name the row the user just created. */
+    if (newPerson) {
+        allPersons = (Array.isArray(allPersons) ? allPersons : []).concat([newPerson]);
+        window.allPersons = allPersons;
+        window.__prksProcessingPeople = allPersons;
+    }
+    const personSearch =
+        typeof searchInputRef === 'string' ? document.getElementById(searchInputRef) : searchInputRef;
+    const personHidden =
+        typeof hiddenInputRef === 'string' ? document.getElementById(hiddenInputRef) : hiddenInputRef;
+    if (personHidden) personHidden.value = created.entity_id;
+    if (personSearch) {
+        personSearch.value = newPerson ? personDisplayName(newPerson) : trimmed;
+    }
+    const hiddenId =
+        typeof hiddenInputRef === 'string' ? hiddenInputRef : hiddenInputRef && hiddenInputRef.id;
+    const prefix = prksCreditPickerPrefixForHiddenId(hiddenId);
+    if (prefix && newPerson) {
+        prksRefreshRoleCreditPicker(prefix, newPerson);
+        const canonical = prksPersonCanonicalName(newPerson);
+        if (trimmed && canonical && trimmed.toLowerCase() !== canonical.toLowerCase()) {
+            prksSetRoleCreditPickerValue(prefix, trimmed);
+        }
     }
 }
+
 
 async function prksQuickCreatePersonForRoleLink(typedName) {
     await prksQuickCreatePersonForSearchField(
