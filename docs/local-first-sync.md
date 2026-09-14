@@ -1,14 +1,16 @@
 # PRKS local-first synchronization
 
-PRKS has one semantic-operation protocol and **two families** on it:
+PRKS has one semantic-operation protocol and several families on it:
 
 | Family | Milestone | Shape |
 | --- | --- | --- |
 | `ADD_WORK_TAG` / `REMOVE_WORK_TAG` | 2B | Revisioned relationship. Two devices can genuinely disagree, so conflicts are real and the user resolves them. |
 | `MARK_WORK_OPENED` | 2C | Max-register over normalized event time. Two devices cannot disagree, so there is no conflict and none is offered. |
-| `SET_WORK_METADATA_FIELD` | 2D, 2E, 2F, 2G | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
+| `SET_WORK_METADATA_FIELD` | 2D–2J, 2M | Revisioned scalar, scoped to one FIELD. Devices disagree per field, so conflicts are real but narrow. |
+| `SET_WORK_SOURCE` | 2O | Revisioned aggregate. `source_kind`, `provider`, `provider_id` and `source_url` are one identity, so they share one revision and one conflict. |
+| `ADD_WORK_PERSON_ROLE` / `REMOVE_WORK_PERSON_ROLE` / `SET_WORK_PERSON_ROLE_CREDIT` | 3A | Revisioned element. The unit is `(work, person, role_type)`, present with a credit override or absent; `order_index` is not identity. |
 
-Both commit to durable browser storage before the UI acts on them, survive
+All of them commit to durable browser storage before the UI acts on them, survive
 reloads and offline periods, and synchronize idempotently on reconnect. Other
 mutations still require the server.
 
@@ -24,6 +26,18 @@ tell them they had -- demanding a resolution for a collision that never
 happened. So the scope is the field, and one conflicting field leaves the other
 six editable.
 
+`SET_WORK_SOURCE` exists because identity is not a field. Three field-scoped
+writes would let two ordinary edits reach "the stored URL names video B while
+the viewer plays video A", and would ask the user to resolve one decision three
+times.
+
+Work–Person roles exist because a relationship is an **element**, not an ordered
+aggregate of everyone on the Work. Independent links cannot produce an invalid
+author order, and two devices editing different people on the same Work have
+not disagreed. Construction (`insert_initial_role`) is revision 0; mutation
+(`set_role_state`) is the one write boundary ordinary HTTP and durable
+operations both use.
+
 ## Layers
 
 | Layer | Owns |
@@ -32,11 +46,17 @@ six editable.
 | `backend/work_tag_sync.py` | Relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
 | `backend/work_open_sync.py` | `last_opened_at` max-register, skew policy, MARK_WORK_OPENED handler |
 | `backend/work_metadata_sync.py` | The synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |
+| `backend/work_source_sync.py` | Source-identity aggregate, YouTube parser, SET_WORK_SOURCE handler |
+| `backend/work_role_sync.py` | Role-element revisions, credit validation, ADD/REMOVE/CREDIT handler |
 | `frontend/js/sync-runtime.js` | Transport, claiming, backoff, locks, replay, status transitions, retirement |
 | `frontend/js/work-tag-state.js` | Work-Tag overlay and sync handler |
 | `frontend/js/work-open-state.js` | Recent overlay, acknowledged merge, sync handler |
 | `frontend/js/work-metadata-state.js` | Field projection, field overlay, dirty-field diff, sync handler |
 | `frontend/js/work-metadata-editor.js` | The bibliographic group's save and per-field conflict UI |
+| `frontend/js/work-source-state.js` | Source overlay, codec, sync handler |
+| `frontend/js/work-source-editor.js` | Video-source save and conflict UI |
+| `frontend/js/work-role-state.js` | Role overlay, credit composition, sync handler |
+| `frontend/js/work-role-editor.js` | Work–Person linking, unlinking, credit editing |
 | `frontend/js/sync-diagnostics.js` | Settings -> Diagnostics, for every family |
 
 A client handler answers three questions and nothing else: `isResult` (is this
@@ -97,13 +117,16 @@ Restoring a backup restores its ledger, revisions and lifecycle together.
 }
 ```
 
-`ADD_WORK_TAG`, `REMOVE_WORK_TAG`, `MARK_WORK_OPENED` and
-`SET_WORK_METADATA_FIELD` are supported; an unregistered operation is
-`INVALID_ENVELOPE` and never reaches a handler.
+Registered operations are `ADD_WORK_TAG`, `REMOVE_WORK_TAG`, `MARK_WORK_OPENED`,
+`SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, `ADD_WORK_PERSON_ROLE`,
+`REMOVE_WORK_PERSON_ROLE` and `SET_WORK_PERSON_ROLE_CREDIT`. An unregistered
+operation is `INVALID_ENVELOPE` and never reaches a handler. Today every one of
+those is scoped to a Work (`entity_type` is `work`).
 UUIDs, bounded IDs and timezone-aware timestamps are validated generically.
-Unknown envelope fields are rejected. Dependencies must be empty in v1; there
-is no batch or dependency executor. Hashes cover the normalized immutable
-semantic envelope, with sorted JSON keys and UTC timestamps.
+Unknown envelope fields are rejected. `depends_on` is already a durable envelope
+field, but it must be empty: a non-empty array is `UNSUPPORTED_DEPENDENCIES` and
+never executes. There is no batch or dependency executor yet. Hashes cover the
+normalized immutable semantic envelope, with sorted JSON keys and UTC timestamps.
 
 `base_revision` is structurally either a nonnegative safe integer or null, and
 **which one is legal is the family's decision**. A Work-Tag edit requires a
