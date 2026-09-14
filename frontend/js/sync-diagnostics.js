@@ -69,6 +69,13 @@
             }
             return 'Link ' + who + ' as ' + role;
         }
+        if (op.operation === 'SET_PERSON_METADATA_FIELD') {
+            const labels = root.PRKS_PERSON_FIELD_LABELS || {};
+            const field = op.payload.field;
+            // Bounded: a Biography has no length limit, and Diagnostics is a
+            // status list, not a place to render -- or log -- a whole value.
+            return (labels[field] || field) + ' = "' + bounded(op.payload.value) + '"';
+        }
         if (op.operation === 'CREATE_PERSON') {
             const who = [op.payload.first_name, op.payload.last_name].filter(Boolean).join(' ') ||
                 op.entity_id;
@@ -97,6 +104,12 @@
         REMOVE_WORK_PERSON_ROLE: 'work-people-state',
         SET_WORK_PERSON_ROLE_CREDIT: 'work-people-state',
         CREATE_PERSON: 'person',
+        /* Reached only through the Work branch below, which a Person-scoped
+         * operation never takes -- `invalidate()` answers `person` entities
+         * first, because the whole People read model carries every profile
+         * field. Listed anyway so the registry stays the readable answer to
+         * "what does discarding this stale?" for every durable family. */
+        SET_PERSON_METADATA_FIELD: 'person-metadata-state',
     });
 
     /** The cached read models a discarded operation's intent was overlaying. */
@@ -107,6 +120,12 @@
             } else {
                 root.prksOfflineMarkEntityChanged('person', op.entity_id);
             }
+            /* The revision this edit was measured against is cached
+             * separately from the profile itself, so the People domain does
+             * not reach it. A discarded edit leaves the base it observed
+             * stale, and the next edit would be enqueued against a revision
+             * the server has already moved past. */
+            root.prksOfflineMarkEntityChanged('person-metadata-state', op.entity_id);
             return;
         }
         root.prksOfflineMarkEntityChanged('work', op.entity_id);

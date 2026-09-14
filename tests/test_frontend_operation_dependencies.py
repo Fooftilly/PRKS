@@ -117,12 +117,22 @@ class OperationDependencyTests(unittest.TestCase):
 
     def test_the_role_writer_uses_the_stores_definition_of_a_healthy_dependency(self):
         store = (FRONTEND / 'local-store.js').read_text()
-        at = store.index('function saveWorkPersonRole(')
-        body = store[at: store.index('\n        function ', at + 10)]
-        self.assertIn('dependencyTerminallyFailed(', body,
-                      'the role writer must not select a refused creation')
-        self.assertIn("'dependency_failed'", body,
+        # ONE helper, asked by every Person-scoped writer. A family that
+        # re-derived "is this creation usable" would be free to disagree with
+        # the enqueue boundary about it.
+        at = store.index('function personCreationDependency(')
+        helper = store[at: store.index('\n        }\n', at)]
+        self.assertIn('dependencyTerminallyFailed(', helper,
+                      'the helper must not select a refused creation')
+        self.assertIn('dependencySucceeded', helper,
+                      'nor name one that is already canonical')
+        self.assertIn("'dependency_failed'", helper,
                       'and must refuse rather than silently drop the dependency')
+        for writer in ('function saveWorkPersonRole(', 'function savePersonMetadataFields('):
+            at = store.index(writer)
+            body = store[at: store.index('\n        function ', at + 10)]
+            with self.subTest(writer=writer):
+                self.assertIn('personCreationDependency(', body)
 
     def test_every_role_surface_names_the_failed_dependency_explicitly(self):
         """G8: a refused prerequisite is not "could not save".

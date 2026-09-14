@@ -257,6 +257,11 @@
             REMOVE_WORK_PERSON_ROLE: root.prksWorkRoleSyncHandler,
             SET_WORK_PERSON_ROLE_CREDIT: root.prksWorkRoleSyncHandler,
             CREATE_PERSON: root.prksPersonSyncHandler,
+            // Editing a Person is FIELD-scoped, like Work metadata and for
+            // the same reason: a biography and a birth date are separate
+            // decisions, and a profile-wide unit would manufacture conflicts
+            // between devices that changed different things.
+            SET_PERSON_METADATA_FIELD: root.prksPersonMetadataSyncHandler,
         },
         lock: root.navigator.locks ? fn => root.navigator.locks.request('prks-sync', { ifAvailable: true }, lock => lock ? fn() : undefined) : null,
     });

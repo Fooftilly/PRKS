@@ -1839,8 +1839,37 @@ async function prksOfflinePeopleFetch(signal) {
     } catch (_e) {
         ops = [];
     }
-    const value = prksEffectivePeople(result.value, ops);
+    /* Creations first, then profile edits: a Person created offline and then
+     * renamed offline must appear under the NEW name, and the edit overlay can
+     * only reach a row the creation overlay has already produced. */
+    let value = prksEffectivePeople(result.value, ops);
+    if (value && typeof prksEffectivePersonRows === 'function') {
+        value = prksEffectivePersonRows(value, ops);
+    }
     return value ? Object.assign({}, result, { value: value }) : result;
+}
+
+/** Every durable operation, or an empty list when the store cannot be read. */
+async function prksDurableOperationsOrNone() {
+    try {
+        if (typeof prksSync !== 'undefined' && prksSync && prksSync.store) {
+            return await prksSync.store.listOperations();
+        }
+    } catch (_e) { /* an unreadable store overlays nothing */ }
+    return [];
+}
+
+/** Whether this Person exists only because of an unsynchronized creation. */
+async function prksPersonHasPendingCreation(personId) {
+    if (typeof prksPendingPersonCreates !== 'function') return false;
+    return prksPendingPersonCreates(await prksDurableOperationsOrNone())
+        .some(op => op && op.entity_id === personId);
+}
+
+/** A Person record with this device's unsynchronized profile edits applied. */
+async function prksEffectivePersonRecord(person) {
+    if (!person || typeof prksEffectivePersonFields !== 'function') return person;
+    return prksEffectivePersonFields(person, await prksDurableOperationsOrNone());
 }
 
 function prksIsPersonGroupRowShape(row) {
@@ -2063,6 +2092,13 @@ async function prksHydratePendingWorkMetadata() {
     if (typeof prksRefreshPendingWorkRoles === 'function') {
         await prksRefreshPendingWorkRoles();
     }
+    /* And the people those links NAME. A Person renamed offline appears on
+     * every Work they are credited on, so the row that renders the credit has
+     * to know the pending name before it paints -- not after some other
+     * surface happens to read the queue. */
+    if (typeof prksRefreshPendingPersonNames === 'function') {
+        await prksRefreshPendingPersonNames();
+    }
 }
 
 /* Two overlays, applied in a fixed order and never by each other.
@@ -2077,7 +2113,26 @@ function prksEffectiveWorkRows(rows) {
     if (out && typeof prksEffectiveWorkRolesRows === 'function') {
         out = prksEffectiveWorkRolesRows(out);
     }
+    /* Third, and always last of the three: the first two decide WHICH people
+     * are credited and what the scalar fields say; this one only corrects the
+     * NAME of whoever ended up there. Running it earlier would rename rows the
+     * relationship overlay then replaced. */
+    if (out) out = prksEffectiveWorkRowPersonNames(out);
     return out;
+}
+
+/** Pending Person renames applied to the `roles[]` each Work row carries. */
+function prksEffectiveWorkRowPersonNames(rows) {
+    if (!Array.isArray(rows) || typeof prksApplyPendingPersonNames !== 'function') return rows;
+    let changed = false;
+    const out = rows.map(function (row) {
+        if (!row || !Array.isArray(row.roles) || !row.roles.length) return row;
+        const roles = prksApplyPendingPersonNames(row.roles);
+        if (roles === row.roles) return row;
+        changed = true;
+        return Object.assign({}, row, { roles: roles });
+    });
+    return changed ? out : rows;
 }
 
 /**
@@ -2326,7 +2381,15 @@ async function prksPendingCreatedPerson(personId) {
         const ops = await prksSync.store.listOperations();
         const op = (ops || []).find(row => row && row.operation === 'CREATE_PERSON' &&
             row.entity_id === personId && row.status !== 'acknowledged');
-        const detail = op ? prksPendingPersonDetail(op) : null;
+        let detail = op ? prksPendingPersonDetail(op) : null;
+        /* Created offline and then edited offline, before either reached the
+         * server. The edit is a separate operation ordered behind the creation
+         * -- never folded into its payload -- so the effective profile is the
+         * creation overlaid with the edits, exactly as it is for a Person the
+         * server already knows. */
+        if (detail && typeof prksEffectivePersonFields === 'function') {
+            detail = prksEffectivePersonFields(detail, ops);
+        }
         return detail && prksIsPersonShape(detail, personId) ? detail : null;
     } catch (_e) {
         return null;
@@ -3442,7 +3505,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     ctx.setEntity('person', null);
                     break;
                 }
-                const person = resolvedPerson.person;
+                /* The profile the user is looking at is the acknowledged one
+                 * plus their own unsynchronized edits. Applied at the ROUTE,
+                 * so the detail page, its sidebar summary and the editor's
+                 * draft all start from the same record. */
+                const person = await prksEffectivePersonRecord(resolvedPerson.person);
+                if (stale()) return;
                 publishSidebar(
                     person
                         ? {

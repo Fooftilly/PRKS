@@ -2169,6 +2169,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 item['mentions'] = research_index.argument_backlinks(aid, db)
                 item['verdicts'] = research_network.list_verdicts(db)
                 self.send_json(200, item)
+            elif path.startswith('/api/persons/') and path.endswith('/metadata-state') and len(path.split('/')) == 5:
+                # REVISIONS ONLY. The Person detail already carries every
+                # profile value and none of them has a length bound, so
+                # echoing them here would make a second copy of the whole
+                # biography in what this sends and what IndexedDB stores.
+                data = db.get_person_metadata_state(unquote(path.split('/')[3]))
+                if data is None:
+                    self.send_json(404, {"error": "Person not found"})
+                else:
+                    etag = db.etag_for_representation("person-metadata-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/persons/') and path.endswith('/profile-image'):
                 parts = path.split('/')
                 if len(parts) != 5:

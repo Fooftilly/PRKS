@@ -14,7 +14,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import (work_metadata_sync, work_open_sync, work_role_sync,
+from backend import (person_metadata_sync, work_metadata_sync, work_open_sync, work_role_sync,
                      work_source_sync, work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.entity_ids import generate as generate_entity_id, is_distributed
@@ -860,6 +860,17 @@ class DeletedWorkRecord:
     work_id: str
     file_path: str
     managed_pdf_still_referenced: bool
+
+
+def _person_wire(value):
+    """A profile value in the SAME representation the sync path carries.
+
+    A caller may hand PATCH a None where the durable queue always carries a
+    string. Converting here means the two paths run one validator over one
+    spelling and reach the same revision decision, rather than being two
+    implementations that agree until they do not.
+    """
+    return "" if value is None else str(value)
 
 
 class PRKSDatabase:
@@ -3375,15 +3386,30 @@ class PRKSDatabase:
     )
 
     def update_person_metadata(self, person_id: str, fields: dict):
+        """Write profile fields through the SAME boundary the sync handler uses.
+
+        Revisions record CANONICAL history, not sync-endpoint history. An
+        ordinary online PATCH that changes a profile field has to advance that
+        field's revision, or an offline device holding the old value has no way
+        to discover it was overtaken -- and would overwrite it believing itself
+        current. Only fields whose value actually changes advance, and the whole
+        edit commits as one transaction so a value can never be stored without
+        its revision.
+        """
         updates = {k: v for k, v in fields.items() if k in self.PERSON_METADATA_FIELDS}
         if not updates:
             return
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [person_id]
-        self.execute_query(
-            f"UPDATE persons SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            tuple(values),
-        )
+        # One rule, whichever path a value arrives by. If PATCH accepted an
+        # image_url the durable queue would refuse, the same edit would be
+        # savable online and impossible offline -- the split contract that
+        # moving a field to local-first exists to remove.
+        for field, value in updates.items():
+            if not person_metadata_sync.is_valid_field_value(field, _person_wire(value)):
+                raise ValueError("%s is not a valid value for %s" % (value, field))
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for field, value in updates.items():
+                person_metadata_sync.set_field_on_conn(conn, person_id, field, _person_wire(value))
 
     def append_person_alias_if_new(self, person_id: str, alias: str) -> bool:
         """Append alias to persons.aliases when not already present (case-insensitive)."""
@@ -3719,6 +3745,18 @@ class PRKSDatabase:
             (person_id, group_id),
         )
 
+    def get_person_metadata_state(self, person_id: str) -> Optional[dict]:
+        """Synchronization state for the supported Person fields.
+
+        Its own endpoint rather than extra keys on the Person detail, for the
+        same reason the Work equivalent is: revisions are synchronization
+        bookkeeping, and every consumer of a Person would otherwise pay for
+        them and re-cache on every change.
+        """
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return person_metadata_sync.get_field_state_on_conn(conn, person_id)
+
     def update_person_profile(self, person_id: str, fields: dict, group_ids=None) -> None:
         """Atomically update Person metadata and (optionally) group memberships.
 
@@ -3737,6 +3775,9 @@ class PRKSDatabase:
             return
         if not isinstance(group_ids, list):
             raise ValueError("group_ids must be a JSON array")
+        for field, value in updates.items():
+            if not person_metadata_sync.is_valid_field_value(field, _person_wire(value)):
+                raise ValueError("%s is not a valid value for %s" % (value, field))
         with self.connection() as conn:
             if not conn.execute("SELECT 1 FROM persons WHERE id = ?", (person_id,)).fetchone():
                 raise ValueError("Person not found.")
@@ -3753,12 +3794,12 @@ class PRKSDatabase:
                 ).fetchone():
                     raise ValueError(f"Unknown group id: {gid}")
                 clean.append(gid)
-            if updates:
-                set_clause = ", ".join(f"{k} = ?" for k in updates)
-                conn.execute(
-                    f"UPDATE persons SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    tuple(list(updates.values()) + [person_id]),
-                )
+            for field, value in updates.items():
+                # The same field writer as the metadata-only path and as the
+                # synchronization handler, so memberships and metadata share
+                # one transaction WITHOUT the profile half bypassing the
+                # revision model that offline devices depend on.
+                person_metadata_sync.set_field_on_conn(conn, person_id, field, _person_wire(value))
             conn.execute("DELETE FROM person_group_members WHERE person_id = ?", (person_id,))
             for gid in clean:
                 conn.execute(

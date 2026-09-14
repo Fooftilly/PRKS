@@ -174,7 +174,8 @@ def process_operation(db, data):
 # Registration is explicit and lives here so the set of families PRKS accepts
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
-    person_sync, work_metadata_sync, work_open_sync, work_role_sync, work_source_sync, work_tag_sync,
+    person_metadata_sync, person_sync, work_metadata_sync, work_open_sync, work_role_sync,
+    work_source_sync, work_tag_sync,
 )
 
 register("ADD_WORK_TAG", work_tag_sync.HANDLER)
@@ -192,3 +193,6 @@ register("REMOVE_WORK_PERSON_ROLE", work_role_sync.HANDLER)
 # scope and revision: it changes the same element's semantic state.
 register("SET_WORK_PERSON_ROLE_CREDIT", work_role_sync.HANDLER)
 register("CREATE_PERSON", person_sync.HANDLER, entity_type="person")
+# Editing a Person is FIELD-scoped, not profile-scoped: see
+# person_metadata_sync's module docstring for the schema evidence behind that.
+register("SET_PERSON_METADATA_FIELD", person_metadata_sync.HANDLER, entity_type="person")

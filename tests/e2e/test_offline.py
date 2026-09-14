@@ -5591,7 +5591,7 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         _open_people_index(page)
         _wait_content_contains(page, "Created Offline")
 
-    def test_cached_person_detail_is_read_only_offline(self):
+    def test_cached_person_detail_allows_profile_edits_but_not_relationships(self):
         server, page, context, _collector = self._start()
         person_a = server.ids["person_a"]
 
@@ -5607,9 +5607,16 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         _wait_offline_banner(page)
         _open_details_drawer_if_tiled(page)
 
+        # Deleting a Person is still a canonical request, so its control is
+        # disabled; editing the PROFILE is durable now, so its control is not.
         page.wait_for_function(
             "() => { const b = document.querySelector('#panel-content"
             " [data-prks-role=\"person-mutation-control\"]'); return !!b && b.disabled; }",
+            timeout=20000,
+        )
+        page.wait_for_function(
+            "() => { const b = document.querySelector('#panel-content"
+            " [data-prks-role=\"person-edit-control\"]'); return !!b && !b.disabled; }",
             timeout=20000,
         )
         self.assertFalse(page.locator("#prks-person-view-graph").is_disabled())
@@ -5617,10 +5624,15 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         page.evaluate("() => { try { prksTogglePersonWorksEdit(); } catch (_e) {} }")
         page.wait_for_timeout(200)
         self.assertEqual(page.locator(".person-profile__card-unlink").count(), 0)
-        # ... nor can profile editing.
+        # ... but profile editing opens, because it is the same feature online
+        # and offline now. Whether a SAVE can proceed is decided by whether
+        # this device knows the profile's revisions, not by connectivity --
+        # tests.e2e.test_person_edit_offline owns that behaviour.
         page.evaluate("() => { try { openPersonProfileEdit(); } catch (_e) {} }")
-        page.wait_for_timeout(200)
-        self.assertEqual(page.locator(".person-panel-edit").count(), 0)
+        page.locator(".person-panel-edit").wait_for(timeout=15000)
+        # Group membership inside that editor is a relationship, not a profile
+        # scalar, and stays connection-required.
+        self.assertTrue(page.locator("#pd-group-add-btn").is_disabled())
         # Work links stay usable.
         self.assertGreaterEqual(page.locator('[data-prks-route^="#/works/"]').count(), 1)
 

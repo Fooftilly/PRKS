@@ -997,6 +997,87 @@
             return cacheEntityIfCurrent('person', result.person_id, person, entityToken);
         }
 
+        /**
+         * A Person profile field the server has applied.
+         *
+         * The value comes from the OPERATION, not the answer: the
+         * acknowledgement deliberately omits it (no profile field has a length
+         * bound, and a result the client cannot durably store is read as a
+         * failed sync and retried forever). The client already holds the
+         * authoritative copy in its own immutable payload.
+         *
+         * Snapshots that hold the value are PATCHED; read models that merely
+         * display the Person's NAME are invalidated instead. The difference is
+         * not laziness: a credit line, a Graph label and a cached Argument
+         * source embed the name in rows keyed by Work, so there is no precise
+         * patch to make -- and this only ever runs while connected, which is
+         * exactly when a refetch is affordable. The ordinary PATCH boundary
+         * draws the same line for the same reason.
+         */
+        async function reconcilePersonField(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.person_id;
+            const field = result.field;
+            const value = String((op && op.payload && op.payload.value) || '');
+            if (!root.prksIsSupportedPersonField || !root.prksIsSupportedPersonField(field)) {
+                return false;
+            }
+            const peopleToken = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
+            domainGeneration.set(DOMAIN_PEOPLE, peopleToken);
+            const kinds = ['person', 'person-metadata-state'];
+            const tokens = kinds.map(function (kind) {
+                const token = currentEntityGeneration(kind, id) + 1;
+                entityCoherence.set(entityKey(kind, id), token);
+                return token;
+            });
+            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
+            const person = snapshots[0] && snapshots[0].value;
+            const state = snapshots[1] && snapshots[1].value;
+            if (state) {
+                if (typeof root.prksIsPersonMetadataStateShape === 'function' &&
+                    !root.prksIsPersonMetadataStateShape(state, id)) return false;
+                const entry = state.fields[field];
+                if (!entry) return false;
+                // An acknowledgement older than what the cache already holds
+                // has been superseded; applying it would move the field back.
+                if (entry.revision > result.server_revision) return true;
+                state.fields[field] = { revision: result.server_revision };
+            }
+            if (person) person[field] = value;
+            const values = [person, state];
+            for (let i = 0; i < kinds.length; i++) {
+                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) {
+                    return false;
+                }
+            }
+            const cached = await store.getList(PEOPLE_LIST_KEY).catch(function () { return null; });
+            if (cached) {
+                const rows = cached.value;
+                if (typeof root.prksIsPeopleIndexShape === 'function' &&
+                    Array.isArray(rows) && !root.prksIsPeopleIndexShape(rows)) return false;
+                const patched = (Array.isArray(rows) ? rows : []).map(function (row) {
+                    if (!row || row.id !== id) return row;
+                    const next = Object.assign({}, row);
+                    next[field] = value;
+                    return next;
+                });
+                if (!await cacheListForDomain(PEOPLE_LIST_KEY, patched, DOMAIN_PEOPLE, peopleToken)) {
+                    return false;
+                }
+            }
+            const displayed = root.PRKS_PERSON_DISPLAY_FIELDS || [];
+            if (displayed.indexOf(field) !== -1) {
+                prksOfflineMarkPersonGroupsChanged();
+                prksOfflineMarkResearchGraphPeopleChanged();
+                prksOfflineMarkArgumentsChanged();
+                prksOfflineMarkWorksBrowseChanged();
+                prksOfflineMarkRecentChanged();
+                prksOfflineMarkRecentlyAddedChanged();
+                prksOfflineMarkFoldersChanged();
+            }
+            return true;
+        }
+
         /** Remove a disposable entity snapshot. Never changes connectivity or server state. */
         function invalidateEntity(kind, id) {
             if (!store || typeof store.deleteEntity !== 'function') return Promise.resolve(false);
@@ -1272,6 +1353,7 @@
             reconcileWorkRole,
             reconcileRecentOpen,
             reconcileCreatedPerson,
+            reconcilePersonField,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
             invalidateEntity: invalidateEntity,
@@ -1478,6 +1560,7 @@
         prksOfflineReconcileWorkRole: result => production.reconcileWorkRole(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
+        prksOfflineReconcilePersonField: (result, op) => production.reconcilePersonField(result, op),
         prksOfflineMarkTagsChanged: () => production.markDomainChanged('tags', { entityKinds: [], listKeys: ['tags:index'] }),
         prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,
         prksOfflineInvalidateEntity: prksOfflineInvalidateEntity,

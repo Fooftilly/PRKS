@@ -70,6 +70,7 @@
         'REMOVE_WORK_PERSON_ROLE',
         'SET_WORK_PERSON_ROLE_CREDIT',
         'CREATE_PERSON',
+        'SET_PERSON_METADATA_FIELD',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -993,32 +994,86 @@
                  * be sent before the Person existed and the server would refuse
                  * it. A link to a Person this device created and has not yet
                  * synchronized MUST wait for that creation. */
-                const creates = allRows.filter(r => r && r.operation === 'CREATE_PERSON' &&
-                    r.entity_type === 'person' && r.entity_id === link.person_id);
-                /* Three states, three different answers -- and the store's own
-                 * definitions of them, not this family's.
-                 *
-                 * Creation already SUCCEEDED: the Person is canonical, so there
-                 * is nothing to wait for and naming it would only keep a
-                 * retirable row alive. Creation is still IN FLIGHT: the link
-                 * must wait for it. Creation was REFUSED: the Person will never
-                 * exist, and a link to it is not a change that can be saved --
-                 * selecting that row merely because it is still in the store
-                 * would hand the enqueue boundary a dependency it has to reject
-                 * anyway, and omitting it would send the link on its own for
-                 * the server to refuse in turn. Say so here instead. */
-                const createOp = creates.find(r => !dependencySucceeded(r) &&
-                    !dependencyTerminallyFailed(r));
-                if (!createOp && !creates.some(dependencySucceeded) &&
-                        creates.some(dependencyTerminallyFailed)) {
-                    throw localStoreError('dependency_failed',
-                        'This person could not be created on the server, so they cannot be linked.');
-                }
+                const createOp = personCreationDependency(allRows, link.person_id,
+                    'they cannot be linked');
                 setResult(await insertEnvelopeIn(request, {
                     operation, entity_type: 'work', entity_id: workId, payload,
                     base_revision: observed.revision,
                     depends_on: createOp ? [createOp.op_id] : [],
                 }, localContext || null));
+            });
+        }
+
+        /**
+         * Save the intent "this Person's <field> is now <value>", per FIELD.
+         *
+         * One conflict unit per field, matching the server family: two devices
+         * that changed a biography and a birth date have not disagreed, and a
+         * profile-wide unit would tell them they had. So a scope that is busy
+         * blocks only its own field and the rest of the form stays editable.
+         *
+         * `base[field]` is `{value, revision}` -- the value from the cached
+         * Person, the revision from the person-metadata-state projection.
+         * Editing back to the observed value leaves NO intent at all: A -> B
+         * -> A is not two changes, it is none.
+         *
+         * A Person who exists only because of a pending `CREATE_PERSON` is
+         * edited through this same path. The edit is ordered behind that
+         * creation by the GENERIC dependency mechanism rather than folded into
+         * its payload: the creation may already be in flight, and rewriting an
+         * envelope that might have been sent is the one way to apply it twice.
+         * Two decisions the user made separately also stay two operations, so
+         * a refused creation does not silently take an unrelated edit with it
+         * -- it fails it visibly, through the same propagation as everything
+         * else.
+         */
+        function savePersonMetadataFields(personId, changes, base) {
+            if (!isNonBlankString(personId) || !isPlainObject(changes) || !isPlainObject(base)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid profile save.'));
+            }
+            for (const field of Object.keys(changes)) {
+                const observed = base[field];
+                if (PERSON_FIELDS.indexOf(field) === -1) {
+                    return Promise.reject(localStoreError('unknown_field',
+                        'Not an editable profile field: ' + field));
+                }
+                if (typeof changes[field] !== 'string' || !isPlainObject(observed) ||
+                    typeof observed.value !== 'string' ||
+                    !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                    return Promise.reject(localStoreError('invalid_base', 'Invalid observed field state.'));
+                }
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                const createOp = personCreationDependency(rows, personId,
+                    'their profile cannot be edited');
+                const written = [];
+                for (const field of Object.keys(changes)) {
+                    const desired = changes[field];
+                    const observed = base[field];
+                    const existing = rows.find(r => r.operation === 'SET_PERSON_METADATA_FIELD' &&
+                        r.entity_type === 'person' && r.entity_id === personId &&
+                        r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        /* Only a NEVER SENT row may be rewritten. A retry after
+                         * a lost response might already be ledgered, and a
+                         * conflict is the user's to resolve -- but this is one
+                         * field, so every other field stays editable. */
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy', 'This field is syncing or needs resolution.');
+                        }
+                        if (existing.payload.value === desired) { written.push(existing); continue; }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    if (desired === observed.value) continue;
+                    written.push(await insertEnvelopeIn(request, {
+                        operation: 'SET_PERSON_METADATA_FIELD', entity_type: 'person',
+                        entity_id: personId, payload: { field, value: desired },
+                        base_revision: observed.revision,
+                        depends_on: createOp ? [createOp.op_id] : [],
+                    }, null));
+                }
+                setResult(written);
             });
         }
 
@@ -1276,6 +1331,40 @@
          */
         function dependencyTerminallyFailed(row) {
             return !!row && row.status === STATUS_ACKNOWLEDGED && !dependencySucceeded(row);
+        }
+
+        /**
+         * The `CREATE_PERSON` a Person-scoped operation must wait for, if any.
+         *
+         * Three states, three different answers -- decided with the store's own
+         * definitions of them, so no family invents its own idea of a healthy
+         * dependency:
+         *
+         *   SUCCEEDED  the Person is canonical. Nothing to wait for, and naming
+         *              it would only keep a retirable row alive.
+         *   IN FLIGHT  this device created them and the server has not heard;
+         *              the dependent must be ordered behind it.
+         *   REFUSED    the Person will never exist there. Selecting that row
+         *              merely because it is still stored -- and it IS still
+         *              stored, retained for whatever already depends on it --
+         *              would hand the enqueue boundary a dependency it has to
+         *              reject anyway, with a message about an op_id. Omitting
+         *              it instead would send the operation alone, for the
+         *              server to refuse in turn. Refuse here, in the terms the
+         *              user was working in.
+         */
+        function personCreationDependency(rows, personId, consequence) {
+            const creates = (Array.isArray(rows) ? rows : []).filter(
+                r => r && r.operation === 'CREATE_PERSON' &&
+                    r.entity_type === 'person' && r.entity_id === personId);
+            if (creates.some(dependencySucceeded)) return null;
+            const live = creates.find(r => !dependencyTerminallyFailed(r));
+            if (live) return live;
+            if (creates.length) {
+                throw localStoreError('dependency_failed',
+                    'This person could not be created on the server, so ' + consequence + '.');
+            }
+            return null;
         }
 
         function reappliable(row) {
@@ -1593,6 +1682,7 @@
             coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, saveWorkSource,
             saveWorkPersonRole,
             createPerson,
+            savePersonMetadataFields: savePersonMetadataFields,
             resolveConflict, claimOperation,
             markDependentsFailed: markDependentsFailed,
             getOperation: getOperation,

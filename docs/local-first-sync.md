@@ -10,6 +10,7 @@ PRKS has one semantic-operation protocol and several families on it:
 | `SET_WORK_SOURCE` | 2O | Revisioned aggregate. `source_kind`, `provider`, `provider_id` and `source_url` are one identity, so they share one revision and one conflict. |
 | `ADD_WORK_PERSON_ROLE` / `REMOVE_WORK_PERSON_ROLE` / `SET_WORK_PERSON_ROLE_CREDIT` | 3A | Revisioned element. The unit is `(work, person, role_type)`, present with a credit override or absent; `order_index` is not identity. |
 | `CREATE_PERSON` | 3B | Construction. Client-generated collision-resistant id; `depends_on` lets a later role link wait until this Person exists. |
+| `SET_PERSON_METADATA_FIELD` | 3C | Editing an existing Person, one FIELD at a time. Scope `person-field/[person_id, field]`. |
 
 All of them commit to durable browser storage before the UI acts on them, survive
 reloads and offline periods, and synchronize idempotently on reconnect. Other
@@ -1430,6 +1431,93 @@ is not burned into the ledger.
 
 Deterministic order is the store's existing `sequence`, skipping unready rows
 rather than stalling the queue on `pending[0]`. One in-flight operation remains.
+
+## Offline Person editing (3C)
+
+### Why the unit is a field
+
+Every editable column on `persons` is an independent scalar: `first_name`,
+`last_name`, `aliases`, `about`, `image_url`, the three encyclopedia links,
+`links_other`, `birth_date`, `death_date`. A biography and a birth date are
+separate decisions, so two devices that changed different ones have not
+disagreed -- and a profile-level revision would tell them they had, forcing a
+resolution UI over a conflict that does not exist. The canonical writer is
+already field-shaped for the same reason: `update_person_profile` applies
+whatever subset of `PERSON_METADATA_FIELDS` it is handed.
+
+This is a reading of the schema, not a copy of the Work-metadata family. The
+one form with one Save button in the UI is a grouping of controls; the store
+therefore writes one operation per changed field, and a busy scope blocks only
+its own field while the rest of the form stays editable.
+
+Group membership is deliberately NOT in this vocabulary. It is a relationship,
+not a scalar -- it is atomic with metadata on the ordinary PATCH precisely
+because it is a different kind of thing -- so it remains a canonical request and
+its controls stay disabled offline.
+
+### Parity with the ordinary PATCH
+
+`SET_PERSON_METADATA_FIELD` accepts exactly the field vocabulary `CREATE_PERSON`
+does, and exactly the same values: any string, except an `image_url` the
+portrait normalizer refuses. There are **no per-field byte bounds**, because the
+creation family has none either and the generic envelope bound already caps what
+a durable operation may carry; inventing one here would make a value savable
+through one path and refused through another.
+
+`update_person_metadata` and `update_person_profile` now write through
+`person_metadata_sync.set_field_on_conn` -- the same boundary the handler uses.
+Revisions record CANONICAL history, not sync-endpoint history: an online PATCH
+that bypassed them would leave an offline device holding the old value with no
+way to discover it was overtaken, and it would overwrite the newer value
+believing itself current. A no-op write advances nothing, and NULL and `""` are
+the same state.
+
+`GET /api/persons/{id}/metadata-state` reports **revisions only**, unlike the
+Work equivalent. The Person detail the client already caches carries all eleven
+values and none of them is bounded, so echoing them here would make a second
+copy of the whole profile -- biography included -- in what the endpoint sends,
+what IndexedDB stores, and what every re-read costs. The acknowledgement omits
+the value for the same reason: the ledger has no retention policy, and a result
+the client cannot durably store is read as a failed sync and retried forever.
+The client holds the authoritative value in its own immutable payload.
+
+### Composition with a Person created offline
+
+An edit to a Person who exists only because of a pending `CREATE_PERSON` is a
+**separate operation carrying `depends_on: [creation]`** -- never folded into
+the creation's payload. Two reasons, both structural: the creation may already
+be in flight, and rewriting an envelope that might have been sent is the one way
+to apply it twice; and two decisions the user made separately stay two
+operations, so a refused creation fails the edit *visibly*, through the same
+transitive propagation as everything else, instead of silently taking an
+unrelated change with it. Ordering comes from the generic dependency mechanism,
+with nothing private to this family.
+
+That Person's base revisions are all 0 -- known, not assumed, because the server
+has never heard of them. For every other Person, an absent `person-metadata-state`
+projection means the revisions are UNKNOWN, and the save is refused rather than
+guessing 0: guessing would silently overwrite whatever another device wrote,
+which is the one thing a base revision exists to prevent.
+
+### What a pending edit reaches, and what an acknowledgement does
+
+A pending edit is an overlay over the durable queue and is never written into
+the acknowledged cache. It reaches the Person detail, the People index and
+every catalogue row through `prksEffectivePersonFields` /
+`prksEffectivePersonRows`, and the NAME fields additionally reach rows that only
+*display* a Person -- a Work's `roles[]`, a Graph label, a cached Argument
+source -- through `prksApplyPendingPersonNames`, hydrated alongside the other
+overlays so a card knows the pending name before it paints.
+
+On acknowledgement the reconciler PATCHES what holds the value (the `person`
+snapshot, the `person-metadata-state` projection, the People index) and
+INVALIDATES the read models that merely display the name, and only when a
+displayed field changed. Those rows are keyed by Work rather than by Person, so
+there is no precise patch to make -- and reconciliation only ever runs while
+connected, which is exactly when a refetch is affordable. The ordinary PATCH
+boundary drew the same line before this milestone, for the same reason: a
+biography, a link or a date is absent from all of them and must not cost the
+user their cache.
 
 ## Offline Person creation (3B)
 

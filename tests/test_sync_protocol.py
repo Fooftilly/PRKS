@@ -27,6 +27,7 @@ class SyncProtocolTests(unittest.TestCase):
                          ["ADD_WORK_PERSON_ROLE", "ADD_WORK_TAG", "CREATE_PERSON",
                           "MARK_WORK_OPENED",
                           "REMOVE_WORK_PERSON_ROLE", "REMOVE_WORK_TAG",
+                          "SET_PERSON_METADATA_FIELD",
                           "SET_WORK_METADATA_FIELD", "SET_WORK_PERSON_ROLE_CREDIT",
                           "SET_WORK_SOURCE"])
 

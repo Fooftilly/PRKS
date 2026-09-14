@@ -282,10 +282,24 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         people = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
         save_at = people.index("async function savePersonProfile(")
         save_body = people[save_at : save_at + 7000]
-        # Every profile field is in the People read model, so People goes
-        # unconditionally; Arguments only when the canonical name changed.
-        self.assertIn("prksMarkPeopleDomainChanged();", save_body)
-        self.assertIn("_personNameChanged", save_body)
+        # Profile editing is durable-first now, so it RECONCILES instead of
+        # invalidating: the canonical change happens at ACKNOWLEDGEMENT, and
+        # that is where coherence belongs. Invalidating at Save would drop the
+        # People cache for a change the server has not applied yet -- and
+        # offline there is nothing to re-read it from.
+        self.assertIn("prksSavePersonFieldsDurably(", save_body)
+        self.assertNotIn("prksRequest(`/api/persons/${personId}`, {\n"
+                         "                method: 'PATCH',\n"
+                         "                headers: { 'Content-Type': 'application/json' },\n"
+                         "                body: JSON.stringify(payload)", save_body,
+                         "profile fields must not also go out as a direct PATCH")
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        reconcile_at = runtime.index("async function reconcilePersonField(")
+        reconcile = runtime[reconcile_at : runtime.index("\n        }\n", reconcile_at)]
+        # Every profile field is in the People read model, so the People
+        # snapshots are PATCHED -- precisely, because the new value is known.
+        for patched in ("'person'", "'person-metadata-state'", "PEOPLE_LIST_KEY"):
+            self.assertIn(patched, reconcile, patched)
         delete_at = people.index("async function deletePerson(")
         delete_body = people[delete_at : delete_at + 2500]
         self.assertIn("prksMarkPeopleDomainChanged();", delete_body)
@@ -380,7 +394,12 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # Person mutations: profile save and delete stale Groups, plain
         # creation does not.
         people = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
-        for fn in ("async function savePersonProfile(", "async function deletePerson("):
+        # Group membership is still a canonical request -- it is a
+        # relationship, not a profile scalar -- so its hooks stay on canonical
+        # success. The profile fields around it are durable now and reconcile
+        # instead, which is why the membership save has its own function.
+        for fn in ("async function prksSavePersonGroupMemberships(",
+                   "async function deletePerson("):
             at = people.index(fn)
             self.assertIn("prksMarkPersonGroupsDomainChanged", people[at : at + 5200], fn)
         # Concept, Position and Argument mutations never touch it. (Research
@@ -794,16 +813,32 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("prksOfflineMarkArgumentsChanged()", delete_body)
 
     def test_person_rename_invalidates_arguments_only_on_a_real_name_change(self):
-        people = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
-        start = people.index("async function savePersonProfile(")
-        body = people[start : start + 6000]
-        self.assertIn("_personNameChanged", body)
-        self.assertIn("first_name", body)
-        self.assertIn("last_name", body)
-        self.assertIn("if (_personNameChanged && typeof prksMarkArgumentsDomainChanged === 'function')", body)
-        # The diff exists precisely so a biography/links/dates/groups edit does
-        # not cost the user their cached Arguments.
-        self.assertLess(body.index("_personNameChanged ="), body.index("prksRequest(`/api/persons/"))
+        """The rule survived the move to durable editing; only its home did.
+
+        A cached Argument source, a Graph label and a Work card credit line
+        display a Person's NAME, in rows keyed by Work -- so there is no
+        precise patch to make and those domains are invalidated. Every other
+        profile field is absent from all of them, and must not cost the user
+        their cache.
+        """
+        state = _read(os.path.join(_FRONTEND, "js", "person-metadata-state.js"))
+        displayed = state[state.index("const DISPLAY_FIELDS ="):]
+        displayed = displayed[: displayed.index(";")]
+        self.assertIn("'first_name'", displayed)
+        self.assertIn("'last_name'", displayed)
+        for absent in ("about", "birth_date", "link_wikipedia", "image_url"):
+            self.assertNotIn("'%s'" % absent, displayed, absent)
+
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        start = runtime.index("async function reconcilePersonField(")
+        body = runtime[start : runtime.index("\n        }\n", start)]
+        self.assertIn("PRKS_PERSON_DISPLAY_FIELDS", body)
+        gate = body.index("PRKS_PERSON_DISPLAY_FIELDS")
+        for hook in ("prksOfflineMarkArgumentsChanged", "prksOfflineMarkResearchGraphPeopleChanged",
+                     "prksOfflineMarkFoldersChanged", "prksOfflineMarkWorksBrowseChanged"):
+            self.assertIn(hook, body, hook)
+            self.assertLess(gate, body.index(hook),
+                            "%s must be gated on the field being displayed elsewhere" % hook)
 
     def test_arguments_are_not_invalidated_by_unrelated_read_models(self):
         """Concept mutations and ordinary Work relationship edits do not touch

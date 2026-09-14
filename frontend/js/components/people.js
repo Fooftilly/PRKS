@@ -141,6 +141,13 @@ const PERSON_MUTATION_ROLE = 'person-mutation-control';
  * rather than one, because the two decisions genuinely differ now. */
 const PERSON_CREATE_ROLE = 'person-create-control';
 
+/* Editing a Person's PROFILE is durable too, so "Edit profile" is never
+ * disabled: the fields are field-scoped operations that queue offline exactly
+ * as they send online. Deleting a Person and changing their GROUP memberships
+ * are still canonical requests, so those keep `PERSON_MUTATION_ROLE`. Three
+ * roles rather than one, because the three decisions genuinely differ. */
+const PERSON_EDIT_ROLE = 'person-edit-control';
+
 /* Group chips keep this role for styling/test identification only: since Person
  * Groups became offline-capable they are ordinary links and are deliberately
  * absent from PERSON_CONTROL_SELECTOR. */
@@ -972,10 +979,13 @@ function openPersonProfileEdit() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const person = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
     if (!ctx || !ctx.ui || !person) return;
-    // Starting a NEW editing session offline is refused outright: a cached
-    // profile stays read-only. An already-open session is a different case --
-    // it keeps its draft and only goes inert.
-    if (prksPersonMutationBlocked('Editing a profile requires a connection to PRKS.')) return;
+    /* No connectivity guard. Profile fields are durable now, so a cached
+     * profile is editable exactly as a connected one is -- the same feature,
+     * not two. What CAN stop a save is not knowing this Person's revisions,
+     * and that is decided at save time by `prksObservedPersonProfileBase`,
+     * because it is a fact about this device's cache rather than about the
+     * network. The group controls inside the editor stay connection-required:
+     * a membership is a relationship, not a profile scalar. */
     if (ctx && ctx.ui) {
         ctx.ui.personWorksEditing = false;
         ctx.ui.personDetailEditing = true;
@@ -1129,7 +1139,7 @@ function renderPersonProfileDetailsSidebarHtml(person) {
                 <li>${nGroups} group${nGroups === 1 ? '' : 's'}</li>
                 <li>${nRefs} reference${nRefs === 1 ? '' : 's'}</li>
             </ul>
-            <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_MUTATION_ROLE}" onclick="openPersonProfileEdit()">Edit profile</button>
+            <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_EDIT_ROLE}" onclick="openPersonProfileEdit()">Edit profile</button>
             <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
             <details class="person-sidebar__advanced" onkeydown="prksPersonAdvancedKeydown(event)">
                 <summary>More</summary>
@@ -1196,13 +1206,89 @@ function renderPersonProfileEditFormHtml(person, draft) {
                         <p class="meta-row">Search for a group, pick from the list, or type a new name and <strong>Add</strong> to create a top-level group. Names are unique. <a href="#/people/groups">Browse groups</a>.</p>
                         <div id="pd-group-chips" class="tag-cloud person-groups-fieldset__chips"></div>
                         <label for="pd-group-search">Add group</label>
-                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell"><div class="tag-add-shell__field">${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}<input type="text" id="pd-group-search" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add"></div><input type="hidden" id="pd-group-pick-id" value=""><div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div></div>
-                        <button type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action" id="pd-group-add-btn">Add group</button>
+                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell"><div class="tag-add-shell__field">${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}<input type="text" id="pd-group-search" data-prks-role="${PERSON_MUTATION_ROLE}" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add"></div><input type="hidden" id="pd-group-pick-id" value=""><div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div></div>
+                        <button type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action" data-prks-role="${PERSON_MUTATION_ROLE}" id="pd-group-add-btn">Add group</button>
                     </fieldset>
                 </section>
             </div>
             <div class="form-actions prks-form-actions--split person-edit-footer"><button type="button" data-prks-person-cancel onclick="closePersonProfileEdit()" class="prks-btn prks-btn--secondary">Cancel</button><button type="button" id="pd-save-btn" class="prks-btn prks-btn--primary" onclick="savePersonProfile('${id}')">Save profile</button></div>
         </div>`;
+}
+
+/* The profile fields this editor owns, in the durable family's vocabulary.
+ * One list: a field the form can change but the queue cannot carry would be
+ * savable online and impossible offline. */
+const PRKS_PERSON_PROFILE_FIELDS = Object.freeze([
+    'first_name', 'last_name', 'aliases', 'about', 'image_url',
+    'link_wikipedia', 'link_stanford_encyclopedia', 'link_iep',
+    'links_other', 'birth_date', 'death_date',
+]);
+
+/**
+ * The base this edit is measured against, or null when it is not knowable.
+ *
+ * Values come from the cached Person; revisions from the `person-metadata-state`
+ * projection, which carries revisions alone. The one case where a missing
+ * projection still yields a sound base is a Person who exists only because of
+ * a pending `CREATE_PERSON`: the server has never heard of them, so every field
+ * IS at revision 0 -- known, not assumed.
+ */
+async function prksObservedPersonProfileBase(personId, ctx) {
+    const person = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
+    if (typeof prksObservedPersonFields !== 'function') return null;
+    let state = null;
+    try {
+        const result = await prksReadPersonMetadataState(personId);
+        state = result && result.value;
+    } catch (_e) { state = null; }
+    if (!state) {
+        /* The durable queue is never read from a component: one composed
+         * helper owns what a pending operation MEANS, so a component cannot
+         * grow a second interpretation of it. */
+        if (!await prksPersonHasPendingCreation(personId)) return null;
+        state = prksNewPersonMetadataState(personId);
+    }
+    return prksObservedPersonFields(person, state);
+}
+
+/**
+ * Group membership, which is NOT part of the durable profile vocabulary.
+ *
+ * A membership is a relationship, not a profile scalar, and belongs to its own
+ * milestone -- so it stays a canonical request and the controls that change it
+ * are disabled offline. Its coherence hooks therefore still fire HERE, on
+ * canonical success, unlike the profile fields whose canonical change now
+ * happens at acknowledgement.
+ */
+async function prksSavePersonGroupMemberships(ctx, personId, groupIds) {
+    if (prksPersonRuntimeState() !== 'online') return;
+    if (!prksPersonGroupsDiffer(ctx, groupIds)) return;
+    const res = await prksRequest(`/api/persons/${personId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group_ids: groupIds })
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        /* Reports only what it owns: the profile was already saved durably
+         * before this ran, so "could not save" would be wrong twice over. */
+        await prksAlertMessage(body.error || 'The profile was saved, but its groups could not '
+            + 'be updated.', 'Groups not updated');
+        return;
+    }
+    if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
+    if (typeof prksMarkPersonGroupsDomainChanged === 'function') {
+        prksMarkPersonGroupsDomainChanged();
+    }
+}
+
+/** Whether the draft's group selection differs from what the cache holds. */
+function prksPersonGroupsDiffer(ctx, groupIds) {
+    const person = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
+    const before = (person && Array.isArray(person.groups) ? person.groups : [])
+        .map(g => String(g && g.id)).sort();
+    const after = (groupIds || []).map(String).sort();
+    return before.length !== after.length || before.some((id, i) => id !== after[i]);
 }
 
 async function savePersonProfile(personId) {
@@ -1247,71 +1333,66 @@ async function savePersonProfile(personId) {
         await prksAlertMessage('Last name is required.', 'Validation');
         return;
     }
-    // Connectivity can change while the editor is open, so re-check
-    // immediately before the canonical request.
-    if (prksPersonMutationBlocked('Saving a profile requires a connection to PRKS.')) return;
     const btn = panel.querySelector('#pd-save-btn');
     if (btn && typeof prksSetButtonBusy === 'function') {
-        prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
+        prksSetButtonBusy(btn, true, { busyLabel: 'Saving\u2026' });
     }
-    // Cached Argument sources display each source Work's Authors by canonical
-    // first/last name, so only a real name change stales the Arguments domain.
-    // Everything else on this form (biography, links, dates, groups, portrait)
-    // is absent from that read model and must not cost the user their cache.
-    const _personBefore = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
-    const _personNameChanged =
-        !_personBefore ||
-        String(_personBefore.first_name || '') !== String(payload.first_name || '') ||
-        String(_personBefore.last_name || '') !== String(payload.last_name || '');
     try {
-        const res = await prksRequest(`/api/persons/${personId}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+        /* Durable-first, with or without the server, through ONE path.
+         *
+         * Saving creates the intent and updates effective local state; putting
+         * it on the wire is subsequent work. A connectivity guard here would
+         * make the same edit two different features -- and a refetch as the
+         * completion condition would make Save fail for a reason the user
+         * cannot act on. */
+        const changes = {};
+        PRKS_PERSON_PROFILE_FIELDS.forEach(function (name) {
+            changes[name] = name === 'birth_date' ? birthIso
+                : name === 'death_date' ? deathIso
+                : String(draft[name] == null ? '' : draft[name]);
         });
-        const patchBody = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            if (
-                prksPersonProfileEditSessionCurrent(ctx, generation, personId, draft) &&
-                typeof prksRightPanelOwnedBy === 'function' &&
-                prksRightPanelOwnedBy(ctx)
-            ) {
-                await prksAlertMessage(patchBody.error || 'Could not save profile.', 'Could not save');
-            }
+        const base = await prksObservedPersonProfileBase(personId, ctx);
+        if (!base) {
+            /* Unknown is not empty. Without this Person's revisions, an edit
+             * would have to guess revision 0 and could silently overwrite what
+             * another device wrote -- which is the one thing a base revision
+             * exists to prevent. */
+            await prksAlertMessage(
+                'This profile cannot be edited offline yet. Open it once while connected to '
+                + 'PRKS so its synchronization state is prepared.', 'Unavailable');
             return;
         }
-        // Canonical success controls coherence, so these run before any UI
-        // ownership test -- exactly like the Work-side coherence hooks. Every
-        // profile field is part of the People read model, so People always
-        // goes; Arguments only when the displayed author name changed.
-        if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
-        if (_personNameChanged && typeof prksMarkResearchGraphPeopleChanged === 'function') prksMarkResearchGraphPeopleChanged();
-        if (_personNameChanged && typeof prksMarkArgumentsDomainChanged === 'function') {
-            prksMarkArgumentsDomainChanged();
+        try {
+            await prksSavePersonFieldsDurably(personId, changes, base);
+        } catch (error) {
+            const code = error && error.prksLocalStoreCode;
+            await prksAlertMessage(
+                code === 'scope_busy'
+                    ? 'One of these fields is syncing or needs a decision. Try again shortly.'
+                    : code === 'dependency_failed'
+                      ? 'This person could not be created on PRKS, so their profile cannot be '
+                        + 'edited. Discard that creation in Sync Diagnostics.'
+                      : 'Could not save this profile locally. Please retry.',
+                'Could not save');
+            return;
         }
-        if (_personNameChanged && typeof prksMarkWorkBrowseDisplayChanged === 'function') {
-            // Browse Work cards fall back to the canonical Person name for
-            // their credit line, exactly as Folder cards do.
-            prksMarkWorkBrowseDisplayChanged();
-        }
-        if (_personNameChanged && typeof prksMarkFoldersDomainChanged === 'function') {
-            // A Folder Work card's credit line falls back to the canonical
-            // Person name, so a rename stales cached Folder details. Biography,
-            // links, dates and groups are absent from that read model.
-            prksMarkFoldersDomainChanged();
-        }
-        if (typeof prksMarkPersonGroupsDomainChanged === 'function') prksMarkPersonGroupsDomainChanged();
+        /* Group membership is a RELATIONSHIP, not a profile scalar, and is not
+         * part of this milestone's durable vocabulary. It stays a canonical
+         * request -- and the controls that change it are disabled offline --
+         * so the two never half-apply: the profile is already durable by the
+         * time this runs, and a failure here reports only what it owns. */
+        await prksSavePersonGroupMemberships(ctx, personId,
+            (Array.isArray(draft.groups) ? draft.groups : []).map(g => g.id));
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
             !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
         ) return;
-        const signal = ctx && ctx.abortController && ctx.abortController.signal;
-        const person = await fetchPersonDetails(personId, { signal: signal });
-        if (
-            typeof prksTabContextOwnsEntityRoute === 'function' &&
-            !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
-        ) return;
-        if (!person) throw new Error('Person refresh failed');
+        /* The record the user now sees: what was cached, overlaid with the
+         * intent just written. No refetch -- there is nothing to fetch, the
+         * change is local, and a reload would throw away every other pending
+         * change on the page. */
+        const cached = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
+        const person = await prksEffectivePersonRecord(cached);
         if (person) {
             if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
             if (ctx) ctx.routeSidebar = {

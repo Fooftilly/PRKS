@@ -244,7 +244,14 @@
                 order_index: null, credit_name: entry.state,
             }));
         });
-        return Object.assign({}, work, { roles: out });
+        /* The NAMES on those rows may themselves be unsynchronized: a Person
+         * renamed offline is still the person this Work is credited to. The
+         * relationship overlay decides who is here; the profile overlay
+         * decides what they are called, and never the other way round. */
+        return Object.assign({}, work, {
+            roles: typeof root.prksApplyPendingPersonNames === 'function'
+                ? root.prksApplyPendingPersonNames(out) : out,
+        });
     }
 
     /** Effective links for one Work, for surfaces that render them directly. */
