@@ -990,7 +990,7 @@ function openPersonProfileEdit() {
     /* No connectivity guard. Profile fields are durable now, so a cached
      * profile is editable exactly as a connected one is -- the same feature,
      * not two. What CAN stop a save is not knowing this Person's revisions,
-     * and that is decided at save time by `prksObservedPersonProfileBase`,
+     * and that is decided at save time by `prksAcknowledgedPersonBase`,
      * because it is a fact about this device's cache rather than about the
      * network. The group controls inside the editor stay connection-required:
      * a membership is a relationship, not a profile scalar. */
@@ -1246,30 +1246,22 @@ const PRKS_PERSON_PROFILE_FIELDS = Object.freeze([
 ]);
 
 /**
- * The base this edit is measured against, or null when it is not knowable.
+ * The acknowledged base and the pending intent, read together.
  *
- * Values come from the cached Person; revisions from the `person-metadata-state`
- * projection, which carries revisions alone. The one case where a missing
- * projection still yields a sound base is a Person who exists only because of
- * a pending `CREATE_PERSON`: the server has never heard of them, so every field
- * IS at revision 0 -- known, not assumed.
+ * Deliberately NOT `ctx.getEntity('person')`: that record is the EFFECTIVE
+ * one, already overlaid with this device's unsynchronized edits, and a base
+ * taken from it would make a pending value look like the server's own. The
+ * shared helper owns that distinction -- and what a pending operation means --
+ * so a component cannot grow a second interpretation of either.
+ *
+ * Returns `{base, operations}`, with a null `base` when it is not knowable.
  */
-async function prksObservedPersonProfileBase(personId, ctx) {
-    const person = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
-    if (typeof prksObservedPersonFields !== 'function') return null;
-    let state = null;
-    try {
-        const result = await prksReadPersonMetadataState(personId);
-        state = result && result.value;
-    } catch (_e) { state = null; }
-    if (!state) {
-        /* The durable queue is never read from a component: one composed
-         * helper owns what a pending operation MEANS, so a component cannot
-         * grow a second interpretation of it. */
-        if (!await prksPersonHasPendingCreation(personId)) return null;
-        state = prksNewPersonMetadataState(personId);
+async function prksReadPersonProfileBase(personId) {
+    if (typeof prksAcknowledgedPersonBase !== 'function') {
+        return { base: null, operations: [] };
     }
-    return prksObservedPersonFields(person, state);
+    const operations = await prksDurableOperationsOrNone();
+    return { base: await prksAcknowledgedPersonBase(personId, operations), operations };
 }
 
 /**
@@ -1367,13 +1359,13 @@ async function savePersonProfile(personId) {
          * make the same edit two different features -- and a refetch as the
          * completion condition would make Save fail for a reason the user
          * cannot act on. */
-        const changes = {};
+        const desired = {};
         PRKS_PERSON_PROFILE_FIELDS.forEach(function (name) {
-            changes[name] = name === 'birth_date' ? birthIso
+            desired[name] = name === 'birth_date' ? birthIso
                 : name === 'death_date' ? deathIso
                 : String(draft[name] == null ? '' : draft[name]);
         });
-        const base = await prksObservedPersonProfileBase(personId, ctx);
+        const { base, operations } = await prksReadPersonProfileBase(personId);
         if (!base) {
             /* Unknown is not empty. Without this Person's revisions, an edit
              * would have to guess revision 0 and could silently overwrite what
@@ -1384,8 +1376,15 @@ async function savePersonProfile(personId) {
                 + 'PRKS so its synchronization state is prepared.', 'Unavailable');
             return;
         }
+        /* Only what this editing session actually changed. Saving all eleven
+         * fields every time would let one syncing or conflicted field refuse
+         * the whole form -- and would rewrite an untouched field's intent
+         * against a base it was never measured against. */
+        const changes = prksDirtyPersonFields(personId, desired, base, operations);
         try {
-            await prksSavePersonFieldsDurably(personId, changes, base);
+            if (Object.keys(changes).length) {
+                await prksSavePersonFieldsDurably(personId, changes, base);
+            }
         } catch (error) {
             const code = error && error.prksLocalStoreCode;
             await prksAlertMessage(

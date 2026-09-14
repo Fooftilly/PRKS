@@ -1455,6 +1455,39 @@ not a scalar -- it is atomic with metadata on the ordinary PATCH precisely
 because it is a different kind of thing -- so it remains a canonical request and
 its controls stay disabled offline.
 
+### Acknowledged, effective, draft
+
+Three values, and an editor that collapses any two of them is wrong in a way
+that only shows up later.
+
+* The **acknowledged base** is what the server last confirmed, with the
+  revision it carried. Values come from the cached `person` record; revisions
+  from `person-metadata-state`. For a Person who exists only as a pending
+  `CREATE_PERSON` it is the *construction payload* at revision 0.
+* The **effective value** is that base overlaid with this device's
+  unsynchronized intent. It is what every surface renders and what the editor
+  is populated from.
+* The **draft** is what is currently typed.
+
+A save measures the draft against the **effective** value to decide what
+changed, and hands the **acknowledged** base to the store to decide what to do
+about it. Swapping either is a real defect:
+
+* Base taken from the effective record: editing a field back to the value the
+  server actually holds looks like a change, so the pending operation is
+  replaced instead of cancelled and the queue keeps asking for a value nobody
+  changed. `A -> B -> A` must leave *zero* operations.
+* Dirtiness measured against the acknowledged base: a field still displaying an
+  untouched pending value looks dirty on every save.
+* No dirtiness test at all -- saving the whole form every time: one syncing or
+  conflicted field refuses the entire save, so a single undecided biography
+  makes the birth date uneditable. That destroys exactly the independence the
+  per-field conflict unit exists to provide.
+
+`prksAcknowledgedPersonBase` and `prksDirtyPersonFields` own these rules, so a
+component never reads the durable queue itself and cannot grow a second
+interpretation of what a pending operation means.
+
 ### Parity with the ordinary PATCH
 
 `SET_PERSON_METADATA_FIELD` accepts exactly the field vocabulary `CREATE_PERSON`
@@ -1518,6 +1551,68 @@ connected, which is exactly when a refetch is affordable. The ordinary PATCH
 boundary drew the same line before this milestone, for the same reason: a
 biography, a link or a date is absent from all of them and must not cost the
 user their cache.
+
+## Adding a family: the four shapes and what each must declare
+
+The families that exist fall into a small number of shapes. New work should
+reuse them *conceptually* -- the names below are descriptive, not a required
+spelling, and a domain whose canonical API is shaped differently should follow
+its API rather than the template.
+
+| Shape | Examples | Conflict unit |
+| --- | --- | --- |
+| Construction | `CREATE_PERSON` | the entity; no base revision |
+| Scalar mutation | `SET_WORK_METADATA_FIELD`, `SET_PERSON_METADATA_FIELD` | one field |
+| Relationship / set membership | `ADD_WORK_TAG`, `REMOVE_WORK_TAG`, `ADD_WORK_PERSON_ROLE` | one pair |
+| Aggregate / structural mutation | `SET_WORK_SOURCE` | the whole aggregate |
+| Destruction | (none yet) | the entity |
+
+The shape decides the conflict unit, and the conflict unit is the decision that
+matters most: it is what the user will be asked to resolve. Getting it wrong is
+not a detail that can be fixed later, because it is baked into every operation
+already in a queue.
+
+A new family must state each of the following before it is implemented. Most of
+these have already cost a defect somewhere above.
+
+1. **Semantic identity and scope** -- what `scope_key` addresses, and therefore
+   what two devices have to be talking about before they have disagreed.
+2. **Payload schema** -- exact keys, and what the envelope validator rejects.
+3. **Acknowledged base and revision** -- where the value comes from, where the
+   revision comes from, and what makes the base *unknown* rather than empty.
+4. **Whether construction mints a permanent distributed ID** -- see
+   *Entity identity*. No temporary local id is ever remapped to a server id.
+5. **Dependencies** -- what this family may name in `depends_on`, and what the
+   enqueue-time guard refuses.
+6. **Coalescing** -- which unsent rows are rewritten, and what `A -> B -> A`
+   leaves behind (the answer is nothing).
+7. **What becomes immutable after the first send** -- an envelope that may have
+   reached the server is never rewritten; a dependent operation is the only way
+   to change its effect.
+8. **Direct-endpoint parity** -- the ordinary online endpoint must share the
+   canonical write boundary and advance the same revisions. Revisions record
+   canonical history, not sync-endpoint history.
+9. **The ACK result** -- and whether it fits `MAX_DURABLE_RESULT_BYTES`. A
+   result the client cannot durably store is read as a failed sync and retried
+   forever.
+10. **Conflict and refusal codes** -- explicit per family; no generic fallback
+    string. Diagnostics must be able to name the reason.
+11. **Lifecycle after deletion** -- what happens to pending operations naming an
+    entity that no longer exists.
+12. **Pending overlay** -- every surface the intent must reach before it is
+    acknowledged, computed from the durable queue and never written into the
+    acknowledged cache.
+13. **Reconciliation** -- what an acknowledgement patches and what it
+    invalidates, and why each.
+14. **Affected cache and coherence domains** -- the generations and read models
+    that go stale.
+
+Use `sync_entity_revisions` wherever its generic `(scope_type, scope_id)` model
+fits; a bespoke revision table needs a concrete reason the generic one cannot
+serve. And keep domain handlers explicit: share the proven primitives --
+dependency handling, distributed-id validation, envelope validation, projection
+helpers -- not a generic CRUD engine that would have to guess every one of the
+fourteen answers above.
 
 ## Offline Person creation (3B)
 

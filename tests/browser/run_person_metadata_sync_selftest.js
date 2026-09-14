@@ -253,6 +253,180 @@ async function observedBaseIsValueAndRevision() {
         'a projection missing a field is not a usable base');
 }
 
+/* ---- the editor: acknowledged base, effective display, typed draft ---- */
+
+/* What the caches hold. `acknowledgedPersonBase` reads them exactly the way
+ * the application does -- through the ordinary read-through -- so a test can
+ * drive the real helper instead of a second copy of its rules. */
+function stubCaches(person, revisions) {
+    globalThis.prksOfflineReadEntity = async function (kind, id) {
+        if (kind === 'person') {
+            return { value: person && person.id === id ? person : null,
+                source: person ? 'cache' : 'unavailable', cachedAt: null };
+        }
+        if (kind === 'person-metadata-state') {
+            if (!person || person.id !== id) {
+                return { value: null, source: 'unavailable', cachedAt: null };
+            }
+            const state = globalThis.prksNewPersonMetadataState(id);
+            Object.keys(revisions || {}).forEach(function (name) {
+                state.fields[name] = { revision: revisions[name] };
+            });
+            return { value: state, source: 'cache', cachedAt: null };
+        }
+        return { value: null, source: 'unavailable', cachedAt: null };
+    };
+    globalThis.prksOfflineInvalidateEntity = async () => true;
+}
+
+/* The editor, in the three steps the component takes: open from the EFFECTIVE
+ * record, measure the typed draft against it, save against the ACKNOWLEDGED
+ * base. Anything that collapses two of those three shows up here. */
+async function editorSession(store, personId, acknowledged) {
+    const ops = await store.listOperations();
+    return globalThis.prksEffectivePersonFields(
+        acknowledged || { id: personId }, ops);
+}
+
+async function saveEditor(store, personId, typed) {
+    const operations = await store.listOperations();
+    const base = await globalThis.prksAcknowledgedPersonBase(personId, operations);
+    if (!base) return null;
+    const changes = globalThis.prksDirtyPersonFields(personId, typed, base, operations);
+    if (Object.keys(changes).length) {
+        await store.savePersonMetadataFields(personId, changes, base);
+    }
+    return changes;
+}
+
+const fieldRows = async (store, personId, field) => (await store.listOperations())
+    .filter(r => r.operation === 'SET_PERSON_METADATA_FIELD' &&
+        r.entity_id === personId && (!field || r.payload.field === field));
+
+async function theEditorSavesOnlyWhatItChanged() {
+    const store = newStore();
+    const cached = { id: 'P-1', first_name: 'Ada', last_name: 'Lovelace',
+        about: 'Server biography' };
+    stubCaches(cached, { about: 3 });
+
+    let shown = await editorSession(store, 'P-1', cached);
+    assert.equal(shown.about, 'Server biography', 'nothing pending yet');
+    let changed = await saveEditor(store, 'P-1',
+        Object.assign({}, shown, { about: 'Pending biography' }));
+    assert.deepEqual(Object.keys(changed), ['about'], 'one field was typed in, one is saved');
+    const [about] = await fieldRows(store, 'P-1', 'about');
+    assert.equal(about.base_revision, 3, 'measured against the acknowledged revision');
+
+    /* Reopened: the form now shows the PENDING value. Saving without touching
+     * anything must produce nothing -- the alternative is an editor that
+     * rewrites every field's intent each time it is opened and closed. */
+    shown = await editorSession(store, 'P-1', cached);
+    assert.equal(shown.about, 'Pending biography');
+    changed = await saveEditor(store, 'P-1', shown);
+    assert.deepEqual(changed, {}, 'an untouched form changes nothing');
+    const unchanged = await fieldRows(store, 'P-1', 'about');
+    assert.equal(unchanged.length, 1);
+    assert.equal(unchanged[0].op_id, about.op_id, 'and the intent is the same one');
+
+    // A second field composes; the first is left exactly as it was.
+    changed = await saveEditor(store, 'P-1', Object.assign({}, shown, { last_name: 'Byron' }));
+    assert.deepEqual(Object.keys(changed), ['last_name']);
+    assert.equal((await fieldRows(store, 'P-1')).length, 2);
+    assert.equal((await fieldRows(store, 'P-1', 'about'))[0].op_id, about.op_id);
+}
+
+async function revertingAFieldRemovesTheIntent() {
+    const store = newStore();
+    const cached = { id: 'P-1', first_name: 'Ada', last_name: 'Lovelace',
+        about: 'Server biography' };
+    stubCaches(cached, { about: 3 });
+    await saveEditor(store, 'P-1', { about: 'Pending biography' });
+    assert.equal((await fieldRows(store, 'P-1', 'about')).length, 1);
+
+    /* Reopened from the effective record and typed BACK to what the server
+     * holds. A -> B -> A is not two changes, it is none: the operation has to
+     * disappear, not become a request to write a value that is already there.
+     *
+     * This is the case a base taken from the on-screen record cannot get
+     * right. That record already says "Pending biography", so the revert would
+     * look like a change away from it and leave an intent behind. */
+    const shown = await editorSession(store, 'P-1', cached);
+    const changed = await saveEditor(store, 'P-1',
+        Object.assign({}, shown, { about: 'Server biography' }));
+    assert.deepEqual(Object.keys(changed), ['about'], 'the user did type something');
+    assert.equal((await fieldRows(store, 'P-1', 'about')).length, 0,
+        'and it left no intent behind');
+    const after = await editorSession(store, 'P-1', cached);
+    assert.equal(after.about, 'Server biography', 'the effective profile is the server\'s again');
+}
+
+async function oneBusyFieldNeverRefusesTheForm() {
+    const store = newStore();
+    const cached = { id: 'P-1', first_name: 'Ada', last_name: 'Lovelace',
+        about: 'Server biography' };
+    stubCaches(cached, { about: 3 });
+    await saveEditor(store, 'P-1', { about: 'Pending biography' });
+    const [about] = await fieldRows(store, 'P-1', 'about');
+    await store.updateOperationSyncState(about.op_id, { status: 'syncing' });
+
+    /* The biography is on the wire and cannot be rewritten. Every OTHER field
+     * stays editable -- which only holds because the save carries what changed
+     * rather than the whole form. */
+    let shown = await editorSession(store, 'P-1', cached);
+    let changed = await saveEditor(store, 'P-1',
+        Object.assign({}, shown, { birth_date: '1815-12-10' }));
+    assert.deepEqual(Object.keys(changed), ['birth_date']);
+    assert.equal((await fieldRows(store, 'P-1', 'about'))[0].status, 'syncing',
+        'and the biography is untouched');
+
+    // The same holds once it has come back as a conflict the user must decide.
+    await store.updateOperationSyncState(about.op_id,
+        { status: 'conflict', server_result: { code: 'REVISION_CONFLICT' } });
+    shown = await editorSession(store, 'P-1', cached);
+    changed = await saveEditor(store, 'P-1',
+        Object.assign({}, shown, { last_name: 'Byron' }));
+    assert.deepEqual(Object.keys(changed), ['last_name']);
+    assert.equal((await fieldRows(store, 'P-1', 'about'))[0].status, 'conflict');
+
+    /* Editing the conflicted field ITSELF is the one thing that must refuse:
+     * the user has an undecided conflict on exactly that value. */
+    await assert.rejects(
+        () => saveEditor(store, 'P-1',
+            Object.assign({}, shown, { about: 'A third biography' })),
+        e => e.prksLocalStoreCode === 'scope_busy');
+}
+
+async function aPendingCreationIsTheBaseForItsOwnEdits() {
+    const store = newStore();
+    stubCaches(null, null);
+    const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
+    const personId = created.entity_id;
+    const ops = await store.listOperations();
+    const base = await globalThis.prksAcknowledgedPersonBase(personId, ops);
+    assert.equal(base.last_name.value, 'Doe', 'the construction payload IS the base');
+    assert.equal(base.last_name.revision, 0, 'at revision 0 -- known, not assumed');
+
+    const shown = globalThis.prksPendingPersonDetail(created);
+    assert.deepEqual(await saveEditor(store, personId, shown), {},
+        'the creation form and the editor agree, so reopening changes nothing');
+
+    const changed = await saveEditor(store, personId,
+        Object.assign({}, shown, { last_name: 'Byron' }));
+    assert.deepEqual(Object.keys(changed), ['last_name']);
+    const [edit] = await fieldRows(store, personId, 'last_name');
+    assert.deepEqual(edit.depends_on, [created.op_id],
+        'still a separate decision, ordered behind the creation');
+    assert.equal(
+        (await store.listOperations()).find(r => r.op_id === created.op_id).payload.last_name,
+        'Doe', 'and never folded into it');
+
+    // And reverting it cancels, against the construction base like any other.
+    const back = await editorSession(store, personId, shown);
+    assert.equal(back.last_name, 'Byron');
+    await saveEditor(store, personId, Object.assign({}, back, { last_name: 'Doe' }));
+    assert.equal((await fieldRows(store, personId, 'last_name')).length, 0);
+}
+
 /* ---- an unknown field never reaches the queue ---- */
 async function onlyProfileFieldsAreWritable() {
     const store = newStore();
@@ -273,6 +447,10 @@ async function main() {
     await renamesApplyWithNoPendingLinks();
     await observedBaseIsValueAndRevision();
     await onlyProfileFieldsAreWritable();
+    await theEditorSavesOnlyWhatItChanged();
+    await revertingAFieldRemovesTheIntent();
+    await oneBusyFieldNeverRefusesTheForm();
+    await aPendingCreationIsTheBaseForItsOwnEdits();
     console.log('All ' + checks + ' person profile checks passed');
 }
 

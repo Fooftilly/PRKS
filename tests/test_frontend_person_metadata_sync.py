@@ -92,13 +92,60 @@ class PersonMetadataSyncFrontendTests(unittest.TestCase):
         never read would silently overwrite whatever another device wrote --
         the one thing a base revision exists to prevent. The exception is a
         Person the server has never heard of, where revision 0 is known."""
-        people = (FRONTEND / 'components' / 'people.js').read_text()
-        at = people.index('async function prksObservedPersonProfileBase(')
-        body = people[at: people.index('\n}', at)]
-        self.assertIn('prksPersonHasPendingCreation(', body)
-        self.assertIn('return null', body)
-        save = people[people.index('async function savePersonProfile('):][:7000]
+        body = self.base_helper()
+        self.assertIn('prksPendingPersonCreates(', body)
+        self.assertIn('if (!state) return null', body)
+        save = self.save_body()
         self.assertIn('if (!base) {', save)
+
+    def base_helper(self):
+        source = (FRONTEND / 'person-metadata-state.js').read_text()
+        at = source.index('async function acknowledgedPersonBase(')
+        return source[at: source.index('\n    }', at)]
+
+    def save_body(self):
+        people = (FRONTEND / 'components' / 'people.js').read_text()
+        return people[people.index('async function savePersonProfile('):][:9000]
+
+    def test_the_base_is_the_acknowledged_record_not_the_one_on_screen(self):
+        """Three concepts, and the editor must not collapse two of them.
+
+        The Person a component holds is the EFFECTIVE record: acknowledged plus
+        this device's unsynchronized intent. Measuring an edit against it would
+        make a pending value indistinguishable from the server's own, so
+        editing a field back to what the server actually holds would look like
+        a change -- and leave behind an operation asking for a value nobody
+        changed.
+        """
+        body = self.base_helper()
+        self.assertIn("prksOfflineReadEntity('person'", body,
+                      'the acknowledged record comes from the cache, not from a caller')
+        people = (FRONTEND / 'components' / 'people.js').read_text()
+        at = people.index('async function prksReadPersonProfileBase(')
+        reader = people[at: people.index('\n}', at)]
+        self.assertNotIn("getEntity('person')", reader)
+        self.assertIn('prksAcknowledgedPersonBase(', reader)
+
+    def test_a_pending_creation_is_its_own_construction_base(self):
+        """Revision 0 is KNOWN for a Person the server has never heard of --
+        and the values are the ones the creation will construct."""
+        body = self.base_helper()
+        self.assertIn('prksPersonCatalogRowFromOp(', body)
+        self.assertIn('newPersonMetadataState(personId)', body)
+
+    def test_only_the_fields_this_session_changed_are_saved(self):
+        """Sending all eleven fields on every save would let ONE syncing or
+        conflicted field refuse the whole form -- destroying exactly the
+        independence a per-field conflict unit exists to give."""
+        save = self.save_body()
+        self.assertIn('prksDirtyPersonFields(personId, desired, base, operations)', save)
+        self.assertIn('if (Object.keys(changes).length) {', save)
+        source = (FRONTEND / 'person-metadata-state.js').read_text()
+        at = source.index('function dirtyPersonFields(')
+        body = source[at: source.index('\n    }', at)]
+        # Measured against what the form was SHOWING: the pending value where
+        # there is one, so an untouched field never looks dirty.
+        self.assertIn('pending.has(field) ? pending.get(field) : observed.value', body)
 
     def test_group_membership_stayed_out_of_the_durable_vocabulary(self):
         """A membership is a relationship, not a profile scalar. Including it

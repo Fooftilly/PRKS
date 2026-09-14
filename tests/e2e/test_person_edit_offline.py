@@ -6,6 +6,7 @@ name or profile is shown, and an edit to a Person this device created is
 ordered behind that creation by the generic dependency machinery rather than by
 anything private to Person editing.
 """
+import json
 import os
 import time
 import unittest
@@ -219,6 +220,83 @@ class OfflinePersonEditTests(unittest.TestCase):
         self.assertIn('Second attempt', ops[0][3])
         o._wait_content_contains(page, 'Second attempt')
 
+    def test_editing_a_field_back_to_the_server_value_leaves_no_intent(self):
+        """A -> B -> A is not two changes, it is none.
+
+        The second save is the one that can only be got right by measuring
+        against the ACKNOWLEDGED value rather than the record on screen: that
+        record already says B, so a base taken from it would read the revert as
+        a change and leave behind an operation asking the server to write a
+        value it already holds.
+        """
+        server, page, context = self.start()
+        person = server.ids['person']
+        self.prepare_person(page, person)
+        original = self.stored(server, person, 'about') or ''
+        self.offline(page, context)
+
+        self.open_editor(page)
+        self.edit_field(page, '#pd-about', 'A biography typed by mistake')
+        self.save_editor(page)
+        self.wait_for_family(page, 'SET_PERSON_METADATA_FIELD')
+        o._wait_content_contains(page, 'A biography typed by mistake')
+
+        # Reopened from the EFFECTIVE profile -- the form shows the pending
+        # value -- and typed back to what the server holds.
+        self.open_editor(page)
+        self.assertEqual(
+            page.evaluate("() => document.querySelector('#pd-about').value"),
+            'A biography typed by mistake',
+            'the editor opens from the effective profile, not the cached one')
+        self.edit_field(page, '#pd-about', original)
+        self.save_editor(page)
+
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            message='reverting an unsent edit must leave no operation behind')
+        self.assertEqual(self.profile_operations(page), [])
+
+    def test_one_conflicted_field_does_not_make_the_rest_unsavable(self):
+        """The conflict unit is one field, and a save carries only what changed.
+
+        Saving the whole form every time would let a single undecided biography
+        make the birth date uneditable -- which is exactly the independence the
+        per-field conflict unit exists to provide.
+        """
+        server, page, context = self.start()
+        person = server.ids['person']
+        self.prepare_person(page, person)
+        self.offline(page, context)
+
+        self.open_editor(page)
+        self.edit_field(page, '#pd-about', 'Will end up in conflict')
+        self.save_editor(page)
+        self.wait_for_family(page, 'SET_PERSON_METADATA_FIELD')
+
+        # Exactly what a stale base comes back as, without needing a race.
+        page.evaluate("""() => prksSync.store.listOperations().then(rows => {
+            const row = rows.find(o => o.operation === 'SET_PERSON_METADATA_FIELD');
+            return prksSync.store.updateOperationSyncState(row.op_id, {
+                status: 'conflict',
+                server_result: { code: 'REVISION_CONFLICT', current_revision: 4,
+                                 current_value: 'Someone else wrote this' },
+            });
+        })""")
+
+        self.open_editor(page)
+        self.edit_field(page, '#pd-link-wikipedia', 'https://example.org/still-editable')
+        self.save_editor(page)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.payload.field === 'link_wikipedia'))",
+            message='an undecided biography must not refuse the whole form')
+        states = {op[3]: op[2] for op in self.profile_operations(page)}
+        self.assertEqual(len(states), 2, states)
+        self.assertTrue(any(s == 'conflict' for s in states.values()))
+        self.assertTrue(any(s == 'pending' for s in states.values()))
+
     def test_two_different_fields_compose_as_separate_decisions(self):
         server, page, context = self.start()
         person = server.ids['person']
@@ -389,12 +467,15 @@ class OfflinePersonEditTests(unittest.TestCase):
         self.assertEqual(rows[0]['about'], 'Edited before it ever synchronized')
         self.assertEqual(rows[0]['first_name'], 'Ada')
 
-    def test_a_three_deep_chain_of_real_operations_reaches_the_server_in_order(self):
-        """CREATE_PERSON -> role link -> profile edit, all made offline.
+    def test_one_offline_creation_carries_two_unrelated_families_behind_it(self):
+        """CREATE_PERSON, with a role link and a profile edit BOTH behind it.
 
-        Exercised with actual PRKS operations rather than synthetic ones: the
-        generic dependency machinery has to order families it knows nothing
-        about, and this is the first chain the product itself produces.
+        The graph is a fan-out, not a chain -- the role and the edit are
+        independent of each other, and inventing a dependency between them to
+        reach three levels would be testing a rule the product does not have.
+        What this proves is the part that matters: the generic machinery orders
+        families it knows nothing about, and one prerequisite can carry several
+        dependants that were never told about one another.
         """
         server, page, context = self.start()
         work = server.ids['work_a']
@@ -434,9 +515,19 @@ class OfflinePersonEditTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => rows.some("
             "  o => o.operation === 'SET_PERSON_METADATA_FIELD'))")
 
-        families = {op[0] for op in self.operations(page)}
+        rows = self.operations(page)
+        families = {op[0] for op in rows}
         self.assertTrue({'CREATE_PERSON', 'ADD_WORK_PERSON_ROLE',
                          'SET_PERSON_METADATA_FIELD'} <= families, families)
+        # Both dependants name the CREATION, and neither names the other.
+        created = [op for op in rows if op[0] == 'CREATE_PERSON']
+        self.assertEqual(len(created), 1)
+        create_id = [op for op in page.evaluate(
+            "() => prksSync.store.listOperations().then(rows => rows.filter("
+            "  o => o.operation === 'CREATE_PERSON').map(o => o.op_id))")][0]
+        for family in ('ADD_WORK_PERSON_ROLE', 'SET_PERSON_METADATA_FIELD'):
+            depends = [json.loads(op[4]) for op in rows if op[0] == family]
+            self.assertEqual(depends, [[create_id]], family)
 
         self.reconnect(page, context)
         self.settled(page)

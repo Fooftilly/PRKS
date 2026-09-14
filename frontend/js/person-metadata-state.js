@@ -54,8 +54,7 @@
     }
 
     /**
-     * The value the user should see for one field: the acknowledged value,
-     * overlaid with their own unsynchronized intent.
+     * The unsynchronized value of each field, as a map.
      *
      * Later operations win. The store coalesces to at most one unsynchronized
      * row per (Person, field), so in practice there is one -- but a row in
@@ -63,18 +62,29 @@
      * what decides. `sequence` is that order; it is the order the user made
      * the changes in.
      */
+    function pendingFieldValues(operations, personId) {
+        const values = new Map();
+        pendingFieldOps(operations, personId)
+            .slice()
+            .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+            .forEach(function (op) {
+                const field = op.payload && op.payload.field;
+                if (!isSupportedField(field)) return;
+                values.set(field, String((op.payload && op.payload.value) || ''));
+            });
+        return values;
+    }
+
+    /**
+     * The value the user should see for one field: the acknowledged value,
+     * overlaid with their own unsynchronized intent.
+     */
     function effectivePersonFields(person, operations) {
         if (!person || typeof person !== 'object') return person;
-        const ops = pendingFieldOps(operations, person.id)
-            .slice()
-            .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
-        if (!ops.length) return person;
+        const values = pendingFieldValues(operations, person.id);
+        if (!values.size) return person;
         const out = Object.assign({}, person);
-        ops.forEach(function (op) {
-            const field = op.payload && op.payload.field;
-            if (!isSupportedField(field)) return;
-            out[field] = String((op.payload && op.payload.value) || '');
-        });
+        values.forEach(function (value, field) { out[field] = value; });
         return out;
     }
 
@@ -165,6 +175,99 @@
         const fields = {};
         FIELDS.forEach(function (name) { fields[name] = { revision: 0 }; });
         return { person_id: personId, fields: fields };
+    }
+
+    /**
+     * The ACKNOWLEDGED base an edit is measured against.
+     *
+     * Three concepts, deliberately kept apart. The record the user is looking
+     * at is the EFFECTIVE one -- acknowledged plus this device's own
+     * unsynchronized intent -- and the draft is a third thing again: what is
+     * currently typed. Handing the effective record in as the base would make
+     * every pending value indistinguishable from the server's own, so an edit
+     * back to what the server actually holds would look like a change and
+     * leave a pending operation behind asking for a value nobody changed.
+     *
+     * Values come from the acknowledged Person record; revisions from the
+     * `person-metadata-state` projection, which carries revisions ALONE so it
+     * does not become a second copy of every biography.
+     *
+     * A Person who exists only because of an unsynchronized `CREATE_PERSON` has
+     * neither. Their base is that CONSTRUCTION payload at revision 0 -- known
+     * rather than assumed, because the server has never heard of them. The
+     * edit is still ordered behind the creation by the generic dependency
+     * mechanism; it is never folded into the creation's payload, because two
+     * decisions the user made separately stay two decisions.
+     *
+     * Returns null when the base is not knowable. Unknown is never empty:
+     * guessing revision 0 for a Person whose revisions this device has never
+     * read would silently overwrite whatever another device wrote, which is
+     * the one thing a base revision exists to prevent.
+     */
+    async function acknowledgedPersonBase(personId, operations) {
+        if (typeof personId !== 'string' || !personId) return null;
+        const creating = typeof root.prksPendingPersonCreates === 'function'
+            ? root.prksPendingPersonCreates(operations)
+                .find(op => op && op.entity_id === personId)
+            : null;
+        if (creating) {
+            const constructed = typeof root.prksPersonCatalogRowFromOp === 'function'
+                ? root.prksPersonCatalogRowFromOp(creating) : null;
+            return constructed
+                ? observedPersonFields(constructed, newPersonMetadataState(personId))
+                : null;
+        }
+        let state = null;
+        try {
+            const result = await readPersonMetadataState(personId);
+            state = result && result.value;
+        } catch (_e) { state = null; }
+        if (!state) return null;
+        let person = null;
+        try {
+            /* The acknowledged record, read through the ordinary cache -- NOT
+             * the overlaid one a component is holding. */
+            const result = await root.prksOfflineReadEntity('person', personId,
+                '/api/persons/' + encodeURIComponent(personId), {
+                    validate: v => typeof root.prksIsPersonShape !== 'function' ||
+                        root.prksIsPersonShape(v, personId),
+                });
+            person = result && result.value;
+        } catch (_e) { person = null; }
+        return person ? observedPersonFields(person, state) : null;
+    }
+
+    /**
+     * What the user actually changed, measured against what the form was
+     * SHOWING -- the pending value where there is one, the acknowledged value
+     * otherwise.
+     *
+     * Measuring against the acknowledged base alone would be wrong in both
+     * directions: a field still displaying an untouched pending value would
+     * look dirty on every save, and a field edited back to its server value
+     * would look unchanged and quietly leave its pending operation in place.
+     *
+     * Sending every field on every save is worse than merely wasteful. One
+     * field that is syncing or in conflict would refuse the entire form, so a
+     * single stuck biography would make the birth date uneditable -- which is
+     * exactly the independence the per-field conflict unit exists to give.
+     *
+     * `draft` is field -> the canonical desired string; the caller has already
+     * interpreted anything the form spells loosely, such as a date.
+     */
+    function dirtyPersonFields(personId, draft, base, operations) {
+        const changes = {};
+        if (!draft || !base) return changes;
+        const pending = pendingFieldValues(operations, personId);
+        FIELDS.forEach(function (field) {
+            if (!Object.prototype.hasOwnProperty.call(draft, field)) return;
+            const observed = base[field];
+            if (!observed || typeof observed.value !== 'string') return;
+            const shown = pending.has(field) ? pending.get(field) : observed.value;
+            const desired = String(draft[field] == null ? '' : draft[field]);
+            if (desired !== shown) changes[field] = desired;
+        });
+        return changes;
     }
 
     /* ---- the pending-name map ---- */
@@ -296,6 +399,9 @@
         prksEffectivePersonRows: effectivePersonRows,
         prksPersonsWithPendingEdits: personsWithPendingEdits,
         prksObservedPersonFields: observedPersonFields,
+        prksPendingPersonFieldValues: pendingFieldValues,
+        prksAcknowledgedPersonBase: acknowledgedPersonBase,
+        prksDirtyPersonFields: dirtyPersonFields,
         prksIsPersonMetadataStateShape: isPersonMetadataStateShape,
         prksReadPersonMetadataState: readPersonMetadataState,
         prksNewPersonMetadataState: newPersonMetadataState,

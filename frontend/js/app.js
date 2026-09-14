@@ -1859,13 +1859,6 @@ async function prksDurableOperationsOrNone() {
     return [];
 }
 
-/** Whether this Person exists only because of an unsynchronized creation. */
-async function prksPersonHasPendingCreation(personId) {
-    if (typeof prksPendingPersonCreates !== 'function') return false;
-    return prksPendingPersonCreates(await prksDurableOperationsOrNone())
-        .some(op => op && op.entity_id === personId);
-}
-
 /** A Person record with this device's unsynchronized profile edits applied. */
 async function prksEffectivePersonRecord(person) {
     if (!person || typeof prksEffectivePersonFields !== 'function') return person;
