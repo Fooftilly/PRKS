@@ -82,7 +82,7 @@ they should take, and what each must declare before implementation, are in
 `docs/local-first-sync.md`.
 
 * **Offline Work creation** for types needing no binary ingestion (video /
-  YouTube URL Works), after deletion.
+  YouTube URL Works).
 * **PDF annotations** — only where the PDF is already cached. Annotation
   identity must be audited first: if annotations receive server-generated ids
   today, new ones need permanent distributed ids before offline creation is
