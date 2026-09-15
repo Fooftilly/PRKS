@@ -21,8 +21,8 @@ class TagVocabularyFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn('checks passed', proc.stdout)
 
-    def test_both_families_are_registered_everywhere(self):
-        families = {'CREATE_TAG', 'DELETE_TAG'}
+    def test_all_vocabulary_families_are_registered_everywhere(self):
+        families = {'CREATE_TAG', 'DELETE_TAG', 'MERGE_TAG'}
         self.assertTrue(families <= set(sync_protocol.supported_operations()))
         runtime = (FRONTEND / 'sync-runtime.js').read_text()
         diagnostics = (FRONTEND / 'sync-diagnostics.js').read_text()
@@ -32,7 +32,7 @@ class TagVocabularyFrontendTests(unittest.TestCase):
                 self.assertIn('%s:' % family, runtime)
                 self.assertIn(family, diagnostics)
 
-    def test_the_vocabulary_has_exactly_two_shapes(self):
+    def test_the_vocabulary_has_no_field_editor(self):
         """PRKS has no rename and no colour editor. A field family would be
         inventing product semantics rather than moving existing ones off the
         network -- the gap is recorded, not guessed at."""
@@ -70,6 +70,7 @@ class TagVocabularyFrontendTests(unittest.TestCase):
         self.assertIn('tagCreationDependency(', body)
         self.assertIn('depends_on: createOp ? [createOp.op_id] : []', body)
         self.assertIn('assertTagIsNotBeingDeleted(', body)
+        self.assertIn('assertTagIsNotBeingMerged(', body)
 
     def test_deletion_cancels_only_what_was_never_sent(self):
         at = self.store.index('function deleteTag(')
@@ -78,10 +79,19 @@ class TagVocabularyFrontendTests(unittest.TestCase):
         self.assertIn('const neverSent =', body)
         self.assertIn('depends_on: waitFor', body)
 
+    def test_merge_refuses_while_the_source_is_still_named(self):
+        at = self.store.index('function mergeTag(')
+        body = self.store[at: self.store.index('\n        function coalesceWorkTag(', at)]
+        self.assertIn('base_revision: null', body)
+        self.assertIn('operationsNamingTag(', body)
+        self.assertIn("'scope_busy'", body)
+        self.assertIn('assertTagIsNotBeingMerged(', body)
+
     def test_a_pending_deletion_is_a_tombstone(self):
         at = self.state.index('function effectiveTagCatalogue(')
         body = self.state[at: self.state.index('\n    /**', at)]
         self.assertIn('pendingDeletions(operations).forEach', body)
+        self.assertIn('pendingMergedSources(operations).forEach', body)
         # And the chips that displayed it go too: the relationship rows are
         # still cached, and the chip would show a Tag already removed.
         self.assertIn('function effectiveTagChips(', self.state)
@@ -106,6 +116,11 @@ class TagVocabularyFrontendTests(unittest.TestCase):
         self.assertNotIn('prksOfflineGuardMutation', body)
         self.assertIn('prksDeleteTagDurably(', tags)
         self.assertNotIn('async function deleteTag(', api)
+        merge = api[api.index('async function mergeTags('): api.index('\nasync function',
+            api.index('async function mergeTags(') + 5)]
+        self.assertIn('prksMergeTagDurably(', merge)
+        self.assertNotIn('prksGuardFolderMutation(', merge)
+        self.assertNotIn("'/api/tags/merge'", merge)
 
 
 if __name__ == '__main__':

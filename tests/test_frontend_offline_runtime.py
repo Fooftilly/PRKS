@@ -1071,23 +1071,29 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertIn("!prksIsFolderParentId(value)", app)
 
     def test_tag_mutations_publish_coherence_from_the_server_answer(self):
-        """Merging is still a canonical request and still publishes coherence
-        from the server's own answer. DELETING is durable now: it reconciles at
-        acknowledgement instead, which is where the canonical change is."""
+        """Deleting and merging are durable: coherence follows the
+        acknowledgement. The ordinary HTTP merge path (if any residual caller
+        remains) still publishes through prksPublishTagCoherence; the durable
+        wrappers reconcile the same affected ids at ACK."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
         self.assertNotIn("async function deleteTag(", api)
         body = _fn_body(api, "async function mergeTags(")
-        self.assertIn("prksGuardFolderMutation(", body)
-        self.assertIn("prksPublishTagCoherence(data)", body)
-        # Coherence only after acknowledged success.
-        self.assertLess(body.index("if (!res.ok)"), body.index("prksPublishTagCoherence"))
+        self.assertIn("prksMergeTagDurably(", body)
+        self.assertNotIn("prksGuardFolderMutation(", body)
+        self.assertNotIn("prksPublishTagCoherence(data)", body)
         runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
         at = runtime.index("async function reconcileDeletedTag(")
-        deleted = runtime[at : runtime.index("\n        /*", at)]
-        # The catalogue is PATCHED; only the Works the answer NAMES are staled.
+        deleted = runtime[at : runtime.index("\n        /**", at)]
+        # The catalogue is PATCHED; only the Works/Folders the answer NAMES are staled.
         self.assertIn("TAGS_LIST_KEY", deleted)
         self.assertIn("result.affected_work_ids", deleted)
+        self.assertIn("result.affected_folder_ids", deleted)
         self.assertIn("invalidateEntity('work-tag-options'", deleted)
+        self.assertIn("invalidateEntity('folder-tag-options'", deleted)
+        merge_at = runtime.index("async function reconcileMergedTag(")
+        merged = runtime[merge_at : runtime.index("\n        /* ---- Person Groups", merge_at)]
+        self.assertIn("result.canonical_tag_id", merged)
+        self.assertIn("result.affected_folder_ids", merged)
         publish = _fn_body(api, "function prksPublishTagCoherence(")
         self.assertIn("affected_folder_ids", publish)
         self.assertIn("affected_work_ids", publish)

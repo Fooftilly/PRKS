@@ -199,6 +199,9 @@
         if (op.operation === 'DELETE_TAG') {
             return 'Delete a tag';
         }
+        if (op.operation === 'MERGE_TAG') {
+            return 'Merge a tag into ' + bounded(op.payload.target_tag_id);
+        }
         if (op.operation === 'DELETE_PERSON') {
             return 'Delete a person';
         }
@@ -276,6 +279,7 @@
         SET_WORK_PLAYLIST: 'work-playlist-state',
         CREATE_TAG: 'tags:index',
         DELETE_TAG: 'tags:index',
+        MERGE_TAG: 'tags:index',
         ADD_WORK_TAG: 'work-tag-options',
         REMOVE_WORK_TAG: 'work-tag-options',
         ADD_FOLDER_TAG: 'folder-tag-options',

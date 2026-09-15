@@ -2133,10 +2133,10 @@
         /**
          * A Tag the server has destroyed.
          *
-         * Its relationships went with it, so every Work that carried it has a
-         * stale chip and a stale tag-options snapshot. The acknowledgement
-         * names exactly those Works, so only they are staled -- the rest of the
-         * cache is untouched.
+         * Its relationships went with it, so every Work or Folder that carried
+         * it has a stale chip and a stale tag-options snapshot. The
+         * acknowledgement names exactly those entities, so only they are
+         * staled -- the rest of the cache is untouched.
          */
         async function reconcileDeletedTag(result) {
             if (!store || !await store.isAvailable()) return false;
@@ -2149,16 +2149,95 @@
                 if (!await cacheListForDomain(TAGS_LIST_KEY,
                     rows.filter(row => row && row.id !== id), DOMAIN_TAGS, token)) return false;
             }
-            const affected = Array.isArray(result.affected_work_ids)
+            const works = Array.isArray(result.affected_work_ids)
                 ? result.affected_work_ids : [];
-            for (let i = 0; i < affected.length; i += 1) {
-                await invalidateEntity('work', affected[i]);
-                await invalidateEntity('work-tag-options', affected[i]);
+            const folders = Array.isArray(result.affected_folder_ids)
+                ? result.affected_folder_ids : [];
+            const optionWorks = Array.isArray(result.affected_tag_options_work_ids)
+                ? result.affected_tag_options_work_ids : works;
+            const optionFolders = Array.isArray(result.affected_tag_options_folder_ids)
+                ? result.affected_tag_options_folder_ids : folders;
+            for (let i = 0; i < works.length; i += 1) {
+                await invalidateEntity('work', works[i]);
             }
-            if (affected.length) {
-                prksOfflineMarkWorksBrowseChanged();
-                prksOfflineMarkFoldersChanged();
+            for (let i = 0; i < optionWorks.length; i += 1) {
+                await invalidateEntity('work-tag-options', optionWorks[i]);
             }
+            for (let i = 0; i < folders.length; i += 1) {
+                await invalidateEntity('folder', folders[i]);
+            }
+            for (let i = 0; i < optionFolders.length; i += 1) {
+                await invalidateEntity('folder-tag-options', optionFolders[i]);
+            }
+            if (works.length) prksOfflineMarkWorksBrowseChanged();
+            if (folders.length) prksOfflineMarkFoldersChanged();
+            return true;
+        }
+
+        /**
+         * A Tag the server has merged into another.
+         *
+         * The source identity is gone; its name becomes an alias of the
+         * canonical target when the names differ. Relationship chips on every
+         * named Work/Folder are staled exactly as delete does -- the answer
+         * lists them -- and tag-options projections that held the source scope
+         * go with them.
+         */
+        async function reconcileMergedTag(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const sourceId = result.tag_id;
+            const targetId = result.canonical_tag_id;
+            if (!sourceId || !targetId) return false;
+            const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
+            if (cached) {
+                const rows = Array.isArray(cached.value) ? cached.value : [];
+                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
+                domainGeneration.set(DOMAIN_TAGS, token);
+                let sourceName = null;
+                const withoutSource = [];
+                for (let i = 0; i < rows.length; i += 1) {
+                    const row = rows[i];
+                    if (!row) continue;
+                    if (row.id === sourceId) {
+                        sourceName = row.name;
+                        continue;
+                    }
+                    withoutSource.push(row);
+                }
+                const next = withoutSource.map(function (row) {
+                    if (row.id !== targetId || !sourceName) return row;
+                    const aliases = Array.isArray(row.aliases) ? row.aliases.slice() : [];
+                    const lower = String(sourceName).toLowerCase();
+                    if (String(row.name || '').toLowerCase() === lower) return row;
+                    if (aliases.some(a => String(a || '').toLowerCase() === lower)) return row;
+                    return Object.assign({}, row, { aliases: aliases.concat([sourceName]) });
+                });
+                if (!await cacheListForDomain(TAGS_LIST_KEY, next, DOMAIN_TAGS, token)) {
+                    return false;
+                }
+            }
+            const works = Array.isArray(result.affected_work_ids)
+                ? result.affected_work_ids : [];
+            const folders = Array.isArray(result.affected_folder_ids)
+                ? result.affected_folder_ids : [];
+            const optionWorks = Array.isArray(result.affected_tag_options_work_ids)
+                ? result.affected_tag_options_work_ids : works;
+            const optionFolders = Array.isArray(result.affected_tag_options_folder_ids)
+                ? result.affected_tag_options_folder_ids : folders;
+            for (let i = 0; i < works.length; i += 1) {
+                await invalidateEntity('work', works[i]);
+            }
+            for (let i = 0; i < optionWorks.length; i += 1) {
+                await invalidateEntity('work-tag-options', optionWorks[i]);
+            }
+            for (let i = 0; i < folders.length; i += 1) {
+                await invalidateEntity('folder', folders[i]);
+            }
+            for (let i = 0; i < optionFolders.length; i += 1) {
+                await invalidateEntity('folder-tag-options', optionFolders[i]);
+            }
+            if (works.length) prksOfflineMarkWorksBrowseChanged();
+            if (folders.length) prksOfflineMarkFoldersChanged();
             return true;
         }
 
@@ -2742,6 +2821,7 @@
             reconcileDeletedArgument,
             reconcileCreatedTag,
             reconcileDeletedTag,
+            reconcileMergedTag,
             reconcileCreatedPerson,
             reconcilePersonField,
             reconcileDeletedPerson,
@@ -3012,6 +3092,7 @@
             production.reconcileDeletedArgument(result),
         prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
         prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
+        prksOfflineReconcileMergedTag: result => production.reconcileMergedTag(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
         prksOfflineReconcilePersonField: (result, op) => production.reconcilePersonField(result, op),
         prksOfflineReconcileDeletedPerson: result => production.reconcileDeletedPerson(result),

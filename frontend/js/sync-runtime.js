@@ -274,6 +274,7 @@
             SET_WORK_PLAYLIST: root.prksWorkPlaylistSyncHandler,
             CREATE_TAG: root.prksTagCreateSyncHandler,
             DELETE_TAG: root.prksTagDeleteSyncHandler,
+            MERGE_TAG: root.prksTagMergeSyncHandler,
             ADD_WORK_TAG: root.prksWorkTagSyncHandler,
             REMOVE_WORK_TAG: root.prksWorkTagSyncHandler,
             ADD_FOLDER_TAG: root.prksFolderTagSyncHandler,

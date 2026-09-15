@@ -290,8 +290,7 @@ function prksWireTagsPageMergePanel() {
             const target = prksTagMergeTarget();
             if (!source || !target) return;
             try {
-                // Canonical boundary owns the offline guard and publishes the
-                // Work/Folder cache coherence from the server's own answer.
+                // Durable identity transform: coherence follows the acknowledgement.
                 await mergeTags(source.id, target.id);
                 prksCloseTagsMergeModal();
                 const wrap = prksTagsPageCtx.containerEl;
@@ -299,7 +298,6 @@ function prksWireTagsPageMergePanel() {
                     await renderTagsPage(wrap);
                 }
             } catch (err) {
-                if (prksOfflineWasGuardRefusal(err)) return;
                 console.error(err);
                 await prksAlertMessage(err.message || 'Could not merge tags.', 'Error');
             }

@@ -1,10 +1,10 @@
 /**
- * The Tag VOCABULARY: pending creations and deletions, and what they mean.
+ * The Tag VOCABULARY: pending creations, deletions, merges, and what they mean.
  *
  * The Work-Tag *relationship* lives in `work-tag-state.js`. This is the other
- * half -- the Tags themselves -- and it has exactly two shapes, because PRKS
- * has exactly two vocabulary actions: create one, and delete one. There is no
- * rename and no colour editor to move off the network.
+ * half -- the Tags themselves -- and it has exactly three shapes, because PRKS
+ * has exactly three vocabulary actions: create one, delete one, and merge one
+ * into another. There is no rename and no colour editor to move off the network.
  *
  * Everything here is a projection over the durable operation list. Nothing
  * writes a pending Tag into the disposable cache.
@@ -34,6 +34,15 @@
             .filter(deletionAwaitsServer).map(op => op.entity_id));
     }
 
+    /** Source Tag ids this device is waiting to merge away. */
+    function pendingMerges(operations) {
+        return unsettled(operations, 'MERGE_TAG').filter(deletionAwaitsServer);
+    }
+
+    function pendingMergedSources(operations) {
+        return new Set(pendingMerges(operations).map(op => op.entity_id));
+    }
+
     function catalogRowFromOp(op) {
         if (!op || op.entity_type !== 'tag' || typeof op.entity_id !== 'string') return null;
         const payload = op.payload && typeof op.payload === 'object' ? op.payload : {};
@@ -50,7 +59,8 @@
      *
      * A deletion is a TOMBSTONE: the Tag is hidden, and nothing acknowledged is
      * destroyed, so a server that refuses the deletion restores it by doing
-     * nothing at all. A creation is a real Tag straight away -- its id was
+     * nothing at all. A pending merge hides the SOURCE the same way -- it is a
+     * doomed identity. A creation is a real Tag straight away -- its id was
      * minted here, so the picker can attach it before the server has heard.
      */
     function effectiveTagCatalogue(rows, operations) {
@@ -61,6 +71,7 @@
             if (row) byId.set(row.id, row);
         });
         pendingDeletions(operations).forEach(function (tagId) { byId.delete(tagId); });
+        pendingMergedSources(operations).forEach(function (tagId) { byId.delete(tagId); });
         return Array.from(byId.values()).filter(Boolean).sort(function (a, b) {
             const name = String(a.name || '').localeCompare(String(b.name || ''),
                 undefined, { sensitivity: 'base' });
@@ -71,14 +82,18 @@
     /**
      * The chips on one entity, with this device's vocabulary intent applied.
      *
-     * A Tag deleted here is gone from everything that displayed it -- the
-     * relationship rows still exist in the cache, and leaving the chip would
-     * show the user a Tag they have already removed from the vocabulary.
+     * A Tag deleted or merged away here is gone from everything that displayed
+     * it -- the relationship rows still exist in the cache, and leaving the
+     * chip would show the user a Tag they have already removed from the
+     * vocabulary.
      */
     function effectiveTagChips(tags, operations) {
-        const deleted = pendingDeletions(operations);
-        if (!Array.isArray(tags) || !deleted.size) return tags;
-        return tags.filter(tag => !tag || !deleted.has(tag.id));
+        const gone = new Set([
+            ...pendingDeletions(operations),
+            ...pendingMergedSources(operations),
+        ]);
+        if (!Array.isArray(tags) || !gone.size) return tags;
+        return tags.filter(tag => !tag || !gone.has(tag.id));
     }
 
     async function createTagDurably(fields, known) {
@@ -97,6 +112,16 @@
             throw new Error('Tag deletion is not available.');
         }
         const op = await sync.store.deleteTag(tagId);
+        if (typeof sync.changed === 'function') sync.changed();
+        return op;
+    }
+
+    async function mergeTagDurably(sourceTagId, targetTagId) {
+        const sync = root.prksSync;
+        if (!sync || !sync.store || typeof sync.store.mergeTag !== 'function') {
+            throw new Error('Tag merge is not available.');
+        }
+        const op = await sync.store.mergeTag(sourceTagId, targetTagId);
         if (typeof sync.changed === 'function') sync.changed();
         return op;
     }
@@ -120,7 +145,8 @@
             if (!data || data.tag_id !== op.entity_id) return false;
             if (data.code === 'TAG_MERGED') return typeof data.target_tag_id === 'string';
             return data.code === 'ACKNOWLEDGED' && typeof data.changed === 'boolean' &&
-                Array.isArray(data.affected_work_ids);
+                Array.isArray(data.affected_work_ids) &&
+                Array.isArray(data.affected_folder_ids);
         },
         terminal: function (data) {
             const out = { code: data.code };
@@ -130,15 +156,38 @@
         reconcile: data => root.prksOfflineReconcileDeletedTag(data),
     };
 
+    const mergeHandler = {
+        isResult: function (data, op) {
+            if (!data || data.tag_id !== op.entity_id) return false;
+            if (data.code === 'TAG_MERGED') return typeof data.target_tag_id === 'string';
+            if (data.code === 'TAG_DELETED') return true;
+            if (data.code === 'ENTITY_NOT_FOUND') return true;
+            return data.code === 'ACKNOWLEDGED' && typeof data.changed === 'boolean' &&
+                typeof data.canonical_tag_id === 'string' &&
+                Array.isArray(data.affected_work_ids) &&
+                Array.isArray(data.affected_folder_ids);
+        },
+        terminal: function (data) {
+            const out = { code: data.code };
+            if (typeof data.target_tag_id === 'string') out.target_tag_id = data.target_tag_id;
+            return { conflict: out };
+        },
+        reconcile: data => root.prksOfflineReconcileMergedTag(data),
+    };
+
     Object.assign(root, {
         prksPendingTagCreates: pendingCreates,
         prksPendingTagDeletions: pendingDeletions,
+        prksPendingTagMerges: pendingMerges,
+        prksPendingMergedTagSources: pendingMergedSources,
         prksTagRowFromOp: catalogRowFromOp,
         prksEffectiveTagCatalogue: effectiveTagCatalogue,
         prksEffectiveTagChips: effectiveTagChips,
         prksCreateTagDurably: createTagDurably,
         prksDeleteTagDurably: deleteTagDurably,
+        prksMergeTagDurably: mergeTagDurably,
         prksTagCreateSyncHandler: createHandler,
         prksTagDeleteSyncHandler: deleteHandler,
+        prksTagMergeSyncHandler: mergeHandler,
     });
 })(typeof window === 'undefined' ? globalThis : window);

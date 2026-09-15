@@ -1,9 +1,9 @@
-"""The Tag VOCABULARY: CREATE_TAG and DELETE_TAG.
+"""The Tag VOCABULARY: CREATE_TAG, DELETE_TAG, and MERGE_TAG.
 
 The Work-Tag *relationship* has been durable since Phase 2 (`work_tag_sync`).
 This module is the other half: the Tags themselves.
 
-Two shapes, and only two. PRKS has no rename and no colour editor -- `POST
+Three shapes, and only three. PRKS has no rename and no colour editor -- `POST
 /api/tags` either creates a Tag or hands back the existing one, and every
 caller sends the same default colour -- so a `SET_TAG_FIELD` family would be
 inventing product semantics rather than moving existing ones off the network.
@@ -116,7 +116,7 @@ def validate_delete(op):
 
 
 def apply_delete(db, conn, op, received_at):
-    from backend import work_tag_sync
+    from backend import folder_tag_sync, work_tag_sync
 
     tag_id = op["entity_id"]
     lifecycle = work_tag_sync.resolve_lifecycle(conn, tag_id)
@@ -125,7 +125,9 @@ def apply_delete(db, conn, op, received_at):
         # Deleting a Tag that is already gone is CONVERGENCE: the user asked
         # for its absence and it is absent.
         return 200, {"code": "ACKNOWLEDGED", "tag_id": tag_id, "changed": False,
-                     "affected_work_ids": []}
+                     "affected_work_ids": [], "affected_folder_ids": [],
+                     "affected_tag_options_work_ids": [],
+                     "affected_tag_options_folder_ids": []}
     if state == "MERGED":
         # It is not there to delete, and it is not gone either -- it became
         # another Tag. Silently deleting the target would destroy a Tag the
@@ -135,12 +137,71 @@ def apply_delete(db, conn, op, received_at):
     affected = db._entities_linked_to_tag_on_conn(conn, tag_id)
     for work_id in affected["affected_work_ids"]:
         work_tag_sync.set_state(conn, work_id, tag_id, False)
+    for folder_id in affected["affected_folder_ids"]:
+        folder_tag_sync.set_state(conn, folder_id, tag_id, False)
     conn.execute(
         "UPDATE sync_tag_lifecycle SET state = 'deleted', target_tag_id = NULL, "
         "changed_at = CURRENT_TIMESTAMP WHERE tag_id = ?", (tag_id,))
     conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
     return 200, {"code": "ACKNOWLEDGED", "tag_id": tag_id, "changed": True,
-                 "affected_work_ids": list(affected["affected_work_ids"])}
+                 **affected}
+
+
+def validate_merge(op):
+    if op["base_revision"] is not None:
+        raise ValueError("INVALID_BASE_REVISION")
+    payload = op["payload"]
+    if set(payload) != {"target_tag_id"}:
+        raise ValueError("INVALID_ENVELOPE")
+    target = payload["target_tag_id"]
+    if (not isinstance(target, str) or not target.strip() or target != target.strip()
+            or len(target) > 200):
+        raise ValueError("INVALID_ENVELOPE")
+    if target == op["entity_id"]:
+        raise ValueError("INVALID_ENVELOPE")
+
+
+def apply_merge(db, conn, op, received_at):
+    from backend import work_tag_sync
+
+    source = op["entity_id"]
+    target = op["payload"]["target_tag_id"]
+    lifecycle = work_tag_sync.resolve_lifecycle(conn, source)
+    state = lifecycle["state"]
+    if state == "MERGED":
+        return 409, {"code": "TAG_MERGED", "tag_id": source,
+                     "target_tag_id": lifecycle["target_tag_id"]}
+    if state == "DELETED":
+        return 409, {"code": "TAG_DELETED", "tag_id": source}
+    if state == "UNKNOWN":
+        return 404, {"code": "ENTITY_NOT_FOUND", "tag_id": source}
+    target_life = work_tag_sync.resolve_lifecycle(conn, target)
+    if target_life["state"] == "DELETED":
+        return 409, {"code": "TAG_DELETED", "tag_id": target}
+    if target_life["state"] in ("UNKNOWN", "MERGED"):
+        # Target must be an active Tag identity — merging into a redirect or
+        # unknown id is not a defined product decision.
+        return 404, {"code": "ENTITY_NOT_FOUND", "tag_id": target}
+    try:
+        merged = db.merge_tags_into_on_conn(conn, source, target)
+    except ValueError as exc:
+        message = str(exc)
+        if "not found" in message:
+            return 404, {"code": "ENTITY_NOT_FOUND", "tag_id": source}
+        raise ValueError("INVALID_ENVELOPE") from exc
+    return 200, {
+        "code": "ACKNOWLEDGED",
+        "tag_id": source,
+        "changed": True,
+        "canonical_tag_id": merged["canonical_tag_id"],
+        "canonical_name": merged["canonical_name"],
+        "affected_work_ids": list(merged.get("affected_work_ids") or []),
+        "affected_folder_ids": list(merged.get("affected_folder_ids") or []),
+        "affected_tag_options_work_ids": list(
+            merged.get("affected_tag_options_work_ids") or []),
+        "affected_tag_options_folder_ids": list(
+            merged.get("affected_tag_options_folder_ids") or []),
+    }
 
 
 def _handler(validate_fn, apply_fn):
@@ -150,3 +211,4 @@ def _handler(validate_fn, apply_fn):
 
 CREATE_HANDLER = _handler(validate_create, apply_create)
 DELETE_HANDLER = _handler(validate_delete, apply_delete)
+MERGE_HANDLER = _handler(validate_merge, apply_merge)

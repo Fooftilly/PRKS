@@ -68,6 +68,7 @@
         'SET_WORK_FOLDER',
         'CREATE_TAG',
         'DELETE_TAG',
+        'MERGE_TAG',
         'ADD_WORK_TAG',
         'REMOVE_WORK_TAG',
         'ADD_FOLDER_TAG',
@@ -1141,6 +1142,27 @@
             }
         }
 
+        /* A Tag already carrying a pending merge is a doomed identity: new
+         * relationship intents must not target it, and a second merge of the
+         * same source would rewrite an identity transform already in flight. */
+        function assertTagIsNotBeingMerged(rows, tagId, verb) {
+            const pendingMerge = (rows || []).find(r => r && r.operation === 'MERGE_TAG' &&
+                r.entity_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingMerge) {
+                throw localStoreError('entity_merged',
+                    'This tag is being merged, so it cannot be ' + verb + '.');
+            }
+        }
+
+        /** Unsettled ops that name a Tag id as subject, relationship, or merge target. */
+        function operationsNamingTag(rows, tagId) {
+            return (rows || []).filter(r => r && r.status !== STATUS_ACKNOWLEDGED && (
+                (r.entity_type === 'tag' && r.entity_id === tagId) ||
+                (!!r.payload && r.payload.tag_id === tagId) ||
+                (r.operation === 'MERGE_TAG' && r.payload && r.payload.target_tag_id === tagId)
+            ));
+        }
+
         /**
          * Create a Tag under an id this device mints.
          *
@@ -1217,6 +1239,51 @@
                 });
         }
 
+        /**
+         * Merge source into target: one identity transform, no base revision.
+         *
+         * Refuse while any unsynchronized operation still names the source —
+         * never rewrite an already-sent envelope, and never retarget a
+         * relationship whose base revision belongs to a scope about to change.
+         * A second identical merge decision is the same row.
+         */
+        function mergeTag(sourceTagId, targetTagId) {
+            if (!isNonBlankString(sourceTagId) || !isNonBlankString(targetTagId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid tag merge.'));
+            }
+            if (sourceTagId === targetTagId) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Cannot merge a tag into itself.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertTagIsNotBeingDeleted(rows, sourceTagId, 'merged');
+                    assertTagIsNotBeingDeleted(rows, targetTagId, 'merged into');
+                    assertTagIsNotBeingMerged(rows, targetTagId, 'merged into');
+                    const already = rows.find(r => r && r.operation === 'MERGE_TAG' &&
+                        r.entity_id === sourceTagId && r.status !== STATUS_ACKNOWLEDGED);
+                    if (already) {
+                        if (already.payload && already.payload.target_tag_id === targetTagId) {
+                            setResult(already);
+                            return;
+                        }
+                        throw localStoreError('entity_merged',
+                            'This tag is already being merged into a different tag.');
+                    }
+                    const naming = operationsNamingTag(rows, sourceTagId)
+                        .filter(r => !(r.operation === 'MERGE_TAG' && r.entity_id === sourceTagId));
+                    if (naming.length) {
+                        throw localStoreError('scope_busy',
+                            'Finish syncing changes that still use this tag before merging it.');
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'MERGE_TAG', entity_type: 'tag', entity_id: sourceTagId,
+                        payload: { target_tag_id: targetTagId }, base_revision: null,
+                    }, null));
+                });
+        }
+
         function coalesceWorkTag(workId, tagId, present, baseState, baseRevision, tag) {
             if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
                 !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -1225,6 +1292,7 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertTagIsNotBeingDeleted(rows, tagId, 'attached or removed');
+                assertTagIsNotBeingMerged(rows, tagId, 'attached or removed');
                 /* A Tag this device created and has not sent yet: the
                  * relationship waits for it, by the generic mechanism. */
                 const createOp = tagCreationDependency(rows, tagId,
@@ -1257,6 +1325,7 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertTagIsNotBeingDeleted(rows, tagId, 'attached or removed');
+                assertTagIsNotBeingMerged(rows, tagId, 'attached or removed');
                 const createOp = tagCreationDependency(rows, tagId,
                     'it cannot be attached to anything');
                 const existing = rows.find(r => r.entity_type === 'folder' && r.entity_id === folderId &&
@@ -3585,6 +3654,7 @@
             enqueueOperation: enqueueOperation,
             createTag: createTag,
             deleteTag: deleteTag,
+            mergeTag: mergeTag,
             coalesceWorkTag, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
             saveWorkSource,
             saveWorkPersonRole,

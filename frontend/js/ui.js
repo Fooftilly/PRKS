@@ -4147,6 +4147,11 @@ function prksTagVocabularyMessage(error, action) {
             return String(error.message || 'A tag with that name already exists.');
         case 'entity_deleted':
             return 'This tag is being deleted, so it cannot be used.';
+        case 'entity_merged':
+            return String(error.message || 'This tag is being merged, so it cannot be used.');
+        case 'scope_busy':
+            return String(error.message ||
+                'Finish syncing changes that still use this tag before continuing.');
         case 'invalid_envelope':
             return String(error.message || 'That is not a valid tag.');
         default:

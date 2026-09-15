@@ -44,6 +44,7 @@ function runtimeFor(store, respond) {
         handlers: {
             CREATE_TAG: silent(globalThis.prksTagCreateSyncHandler),
             DELETE_TAG: silent(globalThis.prksTagDeleteSyncHandler),
+            MERGE_TAG: silent(globalThis.prksTagMergeSyncHandler),
             ADD_WORK_TAG: silent(globalThis.prksWorkTagSyncHandler),
             REMOVE_WORK_TAG: silent(globalThis.prksWorkTagSyncHandler),
         },
@@ -167,6 +168,40 @@ async function aPendingDeletionHidesTheTagEverywhere() {
         ["T-2"]);
 }
 
+async function mergeRefusesWhileTheSourceIsStillNamed() {
+    const store = newStore();
+    await store.coalesceWorkTag("W-1", "T-1", true, false, 0, { id: "T-1", name: "X" });
+    await assert.rejects(
+        () => store.mergeTag("T-1", "T-2"),
+        e => e.prksLocalStoreCode === "scope_busy");
+    await store.deleteTag("T-1");
+    /* Deletion cancelled the never-sent attach; merge still refuses while the
+     * delete names the source. */
+    await assert.rejects(
+        () => store.mergeTag("T-1", "T-2"),
+        e => e.prksLocalStoreCode === "scope_busy" || e.prksLocalStoreCode === "entity_deleted");
+}
+
+async function aPendingMergeHidesTheSourceAndBlocksAttachment() {
+    const store = newStore();
+    const merge = await store.mergeTag("T-1", "T-2");
+    assert.equal(merge.operation, "MERGE_TAG");
+    assert.equal(merge.base_revision, null);
+    assert.equal(merge.payload.target_tag_id, "T-2");
+    assert.equal((await store.mergeTag("T-1", "T-2")).op_id, merge.op_id,
+        "merging twice is one decision");
+    const ops = await store.listOperations();
+    assert.deepEqual(
+        globalThis.prksEffectiveTagCatalogue(
+            [{ id: "T-1", name: "Source", color: "#6d6cf7", aliases: [] },
+             { id: "T-2", name: "Target", color: "#6d6cf7", aliases: [] }], ops)
+            .map(t => t.id),
+        ["T-2"]);
+    await assert.rejects(
+        () => store.coalesceWorkTag("W-1", "T-1", true, false, 0, { id: "T-1", name: "X" }),
+        e => e.prksLocalStoreCode === "entity_merged");
+}
+
 async function aRefusedCreationTakesItsAttachmentsDownVisibly() {
     const store = newStore();
     const created = await store.createTag({ name: "Epistemology" }, []);
@@ -204,6 +239,8 @@ async function main() {
     await deletingATagCreatedHereFoldsItAway();
     await aSentAttachmentIsWaitedForRatherThanRewritten();
     await aPendingDeletionHidesTheTagEverywhere();
+    await mergeRefusesWhileTheSourceIsStillNamed();
+    await aPendingMergeHidesTheSourceAndBlocksAttachment();
     await aRefusedCreationTakesItsAttachmentsDownVisibly();
     console.log("All " + checks + " tag vocabulary checks passed");
 }

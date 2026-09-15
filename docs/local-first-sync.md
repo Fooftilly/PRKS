@@ -1668,10 +1668,10 @@ rather than replaying an add against somebody who no longer exists.
 
 ## The Tag vocabulary (3E)
 
-The Work-Tag *relationship* has been durable since Phase 2. `CREATE_TAG` and
-`DELETE_TAG` are the other half, and they are the whole half: PRKS has no rename
-and no colour editor, so a `SET_TAG_FIELD` family would be inventing product
-semantics rather than moving existing ones off the network.
+The Work-Tag *relationship* has been durable since Phase 2. `CREATE_TAG`,
+`DELETE_TAG` and `MERGE_TAG` are the other half, and they are the whole half:
+PRKS has no rename and no colour editor, so a `SET_TAG_FIELD` family would be
+inventing product semantics rather than moving existing ones off the network.
 
 A Tag name is unique across canonical names **and aliases**, case-insensitively,
 and only the server sees every Tag. A client that minted an id for a name
@@ -1693,6 +1693,19 @@ deleting it asks the server to do work the next operation destroys. A row that
 may be on the wire is waited for instead. The lifecycle row survives the Tag, so
 an offline device replaying an attach is told the Tag was `DELETED` rather than
 that it never existed.
+
+### Merge is an identity transform
+
+`MERGE_TAG` rewrites source → target: relationships move, the source name
+becomes an alias of the target when the names differ, and the source lifecycle
+row survives as `merged`. It carries no base revision — the conflict unit is the
+identity, not a value. The client refuses the merge while any unsynchronized
+operation still names the source, rather than retargeting intents whose base
+revision belongs to a scope about to change; a pending merge hides the source
+from the catalogue and from chips, and relationship coalescing rejects that
+doomed id. Acknowledgement patches `tags:index` and stales exactly the Works and
+Folders the answer names (including Folder-tag option projections), the same
+way delete does.
 
 Tag identity stays PERSISTENT. Nothing here garbage-collects an unused Tag.
 

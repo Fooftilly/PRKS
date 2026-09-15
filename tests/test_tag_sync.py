@@ -1,9 +1,9 @@
-"""The Tag VOCABULARY: CREATE_TAG and DELETE_TAG, and parity with the endpoints."""
+"""The Tag VOCABULARY: CREATE_TAG, DELETE_TAG, MERGE_TAG, and parity with the endpoints."""
 import tempfile
 import unittest
 import uuid
 
-from backend import entity_ids, sync_protocol, tag_sync, work_tag_sync
+from backend import entity_ids, folder_tag_sync, sync_protocol, tag_sync, work_tag_sync
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 
@@ -113,9 +113,22 @@ class TagVocabularySyncTests(unittest.TestCase):
         self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
         self.assertTrue(result["changed"])
         self.assertEqual(result["affected_work_ids"], [work])
+        self.assertEqual(result["affected_folder_ids"], [])
         self.assertIsNone(self.stored(tid))
         with self.db.connection() as conn:
             self.assertEqual(work_tag_sync.get_revision(conn, work, tid), before + 1)
+
+    def test_deleting_a_tag_advances_folder_tag_revisions(self):
+        tid, _, _ = self.create("Epistemology")
+        folder = self.db.add_folder("F")
+        self.db.add_tag_to_folder(folder, tid)
+        with self.db.connection() as conn:
+            before = folder_tag_sync.get_revision(conn, folder, tid)
+        status, result = self.send("DELETE_TAG", tid, {})
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(result["affected_folder_ids"], [folder])
+        with self.db.connection() as conn:
+            self.assertEqual(folder_tag_sync.get_revision(conn, folder, tid), before + 1)
 
     def test_a_deleted_tag_stays_deleted_for_the_relationship_family(self):
         """The lifecycle survives the row: an offline device replaying an
@@ -148,6 +161,70 @@ class TagVocabularySyncTests(unittest.TestCase):
         self.assertEqual((status, result["code"]), (400, "INVALID_BASE_REVISION"))
         self.assertIsNotNone(self.stored(tid))
 
+    # ---- merge ------------------------------------------------------------
+
+    def test_merge_moves_work_and_folder_links_and_keeps_source_as_alias(self):
+        source, _, _ = self.create("Epistemology")
+        target, _, _ = self.create("Knowledge")
+        work = self.db.add_work(title="A Work")
+        folder = self.db.add_folder("F")
+        self.db.add_tag_to_work(work, source)
+        self.db.add_tag_to_folder(folder, source)
+        with self.db.connection() as conn:
+            work_before = work_tag_sync.get_revision(conn, work, source)
+            folder_before = folder_tag_sync.get_revision(conn, folder, source)
+        status, result = self.send("MERGE_TAG", source, {"target_tag_id": target})
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertTrue(result["changed"])
+        self.assertEqual(result["canonical_tag_id"], target)
+        self.assertEqual(result["affected_work_ids"], [work])
+        self.assertEqual(result["affected_folder_ids"], [folder])
+        self.assertIsNone(self.stored(source))
+        self.assertEqual(self.lifecycle(source)["state"], "MERGED")
+        self.assertEqual(self.lifecycle(source)["target_tag_id"], target)
+        aliases = [r["alias"] for r in self.db.execute_query(
+            "SELECT alias FROM tag_aliases WHERE tag_id = ?", (target,))]
+        self.assertIn("Epistemology", aliases)
+        with self.db.connection() as conn:
+            self.assertEqual(work_tag_sync.get_revision(conn, work, source),
+                             work_before + 1)
+            self.assertEqual(folder_tag_sync.get_revision(conn, folder, source),
+                             folder_before + 1)
+        work_tags = [r["id"] for r in self.db.get_work_tags(work)]
+        folder_tags = [r["id"] for r in self.db.get_folder_tags(folder)]
+        self.assertEqual(work_tags, [target])
+        self.assertEqual(folder_tags, [target])
+
+    def test_merge_refuses_a_deleted_or_unknown_target(self):
+        source, _, _ = self.create("Epistemology")
+        status, result = self.send("MERGE_TAG", source, {"target_tag_id": "T-missing"})
+        self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
+        self.assertIsNotNone(self.stored(source))
+
+    def test_merge_of_an_already_merged_source_is_refused(self):
+        source, _, _ = self.create("Epistemology")
+        target, _, _ = self.create("Knowledge")
+        other, _, _ = self.create("Other")
+        self.send("MERGE_TAG", source, {"target_tag_id": target})
+        status, result = self.send("MERGE_TAG", source, {"target_tag_id": other})
+        self.assertEqual((status, result["code"]), (409, "TAG_MERGED"))
+        self.assertEqual(result["target_tag_id"], target)
+
+    def test_merge_addresses_an_identity_and_carries_no_base_revision(self):
+        source, _, _ = self.create("Epistemology")
+        target, _, _ = self.create("Knowledge")
+        status, result = self.send(
+            "MERGE_TAG", source, {"target_tag_id": target}, base=0)
+        self.assertEqual((status, result["code"]), (400, "INVALID_BASE_REVISION"))
+
+    def test_merge_into_self_is_refused(self):
+        tid, _, _ = self.create("Epistemology")
+        status, result = self.send("MERGE_TAG", tid, {"target_tag_id": tid})
+        self.assertEqual((status, result["code"]), (400, "INVALID_ENVELOPE"))
+
+    def test_merge_is_registered(self):
+        self.assertIn("MERGE_TAG", sync_protocol.supported_operations())
+
     # ---- parity with the ordinary endpoint ---------------------------------
 
     def test_the_ordinary_creation_shares_the_construction_boundary(self):
@@ -164,6 +241,16 @@ class TagVocabularySyncTests(unittest.TestCase):
         again = self.db.add_tag("epistemology")
         self.assertTrue(again["existed"])
         self.assertEqual(again["id"], first["id"])
+
+    def test_ordinary_merge_shares_the_sync_boundary(self):
+        source = self.db.add_tag("Epistemology")["id"]
+        target = self.db.add_tag("Knowledge")["id"]
+        work = self.db.add_work(title="A Work")
+        self.db.add_tag_to_work(work, source)
+        out = self.db.merge_tags_into(source, target)
+        self.assertEqual(out["canonical_tag_id"], target)
+        self.assertEqual(out["affected_work_ids"], [work])
+        self.assertEqual(self.lifecycle(source)["state"], "MERGED")
 
 
 if __name__ == "__main__":

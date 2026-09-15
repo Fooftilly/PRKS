@@ -799,8 +799,17 @@ class FoldersOfflineTests(unittest.TestCase):
         o._wait_entity_cached(page, 'work', ids['work_b'])
 
         before = self.generations(page)
+        # Merging a Tag is durable: coherence follows the acknowledgement.
         page.evaluate("async ([src, dst]) => { await mergeTags(src, dst); }",
                       [ids['folder_tag'], target])
+        page.evaluate("""async () => {
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                const rows = await prksSync.store.listOperations();
+                if (!rows.some(o => o.status !== 'conflict')) return;
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }""")
 
         self.changed(page, before, {'folders'})
         o._wait_entity_uncached(page, 'work', ids['work_a'])
@@ -819,14 +828,27 @@ class FoldersOfflineTests(unittest.TestCase):
         failed = page.evaluate(
             """async (tid) => {
                 const out = [];
-                try { await deleteTag('T-does-not-exist'); } catch (e) { out.push('delete'); }
-                try { await mergeTags(tid, 'T-does-not-exist'); } catch (e) { out.push('merge'); }
+                try { await prksDeleteTagDurably('T-does-not-exist'); } catch (e) { out.push('delete'); }
+                try {
+                    await mergeTags(tid, 'T-does-not-exist');
+                    const deadline = Date.now() + 15000;
+                    while (Date.now() < deadline) {
+                        const rows = await prksSync.store.listOperations();
+                        const mine = rows.find(o => o.operation === 'MERGE_TAG' &&
+                            o.entity_id === tid);
+                        if (!mine) { out.push('merge-acked'); break; }
+                        if (mine.status === 'conflict') { out.push('merge'); break; }
+                        await new Promise(r => setTimeout(r, 50));
+                    }
+                } catch (e) { out.push('merge'); }
                 return out;
             }""",
             ids['folder_tag'],
         )
-        self.assertEqual(failed, ['delete', 'merge'])
-        # Nothing canonical changed, so every cached snapshot stays eligible.
+        self.assertIn('merge', failed)
+        # Nothing canonical changed for the failed merge, so every cached
+        # snapshot stays eligible. A durable delete of an unknown id is
+        # convergence (ACK with changed:false) and also leaves caches alone.
         self.changed(page, before, set())
         self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_a']))
 

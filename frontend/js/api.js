@@ -811,19 +811,18 @@ function prksPublishTagCoherence(data) {
 }
 
 async function mergeTags(sourceTagId, targetTagId) {
-    prksGuardFolderMutation('Merging tags requires a connection to PRKS.');
-    const res = await prksRequest('/api/tags/merge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_tag_id: sourceTagId, target_tag_id: targetTagId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        const err = new Error(data.error || 'Could not merge tags.');
-        err.httpStatus = res.status;
-        throw err;
+    if (typeof prksMergeTagDurably !== 'function') {
+        throw new Error('Tag merge is not available.');
     }
-    return prksPublishTagCoherence(data);
+    try {
+        await prksMergeTagDurably(sourceTagId, targetTagId);
+    } catch (error) {
+        if (typeof prksTagVocabularyMessage === 'function') {
+            throw new Error(prksTagVocabularyMessage(error, 'merge these tags'));
+        }
+        throw error;
+    }
+    return { status: 'queued' };
 }
 
 /** Folder deletion, durably. The empty-only rule stays server-enforced. */

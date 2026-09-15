@@ -13,7 +13,7 @@ projection, and is proven by focused E2E coverage.
 | Domain | Operations | Notes |
 | --- | --- | --- |
 | Work tags | `ADD_WORK_TAG`, `REMOVE_WORK_TAG` | element conflict unit `(work, tag)` |
-| Tag vocabulary | `CREATE_TAG`, `DELETE_TAG` | client-minted `T-` id; deletion is a tombstone |
+| Tag vocabulary | `CREATE_TAG`, `DELETE_TAG`, `MERGE_TAG` | client-minted `T-` id; deletion is a tombstone; merge is an identity transform (null base; refuse while source is named in the queue) |
 | Work opens | `MARK_WORK_OPENED` | coalesced per Work |
 | Work metadata | `SET_WORK_METADATA_FIELD` | per-field conflict unit |
 | Work source | `SET_WORK_SOURCE` | aggregate: provider + id + url are one decision |
@@ -80,12 +80,6 @@ they should take, and what each must declare before implementation, are in
 *Adding a family: the four shapes and what each must declare* in
 `docs/local-first-sync.md`.
 
-* **Tag merge** — `MERGE_TAG` is an identity transformation rather than a field
-  change and needs care: a pending merge must not let new relationship intents
-  target a doomed source identity, and must not rewrite an already-sent
-  envelope. The rule this rollout would use is to refuse the merge while any
-  unsynchronized operation still names the source, rather than retargeting
-  intents whose base revision belongs to a scope that is about to change.
 * **PDF annotations** — only where the PDF is already cached. Annotation
   identity must be audited first: if annotations receive server-generated ids
   today, new ones need permanent distributed ids before offline creation is

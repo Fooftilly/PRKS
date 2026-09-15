@@ -4063,8 +4063,8 @@ class PRKSDatabase:
             (aid, tag_id, al),
         )
 
-    def merge_tags_into(self, source_tag_id: str, target_tag_id: str) -> Dict[str, Any]:
-        """Move all links from source tag to target, drop source row, add source name as alias of target."""
+    def merge_tags_into_on_conn(self, conn, source_tag_id: str, target_tag_id: str) -> Dict[str, Any]:
+        """Identity transform on the caller's transaction (sync + HTTP share this)."""
         source = (source_tag_id or "").strip()
         target = (target_tag_id or "").strip()
         if not source or not target:
@@ -4072,89 +4072,98 @@ class PRKSDatabase:
         if source == target:
             raise ValueError("cannot merge a tag into itself")
 
-        with self.connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            srow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (source,)).fetchone()
-            trow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (target,)).fetchone()
-            if not srow or not trow:
-                raise ValueError("tag not found")
+        srow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (source,)).fetchone()
+        trow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (target,)).fetchone()
+        if not srow or not trow:
+            raise ValueError("tag not found")
 
-            source_name = (srow["name"] or "").strip()
-            target_name = (trow["name"] or "").strip()
+        source_name = (srow["name"] or "").strip()
+        target_name = (trow["name"] or "").strip()
 
-            # Everything linked to the SOURCE has its rendered tag list change:
-            # the source name disappears, whether or not the target was already
-            # present. Entities linked only to the target are untouched.
-            affected = self._entities_linked_to_tag_on_conn(conn, source)
+        # Everything linked to the SOURCE has its rendered tag list change:
+        # the source name disappears, whether or not the target was already
+        # present. Entities linked only to the target are untouched.
+        affected = self._entities_linked_to_tag_on_conn(conn, source)
 
-            for wid in affected["affected_work_ids"]:
-                work_tag_sync.set_state(conn, wid, target, True)
-                work_tag_sync.set_state(conn, wid, source, False)
-            for fid in affected["affected_folder_ids"]:
-                folder_tag_sync.set_state(conn, fid, target, True)
-                folder_tag_sync.set_state(conn, fid, source, False)
-            conn.execute("UPDATE sync_tag_lifecycle SET state = 'merged', target_tag_id = ?, changed_at = CURRENT_TIMESTAMP WHERE tag_id = ? OR (state = 'merged' AND target_tag_id = ?)", (target, source, source))
+        for wid in affected["affected_work_ids"]:
+            work_tag_sync.set_state(conn, wid, target, True)
+            work_tag_sync.set_state(conn, wid, source, False)
+        for fid in affected["affected_folder_ids"]:
+            folder_tag_sync.set_state(conn, fid, target, True)
+            folder_tag_sync.set_state(conn, fid, source, False)
+        conn.execute(
+            "UPDATE sync_tag_lifecycle SET state = 'merged', target_tag_id = ?, "
+            "changed_at = CURRENT_TIMESTAMP WHERE tag_id = ? OR "
+            "(state = 'merged' AND target_tag_id = ?)",
+            (target, source, source),
+        )
 
-            # Staged Processing Files reference Tags too. A merge means
-            # "replace S with T everywhere", so these links move like the
-            # others -- without this the source row is deleted below and
-            # `processing_file_tags.tag_id ON DELETE CASCADE` destroys the
-            # relationship, leaving the staged file with neither tag.
-            conn.execute(
-                "INSERT OR IGNORE INTO processing_file_tags (processing_file_id, tag_id) "
-                "SELECT processing_file_id, ? FROM processing_file_tags WHERE tag_id = ?",
-                (target, source),
-            )
-            conn.execute("DELETE FROM processing_file_tags WHERE tag_id = ?", (source,))
+        # Staged Processing Files reference Tags too. A merge means
+        # "replace S with T everywhere", so these links move like the
+        # others -- without this the source row is deleted below and
+        # `processing_file_tags.tag_id ON DELETE CASCADE` destroys the
+        # relationship, leaving the staged file with neither tag.
+        conn.execute(
+            "INSERT OR IGNORE INTO processing_file_tags (processing_file_id, tag_id) "
+            "SELECT processing_file_id, ? FROM processing_file_tags WHERE tag_id = ?",
+            (target, source),
+        )
+        conn.execute("DELETE FROM processing_file_tags WHERE tag_id = ?", (source,))
 
-            alias_rows = conn.execute(
-                "SELECT id, alias FROM tag_aliases WHERE tag_id = ?", (source,)
-            ).fetchall()
-            for ar in alias_rows:
-                aid = ar["id"]
-                al = (ar["alias"] or "").strip()
-                if not al:
-                    conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
-                    continue
-                if al.lower() == target_name.lower():
-                    conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
-                    continue
-                other = conn.execute(
-                    "SELECT id FROM tag_aliases WHERE LOWER(alias) = LOWER(?) AND id != ?",
-                    (al, aid),
-                ).fetchone()
-                if other:
-                    conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
-                else:
+        alias_rows = conn.execute(
+            "SELECT id, alias FROM tag_aliases WHERE tag_id = ?", (source,)
+        ).fetchall()
+        for ar in alias_rows:
+            aid = ar["id"]
+            al = (ar["alias"] or "").strip()
+            if not al:
+                conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
+                continue
+            if al.lower() == target_name.lower():
+                conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
+                continue
+            other = conn.execute(
+                "SELECT id FROM tag_aliases WHERE LOWER(alias) = LOWER(?) AND id != ?",
+                (al, aid),
+            ).fetchone()
+            if other:
+                conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
+            else:
+                conn.execute(
+                    "UPDATE tag_aliases SET tag_id = ? WHERE id = ?",
+                    (target, aid),
+                )
+
+        conn.execute("DELETE FROM tags WHERE id = ?", (source,))
+
+        if source_name and source_name.lower() != target_name.lower():
+            exists = conn.execute(
+                """
+                SELECT 1 FROM tag_aliases
+                WHERE tag_id = ? AND LOWER(alias) = LOWER(?)
+                LIMIT 1
+                """,
+                (target, source_name),
+            ).fetchone()
+            if not exists:
+                new_aid = self.generate_id("L")
+                try:
                     conn.execute(
-                        "UPDATE tag_aliases SET tag_id = ? WHERE id = ?",
-                        (target, aid),
+                        "INSERT INTO tag_aliases (id, tag_id, alias) VALUES (?, ?, ?)",
+                        (new_aid, target, source_name),
                     )
-
-            conn.execute("DELETE FROM tags WHERE id = ?", (source,))
-
-            if source_name and source_name.lower() != target_name.lower():
-                exists = conn.execute(
-                    """
-                    SELECT 1 FROM tag_aliases
-                    WHERE tag_id = ? AND LOWER(alias) = LOWER(?)
-                    LIMIT 1
-                    """,
-                    (target, source_name),
-                ).fetchone()
-                if not exists:
-                    new_aid = self.generate_id("L")
-                    try:
-                        conn.execute(
-                            "INSERT INTO tag_aliases (id, tag_id, alias) VALUES (?, ?, ?)",
-                            (new_aid, target, source_name),
-                        )
-                    except sqlite3.IntegrityError:
-                        pass
-
-            conn.commit()
+                except sqlite3.IntegrityError:
+                    pass
 
         return {"canonical_tag_id": target, "canonical_name": target_name, **affected}
+
+    def merge_tags_into(self, source_tag_id: str, target_tag_id: str) -> Dict[str, Any]:
+        """Move all links from source tag to target, drop source row, add source name as alias of target."""
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = self.merge_tags_into_on_conn(conn, source_tag_id, target_tag_id)
+            conn.commit()
+        return result
 
     def delete_tag_alias(self, tag_id: str, alias: str) -> bool:
         al = (alias or "").strip()

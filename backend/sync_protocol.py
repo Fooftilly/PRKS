@@ -185,6 +185,7 @@ from backend import (  # noqa: E402
 # be inventing product semantics rather than moving existing ones off the wire.
 register("CREATE_TAG", tag_sync.CREATE_HANDLER, entity_type="tag")
 register("DELETE_TAG", tag_sync.DELETE_HANDLER, entity_type="tag")
+register("MERGE_TAG", tag_sync.MERGE_HANDLER, entity_type="tag")
 register("ADD_WORK_TAG", work_tag_sync.HANDLER)
 register("REMOVE_WORK_TAG", work_tag_sync.HANDLER)
 register("ADD_FOLDER_TAG", folder_tag_sync.HANDLER, entity_type="folder")
