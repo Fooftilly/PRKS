@@ -26,7 +26,7 @@ projection, and is proven by focused E2E coverage.
 | Positions | `CREATE_POSITION`, `SET_POSITION_FIELD`, `DELETE_POSITION` | two INDEPENDENT fields; deletion refused while an Argument targets it |
 | Arguments / Stances | `CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`, `SET_ARGUMENT_SOURCES`, `SET_ARGUMENT_TARGETS`, `DELETE_ARGUMENT` | permanent `A-` id; construction atomically includes initial sources/targets; later sources and targets are separate ordered aggregates |
 | Concepts | `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`, `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT` | name+aliases are one aggregate; the parent set is another |
-| Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; deletion has no UI control today (see below) |
+| Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; detail page offers Delete playlist |
 | Work notes | `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE` | independent whole-document aggregates; Research ACK fences Concept/Argument/Graph when the body changed or the revision advanced past the observed base; Private ACK does not |
 
 ## What one overnight pass added
@@ -100,11 +100,7 @@ they should take, and what each must declare before implementation, are in
 
 ### Implemented, but with no control in the app
 
-* **Deleting a playlist.** `DELETE /api/playlists/{id}` has always existed and
-  the durable `DELETE_PLAYLIST` family now shares its boundary, but no PRKS
-  surface offers the action — so it is reachable only through the API and the
-  tests. Adding the button is a product decision (where it lives, what it
-  warns about) rather than a synchronization one.
+_(none — `DELETE_PLAYLIST` is offered from Playlist detail via Delete playlist.)_
 
 ### Deliberately not built, because it would be new product semantics
 

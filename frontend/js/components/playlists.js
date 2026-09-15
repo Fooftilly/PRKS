@@ -402,6 +402,55 @@ async function deletePlaylistCanonical(playlistId) {
     return { status: 'deleted' };
 }
 
+/**
+ * Product control for DELETE_PLAYLIST. Videos survive — only this playlist
+ * identity and its ordered memberships are removed.
+ */
+async function deletePlaylistFromDetail(ctx, pl) {
+    const playlistId = pl && pl.id ? String(pl.id) : '';
+    if (!playlistId) return;
+    const title = (pl && pl.title) ? String(pl.title) : 'this playlist';
+    const itemCount = Array.isArray(pl && pl.items) ? pl.items.length : 0;
+    const message = itemCount
+        ? ('Delete “' + title + '”? The ' + itemCount + ' video'
+            + (itemCount === 1 ? '' : 's')
+            + ' in it will stay in your library; only the playlist is removed.')
+        : ('Delete “' + title + '”? This removes the playlist from your library.');
+    const confirmed =
+        typeof prksConfirmDestructive === 'function'
+            ? await prksConfirmDestructive({
+                  title: 'Delete playlist?',
+                  message: message,
+                  confirmLabel: 'Delete playlist',
+              })
+            : true;
+    if (!confirmed) return;
+    const btn =
+        (ctx && ctx.root && ctx.root.querySelector && ctx.root.querySelector('#prks-playlist-delete-btn')) ||
+        document.getElementById('prks-playlist-delete-btn');
+    try {
+        if (btn && typeof prksSetButtonBusy === 'function') {
+            prksSetButtonBusy(btn, true, { busyLabel: 'Deleting…' });
+        }
+        await deletePlaylistCanonical(playlistId);
+        if (ctx && ctx.ui) ctx.ui.playlistEditing = false;
+        if (typeof prksNavigate === 'function') {
+            prksNavigate('#/playlists', { tabId: ctx && ctx.tabId });
+        }
+    } catch (e) {
+        if (typeof prksAlertMessage === 'function') {
+            await prksAlertMessage(
+                String((e && e.message) || 'Could not delete this playlist.'),
+                'Error'
+            );
+        }
+    } finally {
+        if (btn && typeof prksSetButtonBusy === 'function') {
+            prksSetButtonBusy(btn, false);
+        }
+    }
+}
+
 function prksOpenNewPlaylistModalFromPlaylistsPage() {
     const titleEl = document.getElementById('playlist-title');
     const descEl = document.getElementById('playlist-description');
@@ -546,9 +595,14 @@ function renderPlaylistDetail(ctx, pl, container) {
     const editingClass = editing ? ' prks-playlist-detail--editing' : '';
     container.innerHTML = `
         <div class="prks-playlist-detail${editingClass}">
-            <div class="prks-page-header page-header prks-playlist-detail__header">
-                <h2 class="prks-page-title">${prksPlEsc(pl.title || 'Playlist')}</h2>
-                <a class="route-sidebar__link" href="#/playlists">All playlists</a>
+            <div class="prks-page-header page-header page-header--split prks-playlist-detail__header">
+                <div class="page-header__title-row">
+                    <h2 class="prks-page-title">${prksPlEsc(pl.title || 'Playlist')}</h2>
+                    <a class="route-sidebar__link" href="#/playlists">All playlists</a>
+                </div>
+                <div class="page-header__actions">
+                    <button type="button" class="prks-btn prks-btn--danger" id="prks-playlist-delete-btn" data-playlist-id="${prksPlEsc(pl.id || '')}">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete playlist</button>
+                </div>
             </div>
             ${pl.description ? `<p class="meta-row prks-playlist-detail__desc">${prksPlEsc(pl.description)}</p>` : ''}
             ${
@@ -603,6 +657,14 @@ function renderPlaylistDetail(ctx, pl, container) {
         ) {
             updatePanelContent('details');
         }
+    }
+
+    const deleteBtn = container.querySelector('#prks-playlist-delete-btn');
+    if (deleteBtn && deleteBtn.dataset.bound !== '1') {
+        deleteBtn.dataset.bound = '1';
+        deleteBtn.addEventListener('click', () => {
+            void deletePlaylistFromDetail(ctx, pl);
+        });
     }
 
     container.onclick = async (ev) => {

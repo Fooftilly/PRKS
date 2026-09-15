@@ -1832,14 +1832,13 @@ Deleting cancels every unsynchronized operation naming the playlist that was
 never attempted -- including a video added TO it, which is work the deletion
 would only undo.
 
-### `DELETE_PLAYLIST` has no UI control today
+### `DELETE_PLAYLIST` is offered from Playlist detail
 
-`DELETE /api/playlists/{id}` exists and PRKS has always been willing to delete a
-playlist, but no surface in the app offers it -- so the durable family is
-reachable only through the API and the tests. It is implemented anyway, because
-moving an existing endpoint onto the durable path is synchronization work; the
-button is a product decision (where it lives, what it warns about) and is left
-where it was.
+`DELETE /api/playlists/{id}` and the durable `DELETE_PLAYLIST` family share one
+boundary. Playlist detail shows **Delete playlist** in the page header. The
+confirm copy states that member videos stay in the library; only the playlist
+identity and its order are removed. The control stays live offline because the
+decision is durable.
 
 ### Playlists have never been unique by title
 
