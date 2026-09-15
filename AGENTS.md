@@ -604,9 +604,11 @@ Work notes are **local-first**. Research Notes (`SET_WORK_RESEARCH_NOTE`) and
 Reminders (`SET_WORK_PRIVATE_NOTE`) are independent whole-document revisioned
 aggregates. One user decision is one body and one conflict. The ACK patches
 the canonical Work field and the matching notes-state revision. A Research
-ACK also fences Concept, Argument and Research Graph derived projections
-because the server ran canonical markup processing -- the browser must not
-parse the body to decide that. A Private ACK never invalidates those
+ACK also fences Concept, Argument and Research Graph (core and People)
+derived projections when the body changed *or* the canonical revision
+advanced past the operation's observed base (stale convergence onto the
+same text). A same-revision no-op does not. The browser must not parse
+the body to decide that. A Private ACK never invalidates those
 projections. Folder private notes are not this family.
 
 Concepts are **local-first**. Creating one, editing its definition, renaming it,

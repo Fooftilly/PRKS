@@ -691,31 +691,38 @@ class OfflineFoundationTests(unittest.TestCase):
             _collector.http_5xx.clear()
 
     def test_failed_notes_save_retains_previous_work_cache(self):
-        """A rejected notes PATCH leaves the last known-good snapshot available."""
+        """A notes change that never reaches PRKS stays local; the last
+        known-good Work snapshot remains available offline."""
         server, page, _context, _collector = self._start()
         work_a = server.ids["work_a"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
+        original = _cached_entity(page, "work", work_a)["value"]["text_content"]
 
-        def reject_notes_patch(route):
-            if route.request.method == "PATCH" and urlparse(route.request.url).path == "/api/works/" + work_a:
-                route.fulfill(status=500, content_type="application/json", body='{"error":"test failure"}')
-                return
-            route.fallback()
+        def reject_sync(route):
+            route.fulfill(status=500, content_type="application/json", body='{"error":"test failure"}')
 
-        page.route("**/api/works/*", reject_notes_patch)
+        page.route("**/api/sync/operations", reject_sync)
         try:
             page.locator(".CodeMirror").click()
             page.keyboard.press("Control+A")
             page.keyboard.insert_text("failed offline coherence note")
-            page.locator('[data-prks-role="editor-status"]', has_text="Error saving changes").wait_for(timeout=15000)
+            page.evaluate("""() => {
+                const ctx = window.prksGetFocusedTabContext();
+                window.prksFlushPendingWorkResearchNotes(ctx);
+            }""")
+            wait_for_async(page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'SET_WORK_RESEARCH_NOTE'))""",
+                timeout=15000)
             cached = _cached_entity(page, "work", work_a)
             self.assertIsNotNone(cached)
             self.assertEqual(cached["value"]["id"], work_a)
+            self.assertEqual(cached["value"]["text_content"], original)
         finally:
-            page.unroute("**/api/works/*", reject_notes_patch)
+            page.unroute("**/api/sync/operations", reject_sync)
 
     def test_failed_work_delete_retains_offline_cache(self):
         """Unacknowledged DELETE must not discard a potentially valid snapshot."""
@@ -1043,14 +1050,12 @@ class OfflineFoundationTests(unittest.TestCase):
             )
         )
 
-    def test_offline_research_notes_toolbar_and_pickers_are_inert(self):
-        """Scenario 10: reopening a cached Work directly offline leaves Research
-        Notes unmutable through every PRKS-owned edit path, not merely
-        CodeMirror's own readOnly flag -- keyboard typing, mutating EasyMDE
-        toolbar buttons (native `disabled`, so clicks never dispatch), and
-        (as defense-in-depth beyond the disabled toolbar button) the
-        Concept/Argument picker's onPick/onCreate guard all leave note text
-        byte-for-byte unchanged and never issue a POST /api/arguments."""
+    def test_offline_research_notes_toolbar_and_pickers_stay_live(self):
+        """Reopening a cached Work offline leaves Research Notes editable
+        through every PRKS-owned edit path: keyboard, mutating EasyMDE
+        toolbar buttons, and Concept/Argument pickers. Creating an
+        Argument from the picker is durable, so it never POSTs
+        /api/arguments while unreachable."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
 
@@ -1072,34 +1077,30 @@ class OfflineFoundationTests(unittest.TestCase):
         page.reload(wait_until="domcontentloaded")
         self.assertIn(work_a, page.evaluate("() => location.hash"))
         page.wait_for_selector(".CodeMirror")
-        page.wait_for_function(
-            """() => {
-                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
-                const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
-                const cm = notes && notes.editor && notes.editor.codemirror;
-                return !!(cm && cm.getOption('readOnly'));
-            }"""
+        self.assertFalse(
+            page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                    const cm = notes && notes.editor && notes.editor.codemirror;
+                    return !!(cm && cm.getOption('readOnly'));
+                }"""
+            )
         )
 
-        # Keyboard typing still fails (same guarantee as scenario 7, re-verified
-        # here as the baseline for the toolbar/picker assertions below).
         page.locator(".CodeMirror").click()
-        page.keyboard.type("SHOULD-NOT-APPEAR")
+        page.keyboard.type(" OFFLINE-LIVE")
         page.wait_for_timeout(150)
-        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+        self.assertIn("OFFLINE-LIVE", page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES))
 
-        # Mutating toolbar buttons are natively disabled -- clicking a disabled
-        # <button> never dispatches a click event at all, so this is a real
-        # inertness check, not merely a CSS/visual one.
         for cls in ("bold", "italic", "heading", "quote", "unordered-list", "ordered-list", "link", "image"):
-            self.assertTrue(
+            self.assertFalse(
                 page.evaluate(
                     "(c) => { const b = document.querySelector('.editor-toolbar button.' + c); return !!(b && b.disabled); }",
                     cls,
                 ),
-                "expected .%s toolbar button disabled while offline" % cls,
+                "expected .%s toolbar button enabled while offline" % cls,
             )
-        # Non-mutating actions remain enabled.
         for cls in ("preview", "side-by-side", "fullscreen"):
             self.assertFalse(
                 page.evaluate(
@@ -1109,29 +1110,22 @@ class OfflineFoundationTests(unittest.TestCase):
                 "expected .%s toolbar button to remain enabled while offline" % cls,
             )
 
-        page.evaluate("() => document.querySelector('.editor-toolbar button.bold').click()")
-        page.wait_for_timeout(100)
-        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
-
-        self.assertTrue(
+        self.assertFalse(
             page.evaluate(
                 """() => { const b = document.querySelector('.editor-toolbar button.prks-insert-concept'); return !!(b && b.disabled); }"""
             )
         )
         page.evaluate("() => document.querySelector('.editor-toolbar button.prks-insert-concept').click()")
-        page.wait_for_timeout(100)
-        self.assertEqual(page.locator("#prks-research-picker").count(), 0)
-        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+        page.wait_for_selector("#prks-research-picker .prks-dialog")
+        page.evaluate("() => window.prksCloseResearchPicker && window.prksCloseResearchPicker()")
+        page.wait_for_function("() => !document.getElementById('prks-research-picker')")
 
-        self.assertTrue(
+        self.assertFalse(
             page.evaluate(
                 """() => { const b = document.querySelector('.editor-toolbar button.prks-insert-argument'); return !!(b && b.disabled); }"""
             )
         )
 
-        # Defense-in-depth: even if an Argument picker is opened directly
-        # (bypassing the disabled toolbar button), picking an existing
-        # Argument/Stance is a guarded no-op while offline.
         page.evaluate(
             """(workId) => {
                 const ctx = window.prksGetFocusedTabContext();
@@ -1148,13 +1142,12 @@ class OfflineFoundationTests(unittest.TestCase):
             "#prks-research-picker .prks-research-picker__item", has_text="Existing Fixture Argument"
         ).click()
         page.wait_for_function("() => !document.getElementById('prks-research-picker')")
-        page.locator("#prks-modal-confirm-title", has_text="Offline").wait_for()
-        page.locator("#prks-modal-confirm-ok").click()
-        page.locator("#prks-modal-confirm:not(.hidden)").wait_for(state="detached", timeout=5000)
-        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+        self.assertIn(
+            "[[argument:e2e-fixture-argument|Existing Fixture Argument]]",
+            page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES),
+        )
+        self.assertEqual(page.locator("#prks-modal-confirm:not(.hidden)").count(), 0)
 
-        # Attempting to create a brand-new Argument likewise never reaches the
-        # network and never mutates the note.
         page.evaluate(
             """(workId) => {
                 const ctx = window.prksGetFocusedTabContext();
@@ -1167,11 +1160,15 @@ class OfflineFoundationTests(unittest.TestCase):
         page.locator("#prks-research-picker input.prks-input").fill("Offline Created Argument")
         page.locator("#prks-research-picker [data-create='argument']").click()
         page.wait_for_function("() => !document.getElementById('prks-research-picker')")
-        page.locator("#prks-modal-confirm-title", has_text="Offline").wait_for()
-        page.locator("#prks-modal-confirm-ok").click()
-        page.locator("#prks-modal-confirm:not(.hidden)").wait_for(state="detached", timeout=5000)
-        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext();
+                const text = ctx.getResource('workNotes').editor.value();
+                return text.indexOf('[[argument:') !== -1 && text.indexOf('Offline Created Argument') !== -1;
+            }"""
+        )
         self.assertEqual(argument_posts, [])
+        self.assertNotEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
 
     def test_pending_annotation_survives_disconnect_and_resumes_on_reconnect(self):
         """Scenario 11: an annotation created while ONLINE must not be lost
@@ -1433,13 +1430,10 @@ class OfflineFoundationTests(unittest.TestCase):
         self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
         context.set_offline(False)
 
-    def test_ctrl_b_shortcut_does_not_alter_notes_while_offline(self):
-        """Scenario 14 (AGENTS.md "hard CodeMirror offline mutation barrier"):
-        a formatting keyboard shortcut (EasyMDE's default Ctrl/Cmd-B ->
-        toggleBold) calls `cm.replaceSelection()` directly -- it never goes
-        through the disabled toolbar button at all, so the disabled-button
-        belt alone would not stop it. The `beforeChange` barrier must cancel
-        it while offline regardless."""
+    def test_ctrl_b_shortcut_alters_notes_while_offline(self):
+        """EasyMDE's Ctrl/Cmd-B calls `cm.replaceSelection()` directly.
+        Research Notes are durable, so the shortcut must still apply while
+        unreachable -- there is no beforeChange connectivity barrier."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
 
@@ -1454,13 +1448,15 @@ class OfflineFoundationTests(unittest.TestCase):
             "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
             timeout=20000,
         )
-        page.wait_for_function(
-            """() => {
-                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
-                const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
-                const cm = notes && notes.editor && notes.editor.codemirror;
-                return !!(cm && cm.getOption('readOnly'));
-            }"""
+        self.assertFalse(
+            page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
+                    const cm = notes && notes.editor && notes.editor.codemirror;
+                    return !!(cm && cm.getOption('readOnly'));
+                }"""
+            )
         )
 
         page.locator(".CodeMirror").click()
@@ -1475,16 +1471,13 @@ class OfflineFoundationTests(unittest.TestCase):
         )
         page.keyboard.press("Control+b")
         page.wait_for_timeout(200)
-        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+        self.assertNotEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
 
-    def test_stale_autocomplete_picker_does_not_mutate_notes_offline(self):
-        """Scenario 15 (AGENTS.md "guard every Research Notes autocomplete
-        completion"): opening a wiki/concept/PDF-annotation autocomplete
-        dropdown while online, then losing connectivity before picking a
-        suggestion, must never let that click mutate the document --
-        `prksWorkNotesMutationAllowed()` re-checks connectivity (and editor
-        identity) at pick time, not merely at the moment the dropdown opened.
-        One parameterized helper drives all three completion kinds."""
+    def test_stale_autocomplete_picker_still_mutates_notes_offline(self):
+        """Opening a wiki/concept/PDF-annotation autocomplete dropdown while
+        online, then losing connectivity before picking, must still apply the
+        completion: Research Notes are durable. PDF annotation POSTs stay
+        forbidden -- that family is not durable."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
 
@@ -1571,17 +1564,13 @@ class OfflineFoundationTests(unittest.TestCase):
                 "%s autocomplete dropdown closed before an offline pick could be attempted" % label,
             )
             hint_item.click()
-            # The guarded pick calls prksOfflineGuardMutation(), which raises
-            # the shared "Offline" confirm alert -- dismiss it before moving on.
-            page.locator("#prks-modal-confirm-title", has_text="Offline").wait_for(timeout=5000)
-            page.locator("#prks-modal-confirm-ok").click()
-            page.locator("#prks-modal-confirm:not(.hidden)").wait_for(state="detached", timeout=5000)
-
-            self.assertEqual(
+            page.wait_for_function("() => !document.querySelector('.CodeMirror-hints')")
+            self.assertNotEqual(
                 notes_text(),
                 text_with_dropdown_open,
-                "%s completion pick mutated Research Notes text while offline" % label,
+                "%s completion pick must still apply while offline" % label,
             )
+            self.assertEqual(page.locator("#prks-modal-confirm:not(.hidden)").count(), 0)
 
             close_any_open_hints()
             context.set_offline(False)
@@ -1589,8 +1578,7 @@ class OfflineFoundationTests(unittest.TestCase):
                 "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
                 timeout=20000,
             )
-            # Undo the harmless trigger-text typing itself (never a picked
-            # completion) so the next iteration starts from clean note text.
+            # Undo the picked completion so the next iteration starts clean.
             page.evaluate(
                 "(text) => %s.value(text)" % _FOCUSED_WORK_NOTES,
                 before_trigger,
@@ -4972,22 +4960,26 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         after_first = _domain_generation(page, "arguments")
         self.assertGreaterEqual(after_first, 1)
 
-        def reject_notes(route):
-            if route.request.method == "PATCH":
-                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
-                return
-            route.fallback()
+        def reject_sync(route):
+            route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
 
-        page.route("**/api/works/**", reject_notes)
+        page.route("**/api/sync/operations", reject_sync)
         try:
             page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
             page.keyboard.press("Control+A")
-            page.keyboard.insert_text("second save that fails")
-            page.locator('[data-prks-role="editor-status"]', has_text="Error saving changes").wait_for(timeout=15000)
+            page.keyboard.insert_text("second save that stays local")
+            page.evaluate("""() => {
+                const ctx = window.prksGetFocusedTabContext();
+                window.prksFlushPendingWorkResearchNotes(ctx);
+            }""")
+            wait_for_async(page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'SET_WORK_RESEARCH_NOTE'))""",
+                timeout=15000)
         finally:
-            _safe_unroute(page, "**/api/works/**", reject_notes)
+            _safe_unroute(page, "**/api/sync/operations", reject_sync)
 
-        # Save #1 changed canonical mention data; #2 failing does not undo that.
+        # Save #1 changed canonical mention data; #2 staying local does not undo that.
         self.assertIsNone(_cached_entity(page, "argument", server.ids["argument_a"]))
 
     def test_work_deletion_invalidates_arguments(self):

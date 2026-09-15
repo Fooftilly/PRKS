@@ -125,10 +125,18 @@ class WorkNoteSyncTests(unittest.TestCase):
         self.assertEqual(self.column("text_content"), "First")
 
     def test_equal_desired_canonical_text_converges(self):
+        """Stale convergence: server already holds B at revision 1; a
+        device that independently wrote B against base 0 is ACKNOWLEDGED
+        with changed=false at that newer revision. Distinct from a
+        same-revision no-op, and from a stale different-value conflict."""
         self.send_research("Agreed")
+        self.assertEqual(self.state()["research_note_revision"], 1)
+        self.assertEqual(self.column("text_content"), "Agreed")
         code, result = self.send_research("Agreed", base=0)
-        self.assertEqual((code, result["code"], result["changed"]),
-                         (200, "ACKNOWLEDGED", False))
+        self.assertEqual(code, 200)
+        self.assertEqual(result["code"], "ACKNOWLEDGED")
+        self.assertIs(result["changed"], False)
+        self.assertEqual(result["server_revision"], 1)
         self.assertEqual(self.state()["research_note_revision"], 1,
                          "convergence advances nothing")
         self.assertEqual(self.column("text_content"), "Agreed")

@@ -27,7 +27,7 @@ projection, and is proven by focused E2E coverage.
 | Arguments / Stances | `CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`, `SET_ARGUMENT_SOURCES`, `SET_ARGUMENT_TARGETS`, `DELETE_ARGUMENT` | permanent `A-` id; construction atomically includes initial sources/targets; later sources and targets are separate ordered aggregates |
 | Concepts | `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`, `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT` | name+aliases are one aggregate; the parent set is another |
 | Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; deletion has no UI control today (see below) |
-| Work notes | `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE` | independent whole-document aggregates; Research ACK fences Concept/Argument/Graph; Private ACK does not |
+| Work notes | `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE` | independent whole-document aggregates; Research ACK fences Concept/Argument/Graph when the body changed or the revision advanced past the observed base; Private ACK does not |
 
 ## What one overnight pass added
 

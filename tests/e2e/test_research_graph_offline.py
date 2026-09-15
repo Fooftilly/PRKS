@@ -519,20 +519,23 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         before = self.generations(page)
         o._open_work_from_home(page, o.WORK_A_TITLE)
         def fail(route):
-            if route.request.method == 'PATCH':
-                route.fulfill(status=400, content_type='application/json', body='{"error":"rejected"}')
-            else:
-                route.fallback()
-        page.route('**/api/works/**', fail)
+            route.fulfill(status=500, content_type='application/json', body='{"error":"rejected"}')
+        page.route('**/api/sync/operations', fail)
         page.locator('.work-notes-editor-wrap .CodeMirror').first.click()
         page.keyboard.press('Control+A')
         page.keyboard.insert_text('Failed research note')
-        page.locator('[data-prks-role="editor-status"]', has_text='Error saving changes').wait_for()
+        page.evaluate("""() => {
+            const ctx = window.prksGetFocusedTabContext();
+            window.prksFlushPendingWorkResearchNotes(ctx);
+        }""")
+        wait_for_async(page,
+            """() => prksSync.store.listOperations().then(rows =>
+                rows.some(r => r.operation === 'SET_WORK_RESEARCH_NOTE'))""")
         self.changed(page, before, (False, False))
-        page.unroute('**/api/works/**', fail)
-        page.locator('.work-notes-editor-wrap .CodeMirror').first.click()
-        page.keyboard.press('Control+A')
-        page.keyboard.insert_text('[[argument:%s|mention]]' % server.ids['argument_a'])
+        page.unroute('**/api/sync/operations', fail)
+        wait_for_async(page,
+            """() => prksSync.store.listOperations().then(rows =>
+                !rows.some(r => r.operation === 'SET_WORK_RESEARCH_NOTE'))""")
         page.locator('[data-prks-role="editor-status"]', has_text='All changes saved').wait_for()
         self.changed(page, before)
 

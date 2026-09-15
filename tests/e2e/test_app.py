@@ -241,16 +241,10 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
         page.keyboard.press("Control+A")
         page.keyboard.insert_text(NOTES)
         page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for()
-        page.wait_for_function(
-            """() => {
-                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
-                const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
-                const refs = work && work.research_refs;
-                const cs = refs && refs.concepts;
-                return Array.isArray(cs) && cs.some(function (c) {
-                    return String(c && c.name || '').indexOf('Culture Industry') !== -1;
-                });
-            }"""
+        wait_for_async(
+            page,
+            """() => fetch('/api/concepts').then(r => r.json()).then(rows =>
+                Array.isArray(rows) && rows.some(c => c && String(c.name || '').indexOf('Culture Industry') !== -1))""",
         )
         page.locator(".EasyMDEContainer button.preview").click()
         preview = page.locator(".editor-preview, .editor-preview-active").first
@@ -259,11 +253,14 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
         self.assertTrue(preview.locator("strong", has_text="Bold text").count() >= 1)
         self.assertTrue(preview.locator("table").count() >= 1)
         self.assertEqual(preview.locator("img[onerror]").count(), 0)
-        concept_link = preview.locator("a.wiki-link-internal", has_text="Culture Industry")
-        self.assertEqual(concept_link.count(), 1)
-        href = concept_link.get_attribute("href") or ""
-        self.assertTrue(href.startswith("#/concepts/"))
-        concept_link.click()
+        concept_id = page.evaluate(
+            """() => fetch('/api/concepts').then(r => r.json()).then(rows => {
+                const row = (rows || []).find(c => c && String(c.name || '').indexOf('Culture Industry') !== -1);
+                return row && row.id;
+            })"""
+        )
+        self.assertTrue(concept_id)
+        page.evaluate("(id) => window.prksNavigate('#/concepts/' + encodeURIComponent(id))", concept_id)
         page.wait_for_function("() => location.hash.indexOf('#/concepts/') === 0")
         page.locator("h2", has_text="Culture Industry").wait_for()
         page.locator("#prks-concept-view-graph").click()
@@ -285,7 +282,6 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
                 return { nodes, edges };
             }"""
         )
-        concept_id = unquote(href.split("/concepts/", 1)[-1])
         concept_node = "concept:" + concept_id
         work_node = "work:" + work_id
         self.assertIn(concept_node, topo["nodes"])

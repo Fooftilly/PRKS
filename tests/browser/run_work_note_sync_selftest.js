@@ -239,6 +239,7 @@ async function reconciliation() {
     await cache.putEntity('argument', 'A-1', { id: 'A-1', name: 'Arg' });
     await cache.putList('arguments:index', [{ id: 'A-1', name: 'Arg' }], '');
     await cache.putEntity('research-graph-core', 'snapshot', { nodes: [], edges: [] });
+    await cache.putEntity('research-graph-people', 'snapshot', { nodes: [], edges: [] });
     const offline = createPrksOfflineRuntime({
         store: cache, window: null,
         prksRequest: async () => { throw new Error('no reads in this scenario'); },
@@ -250,6 +251,7 @@ async function reconciliation() {
     const conceptsBefore = offline.currentDomainGeneration('concepts');
     const argumentsBefore = offline.currentDomainGeneration('arguments');
     const graphBefore = offline.currentDomainGeneration('research-graph-core');
+    const peopleGraphBefore = offline.currentDomainGeneration('research-graph-people');
     assert.equal(await offline.reconcileWorkNote(researchAck, researchOp), true);
     assert.equal((await cache.getEntity('work', 'W-1')).value.text_content, 'B [[concept:New]]');
     assert.equal((await cache.getEntity('work', 'W-1')).value.private_notes, 'P',
@@ -260,6 +262,7 @@ async function reconciliation() {
     assert.ok(offline.currentDomainGeneration('concepts') > conceptsBefore);
     assert.ok(offline.currentDomainGeneration('arguments') > argumentsBefore);
     assert.ok(offline.currentDomainGeneration('research-graph-core') > graphBefore);
+    assert.ok(offline.currentDomainGeneration('research-graph-people') > peopleGraphBefore);
 
     const privateOp = { operation: PRIVATE, entity_id: 'W-1', payload: { text: 'Q' } };
     const privateAck = { work_id: 'W-1', note_kind: PRIVATE_KIND, code: 'ACKNOWLEDGED',
@@ -267,6 +270,7 @@ async function reconciliation() {
     const conceptsMid = offline.currentDomainGeneration('concepts');
     const argumentsMid = offline.currentDomainGeneration('arguments');
     const graphMid = offline.currentDomainGeneration('research-graph-core');
+    const peopleGraphMid = offline.currentDomainGeneration('research-graph-people');
     assert.equal(await offline.reconcilePrivateNote(privateAck, privateOp), true);
     assert.equal((await cache.getEntity('work', 'W-1')).value.private_notes, 'Q');
     assert.equal((await cache.getEntity('work', 'W-1')).value.text_content, 'B [[concept:New]]');
@@ -276,29 +280,76 @@ async function reconciliation() {
         'a Private ACK must not fence Concepts');
     assert.equal(offline.currentDomainGeneration('arguments'), argumentsMid);
     assert.equal(offline.currentDomainGeneration('research-graph-core'), graphMid);
+    assert.equal(offline.currentDomainGeneration('research-graph-people'), peopleGraphMid);
 
     /* An older acknowledgement must not move the base backwards. */
     await offline.reconcileWorkNote(
         Object.assign({}, researchAck, { server_revision: 1, changed: false }), researchOp);
     assert.equal((await cache.getEntity('work-notes-state', 'W-1')).value.research_note_revision, 2);
 
-    /* A convergent Research write still patches text but fences nothing. */
-    const cache2 = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
-    await cache2.putEntity('work', 'W-2', { id: 'W-2', text_content: 'Same' });
-    await cache2.putEntity('work-notes-state', 'W-2', {
-        work_id: 'W-2', research_note_revision: 4, private_note_revision: 0,
-    });
-    const offline2 = createPrksOfflineRuntime({
-        store: cache2, window: null,
-        prksRequest: async () => { throw new Error('no reads'); },
-    });
-    const gen = offline2.currentDomainGeneration('concepts');
-    assert.equal(await offline2.reconcileWorkNote({
-        work_id: 'W-2', note_kind: RESEARCH_KIND, code: 'ACKNOWLEDGED',
-        changed: false, server_revision: 4, value_omitted: true,
-    }, { operation: RESEARCH, entity_id: 'W-2', payload: { text: 'Same' } }), true);
-    assert.equal(offline2.currentDomainGeneration('concepts'), gen,
-        'an unchanged Research write does not drop derived projections');
+    /* Same-revision no-op vs stale convergence: both ACK with
+     * changed=false. Only the second must fence, because this device's
+     * derived caches may still be from the older body it observed. */
+    async function researchAckFence(workId, baseRevision, serverRevision) {
+        const cacheN = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+        await cacheN.putEntity('work', workId, { id: workId, text_content: 'Same' });
+        await cacheN.putEntity('work-notes-state', workId, {
+            work_id: workId, research_note_revision: serverRevision, private_note_revision: 0,
+        });
+        await cacheN.putEntity('concept', 'C-old', { id: 'C-old', name: 'Old' });
+        await cacheN.putList('concepts:index', [{ id: 'C-old', name: 'Old' }], '');
+        await cacheN.putEntity('argument', 'A-old', { id: 'A-old', name: 'Arg' });
+        await cacheN.putList('arguments:index', [{ id: 'A-old', name: 'Arg' }], '');
+        await cacheN.putEntity('research-graph-core', 'snapshot', { nodes: [], edges: [] });
+        await cacheN.putEntity('research-graph-people', 'snapshot', { nodes: [], edges: [] });
+        const runtime = createPrksOfflineRuntime({
+            store: cacheN, window: null,
+            prksRequest: async () => { throw new Error('no reads'); },
+        });
+        const before = {
+            concepts: runtime.currentDomainGeneration('concepts'),
+            arguments: runtime.currentDomainGeneration('arguments'),
+            graph: runtime.currentDomainGeneration('research-graph-core'),
+            peopleGraph: runtime.currentDomainGeneration('research-graph-people'),
+        };
+        assert.equal(await runtime.reconcileWorkNote({
+            work_id: workId, note_kind: RESEARCH_KIND, code: 'ACKNOWLEDGED',
+            changed: false, server_revision: serverRevision, value_omitted: true,
+        }, {
+            operation: RESEARCH, entity_id: workId, payload: { text: 'Same' },
+            base_revision: baseRevision,
+        }), true);
+        return {
+            runtime,
+            before,
+            after: {
+                concepts: runtime.currentDomainGeneration('concepts'),
+                arguments: runtime.currentDomainGeneration('arguments'),
+                graph: runtime.currentDomainGeneration('research-graph-core'),
+                peopleGraph: runtime.currentDomainGeneration('research-graph-people'),
+            },
+        };
+    }
+
+    const sameRev = await researchAckFence('W-same', 4, 4);
+    assert.equal(sameRev.after.concepts, sameRev.before.concepts,
+        'a current-revision no-op does not fence Concepts');
+    assert.equal(sameRev.after.arguments, sameRev.before.arguments,
+        'a current-revision no-op does not fence Arguments');
+    assert.equal(sameRev.after.graph, sameRev.before.graph,
+        'a current-revision no-op does not fence Graph');
+    assert.equal(sameRev.after.peopleGraph, sameRev.before.peopleGraph,
+        'a current-revision no-op does not fence People Graph');
+
+    const stale = await researchAckFence('W-stale', 3, 4);
+    assert.ok(stale.after.concepts > stale.before.concepts,
+        'stale convergence fences Concepts');
+    assert.ok(stale.after.arguments > stale.before.arguments,
+        'stale convergence fences Arguments');
+    assert.ok(stale.after.graph > stale.before.graph,
+        'stale convergence fences Graph');
+    assert.ok(stale.after.peopleGraph > stale.before.peopleGraph,
+        'stale convergence fences People Graph');
 }
 
 async function main() {

@@ -829,6 +829,15 @@
          * projections because the server ran canonical markup processing --
          * this client does not parse the body to decide what those caches
          * contain.
+         *
+         * `changed` is not enough. A stale device that independently
+         * wrote the same text the server already holds is ACKNOWLEDGED
+         * with `changed=false` at a *newer* revision. That device's
+         * Concept/Argument/Graph caches may still be derived from the
+         * older body it observed. Fence when the body changed *or* the
+         * canonical revision advanced past this operation's observed
+         * base. A same-revision no-op (`changed=false` and
+         * `server_revision === base_revision`) does not.
          */
         async function reconcileWorkNoteBody(result, op, field, revisionKey, fenceResearch) {
             if (!store || !await store.isAvailable()) return false;
@@ -865,7 +874,10 @@
                     }
                 }
             }
-            if (fenceResearch && result.changed) {
+            const canonicalAdvanced =
+                Number.isSafeInteger(op.base_revision) &&
+                result.server_revision > op.base_revision;
+            if (fenceResearch && (result.changed || canonicalAdvanced)) {
                 markDomainChanged(DOMAIN_CONCEPTS, {
                     entityKinds: ['concept'], listKeys: [CONCEPTS_LIST_KEY],
                 });
@@ -874,6 +886,9 @@
                 });
                 markDomainChanged(DOMAIN_RESEARCH_GRAPH_CORE, {
                     entityKinds: [DOMAIN_RESEARCH_GRAPH_CORE], listKeys: [],
+                });
+                markDomainChanged(DOMAIN_RESEARCH_GRAPH_PEOPLE, {
+                    entityKinds: [DOMAIN_RESEARCH_GRAPH_PEOPLE], listKeys: [],
                 });
             }
             return true;

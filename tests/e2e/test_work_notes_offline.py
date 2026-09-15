@@ -142,6 +142,10 @@ class OfflineWorkNotesTests(unittest.TestCase):
         page.reload(wait_until='domcontentloaded')
         page.wait_for_selector('.CodeMirror')
         page.locator(selector).wait_for()
+        page.wait_for_function(
+            """([sel, text]) => (document.querySelector(sel) || {}).value === text""",
+            arg=[selector, 'Remind me: [[concept:Should Not Exist]].'],
+        )
         self.assertEqual(self.editor_text(page), 'Research B')
         self.assertEqual(page.locator(selector).input_value(),
                          'Remind me: [[concept:Should Not Exist]].')

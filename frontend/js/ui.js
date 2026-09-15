@@ -2701,6 +2701,10 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
     const statusEl = panel.querySelector(`#prks-private-notes-status-${idSuffix}`);
     const entry = prksPrivateNoteDrafts.get(prksPrivateNoteKey(entityType, entityId));
     if (entry) ta.value = entry.draftText;
+    else if (entityType === 'work' && typeof prksPrivateNotesTextForEntity === 'function') {
+        const live = ctx.getEntity && ctx.getEntity('work');
+        ta.value = prksPrivateNotesTextForEntity(entityType, entityId, live && live.private_notes);
+    }
     const editor = {
         key: prksPrivateNoteKey(entityType, entityId),
         entityType: String(entityType),
@@ -2742,6 +2746,19 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
         ta.removeEventListener('input', schedule);
         ta.removeEventListener('blur', blur);
     });
+    if (editor.entityType === 'work' && typeof prksRefreshPendingWorkNotes === 'function') {
+        void prksRefreshPendingWorkNotes().then(function () {
+            if (!ctx.isCurrent(editor.generation)) return;
+            if (editor.dirty) return;
+            if (document.activeElement === ta) return;
+            const liveEditor = ctx.getResource && ctx.getResource('privateNotesEditor');
+            if (liveEditor !== editor) return;
+            const live = ctx.getEntity && ctx.getEntity('work');
+            const next = prksPrivateNotesTextForEntity(entityType, entityId, live && live.private_notes);
+            if (ta.value === next) return;
+            ta.value = next;
+        });
+    }
     if (editor.entityType !== 'work' &&
         typeof prksOfflineRuntimeState === 'function' &&
         prksOfflineRuntimeState() !== 'online') {
