@@ -2031,13 +2031,17 @@ optimization is faster execution, not less verification: the full suite is
 still mandatory before declaring a milestone complete, and a failure it reports
 is never dismissed without being reproduced and classified.
 
-Worker count, measured on a 12-core development machine over the full 418-test
-suite: serial 1131s; `--jobs 2` 652s; `--jobs 3` 422s; `--jobs 4` 315-370s
-across three consecutive green runs. **4 is the recommended gate.** More workers
-are not automatically better -- Chromium plus a PRKS server per test is memory-
-and CPU-hungry, and the per-worker overhead was already ~35% at 4 -- so re-
-benchmark rather than raising it on a different machine. Drop to `--jobs 3` if a
-machine shows contention-driven flakiness.
+Worker count guidance (do not hard-code suite size here — discovery grows):
+on a 12-core development machine, `--jobs 4` was the best measured full-gate
+setting in an earlier benchmark pass (serial much slower; 2–3 better than
+serial; 4 recommended). Re-measure when the suite or machine changes rather
+than trusting a fixed case count. Discover current modules/cases via
+`tests/e2e/run.py` / unittest discovery with `PRKS_E2E=1`. **4 remains the
+recommended default gate** until a fresh benchmark says otherwise. More
+workers are not automatically better -- Chromium plus a PRKS server per test
+is memory- and CPU-hungry, and per-worker overhead was already substantial at
+4 -- so re-benchmark rather than raising it on a different machine. Drop to
+`--jobs 3` if a machine shows contention-driven flakiness.
 
 Debugging. `--jobs 1` is the mode for reproducing a flake, reading one clean
 traceback, or checking that the suite still passes serially. It does not need to
