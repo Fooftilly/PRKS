@@ -486,9 +486,37 @@ Do not add another probe timer in the coordinator — recovery stays in
 
 ## Offline / PWA
 
-Phase 1 is the read-only offline layer. Existing Work Tags are the one
-mutation that crosses it, through a separate durable store and sync
-coordinator (see *Local-first Work Tags*), never through this cache.
+This section describes the **disposable read cache**. It is not the whole
+offline story any more: a growing set of content mutations is *local-first* and
+runs through a separate durable store and sync coordinator (see *Local-first
+Work Tags* and `docs/local-first-rollout-status.md`), never through this cache.
+Keep the two apart — durable user intent belongs in `local-store.js`, and a
+pending or conflicted value must never be written into this cache.
+
+**Which families are durable today** (create/edit/delete work with or without a
+server, survive reload, and reconcile on acknowledgement):
+
+- Work Tags: `ADD_WORK_TAG`, `REMOVE_WORK_TAG`
+- the Tag vocabulary: `CREATE_TAG`, `DELETE_TAG`
+- Work opens: `MARK_WORK_OPENED`
+- Work metadata: `SET_WORK_METADATA_FIELD`
+- Work source identity: `SET_WORK_SOURCE`
+- Work-Person roles: `ADD_WORK_PERSON_ROLE`, `REMOVE_WORK_PERSON_ROLE`,
+  `SET_WORK_PERSON_ROLE_CREDIT`
+- People: `CREATE_PERSON`, `SET_PERSON_METADATA_FIELD`, `DELETE_PERSON`
+- Person Groups: `CREATE_PERSON_GROUP`, `SET_PERSON_GROUP_FIELD`,
+  `ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`,
+  `DELETE_PERSON_GROUP`
+- Folders: `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`,
+  `SET_WORK_FOLDER`
+- Playlists: `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`,
+  `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST`
+
+`docs/local-first-rollout-status.md` is the running score and is authoritative
+when this file and it disagree. Anything not listed there still calls a
+canonical endpoint and is refused while PRKS is unreachable; do not assume a
+surface is durable because a neighbouring one is.
+
 The read layer currently covers:
 
 - Work detail pages and their managed PDFs
@@ -557,13 +585,16 @@ repopulate invalidated snapshots; cleanup failure blocks only the affected domai
   that new unreferenced Work. Playlist inline Work rename inherits the shared
   Work-title hook. Failed canonical mutations retain eligibility.
 
-Apart from existing Work Tags (see *Local-first Work Tags* below), there is no
-offline mutation outbox, sync conflict resolution, background sync, or editable
-offline Research Notes/annotations. This read layer must never grow one: durable
-user intent belongs in `local-store.js` and the sync coordinator, never in the
-disposable cache. Phase 1 covers the principal research-navigation surface;
-review remaining routes, storage growth, invalidation frequency and PWA
-install/update behavior before choosing further offline-mutation work.
+The durable families above have an outbox, conflict resolution and
+reconciliation; **this read cache must never grow one**. Durable user intent
+belongs in `local-store.js` and the sync coordinator. There is still no CRDT or
+character-level merging, no multi-user sync and no server push, and Research
+Notes and PDF annotations are not yet editable offline.
+
+A family becomes durable only by being *implemented* as one — a semantic
+operation with validation, a revision or an explicit "no base revision" rule,
+reconciliation and named refusals. See *Adding a family: the four shapes and
+what each must declare* in `docs/local-first-sync.md` before starting one.
 
 Concept routes are **read-only** offline. The Concept index uses the `lists`
 store under the stable key `concepts:index`; Concept detail uses the `entities`
@@ -675,7 +706,17 @@ invent transactional semantics across an API where a partial save was already
 possible. Any request that already succeeded keeps its cache invalidation — see
 "partial canonical success" below.
 
-People routes are **read-only** offline. The index caches the complete
+People are **local-first**. Creating a Person, editing a profile field by
+field, changing their groups and deleting them are durable operations
+(`CREATE_PERSON`, `SET_PERSON_METADATA_FIELD`, `DELETE_PERSON`, plus the Person
+Group families below) that work with or without a server; `DELETE_PERSON` keeps
+its canonical protection — a Person credited on a file is refused, never
+cascaded. Editing which files a Person is linked to **from their profile page**
+is still online-only; the same links are durable from the file's own People
+panel.
+
+The read cache below still backs the pages themselves. The index caches the
+complete
 collection under one key, `people:index`, and every role view is a local
 projection of it via `filterPersonsByAssignedRole()` — both routes go through
 the single `prksOfflinePeopleFetch()` helper so a future People route cannot
@@ -721,10 +762,13 @@ editor lives in the shared right panel, its portion only runs when
 `prksRightPanelOwnedBy()` says this context owns that panel — a background
 Person tab must never disable or rewrite another tab's panel. An editor open
 when connectivity drops keeps its unsaved draft with only its mutating controls
-inert (**Cancel stays live**), while `openPersonProfileEdit()` refuses to start
-a *new* session offline. `openModal('person-modal')` is guarded centrally so the
-People page, the ribbon and the command palette are all covered at once;
-`person-template-modal` is exempt because it only edits an unsaved local draft.
+inert (**Cancel stays live**). `openModal('person-modal')` carries **no**
+connectivity guard: creating a Person is durable-first under an id this device
+mints, so the modal opens and saves with or without a server, and
+`person-template-modal` never had one because it only edits an unsaved local
+draft. What can still be refused is an **unknown base** — a profile this device
+has never read has no revision to measure an edit against — which is a
+different refusal from "no connection".
 
 ### Offline coherence domains
 
@@ -874,7 +918,17 @@ metadata-only PATCH (no `group_ids`) keeps its original behavior, and the
 disposable portrait cache is cleared only after that transaction commits — its
 failure never fails the PATCH.
 
-Person Groups are **read-only** offline. The hierarchy uses the `lists` store
+Person Groups are **local-first**. Creating a group, renaming it, editing its
+description, moving it, deleting it and changing who is in it are durable
+operations (`CREATE_PERSON_GROUP`, `SET_PERSON_GROUP_FIELD`,
+`ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`,
+`DELETE_PERSON_GROUP`). Membership is a **pair** `(group, person)`, so two
+people joining one group never collide. Name uniqueness and acyclicity stay
+canonical, and deletion is a tombstone that reparents children exactly as the
+ordinary endpoint does.
+
+The read cache below still backs the pages themselves. The hierarchy uses the
+`lists` store
 under `person-groups:index`; Group detail uses the `entities` store under
 `kind: 'person-group'`. The two caches are independent and the index
 deliberately does **not** prefetch Group details — seeing a Group in the cached
@@ -967,15 +1021,13 @@ auto-committing versions (`resolve_or_create_parent_group_by_name`,
 gone. Do not reintroduce either, and do not move parent resolution back into
 `server.py`.
 
-Every Group mutation surface routes through the `api.js` canonical wrappers
-(`createPersonGroup`, `updatePersonGroup`, `deletePersonGroup`,
-`addPersonGroupMember`, `removePersonGroupMember`), which guard connectivity
-*before* the request and publish coherence only after acknowledged success —
-including the standard New Group modal and typed Group creation from the Person
-profile editor. `openModal('group-modal')` is guarded centrally so the Group
-page, the ribbon and the command palette are covered at once, and Save/Delete/
-add/remove each re-check connectivity immediately before their canonical
-request because the connection can drop while a dialog is open.
+Every Group mutation surface routes through the durable writers, so there is
+exactly one boundary per operation — including the standard New Group modal and
+typed Group creation from the Person profile editor. None of them guards
+connectivity: `openModal('group-modal')` opens offline because the id is minted
+here, and Save/Delete/add/remove all enqueue durable intent. A group carrying a
+pending deletion accepts nothing further — renaming something about to stop
+existing is refused locally rather than sent for the server to reject.
 `prksBindPersonGroupOfflineState()` settles the live half: a mounted Group
 editor or membership manager keeps its unsaved draft with only its mutating
 controls inert (**Cancel and Done stay live**) rather than being reloaded on a
@@ -985,7 +1037,23 @@ that this ctx still owns the panel, and that the same edit panel is still
 present — never "whichever context is focused when the callback happens to
 finish", which would mutate another tab's panel.
 
-Playlists are **read-only** offline. The index uses the `lists` store under
+Playlists are **local-first**. Creating one, editing its title / description /
+original URL, putting a video in one, taking it out, reordering it and deleting
+it are all durable semantic operations (`CREATE_PLAYLIST`,
+`SET_PLAYLIST_FIELD`, `SET_WORK_PLAYLIST`, `REORDER_PLAYLIST_ITEMS`,
+`DELETE_PLAYLIST`) that work with or without a server — see *Playlists (3G)* in
+`docs/local-first-sync.md`. The ORDER is one aggregate under one revision: an
+ordered list must never be modelled as independently racing `order_index`
+fields. Which playlist a video is in is a scalar on the **Work**, because a
+video is in at most one.
+
+Two Playlist surfaces are still online-only, and both are *searches* over
+something no cache holds: the "Add video" search reads the whole Works
+catalogue, and the Work card's playlist picker reads the Playlist catalogue.
+Both only disable a search — every decision they lead to is durable.
+
+The read cache below still backs the pages themselves. The index uses the
+`lists` store under
 `playlists:index` (`GET /api/playlists` already returns the complete catalog —
 there is deliberately no second per-Playlist or item-level list key); Playlist
 detail uses the `entities` store under `kind: 'playlist'`. The two caches are
@@ -1033,9 +1101,9 @@ The sixth domain is `playlists` (`entityKinds: ['playlist']`,
 
 The Work-entity column exists because `get_work()` embeds `playlist_id` and
 `playlist_title`. Renaming a Playlist therefore stales the cached Work entity of
-every Work in it — `updatePlaylist()` takes `previousTitle` and `memberWorkIds`
-and does that diff **itself**, so no call site can forget, and a
-description-only edit deliberately keeps those Works offline-available. Only the
+every Work in it — the **reconciler** does that diff on acknowledgement, from
+the playlist detail this device holds, so no call site can forget and a
+description-only edit keeps those Works offline-available. Only the
 *current* members need eviction: a Work moved in or out from elsewhere had its
 snapshot evicted by that membership mutation. In the other direction one
 Playlist per Work means moving a Work from A to B changes both, which
@@ -1053,41 +1121,47 @@ status); and every Concept, Position, Argument/Stance and Research Notes
 mutation. If the Playlist UI later starts rendering role-derived authors or
 status, add that dependency **then** — not pre-emptively.
 
-Every production Playlist write goes through the canonical wrappers in
+Every production Playlist write goes through the durable wrappers in
 `playlists.js` (`createPlaylist`, `updatePlaylist`, `addWorkToPlaylist`,
-`removeWorkFromPlaylist`, `reorderPlaylist`), so there is exactly one
-canonical-success boundary per operation. Each guards connectivity immediately
-before its request as defense in depth — controls are disabled offline, but the
-connection can drop between a dialog opening and Save. A guard refusal throws a
-tagged error (`prksPlaylistWasBlocked()`) so the existing throw/catch call sites
-keep working while skipping a second, redundant error dialog. The inline Work
-rename inside a Playlist re-checks connectivity itself and then goes through the
-shared `prksMarkWorkTitleChanged()` — it must **not** grow its own Playlist hook,
-which would drift from the helper. `openModal('playlist-modal')` is guarded
-centrally so the Playlists page, the Work detail panel and the New File flow are
-covered at once, and `prksBindPlaylistOfflineState()` settles the live half on
-the route's own TabContext (never a global Playlist singleton): a mounted editor
-keeps its unsaved draft with only its mutating controls inert — **Cancel, Close
-and the inline rename's Cancel stay live** — and the right-panel half only runs
-when `prksRightPanelOwnedBy()` says this context owns that panel.
+`removeWorkFromPlaylist`, `reorderPlaylist`, `deletePlaylistCanonical`), so
+there is exactly one boundary per operation. None of them guards connectivity —
+the decision is durable — and none marks a domain changed, because the
+reconcilers own the cache once the server answers. What a caller can still be
+told is that the **base is unknown**: a playlist this device has never read has
+no revision to measure an edit against, and guessing would silently overwrite
+another device. That refusal is `prksPlaylistBaseUnavailable()`, and it is a
+different thing from "no connection".
+
+`openModal('playlist-modal')` carries no guard either: the id is minted here, so
+the playlist is real before any server hears of it, and a video waiting to be
+attached is ordered behind that creation by the generic dependency mechanism.
+The inline Work rename inside a Playlist is a **Work** change and keeps using
+the Work metadata family — a Playlist-specific title mutation would be a second,
+non-revision-aware path to the same column.
+
+`prksBindPlaylistOfflineState()` still settles the one online-only control on
+the route's own TabContext (never a global Playlist singleton), and the
+right-panel half only runs when `prksRightPanelOwnedBy()` says this context owns
+that panel.
 
 The Work detail page's own Playlist card (Set playlist / Clear / New…) is a
 Playlist mutation surface living on a **Work** route, so it cannot ride on that
 binding and has its own `prksApplyWorkPlaylistOfflineState()` plus a
 live-tab-context subscription, in the same shape as the private-notes one. Two
 rules there are easy to get wrong. First, **Edit is refused only when it would
-*start* a session**: `Done` stays live so a user can always leave an editor they
-can no longer save, exactly like the Playlist detail editor. Second, mounting
-that editor calls `fetchPlaylists()`, and the Prev/Next block calls
+*start* a session**: mounting the editor reads the Playlist catalogue, while
+`Done` stays live so a user can always leave it. Clear and `New…` stay live too
+— neither needs the catalogue, and both are ordinary durable decisions. Second,
+mounting that editor calls `fetchPlaylists()`, and the Prev/Next block calls
 `fetchPlaylistDetails()` — both are *raw* reads, not offline read-throughs, so
 both are skipped entirely while non-online rather than left to fail. That is not
 only about wasted requests: `mountPlaylistAttachControls()` is invoked with
 `void`, so a rethrown transport failure would surface as an unhandled rejection.
 The catalog read is additionally wrapped, because the connection can drop
-*during* it. Finally, the `New…` handler guards **before** writing
-`window.__prksPendingPlaylistAttach`: `openModal()` guards too, but it refuses
-after that global has already been set, and the stale `workId` would then be
-picked up by the next Playlist creation from any surface.
+*during* it. Finally, the `New…` handler still clears
+`window.__prksPendingPlaylistAttach` on every open, so a `workId` left by an
+abandoned flow is never picked up by the next Playlist creation from any
+surface.
 
 **Playlist membership removal is transactional.** `remove_work_from_playlist()`
 deletes the `playlist_items` row and bumps the Playlist timestamp in one
@@ -1099,7 +1173,18 @@ write, and return an error the client would correctly treat as a no-op. This is
 the same invariant as the Person profile PATCH and the Person Group mutations
 above.
 
-Folders/Home are **read-only** offline. `#/folders` is PRKS's default route, so
+Folders/Home are **local-first**. Creating a folder (including inside one just
+created), renaming it, editing its description and private notes, moving it, and
+deleting it are durable operations (`CREATE_FOLDER`, `SET_FOLDER_FIELD`,
+`DELETE_FOLDER`), and which folder a file is in is a scalar on the **Work**
+(`SET_WORK_FOLDER`) because a file is in at most one. Name uniqueness within a
+parent and acyclicity stay canonical, and the empty-only delete rule is
+unchanged — `FOLDER_NOT_EMPTY` / `FOLDER_HAS_SUBFOLDERS` come back as named
+refusals. Changing a folder's **tags** is the one Folder relationship still
+online-only.
+
+The read cache below still backs the pages themselves. `#/folders` is PRKS's
+default route, so
 this is what makes an offline launch land somewhere useful rather than on an
 empty library. The hierarchy uses the `lists` store under `folders:index`
 (`GET /api/folders` already returns the complete catalog — there is deliberately
@@ -1191,25 +1276,29 @@ Person Group changes, non-name Person edits, ordinary Person creation, and
 non-Author/non-Editor role changes. If the Folder UI later renders one of
 those, add the dependency **then**.
 
-Every production Folder write goes through the canonical `api.js` wrappers
+Every production Folder write goes through the `api.js` wrappers
 (`createFolder`, `patchFolder`, `deleteFolderCanonical`, `addWorkToFolder`,
 `patchWorkFolder`, `addTagToFolder`, `removeTagFromFolder`), so there is exactly
-one canonical-success boundary per operation. Each calls
-`prksGuardFolderMutation()` immediately before its request as defense in depth
-— controls are disabled offline, but the connection can drop between a dialog
-opening and Save. A refusal throws an error tagged `prksOfflineRefused`, which
-`prksOfflineWasGuardRefusal()` detects so existing call sites skip a second,
-redundant dialog. The three former quick-create surfaces (the Folder modal in
-`app.js`, `quickCreateFolder()` in `ui.js`, and the processing inbox) all route
-through `createFolder()` rather than posting raw. The one documented exception
-is the coalesced private-notes autosave in `ui.js`, which is gated by its own
-runtime check and publishes Folder coherence on success;
+one boundary per operation. The first five are **durable** and carry no
+connectivity guard; what they can still refuse is an unknown base, via
+`prksFolderSaveMessage()`. The two Folder-**tag** wrappers are the exception and
+still call `prksGuardFolderMutation()`, because folder tags are the one Folder
+relationship not yet durable; a refusal throws an error tagged
+`prksOfflineRefused`, which `prksOfflineWasGuardRefusal()` detects so call sites
+skip a second dialog. The three former quick-create surfaces (the Folder modal
+in `app.js`, `quickCreateFolder()` in `ui.js`, and the processing inbox) all
+route through `createFolder()` rather than posting raw. The one documented
+exception is the coalesced private-notes autosave in `ui.js`, which is gated by
+its own runtime check and publishes Folder coherence on success;
 `tests/test_frontend_offline_runtime.py` fails the build if any other module
-pairs an `/api/folders` URL with a mutating method.
+pairs an `/api/folders` URL with a mutating method. Tag **merge** is guarded by
+the same helper and stays online-only — `MERGE_TAG` is an identity
+transformation, not a field change, and is deliberately not yet durable.
 
-`prksOpenFolderModalFromLibrarySearch()` is guarded centrally so the dashboard
-and the create-from-search empty state are covered at once, and
-`prksBindFolderOfflineState()` settles the live half on the route's own
+`prksOpenFolderModalFromLibrarySearch()` no longer guards anything: the folder
+is real the moment it is written, so the dashboard and the create-from-search
+empty state both open offline. `prksBindFolderOfflineState()` settles what
+genuinely still needs a server on the route's own
 TabContext. The Work detail page's own Folder card is a Folder mutation surface
 living on a **Work** route, so — exactly like the Playlist card — it has its own
 `prksApplyWorkFolderOfflineState()` plus a live-tab-context subscription, Edit
@@ -1762,8 +1851,11 @@ Other mutations remain server-required. The implementation contract is in
   Tag catalog copy. Catalog edits invalidate tags, relationship edits do not.
   `work-tag-options` is per Work and contains no catalog ETag. Only affected
   Work projections invalidate, including absent tombstones on delete/merge.
-- No offline Tag creation, Folder edits, Playlists, research-note editing,
-  CRDTs, multi-user sync or server push. Open events joined the protocol in 2C
+- Tag creation/deletion, Folder edits, Person and Person Group edits and
+  Playlists are all durable now — see *Which families are durable today* under
+  "Offline / PWA", and `docs/local-first-rollout-status.md` for the running
+  score. Still absent: research-note editing, PDF annotations, CRDTs,
+  multi-user sync and server push. Open events joined the protocol in 2C
   and the Work fields in `SYNCED_FIELDS` (2D/2E/2F/2G/2H/2I); nothing else has. `year` and
   `published_date` (2G) are the high fan-out case: they reach all three browse
   catalogs AND the Work summaries embedded in cached Folder, Person and
