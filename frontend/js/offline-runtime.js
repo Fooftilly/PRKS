@@ -1082,6 +1082,40 @@
             return true;
         }
 
+        /**
+         * A Person the server has removed.
+         *
+         * The People index this device holds is PATCHED, and the Person's own
+         * snapshot dropped -- there is nothing left to show on it. Group member
+         * lists and the group catalogue's counts are staled: a Person appears
+         * inside whole People rows embedded in a cached Group detail, and there
+         * is no precise patch for a row that is no longer there.
+         */
+        async function reconcileDeletedPerson(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.person_id;
+            const cached = await store.getList(PEOPLE_LIST_KEY)
+                .catch(function () { return null; });
+            const rows = cached && Array.isArray(cached.value) ? cached.value : null;
+            if (rows) {
+                const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
+                domainGeneration.set(DOMAIN_PEOPLE, token);
+                const remaining = rows.filter(row => row && row.id !== id);
+                if (!await cacheListForDomain(PEOPLE_LIST_KEY, remaining,
+                    DOMAIN_PEOPLE, token)) return false;
+            }
+            await invalidateEntity('person', id);
+            await invalidateEntity('person-metadata-state', id);
+            await invalidateEntity('person-group-memberships', id);
+            prksOfflineMarkPersonGroupsChanged();
+            /* The name is gone from every read model that merely displayed it.
+             * Those rows are keyed by Work, so there is no precise patch -- and
+             * a deletable Person is credited on nothing, so in practice this
+             * only stales the Graph's people layer. */
+            prksOfflineMarkResearchGraphPeopleChanged();
+            return true;
+        }
+
         /* ---- Person Groups ---------------------------------------------- */
 
         /** The cached Group catalogue, or null when this device holds none. */
@@ -1637,6 +1671,7 @@
             reconcileRecentOpen,
             reconcileCreatedPerson,
             reconcilePersonField,
+            reconcileDeletedPerson,
             reconcileCreatedPersonGroup,
             reconcilePersonGroupField,
             reconcilePersonGroupMember,
@@ -1848,6 +1883,7 @@
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
         prksOfflineReconcilePersonField: (result, op) => production.reconcilePersonField(result, op),
+        prksOfflineReconcileDeletedPerson: result => production.reconcileDeletedPerson(result),
         prksOfflineReconcileCreatedPersonGroup: result =>
             production.reconcileCreatedPersonGroup(result),
         prksOfflineReconcilePersonGroupField: (result, op) =>

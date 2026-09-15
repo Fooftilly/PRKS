@@ -20,6 +20,7 @@ projection, and is proven by focused E2E coverage.
 | Person creation | `CREATE_PERSON` | client-minted `P-` id |
 | Person profile | `SET_PERSON_METADATA_FIELD` | per-field; acknowledged/effective/draft kept apart |
 | Person Groups | `CREATE_PERSON_GROUP`, `SET_PERSON_GROUP_FIELD`, `ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`, `DELETE_PERSON_GROUP` | four shapes over one entity; deletion is a tombstone |
+| Person deletion | `DELETE_PERSON` | tombstone; a Person credited on a file stays protected |
 
 ## Still connection-required
 
@@ -46,10 +47,6 @@ they should take, and what each must declare before implementation, are in
 *Adding a family: the four shapes and what each must declare* in
 `docs/local-first-sync.md`.
 
-* **Person deletion.** Deliberately left until Group and role relationships were
-  dependency-aware, which they now are. `DELETE_PERSON` should let the server
-  refuse a Person with protected relationships rather than cascading something
-  the ordinary endpoint would reject.
 * **Tag vocabulary** — `CREATE_TAG`, rename, `DELETE_TAG`, `MERGE_TAG`. Merge is
   an identity transformation rather than a field change and needs care: a
   pending merge must not let new relationship intents target a doomed source

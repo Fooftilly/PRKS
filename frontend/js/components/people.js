@@ -144,10 +144,17 @@ const PERSON_CREATE_ROLE = 'person-create-control';
 /* Editing a Person's PROFILE is durable too, so "Edit profile" is never
  * disabled: the fields are field-scoped operations that queue offline exactly
  * as they send online. Group membership became durable with the Person Group
- * families, so its controls are no longer disabled either. Deleting a Person
- * is the one Person mutation still requiring the server, and it keeps
- * `PERSON_MUTATION_ROLE`. */
+ * families, and deletion with `DELETE_PERSON`, so none of those controls is
+ * disabled by connectivity any more. What `PERSON_MUTATION_ROLE` still covers
+ * is the Work-RELATIONSHIP editing on this page, which has not been moved to
+ * the durable role family yet. */
 const PERSON_EDIT_ROLE = 'person-edit-control';
+
+/* Deleting is durable, and carries its own role purely so tests and styling
+ * can name the control. It is deliberately absent from
+ * PERSON_CONTROL_SELECTOR: the protection on deletion is canonical -- a Person
+ * credited on a file is refused -- and has never been about connectivity. */
+const PERSON_DELETE_ROLE = 'person-delete-control';
 
 /* Group chips keep this role for styling/test identification only: since Person
  * Groups became offline-capable they are ordinary links and are deliberately
@@ -1042,7 +1049,10 @@ async function deletePerson() {
     const p = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
     const personId = p && p.id ? String(p.id) : '';
     if (!personId) return;
-    if (prksPersonMutationBlocked('Deleting a Person requires a connection to PRKS.')) return;
+    /* No connectivity guard: deleting a Person is durable now. The PROTECTION
+     * is unchanged and still canonical -- a Person credited on a file cannot be
+     * deleted -- and the check below is the local, earlier half of it, exactly
+     * as it was when this made a request. */
     const linkedWorks = p ? prksUniquePersonWorks(p).length : 0;
     if (linkedWorks > 0) {
         await prksAlertMessage('Cannot delete person with linked files. Unlink all files first.', 'Not allowed');
@@ -1058,35 +1068,30 @@ async function deletePerson() {
         typeof prksTabContextOwnsEntityRoute === 'function' &&
         !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
     ) return;
-    // Re-check: PRKS may have become unreachable while the confirm was open.
-    if (prksPersonMutationBlocked('Deleting a Person requires a connection to PRKS.')) return;
     try {
-        const res = await prksRequest(`/api/persons/${encodeURIComponent(personId)}`, { method: 'DELETE' });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
-                await prksAlertMessage(body.error || 'Could not delete person.', 'Could not delete');
-            }
-            return;
-        }
-        // Canonical success controls coherence, before any UI ownership test.
-        if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
-        if (typeof prksMarkPersonGroupsDomainChanged === 'function') prksMarkPersonGroupsDomainChanged();
-        if (
-            typeof prksTabContextOwnsEntityRoute === 'function' &&
-            !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
-        ) return;
-        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', null);
-        if (ctx && ctx.ui) {
-            ctx.ui.personDetailEditing = false;
-            ctx.ui.personWorksEditing = false;
-        }
-        if (typeof prksNavigate === 'function') prksNavigate('#/people', { replace: true, tabId: ctx.tabId });
-    } catch (_e) {
+        /* A tombstone, not a destruction: the acknowledged cache is untouched,
+         * so a server that refuses the deletion restores them by doing nothing.
+         * A Person created here and never sent folds away entirely. */
+        await prksDeletePersonDurably(personId);
+    } catch (error) {
         if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
-            await prksAlertMessage('Could not delete person.', 'Error');
+            await prksAlertMessage(
+                (error && error.prksLocalStoreCode === 'entity_deleted')
+                    ? 'This person is already being deleted.'
+                    : 'Could not delete this person locally. Please retry.', 'Could not delete');
         }
+        return;
     }
+    if (
+        typeof prksTabContextOwnsEntityRoute === 'function' &&
+        !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
+    ) return;
+    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', null);
+    if (ctx && ctx.ui) {
+        ctx.ui.personDetailEditing = false;
+        ctx.ui.personWorksEditing = false;
+    }
+    if (typeof prksNavigate === 'function') prksNavigate('#/people', { replace: true, tabId: ctx.tabId });
 }
 
 function prksTogglePersonWorksEdit() {
@@ -1155,7 +1160,7 @@ function renderPersonProfileDetailsSidebarHtml(person) {
     const nGroups = Array.isArray(person.groups) ? person.groups.length : 0;
     const nRefs = personReferenceCount(person);
     const deleteBtn = nWorks === 0
-        ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" data-prks-role="${PERSON_MUTATION_ROLE}" onclick="deletePerson()">Delete person</button>`
+        ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" data-prks-role="${PERSON_DELETE_ROLE}" onclick="deletePerson()">Delete person</button>`
         : `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" disabled title="Unlink all files first">Delete person</button>`;
     return `
         <div class="doc-meta-card person-sidebar-summary">

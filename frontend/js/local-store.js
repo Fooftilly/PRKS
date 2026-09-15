@@ -70,6 +70,7 @@
         'REMOVE_WORK_PERSON_ROLE',
         'SET_WORK_PERSON_ROLE_CREDIT',
         'CREATE_PERSON',
+        'DELETE_PERSON',
         'SET_PERSON_METADATA_FIELD',
         'CREATE_PERSON_GROUP',
         'SET_PERSON_GROUP_FIELD',
@@ -130,6 +131,18 @@
             payload[name] = value == null ? '' : String(value);
         });
         return payload;
+    }
+
+    /* Every unsynchronized operation that NAMES one Person, whatever family it
+     * belongs to: their own scalar edits, their group memberships, and the
+     * links that credit them on a file. Deleting a Person has to reason about
+     * all of them at once. */
+    function operationsNamingPerson(rows, personId) {
+        return (Array.isArray(rows) ? rows : []).filter(function (row) {
+            if (!row || row.status === STATUS_ACKNOWLEDGED) return false;
+            if (row.entity_type === 'person' && row.entity_id === personId) return true;
+            return !!row.payload && row.payload.person_id === personId;
+        });
     }
 
     /* The editable columns on a Person Group, in the server's vocabulary. */
@@ -984,6 +997,7 @@
                 row.status !== STATUS_ACKNOWLEDGED;
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const allRows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertPersonIsNotBeingDeleted(allRows, link.person_id, 'credited on a file');
                 const rows = allRows.filter(matches)
                     .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
                 /* One active intent per scope is the invariant, but a store
@@ -1073,6 +1087,7 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertPersonIsNotBeingDeleted(rows, personId, 'edited');
                 const createOp = personCreationDependency(rows, personId,
                     'their profile cannot be edited');
                 const written = [];
@@ -1115,6 +1130,66 @@
                     base_revision: null,
                 }));
             });
+        }
+
+        /* A Person already carrying a pending deletion accepts nothing else:
+         * every later operation naming them could only be refused. */
+        function assertPersonIsNotBeingDeleted(rows, personId, verb) {
+            const pendingDelete = (rows || []).find(r => r && r.operation === 'DELETE_PERSON' &&
+                r.entity_id === personId && r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This person is being deleted, so they cannot be ' + verb + '.');
+            }
+        }
+
+        /**
+         * Delete a Person, cancelling what was never sent.
+         *
+         * The same rule the Group family uses, over a wider set: an operation
+         * naming this Person that has NEVER been attempted is cancelled, since
+         * sending "credit them on this file" immediately before "delete them"
+         * asks the server to do work the next operation destroys -- and would
+         * make the deletion fail, because a credited Person is protected. A row
+         * that may already be on the wire stays immutable and the deletion is
+         * ordered behind it, so the server sees the decisions in the order they
+         * were made and refuses the deletion if the link did land.
+         *
+         * A Person created on this device and never sent folds away entirely.
+         */
+        function deletePerson(personId) {
+            if (!isNonBlankString(personId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid person.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = operationsNamingPerson(rows, personId);
+                    const already = mine.find(r => r.operation === 'DELETE_PERSON');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_PERSON');
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row) && row.operation !== 'CREATE_PERSON') {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_PERSON', entity_type: 'person',
+                        entity_id: personId, payload: {},
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
         }
 
         /* ---- Person Groups: construction, fields, membership, deletion ---- */
@@ -1257,6 +1332,7 @@
                         await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
                     }
                     if (desired === observed.present) { setResult(null); return; }
+                    assertPersonIsNotBeingDeleted(rows, personId, 'put in a group');
                     const createOp = personGroupCreationDependency(rows, groupId,
                         'nobody can be added to it');
                     const personOp = personCreationDependency(rows, personId,
@@ -1941,6 +2017,7 @@
             saveWorkPersonRole,
             createPerson,
             savePersonMetadataFields: savePersonMetadataFields,
+            deletePerson: deletePerson,
             createPersonGroup: createPersonGroup,
             savePersonGroupFields: savePersonGroupFields,
             setPersonGroupMember: setPersonGroupMember,
@@ -1973,6 +2050,7 @@
         PRKS_LOCAL_PERSON_GROUP_OPERATIONS: PERSON_GROUP_OPERATIONS,
         prksGenerateEntityId: generateEntityId,
         prksWorkPersonRoleState: workPersonRoleState,
+        prksOperationsNamingPerson: operationsNamingPerson,
         PRKS_LOCAL_MAX_PAYLOAD_BYTES: MAX_PAYLOAD_BYTES,
         PRKS_LOCAL_MAX_ABSTRACT_VALUE_BYTES: MAX_ABSTRACT_VALUE_BYTES,
         PRKS_LOCAL_WORK_FIELD_VALUE_BYTES: WORK_FIELD_VALUE_BYTES,

@@ -193,6 +193,10 @@ register("REMOVE_WORK_PERSON_ROLE", work_role_sync.HANDLER)
 # scope and revision: it changes the same element's semantic state.
 register("SET_WORK_PERSON_ROLE_CREDIT", work_role_sync.HANDLER)
 register("CREATE_PERSON", person_sync.HANDLER, entity_type="person")
+# Destruction, like the Group family's: it addresses an identity rather than a
+# value, so it carries no base revision. The protection is the ordinary
+# endpoint's -- a Person credited on a file is refused, never cascaded.
+register("DELETE_PERSON", person_sync.DELETE_HANDLER, entity_type="person")
 # Editing a Person is FIELD-scoped, not profile-scoped: see
 # person_metadata_sync's module docstring for the schema evidence behind that.
 register("SET_PERSON_METADATA_FIELD", person_metadata_sync.HANDLER, entity_type="person")

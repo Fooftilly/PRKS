@@ -19,6 +19,14 @@
             op.entity_type === 'person' && op.status !== 'acknowledged');
     }
 
+    /** Every Person id this device is waiting to have deleted. */
+    function pendingDeletions(operations) {
+        return new Set((operations || [])
+            .filter(op => op && op.operation === 'DELETE_PERSON' &&
+                op.entity_type === 'person' && op.status !== 'acknowledged')
+            .map(op => op.entity_id));
+    }
+
     function catalogRowFromOp(op) {
         if (!op || op.entity_type !== 'person' || typeof op.entity_id !== 'string') return null;
         const payload = op.payload && typeof op.payload === 'object' ? op.payload : {};
@@ -42,6 +50,14 @@
         });
     }
 
+    /**
+     * The People a user should see: the acknowledged list, plus the ones this
+     * device created, minus the ones it has asked to delete.
+     *
+     * A deletion is a TOMBSTONE. Nothing is removed from the acknowledged
+     * cache, so a server that refuses the deletion -- a Person credited on a
+     * file is protected -- restores them by doing nothing at all.
+     */
     function effectivePeople(rows, operations) {
         if (!Array.isArray(rows)) return null;
         const byId = new Map(rows.map(row => [row && row.id, row]));
@@ -49,6 +65,7 @@
             const row = catalogRowFromOp(op);
             if (row) byId.set(row.id, row);
         });
+        pendingDeletions(operations).forEach(function (personId) { byId.delete(personId); });
         return orderPeople(Array.from(byId.values()).filter(Boolean));
     }
 
@@ -81,6 +98,35 @@
             !!data.person && data.person.id === data.person_id;
     }
 
+    async function deletePersonDurably(personId) {
+        const sync = root.prksSync;
+        if (!sync || !sync.store || typeof sync.store.deletePerson !== 'function') {
+            throw new Error('Person deletion is not available.');
+        }
+        const op = await sync.store.deletePerson(personId);
+        if (typeof sync.changed === 'function') sync.changed();
+        return op;
+    }
+
+    const deleteHandler = {
+        isResult: function (data, op) {
+            if (!data || data.person_id !== op.entity_id) return false;
+            /* A Person credited on a file is PROTECTED, and the refusal is
+             * terminal: the same answer comes back forever until the user
+             * unlinks them, so retrying is a loop rather than a recovery. */
+            if (data.code === 'PERSON_HAS_LINKS') return true;
+            return data.code === 'ACKNOWLEDGED' && typeof data.changed === 'boolean';
+        },
+        terminal: function (data) {
+            const out = { code: data.code };
+            if (Number.isSafeInteger(data.current_revision)) {
+                out.current_revision = data.current_revision;
+            }
+            return { conflict: out };
+        },
+        reconcile: data => root.prksOfflineReconcileDeletedPerson(data),
+    };
+
     function terminal(data) {
         return { discard: data && data.code };
     }
@@ -94,6 +140,9 @@
     Object.assign(root, {
         PRKS_PERSON_SYNC_FIELDS: FIELDS,
         prksPendingPersonCreates: pendingCreates,
+        prksPendingPersonDeletions: pendingDeletions,
+        prksDeletePersonDurably: deletePersonDurably,
+        prksPersonDeleteSyncHandler: deleteHandler,
         prksPersonCatalogRowFromOp: catalogRowFromOp,
         prksEffectivePeople: effectivePeople,
         prksMergeCreatedPerson: mergeCreatedPerson,

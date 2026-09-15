@@ -300,9 +300,23 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # snapshots are PATCHED -- precisely, because the new value is known.
         for patched in ("'person'", "'person-metadata-state'", "PEOPLE_LIST_KEY"):
             self.assertIn(patched, reconcile, patched)
+        # Deletion is durable-first too, so it reconciles on acknowledgement
+        # rather than invalidating at the click. The PROTECTION is unchanged and
+        # still canonical: a Person credited on a file is refused.
         delete_at = people.index("async function deletePerson(")
         delete_body = people[delete_at : delete_at + 2500]
-        self.assertIn("prksMarkPeopleDomainChanged();", delete_body)
+        self.assertIn("prksDeletePersonDurably(", delete_body)
+        self.assertNotIn("prksMarkPeopleDomainChanged();", delete_body)
+        self.assertNotIn("prksRequest(", delete_body)
+        self.assertIn("prksUniquePersonWorks(p).length", delete_body,
+                      "the local half of the canonical protection stays")
+        deleted_at = runtime.index("async function reconcileDeletedPerson(")
+        deleted = runtime[deleted_at : runtime.index("\n        }\n", deleted_at)]
+        # The index this device holds is patched; the Person's own snapshot has
+        # nothing left to show and is dropped.
+        self.assertIn("PEOPLE_LIST_KEY", deleted)
+        self.assertIn("invalidateEntity('person', id)", deleted)
+        self.assertIn("prksOfflineMarkPersonGroupsChanged()", deleted)
         # Creation is durable-first now, so it RECONCILES instead of
         # invalidating: the acknowledgement carries the created Person, and
         # discarding the People cache would make a Person the user created
@@ -391,12 +405,15 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         create_at = app.index("if (res.ok && Array.isArray(payload.roles) && payload.roles.length) {")
         self.assertIn("prksMarkPersonGroupsDomainChanged();", app[create_at : create_at + 600])
-        # Person deletion is the one Person mutation still requiring the
-        # server, so its coherence hook stays on canonical success. Group
-        # membership is durable now and reconciles instead.
+        # Every Person mutation is durable now, so their Group coherence hooks
+        # moved to the reconcilers: a deleted Person disappears from the member
+        # lists embedded in cached Group details, and that happens when the
+        # server has actually removed them.
         people = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
-        at = people.index("async function deletePerson(")
-        self.assertIn("prksMarkPersonGroupsDomainChanged", people[at : at + 5200])
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        at = runtime.index("async function reconcileDeletedPerson(")
+        self.assertIn("prksOfflineMarkPersonGroupsChanged()",
+                      runtime[at : runtime.index("\n        }\n", at)])
         at = people.index("async function prksSavePersonGroupMemberships(")
         membership = people[at : people.index("\n}", at)]
         self.assertIn("prksSetPersonGroupMembership(", membership)

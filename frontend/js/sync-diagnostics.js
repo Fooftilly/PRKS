@@ -81,6 +81,9 @@
                 op.entity_id;
             return 'Create ' + who;
         }
+        if (op.operation === 'DELETE_PERSON') {
+            return 'Delete a person';
+        }
         if (op.operation === 'CREATE_PERSON_GROUP') {
             return 'Create group "' + bounded(op.payload.name) + '"';
         }
@@ -127,6 +130,7 @@
         REMOVE_WORK_PERSON_ROLE: 'work-people-state',
         SET_WORK_PERSON_ROLE_CREDIT: 'work-people-state',
         CREATE_PERSON: 'person',
+        DELETE_PERSON: 'person',
         /* Reached only through the Work branch below, which a Person-scoped
          * operation never takes -- `invalidate()` answers `person` entities
          * first, because the whole People read model carries every profile
@@ -193,6 +197,7 @@
         PARENT_NOT_FOUND: 'The group it would go inside no longer exists.',
         PARENT_CYCLE: 'That would put the group inside one of its own subgroups.',
         PERSON_NOT_FOUND: 'That person no longer exists on the server.',
+        PERSON_HAS_LINKS: 'They are still credited on a file, so they cannot be deleted.',
         ENTITY_NOT_FOUND: 'It no longer exists on the server.',
     });
 

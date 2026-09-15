@@ -257,6 +257,7 @@
             REMOVE_WORK_PERSON_ROLE: root.prksWorkRoleSyncHandler,
             SET_WORK_PERSON_ROLE_CREDIT: root.prksWorkRoleSyncHandler,
             CREATE_PERSON: root.prksPersonSyncHandler,
+            DELETE_PERSON: root.prksPersonDeleteSyncHandler,
             // Editing a Person is FIELD-scoped, like Work metadata and for
             // the same reason: a biography and a birth date are separate
             // decisions, and a profile-wide unit would manufacture conflicts

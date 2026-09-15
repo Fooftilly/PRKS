@@ -17,6 +17,7 @@ require("../../frontend/js/sync-runtime.js");
 require("../../frontend/js/person-state.js");
 require("../../frontend/js/person-metadata-state.js");
 require("../../frontend/js/person-group-state.js");
+require("../../frontend/js/work-role-state.js");
 
 let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
@@ -403,6 +404,75 @@ async function aPendingDeletionIsATombstoneNotADestruction() {
     assert.deepEqual(person.groups, [], "the chip goes with it");
 }
 
+/* ---- deleting a Person ---- */
+
+async function deletingAPersonCancelsWhatWasNeverSent() {
+    const store = newStore();
+    await store.savePersonMetadataFields("P-1", { about: "Edited" },
+        Object.fromEntries(globalThis.PRKS_PERSON_METADATA_FIELDS.map(
+            name => [name, { value: "", revision: 0 }])));
+    await store.setPersonGroupMember("PG-1", "P-1", true, { present: false, revision: 0 });
+    const removal = await store.deletePerson("P-1");
+    assert.equal(removal.operation, "DELETE_PERSON");
+    assert.equal(removal.base_revision, null,
+        "destruction addresses an identity, not a value");
+    assert.equal((await store.listOperations()).length, 1,
+        "an edit the deletion would immediately undo is not worth sending");
+    assert.deepEqual(removal.depends_on, []);
+
+    /* And nothing else may be enqueued against them: every later operation
+     * naming this Person could only be refused. */
+    await assert.rejects(
+        () => store.setPersonGroupMember("PG-2", "P-1", true, { present: false, revision: 0 }),
+        e => e.prksLocalStoreCode === "entity_deleted");
+    assert.equal((await store.deletePerson("P-1")).op_id, removal.op_id,
+        "deleting twice is one decision");
+}
+
+async function deletingAPersonCreatedHereFoldsThemAway() {
+    const store = newStore();
+    const created = await store.createPerson({ first_name: "Jane", last_name: "Doe" });
+    await store.setPersonGroupMember("PG-1", created.entity_id, true,
+        { present: false, revision: 0 });
+    assert.equal(await store.deletePerson(created.entity_id), null);
+    assert.deepEqual(await store.listOperations(), [],
+        "nothing about this person ever reaches the server");
+}
+
+async function aSentLinkIsWaitedForRatherThanRewritten() {
+    const store = newStore();
+    const link = await store.saveWorkPersonRole("W-1",
+        { person_id: "P-1", role_type: "Author", state: "Credited" },
+        { state: null, revision: 0 });
+    await store.updateOperationSyncState(link.op_id, { status: "syncing" });
+    const removal = await store.deletePerson("P-1");
+    assert.deepEqual(removal.depends_on, [link.op_id],
+        "an envelope that may be on the wire stays immutable; the delete queues behind it");
+    /* And the server will then refuse the deletion, because the link landed --
+     * which is the honest outcome rather than a silent cascade. */
+    assert.equal(removal.entity_type, "person");
+}
+
+async function aPendingDeletionHidesThePersonEverywhere() {
+    const store = newStore();
+    await store.deletePerson("P-1");
+    const ops = await store.listOperations();
+    const people = [{ id: "P-1", first_name: "Ada", last_name: "Lovelace" },
+        { id: "P-2", first_name: "Grace", last_name: "Hopper" }];
+    const effective = globalThis.prksEffectivePeople(people, ops);
+    assert.deepEqual(effective.map(p => p.id), ["P-2"]);
+    assert.equal(people.length, 2,
+        "nothing is destroyed: a refusal restores them by doing nothing");
+
+    /* Including the Group page, which is one of the places a Person is read --
+     * a tombstone that held only on the People index would leave them visible
+     * on exactly the page that names their memberships. */
+    const detail = globalThis.prksEffectivePersonGroupDetail(
+        { id: "PG-1", name: "Analysts", members: people.slice() }, ops, people);
+    assert.deepEqual(detail.members.map(m => m.id), ["P-2"]);
+    assert.equal(detail.member_count, 1);
+}
+
 /* ---- bases ---- */
 
 async function theBaseIsAcknowledgedAndNeverGuessed() {
@@ -445,6 +515,10 @@ async function main() {
     await deletingAGroupCreatedHereFoldsItAwayEntirely();
     await aSentOperationIsWaitedForRatherThanRewritten();
     await aPendingDeletionIsATombstoneNotADestruction();
+    await deletingAPersonCancelsWhatWasNeverSent();
+    await deletingAPersonCreatedHereFoldsThemAway();
+    await aSentLinkIsWaitedForRatherThanRewritten();
+    await aPendingDeletionHidesThePersonEverywhere();
     await theBaseIsAcknowledgedAndNeverGuessed();
     console.log("All " + checks + " person group checks passed");
 }

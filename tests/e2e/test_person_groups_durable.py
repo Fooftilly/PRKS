@@ -437,5 +437,47 @@ class DurablePersonGroupTests(unittest.TestCase):
         self.assertNotIn('Offline Mistake', self.groups_in_db(server))
 
 
+    # ---- deleting a Person ---------------------------------------------------
+
+    def test_deleting_a_person_offline_hides_them_and_reaches_the_server(self):
+        server, page, context = self.start()
+        person = server.ids['person_unvisited']
+        o._open_person(page, person)
+        o._wait_entity_cached(page, 'person', person)
+        self.offline(page, context)
+
+        page.evaluate("() => { try { deletePerson(); } catch (_e) {} }")
+        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
+        page.locator('#prks-modal-confirm-ok').click()
+        self.wait_for_family(page, 'DELETE_PERSON')
+
+        o._open_people_index(page)
+        self.wait_content_lacks(page, o.PERSON_UNVISITED_DISPLAY)
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('#sidebar')
+        self.offline(page, context)
+        o._open_people_index(page)
+        self.wait_content_lacks(page, o.PERSON_UNVISITED_DISPLAY)
+
+        self.reconnect(page, context)
+        self.settled(page)
+        self.assertEqual(self.db_for(server).execute_query(
+            'SELECT 1 FROM persons WHERE id = ?', (person,)), [])
+
+    def test_a_person_credited_on_a_file_cannot_be_deleted(self):
+        """The protection is canonical and unchanged: the relationship is a
+        real record of who wrote what."""
+        server, page, context = self.start()
+        person = server.ids['person']
+        o._open_person(page, person)
+        o._wait_content_contains(page, PERSON_DISPLAY)
+        self.offline(page, context)
+        page.evaluate("() => { try { deletePerson(); } catch (_e) {} }")
+        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
+        text = page.evaluate("() => document.getElementById('prks-modal-confirm').innerText")
+        self.assertIn('Cannot delete person with linked files', text)
+        self.assertEqual(
+            page.evaluate("() => prksSync.store.listOperations().then(rows => rows.length)"), 0)
+
 if __name__ == '__main__':
     unittest.main()

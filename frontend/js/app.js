@@ -1864,6 +1864,24 @@ async function prksDurableOperationsOrNone() {
     return [];
 }
 
+/**
+ * Whether this device has asked for an entity to stop existing.
+ *
+ * A tombstone has to hold on the entity's OWN page too. The acknowledged cache
+ * still holds the record -- nothing local is destroyed, so a refusal restores
+ * it -- which means a bookmark or the back button would otherwise walk straight
+ * past the deletion and show a record the user has already removed.
+ */
+async function prksPendingTombstone(kind, id, ops) {
+    const operations = ops || await prksDurableOperationsOrNone();
+    const deletions = kind === 'person'
+        ? (typeof prksPendingPersonDeletions === 'function'
+            ? prksPendingPersonDeletions(operations) : null)
+        : (typeof prksPendingPersonGroupDeletions === 'function'
+            ? prksPendingPersonGroupDeletions(operations) : null);
+    return !!deletions && deletions.has(id);
+}
+
 /** The People index rows this device holds, or an empty list. */
 async function prksCachedPeopleRows() {
     try {
@@ -3131,10 +3149,18 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 );
                 if (stale()) return;
                 const resolvedGroup = prksResolveOfflinePersonGroup(offlineGroup, groupId);
-                if (resolvedGroup.unavailable) {
+                const groupDeleted = await prksPendingTombstone('person-group', groupId);
+                if (stale()) return;
+                if (groupDeleted) {
+                    resolvedGroup.unavailable = true;
+                    resolvedGroup.group = null;
+                }
+                if (resolvedGroup.unavailable && !groupDeleted) {
                     /* A Group created on this device and not yet sent exists in
                      * no cache at all; its detail is built from the durable
-                     * creation, exactly as a pending Person's is. */
+                     * creation, exactly as a pending Person's is. Not for a
+                     * tombstoned one: the deletion is queued behind that very
+                     * creation. */
                     const pendingGroup = await prksPendingCreatedPersonGroup(groupId);
                     if (stale()) return;
                     if (pendingGroup) {
@@ -3625,7 +3651,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 );
                 if (stale()) return;
                 const resolvedPerson = prksResolveOfflinePerson(offlinePerson, personId);
-                if (resolvedPerson.unavailable) {
+                const personDeleted = await prksPendingTombstone('person', personId);
+                if (stale()) return;
+                if (personDeleted) {
+                    resolvedPerson.unavailable = true;
+                    resolvedPerson.person = null;
+                }
+                if (resolvedPerson.unavailable && !personDeleted) {
+                    /* Not for a tombstoned Person: a creation still in flight
+                     * is exactly what the deletion is queued behind, and
+                     * rebuilding the page from it would show a record the user
+                     * has already removed. */
                     const pendingPerson = await prksPendingCreatedPerson(personId);
                     if (stale()) return;
                     if (pendingPerson) {

@@ -216,7 +216,13 @@
         if (!group || typeof group !== 'object') return group;
         const out = applyFields(group, pendingFieldValues(operations, group.id));
         const memberships = pendingMemberships(operations);
-        if (!memberships.size) return out;
+        /* Somebody this device has asked to delete is gone from the member list
+         * too: the Group page is one of the places a Person is read, and a
+         * tombstone that held only on the People index would leave them
+         * visible on exactly the page that names their memberships. */
+        const goneEntirely = typeof root.prksPendingPersonDeletions === 'function'
+            ? root.prksPendingPersonDeletions(operations) : new Set();
+        if (!memberships.size && !goneEntirely.size) return out;
         const members = Array.isArray(out.members) ? out.members.slice() : [];
         const byId = new Map(members.map(m => [String(m && m.id), m]));
         const lookup = new Map((Array.isArray(people) ? people : [])
@@ -235,6 +241,9 @@
                 byId.delete(personId);
                 changed = true;
             }
+        });
+        goneEntirely.forEach(function (personId) {
+            if (byId.delete(personId)) changed = true;
         });
         if (!changed) return out;
         const next = Object.assign({}, out, { members: Array.from(byId.values()) });

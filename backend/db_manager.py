@@ -14,8 +14,9 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import (person_group_sync, person_metadata_sync, work_metadata_sync,
-                     work_open_sync, work_role_sync, work_source_sync, work_tag_sync)
+from backend import (person_group_sync, person_metadata_sync, person_sync,
+                     work_metadata_sync, work_open_sync, work_role_sync, work_source_sync,
+                     work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.entity_ids import generate as generate_entity_id, is_distributed
 from backend.log_safety import safe_error_type, safe_log_label
@@ -3474,21 +3475,25 @@ class PRKSDatabase:
         return person
 
     def delete_person_if_unlinked(self, person_id: str) -> None:
+        """The ordinary endpoint's deletion, through the shared boundary.
+
+        The durable `DELETE_PERSON` family uses the same one, so a Person can
+        never be removed without the memberships that named them advancing
+        their own revisions.
+        """
         pid = (person_id or "").strip()
         if not pid:
             raise ValueError("Person not found.")
-        exists = self.execute_query("SELECT 1 FROM persons WHERE id = ?", (pid,))
-        if not exists:
-            raise ValueError("Person not found.")
-        linked = self.execute_query(
-            "SELECT COUNT(*) AS c FROM roles WHERE person_id = ?",
-            (pid,),
-        )
-        linked_count = int(linked[0].get("c") or 0) if linked else 0
-        if linked_count > 0:
-            raise ValueError("Cannot delete person with linked works.")
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM persons WHERE id = ?", (pid,)).fetchone() is None:
+                raise ValueError("Person not found.")
+            deleted, linked = person_sync.delete_person_on_conn(conn, pid)
+            if linked:
+                raise ValueError("Cannot delete person with linked works.")
+            if not deleted:
+                raise ValueError("Person not found.")
         prks_delete_person_image_cache(pid, self.storage.people_dir)
-        self.execute_query("DELETE FROM persons WHERE id = ?", (pid,))
 
     def _attach_person_groups_batch(self, rows: List[dict]) -> None:
         if not rows:

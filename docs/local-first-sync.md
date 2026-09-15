@@ -1642,6 +1642,30 @@ same membership scopes from the Person's end, because membership is edited from
 both. Both are revisions only: the catalogue already carries every group's name,
 parent and description, and the detail carries its members.
 
+### Person deletion
+
+`DELETE_PERSON` carries no base revision, for the same reason
+`DELETE_PERSON_GROUP` does not: destruction addresses an identity rather than a
+value.
+
+The protection is the ordinary endpoint's, unchanged and still canonical: a
+Person credited on a file is refused with `PERSON_HAS_LINKS`, never cascaded.
+The client keeps the same check locally as an earlier, better error, but the
+server's is the one that decides.
+
+Deleting cancels every unsynchronized operation naming that Person -- their own
+field edits, their group memberships, and the links that credit them on a file
+-- that has never been attempted. Cancelling the links matters twice over:
+sending "credit them on this file" immediately before "delete them" asks the
+server to do work the next operation destroys, and it would make the deletion
+fail, because a credited Person is protected. A row that may already be on the
+wire stays immutable and the deletion queues behind it, so a link that did land
+produces an honest refusal rather than a silent cascade.
+
+Memberships are removed through the Group family's revision-aware boundary, so a
+device holding "this person is in that group" can discover it was overtaken
+rather than replaying an add against somebody who no longer exists.
+
 ## Adding a family: the four shapes and what each must declare
 
 The families that exist fall into a small number of shapes. New work should

@@ -395,3 +395,91 @@ class PersonGroupSyncTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PersonDeletionSyncTests(unittest.TestCase):
+    """DELETE_PERSON: destruction, and the protection that stays canonical."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="prks-person-delete-")
+        self.addCleanup(self.tmp.cleanup)
+        self.db = PRKSDatabase(storage=StorageConfig.for_testing(self.tmp.name))
+        self.device = str(uuid.uuid4())
+
+    def make_person(self):
+        person = entity_ids.generate("P")
+        body = {name: "" for name in person_sync.FIELDS}
+        body["first_name"], body["last_name"] = "Ada", "Lovelace"
+        self.assertEqual(sync_protocol.process_operation(self.db, dict(
+            op_id=str(uuid.uuid4()), device_id=self.device, operation="CREATE_PERSON",
+            entity_type="person", entity_id=person, payload=body, base_revision=None,
+            occurred_at="2026-09-15T10:00:00Z", created_at="2026-09-15T10:00:00Z",
+            depends_on=[]))[0], 200)
+        return person
+
+    def delete(self, person_id, base=None):
+        return sync_protocol.process_operation(self.db, dict(
+            op_id=str(uuid.uuid4()), device_id=self.device, operation="DELETE_PERSON",
+            entity_type="person", entity_id=person_id, payload={}, base_revision=base,
+            occurred_at="2026-09-15T10:00:00Z", created_at="2026-09-15T10:00:00Z",
+            depends_on=[]))
+
+    def exists(self, person_id):
+        return bool(self.db.execute_query(
+            "SELECT 1 FROM persons WHERE id = ?", (person_id,)))
+
+    def test_a_person_with_no_links_is_removed(self):
+        person = self.make_person()
+        status, result = self.delete(person)
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertTrue(result["changed"])
+        self.assertFalse(self.exists(person))
+
+    def test_deleting_someone_already_gone_is_convergence(self):
+        person = self.make_person()
+        self.delete(person)
+        status, result = self.delete(person)
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertFalse(result["changed"])
+
+    def test_destruction_addresses_an_identity_and_carries_no_base_revision(self):
+        person = self.make_person()
+        status, result = self.delete(person, base=0)
+        self.assertEqual((status, result["code"]), (400, "INVALID_BASE_REVISION"))
+        self.assertTrue(self.exists(person))
+
+    def test_a_person_credited_on_a_file_is_protected(self):
+        """The relationship is a real record of who wrote what, and dropping it
+        silently is the one outcome neither path should produce."""
+        person = self.make_person()
+        work = self.db.add_work(title="A Work")
+        self.db.add_role(person, work, "Author")
+        status, result = self.delete(person)
+        self.assertEqual((status, result["code"]), (409, "PERSON_HAS_LINKS"))
+        self.assertTrue(self.exists(person))
+        with self.assertRaises(ValueError):
+            self.db.delete_person_if_unlinked(person)
+
+    def test_deletion_advances_the_revisions_of_the_memberships_it_removes(self):
+        """A device holding "this person is in that group" has to be able to
+        discover it was overtaken, rather than replaying an add against
+        somebody who no longer exists."""
+        person = self.make_person()
+        group = self.db.add_person_group("Analysts")
+        self.db.add_person_to_group(person, group)
+        with self.db.connection() as conn:
+            before = groups.get_member_revision(conn, group, person)
+        self.delete(person)
+        with self.db.connection() as conn:
+            self.assertEqual(groups.get_member_revision(conn, group, person), before + 1)
+        self.assertEqual(self.db.execute_query(
+            "SELECT 1 FROM person_group_members WHERE person_id = ?", (person,)), [])
+
+    def test_the_ordinary_endpoint_shares_the_same_boundary(self):
+        person = self.make_person()
+        group = self.db.add_person_group("Analysts")
+        self.db.add_person_to_group(person, group)
+        self.db.delete_person_if_unlinked(person)
+        self.assertFalse(self.exists(person))
+        with self.db.connection() as conn:
+            self.assertEqual(groups.get_member_revision(conn, group, person), 2)

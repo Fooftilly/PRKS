@@ -26,7 +26,7 @@ class SyncProtocolTests(unittest.TestCase):
         self.assertEqual(sorted(sync_protocol.supported_operations()),
                          ["ADD_PERSON_GROUP_MEMBER",
                           "ADD_WORK_PERSON_ROLE", "ADD_WORK_TAG", "CREATE_PERSON",
-                          "CREATE_PERSON_GROUP", "DELETE_PERSON_GROUP",
+                          "CREATE_PERSON_GROUP", "DELETE_PERSON", "DELETE_PERSON_GROUP",
                           "MARK_WORK_OPENED", "REMOVE_PERSON_GROUP_MEMBER",
                           "REMOVE_WORK_PERSON_ROLE", "REMOVE_WORK_TAG",
                           "SET_PERSON_GROUP_FIELD", "SET_PERSON_METADATA_FIELD",
