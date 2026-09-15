@@ -1033,22 +1033,33 @@ def replace_argument_targets(db: PRKSDatabase, argument_id: str, targets) -> dic
 # --- Note save ----------------------------------------------------------------
 
 
-def save_work_notes(db: PRKSDatabase, work_id: str, text_content) -> None:
+def save_work_notes_on_conn(conn, db: PRKSDatabase, work_id: str, text_content) -> None:
+    """Canonical connection-aware Research Note write.
+
+    Concept resolution/creation and the note body commit in the caller's one
+    transaction. Revision ownership lives in ``work_note_sync``; this function
+    owns research markup semantics only.
+    """
     if not isinstance(text_content, str):
         raise ResearchError("invalid_text", "Research notes must be a string.")
     if _CONTROL_RE.search(text_content):
         raise ResearchError("invalid_text", "Research notes contain invalid characters.")
     wid = (work_id or "").strip()
     markup = parse_research_markup(text_content)
-    with db.connection() as conn:
-        if not _fetchone(conn, "SELECT 1 FROM works WHERE id = ?", (wid,)):
-            raise ResearchError("not_found", "Work not found.", 404)
-        names = [ref.name for ref in markup.concept_refs]
-        ensure_concepts_for_names(conn, db, names)
-        conn.execute(
-            """
-            UPDATE works SET text_content = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (text_content, wid),
-        )
+    if not _fetchone(conn, "SELECT 1 FROM works WHERE id = ?", (wid,)):
+        raise ResearchError("not_found", "Work not found.", 404)
+    names = [ref.name for ref in markup.concept_refs]
+    ensure_concepts_for_names(conn, db, names)
+    conn.execute(
+        """
+        UPDATE works SET text_content = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (text_content, wid),
+    )
+
+
+def save_work_notes(db: PRKSDatabase, work_id: str, text_content) -> None:
+    """Public canonical note save, revision-aware for every caller."""
+    from backend import work_note_sync
+    work_note_sync.set_research_note(db, work_id, text_content)

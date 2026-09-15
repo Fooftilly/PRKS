@@ -175,7 +175,7 @@ def process_operation(db, data):
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
     argument_sync, concept_sync, folder_sync, person_group_sync, person_metadata_sync, person_sync,
-    playlist_sync, position_sync, tag_sync, work_metadata_sync, work_open_sync,
+    playlist_sync, position_sync, tag_sync, work_metadata_sync, work_note_sync, work_open_sync,
     work_role_sync, work_source_sync, work_tag_sync,
 )
 
@@ -267,3 +267,8 @@ register("SET_ARGUMENT_FIELD", argument_sync.FIELD_HANDLER, entity_type="argumen
 register("SET_ARGUMENT_SOURCES", argument_sync.SOURCES_HANDLER, entity_type="argument")
 register("SET_ARGUMENT_TARGETS", argument_sync.TARGETS_HANDLER, entity_type="argument")
 register("DELETE_ARGUMENT", argument_sync.DELETE_HANDLER, entity_type="argument")
+# Work notes. Each whole body is one aggregate and the two columns deliberately
+# do not share a revision: Research Notes run semantic markup processing;
+# Private Notes never do.
+register("SET_WORK_RESEARCH_NOTE", work_note_sync.HANDLER)
+register("SET_WORK_PRIVATE_NOTE", work_note_sync.HANDLER)

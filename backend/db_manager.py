@@ -2577,7 +2577,8 @@ class PRKSDatabase:
         # actually changes advance, and the whole edit commits as one
         # transaction so a value can never be stored without its revision.
         synced = {k: v for k, v in updates.items() if k in work_metadata_sync.SYNCED_FIELDS}
-        plain = {k: v for k, v in updates.items() if k not in synced}
+        note_updates = {k: updates[k] for k in ("private_notes",) if k in updates}
+        plain = {k: v for k, v in updates.items() if k not in synced and k not in note_updates}
         # PATCH and the synchronization handler converge on ONE representation
         # before either validates or writes. A caller may hand this method a
         # native value -- an int for `thumb_page`, or None -- while the sync
@@ -2621,8 +2622,26 @@ class PRKSDatabase:
                     f"UPDATE works SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     tuple(list(plain.values()) + [work_id]),
                 )
+            if "private_notes" in note_updates:
+                # Lazy import avoids db_manager -> work_note_sync ->
+                # research_network -> db_manager during module initialization.
+                from backend import work_note_sync
+                try:
+                    work_note_sync.set_private_note_on_conn(
+                        conn, work_id,
+                        "" if note_updates["private_notes"] is None
+                        else note_updates["private_notes"])
+                except ValueError as exc:
+                    raise ValueError(str(exc)) from exc
             for field, value in synced.items():
                 work_metadata_sync.set_field_on_conn(conn, work_id, field, value)
+
+    def get_work_notes_state(self, work_id: str) -> Optional[dict]:
+        """The two whole-document revisions; values live on Work detail."""
+        from backend import work_note_sync
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return work_note_sync.get_notes_state_on_conn(conn, work_id)
 
     def get_work_metadata_state(self, work_id: str) -> Optional[dict]:
         """Synchronization state for the supported Work fields.

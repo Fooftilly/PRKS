@@ -1,4 +1,4 @@
-from backend import work_role_sync, work_source_sync
+from backend import work_note_sync, work_role_sync, work_source_sync
 from backend.sync_protocol import process_operation
 import http.server
 import socketserver
@@ -1027,10 +1027,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         return
                 if body:
                     patched_file_path = "file_path" in body
-                    notes_text = None
-                    if "text_content" in body:
-                        notes_text = body.pop("text_content")
-                    if notes_text is not None:
+                    notes_present = "text_content" in body
+                    notes_text = body.pop("text_content", None)
+                    if notes_present:
                         try:
                             research_network.save_work_notes(db, w_id, notes_text)
                         except ResearchError as e:
@@ -1991,6 +1990,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/works/') and path.endswith('/notes-state') and len(path.split('/')) == 5:
+                data = db.get_work_notes_state(path.split('/')[3])
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    etag = db.etag_for_representation("work-notes-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/works/') and path.endswith('/people-state') and len(path.split('/')) == 5:
                 # Relationship REVISIONS, including tombstones. The Work detail
                 # already carries the linked people themselves; duplicating
@@ -2447,6 +2456,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
             if path == '/api/sync/operations':
                 status, result = process_operation(db, data)
+                if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
+                        data.get("operation") == work_note_sync.RESEARCH_OPERATION):
+                    # Canonical note + ledger committed before this derived
+                    # best-effort projection. Re-read current text so replaying
+                    # an old op can never restore an old index snapshot.
+                    try:
+                        current = db.get_work(data.get("entity_id"))
+                        if current:
+                            research_index.sync_work(
+                                data.get("entity_id"), current.get("text_content") or "", db)
+                    except Exception as e:
+                        LOGGER.warning(
+                            "research_index_sync_failed work_id=%s error_type=%s",
+                            safe_log_id(data.get("entity_id")), safe_error_type(e))
                 self.send_json(status, result)
                 return
             if path == '/api/backups/progress':
