@@ -553,12 +553,9 @@ function openModal(id) {
     // `group-modal` has NO connectivity guard: creating a Person Group is
     // durable-first, under an id this device mints, so the modal opens and
     // saves with or without the server.
-    // `playlist-modal` is creation-only, so guarding here covers every caller at
-    // once -- the Playlists page, the Work detail panel, the New File flow and
-    // anything added later -- instead of relying on each surface to remember.
-    if (id === 'playlist-modal' && typeof prksOfflineGuardMutation === 'function') {
-        if (prksOfflineGuardMutation('Creating a Playlist requires a connection to PRKS.')) return;
-    }
+    // `playlist-modal` has none either, for the same reason: a Playlist is
+    // created under an id this device mints, and anything added to it is
+    // ordered behind that creation by the dependency mechanism.
     // `person-modal` has NO connectivity guard: creating a Person is
     // durable-first, so the modal opens and saves with or without the server.
     // `person-template-modal` never had one either -- it edits an unsaved local
@@ -3037,8 +3034,9 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
                 updatePanelContent('details');
                 if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
             } catch (_e) {
-                if (typeof prksPlaylistWasBlocked === 'function' && prksPlaylistWasBlocked(_e)) return;
-                if (statusEl && ownsPlaylistPanel(statusEl)) statusEl.textContent = 'Could not save.';
+                if (statusEl && ownsPlaylistPanel(statusEl)) {
+                    statusEl.textContent = String((_e && _e.message) || 'Could not save.');
+                }
             }
         };
     }
@@ -3117,8 +3115,9 @@ async function mountPlaylistEditSidebar(pl, ownerCtx) {
                             updatePanelContent('details');
                         }
                     } catch (_e) {
-                        if (typeof prksPlaylistWasBlocked === 'function' && prksPlaylistWasBlocked(_e)) return;
-                        if (addStatus && ownsPlaylistPanel(addStatus)) addStatus.textContent = 'Could not add.';
+                        if (addStatus && ownsPlaylistPanel(addStatus)) {
+                            addStatus.textContent = String((_e && _e.message) || 'Could not add.');
+                        }
                     }
                 };
                 row.appendChild(btn);
@@ -5891,8 +5890,8 @@ function initUploadDragAndDrop() {
             async function quickCreate(title) {
                 const t = String(title || '').trim();
                 if (!t) return null;
-                // Canonical wrapper: guards connectivity and owns the
-                // Playlists-domain invalidation for this surface too.
+                // The durable boundary, for this surface too: the id is
+                // minted here, so the playlist is pickable at once.
                 const newId = await createPlaylist(t, '');
                 if (!newId) throw new Error('create failed');
                 playlists = await loadPlaylists();

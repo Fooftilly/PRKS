@@ -23,13 +23,21 @@ projection, and is proven by focused E2E coverage.
 | Person Groups | `CREATE_PERSON_GROUP`, `SET_PERSON_GROUP_FIELD`, `ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`, `DELETE_PERSON_GROUP` | four shapes over one entity; deletion is a tombstone |
 | Person deletion | `DELETE_PERSON` | tombstone; a Person credited on a file stays protected |
 | Folders | `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`, `SET_WORK_FOLDER` | moving is a field; a Work's folder is a scalar on the Work |
+| Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; deletion has no UI control today (see below) |
 
 ## What one overnight pass added
 
 Person profile editing completed (acknowledged/effective/draft kept apart, and
 only what the session changed is sent), then Person Groups, Person deletion, the
-Tag vocabulary, and Folders. Five families' worth of surfaces moved off the
-network, and the gate stayed green between each.
+Tag vocabulary, Folders and Playlists. Six families' worth of surfaces moved off
+the network, and the gate stayed green between each.
+
+Playlists were the first family whose central decision is an AGGREGATE. An order
+is not a collection of racing positions: two devices that each dragged one video
+produced two whole orders, and merging them index by index would arrive at a
+third that neither of them chose. One revision covers the structure, a second
+drag on the same device replaces the first, and a second device's drag conflicts
+so the user decides.
 
 Four product defects surfaced along the way and were fixed where they lived,
 not worked around:
@@ -77,9 +85,6 @@ they should take, and what each must declare before implementation, are in
 * **Folder tags** — `ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG`, the one Folder
   relationship still on the network. It mirrors the Work-Tag family exactly and
   is the obvious next increment.
-* **Playlists** — create, field edits, delete, item add/remove, and reordering.
-  Ordering is an aggregate: an ordered list must not be modelled as independently
-  racing `order_index` fields.
 * **Concepts** — create, field edits, aliases, parents, delete. Aliases and
   parents are aggregates; note resolution depends on the complete vocabulary.
 * **Positions** — create, edit, delete. Lightweight scalar claim records.
@@ -99,6 +104,14 @@ they should take, and what each must declare before implementation, are in
   creation** for types needing no binary ingestion.
 * **Saved Views**, and a clearly-labelled cached-data search mode. Global search
   over uncached server records is not offered and should not be implied.
+
+### Implemented, but with no control in the app
+
+* **Deleting a playlist.** `DELETE /api/playlists/{id}` has always existed and
+  the durable `DELETE_PLAYLIST` family now shares its boundary, but no PRKS
+  surface offers the action — so it is reachable only through the API and the
+  tests. Adding the button is a product decision (where it lives, what it
+  warns about) rather than a synchronization one.
 
 ### Deliberately not built, because it would be new product semantics
 

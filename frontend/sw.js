@@ -104,6 +104,7 @@
         '/js/work-tag-state.js',
         '/js/tag-vocabulary-state.js',
         '/js/folder-state.js',
+        '/js/playlist-state.js',
         '/js/work-open-state.js',
         '/js/work-metadata-state.js',
     '/js/work-source-state.js',

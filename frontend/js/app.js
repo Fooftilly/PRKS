@@ -1880,6 +1880,35 @@ async function prksEffectiveFolderCatalogue(ops) {
     return await prksEffectiveFolderRows(rows, ops);
 }
 
+/** The Playlist catalogue this device holds, with pending intent applied. */
+async function prksEffectivePlaylistRows(rows, ops) {
+    if (!Array.isArray(rows) || typeof prksEffectivePlaylists !== 'function') return rows;
+    return prksEffectivePlaylists(rows, ops || await prksDurableOperationsOrNone());
+}
+
+/** The same overlay, reading the catalogue from cache for a caller that has none. */
+async function prksEffectivePlaylistCatalogue(ops) {
+    let rows = [];
+    try {
+        const cached = await prksOfflineReadList(PRKS_PLAYLISTS_LIST_KEY, '/api/playlists', {});
+        rows = cached && Array.isArray(cached.value) ? cached.value : [];
+    } catch (_e) { rows = []; }
+    return await prksEffectivePlaylistRows(rows, ops);
+}
+
+/**
+ * A Playlist that exists only because of an unsynchronized creation.
+ *
+ * Its empty `items` are the truth rather than a placeholder: nothing the
+ * server holds can be in a playlist it has never heard of. The route's own
+ * overlay then adds whatever this device has since put in it.
+ */
+function prksPendingCreatedPlaylist(playlistId, ops) {
+    if (typeof prksPendingPlaylistCreates !== 'function') return null;
+    const op = prksPendingPlaylistCreates(ops).find(row => row.entity_id === playlistId);
+    return op ? prksPlaylistRowFromOp(op) : null;
+}
+
 /** A Folder that exists only because of an unsynchronized creation. */
 async function prksPendingCreatedFolder(folderId) {
     if (typeof prksPendingFolderCreates !== 'function') return null;
@@ -2251,6 +2280,12 @@ async function prksHydratePendingWorkMetadata() {
     if (typeof prksRefreshPendingWorkFolders === 'function') {
         await prksRefreshPendingWorkFolders();
     }
+    /* And which PLAYLIST each video is in. A video's own page names its
+     * playlist, and so does the Work card's playlist section, so the same rule
+     * applies again. */
+    if (typeof prksRefreshPendingWorkPlaylists === 'function') {
+        await prksRefreshPendingWorkPlaylists();
+    }
 }
 
 /* Two overlays, applied in a fixed order and never by each other.
@@ -2274,6 +2309,11 @@ function prksEffectiveWorkRows(rows) {
      * corrects the FOLDER a row names, which none of them touch. */
     if (out && typeof prksApplyPendingWorkFolders === 'function') {
         out = prksApplyPendingWorkFolders(out);
+    }
+    /* And which playlist it is in, for the same reason and with the same
+     * independence: it corrects a column none of the others touch. */
+    if (out && typeof prksApplyPendingWorkPlaylists === 'function') {
+        out = prksApplyPendingWorkPlaylists(out);
     }
     return out;
 }
@@ -3032,8 +3072,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         { domain: PRKS_PLAYLISTS_DOMAIN, validate: prksIsPlaylistsIndexShape }
                     );
                     if (stale()) return;
-                    const pls = prksResolveOfflinePlaylistsIndex(offlinePlaylists);
-                    if (!pls) {
+                    const cachedPlaylists = prksResolveOfflinePlaylistsIndex(offlinePlaylists);
+                    const playlistOps = await prksDurableOperationsOrNone();
+                    if (stale()) return;
+                    /* A playlist created here is real, so an index this device
+                     * could not read is still a page when the queue holds one.
+                     */
+                    const pls = cachedPlaylists
+                        ? await prksEffectivePlaylistRows(cachedPlaylists, playlistOps)
+                        : await prksEffectivePlaylistRows([], playlistOps);
+                    if (stale()) return;
+                    if (!cachedPlaylists && !(pls && pls.length)) {
                         prksOfflineRenderUnavailable(contentDiv, 'Playlists not available offline');
                         break;
                     }
@@ -3048,12 +3097,45 @@ async function prksRenderTabRoute(ctx, hash, options) {
             case 'playlist-detail': {
                 const plId = route.params.playlistId;
                 if (typeof renderPlaylistDetail === 'function') {
-                    const offlinePlaylist = await prksOfflineDetailFetch(
-                        'playlist', plId, '/api/playlists/' + encodeURIComponent(plId), routeSignal,
-                        { domain: PRKS_PLAYLISTS_DOMAIN, validate: (value) => prksIsPlaylistShape(value, plId) }
-                    );
+                    /* The durable queue first: a playlist this device created
+                     * and has not sent cannot exist on the server, and a real
+                     * 404 is a domain answer ("no such playlist") rather than
+                     * unavailability. */
+                    const plOps = await prksDurableOperationsOrNone();
+                    if (stale()) return;
+                    const plDeleted = typeof prksPendingPlaylistDeletions === 'function' &&
+                        prksPendingPlaylistDeletions(plOps).has(plId);
+                    const plUnsent = !plDeleted &&
+                        typeof prksPendingPlaylistCreates === 'function' &&
+                        prksPendingPlaylistCreates(plOps).some(op => op.entity_id === plId);
+                    const offlinePlaylist = plUnsent
+                        ? { value: null, source: 'unavailable', cachedAt: null }
+                        : await prksOfflineDetailFetch(
+                            'playlist', plId, '/api/playlists/' + encodeURIComponent(plId), routeSignal,
+                            { domain: PRKS_PLAYLISTS_DOMAIN, validate: (value) => prksIsPlaylistShape(value, plId) }
+                        );
                     if (stale()) return;
                     const resolvedPlaylist = prksResolveOfflinePlaylist(offlinePlaylist, plId);
+                    if (plDeleted) {
+                        resolvedPlaylist.unavailable = true;
+                        resolvedPlaylist.playlist = null;
+                    }
+                    /* The browse catalogue is read only when a membership is
+                     * pending: it is the one place a row for a video added here
+                     * can come from, and a device with nothing pending must not
+                     * pay for it. */
+                    let addedWorks = [];
+                    if (typeof prksPendingWorkPlaylists === 'function' &&
+                        prksPendingWorkPlaylists(plOps).size) {
+                        const browse = await prksOfflineWorksBrowseFetch(routeSignal);
+                        if (stale()) return;
+                        addedWorks = prksResolveOfflineWorksBrowse(browse) || [];
+                    }
+                    if (plUnsent) {
+                        const pendingPlaylist = prksPendingCreatedPlaylist(plId, plOps);
+                        resolvedPlaylist.playlist = pendingPlaylist;
+                        resolvedPlaylist.unavailable = !pendingPlaylist;
+                    }
                     if (resolvedPlaylist.unavailable) {
                         ctx.setEntity('playlist', null);
                         ctx.ui.playlistEditing = false;
@@ -3062,7 +3144,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         titleOpts = { notFound: true, notFoundTitle: 'Playlist not available offline' };
                         break;
                     }
-                    const pl = resolvedPlaylist.playlist;
+                    const pl = typeof prksEffectivePlaylistDetail === 'function'
+                        ? prksEffectivePlaylistDetail(resolvedPlaylist.playlist, plOps, addedWorks)
+                        : resolvedPlaylist.playlist;
                     await prksHydratePendingWorkMetadata();
                     if (stale()) return;
                     ctx.setEntity('playlist', pl);
@@ -3484,24 +3568,38 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (!internalRefresh && offlineWork.value && typeof prksRecordWorkOpened === 'function') {
                     void prksRecordWorkOpened(offlineWork.value);
                 }
-                /* Where this file has been FILED, as the user last decided --
-                 * the acknowledged record plus any unsynchronized move. The
-                 * card that names its folder is rendered from this object.
+                /* Where this file has been FILED and which PLAYLIST it is in,
+                 * as the user last decided -- the acknowledged record plus any
+                 * unsynchronized move. The cards that name a folder and a
+                 * playlist are both rendered from this object.
                  *
-                 * The map is applied synchronously and refreshed WITHOUT
+                 * The maps are applied synchronously and refreshed WITHOUT
                  * blocking: this page renders from the cached entity, and
                  * making it wait on a durable read first would delay the whole
                  * Work behind bookkeeping. When the refresh lands it corrects
                  * the record in place rather than holding up the paint. */
-                const work = offlineWork.value && typeof prksApplyPendingWorkFolders === 'function'
-                    ? prksApplyPendingWorkFolders([offlineWork.value])[0]
-                    : offlineWork.value;
-                if (work && typeof prksRefreshPendingWorkFolders === 'function') {
-                    void prksRefreshPendingWorkFolders().then(function () {
+                const prksPlacePendingWork = function (record) {
+                    let placed = record;
+                    if (placed && typeof prksApplyPendingWorkFolders === 'function') {
+                        placed = prksApplyPendingWorkFolders([placed])[0];
+                    }
+                    if (placed && typeof prksApplyPendingWorkPlaylists === 'function') {
+                        placed = prksApplyPendingWorkPlaylists([placed])[0];
+                    }
+                    return placed;
+                };
+                const work = prksPlacePendingWork(offlineWork.value);
+                if (work) {
+                    void Promise.all([
+                        typeof prksRefreshPendingWorkFolders === 'function'
+                            ? prksRefreshPendingWorkFolders() : null,
+                        typeof prksRefreshPendingWorkPlaylists === 'function'
+                            ? prksRefreshPendingWorkPlaylists() : null,
+                    ]).then(function () {
                         if (stale() || !ctx.getEntity) return;
                         const current = ctx.getEntity('work');
                         if (!current || current.id !== work.id) return;
-                        const next = prksApplyPendingWorkFolders([current])[0];
+                        const next = prksPlacePendingWork(current);
                         if (next === current) return;
                         ctx.setEntity('work', next);
                         /* Only when this tab actually owns the shared panel. A
@@ -4407,7 +4505,9 @@ function initForms() {
     const playlistBtn = document.getElementById('save-playlist-btn');
     if (playlistBtn) {
         playlistBtn.onclick = async () => {
-            if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
+            /* No connectivity guard: a Playlist is created under an id this
+             * device mints, and the video waiting to be attached is ordered
+             * behind that creation by the dependency mechanism. */
             const titleEl = document.getElementById('playlist-title');
             const descEl = document.getElementById('playlist-description');
             const errEl = document.getElementById('playlist-error');
@@ -4428,15 +4528,15 @@ function initForms() {
             const old = playlistBtn.textContent;
             playlistBtn.textContent = 'Creating…';
             try {
-                // Canonical wrapper: it owns the Playlists-domain invalidation
-                // and re-guards connectivity, which can have dropped since the
-                // modal opened.
+                // The durable boundary: it mints the id and enqueues the
+                // creation. The reconciler owns the cache once the server
+                // answers.
                 const newId = await createPlaylist(title, description);
                 if (!newId) throw new Error('Could not create playlist');
                 closeModals();
-                // If a work is waiting to be attached, attach it now. The
-                // wrapper also invalidates that Work's cached entity, whose
-                // playlist_id/playlist_title just changed.
+                // If a video is waiting to be attached, attach it now. The
+                // membership names the new playlist, so it is ordered behind
+                // the creation automatically.
                 const pending = window.__prksPendingPlaylistAttach;
                 if (pending && pending.workId) {
                     try {
@@ -4460,15 +4560,16 @@ function initForms() {
                     }
                 }
             } catch (e) {
-                // A blocked mutation already told the user why; a second
-                // "Could not create playlist." would only muddy it.
-                if (typeof prksPlaylistWasBlocked === 'function' && prksPlaylistWasBlocked(e)) return;
                 console.error(e);
+                /* The durable layer names the actual problem -- an unknown base
+                 * for the video that was waiting to be attached, say -- and a
+                 * flat "Could not create playlist." would hide it. */
+                const message = String((e && e.message) || 'Could not create playlist.');
                 if (errEl) {
-                    errEl.textContent = 'Could not create playlist.';
+                    errEl.textContent = message;
                     errEl.classList.remove('hidden');
                 } else {
-                    await prksAlertMessage('Could not create playlist.', 'Error');
+                    await prksAlertMessage(message, 'Error');
                 }
             } finally {
                 playlistBtn.disabled = false;

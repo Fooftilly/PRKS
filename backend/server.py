@@ -2218,6 +2218,29 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/playlists/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
+                # REVISIONS ONLY: the three field revisions and the ORDER
+                # revision. The playlist detail already carries its items in
+                # order, so echoing them here would make a second cached copy.
+                data = db.get_playlist_sync_state(unquote(path.split('/')[3]))
+                if data is None:
+                    self.send_json(404, {"error": "Playlist not found"})
+                else:
+                    etag = db.etag_for_representation("playlist-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/works/') and path.endswith('/playlist-state') and len(path.split('/')) == 5:
+                data = db.get_work_playlist_state(unquote(path.split('/')[3]))
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    etag = db.etag_for_representation("work-playlist-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/persons/') and path.endswith('/group-state') and len(path.split('/')) == 5:
                 # Membership revisions for one Person, including tombstones:
                 # a pair this device once removed has a revision, and adding it

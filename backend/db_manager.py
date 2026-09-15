@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from backend import (folder_sync, person_group_sync, person_metadata_sync, person_sync,
-                     tag_sync, work_metadata_sync, work_open_sync, work_role_sync,
-                     work_source_sync, work_tag_sync)
+                     playlist_sync, tag_sync, work_metadata_sync, work_open_sync,
+                     work_role_sync, work_source_sync, work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.entity_ids import generate as generate_entity_id, is_distributed
 from backend.log_safety import safe_error_type, safe_log_label
@@ -2638,36 +2638,48 @@ class PRKSDatabase:
     # --- Playlists (ordered collections of works, used for video courses) ---
 
     def add_playlist(self, title: str, description: str = "", original_url: str = "") -> str:
-        t = (title or "").strip() or "Untitled playlist"
-        d = (description or "").strip()
-        u = (original_url or "").strip()
         pid = self.generate_id("PL")
-        self.execute_query(
-            "INSERT INTO playlists (id, title, description, original_url) VALUES (?, ?, ?, ?)",
-            (pid, t, d, (u or None)),
-        )
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            # The same construction boundary the durable CREATE_PLAYLIST uses,
+            # so the two paths cannot drift on what a legal playlist is.
+            playlist_sync.insert_playlist_on_conn(conn, pid, title, description, original_url)
         return pid
 
     def update_playlist(self, playlist_id: str, fields: dict) -> None:
-        allowed = {"title", "description", "original_url"}
-        updates = {k: v for k, v in fields.items() if k in allowed}
-        if "title" in updates:
-            updates["title"] = (updates["title"] or "").strip() or "Untitled playlist"
-        if "description" in updates:
-            updates["description"] = (updates["description"] or "").strip()
-        if "original_url" in updates:
-            updates["original_url"] = (updates["original_url"] or "").strip() or None
+        """Edit a Playlist through the revision-aware boundary.
+
+        Every write shares the durable `SET_PLAYLIST_FIELD` family's boundary,
+        so a playlist can never change without its revision: an offline device
+        holding the old value would otherwise have no way to discover it had
+        been overtaken.
+        """
+        updates = {k: v for k, v in fields.items() if k in playlist_sync.FIELD_SET}
         if not updates:
             return
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [playlist_id]
-        self.execute_query(
-            f"UPDATE playlists SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            tuple(values),
-        )
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute(
+                    "SELECT 1 FROM playlists WHERE id = ?", (playlist_id,)).fetchone():
+                raise ValueError("Playlist not found.")
+            for field in playlist_sync.FIELDS:
+                if field not in updates:
+                    continue
+                value = updates[field]
+                playlist_sync.set_field_on_conn(
+                    conn, playlist_id, field, "" if value in (None, False) else str(value))
 
     def delete_playlist(self, playlist_id: str) -> None:
-        self.execute_query("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+        """Destruction, through the boundary that advances what it invalidates.
+
+        Its items go with it -- they are memberships, not the videos themselves
+        -- so every member Work's membership revision advances too: a device
+        holding "this video is in that playlist" has to be able to discover it
+        was overtaken.
+        """
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            playlist_sync.delete_playlist_on_conn(conn, playlist_id)
 
     def get_all_playlists(self) -> List[dict]:
         rows = self.execute_query(
@@ -2701,34 +2713,35 @@ class PRKSDatabase:
         return p
 
     def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
-        with self.connection() as conn:
-            ok_p = conn.execute("SELECT 1 FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
-            ok_w = conn.execute("SELECT 1 FROM works WHERE id = ?", (work_id,)).fetchone()
-            if not ok_p or not ok_w:
-                raise ValueError("Playlist or work not found.")
-            # Enforce one playlist per work: move if already in another playlist.
-            conn.execute("DELETE FROM playlist_items WHERE work_id = ?", (work_id,))
+        """Put a Work in a Playlist, through the revision-aware boundary.
 
+        A Work is in at most one playlist, so this is a SCALAR write on the
+        WORK: the durable `SET_WORK_PLAYLIST` family shares this boundary, and
+        without that an offline device holding the old playlist could never
+        discover it had been overtaken.
+
+        An explicit `position` is honoured as a second decision -- membership,
+        then order -- because those are two revisions and the caller asked for
+        both.
+        """
+        pid = (playlist_id or "").strip()
+        wid = (work_id or "").strip()
+        if not pid or not wid:
+            raise ValueError("Playlist or work not found.")
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM works WHERE id = ?", (wid,)).fetchone():
+                raise ValueError("Playlist or work not found.")
+            try:
+                playlist_sync.set_work_playlist_on_conn(conn, wid, pid)
+            except playlist_sync.PlaylistRuleError as error:
+                raise ValueError("Playlist or work not found.") from error
             if position is None:
-                row = conn.execute(
-                    "SELECT COALESCE(MAX(position), -1) AS m FROM playlist_items WHERE playlist_id = ?",
-                    (playlist_id,),
-                ).fetchone()
-                mx = int(row["m"]) if row else -1
-                position = mx + 1
-            conn.execute(
-                """
-                INSERT INTO playlist_items (playlist_id, work_id, position)
-                VALUES (?, ?, ?)
-                ON CONFLICT(playlist_id, work_id) DO UPDATE SET position=excluded.position
-                """,
-                (playlist_id, work_id, int(position)),
-            )
-            conn.execute(
-                "UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (playlist_id,),
-            )
-            conn.commit()
+                return
+            order = [w for w in playlist_sync.current_order(conn, pid) if w != wid]
+            index = max(0, min(int(position), len(order)))
+            order.insert(index, wid)
+            playlist_sync.set_order_on_conn(conn, pid, order)
 
     def remove_work_from_playlist(self, playlist_id: str, work_id: str) -> None:
         """Membership removal and the Playlist timestamp bump are one write.
@@ -2737,54 +2750,42 @@ class PRKSDatabase:
         previous cache eligible", which is only sound if a failure really means
         nothing changed. Two auto-committing statements could otherwise drop the
         membership, fail the second write, and return an error the client would
-        (correctly, by contract) treat as a no-op. See `add_work_to_playlist`
-        and `reorder_playlist`, which are transactional for the same reason.
+        (correctly, by contract) treat as a no-op.
+
+        Removing is the same SCALAR as adding, with `''` for the value -- so a
+        video taken out of a playlist advances the same revision that putting it
+        in did.
         """
+        wid = (work_id or "").strip()
+        pid = (playlist_id or "").strip()
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "DELETE FROM playlist_items WHERE playlist_id = ? AND work_id = ?",
-                (playlist_id, work_id),
-            )
-            conn.execute(
-                "UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (playlist_id,),
-            )
+            if playlist_sync.current_work_playlist(conn, wid) != pid:
+                return
+            playlist_sync.set_work_playlist_on_conn(conn, wid, "")
 
     def reorder_playlist(self, playlist_id: str, work_ids: List[str]) -> None:
+        """Rewrite the whole order, through the boundary the aggregate owns."""
         if not work_ids:
             return
         with self.connection() as conn:
-            ok_p = conn.execute("SELECT 1 FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
-            if not ok_p:
-                raise ValueError("Playlist not found.")
-            # Keep only works that are currently in this playlist.
-            cur = conn.execute(
-                "SELECT work_id FROM playlist_items WHERE playlist_id = ?",
-                (playlist_id,),
-            ).fetchall()
-            present = {r[0] for r in cur}
-            order: List[str] = []
-            seen = set()
-            for wid in work_ids:
-                if not wid or wid in seen or wid not in present:
-                    continue
-                seen.add(wid)
-                order.append(wid)
-            # Append the rest preserving existing relative order.
-            remaining = [w for w in present if w not in seen]
-            for wid in remaining:
-                order.append(wid)
-            for idx, wid in enumerate(order):
-                conn.execute(
-                    "UPDATE playlist_items SET position = ? WHERE playlist_id = ? AND work_id = ?",
-                    (idx, playlist_id, wid),
-                )
-            conn.execute(
-                "UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (playlist_id,),
-            )
-            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                playlist_sync.set_order_on_conn(conn, playlist_id, list(work_ids))
+            except playlist_sync.PlaylistRuleError as error:
+                raise ValueError("Playlist not found.") from error
+
+    def get_playlist_sync_state(self, playlist_id: str) -> Optional[dict]:
+        """Field revisions and the order revision for one Playlist."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return playlist_sync.get_playlist_state_on_conn(conn, playlist_id)
+
+    def get_work_playlist_state(self, work_id: str) -> Optional[dict]:
+        """Which playlist a Work is in, and the revision that says so."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return playlist_sync.get_work_playlist_state_on_conn(conn, work_id)
 
     def get_work_annotations(self, work_id: str) -> str:
         """Reconstruct annotation JSON solely from canonical `annotations` rows."""

@@ -428,38 +428,43 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             at = api.index(name)
             self.assertNotIn("PersonGroups", api[at : at + 1400], name)
 
-    def test_playlist_mutations_route_through_canonical_wrappers(self):
+    def test_playlist_mutations_route_through_durable_boundaries(self):
         """Playlist writes are spread across playlists.js, ui.js and app.js, so
-        the wrappers -- not each surface -- own the guard and the coherence
-        hook. A raw endpoint call outside playlists.js is how that silently
-        breaks."""
+        the wrappers -- not each surface -- own the durable boundary. A raw
+        endpoint call outside playlists.js is how that silently breaks."""
         pl = _read(os.path.join(_FRONTEND, "js", "components", "playlists.js"))
-        for fn, expect_work in (
-            ("async function createPlaylist(", False),
-            ("async function updatePlaylist(", True),
-            ("async function addWorkToPlaylist(", True),
-            ("async function removeWorkFromPlaylist(", True),
-            ("async function reorderPlaylist(", False),
+        for fn, writer in (
+            ("async function createPlaylist(", "prksCreatePlaylistDurably("),
+            ("async function updatePlaylist(", "prksSavePlaylistFieldsDurably("),
+            ("async function prksSetWorkPlaylist(", "prksSetWorkPlaylistDurably("),
+            ("async function reorderPlaylist(", "prksReorderPlaylistItemsDurably("),
+            ("async function deletePlaylistCanonical(", "prksDeletePlaylistDurably("),
         ):
             start = pl.index(fn)
             end = pl.find("\nasync function ", start + 1)
             body = pl[start : end if end != -1 else len(pl)]
-            # Guarded before the request, invalidated only after success.
-            self.assertIn("prksPlaylistMutationBlocked(", body, fn)
-            self.assertLess(body.index("prksPlaylistMutationBlocked("), body.index("prksRequest("), fn)
-            self.assertIn("prksPlaylistsChanged();", body, fn)
-            self.assertLess(body.index("if (!res.ok)"), body.index("prksPlaylistsChanged();"), fn)
-            if expect_work:
-                self.assertIn("prksPlaylistWorkChanged(", body, fn)
-            else:
-                # A new Playlist has no members; reorder changes no Work field.
-                self.assertNotIn("prksPlaylistWorkChanged(", body, fn)
-        # Playlist title is embedded in Work detail (playlist_title), so the
-        # rename -- and only the rename -- evicts member Work snapshots.
-        update = pl[pl.index("async function updatePlaylist(") : pl.index("async function addWorkToPlaylist(")]
-        self.assertIn("previousTitle", update)
-        self.assertIn("memberWorkIds", update)
-        self.assertIn("titleChanged", update)
+            self.assertIn(writer, body, fn)
+            # Durable, so never gated on connectivity and never a request.
+            self.assertNotIn("prksRequest(", body, fn)
+            self.assertNotIn("prksOfflineGuardMutation(", body, fn)
+            # No manual domain invalidation: the reconcilers own the cache once
+            # the server answers, and marking a domain changed for an intent
+            # that has not landed would discard a page to show the same thing.
+            self.assertNotIn("prksPlaylistsChanged", body, fn)
+        # Adding and removing are the SAME scalar on the Work, so both names
+        # reach the one family rather than two racing membership operations.
+        for fn in ("async function addWorkToPlaylist(",
+                   "async function removeWorkFromPlaylist("):
+            start = pl.index(fn)
+            end = pl.find("\nasync function ", start + 1)
+            self.assertIn("prksSetWorkPlaylist(", pl[start:end], fn)
+        # An edit measures the draft against the ACKNOWLEDGED base, not against
+        # the values the page happens to be showing.
+        update = pl[pl.index("async function updatePlaylist("):
+                    pl.index("async function prksSetWorkPlaylist(")]
+        self.assertIn("prksAcknowledgedPlaylistBase(playlistId, ops)", update)
+        self.assertIn("prksDirtyPlaylistFields(playlistId, draft, base, ops)", update)
+        self.assertIn("if (!base) throw prksPlaylistBaseUnavailable(", update)
         # No other production file may issue a raw Playlist write.
         for name in (
             os.path.join(_FRONTEND, "js", "app.js"),
@@ -468,51 +473,46 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             src = _read(name)
             self.assertNotIn("prksRequest('/api/playlists'", src, name)
             self.assertNotIn("/api/playlists/${encodeURIComponent", src, name)
-        # ... and the creation modal is guarded centrally, so every caller
-        # (Playlists page, Work panel, New File flow) is covered at once.
+        # ... and the creation modal carries no connectivity guard any more:
+        # the id is minted here, so the playlist is real before any server
+        # has heard of it.
         ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
-        self.assertIn("id === 'playlist-modal'", ui)
-        self.assertIn("Creating a Playlist requires a connection to PRKS.", ui)
+        self.assertNotIn("Creating a Playlist requires a connection to PRKS.", ui)
 
-    def test_work_side_playlist_card_is_read_only_offline(self):
+    def test_work_side_playlist_card_disables_only_what_needs_a_server(self):
         """The Work detail page's Playlist card is a Playlist mutation surface
         on a *Work* route, so it needs its own owned policy -- it cannot ride on
-        the Playlist routes' binding, and an unguarded Edit would mount an
-        editor that fetches the Playlist catalog while offline."""
+        the Playlist routes' binding. What it disables offline is the SEARCH,
+        which reads the Playlist catalogue; the decisions themselves are
+        durable."""
         pl = _read(os.path.join(_FRONTEND, "js", "components", "playlists.js"))
-        start = pl.index("async function mountPlaylistAttachControls(")
-        body = pl[start:]
-        # Every Work-side control is settled by one owned helper...
-        for control in (
-            "#prks-work-playlist-search",
-            "#prks-work-playlist-set-btn",
-            "#prks-work-playlist-clear-btn",
-            "#prks-work-playlist-new-btn",
-        ):
-            self.assertIn(control, pl[: pl.index("function prksApplyPlaylistOfflineState(")], control)
+        body = pl[pl.index("async function mountPlaylistAttachControls("):]
+        policy = pl[pl.index("const PRKS_WORK_PLAYLIST_MUTATION_SELECTOR"):]
+        policy = policy[: policy.index("].join(', ');")]
+        for control in ("#prks-work-playlist-search", "#prks-work-playlist-set-btn"):
+            self.assertIn(control, policy, control)
+        # Clear names no playlist at all, and New... mints one here and attaches
+        # this video to it. Both are ordinary durable decisions.
+        self.assertNotIn("#prks-work-playlist-clear-btn", policy)
+        self.assertNotIn("#prks-work-playlist-new-btn", policy)
         self.assertIn("prksApplyWorkPlaylistOfflineState(ctx);", body)
-        # ... and Edit refuses to *start* a session offline while Done stays live.
-        self.assertIn("const leaving = !!(ctx && ctx.ui && ctx.ui.workPlaylistEditing);", body)
-        self.assertIn("if (!leaving && prksPlaylistMutationBlocked(", body)
+        # Edit still refuses to *start* a session offline while Done stays live:
+        # mounting the editor reads the Playlist catalogue.
         self.assertIn("editBtn.disabled = !online && !editing;", pl)
         # Neither Playlist read may reach the network while non-online: both are
         # raw fetches, not offline read-throughs, and this function is invoked
         # with `void` so a rejection would go unhandled.
-        self.assertIn("pid && prksPlaylistRuntimeOnline() && typeof fetchPlaylistDetails === 'function'", body)
+        self.assertIn(
+            "pid && prksPlaylistRuntimeOnline() && typeof fetchPlaylistDetails === 'function'",
+            body)
         self.assertIn("if (prksPlaylistRuntimeOnline()) {", body)
-        self.assertLess(body.index("if (prksPlaylistRuntimeOnline()) {"), body.index("await fetchPlaylists("))
-        # The pending attachment is global state, so the guard runs before it is
-        # written -- openModal()'s own guard refuses too late to prevent that.
-        new_at = body.index("newBtn.onclick = async () => {")
-        new_body = body[new_at : new_at + 900]
-        self.assertLess(
-            new_body.index("prksPlaylistMutationBlocked("),
-            new_body.index("window.__prksPendingPlaylistAttach = {"),
-        )
-        # A blocked mutation already explained itself; no second failure status.
+        self.assertLess(body.index("if (prksPlaylistRuntimeOnline()) {"),
+                        body.index("await fetchPlaylists("))
+        # A failed durable write names the actual problem rather than a flat
+        # "could not": an unknown base is a different thing from a refusal.
         for handler in ("setBtn.onclick", "clearBtn.onclick"):
             at = body.index(handler)
-            self.assertIn("prksPlaylistWasBlocked(_e)", body[at : at + 2600], handler)
+            self.assertIn("(_e && _e.message)", body[at : at + 2600], handler)
 
     def test_playlist_domain_dependencies_and_exclusions(self):
         """Playlist detail renders each item's title, author_text and

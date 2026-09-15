@@ -83,6 +83,11 @@
         'ADD_PERSON_GROUP_MEMBER',
         'REMOVE_PERSON_GROUP_MEMBER',
         'DELETE_PERSON_GROUP',
+        'CREATE_PLAYLIST',
+        'SET_PLAYLIST_FIELD',
+        'REORDER_PLAYLIST_ITEMS',
+        'DELETE_PLAYLIST',
+        'SET_WORK_PLAYLIST',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -111,6 +116,10 @@
      * bounds PROVENANCE on a non-video Work, this one bounds the aggregate's
      * URL. They are equal today and are free to diverge. */
     const WORK_SOURCE_URL_BYTES = 64 * 1024;
+    /* Mirrors `backend/playlist_sync.MAX_ITEMS`. An order travels as ONE
+     * payload -- that is what makes it an aggregate -- so the number of videos
+     * it can name is bounded by what an envelope may carry. */
+    const PLAYLIST_MAX_ITEMS = 1000;
     const MAX_ERROR_CHARS = 500;
 
     /* The Work-Person role family. All three name one element's state, so they
@@ -170,6 +179,34 @@
         const src = isPlainObject(input) ? input : {};
         const payload = {};
         FOLDER_FIELDS.forEach(function (name) {
+            const value = src[name];
+            payload[name] = value == null ? '' : String(value).trim();
+        });
+        return payload;
+    }
+
+    /* The editable columns on a Playlist, in the server's vocabulary. A video's
+     * own title is NOT among them: renaming a video from a playlist page
+     * changes the Work, and goes on using the Work metadata family. */
+    const PLAYLIST_FIELDS = Object.freeze(['title', 'description', 'original_url']);
+
+    /* Every unsynchronized operation that names one playlist, whatever it does
+     * to it -- including the videos filed into it, which a deletion has to know
+     * about because sending "put this here" immediately before "delete this"
+     * asks the server to do work the next operation destroys. */
+    function operationsNamingPlaylist(rows, playlistId) {
+        return (Array.isArray(rows) ? rows : []).filter(function (row) {
+            if (!row || row.status === STATUS_ACKNOWLEDGED) return false;
+            if (row.entity_type === 'playlist' && row.entity_id === playlistId) return true;
+            return row.operation === 'SET_WORK_PLAYLIST' && !!row.payload &&
+                row.payload.playlist_id === playlistId;
+        });
+    }
+
+    function canonicalPlaylistPayload(input) {
+        const src = isPlainObject(input) ? input : {};
+        const payload = {};
+        PLAYLIST_FIELDS.forEach(function (name) {
             const value = src[name];
             payload[name] = value == null ? '' : String(value).trim();
         });
@@ -1505,6 +1542,236 @@
                 });
         }
 
+        /* ---- Playlists: construction, fields, membership, order, deletion ---- */
+
+        function assertPlaylistIsNotBeingDeleted(rows, playlistId, verb) {
+            const pendingDelete = (rows || []).find(r => r &&
+                r.operation === 'DELETE_PLAYLIST' && r.entity_id === playlistId &&
+                r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This playlist is being deleted, so it cannot be ' + verb + '.');
+            }
+        }
+
+        function createPlaylist(fields) {
+            const payload = canonicalPlaylistPayload(fields);
+            if (!payload.title) payload.title = 'Untitled playlist';
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'CREATE_PLAYLIST', entity_type: 'playlist',
+                        entity_id: generateEntityId('PL', uuid),
+                        payload: payload, base_revision: null,
+                    }, null));
+                });
+        }
+
+        /** One Save, however many of a playlist's fields it touched. */
+        function savePlaylistFields(playlistId, changes, base) {
+            if (!isNonBlankString(playlistId) || !isPlainObject(changes) || !isPlainObject(base)) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid playlist save.'));
+            }
+            for (const field of Object.keys(changes)) {
+                const observed = base[field];
+                if (PLAYLIST_FIELDS.indexOf(field) === -1) {
+                    return Promise.reject(localStoreError('unknown_field',
+                        'Not an editable playlist field: ' + field));
+                }
+                if (typeof changes[field] !== 'string' || !isPlainObject(observed) ||
+                    typeof observed.value !== 'string' ||
+                    !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                    return Promise.reject(localStoreError('invalid_base',
+                        'Invalid observed field state.'));
+                }
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertPlaylistIsNotBeingDeleted(rows, playlistId, 'edited');
+                    const createOp = playlistCreationDependency(rows, playlistId,
+                        'it cannot be edited');
+                    const written = [];
+                    for (const field of Object.keys(changes)) {
+                        const desired = changes[field];
+                        const observed = base[field];
+                        const existing = rows.find(r => r.operation === 'SET_PLAYLIST_FIELD' &&
+                            r.entity_type === 'playlist' && r.entity_id === playlistId &&
+                            r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                        if (existing) {
+                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                                throw localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.');
+                            }
+                            if (existing.payload.value === desired) {
+                                written.push(existing);
+                                continue;
+                            }
+                            await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                        }
+                        if (desired === observed.value) continue;
+                        written.push(await insertEnvelopeIn(request, {
+                            operation: 'SET_PLAYLIST_FIELD', entity_type: 'playlist',
+                            entity_id: playlistId, payload: { field, value: desired },
+                            base_revision: observed.revision,
+                            depends_on: createOp ? [createOp.op_id] : [],
+                        }, null));
+                    }
+                    setResult(written);
+                });
+        }
+
+        /**
+         * "This video is now in that playlist", coalescing.
+         *
+         * A video is in at most ONE playlist, so this is a scalar on the WORK
+         * and `''` means "in no playlist". Putting it back where it already was
+         * leaves no intent at all. `observed` is `{playlist_id, revision}`.
+         */
+        function setWorkPlaylist(workId, playlistId, observed, localContext) {
+            if (!isNonBlankString(workId) || typeof playlistId !== 'string' ||
+                !isPlainObject(observed) || typeof observed.playlist_id !== 'string' ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid filing.'));
+            }
+            const desired = playlistId.trim();
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    if (desired) assertPlaylistIsNotBeingDeleted(rows, desired, 'added to');
+                    const existing = rows.find(r => r.operation === 'SET_WORK_PLAYLIST' &&
+                        r.entity_type === 'work' && r.entity_id === workId &&
+                        r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy',
+                                'This file’s playlist is syncing or needs resolution.');
+                        }
+                        if (existing.payload.playlist_id === desired) {
+                            setResult(existing);
+                            return;
+                        }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    if (desired === observed.playlist_id) { setResult(null); return; }
+                    const createOp = desired
+                        ? playlistCreationDependency(rows, desired,
+                            'nothing can be added to it')
+                        : null;
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'SET_WORK_PLAYLIST', entity_type: 'work',
+                        entity_id: workId, payload: { playlist_id: desired },
+                        base_revision: observed.revision,
+                        depends_on: createOp ? [createOp.op_id] : [],
+                    }, localContext || null));
+                });
+        }
+
+        /**
+         * The whole order, as ONE aggregate.
+         *
+         * A drag replaces the previous unsent drag rather than queueing beside
+         * it: both describe the same decision -- "this is the order" -- and the
+         * later one is what the user is looking at. That is coalescing, not
+         * merging: two DIFFERENT devices' orders still conflict on the server.
+         *
+         * `observed` is `{work_ids, revision}`. An order equal to the
+         * acknowledged one leaves no intent.
+         */
+        function reorderPlaylistItems(playlistId, workIds, observed) {
+            if (!isNonBlankString(playlistId) || !Array.isArray(workIds) ||
+                !isPlainObject(observed) || !Array.isArray(observed.work_ids) ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid order.'));
+            }
+            if (workIds.length > PLAYLIST_MAX_ITEMS) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'This playlist is too long to reorder.'));
+            }
+            const desired = [];
+            for (const workId of workIds) {
+                if (!isNonBlankString(workId)) {
+                    return Promise.reject(localStoreError('invalid_envelope',
+                        'Invalid order.'));
+                }
+                if (desired.indexOf(workId) === -1) desired.push(workId);
+            }
+            const same = list => list.length === desired.length &&
+                list.every((id, index) => id === desired[index]);
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertPlaylistIsNotBeingDeleted(rows, playlistId, 'reordered');
+                    const createOp = playlistCreationDependency(rows, playlistId,
+                        'it cannot be reordered');
+                    const existing = rows.find(r => r.operation === 'REORDER_PLAYLIST_ITEMS' &&
+                        r.entity_type === 'playlist' && r.entity_id === playlistId &&
+                        r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy',
+                                'This playlist’s order is syncing or needs resolution.');
+                        }
+                        if (same(existing.payload.work_ids || [])) {
+                            setResult(existing);
+                            return;
+                        }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    if (same(observed.work_ids)) { setResult(null); return; }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'REORDER_PLAYLIST_ITEMS', entity_type: 'playlist',
+                        entity_id: playlistId, payload: { work_ids: desired },
+                        base_revision: observed.revision,
+                        depends_on: createOp ? [createOp.op_id] : [],
+                    }, null));
+                });
+        }
+
+        /**
+         * Delete a playlist, cancelling what was never sent.
+         *
+         * The same rule every other destruction uses. A video this device had
+         * put INTO the playlist counts as naming it -- and unlike a folder,
+         * whose deletion a file would refuse, here the membership simply
+         * becomes work the deletion undoes.
+         */
+        function deletePlaylist(playlistId) {
+            if (!isNonBlankString(playlistId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid playlist.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = operationsNamingPlaylist(rows, playlistId);
+                    const already = mine.find(r => r.operation === 'DELETE_PLAYLIST');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_PLAYLIST');
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row) && row.operation !== 'CREATE_PLAYLIST') {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_PLAYLIST', entity_type: 'playlist',
+                        entity_id: playlistId, payload: {},
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
         /* ---- Person Groups: construction, fields, membership, deletion ---- */
 
         function createPersonGroup(fields) {
@@ -2014,6 +2281,12 @@
                 'This group could not be created on the server, so ' + consequence + '.');
         }
 
+        /** The same three states, for a Playlist this device created. */
+        function playlistCreationDependency(rows, playlistId, consequence) {
+            return creationDependency(rows, 'CREATE_PLAYLIST', 'playlist', playlistId,
+                'This playlist could not be created on the server, so ' + consequence + '.');
+        }
+
         function reappliable(row) {
             const codes = REAPPLIABLE_RESULTS[row.operation];
             return !!codes && !!row.server_result &&
@@ -2333,6 +2606,11 @@
             createPerson,
             savePersonMetadataFields: savePersonMetadataFields,
             deletePerson: deletePerson,
+            createPlaylist: createPlaylist,
+            savePlaylistFields: savePlaylistFields,
+            setWorkPlaylist: setWorkPlaylist,
+            reorderPlaylistItems: reorderPlaylistItems,
+            deletePlaylist: deletePlaylist,
             createFolder: createFolder,
             saveFolderFields: saveFolderFields,
             setWorkFolder: setWorkFolder,
@@ -2366,6 +2644,8 @@
         PRKS_LOCAL_WORK_ROLE_OPERATIONS: WORK_ROLE_OPERATIONS,
         PRKS_LOCAL_PERSON_FIELDS: PERSON_FIELDS,
         PRKS_LOCAL_FOLDER_FIELDS: FOLDER_FIELDS,
+        PRKS_LOCAL_PLAYLIST_FIELDS: PLAYLIST_FIELDS,
+        PRKS_LOCAL_PLAYLIST_MAX_ITEMS: PLAYLIST_MAX_ITEMS,
         PRKS_LOCAL_PERSON_GROUP_FIELDS: PERSON_GROUP_FIELDS,
         PRKS_LOCAL_PERSON_GROUP_OPERATIONS: PERSON_GROUP_OPERATIONS,
         prksGenerateEntityId: generateEntityId,

@@ -174,8 +174,9 @@ def process_operation(db, data):
 # Registration is explicit and lives here so the set of families PRKS accepts
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
-    folder_sync, person_group_sync, person_metadata_sync, person_sync, tag_sync,
-    work_metadata_sync, work_open_sync, work_role_sync, work_source_sync, work_tag_sync,
+    folder_sync, person_group_sync, person_metadata_sync, person_sync, playlist_sync,
+    tag_sync, work_metadata_sync, work_open_sync, work_role_sync, work_source_sync,
+    work_tag_sync,
 )
 
 # The Tag VOCABULARY, as opposed to the Work-Tag relationship below. Two
@@ -225,3 +226,13 @@ register("CREATE_FOLDER", folder_sync.CREATE_HANDLER, entity_type="folder")
 register("SET_FOLDER_FIELD", folder_sync.FIELD_HANDLER, entity_type="folder")
 register("DELETE_FOLDER", folder_sync.DELETE_HANDLER, entity_type="folder")
 register("SET_WORK_FOLDER", folder_sync.WORK_FOLDER_HANDLER)
+# Playlists. The three editable columns are FIELDS; which playlist a Work is in
+# is a field on the WORK, because a Work is in at most one playlist; and the
+# ORDER is an aggregate under one revision -- two devices that each dragged one
+# video produced two whole orders, and merging them index by index would invent
+# a third neither of them chose.
+register("CREATE_PLAYLIST", playlist_sync.CREATE_HANDLER, entity_type="playlist")
+register("SET_PLAYLIST_FIELD", playlist_sync.FIELD_HANDLER, entity_type="playlist")
+register("REORDER_PLAYLIST_ITEMS", playlist_sync.ORDER_HANDLER, entity_type="playlist")
+register("DELETE_PLAYLIST", playlist_sync.DELETE_HANDLER, entity_type="playlist")
+register("SET_WORK_PLAYLIST", playlist_sync.WORK_PLAYLIST_HANDLER)

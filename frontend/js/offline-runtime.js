@@ -1268,6 +1268,205 @@
             return true;
         }
 
+        /* ---- Playlists --------------------------------------------------- */
+
+        async function cachedPlaylistRows() {
+            const cached = await store.getList(PLAYLISTS_LIST_KEY)
+                .catch(function () { return null; });
+            return cached && Array.isArray(cached.value) ? cached.value : null;
+        }
+
+        async function writePlaylistRows(rows) {
+            const token = currentDomainGeneration(DOMAIN_PLAYLISTS) + 1;
+            domainGeneration.set(DOMAIN_PLAYLISTS, token);
+            return cacheListForDomain(PLAYLISTS_LIST_KEY, rows, DOMAIN_PLAYLISTS, token);
+        }
+
+        /**
+         * A Playlist the server has accepted.
+         *
+         * The acknowledgement carries the stored row, so the catalogue is
+         * PATCHED rather than dropped -- discarding it would leave an offline
+         * device with no playlist index at all.
+         */
+        async function reconcileCreatedPlaylist(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const playlist = result && result.playlist;
+            if (!playlist || playlist.id !== result.playlist_id) return false;
+            const rows = await cachedPlaylistRows();
+            if (rows) {
+                /* Newest first, as `get_all_playlists` orders by updated_at. */
+                const merged = [playlist].concat(
+                    rows.filter(row => row && row.id !== playlist.id));
+                if (!await writePlaylistRows(merged)) return false;
+            }
+            if (result.changed && typeof root.prksNewPlaylistState === 'function') {
+                await patchEntity('playlist-state', playlist.id,
+                    () => root.prksNewPlaylistState(playlist.id));
+            }
+            return true;
+        }
+
+        /** One Playlist field the server has applied. */
+        async function reconcilePlaylistField(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.playlist_id;
+            const field = result.field;
+            if (!root.prksIsSupportedPlaylistField ||
+                !root.prksIsSupportedPlaylistField(field)) return false;
+            const raw = String((op && op.payload && op.payload.value) || '');
+            const value = field === 'original_url' ? (raw || null) : raw;
+            await patchEntity('playlist-state', id, function (state) {
+                if (typeof root.prksIsPlaylistStateShape === 'function' &&
+                    !root.prksIsPlaylistStateShape(state, id)) return null;
+                const entry = state.fields[field];
+                if (!entry || entry.revision > result.server_revision) return null;
+                const next = Object.assign({}, state,
+                    { fields: Object.assign({}, state.fields) });
+                next.fields[field] = { revision: result.server_revision };
+                return next;
+            });
+            const rows = await cachedPlaylistRows();
+            if (rows && rows.some(row => row && row.id === id)) {
+                const patched = rows.map(function (row) {
+                    if (!row || row.id !== id) return row;
+                    const next = Object.assign({}, row);
+                    next[field] = value;
+                    return next;
+                });
+                if (!await writePlaylistRows(patched)) return false;
+            }
+            await patchEntity('playlist', id, function (playlist) {
+                if (!playlist || playlist.id !== id) return null;
+                const next = Object.assign({}, playlist);
+                next[field] = value;
+                return next;
+            });
+            if (field === 'title' && result.changed) {
+                /* `get_work()` embeds `playlist_title`, so renaming a playlist
+                 * stales the cached Work of every video in it. Unlike the
+                 * Folder family the acknowledgement does not name the members
+                 * -- the detail this device holds does, and when it holds none
+                 * there is nothing cached to be wrong. */
+                const cached = await store.getEntity('playlist', id)
+                    .catch(function () { return null; });
+                const items = cached && cached.value && Array.isArray(cached.value.items)
+                    ? cached.value.items : [];
+                for (let i = 0; i < items.length; i += 1) {
+                    const workId = items[i] && items[i].id;
+                    if (workId) await invalidateEntity('work', workId);
+                }
+                if (items.length) {
+                    prksOfflineMarkWorksBrowseChanged();
+                    prksOfflineMarkRecentChanged();
+                    prksOfflineMarkRecentlyAddedChanged();
+                }
+            }
+            return true;
+        }
+
+        /** Which playlist a Work is in, as the server now has it. */
+        async function reconcileWorkPlaylist(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const workId = result.work_id;
+            await patchEntity('work-playlist-state', workId, function (state) {
+                if (typeof root.prksIsWorkPlaylistStateShape === 'function' &&
+                    !root.prksIsWorkPlaylistStateShape(state, workId)) return null;
+                if (state.revision > result.server_revision) return null;
+                return Object.assign({}, state, { playlist_id: result.playlist_id,
+                    revision: result.server_revision });
+            });
+            /* The Work's own snapshot carries the playlist's TITLE, and the
+             * acknowledgement states it exactly -- so it is patched rather than
+             * dropped. */
+            await patchEntity('work', workId, function (work) {
+                if (!work || work.id !== workId) return null;
+                return Object.assign({}, work, {
+                    playlist_id: result.playlist_id || null,
+                    playlist_title: result.playlist_title || null,
+                });
+            });
+            if (!result.changed) return true;
+            /* Both playlists' contents and order changed, and this device does
+             * not know which playlist the video left -- the answer names only
+             * where it landed. Their cached details and the index go stale
+             * together, which is what the Playlists domain covers. */
+            prksOfflineMarkPlaylistsChanged();
+            return true;
+        }
+
+        /** A Playlist's order, as the server now has it. */
+        async function reconcilePlaylistOrder(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.playlist_id;
+            await patchEntity('playlist-state', id, function (state) {
+                if (typeof root.prksIsPlaylistStateShape === 'function' &&
+                    !root.prksIsPlaylistStateShape(state, id)) return null;
+                if (state.order_revision > result.server_revision) return null;
+                return Object.assign({}, state, { order_revision: result.server_revision });
+            });
+            /* The answer names the order the server ENDED with, resolved
+             * against what it actually holds -- so the cached detail is patched
+             * into that order rather than dropped, and an offline device keeps
+             * its playlist page. */
+            const order = Array.isArray(result.work_ids) ? result.work_ids : null;
+            if (order && typeof root.prksApplyPlaylistOrder === 'function') {
+                await patchEntity('playlist', id, function (playlist) {
+                    if (!playlist || playlist.id !== id ||
+                        !Array.isArray(playlist.items)) return null;
+                    return Object.assign({}, playlist,
+                        { items: root.prksApplyPlaylistOrder(playlist.items, order) });
+                });
+            } else if (result.changed) {
+                await invalidateEntity('playlist', id);
+            }
+            /* Reordering bumps `updated_at`, which reorders the index -- and no
+             * Work snapshot carries a position, so nothing else is stale. The
+             * INDEX alone is fenced: the playlist's own snapshot was patched
+             * just above, and dropping it would cost an offline device the page
+             * it had just reordered. */
+            if (result.changed) {
+                if (order) prksOfflineMarkPlaylistsIndexChanged();
+                else prksOfflineMarkPlaylistsChanged();
+            }
+            return true;
+        }
+
+        /**
+         * A Playlist the server has removed.
+         *
+         * Its memberships went with it, so every video it held loses its
+         * `playlist_title` -- and this device knows exactly which ones from the
+         * detail it cached.
+         */
+        async function reconcileDeletedPlaylist(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.playlist_id;
+            const cached = await store.getEntity('playlist', id)
+                .catch(function () { return null; });
+            const items = cached && cached.value && Array.isArray(cached.value.items)
+                ? cached.value.items : [];
+            for (let i = 0; i < items.length; i += 1) {
+                const workId = items[i] && items[i].id;
+                if (!workId) continue;
+                await patchEntity('work', workId, function (work) {
+                    if (!work || work.id !== workId || work.playlist_id !== id) return null;
+                    return Object.assign({}, work,
+                        { playlist_id: null, playlist_title: null });
+                });
+                await invalidateEntity('work-playlist-state', workId);
+            }
+            const rows = await cachedPlaylistRows();
+            if (rows) {
+                if (!await writePlaylistRows(rows.filter(row => row && row.id !== id))) {
+                    return false;
+                }
+            }
+            await invalidateEntity('playlist', id);
+            await invalidateEntity('playlist-state', id);
+            return true;
+        }
+
         /* ---- the Tag vocabulary ------------------------------------------ */
 
         /**
@@ -1884,6 +2083,11 @@
             reconcileFolderField,
             reconcileWorkFolder,
             reconcileDeletedFolder,
+            reconcileCreatedPlaylist,
+            reconcilePlaylistField,
+            reconcileWorkPlaylist,
+            reconcilePlaylistOrder,
+            reconcileDeletedPlaylist,
             reconcileCreatedTag,
             reconcileDeletedTag,
             reconcileCreatedPerson,
@@ -2058,6 +2262,16 @@
             listKeys: [PLAYLISTS_LIST_KEY],
         });
     }
+    /* The index alone, for a change whose effect on the playlists themselves
+     * this device can state exactly. Reordering bumps `updated_at`, which
+     * reorders the index -- but the new ORDER is in the acknowledgement, so the
+     * playlist's own snapshot is patched rather than thrown away. Dropping it
+     * would cost an offline device the page it had just reordered. */
+    function prksOfflineMarkPlaylistsIndexChanged() {
+        return production.markDomainChanged(DOMAIN_PLAYLISTS, {
+            entityKinds: [], listKeys: [PLAYLISTS_LIST_KEY],
+        });
+    }
     function prksOfflineMarkResearchGraphCoreChanged() {
         return production.markDomainChanged(DOMAIN_RESEARCH_GRAPH_CORE, {
             entityKinds: [DOMAIN_RESEARCH_GRAPH_CORE], listKeys: [],
@@ -2104,6 +2318,16 @@
         prksOfflineReconcileWorkFolder: (result, op) =>
             production.reconcileWorkFolder(result, op),
         prksOfflineReconcileDeletedFolder: result => production.reconcileDeletedFolder(result),
+        prksOfflineReconcileCreatedPlaylist: result =>
+            production.reconcileCreatedPlaylist(result),
+        prksOfflineReconcilePlaylistField: (result, op) =>
+            production.reconcilePlaylistField(result, op),
+        prksOfflineReconcileWorkPlaylist: (result, op) =>
+            production.reconcileWorkPlaylist(result, op),
+        prksOfflineReconcilePlaylistOrder: (result, op) =>
+            production.reconcilePlaylistOrder(result, op),
+        prksOfflineReconcileDeletedPlaylist: result =>
+            production.reconcileDeletedPlaylist(result),
         prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
         prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
@@ -2131,6 +2355,7 @@
         prksOfflineMarkPeopleChanged: prksOfflineMarkPeopleChanged,
         prksOfflineMarkPersonGroupsChanged: prksOfflineMarkPersonGroupsChanged,
         prksOfflineMarkPlaylistsChanged: prksOfflineMarkPlaylistsChanged,
+        prksOfflineMarkPlaylistsIndexChanged: prksOfflineMarkPlaylistsIndexChanged,
         prksOfflineIsMutationBlocked: prksOfflineIsMutationBlocked,
         prksOfflineGuardMutation: prksOfflineGuardMutation,
         prksOfflineDiagnostics: prksOfflineDiagnostics,

@@ -184,9 +184,10 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.assertIn(PLAYLIST_A_TITLE, body)
         self.assertIn(PLAYLIST_B_TITLE, body)
         self.assertIn('2 items', body)
-        # The one creation control on this route is unavailable offline.
+        # The one creation control on this route stays LIVE: a playlist is
+        # created under an id this device mints, so it is real with no server.
         self.open_details_panel(page)
-        self.assertTrue(page.locator('#prks-create-playlist-btn').is_disabled())
+        self.assertFalse(page.locator('#prks-create-playlist-btn').is_disabled())
 
     def test_missing_index_cache_is_not_the_empty_state(self):
         server, page, context = self.start()
@@ -221,9 +222,9 @@ class PlaylistsOfflineTests(unittest.TestCase):
         body = o._content_text(page)
         self.assertIn('No playlists yet.', body)
         self.assertNotIn('not available offline', body)
-        # A cached-empty list is still not a licence to create one offline.
+        # A cached-empty list is an ANSWER, and creating into it works offline.
         self.open_details_panel(page)
-        self.assertTrue(page.locator('#prks-create-playlist-btn').is_disabled())
+        self.assertFalse(page.locator('#prks-create-playlist-btn').is_disabled())
 
     # ---- detail -------------------------------------------------------------
 
@@ -477,81 +478,116 @@ class PlaylistsOfflineTests(unittest.TestCase):
                 self.online(page, context)
         self.assertEqual(errors, [])
 
-    # ---- mutation blocking --------------------------------------------------
+    # ---- creating offline ---------------------------------------------------
 
-    def test_creation_modal_guard_and_disconnect_before_create(self):
+    def test_the_creation_modal_creates_offline_from_every_surface(self):
+        """Creating a playlist mints its id here, so the modal opens and saves
+        with no server -- and the playlist is real immediately."""
         server, page, context = self.start()
         self.index(page)
         page.wait_for_selector('.playlists-page')
-        page.evaluate("openModal('playlist-modal')")
-        page.locator('#playlist-title').fill('Disconnected playlist')
         self.offline(page, context)
         posts = self.watch(page, ('POST',))
-        page.locator('#save-playlist-btn').click()
-        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
-        self.assertEqual(posts, [])
-        # The draft the user was building is untouched.
-        self.assertEqual(page.locator('#playlist-title').input_value(), 'Disconnected playlist')
-        # And a *fresh* creation modal cannot be opened at all while offline.
-        page.evaluate('closeModals()')
         page.evaluate("openModal('playlist-modal')")
-        self.assertEqual(page.locator('#playlist-modal:not(.hidden)').count(), 0)
-        self.assertEqual(posts, [])
+        self.assertEqual(page.locator('#playlist-modal:not(.hidden)').count(), 1,
+                         'the modal is no longer refused offline')
+        page.locator('#playlist-title').fill('Disconnected playlist')
+        page.locator('#save-playlist-btn').click()
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'CREATE_PLAYLIST'))",
+            timeout=30000, message='the creation was never enqueued')
+        self.assertEqual(posts, [], 'no canonical Playlist request left the browser')
+        # It is in the list straight away, and still there after a reload.
+        self.index(page)
+        o._wait_content_contains(page, 'Disconnected playlist')
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('#sidebar')
+        self.offline(page, context)
+        self.index(page)
+        o._wait_content_contains(page, 'Disconnected playlist')
 
-    def test_cached_detail_cannot_enter_edit_mode_offline(self):
+        self.online(page, context)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=30000, message='the creation never retired')
+        self.assertIn('Disconnected playlist',
+                      [row['title'] for row in self.db_for(server).get_all_playlists()])
+
+    # ---- what still needs a server -----------------------------------------
+
+    def test_cached_detail_can_be_edited_offline(self):
+        """Editing a Playlist is a durable decision, so the editor opens and
+        saves with no server. The one control that needs one -- the search over
+        the whole Works catalogue -- disables itself."""
         server, page, context = self.start()
         self.cache(page, server.ids)
         context.set_offline(True)
         page.reload(wait_until='domcontentloaded')
         o._wait_offline_banner(page)
         self.open_details_panel(page)
-        self.assertTrue(page.locator('#prks-playlist-edit-btn').is_disabled())
-        self.assertEqual(page.locator('#prks-playlist-edit-save').count(), 0)
+        self.assertFalse(page.locator('#prks-playlist-edit-btn').is_disabled())
+        page.locator('#prks-playlist-edit-btn').click()
+        page.wait_for_selector('#prks-playlist-edit-save')
+        self.assertFalse(page.locator('#prks-playlist-edit-save').is_disabled())
+        self.assertTrue(page.locator('#prks-playlist-add-search').is_disabled(),
+                        'the Add video search reads a catalogue no cache answers')
 
-    def test_open_editor_survives_disconnect_and_issues_no_requests(self):
+    def test_the_editor_saves_durably_offline_and_issues_no_request(self):
         server, page, context = self.start()
         pid = server.ids['playlist_a']
         self.detail(page, pid)
         o._wait_content_contains(page, PLAYLIST_A_DESCRIPTION)
+        # Editing offline needs the base it measures the edit against.
+        page.evaluate("id => { void Promise.resolve(prksReadPlaylistState(id)).catch(() => {}); }",
+                      pid)
+        o._wait_entity_cached(page, 'playlist-state', pid)
         self.open_details_panel(page)
         page.locator('#prks-playlist-edit-btn').click()
         page.wait_for_selector('#prks-playlist-edit-save')
-        page.locator('#prks-playlist-edit-title').fill('Unsaved playlist title')
-        page.locator('#prks-playlist-edit-desc').fill('Unsaved description')
+        page.locator('#prks-playlist-edit-title').fill('Renamed while disconnected')
+        page.locator('#prks-playlist-edit-desc').fill('Changed offline')
 
         self.offline(page, context)
         seen = self.watch(page, ('POST', 'PATCH', 'DELETE'))
-        work_writes = self.watch(page, ('PATCH',), fragment='/api/works')
         for selector in ('#prks-playlist-edit-title', '#prks-playlist-edit-desc',
-                         '#prks-playlist-edit-original-url', '#prks-playlist-edit-save',
-                         '#prks-playlist-add-search'):
-            self.assertTrue(page.locator(selector).is_disabled(), selector)
-        # Playlist-scoped item controls freeze too: order and membership are
-        # Playlist mutations and stay online-only in this phase.
-        for selector in ('[data-pl-up]', '[data-pl-down]', '[data-pl-remove]'):
-            self.assertTrue(page.locator(selector).first.is_disabled(), selector)
-        # Rename is the exception, and deliberately so: a video's Title is a
-        # WORK field with a durable path of its own, so it is not gated by the
-        # Playlist mutation block. Covered end to end by
-        # `test_an_inline_rename_is_durable_offline_and_never_patches_the_work`.
-        self.assertFalse(page.locator('[data-pl-rename]').first.is_disabled())
-        # ... while the draft itself and Cancel/Close stay usable.
-        self.assertEqual(page.locator('#prks-playlist-edit-title').input_value(), 'Unsaved playlist title')
-        self.assertEqual(page.locator('#prks-playlist-edit-desc').input_value(), 'Unsaved description')
-        self.assertFalse(page.locator('#prks-playlist-edit-cancel').is_disabled())
-        self.assertFalse(page.locator('#prks-playlist-edit-close').is_disabled())
+                         '#prks-playlist-edit-original-url', '#prks-playlist-edit-save'):
+            self.assertFalse(page.locator(selector).is_disabled(), selector)
+        # Order and membership controls are durable decisions too.
+        for selector in ('[data-pl-up]', '[data-pl-down]', '[data-pl-remove]',
+                         '[data-pl-rename]'):
+            self.assertFalse(page.locator(selector).first.is_disabled(), selector)
+        # Only the catalogue search is frozen.
+        self.assertTrue(page.locator('#prks-playlist-add-search').is_disabled())
 
-        # Invoking the handlers directly proves the guards, not the attributes.
-        page.evaluate("() => { void document.getElementById('prks-playlist-edit-save').onclick(); }")
-        page.wait_for_timeout(500)
-        self.assertEqual(seen, [])
-        self.assertEqual(work_writes, [])
-        self.assertEqual(page.locator('#prks-playlist-edit-title').input_value(), 'Unsaved playlist title')
+        page.locator('#prks-playlist-edit-save').click()
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'SET_PLAYLIST_FIELD' && o.payload.field === 'title'))",
+            timeout=30000,
+            message='the save never became a durable field operation')
+        # Two fields changed, so two independent conflict units were enqueued --
+        # a syncing description must never be able to refuse a rename.
+        fields = page.evaluate(
+            "() => prksSync.store.listOperations().then(rows => rows"
+            "  .filter(o => o.operation === 'SET_PLAYLIST_FIELD')"
+            "  .map(o => o.payload.field).sort())")
+        self.assertEqual(fields, ['description', 'title'])
+        self.assertEqual(seen, [], 'nothing canonical left the browser')
+        self.assertEqual(
+            self.db_for(server).get_playlist(pid)['title'], PLAYLIST_A_TITLE,
+            'the server has not been told anything yet')
 
-        # Reconnecting restores the controls with the draft intact.
         self.online(page, context)
-        self.assertFalse(page.locator('#prks-playlist-edit-save').is_disabled())
-        self.assertEqual(page.locator('#prks-playlist-edit-desc').input_value(), 'Unsaved description')
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=30000, message='the field operations never retired')
+        self.assertEqual(self.db_for(server).get_playlist(pid)['title'],
+                         'Renamed while disconnected')
 
     def test_an_inline_rename_is_durable_offline_and_never_patches_the_work(self):
         """A video's Title is a Work field, not Playlist state.
@@ -590,9 +626,9 @@ class PlaylistsOfflineTests(unittest.TestCase):
         # The rename controls stay live: a durable save needs no server.
         self.assertFalse(page.locator(rename_input).is_disabled())
         self.assertFalse(page.locator('[data-pl-rename-save="%s"]' % work).is_disabled())
-        # A Playlist-scoped control beside it is still offline-blocked, so this
-        # is a distinction the UI actually draws rather than a blanket unlock.
-        self.assertTrue(page.locator('#prks-playlist-edit-save').is_disabled())
+        # The distinction the UI still draws: the Add video SEARCH beside it
+        # reads the whole Works catalogue, which no cache can answer.
+        self.assertTrue(page.locator('#prks-playlist-add-search').is_disabled())
 
         page.locator('[data-pl-rename-save="%s"]' % work).click()
         wait_for_async(
@@ -619,10 +655,10 @@ class PlaylistsOfflineTests(unittest.TestCase):
         titles = page.evaluate("() => fetchWorks().then(ws => ws.map(w => w.title))")
         self.assertIn('Renamed while disconnected', titles)
 
-    def test_cached_work_playlist_card_is_read_only_offline(self):
-        """A cached video Work still shows its Playlist card, but Phase 1 is
-        read-only: Edit cannot start a session, nothing reaches the Playlist
-        API, and no stale pending attachment is left behind."""
+    def test_cached_work_playlist_card_does_not_reach_for_a_catalogue(self):
+        """A cached video Work still shows its Playlist card. Starting a NEW
+        editing session offline is refused, because mounting it reads the
+        Playlist catalogue -- and nothing here may reach the network."""
         server, page, context = self.start()
         ids = server.ids
         errors = []
@@ -644,22 +680,33 @@ class PlaylistsOfflineTests(unittest.TestCase):
         # The relationship itself is real cached data and stays on screen.
         self.assertIn(PLAYLIST_A_TITLE, page.locator('#panel-content').inner_text())
 
-        # Invoking the handler directly proves the guard, not the attribute.
+        # Even forced open, the editor reaches no catalogue: the search that
+        # would is disabled, and Clear -- which names no playlist at all --
+        # stays live, because removing a video is a durable decision.
         page.evaluate("() => { document.getElementById('prks-work-playlist-edit-btn').onclick(); }")
-        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
-        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_selector('#prks-work-playlist-search')
+        self.assertTrue(page.locator('#prks-work-playlist-search').is_disabled())
+        self.assertFalse(page.locator('#prks-work-playlist-clear-btn').is_disabled())
         page.wait_for_timeout(500)
-        self.assertEqual(page.locator('#prks-work-playlist-search').count(), 0)
         self.assertEqual(seen, [])
         self.assertEqual(errors, [])
         self.assertIsNone(page.evaluate("() => window.__prksPendingPlaylistAttach || null"))
 
     def test_open_work_playlist_editor_survives_disconnect(self):
+        """An editor open when the connection drops keeps its draft, and the
+        decisions it can still make are made durably. Only the catalogue search
+        and the Set button that depends on it freeze."""
         server, page, context = self.start()
         ids = server.ids
         errors = []
         page.on('pageerror', lambda e: errors.append(str(e)))
         o._open_work_from_home(page, PLAYLIST_VIDEO_ONE_TITLE)
+        o._wait_entity_cached(page, 'work', ids['playlist_video_one'])
+        # Clearing offline needs the revision it is measured against.
+        page.evaluate(
+            "id => { void Promise.resolve(prksReadWorkPlaylistState(id)).catch(() => {}); }",
+            ids['playlist_video_one'])
+        o._wait_entity_cached(page, 'work-playlist-state', ids['playlist_video_one'])
         self.open_details_panel(page)
         page.locator('#prks-work-playlist-edit-btn').click()
         page.wait_for_selector('#prks-work-playlist-search')
@@ -678,90 +725,139 @@ class PlaylistsOfflineTests(unittest.TestCase):
 
         self.offline(page, context)
         seen = self.watch(page, ('GET', 'POST', 'PATCH', 'DELETE'))
-        for selector in ('#prks-work-playlist-search', '#prks-work-playlist-set-btn',
-                         '#prks-work-playlist-clear-btn', '#prks-work-playlist-new-btn'):
+        for selector in ('#prks-work-playlist-search', '#prks-work-playlist-set-btn'):
             self.assertTrue(page.locator(selector).is_disabled(), selector)
-        # Done stays live so the user can leave an editor they cannot save.
+        # Clear and New... are durable decisions, so they stay live.
+        for selector in ('#prks-work-playlist-clear-btn', '#prks-work-playlist-new-btn'):
+            self.assertFalse(page.locator(selector).is_disabled(), selector)
+        # Done stays live so the user can always leave the editor.
         self.assertFalse(page.locator('#prks-work-playlist-edit-btn').is_disabled())
         self.assertEqual(page.locator('#prks-work-playlist-edit-btn').inner_text().strip(), 'Done')
         self.assertEqual(page.locator('#prks-work-playlist-search').input_value(),
                          'Unsaved playlist search')
 
-        # New... must not leave a pending attachment behind when it is refused.
-        page.evaluate("() => { void document.getElementById('prks-work-playlist-new-btn').onclick(); }")
-        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
-        page.locator('#prks-modal-confirm-ok').click()
-        self.assertEqual(page.locator('#playlist-modal:not(.hidden)').count(), 0)
-        self.assertIsNone(page.evaluate("() => window.__prksPendingPlaylistAttach || null"))
-
-        # Set and Clear reach no canonical request either, and neither leaves a
-        # misleading failure status after the offline explanation.
-        for btn in ('#prks-work-playlist-set-btn', '#prks-work-playlist-clear-btn'):
-            page.evaluate("sel => { void document.querySelector(sel).onclick(); }", btn)
-            page.wait_for_timeout(300)
+        # Clear enqueues the same scalar an add does, with an empty value ...
+        page.locator('#prks-work-playlist-clear-btn').click()
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'SET_WORK_PLAYLIST' && o.payload.playlist_id === ''))",
+            timeout=30000,
+            message='Clear never became a durable membership operation')
+        # ... and reaches no canonical Playlist request at all.
         self.assertEqual(seen, [])
         self.assertNotIn('Could not', page.locator('#prks-work-playlist-status').inner_text())
         self.assertEqual(errors, [])
 
-        # Reconnecting restores the controls with the draft intact.
         self.online(page, context)
-        self.assertFalse(page.locator('#prks-work-playlist-set-btn').is_disabled())
-        self.assertEqual(page.locator('#prks-work-playlist-search').input_value(),
-                         'Unsaved playlist search')
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=30000, message='the membership operation never retired')
+        self.assertEqual(
+            [w['id'] for w in self.db_for(server).get_playlist(ids['playlist_a'])['items']],
+            [ids['playlist_video_two']])
 
     # ---- direct Playlist coherence -----------------------------------------
 
-    def test_direct_playlist_operations_invalidate_exact_domains(self):
+    def drained(self, page):
+        """Every durable operation acknowledged and retired."""
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=30000, message='a durable operation never retired')
+
+    def test_durable_playlist_operations_fence_only_the_playlists_domain(self):
+        """Coherence now happens on ACKNOWLEDGEMENT, not at the call.
+
+        A durable write changes nothing cached until the server answers -- the
+        overlay is what the user sees meanwhile -- so the fence belongs to the
+        reconciler. Two things must stay true either way: the fence is narrow
+        (no other domain names a Playlist), and it drops only what this device
+        cannot state exactly.
+
+        `keeps_index` says whether the catalogue survives. It does for a
+        creation, whose answer carries the stored row. It does NOT for a
+        membership: the item counts of up to two playlists changed, and this
+        device does not know which playlist the video left -- the answer names
+        only where it landed.
+        """
         server, page, context = self.start()
         ids = server.ids
         actions = [
-            ("createPlaylist('Unassigned playlist', '')", {'playlists'}),
-            ("reorderPlaylist(ids.playlist_a, [ids.playlist_video_two, ids.playlist_video_one])", {'playlists'}),
-            ("addWorkToPlaylist(ids.playlist_a, ids.work_b)", {'playlists'}),
-            ("removeWorkFromPlaylist(ids.playlist_a, ids.work_b)", {'playlists'}),
+            ("createPlaylist('Unassigned playlist', '')", True),
+            ("reorderPlaylist(ids.playlist_a, [ids.playlist_video_two, ids.playlist_video_one])",
+             False),
+            ("addWorkToPlaylist(ids.playlist_a, ids.work_b)", False),
+            ("removeWorkFromPlaylist(ids.playlist_a, ids.work_b)", False),
         ]
-        for expression, expected in actions:
+        for expression, keeps_index in actions:
             with self.subTest(expression=expression):
                 self.cache(page, ids, all_domains=True)
+                self.prepare_bases(page, ids)
                 before = self.generations(page)
                 page.evaluate('async ids => { await ' + expression + '; }', ids)
-                self.changed(page, before, expected)
+                self.drained(page)
+                for domain, generation in before.items():
+                    with self.subTest(domain=domain):
+                        now = o._domain_generation(page, domain)
+                        if domain == 'playlists':
+                            self.assertGreater(now, generation, domain)
+                        else:
+                            self.assertEqual(now, generation, domain)
+                if keeps_index:
+                    self.assertIsNotNone(o._cached_list(page, 'playlists:index'),
+                                         'the answer carries the stored row, so the '
+                                         'catalogue is patched rather than dropped')
 
-    def test_description_only_edit_keeps_member_work_caches(self):
+    def prepare_bases(self, page, ids):
+        """Every revision a durable Playlist write measures itself against."""
+        for pid in (ids['playlist_a'], ids['playlist_b']):
+            page.evaluate(
+                "id => { void Promise.resolve(prksReadPlaylistState(id)).catch(() => {}); }", pid)
+            o._wait_entity_cached(page, 'playlist-state', pid)
+        for wid in (ids['playlist_video_one'], ids['playlist_video_two'], ids['work_b']):
+            page.evaluate(
+                "id => { void Promise.resolve(prksReadWorkPlaylistState(id)).catch(() => {}); }",
+                wid)
+            o._wait_entity_cached(page, 'work-playlist-state', wid)
+
+    def test_a_description_edit_keeps_member_work_caches(self):
         """Only `title` is embedded in Work detail as playlist_title, so a
         description edit must not cost the user their cached member Works."""
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids)
         self.cache_member_work(page, ids)
-        before = self.generations(page)
+        self.prepare_bases(page, ids)
         page.evaluate(
             """async ids => { await updatePlaylist(ids.playlist_a,
-                { title: %s, description: 'Changed description' },
-                { previousTitle: %s, memberWorkIds: [ids.playlist_video_one] }); }"""
-            % (json.dumps(PLAYLIST_A_TITLE), json.dumps(PLAYLIST_A_TITLE)),
+                { title: %s, description: 'Changed description' }); }"""
+            % json.dumps(PLAYLIST_A_TITLE),
             ids,
         )
-        self.changed(page, before, {'playlists'})
+        self.drained(page)
         self.assertIsNotNone(o._cached_entity(page, 'work', ids['playlist_video_one']))
+        # And the acknowledgement PATCHED the description in rather than
+        # dropping the playlist this device is looking at.
+        playlist = o._cached_entity(page, 'playlist', ids['playlist_a'])
+        self.assertEqual(playlist['value']['description'], 'Changed description')
 
-    def test_title_edit_evicts_member_work_snapshots_only(self):
+    def test_a_title_edit_stales_member_work_snapshots_only(self):
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids)
         self.cache_member_work(page, ids)
+        self.prepare_bases(page, ids)
         # work_a is deliberately in no Playlist.
         o._open_work_from_home(page, o.WORK_A_TITLE)
         o._wait_entity_cached(page, 'work', ids['work_a'])
-        before = self.generations(page)
         page.evaluate(
             """async ids => { await updatePlaylist(ids.playlist_a,
-                { title: 'Renamed playlist', description: '' },
-                { previousTitle: %s, memberWorkIds: [ids.playlist_video_one] }); }"""
-            % json.dumps(PLAYLIST_A_TITLE),
+                { title: 'Renamed playlist', description: '' }); }""",
             ids,
         )
-        self.changed(page, before, {'playlists'})
+        self.drained(page)
         wait_for_async(page,
             "id => window.createPrksOfflineStore().getEntity('work', id).then(r => r === null)",
             arg=ids['playlist_video_one'], timeout=15000,
@@ -770,85 +866,118 @@ class PlaylistsOfflineTests(unittest.TestCase):
             o._cached_entity(page, 'work', ids['work_a']),
             'a Work outside the Playlist keeps its cached snapshot',
         )
+        # The playlist itself is patched, not discarded.
+        playlist = o._cached_entity(page, 'playlist', ids['playlist_a'])
+        self.assertEqual(playlist['value']['title'], 'Renamed playlist')
 
-    def test_membership_changes_evict_the_affected_work(self):
+    def test_membership_changes_patch_the_affected_work(self):
+        """The acknowledgement states the playlist and its title exactly, so
+        the video's own snapshot is corrected in place rather than thrown
+        away -- an offline device keeps the page it is looking at."""
         server, page, context = self.start()
         ids = server.ids
-        for expression in ('addWorkToPlaylist(ids.playlist_a, ids.work_b)',
-                           'removeWorkFromPlaylist(ids.playlist_a, ids.work_b)'):
-            with self.subTest(expression=expression):
-                self.cache(page, ids)
-                o._open_work_from_home(page, o.WORK_B_TITLE)
-                o._wait_entity_cached(page, 'work', ids['work_b'])
-                before = self.generations(page)
-                page.evaluate('async ids => { await ' + expression + '; }', ids)
-                self.changed(page, before, {'playlists'})
-                o._wait_entity_uncached(page, 'work', ids['work_b'])
+        self.cache(page, ids)
+        self.prepare_bases(page, ids)
+        o._open_work_from_home(page, o.WORK_B_TITLE)
+        o._wait_entity_cached(page, 'work', ids['work_b'])
+        page.evaluate(
+            'async ids => { await addWorkToPlaylist(ids.playlist_a, ids.work_b); }', ids)
+        self.drained(page)
+        cached = o._cached_entity(page, 'work', ids['work_b'])
+        self.assertIsNotNone(cached, 'the snapshot survives')
+        self.assertEqual(cached['value']['playlist_id'], ids['playlist_a'])
+        self.assertEqual(cached['value']['playlist_title'], PLAYLIST_A_TITLE)
 
-    def test_moving_a_work_between_playlists_invalidates_the_whole_domain(self):
+        page.evaluate(
+            'async ids => { await removeWorkFromPlaylist(ids.playlist_a, ids.work_b); }', ids)
+        self.drained(page)
+        cached = o._cached_entity(page, 'work', ids['work_b'])
+        self.assertIsNotNone(cached)
+        self.assertIsNone(cached['value']['playlist_id'])
+
+    def test_moving_a_work_between_playlists_fences_the_whole_domain(self):
         """One Playlist per Work: an add is also a remove from the old one, and
-        whole-domain invalidation covers both without per-Playlist bookkeeping."""
+        this device does not know which playlist the video left -- the answer
+        names only where it landed -- so both playlists' contents go stale
+        together."""
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids)
         self.detail(page, ids['playlist_b'])
         o._wait_entity_cached(page, 'playlist', ids['playlist_b'])
         self.cache_member_work(page, ids)
+        self.prepare_bases(page, ids)
         before = self.generations(page)
         page.evaluate(
-            'async ids => { await addWorkToPlaylist(ids.playlist_b, ids.playlist_video_one); }', ids
-        )
-        self.changed(page, before, {'playlists'})
+            'async ids => { await addWorkToPlaylist(ids.playlist_b, ids.playlist_video_one); }',
+            ids)
+        self.drained(page)
+        self.assertGreater(o._domain_generation(page, 'playlists'), before['playlists'])
         o._wait_entity_uncached(page, 'playlist', ids['playlist_a'])
         o._wait_entity_uncached(page, 'playlist', ids['playlist_b'])
-        o._wait_entity_uncached(page, 'work', ids['playlist_video_one'])
+        # The video itself is patched rather than dropped.
+        cached = o._cached_entity(page, 'work', ids['playlist_video_one'])
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached['value']['playlist_id'], ids['playlist_b'])
 
-    def test_reorder_keeps_member_work_caches(self):
+    def test_a_reorder_keeps_member_work_caches_and_reorders_the_detail(self):
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids)
         self.cache_member_work(page, ids)
-        before = self.generations(page)
+        self.prepare_bases(page, ids)
         page.evaluate(
             """async ids => { await reorderPlaylist(ids.playlist_a,
                 [ids.playlist_video_two, ids.playlist_video_one]); }""",
             ids,
         )
-        self.changed(page, before, {'playlists'})
+        self.drained(page)
         self.assertIsNotNone(
             o._cached_entity(page, 'work', ids['playlist_video_one']),
             'Work detail carries no Playlist position',
         )
+        # The cached detail is reordered IN PLACE: the answer names the order
+        # the server ended with, so there is nothing to re-download.
+        playlist = o._cached_entity(page, 'playlist', ids['playlist_a'])
+        self.assertEqual([w['id'] for w in playlist['value']['items']],
+                         [ids['playlist_video_two'], ids['playlist_video_one']])
 
-    def test_failed_playlist_operations_retain_good_caches(self):
+    def test_a_refused_playlist_operation_retains_good_caches(self):
+        """A durable operation that the server rejects is retried, not lost --
+        and until it is acknowledged, nothing cached is touched."""
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids)
         self.cache_member_work(page, ids)
+        self.prepare_bases(page, ids)
         before = self.generations(page)
 
         def fail(route):
-            if route.request.method in ('POST', 'PATCH', 'DELETE'):
+            if route.request.method == 'POST':
                 route.fulfill(status=500, content_type='application/json', body='{}')
             else:
                 route.fallback()
 
-        page.route('**/api/playlists**', fail)
+        page.route('**/api/sync/operations**', fail)
         try:
-            for expression in (
-                "createPlaylist('Never created', '')",
-                "removeWorkFromPlaylist(ids.playlist_a, ids.playlist_video_one)",
-                "reorderPlaylist(ids.playlist_a, [ids.playlist_video_two, ids.playlist_video_one])",
-            ):
-                with self.subTest(expression=expression):
-                    failed = page.evaluate(
-                        'async ids => { try { await ' + expression + '; return false; }'
-                        ' catch (_e) { return true; } }', ids)
-                    self.assertTrue(failed)
-                    self.changed(page, before, set())
-                    self.assertIsNotNone(o._cached_entity(page, 'work', ids['playlist_video_one']))
+            page.evaluate("async ids => { await createPlaylist('Never created', ''); }", ids)
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'CREATE_PLAYLIST'))",
+                timeout=30000, message='the creation was never enqueued')
+            page.wait_for_timeout(1000)
+            # Still queued, and every cached representation intact.
+            rows = page.evaluate(
+                "() => prksSync.store.listOperations().then(rows => rows.length)")
+            self.assertGreater(rows, 0, 'a refused operation is retried, never dropped')
+            for domain, generation in before.items():
+                with self.subTest(domain=domain):
+                    self.assertEqual(o._domain_generation(page, domain), generation)
+            self.assertIsNotNone(o._cached_list(page, 'playlists:index'))
+            self.assertIsNotNone(o._cached_entity(page, 'work', ids['playlist_video_one']))
         finally:
-            o._safe_unroute(page, '**/api/playlists**', fail)
+            o._safe_unroute(page, '**/api/sync/operations**', fail)
 
     # ---- Work -> Playlist coherence ----------------------------------------
 
@@ -1077,42 +1206,107 @@ class PlaylistsOfflineTests(unittest.TestCase):
 
     # ---- stale reads --------------------------------------------------------
 
-    def test_stale_index_and_detail_reads_cannot_repopulate(self):
+    def test_a_stale_detail_read_cannot_repopulate_the_playlist(self):
+        """A GET issued BEFORE a change must not publish its pre-change body
+        afterwards.
+
+        Only the DETAIL is held here. A durable write does its own bookkeeping
+        against the playlist CATALOGUE -- the overlay that makes a pending
+        membership visible needs the destination's title -- so holding the index
+        as well would stall the very write this test is observing, which is an
+        artifact of the route interception rather than anything a server does.
+        """
         server, page, context = self.start()
-        pid = server.ids['playlist_a']
+        ids = server.ids
+        pid = ids['playlist_a']
+        self.cache(page, ids)
+        self.prepare_bases(page, ids)
+        held = []
+        detail_path = '/api/playlists/' + pid
+
+        def hold(route):
+            if (route.request.method == 'GET'
+                    and urlparse(route.request.url).path == detail_path):
+                held.append(route)
+            else:
+                route.fallback()
+
+        page.route('**/api/playlists/**', hold)
+        page.evaluate(
+            """id => {
+                window.pendingPlaylist = prksOfflineReadEntity('playlist', id,
+                    '/api/playlists/' + id,
+                    { domain: 'playlists', validate: v => prksIsPlaylistShape(v, id) });
+            }""",
+            pid,
+        )
+        for _ in range(100):
+            if held:
+                break
+            page.wait_for_timeout(50)
+        self.assertEqual(len(held), 1)
+
+        page.evaluate(
+            'async ids => { await addWorkToPlaylist(ids.playlist_a, ids.work_b); }', ids)
+        self.drained(page)
+        for route in held:
+            route.fallback()
+        held.clear()
+        page.evaluate('() => pendingPlaylist')
+
+        self.assertIsNone(o._cached_entity(page, 'playlist', pid),
+                          'a read issued before the change cannot refill the playlist')
+        o._safe_unroute(page, '**/api/playlists/**', hold)
+        self.detail(page, pid)
+        o._wait_entity_cached(page, 'playlist', pid)
+
+    def test_a_stale_index_read_cannot_resurrect_a_deleted_playlist(self):
+        """The catalogue is PATCHED by a deletion rather than dropped, so the
+        question is sharper than "is it still cached": a body fetched before
+        the deletion must not put the playlist back into it.
+
+        Deleting is the change used here because it needs no base read at all,
+        and -- with nothing pending that names a playlist -- no catalogue read
+        either, so holding the index stalls nothing.
+        """
+        server, page, context = self.start()
+        ids = server.ids
+        self.cache(page, ids)
         held = []
 
         def hold(route):
-            if route.request.method == 'GET':
+            if (route.request.method == 'GET'
+                    and urlparse(route.request.url).path == '/api/playlists'):
                 held.append(route)
             else:
                 route.fallback()
 
         page.route('**/api/playlists**', hold)
         page.evaluate(
-            """id => {
-                window.pendingPlaylists = prksOfflineReadList('playlists:index', '/api/playlists',
+            """() => {
+                window.pendingPlaylists = prksOfflineReadList('playlists:index',
+                    '/api/playlists',
                     { domain: 'playlists', validate: prksIsPlaylistsIndexShape });
-                window.pendingPlaylist = prksOfflineReadEntity('playlist', id, '/api/playlists/' + id,
-                    { domain: 'playlists', validate: v => prksIsPlaylistShape(v, id) });
-            }""",
-            pid,
-        )
+            }""")
         for _ in range(100):
-            if len(held) >= 2:
+            if held:
                 break
             page.wait_for_timeout(50)
-        self.assertEqual(len(held), 2)
-        page.evaluate(
-            "ids => reorderPlaylist(ids.playlist_a, [ids.playlist_video_two, ids.playlist_video_one])",
-            server.ids,
-        )
-        page.wait_for_function("!prksOfflineIsDomainBlocked('playlists')")
+        self.assertEqual(len(held), 1)
+
+        page.evaluate('async ids => { await deletePlaylistCanonical(ids.playlist_b); }', ids)
+        self.drained(page)
         for route in held:
             route.fallback()
-        page.evaluate('() => Promise.all([pendingPlaylists, pendingPlaylist])')
-        self.assertIsNone(o._cached_list(page, 'playlists:index'))
-        self.assertIsNone(o._cached_entity(page, 'playlist', pid))
+        held.clear()
+        page.evaluate('() => pendingPlaylists')
+
+        cached = o._cached_list(page, 'playlists:index')
+        titles = [row['title'] for row in cached['value']] if cached else []
+        self.assertNotIn(PLAYLIST_B_TITLE, titles,
+                         'a body fetched before the deletion cannot put it back')
         o._safe_unroute(page, '**/api/playlists**', hold)
-        self.detail(page, pid)
-        o._wait_entity_cached(page, 'playlist', pid)
+
+
+if __name__ == "__main__":
+    unittest.main()

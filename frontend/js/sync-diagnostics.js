@@ -100,6 +100,28 @@
             const where = (context.folder && context.folder.title) || op.payload.folder_id;
             return op.payload.folder_id ? 'File in ' + where : 'Remove from its folder';
         }
+        if (op.operation === 'CREATE_PLAYLIST') {
+            return 'Create playlist "' + bounded(op.payload.title) + '"';
+        }
+        if (op.operation === 'SET_PLAYLIST_FIELD') {
+            const labels = root.PRKS_PLAYLIST_FIELD_LABELS || {};
+            const field = op.payload.field;
+            return (labels[field] || field) + ' = "' + bounded(op.payload.value) + '"';
+        }
+        if (op.operation === 'REORDER_PLAYLIST_ITEMS') {
+            /* The COUNT, not the ids: an order is one decision, and listing
+             * thirty video ids says nothing a user can act on. */
+            const count = Array.isArray(op.payload.work_ids) ? op.payload.work_ids.length : 0;
+            return 'Reorder ' + count + (count === 1 ? ' video' : ' videos') + ' in a playlist';
+        }
+        if (op.operation === 'DELETE_PLAYLIST') {
+            return 'Delete a playlist';
+        }
+        if (op.operation === 'SET_WORK_PLAYLIST') {
+            const where = (context.playlist && context.playlist.title) || op.payload.playlist_id;
+            return op.payload.playlist_id
+                ? 'Add to ' + where : 'Remove from its playlist';
+        }
         if (op.operation === 'CREATE_TAG') {
             return 'Create tag "' + bounded(op.payload.name) + '"';
         }
@@ -155,6 +177,13 @@
         /* Reached through the Work branch, which is where a filing belongs: the
          * folder a Work is in is a field on the WORK. */
         SET_WORK_FOLDER: 'work-folder-state',
+        CREATE_PLAYLIST: 'playlist-state',
+        SET_PLAYLIST_FIELD: 'playlist-state',
+        REORDER_PLAYLIST_ITEMS: 'playlist-state',
+        DELETE_PLAYLIST: 'playlist-state',
+        /* Reached through the Work branch, which is where a membership
+         * belongs: the playlist a video is in is a field on the WORK. */
+        SET_WORK_PLAYLIST: 'work-playlist-state',
         CREATE_TAG: 'tags:index',
         DELETE_TAG: 'tags:index',
         ADD_WORK_TAG: 'work-tag-options',
@@ -207,6 +236,16 @@
             root.prksOfflineMarkEntityChanged('folder-state', op.entity_id);
             return;
         }
+        if (op.entity_type === 'playlist') {
+            /* The whole catalogue: a discarded creation leaves an index that
+             * was showing a playlist the server never stored, and a discarded
+             * deletion one that was hiding a playlist it still has. */
+            if (typeof root.prksOfflineMarkPlaylistsChanged === 'function') {
+                root.prksOfflineMarkPlaylistsChanged();
+            }
+            root.prksOfflineMarkEntityChanged('playlist-state', op.entity_id);
+            return;
+        }
         if (op.entity_type === 'tag') {
             /* The whole vocabulary, not one row: a discarded creation leaves a
              * catalogue that was showing a Tag the server never stored, and a
@@ -256,6 +295,7 @@
         PARENT_CYCLE: 'That would put the group inside one of its own subgroups.',
         PERSON_NOT_FOUND: 'That person no longer exists on the server.',
         PERSON_HAS_LINKS: 'They are still credited on a file, so they cannot be deleted.',
+        PLAYLIST_NOT_FOUND: 'That playlist no longer exists on the server.',
         ENTITY_NOT_FOUND: 'It no longer exists on the server.',
     });
 
@@ -272,6 +312,13 @@
          * refused because its parent would make a cycle are different problems
          * with different fixes, and "Needs a decision" is neither of them. */
         if (NAMED_REFUSALS[result.code]) return ' ' + NAMED_REFUSALS[result.code];
+        /* An order carries no "current value" to report -- a long playlist's
+         * ids would not fit the durable result -- so it says what actually
+         * happened instead of leaving a bare "Needs a decision". */
+        if (op.operation === 'REORDER_PLAYLIST_ITEMS') {
+            return ' This playlist was reordered somewhere else, so there are two'
+                + ' orders and only one can stand.';
+        }
         if (typeof result.current_state === 'boolean' &&
             typeof result.current_value !== 'string') {
             return result.current_state

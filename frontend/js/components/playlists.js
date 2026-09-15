@@ -22,72 +22,114 @@ function prksPlWorkSubtitle(w) {
     return channel || published || '';
 }
 
+/**
+ * The Playlist catalogue a user should see: what this device holds, with every
+ * unsynchronized intent applied. A playlist created here is real, so it is in
+ * the list before any server has heard of it.
+ */
 async function fetchPlaylists(options) {
     const signal = options && options.signal;
+    let rows = [];
     try {
-        const res = await prksRequest(
-            '/api/playlists',
-            { signal: signal },
-            { freshForMs: typeof PRKS_REQUEST_BURST_FRESH_MS === 'number' ? PRKS_REQUEST_BURST_FRESH_MS : 1500 }
-        );
-        if (!res.ok) return [];
-        const data = await res.json().catch(() => []);
-        return Array.isArray(data) ? data : [];
+        const cached = await prksOfflineReadList(
+            PRKS_PLAYLISTS_LIST_KEY, '/api/playlists', { signal: signal });
+        rows = cached && Array.isArray(cached.value) ? cached.value : [];
     } catch (e) {
         if (typeof prksIsAbortError === 'function' && prksIsAbortError(e)) return [];
-        throw e;
+        rows = [];
+    }
+    if (typeof prksEffectivePlaylistRows !== 'function') return rows;
+    try {
+        return await prksEffectivePlaylistRows(rows) || [];
+    } catch (_e) {
+        return rows;
     }
 }
 
+/**
+ * One Playlist, with its pending fields, contents and order applied.
+ *
+ * Every surface that re-reads a playlist after a change comes through here, so
+ * a change made with no server is visible for the same reason an acknowledged
+ * one is -- the durable queue, not a lucky refetch.
+ */
 async function fetchPlaylistDetails(id, options) {
     const signal = options && options.signal;
-    try {
-        const res = await prksRequest('/api/playlists/' + encodeURIComponent(id), { signal: signal });
-        if (!res.ok) return null;
-        return await res.json().catch(() => null);
-    } catch (e) {
-        if (typeof prksIsAbortError === 'function' && prksIsAbortError(e)) return null;
-        throw e;
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    if (typeof prksPendingPlaylistDeletions === 'function' &&
+        prksPendingPlaylistDeletions(ops).has(id)) return null;
+    const unsent = typeof prksPendingPlaylistCreates === 'function' &&
+        prksPendingPlaylistCreates(ops).some(op => op.entity_id === id);
+    let value = null;
+    if (unsent) {
+        /* Nothing the server holds can be in a playlist it has never heard of,
+         * so the fetch is skipped entirely rather than answered with a 404. */
+        value = typeof prksPendingCreatedPlaylist === 'function'
+            ? prksPendingCreatedPlaylist(id, ops) : null;
+    } else {
+        try {
+            const cached = await prksOfflineReadEntity('playlist', id,
+                '/api/playlists/' + encodeURIComponent(id),
+                { signal: signal, validate: v => prksIsPlaylistShape(v, id) });
+            value = cached && cached.value;
+        } catch (e) {
+            if (typeof prksIsAbortError === 'function' && prksIsAbortError(e)) return null;
+            value = null;
+        }
     }
+    if (!value) return null;
+    if (typeof prksEffectivePlaylistDetail !== 'function') return value;
+    /* The browse catalogue is read only when a membership is pending: it is the
+     * one place a row for a video added here can come from. */
+    let works = [];
+    if (typeof prksPendingWorkPlaylists === 'function' &&
+        prksPendingWorkPlaylists(ops).size &&
+        typeof prksOfflineReadList === 'function') {
+        try {
+            const browse = await prksOfflineReadList(
+                PRKS_WORKS_BROWSE_LIST_KEY, '/api/works', { signal: signal });
+            works = browse && Array.isArray(browse.value) ? browse.value : [];
+        } catch (_e) { works = []; }
+    }
+    return prksEffectivePlaylistDetail(value, ops, works);
 }
 
-/* --- Offline policy for Playlist routes (AGENTS.md "Offline / PWA") -------
- * Playlists are read-only offline in Phase 1: cached index/detail render, and
- * every canonical mutation is blocked outright (never queued, never faked).
+/* --- Offline policy for Playlist routes -----------------------------------
+ * Playlists are local-first: creating one, editing its fields, adding and
+ * removing videos, reordering it and deleting it are all semantic operations
+ * with revisions and defined conflicts, so nothing here is disabled for want
+ * of a connection.
+ *
+ * Two surfaces still read the server rather than the durable queue, and those
+ * stay online-only, because neither can be answered from anything this device
+ * holds:
+ *   - the "Add video" search reads the whole Works catalogue;
+ *   - the Work card's playlist picker reads the Playlist catalogue.
+ * Both only DISABLE a search; the decisions they lead to are durable.
+ *
  * Navigation is deliberately untouched -- a Playlist item is an ordinary
  * `#/works/:id` link and "All playlists" an ordinary route, so each destination
  * decides for itself whether it has cached data. `original_url` is an external
  * link: PRKS being unreachable says nothing about the rest of the internet. */
 const PRKS_PLAYLIST_MUTATION_SELECTOR = [
-    '#prks-create-playlist-btn',
-    '#prks-playlist-edit-btn',
-    '#prks-playlist-edit-title',
-    '#prks-playlist-edit-desc',
-    '#prks-playlist-edit-original-url',
-    '#prks-playlist-edit-save',
     '#prks-playlist-add-search',
     '#prks-playlist-add-results button',
-    '[data-pl-up]',
-    '[data-pl-down]',
-    '[data-pl-remove]',
 ].join(', ');
 
-/* The inline Work rename is deliberately ABSENT from that list. It changes a
- * Work Title, not Playlist state, and Work Titles are local-first -- so it
- * works offline exactly as the metadata editor does. Every genuine Playlist
- * mutation above stays online-only. */
-
-/* The Work detail page's own Playlist card ("Set playlist" / Clear / New…)
- * is a Playlist mutation surface living on a *Work* route, so it needs its own
- * owned policy rather than riding on the Playlist routes' binding. Edit is
- * disabled offline only while NOT already editing: an editor open when the
- * connection drops keeps its draft and its Done button, exactly like the
- * Playlist detail editor. */
+/* The Work detail page's own Playlist card lives on a *Work* route, so it
+ * needs its own owned policy rather than riding on the Playlist routes'
+ * binding.
+ *
+ * What is disabled is the SEARCH over the Playlist catalogue and the Set button
+ * that can only act on what that search picked. Clear names no playlist at all,
+ * and New... mints one here and attaches this video to it -- both are ordinary
+ * durable decisions, so both stay live. Edit is disabled offline only while NOT
+ * already editing: an editor open when the connection drops keeps its draft and
+ * its Done button. */
 const PRKS_WORK_PLAYLIST_MUTATION_SELECTOR = [
     '#prks-work-playlist-search',
     '#prks-work-playlist-set-btn',
-    '#prks-work-playlist-clear-btn',
-    '#prks-work-playlist-new-btn',
 ].join(', ');
 
 function prksPlaylistRuntimeOnline() {
@@ -196,130 +238,168 @@ function prksBindPlaylistOfflineState(ctx, container) {
     if (ctx && typeof ctx.registerCleanup === 'function') unregister = ctx.registerCleanup(dispose) || function () {};
 }
 
-/* --- Canonical Playlist mutation helpers --------------------------------
+/* --- Durable Playlist mutations ------------------------------------------
  * Every production Playlist write goes through these, so there is exactly one
- * canonical-success boundary per operation and coherence cannot depend on each
- * UI surface remembering a domain hook. Each one guards connectivity
- * immediately before its request as defense in depth: controls are disabled
- * offline, but the connection can drop between a dialog opening and Save, and
- * a future caller may forget its own UI guard. See AGENTS.md, "Offline
- * coherence domains".
+ * boundary per operation and coherence cannot depend on each UI surface
+ * remembering a domain hook.
  *
- * A guard refusal throws a tagged error rather than returning quietly, so the
- * existing throw/catch call sites keep working -- and `prksPlaylistWasBlocked()`
- * lets them skip their own error dialog, since the guard already showed one. */
-function prksPlaylistMutationBlocked(message) {
-    if (typeof prksOfflineGuardMutation !== 'function') return false;
-    return prksOfflineGuardMutation(message);
+ * There are no connectivity guards left here. A Playlist change is a semantic
+ * operation with a revision and a defined conflict, so it is written to the
+ * durable queue and is as real offline as online -- the reconcilers own the
+ * cache once the server answers. What a caller can still be told is that the
+ * BASE is unknown: a playlist this device has never read has no revision to
+ * measure an edit against, and guessing 0 would silently overwrite whatever
+ * another device wrote. That is a different refusal from "no connection", and
+ * it is the only one this layer makes.
+ *
+ */
+
+function prksPlaylistSaveMessage(error, action) {
+    switch (error && error.prksLocalStoreCode) {
+        case 'scope_busy':
+            return 'Part of this playlist is syncing or needs a decision. Try again shortly.';
+        case 'entity_deleted':
+            return 'This playlist is being deleted, so it cannot be changed.';
+        case 'dependency_failed':
+            return String(error.message || 'A change this one depends on could not be saved.');
+        case 'invalid_envelope':
+        case 'invalid_base':
+            return String(error.message || 'That is not a valid playlist change.');
+        default:
+            return 'Could not ' + action + ' locally. Please retry.';
+    }
 }
 
-function prksPlaylistBlockedError() {
-    const err = new Error('Requires a connection to PRKS.');
-    err.prksOfflineBlocked = true;
+function prksPlaylistBaseUnavailable(what) {
+    const err = new Error(
+        'This ' + what + ' cannot be changed offline yet. Open it once while connected to '
+        + 'PRKS so its synchronization state is prepared.');
+    err.prksPlaylistUnavailable = true;
     return err;
 }
 
-function prksPlaylistWasBlocked(err) {
-    return !!(err && err.prksOfflineBlocked);
-}
-
-function prksPlaylistsChanged() {
-    return typeof prksMarkPlaylistsDomainChanged === 'function' ? prksMarkPlaylistsDomainChanged() : null;
-}
-
-function prksPlaylistWorkChanged(workId) {
-    return typeof prksOfflineMarkEntityChanged === 'function'
-        ? prksOfflineMarkEntityChanged('work', workId)
-        : null;
-}
-
+/**
+ * Create a Playlist durably, under an id this device mints.
+ *
+ * The id is permanent and is never remapped, so anything added to the playlist
+ * is ordered behind its creation by the generic dependency mechanism rather
+ * than waiting for a server-assigned key.
+ */
 async function createPlaylist(title, description) {
-    if (prksPlaylistMutationBlocked('Creating a Playlist requires a connection to PRKS.')) {
-        throw prksPlaylistBlockedError();
-    }
-    const res = await prksRequest('/api/playlists', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, description }),
+    const op = await prksCreatePlaylistDurably({
+        title: (title || '').trim() || 'Untitled playlist',
+        description: (description || '').trim(),
+        original_url: '',
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'create failed');
-    // A brand-new Playlist has no members, so it cannot appear in any cached
-    // Work's playlist_id/playlist_title -- Playlists only.
-    prksPlaylistsChanged();
-    return data.id;
+    return op && op.entity_id;
 }
 
 /**
- * Playlist metadata save.
+ * Playlist metadata save, sending only what changed.
  *
- * `options.previousTitle` and `options.memberWorkIds` exist because `get_work()`
- * embeds `playlist_title`: renaming a Playlist stales the cached Work entity of
- * every Work in it. The diff lives here rather than in UI code so no caller can
- * forget it, and a description/original_url-only edit deliberately keeps those
- * Works offline-available. Only the *current* members need eviction: a Work
- * moved in or out elsewhere had its own snapshot evicted by that membership
- * mutation.
+ * The three concepts stay apart, exactly as the Person editor keeps them: the
+ * fields passed in are the DRAFT, the acknowledged base comes from the cache
+ * and the revisions projection, and the difference is measured against what
+ * the caller was SHOWING. Sending every field would let one syncing field
+ * refuse the whole form.
+ *
+ * `options.previousTitle` and `options.memberWorkIds` are accepted and ignored:
+ * renaming a playlist stales the cached Work of every member, and the
+ * reconciler now does that from the acknowledgement rather than from whatever
+ * the editor happened to have on screen.
  */
 async function updatePlaylist(playlistId, fields, options) {
-    if (prksPlaylistMutationBlocked()) throw prksPlaylistBlockedError();
-    const res = await prksRequest('/api/playlists/' + encodeURIComponent(playlistId), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fields || {}),
+    const draft = {};
+    (PRKS_PLAYLIST_FIELDS || []).forEach(function (field) {
+        if (!fields || !Object.prototype.hasOwnProperty.call(fields, field)) return;
+        const value = fields[field];
+        draft[field] = value == null || value === false ? '' : String(value);
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'save failed');
-    prksPlaylistsChanged();
-    const opts = options && typeof options === 'object' ? options : {};
-    const nextTitle = fields && fields.title != null ? String(fields.title) : null;
-    const titleChanged = nextTitle !== null && String(opts.previousTitle == null ? '' : opts.previousTitle) !== nextTitle;
-    if (titleChanged && Array.isArray(opts.memberWorkIds)) {
-        opts.memberWorkIds.forEach(function (workId) {
-            if (workId) prksPlaylistWorkChanged(workId);
-        });
+    if (!Object.keys(draft).length) return {};
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    const base = await prksAcknowledgedPlaylistBase(playlistId, ops);
+    if (!base) throw prksPlaylistBaseUnavailable('playlist');
+    const changes = prksDirtyPlaylistFields(playlistId, draft, base, ops);
+    if (!Object.keys(changes).length) return {};
+    try {
+        await prksSavePlaylistFieldsDurably(playlistId, changes, base);
+    } catch (error) {
+        throw new Error(prksPlaylistSaveMessage(error, 'save this playlist'));
     }
-    return data;
+    return {};
+}
+
+/**
+ * Which playlist a video is in, durably.
+ *
+ * `addWorkToPlaylist` and `removeWorkFromPlaylist` are the same operation seen
+ * from two ends -- a video is in at most ONE playlist, so adding, moving and
+ * removing all set the same scalar on the WORK. Both names are kept so their
+ * callers do not change.
+ */
+async function prksSetWorkPlaylist(workId, playlistIdOrNull, knownObserved) {
+    const observed = knownObserved || await prksAcknowledgedWorkPlaylist(workId);
+    if (!observed) {
+        /* Unknown is not empty: without the revision this membership was
+         * measured against, it would have to guess 0 and could silently
+         * overwrite wherever another device had put it. */
+        const err = prksPlaylistBaseUnavailable('video');
+        err.message = 'This video cannot be added to a playlist offline yet. Open it once '
+            + 'while connected to PRKS so its synchronization state is prepared.';
+        throw err;
+    }
+    try {
+        await prksSetWorkPlaylistDurably(
+            workId, playlistIdOrNull == null ? '' : String(playlistIdOrNull), observed);
+    } catch (error) {
+        throw new Error(prksPlaylistSaveMessage(error, 'change this video’s playlist'));
+    }
+    return null;
 }
 
 async function addWorkToPlaylist(playlistId, workId) {
-    if (prksPlaylistMutationBlocked()) throw prksPlaylistBlockedError();
-    const res = await prksRequest(`/api/playlists/${encodeURIComponent(playlistId)}/items`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ work_id: workId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'add failed');
-    // One Playlist per Work: moving a Work from A to B changes both Playlists'
-    // item_count and items, which whole-domain invalidation already covers.
-    prksPlaylistsChanged();
-    return prksPlaylistWorkChanged(workId);
+    return prksSetWorkPlaylist(workId, playlistId);
 }
 
 async function removeWorkFromPlaylist(playlistId, workId) {
-    if (prksPlaylistMutationBlocked()) throw prksPlaylistBlockedError();
-    const res = await prksRequest(
-        `/api/playlists/${encodeURIComponent(playlistId)}/items/${encodeURIComponent(workId)}`,
-        { method: 'DELETE' }
-    );
-    if (!res.ok) throw new Error('remove failed');
-    prksPlaylistsChanged();
-    return prksPlaylistWorkChanged(workId);
+    /* Aimed at the playlist the video is actually in, exactly as the canonical
+     * endpoint is: a removal naming some other playlist changes nothing. The
+     * base read here is the one the write then uses, rather than a second. */
+    const observed = await prksAcknowledgedWorkPlaylist(workId);
+    if (observed && observed.playlist_id && observed.playlist_id !== String(playlistId)) {
+        return null;
+    }
+    return prksSetWorkPlaylist(workId, '', observed);
 }
 
+/**
+ * The whole order, as ONE decision.
+ *
+ * Not a collection of independently racing positions: two devices that each
+ * dragged one video produced two whole orders, and merging them index by index
+ * would invent a third that neither of them chose.
+ */
 async function reorderPlaylist(playlistId, workIds) {
-    if (prksPlaylistMutationBlocked()) throw prksPlaylistBlockedError();
-    const res = await prksRequest(`/api/playlists/${encodeURIComponent(playlistId)}/reorder`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ work_ids: workIds }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'reorder failed');
-    // Work detail carries no Playlist position, so no Work entity is stale --
-    // but reorder also bumps updated_at, which reorders the index.
-    prksPlaylistsChanged();
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    const observed = await prksAcknowledgedPlaylistOrder(playlistId, ops);
+    if (!observed) throw prksPlaylistBaseUnavailable('playlist');
+    try {
+        await prksReorderPlaylistItemsDurably(playlistId, workIds, observed);
+    } catch (error) {
+        throw new Error(prksPlaylistSaveMessage(error, 'reorder this playlist'));
+    }
+}
+
+/** Delete a Playlist durably. A tombstone: its videos survive it. */
+async function deletePlaylistCanonical(playlistId) {
+    try {
+        await prksDeletePlaylistDurably(playlistId);
+    } catch (error) {
+        throw new Error(prksPlaylistSaveMessage(error, 'delete this playlist'));
+    }
+    return { status: 'deleted' };
 }
 
 function prksOpenNewPlaylistModalFromPlaylistsPage() {
@@ -577,10 +657,8 @@ function renderPlaylistDetail(ctx, pl, container) {
              * milestone since 2D has removed: the non-revision-aware one
              * silently overwrites the other's conflicts.
              *
-             * This is deliberately NOT a Playlist mutation, so it is NOT
-             * gated by `prksPlaylistMutationBlocked()`: renaming works
-             * offline exactly as it does in the metadata editor. The other
-             * Playlist controls remain online-only. */
+             * This is deliberately NOT a Playlist mutation: it belongs to
+             * the Work metadata family and shares that family's revision. */
             try {
                 const result = await prksSaveWorkFieldDurably(wid, 'title', nextTitle,
                     { label: 'Title' });
@@ -631,8 +709,10 @@ function renderPlaylistDetail(ctx, pl, container) {
                 });
                 applyFreshPlaylist(fresh);
             } catch (_e) {
-                if (prksPlaylistWasBlocked(_e)) return;
-                if (ownsPlaylist()) await prksAlertMessage('Could not remove item.', 'Error');
+                if (ownsPlaylist()) {
+                    await prksAlertMessage(
+                        String((_e && _e.message) || 'Could not remove item.'), 'Error');
+                }
             }
             return;
         }
@@ -644,8 +724,10 @@ function renderPlaylistDetail(ctx, pl, container) {
             });
             applyFreshPlaylist(fresh);
         } catch (_e) {
-            if (prksPlaylistWasBlocked(_e)) return;
-            if (ownsPlaylist()) await prksAlertMessage('Could not reorder playlist.', 'Error');
+            if (ownsPlaylist()) {
+                await prksAlertMessage(
+                    String((_e && _e.message) || 'Could not reorder playlist.'), 'Error');
+            }
         }
     };
 
@@ -725,11 +807,9 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     if (editBtn && editBtn.dataset.bound !== '1') {
         editBtn.dataset.bound = '1';
         editBtn.onclick = () => {
-            const leaving = !!(ctx && ctx.ui && ctx.ui.workPlaylistEditing);
-            // Leaving an already-open editor is always allowed; starting a new
-            // one offline is refused, because mounting it would fetch the
-            // Playlist catalog and expose canonical mutation controls.
-            if (!leaving && prksPlaylistMutationBlocked('Editing a Work\u2019s playlist requires a connection to PRKS.')) return;
+            /* Opening the editor is always allowed: Clear is a durable
+             * decision, and the one control that needs a server -- the search
+             * over the Playlist catalogue -- disables itself. */
             if (ctx && ctx.ui) ctx.ui.workPlaylistEditing = !ctx.ui.workPlaylistEditing;
             const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
             if (focused && ctx && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
@@ -874,7 +954,6 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 
     setBtn.onclick = async () => {
-        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         const pid = String(hidden.value || '').trim();
         if (!pid) return;
         try {
@@ -897,13 +976,13 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                 }
             }
         } catch (_e) {
-            if (prksPlaylistWasBlocked(_e)) return;
-            if (status && ownsPanel(status)) status.textContent = 'Could not set playlist.';
+            if (status && ownsPanel(status)) {
+                status.textContent = String((_e && _e.message) || 'Could not set playlist.');
+            }
         }
     };
 
     clearBtn.onclick = async () => {
-        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         const currentPid = work && work.playlist_id ? String(work.playlist_id) : '';
         if (!currentPid) {
             input.value = '';
@@ -932,17 +1011,13 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
                 }
             }
         } catch (_e) {
-            if (prksPlaylistWasBlocked(_e)) return;
-            if (status && ownsPanel(status)) status.textContent = 'Could not remove.';
+            if (status && ownsPanel(status)) {
+                status.textContent = String((_e && _e.message) || 'Could not remove.');
+            }
         }
     };
 
     newBtn.onclick = async () => {
-        // Guard before touching the global pending attachment: openModal()
-        // guards too, but it refuses *after* this handler would already have
-        // left `__prksPendingPlaylistAttach` set, and that stale workId would
-        // then be picked up by the next Playlist creation from any surface.
-        if (prksPlaylistMutationBlocked('Creating a Playlist requires a connection to PRKS.')) return;
         const titleEl = document.getElementById('playlist-title');
         const descEl = document.getElementById('playlist-description');
         const errEl = document.getElementById('playlist-error');
@@ -962,8 +1037,12 @@ window.fetchPlaylistDetails = fetchPlaylistDetails;
 window.prksBindPlaylistsIndexCreateBtn = prksBindPlaylistsIndexCreateBtn;
 window.renderPlaylistsIndex = renderPlaylistsIndex;
 window.prksApplyPlaylistPanelOfflineState = prksApplyPlaylistPanelOfflineState;
-window.prksPlaylistWasBlocked = prksPlaylistWasBlocked;
 window.updatePlaylist = updatePlaylist;
+window.createPlaylist = createPlaylist;
+window.addWorkToPlaylist = addWorkToPlaylist;
+window.removeWorkFromPlaylist = removeWorkFromPlaylist;
+window.reorderPlaylist = reorderPlaylist;
+window.deletePlaylistCanonical = deletePlaylistCanonical;
 window.renderPlaylistDetail = renderPlaylistDetail;
 window.prksRefreshPlaylistDetailMain = prksRefreshPlaylistDetailMain;
 window.prksClearPlaylistRenameState = prksClearPlaylistRenameState;

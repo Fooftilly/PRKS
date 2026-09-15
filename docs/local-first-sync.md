@@ -1760,6 +1760,119 @@ snapshots are staled. Among the browse projections only Recently added carries
 `folder_id`; Progress and File types never render a folder, so staling them
 would cost the user their offline browse pages for a value neither shows.
 
+## Playlists (3G)
+
+Five shapes, and the first family whose central decision is an AGGREGATE.
+
+| Operation | Shape | Conflict unit | Base revision |
+| --- | --- | --- | --- |
+| `CREATE_PLAYLIST` | construction | the playlist | none |
+| `SET_PLAYLIST_FIELD` | scalar mutation | one field | `playlist-field/[playlist, field]` |
+| `SET_WORK_PLAYLIST` | scalar mutation of the WORK | the Work | `work-playlist/[work]` |
+| `REORDER_PLAYLIST_ITEMS` | aggregate | the whole order | `playlist-order/[playlist]` |
+| `DELETE_PLAYLIST` | destruction | the identity | none |
+
+### The order is an aggregate, not racing positions
+
+An order is not a collection of independently racing `position` values. Two
+devices that each dragged one video have produced two WHOLE orders, and merging
+them index by index would arrive at a third that neither of them chose. One
+revision covers the structure, so the second drag to arrive conflicts and the
+user decides.
+
+That makes coalescing straightforward and merging impossible, which is the right
+way round: a second drag on the SAME device replaces the first, because both
+describe one decision -- "this is the order" -- and the later one is what the
+user is looking at.
+
+The conflict result carries COUNTS, never the two orders. A long playlist's ids
+would not fit `MAX_RESULT_BYTES`, and the client re-reads the playlist to show
+what the server has. `MAX_ITEMS` (1000, mirrored as `PLAYLIST_MAX_ITEMS` in
+local-store.js) is what a single envelope can carry -- an order travels as one
+payload, which is exactly what makes it an aggregate.
+
+Reordering is not a membership change, on either side: an id the playlist does
+not hold is ignored, and one it holds that the order omitted keeps its relative
+place at the end. That is the rule `reorder_playlist` has always applied, and a
+second one would make the same drag mean two different things.
+
+### Which playlist a video is in is a field on the WORK
+
+A video is in at most one playlist -- `add_work_to_playlist` has always deleted
+any other membership first -- so this is a scalar rather than membership of a
+set. Adding, moving and removing are one operation with different values, and
+`''` means "in no playlist". Putting it back where it already was leaves no
+intent at all.
+
+Modelling it from the playlist's end would have made moving one video between
+two playlists a change that neither playlist's revision described. Because a
+membership changes the contents of up to two playlists, it advances BOTH of
+their order revisions as well -- without that, a reorder made before the move
+would still look current.
+
+Its acknowledgement carries the playlist's TITLE, because a cached Work detail
+renders it and a client whose playlist catalogue does not hold that playlist
+could not build the row without it.
+
+### A video's title is not a Playlist field
+
+Renaming a video from inside a playlist page changes a Work, and goes on using
+the Work metadata family and its revision. A Playlist-specific title mutation
+would be a second, non-revision-aware path to the same column -- exactly the
+contract every milestone since 2D has been removing.
+
+### Deletion is not protected, and takes its memberships with it
+
+Unlike a Folder, a Playlist holding videos is NOT refused: its items are
+memberships, not the videos themselves, and the videos survive it. Every member
+Work's membership revision advances, so a device holding "this video is in that
+playlist" can discover it was overtaken.
+
+Deleting cancels every unsynchronized operation naming the playlist that was
+never attempted -- including a video added TO it, which is work the deletion
+would only undo.
+
+### `DELETE_PLAYLIST` has no UI control today
+
+`DELETE /api/playlists/{id}` exists and PRKS has always been willing to delete a
+playlist, but no surface in the app offers it -- so the durable family is
+reachable only through the API and the tests. It is implemented anyway, because
+moving an existing endpoint onto the durable path is synchronization work; the
+button is a product decision (where it lives, what it warns about) and is left
+where it was.
+
+### Playlists have never been unique by title
+
+Two playlists may share a name, so there is no `TITLE_TAKEN` here. Inventing one
+would refuse something the ordinary endpoint accepts.
+
+### What a pending change reaches, and what an acknowledgement does
+
+A pending creation, edit, membership, drag or deletion is an overlay over the
+durable queue and is never written into the acknowledged cache. A pending
+membership reaches the video's own page, the card that names its playlist, and
+the playlist page's own list -- but only where this device already holds a row
+for the video, for the same reason the Folder family gives.
+
+`item_count` is deliberately NOT adjusted for a pending membership. The count
+moves between two playlists and the catalogue projection cannot know which
+playlist a video is leaving. A playlist created here is the exception: its count
+is genuinely zero, because nothing the server holds can be in a playlist it has
+never heard of.
+
+On acknowledgement the catalogue is PATCHED rather than dropped. A reorder's
+answer names the order the server ended with, so the cached detail is reordered
+in place; a rename stales the member Works from the detail this device holds --
+and when it holds none, there is nothing cached to be wrong.
+
+### What stays online-only
+
+Two Playlist surfaces still read the server, and neither can be answered from
+anything this device holds: the "Add video" search reads the whole Works
+catalogue, and the Work card's playlist picker reads the Playlist catalogue.
+Both only disable a SEARCH. Every decision those searches lead to is durable,
+and Clear -- which names no playlist at all -- is live offline.
+
 ## Adding a family: the four shapes and what each must declare
 
 The families that exist fall into a small number of shapes. New work should

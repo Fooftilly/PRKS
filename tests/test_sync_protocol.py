@@ -26,15 +26,19 @@ class SyncProtocolTests(unittest.TestCase):
         self.assertEqual(sorted(sync_protocol.supported_operations()),
                          ["ADD_PERSON_GROUP_MEMBER",
                           "ADD_WORK_PERSON_ROLE", "ADD_WORK_TAG", "CREATE_FOLDER",
-                          "CREATE_PERSON", "CREATE_PERSON_GROUP", "CREATE_TAG",
+                          "CREATE_PERSON", "CREATE_PERSON_GROUP", "CREATE_PLAYLIST",
+                          "CREATE_TAG",
                           "DELETE_FOLDER", "DELETE_PERSON",
-                          "DELETE_PERSON_GROUP", "DELETE_TAG",
+                          "DELETE_PERSON_GROUP", "DELETE_PLAYLIST", "DELETE_TAG",
                           "MARK_WORK_OPENED", "REMOVE_PERSON_GROUP_MEMBER",
                           "REMOVE_WORK_PERSON_ROLE", "REMOVE_WORK_TAG",
+                          "REORDER_PLAYLIST_ITEMS",
                           "SET_FOLDER_FIELD",
                           "SET_PERSON_GROUP_FIELD", "SET_PERSON_METADATA_FIELD",
+                          "SET_PLAYLIST_FIELD",
                           "SET_WORK_FOLDER",
                           "SET_WORK_METADATA_FIELD", "SET_WORK_PERSON_ROLE_CREDIT",
+                          "SET_WORK_PLAYLIST",
                           "SET_WORK_SOURCE"])
 
     def test_unregistered_operation_is_refused_and_unledgered(self):
