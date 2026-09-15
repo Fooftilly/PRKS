@@ -218,6 +218,26 @@
         return payload;
     }
 
+    /**
+     * Whether a DESTRUCTIVE intent is still awaiting the server's answer.
+     *
+     * A deletion hides its entity locally -- a tombstone -- while it is
+     * `pending` or `syncing`, and after a transport failure, which returns the
+     * row to `pending` because the delete may still land. It must STOP hiding
+     * it the moment the server terminally refuses: a `conflict` is the server
+     * saying the entity is still there, so leaving it hidden would show the
+     * user a library that disagrees with both the server and the Diagnostics
+     * entry telling them why. `acknowledged` rows are retired, and their
+     * entity is genuinely gone.
+     *
+     * Shared by every destructive family, because the contract they document
+     * is the same one: nothing on this device is destroyed, and a refusal
+     * brings the entity back.
+     */
+    function deletionAwaitsServer(op) {
+        return !!op && op.status !== STATUS_ACKNOWLEDGED && op.status !== STATUS_CONFLICT;
+    }
+
     /* The one editable Concept column that is not part of its identity. The
      * name and the aliases are NOT here: renaming writes an alias, so they are
      * one aggregate under `SET_CONCEPT_IDENTITY` rather than fields. */
@@ -2969,6 +2989,7 @@
         PRKS_LOCAL_WORK_ROLE_OPERATIONS: WORK_ROLE_OPERATIONS,
         PRKS_LOCAL_PERSON_FIELDS: PERSON_FIELDS,
         PRKS_LOCAL_FOLDER_FIELDS: FOLDER_FIELDS,
+        prksDurableDeletionAwaitsServer: deletionAwaitsServer,
         PRKS_LOCAL_CONCEPT_FIELDS: CONCEPT_FIELDS,
         PRKS_LOCAL_CONCEPT_MAX_ALIASES: CONCEPT_MAX_ALIASES,
         PRKS_LOCAL_CONCEPT_MAX_PARENTS: CONCEPT_MAX_PARENTS,

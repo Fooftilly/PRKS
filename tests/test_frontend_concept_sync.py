@@ -185,6 +185,9 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         body = runtime[at: runtime.index('\n        }', at)]
         self.assertIn('if (!snapshot || !Array.isArray(snapshot.nodes)) return null;', body)
         self.assertIn("node.type !== 'concept'", body)
+        # Matched on `record_id`, never the namespaced `id` -- the projection
+        # holds several record types in one node list.
+        self.assertIn('node.record_id !== conceptId', body)
         self.assertNotIn('push(', body)
         # A creation cannot patch a snapshot computed before it existed.
         at = runtime.index('async function reconcileCreatedConcept(')

@@ -311,6 +311,50 @@ async function aPendingDeletionIsATombstone() {
         "nor may it be chosen as a parent while it is being deleted");
 }
 
+async function aRefusedDeletionStopsHidingTheConcept() {
+    /* The other half of the tombstone contract, and the easy one to miss. A
+     * deletion hides its Concept while the server has not answered. Once the
+     * server REFUSES -- `CONCEPT_IN_USE`, because notes still name it -- the
+     * Concept must come back: the refusal is the server saying it is still
+     * there, and a library that kept hiding it would disagree with both the
+     * server and the Diagnostics entry explaining why. */
+    const store = newStore();
+    const id = "C-" + "A".repeat(31) + "9";
+    const deletion = await store.deleteConcept(id);
+    const rows = [{ id: id, name: "Emergence" }];
+
+    let ops = await store.listOperations();
+    assert.deepEqual(globalThis.prksEffectiveConcepts(rows, ops), [],
+        "hidden while the answer is still owed");
+
+    /* A transport failure is NOT an answer: the delete may still land, so it
+     * goes on hiding. */
+    await store.updateOperationSyncState(deletion.op_id,
+        { status: "pending", last_error: "Sync failed; retry scheduled." });
+    ops = await store.listOperations();
+    assert.deepEqual(globalThis.prksEffectiveConcepts(rows, ops), [],
+        "a failed attempt is not a refusal");
+
+    await store.updateOperationSyncState(deletion.op_id,
+        { status: "conflict", server_result: { code: "CONCEPT_IN_USE" } });
+    ops = await store.listOperations();
+    assert.deepEqual(globalThis.prksEffectiveConcepts(rows, ops).map(r => r.id), [id],
+        "refused, so the Concept is visible again");
+
+    /* And the conflict itself survives being visible -- the user still has a
+     * decision to make. */
+    const conflicted = (await store.listOperations())
+        .filter(r => r.status === "conflict");
+    assert.equal(conflicted.length, 1);
+    assert.equal(conflicted[0].server_result.code, "CONCEPT_IN_USE");
+
+    /* It also stops being anyone's phantom parent or child once refused. */
+    const detail = globalThis.prksEffectiveConceptDetail(
+        { id: "C-OTHER", name: "Other", parents: [{ id: id, name: "Emergence" }],
+          children: [] }, ops, []);
+    assert.deepEqual(detail.parents, [{ id: id, name: "Emergence" }]);
+}
+
 /* ---- bases ---- */
 
 async function theBaseIsAcknowledgedAndNeverGuessed() {
@@ -356,6 +400,7 @@ async function main() {
     await aSentParentAssignmentIsWaitedForRatherThanRewritten();
     await deletingAConceptCreatedHereFoldsItAway();
     await aPendingDeletionIsATombstone();
+    await aRefusedDeletionStopsHidingTheConcept();
     await theBaseIsAcknowledgedAndNeverGuessed();
     console.log("All " + checks + " concept checks passed");
 }

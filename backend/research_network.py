@@ -556,59 +556,72 @@ def _position_arguments(conn: sqlite3.Connection, position_id: str) -> List[dict
 
 
 def create_position(db: PRKSDatabase, name, description: str = "") -> dict:
-    n = _plain_name(name, max_len=POSITION_NAME_MAX)
-    d = _optional_markdown(description, max_len=POSITION_DESCRIPTION_MAX)
+    """Construct a Position through the boundary the durable family shares.
+
+    The lazy import is required, not stylistic: `position_sync` reads its
+    normalization rules from this module, so a top-level import here would be a
+    cycle. Concepts needed the same treatment for the same reason.
+    """
+    from backend import position_sync
+
     pid = db.generate_id("P")
-    db.execute_query(
-        "INSERT INTO positions (id, name, description) VALUES (?, ?, ?)",
-        (pid, n, d),
-    )
+    with db.connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        position_sync.insert_position_on_conn(conn, pid, name, description)
     LOGGER.info("position_created position_id=%s", safe_log_id(pid))
     return get_position(db, pid)
 
 
 def update_position(db: PRKSDatabase, position_id: str, *, name=None, description=None) -> dict:
+    """Edit a Position through the revision-aware boundary.
+
+    One call per field actually supplied, so each field advances only its OWN
+    revision -- that is what makes an unrelated description edit unable to
+    conflict with a rename, and it is the property the durable family relies on.
+    """
+    from backend import position_sync
+
     pid = (position_id or "").strip()
     if not pid:
         raise ResearchError("not_found", "Position not found.", 404)
+    if name is None and description is None:
+        raise ResearchError("nothing_to_update", "Nothing to update.")
     with db.connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if not _fetchone(conn, "SELECT 1 FROM positions WHERE id = ?", (pid,)):
             raise ResearchError("not_found", "Position not found.", 404)
-        if name is None and description is None:
-            raise ResearchError("nothing_to_update", "Nothing to update.")
         if name is not None:
-            conn.execute(
-                "UPDATE positions SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (_plain_name(name, max_len=POSITION_NAME_MAX), pid),
-            )
+            position_sync.set_field_on_conn(conn, pid, "name", name)
         if description is not None:
-            conn.execute(
-                "UPDATE positions SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (_optional_markdown(description, max_len=POSITION_DESCRIPTION_MAX), pid),
-            )
+            position_sync.set_field_on_conn(conn, pid, "description", description)
     LOGGER.info("position_updated position_id=%s", safe_log_id(pid))
     return get_position(db, pid)
 
 
 def delete_position(db: PRKSDatabase, position_id: str) -> None:
+    """Destruction, through the boundary the durable family shares.
+
+    The protection is unchanged: a Position an Argument still targets is
+    refused, because deleting it would leave that Argument aimed at nothing.
+    The shared primitive reports it as a code, which is translated back into
+    the `ResearchError` contract this endpoint has always raised.
+    """
+    from backend import position_sync
+
     pid = (position_id or "").strip()
     if not pid:
         raise ResearchError("not_found", "Position not found.", 404)
     with db.connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if not _fetchone(conn, "SELECT 1 FROM positions WHERE id = ?", (pid,)):
             raise ResearchError("not_found", "Position not found.", 404)
-        used = _fetchone(
-            conn,
-            "SELECT 1 FROM argument_target_positions WHERE position_id = ? LIMIT 1",
-            (pid,),
-        )
-        if used:
+        _deleted, refusal = position_sync.delete_position_on_conn(conn, pid)
+        if refusal == "POSITION_IN_USE":
             raise ResearchError(
                 "position_in_use",
                 "This Position is still targeted by an Argument or Stance.",
                 409,
             )
-        conn.execute("DELETE FROM positions WHERE id = ?", (pid,))
     LOGGER.info("position_deleted position_id=%s", safe_log_id(pid))
 
 

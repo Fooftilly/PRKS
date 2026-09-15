@@ -22,8 +22,16 @@
     }
 
     /** Every Tag id this device is waiting to have deleted. */
+    /* A refused deletion stops hiding its entity: see
+     * `prksDurableDeletionAwaitsServer` in local-store.js for why. */
+    const deletionAwaitsServer = root.prksDurableDeletionAwaitsServer ||
+        function (op) {
+            return !!op && op.status !== 'acknowledged' && op.status !== 'conflict';
+        };
+
     function pendingDeletions(operations) {
-        return new Set(unsettled(operations, 'DELETE_TAG').map(op => op.entity_id));
+        return new Set(unsettled(operations, 'DELETE_TAG')
+            .filter(deletionAwaitsServer).map(op => op.entity_id));
     }
 
     function catalogRowFromOp(op) {

@@ -2775,6 +2775,13 @@ class PRKSDatabase:
             except playlist_sync.PlaylistRuleError as error:
                 raise ValueError("Playlist not found.") from error
 
+    def get_position_sync_state(self, position_id: str) -> Optional[dict]:
+        """Field revisions for one Position."""
+        from backend import position_sync
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return position_sync.get_position_state_on_conn(conn, position_id)
+
     def get_concept_sync_state(self, concept_id: str) -> Optional[dict]:
         """Field revisions plus the two aggregates and their revisions."""
         from backend import concept_sync

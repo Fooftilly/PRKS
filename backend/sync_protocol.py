@@ -175,8 +175,8 @@ def process_operation(db, data):
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
     concept_sync, folder_sync, person_group_sync, person_metadata_sync, person_sync,
-    playlist_sync, tag_sync, work_metadata_sync, work_open_sync, work_role_sync,
-    work_source_sync, work_tag_sync,
+    playlist_sync, position_sync, tag_sync, work_metadata_sync, work_open_sync,
+    work_role_sync, work_source_sync, work_tag_sync,
 )
 
 # The Tag VOCABULARY, as opposed to the Work-Tag relationship below. Two
@@ -246,3 +246,11 @@ register("SET_CONCEPT_FIELD", concept_sync.FIELD_HANDLER, entity_type="concept")
 register("SET_CONCEPT_IDENTITY", concept_sync.IDENTITY_HANDLER, entity_type="concept")
 register("SET_CONCEPT_PARENTS", concept_sync.PARENTS_HANDLER, entity_type="concept")
 register("DELETE_CONCEPT", concept_sync.DELETE_HANDLER, entity_type="concept")
+# Positions. Deliberately the smallest domain: a claim record with two
+# INDEPENDENT scalar fields. `positions.name` carries no UNIQUE constraint and
+# renaming one writes nothing else, so nothing forces `name` and `description`
+# into one judgement -- and joining them would make an unrelated description
+# edit conflict with a rename.
+register("CREATE_POSITION", position_sync.CREATE_HANDLER, entity_type="position")
+register("SET_POSITION_FIELD", position_sync.FIELD_HANDLER, entity_type="position")
+register("DELETE_POSITION", position_sync.DELETE_HANDLER, entity_type="position")

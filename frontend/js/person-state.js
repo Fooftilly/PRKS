@@ -20,10 +20,17 @@
     }
 
     /** Every Person id this device is waiting to have deleted. */
+    /* A refused deletion stops hiding its entity: see
+     * `prksDurableDeletionAwaitsServer` in local-store.js for why. */
+    const deletionAwaitsServer = root.prksDurableDeletionAwaitsServer ||
+        function (op) {
+            return !!op && op.status !== 'acknowledged' && op.status !== 'conflict';
+        };
+
     function pendingDeletions(operations) {
         return new Set((operations || [])
             .filter(op => op && op.operation === 'DELETE_PERSON' &&
-                op.entity_type === 'person' && op.status !== 'acknowledged')
+                op.entity_type === 'person' && deletionAwaitsServer(op))
             .map(op => op.entity_id));
     }
 

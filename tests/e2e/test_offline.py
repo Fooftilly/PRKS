@@ -179,6 +179,20 @@ def _wait_list_cached(page, list_key, timeout=15000):
     page.wait_for_timeout(250)
 
 
+def _drain_durable(page, message='a durable operation never retired'):
+    """Wait for every durable operation to be acknowledged and retired.
+
+    Coherence for the local-first families happens on ACKNOWLEDGEMENT, not at
+    the call: a durable write changes nothing cached until the server answers,
+    so a coherence assertion has to wait for that answer rather than for the
+    call to return.
+    """
+    wait_for_async(
+        page,
+        "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+        timeout=40000, message=message)
+
+
 def _cached_list(page, list_key):
     return page.evaluate(
         "(key) => window.createPrksOfflineStore().getList(key)",
@@ -1957,9 +1971,11 @@ class OfflineConceptTests(unittest.TestCase):
         page.locator(".prks-research-index__empty", has_text="match").wait_for()
         self.assertEqual(seen, [], "offline Concept search must issue zero API requests")
 
+        # New Concept stays LIVE: a Concept is created under an id this device
+        # mints, so it is real the moment it is written.
         new_btn = page.locator("#prks-concept-new")
-        self.assertTrue(new_btn.is_disabled())
-        self.assertEqual(new_btn.get_attribute("aria-disabled"), "true")
+        self.assertFalse(new_btn.is_disabled())
+        self.assertIsNone(new_btn.get_attribute("aria-disabled"))
 
     def test_uncached_concept_index_offline_is_explicitly_unavailable(self):
         """No cached index is "not cached", never "No Concepts yet."."""
@@ -2075,7 +2091,7 @@ class OfflineConceptTests(unittest.TestCase):
 
     # ---- mutation blocking --------------------------------------------------
 
-    def test_offline_concept_detail_cannot_mutate(self):
+    def test_offline_concept_detail_edits_durably(self):
         """Every Concept mutation surface is inert offline and issues no request."""
         server, page, context, _collector = self._start()
         child = server.ids["concept_child"]
@@ -2104,6 +2120,8 @@ class OfflineConceptTests(unittest.TestCase):
 
         page.route("**/api/concepts**", record_mutation)
         try:
+            # Every Concept control stays usable offline: each one is a durable
+            # decision with a revision and a defined conflict.
             for selector in (
                 "#prks-concept-rename",
                 "#prks-concept-delete",
@@ -2112,21 +2130,27 @@ class OfflineConceptTests(unittest.TestCase):
                 "#prks-concept-edit-parents",
             ):
                 btn = page.locator(selector)
-                self.assertTrue(btn.is_disabled(), "%s must be disabled offline" % selector)
-                self.assertEqual(btn.get_attribute("aria-disabled"), "true", selector)
-                btn.click(force=True)
+                self.assertFalse(btn.is_disabled(), "%s must stay live offline" % selector)
+                self.assertIsNone(btn.get_attribute("aria-disabled"), selector)
+            # And an actual edit goes through, reaching no canonical request.
+            page.evaluate(
+                "id => updateConcept(id, { description: 'Written with no server.' })",
+                child)
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'SET_CONCEPT_FIELD'))",
+                timeout=30000, message="the edit never became a durable operation")
             # The New Concept flow is also reachable from Work Research Notes, so
-            # drive it directly: it must refuse before opening its dialog rather
-            # than reaching the network.
+            # drive it directly: it opens its dialog offline like any other.
             page.evaluate("""async () => {
                     try { await window.prksCreateConceptFlow('Offline concept'); } catch (_e) {}
                 }""")
-            page.wait_for_timeout(300)
-            self.assertEqual(mutations, [])
-            # The guard's own requires-a-connection notice is the only dialog: no
-            # editor was opened that could never save.
-            page.locator("#prks-modal-confirm:not(.hidden)", has_text="requires a connection").wait_for()
-            self.assertEqual(page.locator("#prks-modal-confirm .prks-modal-prompt__input").count(), 0)
+            page.locator("#prks-modal-confirm .prks-modal-prompt__input").wait_for()
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(200)
+            self.assertEqual(mutations, [],
+                             "nothing canonical left the browser")
         finally:
             _safe_unroute(page, "**/api/concepts**", record_mutation)
 
@@ -2177,15 +2201,26 @@ class OfflineConceptTests(unittest.TestCase):
 
         self.assertEqual(_cached_entity(page, "concept", child)["value"]["name"], CONCEPT_CHILD_NAME)
 
-    def test_live_concept_page_becomes_read_only_on_disconnect_and_restores(self):
-        """A Concept page mounted online becomes read-only in place when PRKS
-        stops answering, without a reload, and restores on reconnect."""
+    def test_a_live_concept_page_keeps_every_control_on_disconnect(self):
+        """A Concept page mounted online stays fully usable when PRKS stops
+        answering, without a reload.
+
+        This test used to assert the opposite -- that the page went read-only in
+        place. The invariant it protects is unchanged and still worth holding:
+        connectivity must reach a MOUNTED page, not only a freshly routed one.
+        What changed is the correct answer. Every Concept control is durable, so
+        the page settles to "still editable" rather than to "inert", and a save
+        made in that state has to actually land.
+        """
         server, page, _context, _collector = self._start()
         child = server.ids["concept_child"]
 
         _wait_sw_active(page)
         _open_concept(page, child)
         _wait_content_contains(page, CONCEPT_CHILD_NAME)
+        page.evaluate("id => { void Promise.resolve(prksReadConceptState(id)).catch(() => {}); }",
+                      child)
+        _wait_entity_cached(page, "concept-state", child)
         self.assertFalse(page.locator("#prks-concept-rename").is_disabled())
         self.assertFalse(page.locator("#prks-concept-view-graph").is_disabled())
 
@@ -2204,15 +2239,25 @@ class OfflineConceptTests(unittest.TestCase):
                 timeout=20000,
             )
             self.assertTrue(page.evaluate("() => navigator.onLine"))
-            page.wait_for_function("() => !!document.querySelector('#prks-concept-rename[disabled]')", timeout=20000)
             for selector in (
+                "#prks-concept-rename",
                 "#prks-concept-delete",
                 "#prks-concept-edit-def",
                 "#prks-concept-edit-aliases",
                 "#prks-concept-edit-parents",
+                "#prks-concept-view-graph",
             ):
-                self.assertTrue(page.locator(selector).is_disabled(), selector)
-            self.assertFalse(page.locator("#prks-concept-view-graph").is_disabled())
+                self.assertFalse(page.locator(selector).is_disabled(), selector)
+            # Not just enabled -- actually able to save, from the page that was
+            # mounted before the connection dropped.
+            page.evaluate("id => updateConcept(id, { description: 'Saved after the drop.' })",
+                          child)
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'SET_CONCEPT_FIELD'))",
+                timeout=30000,
+                message="a page mounted before the drop must still be able to save")
             # Read/navigation links stay usable.
             self.assertEqual(page.locator('.prks-research-row[href$="%s"]' % server.ids["concept_parent"]).count(), 1)
         finally:
@@ -2223,7 +2268,6 @@ class OfflineConceptTests(unittest.TestCase):
             "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
             timeout=20000,
         )
-        page.wait_for_function("() => !document.querySelector('#prks-concept-rename[disabled]')", timeout=20000)
         self.assertFalse(page.locator("#prks-concept-view-graph").is_disabled())
 
     # ---- HTTP errors are never disguised as offline -------------------------
@@ -2302,49 +2346,68 @@ class OfflineConceptTests(unittest.TestCase):
         _wait_entity_cached(page, "concept", child)
         generation_before = _concept_domain_generation(page)
 
-        page.evaluate(
-            "id => window.updateConcept(id, { description: 'Domain coherence rename check.' })",
-            parent,
-        )
+        # A RENAME is what stales siblings, because a sibling may display the
+        # old name as a parent or subconcept. A definition edit does not -- no
+        # other Concept renders it -- so this test now uses the mutation whose
+        # consequence it is actually describing.
+        page.evaluate("id => window.updateConcept(id, { name: 'Domain coherence rename' })",
+                      parent)
+        _drain_durable(page)
         self.assertGreater(_concept_domain_generation(page), generation_before)
         _wait_entity_uncached(page, "concept", child)
-        _wait_list_uncached(page, "concepts:index")
+        # The catalogue is deliberately KEPT: the acknowledgement states the
+        # renamed row exactly, so it is patched rather than dropped, and an
+        # offline device does not lose its Concept list to a rename.
+        cached_index = _cached_list(page, "concepts:index")
+        self.assertIsNotNone(cached_index)
+        self.assertIn("Domain coherence rename",
+                      [row["name"] for row in cached_index["value"]])
 
         context.set_offline(True)
         _open_concept(page, child)
         _wait_offline_unavailable(page)
-        _open_concept_index(page)
-        _wait_offline_unavailable(page)
 
-    def test_failed_concept_mutation_retains_the_concept_cache(self):
-        """A rejected Concept PATCH never advances Concept-domain coherence."""
+    def test_a_refused_concept_operation_retains_the_concept_cache(self):
+        """A durable operation the server rejects is retried, not lost -- and
+        until it is acknowledged, nothing cached is touched.
+
+        This used to reject the PATCH. There is no PATCH any more, so the
+        refusal is injected where the decision actually travels: the sync
+        endpoint.
+        """
         server, page, context, _collector = self._start()
         child = server.ids["concept_child"]
 
         _wait_sw_active(page)
         _open_concept(page, child)
         _wait_entity_cached(page, "concept", child)
+        page.evaluate("id => { void Promise.resolve(prksReadConceptState(id)).catch(() => {}); }",
+                      child)
+        _wait_entity_cached(page, "concept-state", child)
         generation_before = _concept_domain_generation(page)
 
-        def reject_patch(route):
-            if route.request.method == "PATCH":
+        def reject_sync(route):
+            if route.request.method == "POST":
                 route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
                 return
             route.fallback()
 
-        page.route("**/api/concepts/**", reject_patch)
+        page.route("**/api/sync/operations**", reject_sync)
         try:
-            page.evaluate(
-                """async (id) => {
-                    try { await window.updateConcept(id, { description: 'never applied' }); } catch (_e) {}
-                }""",
-                child,
-            )
-            page.wait_for_timeout(300)
+            page.evaluate("id => updateConcept(id, { description: 'never applied' })", child)
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'SET_CONCEPT_FIELD'))",
+                timeout=30000, message="the edit was never enqueued")
+            page.wait_for_timeout(800)
+            queued = page.evaluate(
+                "() => prksSync.store.listOperations().then(rows => rows.length)")
+            self.assertGreater(queued, 0, "a refused operation is retried, never dropped")
             self.assertEqual(_concept_domain_generation(page), generation_before)
             self.assertIsNotNone(_cached_entity(page, "concept", child))
         finally:
-            _safe_unroute(page, "**/api/concepts/**", reject_patch)
+            _safe_unroute(page, "**/api/sync/operations**", reject_sync)
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
@@ -2390,11 +2453,13 @@ class OfflineConceptTests(unittest.TestCase):
                 page.wait_for_timeout(100)
             self.assertTrue(held, "the Concept GET was not intercepted")
             generation_before = _concept_domain_generation(page)
-            # A canonical Concept mutation lands while that read is still in flight.
-            page.evaluate(
-                "id => window.updateConcept(id, { description: 'stale-read coherence check.' })",
-                parent,
-            )
+            # A Concept mutation is ACKNOWLEDGED while that read is still in
+            # flight. A rename, because that is the change whose consequence
+            # reaches siblings -- and the fence is what stops this pre-rename
+            # body from publishing afterwards.
+            page.evaluate("id => window.updateConcept(id, { name: 'Stale read rename' })",
+                          parent)
+            _drain_durable(page)
             self.assertGreater(_concept_domain_generation(page), generation_before)
             page.wait_for_function(
                 "() => (typeof prksOfflineIsDomainBlocked === 'function'"
@@ -3611,17 +3676,19 @@ class OfflinePositionTests(unittest.TestCase):
         _wait_entity_cached(page, "position", position_a)
         positions_before = _domain_generation(page, "positions")
 
+        concepts_before = _domain_generation(page, "concepts")
         page.evaluate(
-            "id => window.updateConcept(id, { description: 'Domain independence check.' })", concept_child
+            "id => window.updateConcept(id, { name: 'Domain independence rename' })", concept_child
         )
-        _wait_entity_uncached(page, "concept", concept_child)
+        _drain_durable(page)
+        # The Concept domain moved -- a rename reaches every sibling that may
+        # display the old name -- and Positions did not move at all.
+        self.assertGreater(_domain_generation(page, "concepts"), concepts_before)
         self.assertEqual(_domain_generation(page, "positions"), positions_before)
         self.assertFalse(_domain_blocked(page, "positions"))
         self.assertIsNotNone(_cached_entity(page, "position", position_a))
 
         context.set_offline(True)
-        _open_concept(page, concept_child)
-        _wait_offline_unavailable(page)
         _open_position(page, position_a)
         _wait_offline_banner(page)
         _wait_content_contains(page, POSITION_A_NAME)
@@ -4696,8 +4763,11 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         arguments_before = _domain_generation(page, "arguments")
         positions_before = _domain_generation(page, "positions")
 
-        page.evaluate("id => window.updateConcept(id, { description: 'Domain isolation check.' })", concept_child)
-        _wait_entity_uncached(page, "concept", concept_child)
+        concepts_before = _domain_generation(page, "concepts")
+        page.evaluate("id => window.updateConcept(id, { name: 'Domain isolation rename' })",
+                      concept_child)
+        _drain_durable(page)
+        self.assertGreater(_domain_generation(page, "concepts"), concepts_before)
         self.assertEqual(_domain_generation(page, "arguments"), arguments_before)
         self.assertEqual(_domain_generation(page, "positions"), positions_before)
         self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))

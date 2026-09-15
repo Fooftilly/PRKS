@@ -1293,7 +1293,12 @@
                     if (!snapshot || !Array.isArray(snapshot.nodes)) return null;
                     let changed = false;
                     const nodes = snapshot.nodes.map(function (node) {
-                        if (!node || node.type !== 'concept' || node.id !== conceptId) return node;
+                        /* `record_id` is the Concept's own id. A node's `id` is
+                         * the NAMESPACED `concept:<id>`, because the projection
+                         * holds several record types in one list -- matching on
+                         * it would silently patch nothing. */
+                        if (!node || node.type !== 'concept') return node;
+                        if (node.record_id !== conceptId) return node;
                         if (node.label === name) return node;
                         changed = true;
                         return Object.assign({}, node, { label: name });

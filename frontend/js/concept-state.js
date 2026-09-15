@@ -49,8 +49,16 @@
         return unsettled(operations, 'CREATE_CONCEPT', null);
     }
 
+    /* A refused deletion stops hiding its entity: see
+     * `prksDurableDeletionAwaitsServer` in local-store.js for why. */
+    const deletionAwaitsServer = root.prksDurableDeletionAwaitsServer ||
+        function (op) {
+            return !!op && op.status !== 'acknowledged' && op.status !== 'conflict';
+        };
+
     function pendingDeletions(operations) {
-        return new Set(unsettled(operations, 'DELETE_CONCEPT', null).map(op => op.entity_id));
+        return new Set(unsettled(operations, 'DELETE_CONCEPT', null)
+            .filter(deletionAwaitsServer).map(op => op.entity_id));
     }
 
     /* ---- the definition ---- */

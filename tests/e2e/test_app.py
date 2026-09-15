@@ -3254,10 +3254,14 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         self.assertTrue(concept_id)
         held = []
+        state_path = "/api/concepts/" + concept_id + "/sync-state"
 
-        def hold_concept_patch(route):
+        def hold_concept_base(route):
+            """A Concept save is durable, so what can still be in flight is the
+            read of the BASE the edit is measured against -- delayed here the
+            way the PATCH used to be."""
             req = route.request
-            if req.method == "PATCH" and urlparse(req.url).path == "/api/concepts/" + concept_id:
+            if req.method == "GET" and urlparse(req.url).path == state_path:
                 held.append(route)
                 return
             route.fallback()
@@ -3267,18 +3271,19 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
         page.locator(".prks-tile--secondary #prks-concept-edit-def").click()
         page.locator("#prks-modal-confirm .prks-modal-prompt__input").fill("OWNER-SAFE-DEFINITION")
-        page.route("**/api/concepts/*", hold_concept_patch)
+        page.route("**/api/concepts/**", hold_concept_base)
         try:
             page.locator("#prks-modal-confirm-ok").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "Concept PATCH was not intercepted")
+            self.assertTrue(held, "Concept base read was not intercepted")
             main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
             page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=main_id)
             main_hash = page.evaluate("() => location.hash")
             self.assertIn(work_a, main_hash)
             _continue_held_routes(held)
+            held.clear()
             page.wait_for_function(
                 """() => {
                     const tile = document.querySelector('.prks-tile--secondary');
@@ -3292,7 +3297,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/concepts/*", hold_concept_patch)
+                page.unroute("**/api/concepts/**", hold_concept_base)
             except Exception:
                 pass
 

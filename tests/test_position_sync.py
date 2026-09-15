@@ -4,6 +4,7 @@ The decision worth recording is why this domain is SMALL: `name` and
 `description` are independent fields rather than one aggregate, because nothing
 in the schema or the API links them.
 """
+import pathlib
 import tempfile
 import unittest
 import uuid
@@ -19,6 +20,8 @@ from backend.research_network import (
     update_position,
 )
 from backend.storage.config import StorageConfig
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class PositionSyncTests(unittest.TestCase):
@@ -196,6 +199,84 @@ class PositionSyncTests(unittest.TestCase):
         self.assertEqual(self.revision(pid, "description"), 1)
         self.assertEqual(self.revision(pid, "name"), 0)
 
+    # ---- construction and edit parity --------------------------------------
+
+    def test_both_construction_paths_share_one_boundary(self):
+        """The ordinary POST and the durable operation must not drift on what a
+        legal Position is."""
+        source = (ROOT / "backend" / "research_network.py").read_text()
+        at = source.index("def create_position(")
+        body = source[at: source.index("\ndef ", at + 5)]
+        self.assertIn("position_sync.insert_position_on_conn(conn, pid, name, description)", body)
+        self.assertNotIn("INSERT INTO positions", body)
+        # And the edit path uses the revision-aware boundary, once per field.
+        at = source.index("def update_position(")
+        body = source[at: source.index("\ndef ", at + 5)]
+        self.assertEqual(body.count("position_sync.set_field_on_conn(conn, pid,"), 2)
+        self.assertNotIn("UPDATE positions SET", body)
+        # And the delete path shares the protection rather than repeating it.
+        at = source.index("def delete_position(")
+        body = source[at: source.index("\ndef ", at + 5)]
+        self.assertIn("position_sync.delete_position_on_conn(conn, pid)", body)
+        self.assertNotIn("argument_target_positions", body)
+
+    def test_both_paths_normalize_identically(self):
+        ordinary = create_position(self.db, "  Realism   is   false  ",
+                                   "  A   claim.  ")
+        pid, _, _ = self.create("  Realism   is   false  ", "  A   claim.  ")
+        stored = self.stored(pid)
+        self.assertEqual(stored["name"], ordinary["name"])
+        self.assertEqual(stored["description"], ordinary["description"])
+
+    def test_a_durable_edit_observes_an_ordinary_edit(self):
+        """The whole point of sharing the boundary: an offline device measuring
+        against a value the ordinary endpoint has since changed must be told."""
+        pid, _, _ = self.create("Realism is false")
+        update_position(self.db, pid, name="Renamed by the API")
+        status, result = self.field(pid, "name", "Renamed offline", 0)
+        self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"))
+        self.assertEqual(result["current_value"], "Renamed by the API")
+        self.assertEqual(result["current_revision"], 1)
+
+    def test_an_ordinary_name_edit_advances_only_the_name(self):
+        pid, _, _ = self.create("Realism is false", "A claim.")
+        update_position(self.db, pid, name="Renamed")
+        self.assertEqual(self.revision(pid, "name"), 1)
+        self.assertEqual(self.revision(pid, "description"), 0)
+        # So a durable description edit measured against 0 still applies.
+        status, result = self.field(pid, "description", "Edited elsewhere", 0)
+        self.assertEqual(status, 200)
+
+    def test_an_ordinary_description_edit_advances_only_the_description(self):
+        pid, _, _ = self.create("Realism is false", "A claim.")
+        update_position(self.db, pid, description="Changed")
+        self.assertEqual(self.revision(pid, "description"), 1)
+        self.assertEqual(self.revision(pid, "name"), 0)
+        status, result = self.send("SET_POSITION_FIELD", pid,
+                                   dict(field="name", value="Renamed offline"), 0)
+        self.assertEqual(status, 200)
+
+    def test_an_ordinary_edit_of_both_advances_both_separately(self):
+        pid, _, _ = self.create("Realism is false", "A claim.")
+        update_position(self.db, pid, name="Renamed", description="Changed")
+        self.assertEqual(self.revision(pid, "name"), 1)
+        self.assertEqual(self.revision(pid, "description"), 1)
+
+    def test_an_ordinary_edit_to_the_same_value_advances_nothing(self):
+        pid, _, _ = self.create("Realism is false", "A claim.")
+        update_position(self.db, pid, name="Realism is false")
+        self.assertEqual(self.revision(pid, "name"), 0,
+                         "agreeing with what is stored is not a change")
+
+    def test_the_sync_state_exposes_both_revisions_without_the_values(self):
+        pid, _, _ = self.create("Realism is false", "A claim.")
+        update_position(self.db, pid, name="Renamed")
+        state = self.db.get_position_sync_state(pid)
+        self.assertEqual(state, {
+            "position_id": pid,
+            "fields": {"description": {"revision": 0}, "name": {"revision": 1}},
+        }, "revisions only -- the Position detail already carries both values")
+
     # ---- deletion ---------------------------------------------------------
 
     def test_deleting_a_position_works(self):
@@ -208,7 +289,8 @@ class PositionSyncTests(unittest.TestCase):
     def test_a_position_an_argument_targets_is_refused(self):
         pid, _, _ = self.create("Realism is false")
         create_argument(self.db, name="An argument", kind="argument",
-                        targets=[{"position_id": pid, "verdict_id": None}])
+                        targets=[{"type": "position", "id": pid,
+                                  "verdict_id": "supports"}])
         status, result = self.send("DELETE_POSITION", pid, {}, None)
         self.assertEqual((status, result["code"]), (409, "POSITION_IN_USE"))
         self.assertIsNotNone(self.stored(pid))
@@ -231,7 +313,8 @@ class PositionSyncTests(unittest.TestCase):
     def test_the_ordinary_delete_keeps_its_protection(self):
         pid, _, _ = self.create("Realism is false")
         create_argument(self.db, name="An argument", kind="argument",
-                        targets=[{"position_id": pid, "verdict_id": None}])
+                        targets=[{"type": "position", "id": pid,
+                                  "verdict_id": "supports"}])
         with self.assertRaises(ResearchError) as caught:
             delete_position(self.db, pid)
         self.assertEqual(caught.exception.code, "position_in_use")

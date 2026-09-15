@@ -361,9 +361,16 @@ class DurableConceptTests(unittest.TestCase):
         self.drained(page)
         self.assertNotIn(server.ids['concept_unvisited_name'], self.concepts_in_db(server))
 
-    def test_a_concept_a_note_still_names_comes_back_refused_and_visible(self):
-        """The canonical protection is unchanged, and the tombstone is undone by
-        the server doing nothing: the Concept comes back."""
+    def test_a_concept_a_note_still_names_is_refused_and_comes_back(self):
+        """The whole deletion contract, in the order a user experiences it.
+
+        A tombstone hides the Concept while the server has not answered. The
+        server then refuses, because canonical notes still name it -- and at
+        that moment the Concept has to become VISIBLE again. Leaving it hidden
+        would show a library that disagrees with both the server and the
+        Diagnostics entry explaining why, and the user would have no way to see
+        the thing they were told could not be deleted.
+        """
         server, page, context = self.start()
         child = server.ids['concept_child']
         self.prepare(page, child)
@@ -371,6 +378,16 @@ class DurableConceptTests(unittest.TestCase):
 
         page.evaluate("id => deleteConcept(id)", child)
         self.wait_for_family(page, 'DELETE_CONCEPT')
+        # While undecided it IS hidden -- that is the tombstone half.
+        self.index(page)
+        page.wait_for_function(
+            """needle => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const root = ctx && ctx.root;
+                return !!root && root.innerText.indexOf(needle) === -1;
+            }""",
+            arg=CONCEPT_CHILD_NAME, timeout=30000)
+
         self.reconnect(page, context)
         self.settled(page)
         state = page.evaluate(
@@ -378,6 +395,19 @@ class DurableConceptTests(unittest.TestCase):
             "  o => o.operation === 'DELETE_CONCEPT') || {}).server_result)")
         self.assertEqual(state['code'], 'CONCEPT_IN_USE')
         self.assertIn(CONCEPT_CHILD_NAME, self.concepts_in_db(server))
+
+        # ... and now the user can see it again, on the index ...
+        self.index(page)
+        o._wait_content_contains(page, CONCEPT_CHILD_NAME, timeout=30000)
+        # ... and on its own page.
+        self.detail(page, child)
+        o._wait_content_contains(page, CONCEPT_CHILD_NAME, timeout=30000)
+        # The refusal is not lost by becoming visible: it is still a decision
+        # waiting in Diagnostics, with the reason named.
+        conflicts = page.evaluate(
+            "() => prksSync.store.listOperations().then(rows => rows.filter("
+            "  o => o.status === 'conflict').length)")
+        self.assertEqual(conflicts, 1)
 
     def test_deleting_a_concept_created_offline_folds_the_whole_case_away(self):
         server, page, context = self.start()

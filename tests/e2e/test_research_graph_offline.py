@@ -342,8 +342,6 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         server, page, context = self.start()
         ids = server.ids
         operations = [
-            ('aliases', 'ids => putConceptAliases(ids.concept_child, ["Alias only"])', (False, False)),
-            ('concept rename', 'ids => updateConcept(ids.concept_child, {name:"Renamed concept"})', (True, True)),
             ('position rename', 'ids => updatePosition(ids.position_a, {name:"Renamed position"})', (True, True)),
             ('argument targets', 'ids => putArgumentTargets(ids.argument_a, [{type:"position",id:ids.position_a,verdict_id:"supports"}])', (True, True)),
             ('argument sources', 'ids => putArgumentSources(ids.argument_a, [{work_id:ids.work_b,pages:"3"}])', (True, True)),
@@ -354,6 +352,51 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                 before = self.generations(page)
                 page.evaluate(operation, ids)
                 self.changed(page, before, expected)
+
+    def test_a_concept_rename_patches_the_graph_node_it_already_has(self):
+        """Graph is a PROJECTION, and a Concept rename is the one Concept change
+        whose consequence there is fully determined: the node's label.
+
+        So it is patched in place rather than the snapshot being thrown away --
+        an offline device keeps the graph it warmed. This is the same rule the
+        Work-Person role acknowledgement follows. A Concept the snapshot does
+        not contain is never synthesized, because the server decides what a
+        projection holds.
+
+        Aliases are excluded for the reason they always were: they are not a
+        Graph label and move no edge.
+        """
+        server, page, context = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        page.evaluate("id => { void Promise.resolve(prksReadConceptState(id)).catch(() => {}); }",
+                      ids['concept_child'])
+        o._wait_entity_cached(page, 'concept-state', ids['concept_child'])
+
+        before = self.generations(page)
+        page.evaluate('ids => putConceptAliases(ids.concept_child, ["Alias only"])', ids)
+        self.drained(page)
+        self.changed(page, before, (False, False))
+
+        before = self.generations(page)
+        page.evaluate('ids => updateConcept(ids.concept_child, {name:"Renamed concept"})', ids)
+        self.drained(page)
+        # The snapshot SURVIVES, carrying the new label.
+        self.changed(page, before, (False, False))
+        for kind in ('research-graph-core', 'research-graph-people'):
+            cached = o._cached_entity(page, kind, 'snapshot')
+            if not cached:
+                continue
+            labels = [n['label'] for n in cached['value']['nodes']
+                      if n.get('type') == 'concept']
+            with self.subTest(kind=kind):
+                self.assertIn('Renamed concept', labels)
+
+    def drained(self, page, message='a durable operation never retired'):
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=40000, message=message)
 
     def test_person_name_only_invalidates_people_snapshot(self):
         server, page, context = self.start()
