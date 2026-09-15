@@ -337,71 +337,32 @@ def get_concept_on_conn(conn: sqlite3.Connection, concept_id: str) -> dict:
 
 
 def update_concept(db: PRKSDatabase, concept_id: str, *, name=None, description=None) -> dict:
+    """Edit a Concept through the revision-aware boundaries.
+
+    A rename is not a field write: it keeps the old name reachable as an alias,
+    so it goes through the IDENTITY boundary that owns both. The definition is
+    an ordinary scalar and goes through the field boundary. Sharing them with
+    the durable families is what makes an offline device able to discover that
+    a value it was holding had been overtaken.
+    """
+    from backend import concept_sync
+
     cid = (concept_id or "").strip()
     if not cid:
         raise ResearchError("not_found", "Concept not found.", 404)
+    if name is None and description is None:
+        raise ResearchError("nothing_to_update", "Nothing to update.")
     with db.connection() as conn:
-        row = _fetchone(conn, "SELECT * FROM concepts WHERE id = ?", (cid,))
-        if not row:
+        conn.execute("BEGIN IMMEDIATE")
+        identity = concept_sync.current_identity(conn, cid)
+        if identity is None:
             raise ResearchError("not_found", "Concept not found.", 404)
-        old_name = row["name"]
-        new_name = _concept_name(name) if name is not None else None
-        new_desc = (
-            _optional_markdown(description, max_len=CONCEPT_DEFINITION_MAX)
-            if description is not None
-            else None
-        )
-        if new_name is None and new_desc is None:
-            raise ResearchError("nothing_to_update", "Nothing to update.")
-        if new_name is not None and new_name != old_name:
-            old_key = normalize_concept_key(old_name)
-            new_key = normalize_concept_key(new_name)
-            identity_changed = new_key != old_key
-            if identity_changed:
-                status, ids = resolve_concept_key(conn, new_name)
-                if status == "ok" and ids[0] != cid:
-                    raise ResearchError(
-                        "concept_exists",
-                        "A Concept with that name or alias already exists.",
-                        409,
-                    )
-                if status == "ambiguous":
-                    others = [i for i in ids if i != cid]
-                    if others:
-                        raise ResearchError(
-                            "ambiguous_concept",
-                            "Multiple Concepts match that name.",
-                            409,
-                        )
-            conn.execute(
-                "UPDATE concepts SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (new_name, cid),
-            )
-            if identity_changed:
-                existing_alias = _fetchone(
-                    conn,
-                    "SELECT 1 FROM concept_aliases WHERE concept_id = ? AND normalized_alias = ?",
-                    (cid, old_key),
-                )
-                clash = _fetchone(
-                    conn,
-                    "SELECT concept_id FROM concept_aliases WHERE normalized_alias = ?",
-                    (old_key,),
-                )
-                if not existing_alias and (not clash or clash["concept_id"] == cid):
-                    conn.execute(
-                        """
-                        INSERT OR IGNORE INTO concept_aliases
-                            (concept_id, alias, normalized_alias)
-                        VALUES (?, ?, ?)
-                        """,
-                        (cid, old_name, old_key),
-                    )
-        if new_desc is not None:
-            conn.execute(
-                "UPDATE concepts SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (new_desc, cid),
-            )
+        if name is not None:
+            # The alias set is carried through unchanged; the boundary adds the
+            # old name to it when the identity actually moves.
+            concept_sync.set_identity_on_conn(conn, cid, name, identity["aliases"])
+        if description is not None:
+            concept_sync.set_field_on_conn(conn, cid, "description", description)
         LOGGER.info("concept_updated concept_id=%s", safe_log_id(cid))
         return get_concept_on_conn(conn, cid)
 
@@ -434,66 +395,53 @@ def _canonical_notes_reference_argument(conn: sqlite3.Connection, argument_id: s
 
 
 def delete_concept(db: PRKSDatabase, concept_id: str) -> None:
+    """Destruction, through the boundary that advances what it invalidates.
+
+    The protection is unchanged: a Concept still referenced by canonical
+    research notes is refused rather than cascaded.
+    """
+    from backend import concept_sync
+
     cid = (concept_id or "").strip()
     if not cid:
         raise ResearchError("not_found", "Concept not found.", 404)
     with db.connection() as conn:
-        row = _fetchone(conn, "SELECT 1 FROM concepts WHERE id = ?", (cid,))
-        if not row:
+        conn.execute("BEGIN IMMEDIATE")
+        if not _fetchone(conn, "SELECT 1 FROM concepts WHERE id = ?", (cid,)):
             raise ResearchError("not_found", "Concept not found.", 404)
-        if _canonical_notes_reference_concept(conn, cid):
+        _deleted, refusal = concept_sync.delete_concept_on_conn(conn, cid)
+        if refusal:
             raise ResearchError(
                 "concept_in_use",
                 "This Concept is still referenced in research notes. Remove or replace those references before deleting it.",
                 409,
             )
-        conn.execute("DELETE FROM concepts WHERE id = ?", (cid,))
     LOGGER.info("concept_deleted concept_id=%s", safe_log_id(cid))
 
 
 def replace_concept_aliases(db: PRKSDatabase, concept_id: str, aliases) -> dict:
+    """Rewrite a Concept's alias set, through the IDENTITY boundary.
+
+    Aliases are half of what a Concept IS -- `resolve_concept_key` matches
+    name-or-alias over one normalized space -- so they share a revision with the
+    name rather than carrying one of their own.
+    """
+    from backend import concept_sync
+
     cid = (concept_id or "").strip()
     if not isinstance(aliases, list):
         raise ResearchError("invalid_aliases", "Aliases must be a JSON array.")
-    names = []
-    seen_keys = set()
     for raw in aliases:
-        alias = _concept_name(raw) if isinstance(raw, str) else None
-        if alias is None:
+        if not isinstance(raw, str):
             raise ResearchError("invalid_aliases", "Each alias must be a string.")
-        key = normalize_concept_key(alias)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        names.append((alias, key))
     with db.connection() as conn:
-        row = _fetchone(conn, "SELECT id, name FROM concepts WHERE id = ?", (cid,))
-        if not row:
+        conn.execute("BEGIN IMMEDIATE")
+        identity = concept_sync.current_identity(conn, cid)
+        if identity is None:
             raise ResearchError("not_found", "Concept not found.", 404)
-        own_key = normalize_concept_key(row["name"])
-        for alias, key in names:
-            if key == own_key:
-                continue
-            hits = _normalized_hits(conn, key)
-            others = [i for i in hits if i != cid]
-            if others:
-                raise ResearchError(
-                    "alias_conflict",
-                    "That search key already belongs to another Concept.",
-                    409,
-                )
-        conn.execute("DELETE FROM concept_aliases WHERE concept_id = ?", (cid,))
-        for alias, key in names:
-            if key == own_key:
-                continue
-            conn.execute(
-                """
-                INSERT INTO concept_aliases (concept_id, alias, normalized_alias)
-                VALUES (?, ?, ?)
-                """,
-                (cid, alias, key),
-            )
-        LOGGER.info("concept_aliases_changed concept_id=%s alias_count=%s", safe_log_id(cid), len(names))
+        concept_sync.set_identity_on_conn(conn, cid, identity["name"], aliases)
+        LOGGER.info("concept_aliases_changed concept_id=%s alias_count=%s",
+                    safe_log_id(cid), len(aliases))
         return get_concept_on_conn(conn, cid)
 
 
@@ -519,42 +467,20 @@ def _parent_cycle(conn: sqlite3.Connection, child_id: str, parent_ids: Sequence[
 
 
 def replace_concept_parents(db: PRKSDatabase, concept_id: str, parent_ids) -> dict:
+    """Rewrite the whole parent set, through the boundary the aggregate owns."""
+    from backend import concept_sync
+
     cid = (concept_id or "").strip()
     if not isinstance(parent_ids, list):
         raise ResearchError("invalid_parents", "Parents must be a JSON array.")
-    pids = []
-    seen = set()
     for raw in parent_ids:
         if not isinstance(raw, str) or not raw.strip():
             raise ResearchError("invalid_parents", "Each parent id must be a string.")
-        pid = raw.strip()
-        if pid in seen:
-            continue
-        seen.add(pid)
-        pids.append(pid)
     with db.connection() as conn:
-        row = _fetchone(conn, "SELECT 1 FROM concepts WHERE id = ?", (cid,))
-        if not row:
-            raise ResearchError("not_found", "Concept not found.", 404)
-        for pid in pids:
-            if not _fetchone(conn, "SELECT 1 FROM concepts WHERE id = ?", (pid,)):
-                raise ResearchError("parent_not_found", "Parent Concept not found.", 404)
-        if _parent_cycle(conn, cid, pids):
-            raise ResearchError(
-                "concept_cycle",
-                "That parent would create a Concept hierarchy cycle.",
-                409,
-            )
-        conn.execute("DELETE FROM concept_parents WHERE child_concept_id = ?", (cid,))
-        for pid in pids:
-            conn.execute(
-                """
-                INSERT INTO concept_parents (child_concept_id, parent_concept_id)
-                VALUES (?, ?)
-                """,
-                (cid, pid),
-            )
-        LOGGER.info("concept_parents_changed concept_id=%s parent_count=%s", safe_log_id(cid), len(pids))
+        conn.execute("BEGIN IMMEDIATE")
+        concept_sync.set_parents_on_conn(conn, cid, parent_ids)
+        LOGGER.info("concept_parents_changed concept_id=%s parent_count=%s",
+                    safe_log_id(cid), len(parent_ids))
         return get_concept_on_conn(conn, cid)
 
 

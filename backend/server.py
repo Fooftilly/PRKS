@@ -2218,6 +2218,21 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/concepts/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
+                # Revisions, plus the two AGGREGATE values. A field revision is
+                # a number, but an identity and a hierarchy are sets: a client
+                # measuring an edit against them needs what it last
+                # acknowledged, and the Concept detail carries `parents` as
+                # objects rather than ids.
+                data = db.get_concept_sync_state(unquote(path.split('/')[3]))
+                if data is None:
+                    self.send_json(404, {"error": "Concept not found"})
+                else:
+                    etag = db.etag_for_representation("concept-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/playlists/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
                 # REVISIONS ONLY: the three field revisions and the ORDER
                 # revision. The playlist detail already carries its items in

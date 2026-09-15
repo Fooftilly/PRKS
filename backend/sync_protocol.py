@@ -174,9 +174,9 @@ def process_operation(db, data):
 # Registration is explicit and lives here so the set of families PRKS accepts
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
-    folder_sync, person_group_sync, person_metadata_sync, person_sync, playlist_sync,
-    tag_sync, work_metadata_sync, work_open_sync, work_role_sync, work_source_sync,
-    work_tag_sync,
+    concept_sync, folder_sync, person_group_sync, person_metadata_sync, person_sync,
+    playlist_sync, tag_sync, work_metadata_sync, work_open_sync, work_role_sync,
+    work_source_sync, work_tag_sync,
 )
 
 # The Tag VOCABULARY, as opposed to the Work-Tag relationship below. Two
@@ -236,3 +236,13 @@ register("SET_PLAYLIST_FIELD", playlist_sync.FIELD_HANDLER, entity_type="playlis
 register("REORDER_PLAYLIST_ITEMS", playlist_sync.ORDER_HANDLER, entity_type="playlist")
 register("DELETE_PLAYLIST", playlist_sync.DELETE_HANDLER, entity_type="playlist")
 register("SET_WORK_PLAYLIST", playlist_sync.WORK_PLAYLIST_HANDLER)
+# Concepts. `description` is the only column that is not part of a Concept's
+# identity, so it is the only FIELD. Renaming writes an alias -- every note that
+# already says the old name must go on resolving -- so `name` and `aliases` are
+# ONE aggregate, and the hierarchy is another whose acyclicity only the server
+# can see.
+register("CREATE_CONCEPT", concept_sync.CREATE_HANDLER, entity_type="concept")
+register("SET_CONCEPT_FIELD", concept_sync.FIELD_HANDLER, entity_type="concept")
+register("SET_CONCEPT_IDENTITY", concept_sync.IDENTITY_HANDLER, entity_type="concept")
+register("SET_CONCEPT_PARENTS", concept_sync.PARENTS_HANDLER, entity_type="concept")
+register("DELETE_CONCEPT", concept_sync.DELETE_HANDLER, entity_type="concept")
