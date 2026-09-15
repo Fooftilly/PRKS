@@ -33,8 +33,16 @@ def _remove_managed_pdf(file_path: str, pdfs_dir: str, still_referenced: bool) -
         return
 
 
-def delete_work(db: PRKSDatabase, text_index: PRKSTextIndex, work_id: str) -> WorkDeletionResult:
-    record = db.delete_work_record(work_id)
+def cleanup_after_work_delete(
+    db: PRKSDatabase,
+    text_index: PRKSTextIndex,
+    work_id: str,
+    *,
+    file_path: str = "",
+    managed_pdf_still_referenced: bool = False,
+    existed: bool = True,
+) -> WorkDeletionResult:
+    """Best-effort derived/FS cleanup after a committed Work row delete."""
     failures: list[str] = []
     wid = safe_log_id(work_id)
     try:
@@ -80,12 +88,12 @@ def delete_work(db: PRKSDatabase, text_index: PRKSTextIndex, work_id: str) -> Wo
             wid,
             safe_error_type(e),
         )
-    if record is not None:
+    if existed:
         try:
             _remove_managed_pdf(
-                record.file_path,
+                file_path,
                 db.storage.pdfs_dir,
-                record.managed_pdf_still_referenced,
+                managed_pdf_still_referenced,
             )
         except OSError as e:
             failures.append("pdf")
@@ -94,4 +102,18 @@ def delete_work(db: PRKSDatabase, text_index: PRKSTextIndex, work_id: str) -> Wo
                 wid,
                 safe_error_type(e),
             )
-    return WorkDeletionResult(existed=record is not None, cleanup_failures=tuple(failures))
+    return WorkDeletionResult(existed=existed, cleanup_failures=tuple(failures))
+
+
+def delete_work(db: PRKSDatabase, text_index: PRKSTextIndex, work_id: str) -> WorkDeletionResult:
+    record = db.delete_work_record(work_id)
+    return cleanup_after_work_delete(
+        db,
+        text_index,
+        work_id,
+        file_path="" if record is None else record.file_path,
+        managed_pdf_still_referenced=(
+            False if record is None else record.managed_pdf_still_referenced
+        ),
+        existed=record is not None,
+    )

@@ -153,8 +153,12 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertNotIn("prksOfflineMarkConceptsChanged()", notes_body)
         delete_at = works.index("async function deleteWork(")
         delete_body = works[delete_at : delete_at + 2500]
-        self.assertIn("prksOfflineMarkConceptsChanged()", delete_body)
+        self.assertIn("prksDeleteWorkDurably", delete_body)
+        self.assertNotIn("prksOfflineMarkConceptsChanged()", delete_body)
         runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkConceptsChanged()", reconcile_del)
         reconcile = runtime[runtime.index("async function reconcileWorkNoteBody("):]
         reconcile = reconcile[: reconcile.index("\n        async function reconcileWorkNote(")]
         self.assertIn("DOMAIN_CONCEPTS", reconcile)
@@ -377,7 +381,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             )
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         delete_at = works.index("async function deleteWork(")
-        self.assertIn("prksOfflineMarkPeopleChanged()", works[delete_at : delete_at + 3000])
+        self.assertIn("prksDeleteWorkDurably", works[delete_at : delete_at + 3000])
+        runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkPeopleChanged()", reconcile_del)
         # Managed PDF save changes file_size_bytes and can add Mentioned roles.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         pdf_at = pdf.index("async function exportAndPersistPdfCopy(")
@@ -409,7 +417,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # Work deletion drops role rows out of every cached Group member row.
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         delete_at = works.index("async function deleteWork(")
-        self.assertIn("prksOfflineMarkPersonGroupsChanged()", works[delete_at : delete_at + 3000])
+        self.assertIn("prksDeleteWorkDurably", works[delete_at : delete_at + 3000])
+        runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkPersonGroupsChanged()", reconcile_del)
         # The managed PDF save owns it; the separate annotations JSON save does not.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         pdf_at = pdf.index("async function exportAndPersistPdfCopy(")
@@ -567,7 +579,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # Work deletion drops the playlist_items row.
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         delete_at = works.index("async function deleteWork(")
-        self.assertIn("prksOfflineMarkPlaylistsChanged()", works[delete_at : delete_at + 3800])
+        self.assertIn("prksDeleteWorkDurably", works[delete_at : delete_at + 3800])
+        runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkPlaylistsChanged()", reconcile_del)
         # The managed PDF save does not: no rendered Playlist field changes.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         self.assertNotIn("Playlists", pdf)
@@ -857,8 +873,12 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertNotIn("prksOfflineMarkArgumentsChanged()", notes_body)
         delete_at = works.index("async function deleteWork(")
         delete_body = works[delete_at : delete_at + 3000]
-        self.assertIn("prksOfflineMarkArgumentsChanged()", delete_body)
+        self.assertIn("prksDeleteWorkDurably", delete_body)
+        self.assertNotIn("prksOfflineMarkArgumentsChanged()", delete_body)
         runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkArgumentsChanged()", reconcile_del)
         reconcile = runtime[runtime.index("async function reconcileWorkNoteBody("):]
         reconcile = reconcile[: reconcile.index("\n        async function reconcileWorkNote(")]
         self.assertIn("DOMAIN_ARGUMENTS", reconcile)
@@ -997,7 +1017,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
     def test_canonical_folder_wrappers_guard_and_publish_coherence(self):
         """Folder TAG membership is durable (ADD/REMOVE_FOLDER_TAG). Folder
         create/field/delete/work-folder remain durable and reconcile at ACK.
-        Tag merge is still the one Folder-adjacent path that guards connectivity."""
+        Tag merge is also durable (MERGE_TAG) and reconciles at acknowledgement."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
         for fn in ("async function addTagToFolder(", "async function removeTagFromFolder("):
             body = _fn_body(api, fn)

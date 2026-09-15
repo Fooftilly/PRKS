@@ -14,6 +14,7 @@ projection, and is proven by focused E2E coverage.
 | --- | --- | --- |
 | Work tags | `ADD_WORK_TAG`, `REMOVE_WORK_TAG` | element conflict unit `(work, tag)` |
 | Tag vocabulary | `CREATE_TAG`, `DELETE_TAG`, `MERGE_TAG` | client-minted `T-` id; deletion is a tombstone; merge is an identity transform (null base; refuse while source is named in the queue) |
+| Work deletion | `DELETE_WORK` | destruction; cascade like the ordinary DELETE; absence is convergence |
 | Work opens | `MARK_WORK_OPENED` | coalesced per Work |
 | Work metadata | `SET_WORK_METADATA_FIELD` | per-field conflict unit |
 | Work source | `SET_WORK_SOURCE` | aggregate: provider + id + url are one decision |
@@ -80,12 +81,12 @@ they should take, and what each must declare before implementation, are in
 *Adding a family: the four shapes and what each must declare* in
 `docs/local-first-sync.md`.
 
+* **Offline Work creation** for types needing no binary ingestion (video /
+  YouTube URL Works), after deletion.
 * **PDF annotations** — only where the PDF is already cached. Annotation
   identity must be audited first: if annotations receive server-generated ids
   today, new ones need permanent distributed ids before offline creation is
   possible.
-* **Work deletion and the remaining Work relationships**, then **offline Work
-  creation** for types needing no binary ingestion.
 * **Saved Views**, and a clearly-labelled cached-data search mode. Global search
   over uncached server records is not offered and should not be implied.
 

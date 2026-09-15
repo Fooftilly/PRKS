@@ -2041,33 +2041,10 @@ class PRKSDatabase:
         return f'W/"prks-recently-added-{row["c"]}-{row["m"]}"'
 
     def delete_work_record(self, work_id: str) -> Optional[DeletedWorkRecord]:
+        from backend.work_lifecycle_sync import delete_work_record_on_conn
+
         with self.connection() as conn:
-            row = conn.execute(
-                "SELECT file_path FROM works WHERE id = ?",
-                (work_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            file_path = "" if row["file_path"] is None else str(row["file_path"])
-            deleted_filename = managed_pdf_filename(file_path)
-            # Deleting a Work removes its work_tags rows (via ON DELETE
-            # CASCADE) and nothing more: Tag identity is persistent -- see
-            # delete_tag().
-            conn.execute("DELETE FROM works WHERE id = ?", (work_id,))
-            still_referenced = False
-            if deleted_filename is not None:
-                survivors = conn.execute(
-                    "SELECT file_path FROM works WHERE file_path IS NOT NULL"
-                ).fetchall()
-                still_referenced = any(
-                    referenced_managed_pdf_filename(r["file_path"]) == deleted_filename
-                    for r in survivors
-                )
-            return DeletedWorkRecord(
-                work_id=work_id,
-                file_path=file_path,
-                managed_pdf_still_referenced=still_referenced,
-            )
+            return delete_work_record_on_conn(conn, work_id)
 
     def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
         ordered_ids = [str(wid).strip() for wid in (work_ids or []) if str(wid).strip()]

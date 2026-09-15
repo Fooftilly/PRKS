@@ -498,6 +498,7 @@ server, survive reload, and reconcile on acknowledgement):
 
 - Work Tags: `ADD_WORK_TAG`, `REMOVE_WORK_TAG`
 - the Tag vocabulary: `CREATE_TAG`, `DELETE_TAG`, `MERGE_TAG`
+- Work deletion: `DELETE_WORK`
 - Work opens: `MARK_WORK_OPENED`
 - Work metadata: `SET_WORK_METADATA_FIELD`
 - Work source identity: `SET_WORK_SOURCE`

@@ -2476,6 +2476,23 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         LOGGER.warning(
                             "research_index_sync_failed work_id=%s error_type=%s",
                             safe_log_id(data.get("entity_id")), safe_error_type(e))
+                if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
+                        data.get("operation") == "DELETE_WORK"):
+                    if result.get("changed"):
+                        from backend.work_deletion import cleanup_after_work_delete
+                        cleanup_after_work_delete(
+                            db, text_index, data.get("entity_id"),
+                            file_path=result.get("file_path") or "",
+                            managed_pdf_still_referenced=bool(
+                                result.get("managed_pdf_still_referenced")),
+                            existed=True,
+                        )
+                    # Paths are not durable client state; strip before the wire.
+                    result = {
+                        "code": result["code"],
+                        "work_id": result["work_id"],
+                        "changed": result["changed"],
+                    }
                 self.send_json(status, result)
                 return
             if path == '/api/backups/progress':

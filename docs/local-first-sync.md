@@ -1709,6 +1709,21 @@ way delete does.
 
 Tag identity stays PERSISTENT. Nothing here garbage-collects an unused Tag.
 
+## Work deletion (DELETE_WORK)
+
+Destruction of a Work identity. Empty payload, null base revision. Absence is
+convergence (`ACKNOWLEDGED` with `changed: false`) — the ordinary
+`DELETE /api/works/:id` has never refused a delete, and offline invents no
+`WORK_IN_USE` refusal. Cascade matches SQLite FK behaviour (tags/roles/folder/
+playlist/annotations/argument_sources relationships only; Tags/Persons/Arguments
+themselves stay). Filesystem and derived-index cleanup remain post-commit
+best-effort via `work_deletion.cleanup_after_work_delete`, shared with the HTTP
+path. The client cancels never-sent ops that name the Work (including Argument
+creates/source replacements that cite it) and waits for possibly-sent ones.
+Acknowledgement fences Concepts, Arguments, People, Person Groups, Folders,
+Playlists, browse catalogs and Research Graph core the same way the previous
+online-only `deleteWork` published coherence.
+
 ## Folders (3F)
 
 Four shapes, and the split is a reading of the schema rather than a template.
@@ -2108,7 +2123,7 @@ its API rather than the template.
 | Scalar mutation | `SET_WORK_METADATA_FIELD`, `SET_PERSON_METADATA_FIELD` | one field |
 | Relationship / set membership | `ADD_WORK_TAG`, `REMOVE_WORK_TAG`, `ADD_WORK_PERSON_ROLE` | one pair |
 | Aggregate / structural mutation | `SET_WORK_SOURCE` | the whole aggregate |
-| Destruction | (none yet) | the entity |
+| Destruction | `DELETE_WORK`, `DELETE_PERSON`, `DELETE_FOLDER`, … | the entity |
 
 The shape decides the conflict unit, and the conflict unit is the decision that
 matters most: it is what the user will be asked to resolve. Getting it wrong is

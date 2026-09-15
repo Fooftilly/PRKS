@@ -176,8 +176,8 @@ def process_operation(db, data):
 from backend import (  # noqa: E402
     argument_sync, concept_sync, folder_sync, folder_tag_sync, person_group_sync,
     person_metadata_sync, person_sync, playlist_sync, position_sync, tag_sync,
-    work_metadata_sync, work_note_sync, work_open_sync, work_role_sync,
-    work_source_sync, work_tag_sync,
+    work_lifecycle_sync, work_metadata_sync, work_note_sync, work_open_sync,
+    work_role_sync, work_source_sync, work_tag_sync,
 )
 
 # The Tag VOCABULARY, as opposed to the Work-Tag relationship below. Two
@@ -195,6 +195,7 @@ register("SET_WORK_METADATA_FIELD", work_metadata_sync.HANDLER)
 # Source identity is an AGGREGATE, not a field: see work_source_sync's module
 # docstring for why three field-scoped operations would be the wrong unit.
 register("SET_WORK_SOURCE", work_source_sync.HANDLER)
+register("DELETE_WORK", work_lifecycle_sync.DELETE_HANDLER)
 # Work-Person roles are ELEMENTS, not an ordered aggregate: see
 # work_role_sync's module docstring for the schema evidence behind that.
 register("ADD_WORK_PERSON_ROLE", work_role_sync.HANDLER)

@@ -2241,6 +2241,53 @@
             return true;
         }
 
+        /**
+         * A Work the server has destroyed.
+         *
+         * Cascades already removed relationships; every projection that could
+         * have shown this Work is staled the same way the online DELETE path
+         * published coherence — Concepts, Arguments, People, Groups, Folders,
+         * Playlists, browse catalogs and Research Graph core.
+         */
+        async function reconcileDeletedWork(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result && result.work_id;
+            if (!id) return false;
+            await invalidateEntity('work', id);
+            await invalidateEntity('work-metadata-state', id);
+            await invalidateEntity('work-source-state', id);
+            await invalidateEntity('work-tag-options', id);
+            await invalidateEntity('work-people-state', id);
+            await invalidateEntity('work-folder-state', id);
+            await invalidateEntity('work-playlist-state', id);
+            await invalidateEntity('work-notes-state', id);
+            if (typeof prksMarkResearchGraphCoreChanged === 'function') {
+                prksMarkResearchGraphCoreChanged();
+            }
+            if (typeof prksOfflineMarkConceptsChanged === 'function') {
+                prksOfflineMarkConceptsChanged();
+            }
+            if (typeof prksOfflineMarkArgumentsChanged === 'function') {
+                prksOfflineMarkArgumentsChanged();
+            }
+            if (typeof prksOfflineMarkPeopleChanged === 'function') {
+                prksOfflineMarkPeopleChanged();
+            }
+            if (typeof prksOfflineMarkPersonGroupsChanged === 'function') {
+                prksOfflineMarkPersonGroupsChanged();
+            }
+            if (typeof prksMarkFoldersDomainChanged === 'function') {
+                prksMarkFoldersDomainChanged();
+            }
+            if (typeof prksMarkWorkBrowseDisplayChanged === 'function') {
+                prksMarkWorkBrowseDisplayChanged();
+            }
+            if (typeof prksOfflineMarkPlaylistsChanged === 'function') {
+                prksOfflineMarkPlaylistsChanged();
+            }
+            return true;
+        }
+
         /* ---- Person Groups ---------------------------------------------- */
 
         /** The cached Group catalogue, or null when this device holds none. */
@@ -2822,6 +2869,7 @@
             reconcileCreatedTag,
             reconcileDeletedTag,
             reconcileMergedTag,
+            reconcileDeletedWork,
             reconcileCreatedPerson,
             reconcilePersonField,
             reconcileDeletedPerson,
@@ -3093,6 +3141,7 @@
         prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
         prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
         prksOfflineReconcileMergedTag: result => production.reconcileMergedTag(result),
+        prksOfflineReconcileDeletedWork: result => production.reconcileDeletedWork(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
         prksOfflineReconcilePersonField: (result, op) => production.reconcilePersonField(result, op),
         prksOfflineReconcileDeletedPerson: result => production.reconcileDeletedPerson(result),

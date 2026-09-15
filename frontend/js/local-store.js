@@ -69,6 +69,7 @@
         'CREATE_TAG',
         'DELETE_TAG',
         'MERGE_TAG',
+        'DELETE_WORK',
         'ADD_WORK_TAG',
         'REMOVE_WORK_TAG',
         'ADD_FOLDER_TAG',
@@ -180,6 +181,24 @@
             if (!row || row.status === STATUS_ACKNOWLEDGED) return false;
             if (row.entity_type === 'person' && row.entity_id === personId) return true;
             return !!row.payload && row.payload.person_id === personId;
+        });
+    }
+
+    /* Every unsynchronized operation that names one Work: its own field and
+     * relationship intents, and Argument constructions/source replacements that
+     * cite it. Deletion has to reason about all of them at once. */
+    function operationsNamingWork(rows, workId) {
+        return (Array.isArray(rows) ? rows : []).filter(function (row) {
+            if (!row || row.status === STATUS_ACKNOWLEDGED) return false;
+            if (row.entity_type === 'work' && row.entity_id === workId) return true;
+            if ((row.operation === 'CREATE_ARGUMENT' || row.operation === 'SET_ARGUMENT_SOURCES') &&
+                Array.isArray(row.payload && row.payload.sources) &&
+                row.payload.sources.some(function (s) {
+                    return s && s.work_id === workId;
+                })) {
+                return true;
+            }
+            return false;
         });
     }
 
@@ -1291,6 +1310,7 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'tagged');
                 assertTagIsNotBeingDeleted(rows, tagId, 'attached or removed');
                 assertTagIsNotBeingMerged(rows, tagId, 'attached or removed');
                 /* A Tag this device created and has not sent yet: the
@@ -1386,6 +1406,7 @@
                 row.status !== STATUS_ACKNOWLEDGED;
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const allRows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(allRows, workId, 'credited');
                 assertPersonIsNotBeingDeleted(allRows, link.person_id, 'credited on a file');
                 const rows = allRows.filter(matches)
                     .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
@@ -1581,6 +1602,50 @@
                 });
         }
 
+        function assertWorkIsNotBeingDeleted(rows, workId, verb) {
+            const pendingDelete = (rows || []).find(r => r && r.operation === 'DELETE_WORK' &&
+                r.entity_id === workId && r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This file is being deleted, so it cannot be ' + verb + '.');
+            }
+        }
+
+        /**
+         * Delete a Work, cancelling the intents it makes pointless.
+         *
+         * Same rule every other destruction uses: never-sent ops naming this
+         * Work are cancelled; possibly-sent ones are waited for. Absence is
+         * the goal, so there is no CREATE_WORK fold yet — that arrives with
+         * offline construction.
+         */
+        function deleteWork(workId) {
+            if (!isNonBlankString(workId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid file.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = operationsNamingWork(rows, workId);
+                    const already = mine.find(r => r.operation === 'DELETE_WORK');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row)) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_WORK', entity_type: 'work',
+                        entity_id: workId, payload: {},
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
         /* ---- Folders: construction, fields, filing, deletion ---- */
 
         function folderCreationDependency(rows, folderId, consequence) {
@@ -1696,6 +1761,7 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertWorkIsNotBeingDeleted(rows, workId, 'filed');
                     if (desired) assertFolderIsNotBeingDeleted(rows, desired, 'filed into');
                     const existing = rows.find(r => r.operation === 'SET_WORK_FOLDER' &&
                         r.entity_type === 'work' && r.entity_id === workId &&
@@ -2636,6 +2702,7 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertWorkIsNotBeingDeleted(rows, workId, 'added to a playlist');
                     if (desired) assertPlaylistIsNotBeingDeleted(rows, desired, 'added to');
                     const existing = rows.find(r => r.operation === 'SET_WORK_PLAYLIST' &&
                         r.entity_type === 'work' && r.entity_id === workId &&
@@ -3014,6 +3081,7 @@
             const at = Date.parse(occurredAt);
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'opened');
                 const existing = rows.find(r => r.operation === 'MARK_WORK_OPENED' &&
                     r.entity_type === 'work' && r.entity_id === workId &&
                     r.status === STATUS_PENDING && r.attempt_count === 0);
@@ -3056,6 +3124,7 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'edited');
                 const written = [];
                 for (const field of Object.keys(changes)) {
                     const desired = changes[field];
@@ -3127,6 +3196,7 @@
             if (utf8ByteLength(text) > limit) return Promise.reject(localStoreError('payload_too_large', 'Note exceeds byte limit.'));
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'edited');
                 const active = rows.filter(r => r.operation === operation &&
                     r.entity_type === 'work' && r.entity_id === workId && r.status !== STATUS_ACKNOWLEDGED)
                     .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
@@ -3164,6 +3234,7 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'edited');
                 const active = rows.filter(r => r.operation === 'SET_WORK_SOURCE' &&
                     r.entity_type === 'work' && r.entity_id === workId &&
                     r.status !== STATUS_ACKNOWLEDGED)
@@ -3655,6 +3726,7 @@
             createTag: createTag,
             deleteTag: deleteTag,
             mergeTag: mergeTag,
+            deleteWork: deleteWork,
             coalesceWorkTag, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
             saveWorkSource,
             saveWorkPersonRole,

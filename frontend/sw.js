@@ -103,6 +103,7 @@
         '/js/local-store.js',
         '/js/work-tag-state.js',
         '/js/folder-tag-state.js',
+        '/js/work-lifecycle-state.js',
         '/js/tag-vocabulary-state.js',
         '/js/folder-state.js',
         '/js/playlist-state.js',

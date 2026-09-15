@@ -31,7 +31,7 @@ class SyncProtocolTests(unittest.TestCase):
                           "CREATE_POSITION", "CREATE_TAG", "DELETE_ARGUMENT",
                           "DELETE_CONCEPT", "DELETE_FOLDER",
                           "DELETE_PERSON", "DELETE_PERSON_GROUP", "DELETE_PLAYLIST",
-                          "DELETE_POSITION", "DELETE_TAG", "MARK_WORK_OPENED", "MERGE_TAG",
+                          "DELETE_POSITION", "DELETE_TAG", "DELETE_WORK", "MARK_WORK_OPENED", "MERGE_TAG",
                           "REMOVE_FOLDER_TAG", "REMOVE_PERSON_GROUP_MEMBER", "REMOVE_WORK_PERSON_ROLE", "REMOVE_WORK_TAG",
                           "REORDER_PLAYLIST_ITEMS", "SET_ARGUMENT_FIELD",
                           "SET_ARGUMENT_SOURCES", "SET_ARGUMENT_TARGETS",
