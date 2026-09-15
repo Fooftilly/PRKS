@@ -277,7 +277,6 @@ const PRKS_FOLDER_MUTATION_SELECTOR = [
     '#prks-folder-library-create-btn',
     '[data-prks-create-folder-query]',
     '[data-delete-folder-id]',
-    '#folder-tag-search',
 ].join(', ');
 
 function prksFolderRuntimeOnline() {
@@ -1034,11 +1033,15 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
 async function prksRemoveFolderTag(folderId, tagId, btn) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     try {
-        await removeTagFromFolder(folderId, tagId);
-        await prksReloadEntityTagsUI('folder', folderId, ownerCtx);
+        if (typeof prksFolderTagEdit === 'function') {
+            await prksFolderTagEdit(ownerCtx, tagId, false);
+        } else {
+            await removeTagFromFolder(folderId, tagId);
+            await prksReloadEntityTagsUI('folder', folderId, ownerCtx);
+        }
     } catch (e) {
         if (btn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
-        if (prksOfflineWasGuardRefusal(e)) return;
+        if (typeof prksOfflineWasGuardRefusal === 'function' && prksOfflineWasGuardRefusal(e)) return;
         console.error(e);
         await prksAlertMessage('Could not remove tag.', 'Error');
     }

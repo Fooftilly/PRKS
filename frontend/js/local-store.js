@@ -70,6 +70,8 @@
         'DELETE_TAG',
         'ADD_WORK_TAG',
         'REMOVE_WORK_TAG',
+        'ADD_FOLDER_TAG',
+        'REMOVE_FOLDER_TAG',
         'SET_WORK_METADATA_FIELD',
         'SET_WORK_SOURCE',
         'ADD_WORK_PERSON_ROLE',
@@ -573,6 +575,8 @@
         SET_WORK_PERSON_ROLE_CREDIT: Object.freeze(['REVISION_CONFLICT']),
         ADD_WORK_TAG: Object.freeze(['REVISION_CONFLICT']),
         REMOVE_WORK_TAG: Object.freeze(['REVISION_CONFLICT']),
+        ADD_FOLDER_TAG: Object.freeze(['REVISION_CONFLICT']),
+        REMOVE_FOLDER_TAG: Object.freeze(['REVISION_CONFLICT']),
         SET_WORK_METADATA_FIELD: Object.freeze(['REVISION_CONFLICT']),
         SET_WORK_SOURCE: Object.freeze(['SOURCE_REVISION_CONFLICT']),
         SET_WORK_RESEARCH_NOTE: Object.freeze(['REVISION_CONFLICT']),
@@ -1240,6 +1244,36 @@
                 setResult(await insertEnvelopeIn(request, {
                     operation: present ? 'ADD_WORK_TAG' : 'REMOVE_WORK_TAG', entity_type: 'work',
                     entity_id: workId, payload: { tag_id: tagId }, base_revision: baseRevision,
+                    depends_on: createOp ? [createOp.op_id] : [],
+                }, { tag }));
+            });
+        }
+
+        function coalesceFolderTag(folderId, tagId, present, baseState, baseRevision, tag) {
+            if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
+                !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
+                return Promise.reject(localStoreError('invalid_base', 'Invalid relationship base.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertTagIsNotBeingDeleted(rows, tagId, 'attached or removed');
+                const createOp = tagCreationDependency(rows, tagId,
+                    'it cannot be attached to anything');
+                const existing = rows.find(r => r.entity_type === 'folder' && r.entity_id === folderId &&
+                    r.payload.tag_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
+                if (existing) {
+                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                        throw localStoreError('scope_busy', 'This Tag change is syncing or needs resolution.');
+                    }
+                    if ((existing.operation === 'ADD_FOLDER_TAG') === present) { setResult(existing); return; }
+                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    setResult(null);
+                    return;
+                }
+                if (present === baseState) { setResult(null); return; }
+                setResult(await insertEnvelopeIn(request, {
+                    operation: present ? 'ADD_FOLDER_TAG' : 'REMOVE_FOLDER_TAG', entity_type: 'folder',
+                    entity_id: folderId, payload: { tag_id: tagId }, base_revision: baseRevision,
                     depends_on: createOp ? [createOp.op_id] : [],
                 }, { tag }));
             });
@@ -3551,7 +3585,7 @@
             enqueueOperation: enqueueOperation,
             createTag: createTag,
             deleteTag: deleteTag,
-            coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
+            coalesceWorkTag, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
             saveWorkSource,
             saveWorkPersonRole,
             createPerson,

@@ -1705,7 +1705,18 @@ Four shapes, and the split is a reading of the schema rather than a template.
 | `CREATE_FOLDER` | construction | the folder | none |
 | `SET_FOLDER_FIELD` | scalar mutation | one field | `folder-field/[folder, field]` |
 | `SET_WORK_FOLDER` | scalar mutation of the WORK | the Work | `work-folder/[work]` |
+| `ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG` | relationship element | `(folder, tag)` | `folder-tag/[folder, tag]` |
 | `DELETE_FOLDER` | destruction | the identity | none |
+
+### Folder tags mirror Work tags
+
+`ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG` are the same shape as Work-Tag
+membership: one pair, one revision, shared `set_state` for sync and direct HTTP,
+Tag lifecycle codes (`TAG_MERGED` / `TAG_DELETED`), and a per-Folder
+`folder-tag-options` projection. Merge and delete of a Tag advance Folder-tag
+revisions the same way they advance Work-tag ones. Pending overlays never enter
+the disposable cache; an unknown options base refuses the edit locally rather
+than guessing revision zero.
 
 ### Moving a folder is a field, not a structure
 

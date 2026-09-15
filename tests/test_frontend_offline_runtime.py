@@ -995,16 +995,19 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertNotIn(".length === 0", body)
 
     def test_canonical_folder_wrappers_guard_and_publish_coherence(self):
-        """Folder TAG membership is still a canonical request, and still
-        publishes coherence from the server's answer. Everything else about a
-        folder is durable now and reconciles at acknowledgement instead."""
+        """Folder TAG membership is durable (ADD/REMOVE_FOLDER_TAG). Folder
+        create/field/delete/work-folder remain durable and reconcile at ACK.
+        Tag merge is still the one Folder-adjacent path that guards connectivity."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
         for fn in ("async function addTagToFolder(", "async function removeTagFromFolder("):
-            at = api.index(fn)
-            body = api[at : at + 1400]
+            body = _fn_body(api, fn)
             with self.subTest(fn=fn):
-                self.assertIn("prksGuardFolderMutation(", body)
-                self.assertIn("prksMarkFoldersDomainChanged()", body)
+                self.assertNotIn("prksGuardFolderMutation(", body)
+                self.assertNotIn("prksRequest(", body)
+                self.assertIn("prksEnqueueFolderTag(", body)
+        # Direct durable enqueue helper must exist for non-mounted call sites.
+        self.assertIn("async function prksEnqueueFolderTag(", api)
+        self.assertIn("coalesceFolderTag(", api)
         for fn in ("async function createFolder(", "async function patchFolder(",
                    "async function deleteFolderCanonical(", "async function addWorkToFolder(",
                    "async function patchWorkFolder("):
@@ -1016,7 +1019,8 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         for reconciler in ("async function reconcileCreatedFolder(",
                            "async function reconcileFolderField(",
                            "async function reconcileWorkFolder(",
-                           "async function reconcileDeletedFolder("):
+                           "async function reconcileDeletedFolder(",
+                           "async function reconcileFolderTag("):
             self.assertIn(reconciler, runtime, reconciler)
 
     def test_no_production_surface_writes_folders_outside_the_wrappers(self):

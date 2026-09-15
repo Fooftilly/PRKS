@@ -20,7 +20,7 @@ from tests.e2e.fixtures import (
     WORK_B_TITLE,
     seed_folders_library,
 )
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -678,15 +678,38 @@ class FoldersOfflineTests(unittest.TestCase):
         self.assertEqual(o._domain_generation(page, 'folders'), before)
         self.assertIsNotNone(o._cached_list(page, 'folders:index'))
 
-    def test_folder_tag_mutation_invalidates_folders(self):
+    def test_folder_tag_mutation_patches_folder_without_dropping_index(self):
+        """ADD/REMOVE_FOLDER_TAG reconcile like Work tags: patch the Folder
+        entity (and folder-tag-options), never drop folders:index for a
+        relationship change the catalogue does not render."""
         server, page, context, _c = self.start()
         ids = server.ids
         self.cache(page, ids, all_domains=True)
+        # Warm tag-options so the durable enqueue has a known base.
+        page.evaluate(
+            """async (fid) => {
+                const res = await prksRequest(
+                    '/api/folders/' + encodeURIComponent(fid) + '/tag-options');
+                const body = await res.json();
+                await prksOfflineCacheEntity('folder-tag-options', fid, body);
+            }""",
+            ids['folder_parent'],
+        )
         before = self.generations(page)
         page.evaluate("async ([fid, tid]) => { await removeTagFromFolder(fid, tid); }",
                       [ids['folder_parent'], ids['folder_tag']])
-        self.changed(page, before, {'folders'})
-
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message='folder-tag remove must acknowledge',
+        )
+        self.assertEqual(o._domain_generation(page, 'folders'), before['folders'])
+        self.assertIsNotNone(o._cached_list(page, 'folders:index'))
+        folder = o._cached_entity(page, 'folder', ids['folder_parent'])
+        self.assertIsNotNone(folder)
+        tag_ids = [t.get('id') for t in (folder.get('tags') or [])]
+        self.assertNotIn(ids['folder_tag'], tag_ids)
     def test_unrelated_research_mutations_keep_folders_eligible(self):
         server, page, context, _c = self.start()
         ids = server.ids

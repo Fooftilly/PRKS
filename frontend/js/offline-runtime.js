@@ -410,6 +410,50 @@
             return true;
         }
 
+        async function reconcileFolderTag(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.folder_id;
+            const kinds = ['folder', 'folder-tag-options'];
+            const tokens = kinds.map(kind => {
+                const key = entityKey(kind, id);
+                const token = currentEntityGeneration(kind, id) + 1;
+                entityCoherence.set(key, token);
+                return token;
+            });
+            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
+            const folder = snapshots[0] && snapshots[0].value;
+            const options = snapshots[1] && snapshots[1].value;
+            if (options && typeof root.prksIsFolderTagOptionsShape === 'function' &&
+                !root.prksIsFolderTagOptionsShape(options, id)) {
+                return false;
+            }
+            let revision = 0;
+            if (options) {
+                const assigned = options.assigned.find(r => r.tag_id === result.tag_id);
+                revision = assigned ? assigned.relation_revision : (options.known_absent[result.tag_id] || 0);
+            }
+            if (revision > result.server_revision) return true;
+            if (folder) {
+                if (!Array.isArray(folder.tags)) return false;
+                folder.tags = folder.tags.filter(t => t.id !== result.tag_id);
+                if (result.present) folder.tags.push(result.tag);
+            }
+            if (options) {
+                options.assigned = options.assigned.filter(t => t.tag_id !== result.tag_id);
+                delete options.known_absent[result.tag_id];
+                if (result.present) {
+                    options.assigned.push({ tag_id: result.tag_id, relation_revision: result.server_revision });
+                } else if (result.server_revision) {
+                    options.known_absent[result.tag_id] = result.server_revision;
+                }
+            }
+            const values = [folder, options];
+            for (let i = 0; i < kinds.length; i++) {
+                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
+            }
+            return true;
+        }
+
         /* Reconcile one acknowledged field edit into both cached records that
          * carry it: the Work itself and its metadata-state projection.
          *
@@ -2667,6 +2711,7 @@
             readThroughEntity: readThroughEntity,
             readThroughList: readThroughList,
             reconcileWorkTag,
+            reconcileFolderTag,
             reconcileWorkField,
             reconcileWorkSource,
             reconcileWorkNote,
@@ -2915,6 +2960,7 @@
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
         prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
+        prksOfflineReconcileFolderTag: result => production.reconcileFolderTag(result),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
         prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
         prksOfflineReconcileWorkNote: (result, op) => production.reconcileWorkNote(result, op),

@@ -276,6 +276,8 @@
             DELETE_TAG: root.prksTagDeleteSyncHandler,
             ADD_WORK_TAG: root.prksWorkTagSyncHandler,
             REMOVE_WORK_TAG: root.prksWorkTagSyncHandler,
+            ADD_FOLDER_TAG: root.prksFolderTagSyncHandler,
+            REMOVE_FOLDER_TAG: root.prksFolderTagSyncHandler,
             MARK_WORK_OPENED: root.prksWorkOpenSyncHandler,
             SET_WORK_METADATA_FIELD: root.prksWorkMetadataSyncHandler,
             // Source identity is an AGGREGATE, not a field: one decision, one

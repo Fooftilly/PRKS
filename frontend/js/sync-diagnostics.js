@@ -229,6 +229,10 @@
             return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') +
                 ((context.tag && context.tag.name) || 'Tag');
         }
+        if (op.operation === 'ADD_FOLDER_TAG' || op.operation === 'REMOVE_FOLDER_TAG') {
+            return (op.operation === 'ADD_FOLDER_TAG' ? 'Add ' : 'Remove ') +
+                ((context.tag && context.tag.name) || 'Tag');
+        }
         /* Never a guess. Describing an unknown family as a Tag edit is how a
          * source operation came to be labelled "Remove Tag" -- and to
          * invalidate the Tag options cache when it was discarded. */
@@ -274,6 +278,8 @@
         DELETE_TAG: 'tags:index',
         ADD_WORK_TAG: 'work-tag-options',
         REMOVE_WORK_TAG: 'work-tag-options',
+        ADD_FOLDER_TAG: 'folder-tag-options',
+        REMOVE_FOLDER_TAG: 'folder-tag-options',
         ADD_WORK_PERSON_ROLE: 'work-people-state',
         REMOVE_WORK_PERSON_ROLE: 'work-people-state',
         SET_WORK_PERSON_ROLE_CREDIT: 'work-people-state',

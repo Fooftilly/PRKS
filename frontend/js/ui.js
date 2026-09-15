@@ -3851,6 +3851,8 @@ function renderFolderTagsChipsHtml(folder) {
         .join('');
 }
 
+window.renderFolderTagsChipsHtml = renderFolderTagsChipsHtml;
+
 function escapeHtml(s) {
     if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
     if (s == null || s === '') return '';
@@ -4072,6 +4074,17 @@ async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, trig
         if (triggerInput) { triggerInput.disabled = false; triggerInput.removeAttribute('aria-busy'); }
         return;
     }
+    if (entityType === 'folder') {
+        try {
+            await prksFolderTagEdit(ownerCtx, tagId, true, knownTag);
+        } finally {
+            if (triggerInput) {
+                triggerInput.disabled = false;
+                triggerInput.removeAttribute('aria-busy');
+            }
+        }
+        return;
+    }
     if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const owner = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const generation = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
@@ -4258,9 +4271,10 @@ function initWorkTagCombobox(workId, ownerCtx) {
 }
 
 function initFolderTagCombobox(folderId) {
-    const _cf = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('folder') : null;
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const _cf = ctx && ctx.getEntity ? ctx.getEntity('folder') : (typeof prksFocusedEntity === 'function' ? prksFocusedEntity('folder') : null);
     if (!_cf || _cf.id !== folderId) return;
-    initTagComboboxForEntity('folder', folderId, 'folder-tag-search', 'folder-tag-search-results');
+    if (typeof prksMountFolderTags === 'function') prksMountFolderTags(ctx, folderId);
 }
 
 async function mountFolderHierarchyControls(folder) {

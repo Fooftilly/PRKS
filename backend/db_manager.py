@@ -14,8 +14,8 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import (folder_sync, person_group_sync, person_metadata_sync, person_sync,
-                     playlist_sync, tag_sync, work_metadata_sync, work_open_sync,
+from backend import (folder_sync, folder_tag_sync, person_group_sync, person_metadata_sync,
+                     person_sync, playlist_sync, tag_sync, work_metadata_sync, work_open_sync,
                      work_role_sync, work_source_sync, work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.entity_ids import generate as generate_entity_id, is_distributed
@@ -4090,14 +4090,10 @@ class PRKSDatabase:
             for wid in affected["affected_work_ids"]:
                 work_tag_sync.set_state(conn, wid, target, True)
                 work_tag_sync.set_state(conn, wid, source, False)
+            for fid in affected["affected_folder_ids"]:
+                folder_tag_sync.set_state(conn, fid, target, True)
+                folder_tag_sync.set_state(conn, fid, source, False)
             conn.execute("UPDATE sync_tag_lifecycle SET state = 'merged', target_tag_id = ?, changed_at = CURRENT_TIMESTAMP WHERE tag_id = ? OR (state = 'merged' AND target_tag_id = ?)", (target, source, source))
-
-            conn.execute(
-                "INSERT OR IGNORE INTO folder_tags (folder_id, tag_id) "
-                "SELECT folder_id, ? FROM folder_tags WHERE tag_id = ?",
-                (target, source),
-            )
-            conn.execute("DELETE FROM folder_tags WHERE tag_id = ?", (source,))
 
             # Staged Processing Files reference Tags too. A merge means
             # "replace S with T everywhere", so these links move like the
@@ -4326,8 +4322,14 @@ class PRKSDatabase:
             pair = json.loads(row["scope_id"])
             if pair[1] == tag_id:
                 option_works.add(pair[0])
+        option_folders = set(folders)
+        for row in conn.execute("SELECT scope_id FROM sync_entity_revisions WHERE scope_type = 'folder-tag'"):
+            pair = json.loads(row["scope_id"])
+            if pair[1] == tag_id:
+                option_folders.add(pair[0])
         return {"affected_work_ids": works, "affected_folder_ids": folders,
-                "affected_tag_options_work_ids": sorted(option_works)}
+                "affected_tag_options_work_ids": sorted(option_works),
+                "affected_tag_options_folder_ids": sorted(option_folders)}
 
     def delete_tag(self, tag_id: str) -> Dict[str, Any]:
         """Explicitly destroy a Tag. Relationships cascade.
@@ -4368,6 +4370,8 @@ class PRKSDatabase:
             affected = self._entities_linked_to_tag_on_conn(conn, tid)
             for wid in affected["affected_work_ids"]:
                 work_tag_sync.set_state(conn, wid, tid, False)
+            for fid in affected["affected_folder_ids"]:
+                folder_tag_sync.set_state(conn, fid, tid, False)
             conn.execute("UPDATE sync_tag_lifecycle SET state = 'deleted', target_tag_id = NULL, changed_at = CURRENT_TIMESTAMP WHERE tag_id = ?", (tid,))
             conn.execute("DELETE FROM tags WHERE id = ?", (tid,))
         return {"status": "deleted", **affected}
@@ -4386,13 +4390,20 @@ class PRKSDatabase:
             return work_tag_sync.tag_options(conn, work_id)
 
     def add_tag_to_folder(self, folder_id: str, tag_id: str):
-        self.execute_query("INSERT INTO folder_tags (folder_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", (folder_id, tag_id))
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            folder_tag_sync.set_state(conn, folder_id, tag_id, True)
 
     def remove_tag_from_folder(self, folder_id: str, tag_id: str):
         # Relationship only; see remove_tag_from_work.
-        self.execute_query(
-            "DELETE FROM folder_tags WHERE folder_id = ? AND tag_id = ?", (folder_id, tag_id)
-        )
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            folder_tag_sync.set_state(conn, folder_id, tag_id, False)
+
+    def get_folder_tag_options(self, folder_id: str):
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return folder_tag_sync.tag_options(conn, folder_id)
 
     def get_work_tags(self, work_id: str) -> List[dict]:
         query = """

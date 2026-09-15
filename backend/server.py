@@ -2022,6 +2022,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(404, {"error": "Work not found"})
                 else:
                     self.send_json(200, data, etag=db.etag_for_representation("work-tag-options", data))
+            elif path.startswith('/api/folders/') and path.endswith('/tag-options') and len(path.split('/')) == 5:
+                data = db.get_folder_tag_options(path.split('/')[3])
+                if data is None:
+                    self.send_json(404, {"error": "Folder not found"})
+                else:
+                    self.send_json(200, data, etag=db.etag_for_representation("folder-tag-options", data))
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 data = db.get_work(w_id)

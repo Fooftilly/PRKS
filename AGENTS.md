@@ -508,7 +508,7 @@ server, survive reload, and reconcile on acknowledgement):
   `ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`,
   `DELETE_PERSON_GROUP`
 - Folders: `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`,
-  `SET_WORK_FOLDER`
+  `SET_WORK_FOLDER`, `ADD_FOLDER_TAG`, `REMOVE_FOLDER_TAG`
 - Playlists: `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`,
   `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST`
 - Concepts: `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`,
@@ -1318,20 +1318,19 @@ those, add the dependency **then**.
 Every production Folder write goes through the `api.js` wrappers
 (`createFolder`, `patchFolder`, `deleteFolderCanonical`, `addWorkToFolder`,
 `patchWorkFolder`, `addTagToFolder`, `removeTagFromFolder`), so there is exactly
-one boundary per operation. The first five are **durable** and carry no
-connectivity guard; what they can still refuse is an unknown base, via
-`prksFolderSaveMessage()`. The two Folder-**tag** wrappers are the exception and
-still call `prksGuardFolderMutation()`, because folder tags are the one Folder
-relationship not yet durable; a refusal throws an error tagged
-`prksOfflineRefused`, which `prksOfflineWasGuardRefusal()` detects so call sites
-skip a second dialog. The three former quick-create surfaces (the Folder modal
+one boundary per operation. All of them are **durable** and carry no
+connectivity guard; what they can still refuse is an unknown base (Folder fields
+via `prksFolderSaveMessage()`, Folder tags when `folder-tag-options` has never
+been prepared). Folder-tag add/remove enqueue `ADD_FOLDER_TAG` /
+`REMOVE_FOLDER_TAG` through `coalesceFolderTag` / `prksFolderTagEdit`, mirroring
+Work tags. The three former quick-create surfaces (the Folder modal
 in `app.js`, `quickCreateFolder()` in `ui.js`, and the processing inbox) all
 route through `createFolder()` rather than posting raw. The one documented
 exception is the coalesced private-notes autosave in `ui.js`, which is gated by
 its own runtime check and publishes Folder coherence on success;
 `tests/test_frontend_offline_runtime.py` fails the build if any other module
-pairs an `/api/folders` URL with a mutating method. Tag **merge** is guarded by
-the same helper and stays online-only — `MERGE_TAG` is an identity
+pairs an `/api/folders` URL with a mutating method. Tag **merge** still calls
+`prksGuardFolderMutation()` and stays online-only — `MERGE_TAG` is an identity
 transformation, not a field change, and is deliberately not yet durable.
 
 `prksOpenFolderModalFromLibrarySearch()` no longer guards anything: the folder

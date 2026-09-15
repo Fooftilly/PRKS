@@ -22,7 +22,7 @@ projection, and is proven by focused E2E coverage.
 | Person profile | `SET_PERSON_METADATA_FIELD` | per-field; acknowledged/effective/draft kept apart |
 | Person Groups | `CREATE_PERSON_GROUP`, `SET_PERSON_GROUP_FIELD`, `ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`, `DELETE_PERSON_GROUP` | four shapes over one entity; deletion is a tombstone |
 | Person deletion | `DELETE_PERSON` | tombstone; a Person credited on a file stays protected |
-| Folders | `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`, `SET_WORK_FOLDER` | moving is a field; a Work's folder is a scalar on the Work |
+| Folders | `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`, `SET_WORK_FOLDER`, `ADD_FOLDER_TAG`, `REMOVE_FOLDER_TAG` | moving is a field; a Work's folder is a scalar on the Work; folder tags mirror Work tags `(folder, tag)` |
 | Positions | `CREATE_POSITION`, `SET_POSITION_FIELD`, `DELETE_POSITION` | two INDEPENDENT fields; deletion refused while an Argument targets it |
 | Arguments / Stances | `CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`, `SET_ARGUMENT_SOURCES`, `SET_ARGUMENT_TARGETS`, `DELETE_ARGUMENT` | permanent `A-` id; construction atomically includes initial sources/targets; later sources and targets are separate ordered aggregates |
 | Concepts | `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`, `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT` | name+aliases are one aggregate; the parent set is another |
@@ -86,9 +86,6 @@ they should take, and what each must declare before implementation, are in
   envelope. The rule this rollout would use is to refuse the merge while any
   unsynchronized operation still names the source, rather than retargeting
   intents whose base revision belongs to a scope that is about to change.
-* **Folder tags** — `ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG`, the one Folder
-  relationship still on the network. It mirrors the Work-Tag family exactly and
-  is the obvious next increment.
 * **PDF annotations** — only where the PDF is already cached. Annotation
   identity must be audited first: if annotations receive server-generated ids
   today, new ones need permanent distributed ids before offline creation is
