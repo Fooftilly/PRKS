@@ -4,6 +4,7 @@ The decision worth testing hardest is why `name` and `aliases` share one
 revision: renaming a Concept keeps the old name reachable as an alias, so the
 two cannot be judged apart.
 """
+import pathlib
 import tempfile
 import unittest
 import uuid
@@ -20,6 +21,8 @@ from backend.research_network import (
     update_concept,
 )
 from backend.storage.config import StorageConfig
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class ConceptSyncTests(unittest.TestCase):
@@ -136,6 +139,148 @@ class ConceptSyncTests(unittest.TestCase):
         its name IS its identity, and inventing one would invent a key."""
         _, status, result = self.create("   ")
         self.assertEqual((status, result["code"]), (400, "INVALID_ENVELOPE"))
+
+    # ---- construction parity ----------------------------------------------
+
+    def test_both_construction_paths_share_one_boundary(self):
+        """The ordinary POST and the durable operation must not drift on what a
+        legal Concept is, so both go through `insert_concept_on_conn`."""
+        source = (ROOT / "backend" / "research_network.py").read_text()
+        at = source.index("def create_concept(")
+        body = source[at: source.index("\ndef ", at + 5)]
+        self.assertIn("concept_sync.insert_concept_on_conn(conn, cid, name, description)", body)
+        self.assertNotIn("INSERT INTO concepts", body,
+                         "the ordinary path must not carry its own INSERT")
+        # And note auto-creation shares the ROW invariant, one layer down.
+        at = source.index("def ensure_concepts_for_names(")
+        body = source[at: source.index("\ndef ", at + 5)]
+        self.assertIn('concept_sync.insert_concept_on_conn(conn, cid, name, "")', body)
+        self.assertNotIn("INSERT INTO concepts", body)
+        # And nothing else in the module constructs a Concept row by hand.
+        self.assertEqual(source.count("INSERT INTO concepts"), 0)
+
+    def test_both_paths_refuse_a_normalized_duplicate_name(self):
+        create_concept(self.db, "Culture Industry")
+        with self.assertRaises(ResearchError) as caught:
+            create_concept(self.db, "  culture   INDUSTRY  ")
+        self.assertEqual(caught.exception.code, "concept_exists")
+        _, status, result = self.create("  culture   INDUSTRY  ")
+        self.assertEqual((status, result["code"]), (409, "CONCEPT_EXISTS"),
+                         "the durable path applies the same normalization")
+
+    def test_both_paths_refuse_a_name_taken_by_an_alias(self):
+        first = create_concept(self.db, "Emergence")
+        replace_concept_aliases(self.db, first["id"], ["Holism"])
+        with self.assertRaises(ResearchError) as caught:
+            create_concept(self.db, "holism")
+        self.assertEqual(caught.exception.code, "concept_exists")
+        _, status, result = self.create("holism")
+        self.assertEqual((status, result["code"]), (409, "CONCEPT_EXISTS"))
+
+    def test_both_paths_normalize_the_name_the_same_way(self):
+        ordinary = create_concept(self.db, "  Culture   Industry  ")
+        self.assertEqual(ordinary["name"], "Culture Industry")
+        cid, _, _ = self.create("  Mass   Culture  ")
+        self.assertEqual(self.stored(cid)["name"], "Mass Culture")
+
+    def test_both_paths_normalize_the_description_the_same_way(self):
+        ordinary = create_concept(self.db, "Alpha", "  A definition.  ")
+        cid, _, _ = self.create("Beta", "  A definition.  ")
+        self.assertEqual(self.stored(cid)["description"], ordinary["description"],
+                         "one `_optional_markdown` call, not two spellings of it")
+
+    def test_both_paths_refuse_a_name_that_is_too_long(self):
+        """The durable path refuses it as a malformed ENVELOPE, so it is never
+        ledgered as a domain outcome -- and never reported under a domain code
+        that would tell the user something else entirely."""
+        from backend.research_network import CONCEPT_NAME_MAX
+        long_name = "x" * (CONCEPT_NAME_MAX + 1)
+        with self.assertRaises(ResearchError) as caught:
+            create_concept(self.db, long_name)
+        self.assertEqual(caught.exception.code, "invalid_name")
+        _, status, result = self.create(long_name)
+        self.assertEqual((status, result["code"]), (400, "INVALID_ENVELOPE"))
+
+    def test_an_identity_edit_refuses_a_malformed_name_as_an_envelope_error(self):
+        from backend.research_network import CONCEPT_NAME_MAX
+        cid, _, _ = self.create("Emergence")
+        for bad in ("   ", "x" * (CONCEPT_NAME_MAX + 1), "Bell\x07 Curve"):
+            with self.subTest(bad=bad):
+                status, result = self.identity(cid, bad, [], 0)
+                self.assertEqual((status, result["code"]), (400, "INVALID_ENVELOPE"))
+        status, result = self.identity(cid, "Emergence", ["Bell\x07 Curve"], 0)
+        self.assertEqual((status, result["code"]), (400, "INVALID_ENVELOPE"))
+
+    def test_the_ordinary_path_mints_the_same_id_format(self):
+        """Both produce a `C-` id; only the durable one is client-minted, and
+        only it is required to be collision-resistant."""
+        ordinary = create_concept(self.db, "Alpha")
+        self.assertTrue(entity_ids.is_generated(ordinary["id"], "C"))
+        cid, _, _ = self.create("Beta")
+        self.assertTrue(entity_ids.is_distributed(cid, "C"))
+
+    def test_the_ordinary_path_still_returns_the_full_concept(self):
+        """The response shape is what the route serializes, so a refactor that
+        returned the id alone would silently change the API."""
+        created = create_concept(self.db, "Alpha", "A definition.")
+        self.assertEqual(created["name"], "Alpha")
+        self.assertEqual(created["description"], "A definition.")
+        self.assertEqual(created["aliases"], [])
+        self.assertEqual(created["parents"], [])
+        self.assertEqual(created["children"], [])
+
+    def test_a_note_can_never_carry_a_name_the_primitive_would_refuse(self):
+        """Why routing note auto-creation through the shared primitive is safe.
+
+        It looked as though markup might be more tolerant than the API -- and if
+        it were, sharing the primitive would start failing note saves that work
+        today. It is not: `save_work_notes` refuses control characters in the
+        whole note body before any Concept is resolved, and an over-long
+        reference is already answered "invalid" by `resolve_concept_key`. Both
+        boundaries are asserted here, because the safety of the shared primitive
+        rests on them.
+        """
+        from backend.research_markup import CONCEPT_REF_MAX
+        from backend.research_network import CONCEPT_NAME_MAX, save_work_notes
+
+        # Control characters: refused for the whole note body, before any
+        # Concept is resolved.
+        work = self.db.add_work(title="A paper")
+        with self.assertRaises(ResearchError) as caught:
+            save_work_notes(self.db, work, "See [[concept:Bell\x07 Curve]].")
+        self.assertEqual(caught.exception.code, "invalid_text")
+
+        # Length: the markup parser will not produce a reference longer than
+        # the API's own limit, so an over-long one is simply not a reference.
+        # These two constants live in different modules and are load-bearing
+        # together -- raising CONCEPT_REF_MAX above CONCEPT_NAME_MAX would let
+        # a note carry a name the primitive refuses.
+        self.assertLessEqual(CONCEPT_REF_MAX, CONCEPT_NAME_MAX)
+        save_work_notes(self.db, work,
+                        "See [[concept:%s]]." % ("x" * (CONCEPT_REF_MAX + 1)))
+        self.assertEqual(self.db.execute_query(
+            "SELECT COUNT(*) AS c FROM concepts")[0]["c"], 0,
+            "an over-long reference is not a reference, and creates nothing")
+
+    def test_note_auto_creation_still_resolves_before_it_creates(self):
+        from backend.research_network import save_work_notes
+        existing = create_concept(self.db, "Emergence")
+        work = self.db.add_work(title="A paper")
+        save_work_notes(self.db, work, "See [[concept:emergence]].")
+        rows = self.db.execute_query("SELECT id FROM concepts")
+        self.assertEqual([r["id"] for r in rows], [existing["id"]],
+                         "a note naming an existing Concept must not create a second")
+
+    def test_note_auto_creation_shares_the_uniqueness_rule(self):
+        """An alias is part of identity, so a note naming one resolves to that
+        Concept rather than constructing a colliding row."""
+        from backend.research_network import save_work_notes
+        existing = create_concept(self.db, "Emergence")
+        replace_concept_aliases(self.db, existing["id"], ["Self-organization"])
+        work = self.db.add_work(title="A paper")
+        save_work_notes(self.db, work, "See [[concept:self-organization]].")
+        rows = self.db.execute_query("SELECT id FROM concepts")
+        self.assertEqual([r["id"] for r in rows], [existing["id"]])
 
     # ---- the definition ---------------------------------------------------
 

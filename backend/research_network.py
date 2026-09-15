@@ -261,30 +261,20 @@ def create_concept(
     *,
     conn: Optional[sqlite3.Connection] = None,
 ) -> dict:
-    cname = _concept_name(name)
-    desc = _optional_markdown(description, max_len=CONCEPT_DEFINITION_MAX)
+    from backend import concept_sync
+
     own = conn is None
     if own:
         conn = db.get_connection()
     try:
-        status, ids = resolve_concept_key(conn, cname)
-        if status == "ok":
-            raise ResearchError(
-                "concept_exists",
-                "A Concept with that name or alias already exists.",
-                409,
-            )
-        if status == "ambiguous":
-            raise ResearchError(
-                "ambiguous_concept",
-                "Multiple Concepts match that name.",
-                409,
-            )
+        # The SAME construction boundary the durable `CREATE_CONCEPT` uses, so
+        # the two paths cannot drift on what a legal Concept is: normalization,
+        # the name-or-alias uniqueness rule, and the row shape are one
+        # implementation. The id is still minted here, because that is what
+        # distinguishes the two paths -- the ordinary API allocates, a durable
+        # client brings its own.
         cid = db.generate_id("C")
-        conn.execute(
-            "INSERT INTO concepts (id, name, description) VALUES (?, ?, ?)",
-            (cid, cname, desc),
-        )
+        concept_sync.insert_concept_on_conn(conn, cid, name, description)
         if own:
             conn.commit()
         LOGGER.info("concept_created concept_id=%s", safe_log_id(cid))
@@ -485,7 +475,17 @@ def replace_concept_parents(db: PRKSDatabase, concept_id: str, parent_ids) -> di
 
 
 def ensure_concepts_for_names(conn: sqlite3.Connection, db: PRKSDatabase, names: Iterable[str]) -> Dict[str, str]:
-    """Resolve or create Concepts for canonical names. Map written-normalized key → id."""
+    """Resolve or create Concepts for canonical names. Map written-normalized key → id.
+
+    A higher-level workflow -- resolution first, construction only for what is
+    genuinely missing -- built on the shared row primitive so every Concept in
+    the database was inserted under the same uniqueness rule, whoever asked for
+    it. It runs inside the caller's note-save transaction and must stay that
+    way: a Concept auto-created for a note that then fails to save would leave
+    a vocabulary entry nothing references.
+    """
+    from backend import concept_sync
+
     resolved: Dict[str, str] = {}
     for raw in names:
         name = canonical_concept_name(raw)
@@ -505,10 +505,12 @@ def ensure_concepts_for_names(conn: sqlite3.Connection, db: PRKSDatabase, names:
             resolved[key] = ids[0]
             continue
         cid = db.generate_id("C")
-        conn.execute(
-            "INSERT INTO concepts (id, name, description) VALUES (?, ?, ?)",
-            (cid, name, ""),
-        )
+        # The same construction primitive every other path uses. Safe here
+        # because `save_work_notes` has already refused control characters in
+        # the note body and `resolve_concept_key` has already answered
+        # "invalid" for an over-long reference -- so nothing reachable through
+        # markup can be a name the primitive would reject.
+        concept_sync.insert_concept_on_conn(conn, cid, name, "")
         LOGGER.info("concept_created concept_id=%s", safe_log_id(cid))
         resolved[key] = cid
     return resolved

@@ -126,10 +126,17 @@ def set_field_on_conn(conn, concept_id, field, value):
 
 
 def insert_concept_on_conn(conn, concept_id, name, description=""):
-    """CONSTRUCTION, through the identity rules the ordinary path applies.
+    """The one Concept construction primitive. Every path goes through it.
 
-    A Concept created with a name and a definition has not "changed" twice, so
-    no revision is advanced here.
+    The ordinary `POST /api/concepts`, the durable `CREATE_CONCEPT` and
+    research-note auto-creation all construct Concepts here, so there is exactly
+    one answer to "what is a legal Concept": normalization, the name-or-alias
+    uniqueness rule over a single normalized space, and the row shape.
+
+    The uniqueness check runs inside the caller's transaction, so two requests
+    racing on the same name cannot both pass it. A Concept created with a name
+    and a definition has not "changed" twice, so no revision is advanced here --
+    construction is not mutation.
     """
     cname = network._concept_name(name)
     desc = network._optional_markdown(description, max_len=network.CONCEPT_DEFINITION_MAX)
@@ -330,8 +337,16 @@ def validate_create(op):
         raise ValueError("INVALID_ENVELOPE")
     if not isinstance(payload["name"], str) or not isinstance(payload["description"], str):
         raise ValueError("INVALID_ENVELOPE")
-    if not canonical_concept_name(payload["name"]):
-        raise ValueError("INVALID_ENVELOPE")
+    # Validated HERE rather than left to the domain rule, so a malformed name is
+    # refused before the ledger records it as an outcome -- and so it reports
+    # INVALID_ENVELOPE instead of being flattened into a domain code that says
+    # something else entirely.
+    try:
+        network._concept_name(payload["name"])
+        network._optional_markdown(payload["description"],
+                                   max_len=network.CONCEPT_DEFINITION_MAX)
+    except ResearchError:
+        raise ValueError("INVALID_ENVELOPE") from None
 
 
 def apply_create(db, conn, op, received_at):
@@ -399,13 +414,18 @@ def validate_identity(op):
     if set(payload) != {"name", "aliases"}:
         raise ValueError("INVALID_ENVELOPE")
     name, aliases = payload["name"], payload["aliases"]
-    if not isinstance(name, str) or not canonical_concept_name(name):
+    if not isinstance(name, str) or not isinstance(aliases, list):
         raise ValueError("INVALID_ENVELOPE")
-    if not isinstance(aliases, list) or len(aliases) > MAX_ALIASES:
+    if len(aliases) > MAX_ALIASES:
         raise ValueError("INVALID_ENVELOPE")
-    for alias in aliases:
-        if not isinstance(alias, str) or not canonical_concept_name(alias):
-            raise ValueError("INVALID_ENVELOPE")
+    try:
+        network._concept_name(name)
+        for alias in aliases:
+            if not isinstance(alias, str):
+                raise ValueError("INVALID_ENVELOPE")
+            network._concept_name(alias)
+    except ResearchError:
+        raise ValueError("INVALID_ENVELOPE") from None
     if op["base_revision"] is None:
         raise ValueError("INVALID_BASE_REVISION")
 
