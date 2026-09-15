@@ -145,25 +145,14 @@ async function run() {
         assert(!e.entities.has(people));
         for(const k of ['concept','position','argument','person','person-group','playlist','work'])assert(e.entities.has(k));
     }
-    // Canonical API successes, failures and exclusions, without UI ownership dependencies.
-    // Concepts are deliberately absent: they are DURABLE, so a Concept write
-    // reaches no request at all and stales nothing at the call site -- the
-    // Graph is fenced (or its label patched) by the reconciler, once the server
-    // has actually answered. Publishing a Graph invalidation for an intent that
-    // has not landed would discard a snapshot to show the same thing.
-    for(const fn of ['createArgument','updateArgument','deleteArgument','putArgumentSources','putArgumentTargets']) {
-        for(const ok of [true,false]) {
-            const e=environment();e.setRequest(async()=>({ok,status:ok?200:400,json:async()=>({})}));
-            try {await e.ctx[fn]('id',[]);}catch(err){assert(!ok);}
-            const expected=ok?1:0;
-            assert.equal(e.ctx.prksOfflineDomainGeneration(core),expected,fn);
-            assert.equal(e.ctx.prksOfflineDomainGeneration(people),expected,fn);
-        }
-    }
+    // Durable writes issue no canonical request. Family-specific optimistic
+    // Graph behavior belongs to each state module's selftest, not this helper
+    // environment (which intentionally does not load those modules).
+    // This test pins only that API adapters cannot bypass the queue.
     // And the durable half of that rule, asserted rather than assumed: a
     // Concept write issues no canonical request and moves neither Graph
     // generation, whatever the (unused) transport would have answered.
-    for(const fn of ['createConcept','updateConcept','deleteConcept','putConceptParents','putConceptAliases','createPosition','updatePosition','deletePosition']) {
+    for(const fn of ['createConcept','updateConcept','deleteConcept','putConceptParents','putConceptAliases','createPosition','updatePosition','deletePosition','createArgument','updateArgument','deleteArgument','putArgumentSources','putArgumentTargets']) {
         const e=environment();
         let requests=0;
         e.setRequest(async()=>{requests+=1;return {ok:true,status:200,json:async()=>({})};});

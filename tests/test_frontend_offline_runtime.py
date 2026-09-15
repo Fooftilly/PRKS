@@ -673,7 +673,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertNotIn("fetchArguments(", index_body)
 
         detail_at = app.index("case 'argument-detail': {")
-        detail_body = app[detail_at : detail_at + 3000]
+        detail_body = app[detail_at : app.index("case 'research-graph': {", detail_at)]
         self.assertIn("prksOfflineDetailFetch(", detail_body)
         self.assertIn("'argument',", detail_body)
         self.assertIn("domain: PRKS_ARGUMENTS_DOMAIN", detail_body)
@@ -684,8 +684,10 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # A reachable-server 404 keeps its own distinct meaning.
         self.assertIn("renderArgumentNotFound", detail_body)
         self.assertNotIn("fetchArgument(", detail_body)
-        # A freshly mounted route always starts read-only.
+        # A freshly mounted route resets stale edit-mode UI, but mutation stays
+        # available offline through the durable queue.
         self.assertIn("ctx.ui.argumentEditing = false;", detail_body)
+        self.assertIn("prksEffectiveArgumentDetail(item, argumentOps)", detail_body)
 
         self.assertIn("prksFilterArgumentsByKind", app)
         self.assertIn(
@@ -732,31 +734,28 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn("async function %s(" % name, runtime)
 
-    def test_argument_mutations_that_stale_position_summaries_invalidate_positions(self):
-        """A cached Position detail embeds Argument name/kind/verdict and the
-        whole targeting list, so those Argument helpers owe it an invalidation --
-        while Argument *sources* (Works) are not in the Position read model."""
+    def test_argument_mutations_route_through_durable_boundaries(self):
+        """User actions write semantic intent; reconcilers own ACK coherence."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        for fn in (
-            "async function createArgument(",
-            "async function updateArgument(",
-            "async function deleteArgument(",
-            "async function putArgumentTargets(",
+        for fn, writer in (
+            ("async function createArgument(", "prksCreateArgumentDurably("),
+            ("async function updateArgument(", "prksSaveArgumentFieldsDurably("),
+            ("async function deleteArgument(", "prksDeleteArgumentDurably("),
+            ("async function putArgumentTargets(", "prksSetArgumentTargetsDurably("),
+            ("async function putArgumentSources(", "prksSetArgumentSourcesDurably("),
         ):
             start = api.index(fn)
-            body = api[start : start + 900]
-            self.assertIn("prksResearchJson(", body, fn)
-            self.assertIn("prksMarkPositionsDomainChanged();", body, fn)
-            self.assertLess(
-                body.index("prksResearchJson("), body.index("prksMarkPositionsDomainChanged();"), fn
-            )
-        sources_at = api.index("async function putArgumentSources(")
-        sources_body = api[sources_at : api.index("async function putArgumentTargets(")]
-        self.assertNotIn(
-            "prksMarkPositionsDomainChanged",
-            sources_body,
-            "Argument source Works are not part of the Position read model",
-        )
+            body = api[start : api.index("\n}", start)]
+            with self.subTest(fn=fn):
+                self.assertIn(writer, body)
+                self.assertNotIn("prksRequest('/api/arguments", body)
+                self.assertNotIn("prksResearchJson(", body)
+        runtime = _read(_RUNTIME)
+        self.assertIn("prksOfflineMarkPositionsChanged();", runtime)
+        self.assertIn("async function reconcileArgumentSources(", runtime)
+        sources = runtime[runtime.index("async function reconcileArgumentSources("):
+                          runtime.index("async function reconcileArgumentTargets(")]
+        self.assertNotIn("prksOfflineMarkPositionsChanged", sources)
 
     def test_positions_are_not_invalidated_by_unrelated_read_models(self):
         """Research Notes, Work and Concept coherence hooks must not have been
@@ -768,36 +767,19 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         concepts = _read(os.path.join(_FRONTEND, "js", "components", "concepts.js"))
         self.assertNotIn("Positions", concepts)
 
-    def test_direct_argument_mutations_invalidate_the_arguments_domain(self):
-        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        for fn in (
-            "async function createArgument(",
-            "async function updateArgument(",
-            "async function deleteArgument(",
-            "async function putArgumentTargets(",
-            "async function putArgumentSources(",
-        ):
-            start = api.index(fn)
-            body = api[start : start + 1200]
-            self.assertIn("prksResearchJson(", body, fn)
-            self.assertIn("prksMarkArgumentsDomainChanged();", body, fn)
-            self.assertLess(
-                body.index("prksResearchJson("), body.index("prksMarkArgumentsDomainChanged();"), fn
-            )
-
     def test_argument_sources_touch_arguments_but_never_positions(self):
         """Source Works and their authors are in the Argument read model and NOT
         in the Position one -- the sharpest boundary between the two domains."""
-        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        start = api.index("async function putArgumentSources(")
-        body = api[start : api.index("async function putArgumentTargets(")]
-        self.assertIn("prksMarkArgumentsDomainChanged();", body)
+        runtime = _read(_RUNTIME)
+        start = runtime.index("async function reconcileArgumentSources(")
+        body = runtime[start : runtime.index("async function reconcileArgumentTargets(")]
+        self.assertIn("prksOfflineMarkArgumentsChanged();", body)
         self.assertNotIn("prksMarkPositionsDomainChanged", body)
         # ... while targets legitimately move both.
-        targets_start = api.index("async function putArgumentTargets(")
-        targets_body = api[targets_start : targets_start + 1200]
-        self.assertIn("prksMarkArgumentsDomainChanged();", targets_body)
-        self.assertIn("prksMarkPositionsDomainChanged();", targets_body)
+        targets_start = runtime.index("async function reconcileArgumentTargets(")
+        targets_body = runtime[targets_start : runtime.index("async function reconcileDeletedArgument(")]
+        self.assertIn("prksOfflineMarkArgumentsChanged();", targets_body)
+        self.assertIn("prksOfflineMarkPositionsChanged();", targets_body)
 
     def test_a_position_rename_stales_arguments_but_a_description_edit_does_not(self):
         """A cached Argument's targets embed the Position's NAME, and nothing

@@ -685,11 +685,25 @@ detail behind it was cached.
 TabContext-owned, one-binding-per-container contract as
 `prksBindConceptOfflineState()`.
 
-Argument/Stance routes are **read-only** offline. Both kinds are one record
-family and one cache: entity `kind: 'argument'` covers Stances too (a Stance is
-an Argument with `kind: 'stance'`), and there is no separate `stances` domain —
-Arguments and Stances target and answer each other, so the read model is a
-single interconnected graph.
+Arguments/Stances are **local-first**. Their five durable operations are
+`CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`, `SET_ARGUMENT_SOURCES`,
+`SET_ARGUMENT_TARGETS`, and `DELETE_ARGUMENT`. Both kinds are one record family
+and one cache: entity `kind: 'argument'` covers Stances too (a Stance is an
+Argument with `kind: 'stance'`), and there is no separate `stances` domain.
+Construction mints a permanent distributed `A-` id and carries the initial
+scalar state, sources, and targets in ONE atomic operation. Response creation
+must include the parent target there; Create from Work must include the Work
+source there. Never decompose either into a construction followed by an
+aggregate mutation.
+
+The three scalar fields (`name`, `kind`, `main_text`) are independent conflict
+units. Sources are one ordered aggregate under
+`argument-sources/[argument_id]`. Targets are one ordered aggregate under
+`argument-targets/[argument_id]`, spanning both physical Position-target and
+Argument-target tables; never split those tables into separate durable
+families. Later editing intentionally produces independent scalar/source/target
+operations. The editor must compare acknowledged base, effective displayed
+state, and draft separately and enqueue only units the user changed.
 
 The index caches the **complete unfiltered collection** under one key,
 `arguments:index`. The route always fetches `/api/arguments` without a `kind`
@@ -715,21 +729,14 @@ gap — while `first_name`/`last_name`/`credit_name` stay optional, since any of
 them may legitimately be empty. The same rule is why targets need a `type` and
 responses a valid `kind`.
 
-An Argument edit session gets one special case. A form mounted while online
-keeps its unsaved values when PRKS stops answering — only the controls that
-could submit or alter them go inert, with **Cancel deliberately left live** so
-the user can leave edit mode. Known gap: a target/source picker already open
-when connectivity drops lives outside the form container and stays interactive.
-Picking there only edits the unsaved local draft — it cannot reach canonical
-data, and Save is still guarded — so it is a UX wrinkle, not a correctness hole;
-closing or disabling an active research picker when the editor goes offline
-would tidy it up. A route freshly mounted from cache while already
-offline starts read-only instead. `saveArgumentForm()` issues three canonical
-requests (`updateArgument`, `putArgumentTargets`, `putArgumentSources`); it
-guards before the first and re-checks before each subsequent one, but does not
-invent transactional semantics across an API where a partial save was already
-possible. Any request that already succeeded keeps its cache invalidation — see
-"partial canonical success" below.
+Argument mutation controls remain live offline. An acknowledged edit needs the
+cached entity plus its cached sync-state revisions; without those, saving is
+refused as an unknown-base condition rather than guessing revision zero. Opening
+the editor online warms that sync state so a later disconnect is safe. A pending
+local construction needs no server read. Pending/syncing deletes tombstone the
+record; a canonical refusal restores it while Diagnostics retains the conflict.
+Pending names overlay Position rows, Argument target/response rows, pickers, and
+existing Graph nodes. Graph topology is never invented from pending state.
 
 People are **local-first**. Creating a Person, editing a profile field by
 field, changing their groups and deleting them are durable operations
@@ -850,13 +857,11 @@ than relying on a field diff.
 
 The second domain is `positions` (`entityKinds: ['position']`,
 `listKeys: ['positions:index']`), defined once in
-`prksOfflineMarkPositionsChanged()`. It is invalidated after success by
-`createPosition`/`updatePosition`/`deletePosition`, and — because a cached
-Position detail embeds derived Argument/Stance summaries (name, kind, verdict)
-plus its whole targeting list — also by `createArgument`, `updateArgument`,
-`deleteArgument` and `putArgumentTargets`, all at the `api.js` canonical helper
-boundary — those hooks predate Argument offline support and remain independent
-of it, so a change to one domain's policy never silently rides on the other's.
+`prksOfflineMarkPositionsChanged()`. Position mutations reconcile through their
+durable handlers. Because a cached Position detail embeds derived
+Argument/Stance summaries plus its targeting list, acknowledged Argument
+construction, name/kind changes, target replacement, and deletion reconcile or
+fence this domain too.
 
 Deliberately **not** invalidating Positions: `putArgumentSources` (Position
 detail never displays an Argument's source Works), Research Notes saves (notes
@@ -865,10 +870,8 @@ drive Concept references and Argument mentions, not `positions` or
 playlists, progress, PDF annotations, and Concept mutations. None of those
 change the Position index/detail read model, and copying the Concepts policy
 onto Positions without checking would only shorten cache life for nothing.
-Editing one Argument legitimately issues several canonical requests
-(`updateArgument` then `putArgumentTargets`), so overlapping Positions
-invalidations are normal and are handled by the generic generation machinery —
-do not add sequencing to the Argument form to avoid them.
+Editing one Argument may legitimately enqueue several independent durable
+operations. Do not invent cross-unit atomicity to avoid overlapping fences.
 
 The third domain is `arguments` (`entityKinds: ['argument']`,
 `listKeys: ['arguments:index']`), defined once in
@@ -898,11 +901,10 @@ diff precisely so a biography edit does not cost the user their cached
 Arguments. Only `putArgumentTargets` (not `putArgumentSources`) also invalidates
 Positions: source Works are in the Argument read model and not the Position one.
 
-**Partial canonical success still invalidates.** If `updateArgument` succeeds
-and `putArgumentTargets` then fails, the Arguments domain stays invalidated —
-canonical success of any individual request controls coherence, and a UI
-workflow failing later is not a rollback. This is the same principle as a stale
-Research Notes save completion.
+**Partial durable success still reconciles.** If one Argument conflict unit
+acknowledges and another conflicts, the acknowledged unit keeps its
+reconciliation and the conflicting unit remains in Diagnostics. A multi-unit
+edit is not a transaction; only construction is atomic.
 
 The fourth domain is `people` (`entityKinds: ['person']`,
 `listKeys: ['people:index']`), defined once in `prksOfflineMarkPeopleChanged()`.

@@ -23,58 +23,14 @@
         return '<h3 id="' + esc((opts && opts.headingId) || '') + '">' + esc(title) + '</h3>';
     }
 
-    /* --- Offline policy for Argument/Stance routes (AGENTS.md "Offline / PWA")
-     * Arguments are read-only offline in Phase 1: a cached index/detail renders,
-     * every canonical mutation is blocked outright (never queued, never faked),
-     * Graph and relationship links are ordinary PRKS navigation:
-     * each destination decides for itself whether it has cached data.
-     * Controls carry these roles so one helper can settle them all, including
-     * markup rerendered after the initial bind. */
+    /* Argument/Stance mutations are durable. Role remains for styling and test
+     * identification; no control is disabled merely because PRKS is offline. */
     const ARGUMENT_MUTATION_ROLE = 'argument-mutation-control';
-    const ARGUMENT_CONTROL_SELECTOR = '[data-prks-role="' + ARGUMENT_MUTATION_ROLE + '"]';
-    /* The edit form's own inputs: disabled while offline so a draft is held
-     * rather than silently discarded, with Cancel deliberately excluded so the
-     * user can always leave edit mode. */
-    const ARGUMENT_EDITOR_SELECTOR =
-        '#prks-arg-form input, #prks-arg-form textarea, #prks-arg-form select, #prks-arg-form button';
-
-    function argumentRuntimeState() {
-        return typeof root.prksOfflineRuntimeState === 'function' ? root.prksOfflineRuntimeState() : 'online';
-    }
-
-    /** Blocks a canonical Argument mutation while PRKS is unreachable. */
-    function argumentMutationBlocked(message) {
-        return typeof root.prksOfflineGuardMutation === 'function'
-            ? root.prksOfflineGuardMutation(message)
-            : false;
-    }
 
     function applyArgumentOfflineState(container) {
-        if (!container || !container.querySelectorAll) return;
-        const online = argumentRuntimeState() === 'online';
-        const nodes = container.querySelectorAll(ARGUMENT_CONTROL_SELECTOR);
-        for (let i = 0; i < nodes.length; i++) {
-            const el = nodes[i];
-            if ('disabled' in el) el.disabled = !online;
-            if (online) {
-                el.removeAttribute('aria-disabled');
-                el.removeAttribute('title');
-            } else {
-                el.setAttribute('aria-disabled', 'true');
-                el.setAttribute('title', 'Requires a connection to PRKS');
-            }
-        }
-        // An edit session that was already open when the connection dropped
-        // keeps its unsaved values on screen; only the controls that could
-        // submit or alter them go inert. Cancel stays live.
-        const editorNodes = container.querySelectorAll(ARGUMENT_EDITOR_SELECTOR);
-        for (let j = 0; j < editorNodes.length; j++) {
-            const el = editorNodes[j];
-            if (!('disabled' in el)) continue;
-            el.disabled = !online;
-            if (online) el.removeAttribute('aria-disabled');
-            else el.setAttribute('aria-disabled', 'true');
-        }
+        /* Deliberately empty. Unknown revision is a save-time safety refusal,
+         * not an offline policy and not a reason to freeze an open draft. */
+        void container;
     }
 
     /**
@@ -97,22 +53,11 @@
                 /* a stale disposer must not block the new binding */
             }
         }
-        // Read current state immediately: a page rendered after the runtime
-        // already left 'online' is never briefly mutable.
         applyArgumentOfflineState(container);
-        let unsubscribe = function () {};
-        if (typeof root.prksOfflineRuntimeSubscribe === 'function') {
-            unsubscribe =
-                root.prksOfflineRuntimeSubscribe(function () {
-                    if (container.__prksArgumentOfflineDispose !== dispose) return;
-                    applyArgumentOfflineState(container);
-                }) || function () {};
-        }
         let unregister = function () {};
         function dispose() {
             if (container.__prksArgumentOfflineDispose === dispose) container.__prksArgumentOfflineDispose = null;
             unregister();
-            unsubscribe();
         }
         if (ctx && typeof ctx.registerCleanup === 'function') {
             unregister = ctx.registerCleanup(dispose) || function () {};
@@ -244,17 +189,18 @@
             const label = kindName === 'stance' ? 'Stance' : 'Argument';
             return function () {
                 void (async function () {
-                    // Guard before the dialog opens: never an editor the user
-                    // cannot submit.
-                    if (argumentMutationBlocked('Creating a ' + label + ' requires a connection to PRKS.')) return;
                     const name = await promptArgumentName(kindName);
                     if (!name) return;
-                    // Connectivity can change while the prompt is open.
-                    if (argumentMutationBlocked('Creating a ' + label + ' requires a connection to PRKS.')) return;
-                    const created = await root.createArgument({
-                        name: name,
-                        kind: kindName,
-                    });
+                    let created;
+                    try {
+                        created = await root.createArgument({ name: name, kind: kindName });
+                    } catch (err) {
+                        if (typeof root.prksAlertDialog === 'function') {
+                            await root.prksAlertDialog({ title: 'Could not create ' + label,
+                                message: (err && err.message) || '' });
+                        }
+                        return;
+                    }
                     if (created && created.id && typeof root.prksNavigate === 'function') {
                         root.prksNavigate('#/arguments/' + encodeURIComponent(created.id));
                     }
@@ -387,13 +333,15 @@
         }
 
         function verdictOpts(selected) {
-            return verdicts
+            const html = verdicts
                 .map(function (v) {
                     const id = v.id || '';
                     const sel = id === selected ? ' selected' : '';
                     return '<option value="' + esc(id) + '"' + sel + '>' + esc(v.label || id) + '</option>';
                 })
                 .join('');
+            if (!selected || verdicts.some(v => v && v.id === selected)) return html;
+            return '<option value="' + esc(selected) + '" selected>' + esc(selected) + '</option>' + html;
         }
 
         const header =
@@ -619,25 +567,46 @@
         const edit = container.querySelector('#prks-arg-edit');
         if (edit) {
             edit.addEventListener('click', function () {
-                if (argumentMutationBlocked('Editing requires a connection to PRKS.')) return;
-                if (ctx && ctx.ui) ctx.ui.argumentEditing = true;
-                renderArgumentDetail(ctx, a, container);
+                void (async function () {
+                    /* Warm/cache revisions while a connection may still exist.
+                     * Pending construction already has a known revision-0 base
+                     * and must never ask server for an entity it cannot know. */
+                    let ops = [];
+                    try {
+                        if (root.prksSync && root.prksSync.store) {
+                            ops = await root.prksSync.store.listOperations();
+                        }
+                        const locallyCreated = typeof root.prksPendingArgumentCreates === 'function' &&
+                            root.prksPendingArgumentCreates(ops).some(op => op.entity_id === a.id);
+                        if (!locallyCreated && typeof root.prksReadArgumentState === 'function') {
+                            await root.prksReadArgumentState(a.id);
+                        }
+                    } catch (_e) { /* save reports unknown base if warm-up failed */ }
+                    if (!ownsArgument()) return;
+                    if (ctx && ctx.ui) ctx.ui.argumentEditing = true;
+                    renderArgumentDetail(ctx, a, container);
+                })();
             });
         }
         const resp = container.querySelector('#prks-arg-response');
         if (resp) {
             resp.addEventListener('click', function () {
                 void (async function () {
-                    if (argumentMutationBlocked('Creating a response requires a connection to PRKS.')) return;
                     const name = await promptArgumentName('argument', 'New response argument');
                     if (!name) return;
-                    // Connectivity can change while the prompt is open.
-                    if (argumentMutationBlocked('Creating a response requires a connection to PRKS.')) return;
-                    const created = await root.createArgument({
-                        name: name,
-                        kind: 'argument',
-                        targets: [{ type: 'argument', id: a.id, verdict_id: 'opposes' }],
-                    });
+                    let created;
+                    try {
+                        created = await root.createArgument({
+                            name: name, kind: 'argument',
+                            targets: [{ type: 'argument', id: a.id, verdict_id: 'opposes' }],
+                        });
+                    } catch (err) {
+                        if (typeof root.prksAlertDialog === 'function') {
+                            await root.prksAlertDialog({ title: 'Could not create response',
+                                message: (err && err.message) || '' });
+                        }
+                        return;
+                    }
                     if (created && created.id && ownsArgument() && typeof root.prksNavigate === 'function') {
                         root.prksNavigate('#/arguments/' + encodeURIComponent(created.id), { tabId: ctx.tabId });
                     }
@@ -825,11 +794,6 @@
     }
 
     async function saveArgumentForm(ctx, id, container) {
-        // Guard before the first canonical request. The three calls below are an
-        // existing non-transactional sequence -- a partial save is already
-        // possible if the network drops between them -- so each is re-checked
-        // rather than wrapped in invented transactional semantics.
-        if (argumentMutationBlocked('Saving requires a connection to PRKS.')) return;
         const generation = ctx && ctx.generation;
         const nameEl = container.querySelector('#prks-arg-name');
         const kindEl = container.querySelector('#prks-arg-kind');
@@ -848,19 +812,42 @@
             if (wid) sources.push({ work_id: wid, pages: pages });
         });
         try {
-            if (argumentMutationBlocked('Saving requires a connection to PRKS.')) return;
-            await root.updateArgument(id, {
+            const operations = root.prksSync && root.prksSync.store
+                ? await root.prksSync.store.listOperations() : [];
+            const base = typeof root.prksAcknowledgedArgumentBase === 'function'
+                ? await root.prksAcknowledgedArgumentBase(id, operations) : null;
+            if (!base) {
+                const unavailable = new Error('This Argument cannot be safely saved because this device does not know its revision. Open it once while connected to PRKS and try again.');
+                unavailable.prksArgumentUnavailable = true;
+                throw unavailable;
+            }
+            const draft = {
                 name: nameEl ? nameEl.value : '',
                 kind: kindEl ? kindEl.value : 'argument',
                 main_text: textEl ? textEl.value : '',
-            });
-            // Each subsequent canonical request re-checks: losing the connection
-            // mid-sequence must stop the next request rather than fail it. Any
-            // request that already succeeded keeps its cache invalidation.
-            if (argumentMutationBlocked('Saving requires a connection to PRKS.')) return;
-            await root.putArgumentTargets(id, targets);
-            if (argumentMutationBlocked('Saving requires a connection to PRKS.')) return;
-            await root.putArgumentSources(id, sources);
+            };
+            const changes = typeof root.prksDirtyArgumentFields === 'function'
+                ? root.prksDirtyArgumentFields(id, draft, base.fields, operations) : draft;
+            const dirtyTargets = typeof root.prksDirtyArgumentTargets === 'function'
+                ? root.prksDirtyArgumentTargets(id, targets, base.targets, operations) : true;
+            const dirtySources = typeof root.prksDirtyArgumentSources === 'function'
+                ? root.prksDirtyArgumentSources(id, sources, base.sources, operations) : true;
+            const failures = [];
+            for (const field of Object.keys(changes)) {
+                try {
+                    await root.prksSaveArgumentFieldsDurably(id,
+                        { [field]: changes[field] }, { [field]: base.fields[field] });
+                } catch (error) { failures.push(error); }
+            }
+            if (dirtyTargets) {
+                try { await root.prksSetArgumentTargetsDurably(id, targets, base.targets); }
+                catch (error) { failures.push(error); }
+            }
+            if (dirtySources) {
+                try { await root.prksSetArgumentSourcesDurably(id, sources, base.sources); }
+                catch (error) { failures.push(error); }
+            }
+            if (failures.length) throw failures[0];
             if (
                 typeof root.prksTabContextOwnsEntityRoute === 'function' &&
                 root.prksTabContextOwnsEntityRoute(ctx, generation, 'argument', id, 'argument-detail')
@@ -878,14 +865,15 @@
             if (typeof root.prksAlertDialog === 'function') {
                 await root.prksAlertDialog({
                     title: 'Could not save',
-                    message: (err && err.message) || '',
+                    message: typeof root.prksArgumentSaveMessage === 'function'
+                        ? root.prksArgumentSaveMessage(err, 'save this Argument')
+                        : ((err && err.message) || ''),
                 });
             }
         }
     }
 
     async function deleteArgument(ctx, generation, a) {
-        if (argumentMutationBlocked('Deleting requires a connection to PRKS.')) return;
         const ok =
             typeof root.prksConfirmDestructive === 'function'
                 ? await root.prksConfirmDestructive({
@@ -896,8 +884,6 @@
                 : true;
         if (!ok) return;
         if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
-        // Re-check: PRKS may have become unreachable while the confirm was open.
-        if (argumentMutationBlocked('Deleting requires a connection to PRKS.')) return;
         try {
             await root.deleteArgument(a.id);
             if (
@@ -932,15 +918,10 @@
     async function createArgumentFromWork(options) {
         const opts = options || {};
         const kind = opts.kind === 'stance' ? 'stance' : 'argument';
-        // Also reachable from Work Research Notes, so this secondary creation
-        // surface needs the same guard as the route's own buttons.
         const label = kind === 'stance' ? 'Stance' : 'Argument';
-        if (argumentMutationBlocked('Creating a ' + label + ' requires a connection to PRKS.')) return null;
         const provided = opts.name != null ? String(opts.name).trim() : '';
         const name = provided || (await promptArgumentName(kind));
         if (!name) return null;
-        // Connectivity can change while the prompt is open.
-        if (argumentMutationBlocked('Creating a ' + label + ' requires a connection to PRKS.')) return null;
         const payload = {
             name: String(name).trim(),
             kind: kind,

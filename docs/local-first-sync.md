@@ -2019,6 +2019,59 @@ Argument embeds the name of every Position it targets and this device cannot
 know which Arguments point here. A description edit reaches none of that, and is
 patched in place.
 
+## Arguments and Stances (3J)
+
+Arguments and Stances are one entity family (`kind` distinguishes them) with
+five semantic operations:
+
+| Operation | Shape | Conflict unit | Base revision |
+| --- | --- | --- | --- |
+| `CREATE_ARGUMENT` | construction | the Argument | none |
+| `SET_ARGUMENT_FIELD` | scalar mutation | one of `name`, `kind`, `main_text` | `argument-field/[argument, field]` |
+| `SET_ARGUMENT_SOURCES` | ordered aggregate | all source Works/pages | `argument-sources/[argument]` |
+| `SET_ARGUMENT_TARGETS` | ordered aggregate | all Position/Argument targets and verdicts | `argument-targets/[argument]` |
+| `DELETE_ARGUMENT` | destruction | the identity | none |
+
+### Construction is atomic
+
+`CREATE_ARGUMENT` mints the permanent distributed `A-` id and contains the
+initial scalar state, sources, and targets. Create Response therefore targets
+its parent in the construction envelope, and Create from Work cites that Work
+in the same envelope. Splitting those flows into later aggregate operations
+would permit a standalone Argument that never represented the user's intent.
+The server uses a savepoint around row creation and connection validation: an
+invalid initial source or target refuses the operation and leaves no row.
+
+Targets remain one logical aggregate even though SQLite stores Position targets
+and Argument targets in two tables. `_replace_targets_on_conn()` replaces both
+halves together. Sources and targets are ordered: reordering identical entries
+is a real change. An unsent A→B→A edit cancels; after an operation may have been
+sent, its envelope is immutable and later intent becomes a dependent operation.
+
+### Dependencies and effective state
+
+A construction may depend on a pending Position construction and on pending
+Argument constructions named by its targets. This supports the real chain
+Position P → Argument A targeting P → Argument B targeting A. Terminal failure
+propagates as `DEPENDENCY_FAILED`; descendants do not wait forever. There is no
+invented Work-construction dependency while offline Work creation does not
+exist.
+
+The UI keeps acknowledged base, effective overlay, and editor draft separate.
+It enqueues only scalar fields or aggregates changed relative to what the editor
+showed. Thus an untouched conflicted `main_text` cannot block a name save, and
+merely opening and saving a form produces no operation. A cached acknowledged
+entity without cached revision state is an unknown base, never revision zero.
+
+Pending construction, field, source, target, and deletion state overlays the
+index and detail routes before kind filtering. Names also overlay Position
+target rows, Argument targets/responses, pickers, and existing Research Graph
+nodes by `record_id`. Pending structural changes fence the Graph projection when
+the cached snapshot cannot be patched exactly; they never manufacture nodes or
+edges. Pending deletes stay tombstoned through transport failure, while named
+canonical refusals such as `ARGUMENT_IN_USE` and `ARGUMENT_TARGETED` restore the
+acknowledged record and remain visible in Diagnostics.
+
 ## Adding a family: the four shapes and what each must declare
 
 The families that exist fall into a small number of shapes. New work should

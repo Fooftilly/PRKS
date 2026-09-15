@@ -1524,6 +1524,13 @@ async function deletePosition(id) {
 }
 
 async function fetchArguments(kind, options = {}) {
+    if (typeof prksEffectiveArgumentCatalogue === 'function') {
+        try {
+            const rows = await prksEffectiveArgumentCatalogue();
+            return typeof prksFilterArgumentsByKind === 'function'
+                ? prksFilterArgumentsByKind(rows || [], kind || '') : (rows || []);
+        } catch (_e) { return []; }
+    }
     const errorOwner = prksApiErrorOwner(options);
     try {
         const q = kind ? '?kind=' + encodeURIComponent(kind) : '';
@@ -1565,82 +1572,124 @@ async function fetchArgumentVerdicts(options = {}) {
     }
 }
 
-/* Argument mutations below additionally invalidate the POSITIONS domain: a
- * cached Position detail embeds its targeting Arguments/Stances by name, kind
- * and verdict, so those cached Positions go stale whenever an Argument is
- * created, edited, retargeted or deleted. The Arguments domain itself is
- * invalidated alongside it in each mutation below. `putArgumentSources` marks
- * Arguments but deliberately NOT Positions -- source Works are not part of the
- * Position read model. */
+/* --- Durable Argument mutations ------------------------------------------
+ * Construction is one atomic operation carrying scalar state, sources and
+ * targets. Later fields and the two ordered aggregates are independent
+ * conflict units. No connectivity guard belongs here: lack of a known
+ * acknowledged revision is reported as unknown base, never disguised as an
+ * offline policy. */
 
-async function createArgument(payload) {
-    const res = await prksRequest('/api/arguments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    // A create payload may already carry Position targets.
-    const data = await prksResearchJson(res, 'Could not create Argument.', 'arguments.create');
-    prksMarkArgumentsDomainChanged();
-    prksMarkPositionsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+function prksArgumentSaveMessage(error, action) {
+    if (error && error.prksArgumentUnavailable) return String(error.message || '');
+    const code = error && (error.prksLocalStoreCode || error.code);
+    switch (code) {
+        case 'scope_busy':
+            return 'That part of this Argument is syncing or needs a decision. Try again shortly.';
+        case 'entity_deleted':
+            return 'This Argument is being deleted, so it cannot be changed.';
+        case 'dependency_failed':
+        case 'DEPENDENCY_FAILED':
+            return String(error.message || 'A change this one depends on could not be saved.');
+        case 'invalid_envelope':
+        case 'invalid_base':
+            return String(error.message || 'That is not a valid Argument change.');
+        case 'WORK_NOT_FOUND': return 'One source Work no longer exists on PRKS.';
+        case 'POSITION_NOT_FOUND': return 'One target Position no longer exists on PRKS.';
+        case 'TARGET_NOT_FOUND': return 'One target Argument no longer exists on PRKS.';
+        case 'INVALID_VERDICT': return 'One selected verdict is no longer available.';
+        case 'ARGUMENT_CYCLE': return 'Those targets would create an Argument response cycle.';
+        case 'ARGUMENT_IN_USE': return 'Research notes still mention this Argument.';
+        case 'ARGUMENT_TARGETED': return 'Another Argument still targets this Argument.';
+        case 'ENTITY_NOT_FOUND': return 'This Argument no longer exists on PRKS.';
+        case 'REVISION_CONFLICT': return 'This part changed on another device and needs a decision.';
+        case 'FUTURE_REVISION': return 'This device has a newer revision than PRKS can accept.';
+        default: return 'Could not ' + action + ' locally. Please retry.';
+    }
 }
 
-async function updateArgument(id, payload) {
-    const res = await prksRequest('/api/arguments/' + encodeURIComponent(id), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
+function prksArgumentBaseUnavailable(what) {
+    const err = new Error(
+        'This Argument\u2019s ' + what + ' cannot be safely saved because this device does not '
+        + 'know its revision. Open it once while connected to PRKS and try again.');
+    err.prksArgumentUnavailable = true;
+    return err;
+}
+
+async function createArgument(payload) {
+    const src = payload && typeof payload === 'object' ? payload : {};
+    try {
+        const op = await prksCreateArgumentDurably({
+            name: src.name == null ? '' : String(src.name),
+            kind: src.kind === 'stance' ? 'stance' : 'argument',
+            main_text: src.main_text == null ? '' : String(src.main_text),
+            sources: Array.isArray(src.sources) ? src.sources : [],
+            targets: Array.isArray(src.targets) ? src.targets : [],
+        });
+        return op ? { id: op.entity_id, name: op.payload.name, kind: op.payload.kind,
+            main_text: op.payload.main_text, sources: op.payload.sources,
+            targets: op.payload.targets } : null;
+    } catch (error) {
+        throw new Error(prksArgumentSaveMessage(error, 'create this Argument'));
+    }
+}
+
+async function updateArgument(id, payload, options) {
+    const src = payload && typeof payload === 'object' ? payload : {};
+    const draft = {};
+    (PRKS_ARGUMENT_FIELDS || []).forEach(function (field) {
+        if (Object.prototype.hasOwnProperty.call(src, field)) {
+            draft[field] = src[field] == null ? '' : String(src[field]);
+        }
     });
-    // name/kind are both displayed in a Position's Arguments & Stances list --
-    // and in every other Argument that targets or responds to this one, which
-    // is why the whole Arguments domain goes rather than one row.
-    const data = await prksResearchJson(res, 'Could not update Argument.', 'arguments.update');
-    prksMarkArgumentsDomainChanged();
-    prksMarkPositionsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+    if (!Object.keys(draft).length) return { id: id };
+    const opts = options || {};
+    const ops = Array.isArray(opts.operations) ? opts.operations
+        : await prksDurableOperationsOrNone();
+    const wholeBase = opts.base || await prksAcknowledgedArgumentBase(id, ops);
+    if (!wholeBase) throw prksArgumentBaseUnavailable('fields');
+    const fieldBase = wholeBase.fields || wholeBase;
+    const changes = prksDirtyArgumentFields(id, draft, fieldBase, ops);
+    try {
+        for (const field of Object.keys(changes)) {
+            await prksSaveArgumentFieldsDurably(id,
+                { [field]: changes[field] }, { [field]: fieldBase[field] });
+        }
+    } catch (error) {
+        throw new Error(prksArgumentSaveMessage(error, 'save this Argument'));
+    }
+    return { id: id };
 }
 
 async function deleteArgument(id) {
-    const res = await prksRequest('/api/arguments/' + encodeURIComponent(id), { method: 'DELETE' });
-    // A deleted Argument must stop appearing in a cached Position's list, and in
-    // any cached Argument that targeted or was answered by it.
-    const data = await prksResearchJson(res, 'Could not delete Argument.', 'arguments.delete');
-    prksMarkArgumentsDomainChanged();
-    prksMarkPositionsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+    try { await prksDeleteArgumentDurably(id); }
+    catch (error) { throw new Error(prksArgumentSaveMessage(error, 'delete this Argument')); }
+    return { status: 'deleted' };
 }
 
-async function putArgumentSources(id, sources) {
-    const res = await prksRequest('/api/arguments/' + encodeURIComponent(id) + '/sources', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sources: sources || [] }),
-    });
-    // Arguments only: source Works (and their authors) are part of the Argument
-    // read model, and deliberately NOT of the Position one.
-    const data = await prksResearchJson(res, 'Could not update Argument sources.', 'arguments.sources');
-    prksMarkArgumentsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+async function putArgumentSources(id, sources, options) {
+    const opts = options || {};
+    const ops = Array.isArray(opts.operations) ? opts.operations
+        : await prksDurableOperationsOrNone();
+    const base = opts.base || await prksAcknowledgedArgumentBase(id, ops);
+    if (!base || !base.sources) throw prksArgumentBaseUnavailable('sources');
+    if (typeof prksDirtyArgumentSources === 'function' &&
+        !prksDirtyArgumentSources(id, sources || [], base.sources, ops)) return { id: id };
+    try { await prksSetArgumentSourcesDurably(id, sources || [], base.sources); }
+    catch (error) { throw new Error(prksArgumentSaveMessage(error, 'save these sources')); }
+    return { id: id };
 }
 
-async function putArgumentTargets(id, targets) {
-    const res = await prksRequest('/api/arguments/' + encodeURIComponent(id) + '/targets', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targets: targets || [] }),
-    });
-    // Changes Position membership and per-Position verdict, and on the Argument
-    // side both this Argument's targets and the target's responses list.
-    const data = await prksResearchJson(res, 'Could not update Argument targets.', 'arguments.targets');
-    prksMarkArgumentsDomainChanged();
-    prksMarkPositionsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+async function putArgumentTargets(id, targets, options) {
+    const opts = options || {};
+    const ops = Array.isArray(opts.operations) ? opts.operations
+        : await prksDurableOperationsOrNone();
+    const base = opts.base || await prksAcknowledgedArgumentBase(id, ops);
+    if (!base || !base.targets) throw prksArgumentBaseUnavailable('targets');
+    if (typeof prksDirtyArgumentTargets === 'function' &&
+        !prksDirtyArgumentTargets(id, targets || [], base.targets, ops)) return { id: id };
+    try { await prksSetArgumentTargetsDurably(id, targets || [], base.targets); }
+    catch (error) { throw new Error(prksArgumentSaveMessage(error, 'save these targets')); }
+    return { id: id };
 }
 
 window.bulkUpdateWorks = bulkUpdateWorks;
@@ -1688,6 +1737,7 @@ window.prksMarkConceptsDomainChanged = prksMarkConceptsDomainChanged;
 window.prksMarkWorkTitleChanged = prksMarkWorkTitleChanged;
 window.prksMarkPositionsDomainChanged = prksMarkPositionsDomainChanged;
 window.prksMarkArgumentsDomainChanged = prksMarkArgumentsDomainChanged;
+window.prksArgumentSaveMessage = prksArgumentSaveMessage;
 window.prksMarkPeopleDomainChanged = prksMarkPeopleDomainChanged;
 window.prksMarkPersonGroupsDomainChanged = prksMarkPersonGroupsDomainChanged;
 window.prksMarkPlaylistsDomainChanged = prksMarkPlaylistsDomainChanged;

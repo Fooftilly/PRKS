@@ -64,6 +64,7 @@ E2E_MODULES = (
     "tests.e2e.test_playlists_durable",
     "tests.e2e.test_concepts_durable",
     "tests.e2e.test_positions_durable",
+    "tests.e2e.test_arguments_durable",
     "tests.e2e.test_research_graph_offline",
     "tests.e2e.test_work_tags_offline",
     "tests.e2e.test_work_opens_offline",

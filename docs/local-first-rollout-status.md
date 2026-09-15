@@ -24,6 +24,7 @@ projection, and is proven by focused E2E coverage.
 | Person deletion | `DELETE_PERSON` | tombstone; a Person credited on a file stays protected |
 | Folders | `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`, `SET_WORK_FOLDER` | moving is a field; a Work's folder is a scalar on the Work |
 | Positions | `CREATE_POSITION`, `SET_POSITION_FIELD`, `DELETE_POSITION` | two INDEPENDENT fields; deletion refused while an Argument targets it |
+| Arguments / Stances | `CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`, `SET_ARGUMENT_SOURCES`, `SET_ARGUMENT_TARGETS`, `DELETE_ARGUMENT` | permanent `A-` id; construction atomically includes initial sources/targets; later sources and targets are separate ordered aggregates |
 | Concepts | `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`, `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT` | name+aliases are one aggregate; the parent set is another |
 | Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; deletion has no UI control today (see below) |
 
@@ -87,9 +88,6 @@ they should take, and what each must declare before implementation, are in
 * **Folder tags** — `ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG`, the one Folder
   relationship still on the network. It mirrors the Work-Tag family exactly and
   is the obvious next increment.
-* **Arguments and stances** — create, field edits, `SET_ARGUMENT_SOURCES`,
-  `SET_ARGUMENT_TARGETS`, delete. Sources and targets are coherent replacements
-  on the server today and should stay one unit each.
 * **Research notes and private notes** — one note body is one conflict unit,
   with revision-based optimistic concurrency. The ACK must keep using the
   canonical note-save boundary so Concept auto-creation and reference indexing

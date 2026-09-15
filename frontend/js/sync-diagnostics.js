@@ -111,6 +111,32 @@
         if (op.operation === 'DELETE_POSITION') {
             return 'Delete a position';
         }
+        if (op.operation === 'CREATE_ARGUMENT') {
+            const kind = op.payload.kind === 'stance' ? 'stance' : 'argument';
+            const sources = Array.isArray(op.payload.sources) ? op.payload.sources.length : 0;
+            const targets = Array.isArray(op.payload.targets) ? op.payload.targets.length : 0;
+            return 'Create ' + kind + ' "' + bounded(op.payload.name) + '" with ' +
+                sources + (sources === 1 ? ' source and ' : ' sources and ') +
+                targets + (targets === 1 ? ' target' : ' targets');
+        }
+        if (op.operation === 'SET_ARGUMENT_FIELD') {
+            const labels = root.PRKS_ARGUMENT_FIELD_LABELS || {};
+            const field = op.payload.field;
+            return (labels[field] || field) + ' = "' + bounded(op.payload.value) + '"';
+        }
+        if (op.operation === 'SET_ARGUMENT_SOURCES') {
+            const count = Array.isArray(op.payload.sources) ? op.payload.sources.length : 0;
+            return 'Replace ordered source list with ' + count +
+                (count === 1 ? ' source' : ' sources');
+        }
+        if (op.operation === 'SET_ARGUMENT_TARGETS') {
+            const count = Array.isArray(op.payload.targets) ? op.payload.targets.length : 0;
+            return 'Replace ordered target list with ' + count +
+                (count === 1 ? ' target' : ' targets');
+        }
+        if (op.operation === 'DELETE_ARGUMENT') {
+            return 'Delete an argument or stance';
+        }
         if (op.operation === 'CREATE_CONCEPT') {
             return 'Create concept "' + bounded(op.payload.name) + '"';
         }
@@ -216,6 +242,11 @@
         CREATE_POSITION: 'position-state',
         SET_POSITION_FIELD: 'position-state',
         DELETE_POSITION: 'position-state',
+        CREATE_ARGUMENT: 'argument-state',
+        SET_ARGUMENT_FIELD: 'argument-state',
+        SET_ARGUMENT_SOURCES: 'argument-state',
+        SET_ARGUMENT_TARGETS: 'argument-state',
+        DELETE_ARGUMENT: 'argument-state',
         CREATE_CONCEPT: 'concept-state',
         SET_CONCEPT_FIELD: 'concept-state',
         SET_CONCEPT_IDENTITY: 'concept-state',
@@ -290,6 +321,22 @@
             root.prksOfflineMarkEntityChanged('position-state', op.entity_id);
             return;
         }
+        if (op.entity_type === 'argument') {
+            if (typeof root.prksOfflineMarkArgumentsChanged === 'function') {
+                root.prksOfflineMarkArgumentsChanged();
+            }
+            if (typeof root.prksOfflineMarkPositionsChanged === 'function') {
+                root.prksOfflineMarkPositionsChanged();
+            }
+            root.prksOfflineMarkEntityChanged('argument-state', op.entity_id);
+            if (typeof root.prksOfflineMarkResearchGraphCoreChanged === 'function') {
+                root.prksOfflineMarkResearchGraphCoreChanged();
+            }
+            if (typeof root.prksOfflineMarkResearchGraphPeopleChanged === 'function') {
+                root.prksOfflineMarkResearchGraphPeopleChanged();
+            }
+            return;
+        }
         if (op.entity_type === 'concept') {
             /* The whole vocabulary: a discarded creation leaves an index that
              * was showing a Concept the server never stored, a discarded
@@ -362,6 +409,13 @@
         PERSON_HAS_LINKS: 'They are still credited on a file, so they cannot be deleted.',
         PLAYLIST_NOT_FOUND: 'That playlist no longer exists on the server.',
         POSITION_IN_USE: 'An argument or stance still targets it, so it cannot be deleted.',
+        WORK_NOT_FOUND: 'A source Work no longer exists on the server.',
+        POSITION_NOT_FOUND: 'A target Position no longer exists on the server.',
+        TARGET_NOT_FOUND: 'A target Argument no longer exists on the server.',
+        INVALID_VERDICT: 'A selected verdict is not available on the server.',
+        ARGUMENT_CYCLE: 'Those targets would create a response cycle.',
+        ARGUMENT_IN_USE: 'It is still referenced in research notes, so it cannot be deleted.',
+        ARGUMENT_TARGETED: 'Another Argument still targets it, so it cannot be deleted.',
         CONCEPT_EXISTS: 'Another concept already has that name or alias.',
         AMBIGUOUS_CONCEPT: 'More than one concept matches that name.',
         ALIAS_CONFLICT: 'That search key already belongs to another concept.',
@@ -401,6 +455,16 @@
             return ' This concept was reparented somewhere else, so there are two'
                 + ' hierarchies and only one can stand.';
         }
+        if (op.operation === 'SET_ARGUMENT_SOURCES' &&
+            (result.code === 'REVISION_CONFLICT' || result.code === 'FUTURE_REVISION')) {
+            return ' Its ordered source list changed somewhere else; server revision is ' +
+                String(result.current_revision) + '.';
+        }
+        if (op.operation === 'SET_ARGUMENT_TARGETS' &&
+            (result.code === 'REVISION_CONFLICT' || result.code === 'FUTURE_REVISION')) {
+            return ' Its ordered Position-and-Argument target list changed somewhere else; server revision is ' +
+                String(result.current_revision) + '.';
+        }
         if (typeof result.current_state === 'boolean' &&
             typeof result.current_value !== 'string') {
             return result.current_state
@@ -434,6 +498,12 @@
                 ? '#/people/' + encodeURIComponent(op.entity_id)
                 : op.entity_type === 'person-group'
                     ? '#/people/groups/' + encodeURIComponent(op.entity_id)
+                    : op.entity_type === 'position'
+                        ? '#/positions/' + encodeURIComponent(op.entity_id)
+                    : op.entity_type === 'concept'
+                        ? '#/concepts/' + encodeURIComponent(op.entity_id)
+                    : op.entity_type === 'argument'
+                        ? '#/arguments/' + encodeURIComponent(op.entity_id)
                     : '#/works/' + encodeURIComponent(op.entity_id);
             link.textContent = describe(op);
             row.append(link, document.createTextNode(

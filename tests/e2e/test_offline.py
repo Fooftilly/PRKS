@@ -1,4 +1,4 @@
-"""Real Chromium + real PRKS server offline/PWA scenarios (Phase 1, read-only).
+"""Real Chromium + real PRKS server offline/PWA scenarios.
 
 Collected only when PRKS_E2E=1 (see tests/e2e/run.py). These scenarios need a
 real Service Worker and real IndexedDB, so -- unlike tests.e2e.test_app, which
@@ -3507,6 +3507,7 @@ class OfflinePositionTests(unittest.TestCase):
             "id => window.updateArgument(id, { name: 'Renamed Targeting Argument', kind: 'stance' })",
             argument_id,
         )
+        _drain_durable(page)
         self.assertGreater(_domain_generation(page, "positions"), generation_before)
         _wait_entity_uncached(page, "position", position_a)
         _wait_list_uncached(page, "positions:index")
@@ -3517,34 +3518,28 @@ class OfflinePositionTests(unittest.TestCase):
         self.assertNotIn(POSITION_ARGUMENT_NAME, _content_text(page))
 
     def test_failed_argument_update_retains_the_position_cache(self):
-        server, page, _context, _collector = self._start()
+        server, page, context, _collector = self._start()
         position_a = server.ids["position_a"]
         argument_id = server.ids["position_argument"]
 
         _wait_sw_active(page)
         _open_position(page, position_a)
         _wait_entity_cached(page, "position", position_a)
+        _open_argument(page, argument_id)
+        _wait_entity_cached(page, "argument", argument_id)
+        page.evaluate("id => prksReadArgumentState(id)", argument_id)
+        _wait_entity_cached(page, "argument-state", argument_id)
+        _open_position(page, position_a)
+        _wait_content_contains(page, POSITION_A_NAME)
         generation_before = _domain_generation(page, "positions")
-
-        def reject(route):
-            if route.request.method in ("PATCH", "PUT", "DELETE"):
-                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
-                return
-            route.fallback()
-
-        page.route("**/api/arguments**", reject)
-        try:
-            page.evaluate(
-                """async (id) => {
-                    try { await window.updateArgument(id, { name: 'never applied' }); } catch (_e) {}
-                }""",
-                argument_id,
-            )
-            page.wait_for_timeout(400)
-            self.assertEqual(_domain_generation(page, "positions"), generation_before)
-            self.assertIsNotNone(_cached_entity(page, "position", position_a))
-        finally:
-            _safe_unroute(page, "**/api/arguments**", reject)
+        context.set_offline(True)
+        page.evaluate("() => prksOfflineNoteRequestFailure()")
+        page.evaluate("id => window.updateArgument(id, { name: 'retained offline' })",
+                      argument_id)
+        wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.some("
+                       "op => op.operation === 'SET_ARGUMENT_FIELD' && op.status === 'pending'))")
+        self.assertEqual(_domain_generation(page, "positions"), generation_before)
+        self.assertIsNotNone(_cached_entity(page, "position", position_a))
 
     def test_argument_target_change_invalidates_the_position_domain(self):
         """Targets carry Position membership and the per-Position verdict."""
@@ -3566,6 +3561,7 @@ class OfflinePositionTests(unittest.TestCase):
             ])""",
             [argument_id, position_a, position_b],
         )
+        _drain_durable(page)
         self.assertGreater(_domain_generation(page, "positions"), generation_before)
         _wait_entity_uncached(page, "position", position_a)
 
@@ -3591,6 +3587,7 @@ class OfflinePositionTests(unittest.TestCase):
         generation_before = _domain_generation(page, "positions")
 
         page.evaluate("id => window.deleteArgument(id)", argument_id)
+        _drain_durable(page)
         self.assertGreater(_domain_generation(page, "positions"), generation_before)
         _wait_entity_uncached(page, "position", position_a)
 
@@ -3613,7 +3610,7 @@ class OfflinePositionTests(unittest.TestCase):
             "([argId, workId]) => window.putArgumentSources(argId, [{ work_id: workId, pages: '1-2' }])",
             [argument_id, work_a],
         )
-        page.wait_for_timeout(400)
+        _drain_durable(page)
         self.assertEqual(_domain_generation(page, "positions"), generation_before)
         self.assertIsNotNone(_cached_entity(page, "position", position_a))
 
@@ -3655,6 +3652,7 @@ class OfflinePositionTests(unittest.TestCase):
             generation_before = _domain_generation(page, "positions")
             # An Argument-side mutation lands while that read is still in flight.
             page.evaluate("id => window.updateArgument(id, { name: 'Stale read check' })", argument_id)
+            _drain_durable(page)
             self.assertGreater(_domain_generation(page, "positions"), generation_before)
             page.wait_for_function(
                 "() => (typeof prksOfflineIsDomainBlocked === 'function'"
@@ -3698,6 +3696,7 @@ class OfflinePositionTests(unittest.TestCase):
             ])""",
             [argument_id, position_a],
         )
+        _drain_durable(page)
         _wait_entity_uncached(page, "position", position_a)
         self.assertEqual(_domain_generation(page, "concepts"), concepts_before)
         self.assertFalse(_domain_blocked(page, "concepts"))
@@ -3870,8 +3869,8 @@ class OfflineArgumentTests(unittest.TestCase):
         page.locator(".prks-research-index__empty", has_text="match").wait_for()
         self.assertEqual(seen, [], "offline Argument search must issue zero API requests")
 
-        self.assertTrue(page.locator("#prks-argument-new").is_disabled())
-        self.assertTrue(page.locator("#prks-stance-new").is_disabled())
+        self.assertFalse(page.locator("#prks-argument-new").is_disabled())
+        self.assertFalse(page.locator("#prks-stance-new").is_disabled())
 
     def test_uncached_argument_index_offline_is_explicitly_unavailable(self):
         server, page, context, _collector = self._start()
@@ -3895,7 +3894,7 @@ class OfflineArgumentTests(unittest.TestCase):
 
     def test_legitimately_empty_kind_subset_is_not_the_uncached_state(self):
         """A cached complete list with zero Stances still shows the ordinary
-        "No Stances yet." empty state -- with creation disabled offline."""
+        "No Stances yet." empty state -- with durable creation available."""
         server = AppServer(seed_fn=seed_positions_library)  # Arguments, no Stances
         self.addCleanup(server.stop)
         server.start()
@@ -3914,9 +3913,7 @@ class OfflineArgumentTests(unittest.TestCase):
         _wait_content_contains(page, "No Stances yet.")
         body = _content_text(page)
         self.assertNotIn("not available offline", body)
-        page.wait_for_function(
-            "() => !!document.querySelector('#prks-stance-new-empty[disabled]')", timeout=20000
-        )
+        self.assertFalse(page.locator("#prks-stance-new-empty").is_disabled())
 
     # ---- cached detail ------------------------------------------------------
 
@@ -4063,7 +4060,7 @@ class OfflineArgumentTests(unittest.TestCase):
         _wait_offline_unavailable(page)
         self.assertIn("#/graph?focus=argument:", page.evaluate("decodeURIComponent(location.hash)"))
 
-    def test_offline_argument_index_and_detail_cannot_mutate(self):
+    def test_offline_argument_index_and_detail_mutate_through_durable_queue(self):
         server, page, context, _collector = self._start()
         argument_a = server.ids["argument_a"]
 
@@ -4072,6 +4069,8 @@ class OfflineArgumentTests(unittest.TestCase):
         _wait_list_cached(page, "arguments:index")
         _open_argument(page, argument_a)
         _wait_entity_cached(page, "argument", argument_a)
+        page.evaluate("id => prksReadArgumentState(id)", argument_a)
+        _wait_entity_cached(page, "argument-state", argument_a)
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
@@ -4093,34 +4092,28 @@ class OfflineArgumentTests(unittest.TestCase):
         try:
             for selector in ("#prks-arg-edit", "#prks-arg-response", "#prks-arg-delete"):
                 btn = page.locator(selector)
-                self.assertTrue(btn.is_disabled(), "%s must be disabled offline" % selector)
-                self.assertEqual(btn.get_attribute("aria-disabled"), "true", selector)
-                btn.click(force=True)
-                page.wait_for_timeout(150)
-            # Edit must not have opened a form the user could never submit.
-            self.assertEqual(page.locator("#prks-arg-form").count(), 0)
+                self.assertFalse(btn.is_disabled(), "%s must stay available offline" % selector)
+                self.assertNotEqual(btn.get_attribute("aria-disabled"), "true", selector)
+            page.locator("#prks-arg-edit").click()
+            page.locator("#prks-arg-form").wait_for()
+            self.assertFalse(page.locator("#prks-arg-form button[type=submit]").is_disabled())
 
             _open_argument_index(page)
             _wait_content_contains(page, ARGUMENT_A_NAME)
             for selector in ("#prks-argument-new", "#prks-stance-new"):
                 btn = page.locator(selector)
-                self.assertTrue(btn.is_disabled(), selector)
-                btn.click(force=True)
-                page.wait_for_timeout(150)
-            self.assertEqual(page.locator("#prks-modal-confirm .prks-modal-prompt__input").count(), 0)
+                self.assertFalse(btn.is_disabled(), selector)
 
             # The Work Research Notes creation path is a second mutation surface.
-            page.evaluate(
-                """async () => {
-                    try { await window.prksCreateArgumentFromWork({ name: 'Offline argument' }); } catch (_e) {}
-                }"""
-            )
-            page.wait_for_timeout(300)
-            self.assertEqual(mutations, [])
+            page.evaluate("() => window.prksCreateArgumentFromWork({ name: 'Offline argument' })")
+            wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.some("
+                           "op => op.operation === 'CREATE_ARGUMENT'))")
+            self.assertFalse(any(path.startswith('/api/arguments') for _method, path in mutations),
+                             "durable mutation must not bypass /api/sync/operations")
         finally:
             _safe_unroute(page, "**/api/arguments**", record_mutation)
 
-    def test_disconnect_while_argument_prompt_open_blocks_the_create(self):
+    def test_disconnect_while_argument_prompt_open_retains_the_create(self):
         server, page, context, _collector = self._start()
 
         _wait_sw_active(page)
@@ -4146,8 +4139,11 @@ class OfflineArgumentTests(unittest.TestCase):
                 timeout=20000,
             )
             page.locator("#prks-modal-confirm-ok").click()
-            page.wait_for_timeout(500)
-            self.assertEqual(mutations, [], "no Argument create may be attempted after disconnect")
+            wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.some("
+                           "op => op.operation === 'CREATE_ARGUMENT' &&"
+                           "op.payload.name === 'Created while disconnected'))")
+            self.assertFalse(any(path.startswith('/api/arguments') for _method, path in mutations),
+                             "create is durable, never a direct canonical POST")
         finally:
             _safe_unroute(page, "**/api/**", block_api)
 
@@ -4156,12 +4152,14 @@ class OfflineArgumentTests(unittest.TestCase):
             "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
             timeout=20000,
         )
+        page.evaluate("() => window.dispatchEvent(new Event('online'))")
+        _drain_durable(page)
         names = page.evaluate("() => fetchArguments().then(items => items.map(a => a.name))")
-        self.assertNotIn("Created while disconnected", names)
+        self.assertIn("Created while disconnected", names)
 
     def test_open_edit_form_survives_disconnect_without_losing_the_draft(self):
         """An editor mounted online keeps its unsaved values when PRKS stops
-        answering; only the controls that could submit them go inert."""
+        answering, and Save records it durably."""
         server, page, _context, _collector = self._start()
         argument_a = server.ids["argument_a"]
 
@@ -4187,29 +4185,24 @@ class OfflineArgumentTests(unittest.TestCase):
                 "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
                 timeout=20000,
             )
-            # The draft is still there ...
-            page.wait_for_function(
-                "() => !!document.querySelector('#prks-arg-name[disabled]')", timeout=20000
-            )
+            # Draft and every durable editor control stay live.
             self.assertEqual(page.locator("#prks-arg-name").input_value(), draft)
-            self.assertTrue(page.locator("#prks-arg-text").is_disabled())
-            self.assertTrue(page.locator("#prks-arg-kind").is_disabled())
-            self.assertTrue(page.locator("#prks-arg-add-target").is_disabled())
-            # ... Cancel stays usable so the user can leave edit mode ...
+            self.assertFalse(page.locator("#prks-arg-text").is_disabled())
+            self.assertFalse(page.locator("#prks-arg-kind").is_disabled())
+            self.assertFalse(page.locator("#prks-arg-add-target").is_disabled())
             self.assertFalse(page.locator("#prks-arg-cancel").is_disabled())
-            # ... and Save cannot reach the network.
-            page.locator("#prks-arg-form button[type=submit]").click(force=True)
-            page.wait_for_timeout(400)
-            self.assertEqual(mutations, [])
+            page.locator("#prks-arg-form button[type=submit]").click()
+            wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.some("
+                           "op => op.operation === 'SET_ARGUMENT_FIELD' &&"
+                           "op.payload.field === 'name'))")
+            self.assertFalse(any(path.startswith('/api/arguments') for _method, path in mutations))
         finally:
             _safe_unroute(page, "**/api/**", block_api)
 
-        page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
-        page.wait_for_function(
-            "() => !document.querySelector('#prks-arg-name[disabled]')", timeout=20000
-        )
-        self.assertEqual(page.locator("#prks-arg-name").input_value(), draft)
-        self.assertFalse(page.locator("#prks-arg-form button[type=submit]").is_disabled())
+        page.evaluate("() => window.dispatchEvent(new Event('online'))")
+        _drain_durable(page)
+        _open_argument(page, argument_a)
+        _wait_content_contains(page, draft)
 
     def test_fresh_offline_route_renders_read_mode(self):
         """A cached detail mounted while already offline starts read-only rather
@@ -4231,7 +4224,7 @@ class OfflineArgumentTests(unittest.TestCase):
         self.assertEqual(page.locator("#prks-arg-form").count(), 0)
         self.assertEqual(page.locator("#prks-arg-edit").count(), 1)
 
-    def test_live_argument_pages_react_to_connectivity(self):
+    def test_live_argument_pages_keep_durable_controls_across_connectivity(self):
         server, page, _context, _collector = self._start()
         argument_a = server.ids["argument_a"]
 
@@ -4246,18 +4239,14 @@ class OfflineArgumentTests(unittest.TestCase):
         page.route("**/api/**", abort_api)
         try:
             page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-            page.wait_for_function(
-                "() => !!document.querySelector('#prks-argument-new[disabled]')", timeout=20000
-            )
             self.assertTrue(page.evaluate("() => navigator.onLine"))
-            self.assertTrue(page.locator("#prks-stance-new").is_disabled())
+            self.assertFalse(page.locator("#prks-argument-new").is_disabled())
+            self.assertFalse(page.locator("#prks-stance-new").is_disabled())
         finally:
             _safe_unroute(page, "**/api/**", abort_api)
 
         page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
-        page.wait_for_function(
-            "() => !document.querySelector('#prks-argument-new[disabled]')", timeout=20000
-        )
+        self.assertFalse(page.locator("#prks-argument-new").is_disabled())
 
         _open_argument(page, argument_a)
         _wait_content_contains(page, ARGUMENT_A_NAME)
@@ -4265,11 +4254,9 @@ class OfflineArgumentTests(unittest.TestCase):
         page.route("**/api/**", abort_api)
         try:
             page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-            page.wait_for_function(
-                "() => !!document.querySelector('#prks-arg-edit[disabled]')", timeout=20000
-            )
+            self.assertFalse(page.locator("#prks-arg-edit").is_disabled())
             for selector in ("#prks-arg-response", "#prks-arg-delete"):
-                self.assertTrue(page.locator(selector).is_disabled(), selector)
+                self.assertFalse(page.locator(selector).is_disabled(), selector)
             self.assertFalse(page.locator("#prks-arg-view-graph").is_disabled())
             # Read-only content and relationship links stay usable.
             body = _content_text(page)
@@ -4280,9 +4267,7 @@ class OfflineArgumentTests(unittest.TestCase):
             _safe_unroute(page, "**/api/**", abort_api)
 
         page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
-        page.wait_for_function(
-            "() => !document.querySelector('#prks-arg-edit[disabled]')", timeout=20000
-        )
+        self.assertFalse(page.locator("#prks-arg-edit").is_disabled())
 
     def test_argument_shape_validators_reject_unusable_rows(self):
         """The validators gate cache publication, so they are checked directly
@@ -4652,6 +4637,8 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         )
         _wait_entity_uncached(page, "argument", server.ids["argument_a"])
         _wait_list_uncached(page, "arguments:index")
+        page.wait_for_function(
+            "() => !prksOfflineIsDomainBlocked('arguments')", timeout=20000)
 
     # ---- direct Argument mutations -----------------------------------------
 
@@ -4688,7 +4675,7 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
                 return
             route.fallback()
 
-        page.route("**/api/arguments**", reject)
+        page.route("**/api/sync/operations", reject)
         try:
             page.evaluate(
                 """async (id) => {
@@ -4699,15 +4686,15 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
                 }""",
                 argument_a,
             )
-            page.wait_for_timeout(400)
+            wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.some("
+                           "op => op.status === 'pending' && op.last_error))")
             self.assertEqual(_domain_generation(page, "arguments"), before)
             self.assertIsNotNone(_cached_entity(page, "argument", argument_a))
         finally:
-            _safe_unroute(page, "**/api/arguments**", reject)
+            _safe_unroute(page, "**/api/sync/operations", reject)
 
-    def test_partial_multi_request_save_keeps_arguments_invalidated(self):
-        """updateArgument succeeded, putArgumentTargets failed: canonical success
-        of the first request controls coherence, not the UI workflow's outcome."""
+    def test_independent_durable_units_survive_one_transport_failure(self):
+        """A field ACK controls its coherence while target intent stays durable."""
         server, page, _context, _collector = self._start()
         argument_a = server.ids["argument_a"]
 
@@ -4715,29 +4702,27 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         before = _domain_generation(page, "arguments")
 
         def reject_targets(route):
-            if route.request.method == "PUT" and urlparse(route.request.url).path.endswith("/targets"):
-                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
+            body = json.loads(route.request.post_data or "{}")
+            if body.get("operation") == "SET_ARGUMENT_TARGETS":
+                route.fulfill(status=503, content_type="application/json", body='{"error":"nope"}')
                 return
             route.fallback()
 
-        page.route("**/api/arguments/**", reject_targets)
+        page.route("**/api/sync/operations", reject_targets)
         try:
-            outcome = page.evaluate(
+            page.evaluate(
                 """async (id) => {
                     await window.updateArgument(id, { name: 'Partially saved', kind: 'argument' });
-                    try {
-                        await window.putArgumentTargets(id, []);
-                        return 'targets-succeeded';
-                    } catch (_e) {
-                        return 'targets-failed';
-                    }
+                    await window.putArgumentTargets(id, []);
                 }""",
                 argument_a,
             )
-            self.assertEqual(outcome, "targets-failed")
             self._assert_arguments_invalidated(page, server, before)
+            wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.some("
+                           "op => op.operation === 'SET_ARGUMENT_TARGETS' &&"
+                           "op.status === 'pending' && op.last_error))")
         finally:
-            _safe_unroute(page, "**/api/arguments/**", reject_targets)
+            _safe_unroute(page, "**/api/sync/operations", reject_targets)
 
     # ---- domain boundaries --------------------------------------------------
 

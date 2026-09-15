@@ -1560,12 +1560,15 @@ function prksEffectiveResearchGraphLabels(snapshot) {
         ? prksApplyPendingConceptNames : null);
     const positions = rename('position', typeof prksApplyPendingPositionNames === 'function'
         ? prksApplyPendingPositionNames : null);
-    if (!concepts && !positions) return snapshot;
+    const arguments2 = rename('argument', typeof prksApplyPendingArgumentNames === 'function'
+        ? prksApplyPendingArgumentNames : null);
+    if (!concepts && !positions && !arguments2) return snapshot;
     let changed = false;
     const nodes = snapshot.nodes.map(function (node) {
         if (!node || !node.record_id) return node;
         const apply = node.type === 'concept' ? concepts
-            : (node.type === 'position' ? positions : null);
+            : (node.type === 'position' ? positions
+                : (node.type === 'argument' ? arguments2 : null));
         if (!apply) return node;
         const renamed = apply([{ id: node.record_id, name: node.label }])[0];
         if (!renamed || renamed.name === node.label) return node;
@@ -1931,6 +1934,31 @@ async function prksEffectivePositionCatalogue(ops) {
         rows = cached && Array.isArray(cached.value) ? cached.value : [];
     } catch (_e) { rows = []; }
     return await prksEffectivePositionRows(rows, ops);
+}
+
+/** Complete Argument/Stance collection with durable construction/edit/delete. */
+async function prksEffectiveArgumentRows(rows, ops) {
+    if (!Array.isArray(rows) || typeof prksEffectiveArguments !== 'function') return rows;
+    return prksEffectiveArguments(rows, ops || await prksDurableOperationsOrNone());
+}
+
+/** Same overlay for synchronous pickers, reading one complete cached catalogue. */
+async function prksEffectiveArgumentCatalogue(ops) {
+    let rows = [];
+    try {
+        const cached = await prksOfflineReadList(PRKS_ARGUMENTS_LIST_KEY, '/api/arguments', {});
+        rows = cached && Array.isArray(cached.value) ? cached.value : [];
+    } catch (_e) { rows = []; }
+    return await prksEffectiveArgumentRows(rows, ops);
+}
+
+/** Full safe detail for an Argument that exists only in CREATE_ARGUMENT. */
+function prksPendingCreatedArgument(argumentId, ops) {
+    if (typeof prksPendingArgumentCreates !== 'function') return null;
+    const op = prksPendingArgumentCreates(ops).find(row => row.entity_id === argumentId);
+    if (!op) return null;
+    return typeof prksArgumentDetailFromOp === 'function'
+        ? prksArgumentDetailFromOp(op) : prksArgumentRowFromOp(op);
 }
 
 /** A Position that exists only because of an unsynchronized creation. */
@@ -2385,6 +2413,11 @@ async function prksHydratePendingWorkMetadata() {
      * targets, and the target picker renders them all -- both synchronously. */
     if (typeof prksRefreshPendingPositionNames === 'function') {
         await prksRefreshPendingPositionNames();
+    }
+    /* And Argument NAMES. Position details, responses, targets, pickers and
+     * Graph nodes all render them synchronously from acknowledged snapshots. */
+    if (typeof prksRefreshPendingArgumentNames === 'function') {
+        await prksRefreshPendingArgumentNames();
     }
 }
 
@@ -3899,8 +3932,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Position not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Position not found' };
                 } else {
-                    const item2 = typeof prksEffectivePositionDetail === 'function'
+                    await prksHydratePendingWorkMetadata();
+                    if (stale()) return;
+                    let item2 = typeof prksEffectivePositionDetail === 'function'
                         ? prksEffectivePositionDetail(item, positionOps) : item;
+                    if (typeof prksApplyPendingArgumentNames === 'function' &&
+                        Array.isArray(item2.arguments)) {
+                        const argumentRows = prksApplyPendingArgumentNames(item2.arguments);
+                        if (argumentRows !== item2.arguments) {
+                            item2 = Object.assign({}, item2, { arguments: argumentRows });
+                        }
+                    }
                     ctx.setEntity('position', item2);
                     if (typeof renderPositionDetail === 'function') renderPositionDetail(ctx, item2, contentDiv);
                     prksOfflinePrependBanner(contentDiv, offlinePosition);
@@ -3910,6 +3952,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'arguments': {
                 const kind = route.params.kind || '';
+                const argumentOps = await prksDurableOperationsOrNone();
+                if (typeof prksSetPendingArgumentNames === 'function') {
+                    prksSetPendingArgumentNames(argumentOps);
+                }
+                if (stale()) return;
                 // Always the COMPLETE collection: one cache key holds the whole
                 // list and every ?kind= route derives its subset locally, so a
                 // visit to any tab warms the cache for all of them.
@@ -3920,8 +3967,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     { domain: PRKS_ARGUMENTS_DOMAIN, validate: prksIsArgumentIndexShape }
                 );
                 if (stale()) return;
-                const allArguments = prksResolveOfflineArgumentIndex(offlineArguments);
-                if (!allArguments) {
+                const cachedArguments = prksResolveOfflineArgumentIndex(offlineArguments);
+                const allArguments = await prksEffectiveArgumentRows(
+                    cachedArguments || [], argumentOps);
+                if (!cachedArguments && !(allArguments && allArguments.length)) {
                     if (typeof renderArgumentsIndexUnavailable === 'function') renderArgumentsIndexUnavailable(contentDiv);
                     else prksOfflineRenderUnavailable(contentDiv, 'Arguments & Stances not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Arguments & Stances not available offline' };
@@ -3935,20 +3984,41 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'argument-detail': {
                 const argumentId = route.params.argumentId;
-                const offlineArgument = await prksOfflineDetailFetch(
-                    'argument',
-                    argumentId,
-                    '/api/arguments/' + encodeURIComponent(argumentId),
-                    routeSignal,
-                    {
-                        domain: PRKS_ARGUMENTS_DOMAIN,
-                        validate: function (value) {
-                            return prksIsArgumentShape(value, argumentId);
-                        },
-                    }
-                );
+                const argumentOps = await prksDurableOperationsOrNone();
+                if (typeof prksSetPendingArgumentNames === 'function') {
+                    prksSetPendingArgumentNames(argumentOps);
+                }
+                if (stale()) return;
+                const argumentDeleted = typeof prksPendingArgumentDeletions === 'function' &&
+                    prksPendingArgumentDeletions(argumentOps).has(argumentId);
+                const argumentUnsent = !argumentDeleted &&
+                    typeof prksPendingArgumentCreates === 'function' &&
+                    prksPendingArgumentCreates(argumentOps).some(op => op.entity_id === argumentId);
+                const offlineArgument = argumentUnsent
+                    ? { value: null, source: 'unavailable', cachedAt: null }
+                    : await prksOfflineDetailFetch(
+                        'argument',
+                        argumentId,
+                        '/api/arguments/' + encodeURIComponent(argumentId),
+                        routeSignal,
+                        {
+                            domain: PRKS_ARGUMENTS_DOMAIN,
+                            validate: function (value) {
+                                return prksIsArgumentShape(value, argumentId);
+                            },
+                        }
+                    );
                 if (stale()) return;
                 const resolvedArgument = prksResolveOfflineArgument(offlineArgument, argumentId);
+                if (argumentDeleted) {
+                    resolvedArgument.unavailable = true;
+                    resolvedArgument.argument = null;
+                }
+                if (argumentUnsent) {
+                    const pendingArgument = prksPendingCreatedArgument(argumentId, argumentOps);
+                    resolvedArgument.argument = pendingArgument;
+                    resolvedArgument.unavailable = !pendingArgument;
+                }
                 if (resolvedArgument.unavailable) {
                     prksOfflineRenderUnavailable(contentDiv, 'Argument or Stance not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Argument or Stance not available offline' };
@@ -3963,8 +4033,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     // Source and mention rows both name a Work's Title.
                     await prksHydratePendingWorkMetadata();
                     if (stale()) return;
-                    let effectiveArgument = typeof prksEffectiveWorkReferences === 'function'
-                        ? prksEffectiveWorkReferences('argument', item) : item;
+                    let effectiveArgument = typeof prksEffectiveArgumentDetail === 'function'
+                        ? prksEffectiveArgumentDetail(item, argumentOps) : item;
+                    effectiveArgument = typeof prksEffectiveWorkReferences === 'function'
+                        ? prksEffectiveWorkReferences('argument', effectiveArgument) : effectiveArgument;
                     /* A target row names the POSITION it points at, so a
                      * pending Position rename has to reach it too -- the same
                      * rule as a Work title on a source row. */
@@ -3977,13 +4049,30 @@ async function prksRenderTabRoute(ctx, hash, options) {
                                 { targets: targets });
                         }
                     }
+                    if (typeof prksApplyPendingArgumentNamesToTargets === 'function' &&
+                        Array.isArray(effectiveArgument.targets)) {
+                        const targets = prksApplyPendingArgumentNamesToTargets(
+                            effectiveArgument.targets);
+                        if (targets !== effectiveArgument.targets) {
+                            effectiveArgument = Object.assign({}, effectiveArgument,
+                                { targets: targets });
+                        }
+                    }
+                    if (typeof prksApplyPendingArgumentNames === 'function' &&
+                        Array.isArray(effectiveArgument.responses)) {
+                        const responses = prksApplyPendingArgumentNames(effectiveArgument.responses);
+                        if (responses !== effectiveArgument.responses) {
+                            effectiveArgument = Object.assign({}, effectiveArgument,
+                                { responses: responses });
+                        }
+                    }
                     ctx.setEntity('argument', effectiveArgument);
                     // A freshly rendered route always starts read-only, even if a
                     // previous mount left an edit session behind.
                     ctx.ui.argumentEditing = false;
                     if (typeof renderArgumentDetail === 'function') renderArgumentDetail(ctx, effectiveArgument, contentDiv);
                     prksOfflinePrependBanner(contentDiv, offlineArgument);
-                    titleOpts = { entityTitle: item.name || 'Argument' };
+                    titleOpts = { entityTitle: effectiveArgument.name || 'Argument' };
                 }
                 break;
             }

@@ -55,6 +55,22 @@
         };
     }
 
+    /**
+     * Full detail shape for an Argument the server cannot know yet.
+     *
+     * Responses and note mentions are empty facts: no canonical row can point
+     * at an id that has not been constructed. Verdict vocabulary is left empty
+     * rather than guessed; an existing selected verdict id is still preserved
+     * on each target row by the renderer.
+     */
+    function detailFromOp(op) {
+        const row = catalogRowFromOp(op);
+        if (!row) return null;
+        return Object.assign({}, row, {
+            responses: [], mentions: [], verdicts: [],
+        });
+    }
+
     function pendingCreates(operations) {
         return unsettled(operations, 'CREATE_ARGUMENT', null);
     }
@@ -331,6 +347,39 @@
         }));
     }
 
+    function sameSourceRows(left, right) {
+        const a = canonicalSourceRows(left);
+        const b = canonicalSourceRows(right);
+        return a.length === b.length && a.every(function (row, index) {
+            return row.work_id === b[index].work_id && row.pages === b[index].pages;
+        });
+    }
+
+    function sameTargetRows(left, right) {
+        const a = canonicalTargetRows(left);
+        const b = canonicalTargetRows(right);
+        return a.length === b.length && a.every(function (row, index) {
+            return row.type === b[index].type && row.id === b[index].id &&
+                row.verdict_id === b[index].verdict_id;
+        });
+    }
+
+    /** Dirty only when draft differs from effective list editor showed. */
+    function dirtyArgumentSources(argumentId, draft, base, operations) {
+        if (!base || !Array.isArray(draft)) return false;
+        const pending = pendingSources(operations, argumentId);
+        const shown = pending || (base.sources || []);
+        return !sameSourceRows(draft, shown);
+    }
+
+    /** Position and Argument targets remain one ordered aggregate here. */
+    function dirtyArgumentTargets(argumentId, draft, base, operations) {
+        if (!base || !Array.isArray(draft)) return false;
+        const pending = pendingTargets(operations, argumentId);
+        const shown = pending || (base.targets || []);
+        return !sameTargetRows(draft, shown);
+    }
+
     /** The acknowledged citation list and its revision. */
     function observedArgumentSources(argument, state) {
         const entry = state && state.sources;
@@ -416,15 +465,22 @@
         return runtime;
     }
 
-    async function after(op) {
+    async function after(op, graphStructureChanged) {
         await refreshPendingArgumentNames();
+        if (graphStructureChanged &&
+            typeof root.prksOfflineMarkResearchGraphCoreChanged === 'function') {
+            root.prksOfflineMarkResearchGraphCoreChanged();
+            if (typeof root.prksOfflineMarkResearchGraphPeopleChanged === 'function') {
+                root.prksOfflineMarkResearchGraphPeopleChanged();
+            }
+        }
         const runtime = root.prksSync;
         if (runtime && typeof runtime.changed === 'function') runtime.changed();
         return op;
     }
 
     async function createArgumentDurably(fields) {
-        return after(await sync().store.createArgument(fields));
+        return after(await sync().store.createArgument(fields), true);
     }
 
     async function saveArgumentFieldsDurably(argumentId, changes, base) {
@@ -432,15 +488,15 @@
     }
 
     async function setArgumentSourcesDurably(argumentId, sources, observed) {
-        return after(await sync().store.setArgumentSources(argumentId, sources, observed));
+        return after(await sync().store.setArgumentSources(argumentId, sources, observed), true);
     }
 
     async function setArgumentTargetsDurably(argumentId, targets, observed) {
-        return after(await sync().store.setArgumentTargets(argumentId, targets, observed));
+        return after(await sync().store.setArgumentTargets(argumentId, targets, observed), true);
     }
 
     async function deleteArgumentDurably(argumentId) {
-        return after(await sync().store.deleteArgument(argumentId));
+        return after(await sync().store.deleteArgument(argumentId), true);
     }
 
     /* ---- sync handlers ---- */
@@ -547,6 +603,7 @@
         PRKS_ARGUMENT_FIELD_LABELS: LABELS,
         prksIsSupportedArgumentField: isSupportedField,
         prksArgumentRowFromOp: catalogRowFromOp,
+        prksArgumentDetailFromOp: detailFromOp,
         prksPendingArgumentCreates: pendingCreates,
         prksPendingArgumentDeletions: pendingDeletions,
         prksPendingArgumentSources: pendingSources,
@@ -565,6 +622,10 @@
         prksObservedArgumentTargets: observedArgumentTargets,
         prksAcknowledgedArgumentBase: acknowledgedArgumentBase,
         prksDirtyArgumentFields: dirtyArgumentFields,
+        prksSameArgumentSources: sameSourceRows,
+        prksSameArgumentTargets: sameTargetRows,
+        prksDirtyArgumentSources: dirtyArgumentSources,
+        prksDirtyArgumentTargets: dirtyArgumentTargets,
         prksCreateArgumentDurably: createArgumentDurably,
         prksSaveArgumentFieldsDurably: saveArgumentFieldsDurably,
         prksSetArgumentSourcesDurably: setArgumentSourcesDurably,
