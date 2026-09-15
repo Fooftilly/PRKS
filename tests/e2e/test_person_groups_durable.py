@@ -1,5 +1,11 @@
 """Person Groups, created and changed with no server.
 
+Every durable-queue gate here allows a generous timeout. A save offline first
+reads the base it measures the edit against, and offline that read has to let a
+doomed request fail before the cache answers -- twice, with the request layer's
+own retries -- so the wall-clock cost is seconds rather than milliseconds, and
+more again under a four-worker gate.
+
 The milestone's vertical slice: creating a group, renaming it, moving it,
 deleting it and changing who is in it are the same feature with or without a
 connection, every one of them composes into the surfaces that show a group, and
@@ -97,7 +103,7 @@ class DurablePersonGroupTests(unittest.TestCase):
             page,
             "op => prksSync.store.listOperations().then(rows => rows.some("
             "  o => o.operation === op))",
-            arg=operation, timeout=30000,
+            arg=operation, timeout=60000,
             message='%s was never enqueued' % operation)
 
     def db_for(self, server):
@@ -122,7 +128,7 @@ class DurablePersonGroupTests(unittest.TestCase):
             page,
             "n => prksSync.store.listOperations().then(rows => rows.some("
             "  o => o.operation === 'CREATE_PERSON_GROUP' && o.payload.name === n))",
-            arg=name, timeout=30000,
+            arg=name, timeout=60000,
             message='the group was never recorded durably')
         return page.evaluate(
             "n => prksSync.store.listOperations().then(rows => (rows.find("
@@ -136,7 +142,7 @@ class DurablePersonGroupTests(unittest.TestCase):
                 const root = ctx && ctx.root;
                 return !!root && root.innerText.indexOf(needle) === -1;
             }""",
-            arg=text, timeout=30000)
+            arg=text, timeout=60000)
 
     def open_member_manager(self, page):
         page.wait_for_selector('.document-view--group-detail', timeout=15000)
@@ -173,15 +179,15 @@ class DurablePersonGroupTests(unittest.TestCase):
         group = self.create_group(page, 'Offline Circle', 'Made with no server')
         self.assertRegex(group, r'^PG-[0-9A-F]{32}$',
                          'a permanent id minted here, never remapped later')
-        o._wait_content_contains(page, 'Offline Circle', timeout=30000)
+        o._wait_content_contains(page, 'Offline Circle', timeout=60000)
 
         page.reload(wait_until='domcontentloaded')
         page.wait_for_selector('#sidebar')
         self.offline(page, context)
         self.index(page)
-        o._wait_content_contains(page, 'Offline Circle', timeout=30000)
+        o._wait_content_contains(page, 'Offline Circle', timeout=60000)
         self.detail(page, group)
-        o._wait_content_contains(page, 'Made with no server', timeout=30000)
+        o._wait_content_contains(page, 'Made with no server', timeout=60000)
 
     def test_reconnecting_creates_the_group_once_with_no_rollback(self):
         server, page, context = self.start()
@@ -195,7 +201,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         self.assertEqual(rows['Offline Circle']['id'], group,
                          'the id the client minted is the id SQLite stores')
         self.index(page)
-        o._wait_content_contains(page, 'Offline Circle', timeout=30000)
+        o._wait_content_contains(page, 'Offline Circle', timeout=60000)
         self.assertEqual(
             len([g for g in self.db_for(server).get_all_person_groups()
                  if g['name'] == 'Offline Circle']), 1, 'created once, not twice')
@@ -235,13 +241,13 @@ class DurablePersonGroupTests(unittest.TestCase):
         page.locator('#gd-name').fill('Renamed Offline')
         page.locator('#gd-save-btn').click()
         self.wait_for_family(page, 'SET_PERSON_GROUP_FIELD')
-        o._wait_content_contains(page, 'Renamed Offline', timeout=30000)
+        o._wait_content_contains(page, 'Renamed Offline', timeout=60000)
 
         # The catalogue, and the chip on the Person who is in it.
         self.index(page)
-        o._wait_content_contains(page, 'Renamed Offline', timeout=30000)
+        o._wait_content_contains(page, 'Renamed Offline', timeout=60000)
         o._open_person(page, server.ids['person'])
-        o._wait_content_contains(page, 'Renamed Offline', timeout=30000)
+        o._wait_content_contains(page, 'Renamed Offline', timeout=60000)
 
         self.reconnect(page, context)
         self.settled(page)
@@ -260,7 +266,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         page.locator('#gd-name').fill('Temporarily Renamed')
         page.locator('#gd-save-btn').click()
         self.wait_for_family(page, 'SET_PERSON_GROUP_FIELD')
-        o._wait_content_contains(page, 'Temporarily Renamed', timeout=30000)
+        o._wait_content_contains(page, 'Temporarily Renamed', timeout=60000)
 
         self.open_editor(page)
         self.assertEqual(page.evaluate("() => document.querySelector('#gd-name').value"),
@@ -271,7 +277,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         wait_for_async(
             page,
             "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
-            timeout=30000, message='reverting an unsent rename must leave no operation behind')
+            timeout=60000, message='reverting an unsent rename must leave no operation behind')
 
     def test_two_fields_compose_and_one_busy_field_blocks_only_itself(self):
         server, page, context = self.start()
@@ -286,7 +292,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         wait_for_async(
             page,
             "() => prksSync.store.listOperations().then(rows => rows.length === 2)",
-            timeout=30000, message='each field is its own decision and its own operation')
+            timeout=60000, message='each field is its own decision and its own operation')
 
         # The name lands in conflict; the description must stay editable.
         page.evaluate("""() => prksSync.store.listOperations().then(rows => {
@@ -304,7 +310,7 @@ class DurablePersonGroupTests(unittest.TestCase):
             page,
             "() => prksSync.store.listOperations().then(rows => rows.some("
             "  o => o.payload.field === 'description' && o.payload.value === 'Edited again'))",
-            timeout=30000, message='an undecided rename must not refuse the whole form')
+            timeout=60000, message='an undecided rename must not refuse the whole form')
 
     # ---- membership ---------------------------------------------------------
 
@@ -323,9 +329,9 @@ class DurablePersonGroupTests(unittest.TestCase):
         self.wait_for_family(page, 'ADD_PERSON_GROUP_MEMBER')
 
         # The group's own member list, and the Person's group chips.
-        o._wait_content_contains(page, PERSON_B_LAST, timeout=30000)
+        o._wait_content_contains(page, PERSON_B_LAST, timeout=60000)
         o._open_person(page, person)
-        o._wait_content_contains(page, PERSON_GROUP_NAME, timeout=30000)
+        o._wait_content_contains(page, PERSON_GROUP_NAME, timeout=60000)
 
         self.reconnect(page, context)
         self.settled(page)
@@ -351,7 +357,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         wait_for_async(
             page,
             "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
-            timeout=30000, message='added and taken back is not two changes, it is none')
+            timeout=60000, message='added and taken back is not two changes, it is none')
 
     def test_a_person_and_a_group_both_created_offline_can_be_joined(self):
         """The generic dependency machinery orders a relationship between two
@@ -371,7 +377,7 @@ class DurablePersonGroupTests(unittest.TestCase):
             "  o => o.operation === 'CREATE_PERSON') || {}).entity_id)")
 
         self.detail(page, group)
-        o._wait_content_contains(page, 'Offline Circle', timeout=30000)
+        o._wait_content_contains(page, 'Offline Circle', timeout=60000)
         self.open_member_manager(page)
         self.add_member(page, person)
         self.wait_for_family(page, 'ADD_PERSON_GROUP_MEMBER')
@@ -431,7 +437,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         wait_for_async(
             page,
             "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
-            timeout=30000, message='nothing about this group should ever reach the server')
+            timeout=60000, message='nothing about this group should ever reach the server')
 
         self.reconnect(page, context)
         self.settled(page)

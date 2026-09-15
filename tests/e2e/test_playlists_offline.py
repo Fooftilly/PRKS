@@ -1016,7 +1016,17 @@ class PlaylistsOfflineTests(unittest.TestCase):
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ first_name: 'Renamed', last_name: 'Author' }) });
                 prksMarkPeopleDomainChanged();
-                await addPersonGroupMember(ids.person_group, ids.person_b);
+                const ops = await prksSync.store.listOperations();
+                const observed = await prksAcknowledgedPersonGroupMembership(
+                    ids.person_group, ids.person_b, ops);
+                await prksSetPersonGroupMemberDurably(
+                    ids.person_group, ids.person_b, true, observed);
+                const deadline = Date.now() + 30000;
+                while (Date.now() < deadline) {
+                    const rows = await prksSync.store.listOperations();
+                    if (!rows.some(o => o.status !== 'conflict')) break;
+                    await new Promise(r => setTimeout(r, 100));
+                }
                 await bulkUpdateWorks({ action: 'set_status',
                     work_ids: [ids.playlist_video_one], status: 'Completed' });
             }""",

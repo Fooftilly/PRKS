@@ -542,10 +542,30 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         server, page, context = self.start()
         self.cache(page, server.ids)
         before = self.generations(page)
+        # Group changes are durable now, so they are driven through the store
+        # and DRAINED: the canonical change a coherence rule follows is the
+        # acknowledgement, not the click.
         page.evaluate('''async ids => {
-            const group = await createPersonGroup({name:'Graph-neutral group'});
-            await addPersonGroupMember(group.data.id, ids.person);
-            await updatePersonGroup(group.data.id, {name:'Renamed group'});
+            const created = await prksCreatePersonGroupDurably(
+                { name: 'Graph-neutral group', description: '' }, []);
+            const group = created.entity_id;
+            const settle = async () => {
+                const deadline = Date.now() + 30000;
+                while (Date.now() < deadline) {
+                    const rows = await prksSync.store.listOperations();
+                    if (!rows.some(o => o.status !== 'conflict')) return;
+                    await new Promise(r => setTimeout(r, 100));
+                }
+            };
+            await settle();
+            const observed = await prksAcknowledgedPersonGroupMembership(
+                group, ids.person, await prksSync.store.listOperations());
+            await prksSetPersonGroupMemberDurably(group, ids.person, true, observed);
+            await settle();
+            const base = await prksAcknowledgedPersonGroupBase(
+                group, await prksSync.store.listOperations());
+            await prksSavePersonGroupFieldsDurably(group, { name: 'Renamed group' }, base);
+            await settle();
         }''', server.ids)
         # The existing Playlist component owns this canonical operation.
         page.evaluate('async () => { await createPlaylist("Graph-neutral playlist", ""); }')

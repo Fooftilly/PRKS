@@ -6147,6 +6147,9 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         self.assertEqual(page.locator("#role-type").input_value(), "Reviewer")
         page.locator("#save-role-btn").click()
         page.locator("#role-modal").wait_for(state="hidden", timeout=20000)
+        # The link is durable: it completes when the intent is WRITTEN, so a
+        # canonical read straight afterwards is reading it too early.
+        _wait_sync_settled(page)
         self.assertIn(
             "Reviewer",
             page.evaluate(
