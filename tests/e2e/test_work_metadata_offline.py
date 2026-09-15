@@ -706,6 +706,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             await addWorkToPlaylist(id, workId);
             return id;
         }""", work)
+        # Both writes are durable, so the playlist is only a CACHED entity once
+        # the server has actually been told about it -- and this test is about
+        # what an overlay does to a cached one.
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=30000,
+            message='the playlist never reached the server')
         page.evaluate("id => prksNavigate('#/playlists/' + encodeURIComponent(id))", playlist)
         page.wait_for_selector('.prks-playlist-detail')
         page.wait_for_selector('[data-pl-nav="%s"]' % work)

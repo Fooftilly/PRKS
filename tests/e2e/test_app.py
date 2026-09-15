@@ -3785,10 +3785,25 @@ class TabContextHostRootTests(_BrowserE2E):
         )
 
     def test_delayed_playlist_save_cannot_repaint_newer_same_tab_route(self):
+        """A save still in flight when the tab has moved on must not repaint it.
+
+        A Playlist save is durable, so what can still be in flight is the read
+        of the BASE the edit is measured against -- and it is delayed here the
+        way the PATCH used to be. The playlist is synchronized first on purpose:
+        the base of one this device created and has not sent is its own
+        construction payload, which needs no read at all and so could not be
+        delayed.
+        """
         _server, page, _collector = self._start_app()
         page.evaluate("() => window.prksNavigate('#/playlists')")
         page.wait_for_function("() => location.hash === '#/playlists'")
         playlist_id = page.evaluate("() => createPlaylist('E2E Stale Playlist', 'Before')")
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=30000,
+            message="the playlist creation never reached the server",
+        )
         page.evaluate(
             "id => window.prksNavigate('#/playlists/' + encodeURIComponent(id))",
             arg=playlist_id,
@@ -3797,27 +3812,29 @@ class TabContextHostRootTests(_BrowserE2E):
         page.locator("#prks-playlist-edit-btn").click()
         page.wait_for_selector("#prks-playlist-edit-save")
         held = []
+        state_path = "/api/playlists/" + playlist_id + "/sync-state"
 
-        def hold_playlist_patch(route):
+        def hold_playlist_base(route):
             req = route.request
-            if req.method == "PATCH" and urlparse(req.url).path == "/api/playlists/" + playlist_id:
+            if req.method == "GET" and urlparse(req.url).path == state_path:
                 held.append(route)
                 return
             route.fallback()
 
-        page.route("**/api/playlists/*", hold_playlist_patch)
+        page.route("**/api/playlists/**", hold_playlist_base)
         try:
             page.fill("#prks-playlist-edit-desc", "Delayed stale response")
             page.locator("#prks-playlist-edit-save").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "Playlist PATCH was not intercepted")
+            self.assertTrue(held, "Playlist base read was not intercepted")
             page.evaluate("() => window.prksNavigate('#/folders')")
             page.wait_for_function("() => location.hash === '#/folders'")
             page.wait_for_selector(".prks-folder-library")
             root_id = _tab_root_id(page)
             _continue_held_routes(held)
+            held.clear()
             page.wait_for_timeout(500)
             self.assertEqual(page.evaluate("() => location.hash"), "#/folders")
             self.assertEqual(_tab_root_id(page), root_id)
@@ -3826,7 +3843,7 @@ class TabContextHostRootTests(_BrowserE2E):
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/playlists/*", hold_playlist_patch)
+                page.unroute("**/api/playlists/**", hold_playlist_base)
             except Exception:
                 pass
 
