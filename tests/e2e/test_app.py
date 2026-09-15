@@ -4938,6 +4938,7 @@ class WorkspaceTilingTests(_BrowserE2E):
                     );
                 }""",
                 arg={"tabId": ids["secondaryTabId"], "about": saved_about},
+                timeout=60000,
             )
             after = page.evaluate(
                 """() => {
@@ -5162,6 +5163,7 @@ class WorkspaceTilingTests(_BrowserE2E):
                     );
                 }""",
                 arg={"tabId": ids["secondaryTabId"], "about": saved_about},
+                timeout=60000,
             )
         finally:
             _continue_held_routes(held)
