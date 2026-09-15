@@ -35,12 +35,17 @@
         return '<h3>' + esc(title) + '</h3>';
     }
 
-    /* --- Offline policy for Position routes (AGENTS.md "Offline / PWA") ------
-     * Positions are read-only offline in Phase 1: a cached index/detail
-     * renders, every canonical mutation is blocked outright (never queued,
-     * never faked). Graph navigation delegates availability to its route.
-     * Controls carry these roles so one helper can settle them all, including
-     * markup rerendered after the initial bind. */
+    /* --- Offline policy for Position routes ----------------------------------
+     * Positions are local-first: creating one, renaming it, editing its
+     * description and deleting it are all semantic operations with per-field
+     * revisions and defined conflicts, so nothing here is disabled for want of
+     * a connection. Graph navigation delegates availability to its route.
+     *
+     * The role and the selector survive because the markup carries them and
+     * tests identify controls by them, but the helper now settles NOTHING --
+     * there is no Position control left that needs a server. It is kept as the
+     * one place a genuinely server-bound Position action would be registered,
+     * so a future one cannot be added without a decision. */
     const POSITION_MUTATION_ROLE = 'position-mutation-control';
     /* Argument/Stance rows keep this role for styling and test identification
      * only. Since Arguments became offline-capable the Argument route owns its
@@ -49,21 +54,26 @@
     const POSITION_ARGUMENT_LINK_ROLE = 'position-argument-link';
     const POSITION_CONTROL_SELECTOR = '[data-prks-role="' + POSITION_MUTATION_ROLE + '"]';
 
+    /* Deliberately empty: every Position mutation is durable. Adding a selector
+     * here means asserting that the action genuinely cannot be represented
+     * offline, not that it is easier to disable it. */
+    const POSITION_SERVER_BOUND_SELECTOR = '';
+
     function positionRuntimeState() {
         return typeof root.prksOfflineRuntimeState === 'function' ? root.prksOfflineRuntimeState() : 'online';
     }
 
-    /** Blocks a canonical Position mutation while PRKS is unreachable. */
-    function positionMutationBlocked(message) {
-        return typeof root.prksOfflineGuardMutation === 'function'
-            ? root.prksOfflineGuardMutation(message)
-            : false;
-    }
-
     function applyPositionOfflineState(container) {
         if (!container || !container.querySelectorAll) return;
+        if (!POSITION_SERVER_BOUND_SELECTOR) {
+            /* Every Position control is durable. Leave them exactly as
+             * rendered -- and in particular do not clear a `disabled` another
+             * concern set, which is why this returns rather than enabling
+             * everything. */
+            return;
+        }
         const online = positionRuntimeState() === 'online';
-        const nodes = container.querySelectorAll(POSITION_CONTROL_SELECTOR);
+        const nodes = container.querySelectorAll(POSITION_SERVER_BOUND_SELECTOR);
         for (let i = 0; i < nodes.length; i++) {
             const el = nodes[i];
             // Buttons take native `disabled` (blocks pointer AND keyboard, and
@@ -138,18 +148,27 @@
 
     async function createPositionFlow(ctx, ownsIndex) {
         if (typeof root.prksPromptTextDialog !== 'function') return null;
-        // Guard before the dialog opens: never an editor the user cannot save.
-        if (positionMutationBlocked('Creating a Position requires a connection to PRKS.')) return null;
+        /* No connectivity guard: a Position is created under an id this device
+         * mints, so it is real the moment it is written -- and can be an
+         * Argument's target before any server has heard of it. */
         const name = await root.prksPromptTextDialog({
             title: 'New Position',
             okLabel: 'Create',
         });
         if (!name || !String(name).trim()) return null;
         if (ctx && !ownsIndex()) return null;
-        // Connectivity can change while the prompt is open, so re-check
-        // immediately before the canonical request: zero POST while offline.
-        if (positionMutationBlocked('Creating a Position requires a connection to PRKS.')) return null;
-        const created = await root.createPosition({ name: String(name).trim() });
+        let created;
+        try {
+            created = await root.createPosition({ name: String(name).trim() });
+        } catch (err) {
+            if (typeof root.prksAlertDialog === 'function') {
+                await root.prksAlertDialog({
+                    title: 'Could not create Position',
+                    message: (err && err.message) || 'Could not create Position.',
+                });
+            }
+            return null;
+        }
         if (created && created.id && (!ctx || ownsIndex()) && typeof root.prksNavigate === 'function') {
             root.prksNavigate('#/positions/' + encodeURIComponent(created.id), {
                 tabId: ctx && ctx.tabId,

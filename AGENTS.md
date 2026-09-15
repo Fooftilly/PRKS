@@ -511,6 +511,9 @@ server, survive reload, and reconcile on acknowledgement):
   `SET_WORK_FOLDER`
 - Playlists: `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`,
   `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST`
+- Concepts: `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`,
+  `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT`
+- Positions: `CREATE_POSITION`, `SET_POSITION_FIELD`, `DELETE_POSITION`
 
 `docs/local-first-rollout-status.md` is the running score and is authoritative
 when this file and it disagree. Anything not listed there still calls a
@@ -643,7 +646,17 @@ body must never overwrite a previously good snapshot — doing so turns one bad
 response into a route error *now* plus an unavailable-offline Concept domain
 *later*. A validator that itself throws counts as rejection, never acceptance.
 
-Position routes are **read-only** offline and follow the Concept pattern
+Positions are **local-first**. Creating one, renaming it, editing its
+description and deleting it are durable operations (`CREATE_POSITION`,
+`SET_POSITION_FIELD`, `DELETE_POSITION`) -- see *Positions (3I)* in
+`docs/local-first-sync.md`. `name` and `description` are INDEPENDENT fields, not
+an aggregate: nothing in the schema links them, and joining them would make an
+unrelated description edit conflict with a rename. `POSITION_IN_USE` still
+refuses a Position an Argument targets, and the deletion is a tombstone, so a
+refusal makes it visible again.
+
+The read cache below still backs the pages themselves, and follows the Concept
+pattern
 exactly: the index uses the `lists` store under `positions:index`, detail uses
 the `entities` store under `kind: 'position'`, the two caches are independent,
 the index never prefetches details, and index search stays client-side over the

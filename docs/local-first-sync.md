@@ -1968,6 +1968,57 @@ a legal Concept is. Note auto-creation reuses the database primitive, never the
 operation handler: resolve-then-construct stays a higher-level workflow inside
 the caller's note-save transaction.
 
+## Positions (3I)
+
+Three shapes, and deliberately the smallest domain yet.
+
+| Operation | Shape | Conflict unit | Base revision |
+| --- | --- | --- | --- |
+| `CREATE_POSITION` | construction | the position | none |
+| `SET_POSITION_FIELD` | scalar mutation | one field | `position-field/[position, field]` |
+| `DELETE_POSITION` | destruction | the identity | none |
+
+### Why `name` and `description` are NOT an aggregate
+
+This is a reading of the schema, not a default. Unlike a Concept, a Position's
+name is subject to no uniqueness rule -- `positions.name` carries no UNIQUE
+constraint and `create_position` performs no lookup -- renaming one writes
+nothing else, and `update_position` already applied the two columns
+independently. There is no second value whose meaning changes when the name
+does, so nothing forces them into one judgement, and joining them would make an
+unrelated description edit conflict with a rename.
+
+Compare the Concept identity aggregate, where a rename genuinely *does* write
+into the alias set. The test of an aggregate is whether one value's meaning
+depends on the other, not whether they are edited by the same form.
+
+### Ids are permanent so an Argument can target a new Position
+
+`CREATE_POSITION` mints a collision-resistant `P-` id, so a Position created
+offline can become an Argument's target before any server has heard of either.
+Ordering is the generic `depends_on` DAG's job; no Argument code special-cases
+it. Persons and Positions share the `P-` prefix, which is exactly why the
+entity TYPE is registered with the operation rather than inferred.
+
+### Deletion keeps its canonical protection
+
+`POSITION_IN_USE` is unchanged: a Position an Argument still targets is refused,
+because deleting it would leave that Argument aimed at nothing. The deletion is
+a tombstone, so a refusal makes the Position visible again.
+
+### What a pending change reaches
+
+A pending rename reaches the Position list and detail, every Argument target row
+that names it, and the picker used when choosing a target. It also reaches an
+existing Research Graph node's LABEL -- and only the label. A Position the
+snapshot does not contain is never synthesized, and no edge is drawn: the
+projection decides its own structure.
+
+On acknowledgement, a RENAME fences the Arguments domain, because a cached
+Argument embeds the name of every Position it targets and this device cannot
+know which Arguments point here. A description edit reaches none of that, and is
+patched in place.
+
 ## Adding a family: the four shapes and what each must declare
 
 The families that exist fall into a small number of shapes. New work should

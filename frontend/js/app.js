@@ -1533,9 +1533,46 @@ async function prksOfflineResearchGraphFetch(includePeople, signal) {
      * made offline has to draw its edge, and an unlink has to hide one. Only
      * the Author role produces edges, and only where the node data to draw
      * them exactly is available -- see `effectiveResearchGraph`. */
-    const snapshot = typeof prksEffectiveResearchGraphRoles === 'function'
+    const withRoles = typeof prksEffectiveResearchGraphRoles === 'function'
         ? prksEffectiveResearchGraphRoles(withFields) : withFields;
+    /* And pending Concept and Position NAMES, which are node labels. Only
+     * labels: a node the snapshot does not contain is one the server did not
+     * put there, and a Concept or Position created offline is never invented
+     * into a projection nobody computed. Edges are structure the projection
+     * decides, so a pending reparent moves none of them either. */
+    const snapshot = prksEffectiveResearchGraphLabels(withRoles);
     return { snapshot, source: result.source, cachedAt: result.cachedAt };
+}
+
+/**
+ * Pending renames applied to the labels of nodes the snapshot ALREADY holds.
+ *
+ * `record_id` is the entity's own id; a node's `id` is the namespaced
+ * `<type>:<id>`, because one node list holds several record types.
+ */
+function prksEffectiveResearchGraphLabels(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.nodes) || !snapshot.nodes.length) return snapshot;
+    const rename = function (type, rows) {
+        if (typeof rows !== 'function') return null;
+        return rows;
+    };
+    const concepts = rename('concept', typeof prksApplyPendingConceptNames === 'function'
+        ? prksApplyPendingConceptNames : null);
+    const positions = rename('position', typeof prksApplyPendingPositionNames === 'function'
+        ? prksApplyPendingPositionNames : null);
+    if (!concepts && !positions) return snapshot;
+    let changed = false;
+    const nodes = snapshot.nodes.map(function (node) {
+        if (!node || !node.record_id) return node;
+        const apply = node.type === 'concept' ? concepts
+            : (node.type === 'position' ? positions : null);
+        if (!apply) return node;
+        const renamed = apply([{ id: node.record_id, name: node.label }])[0];
+        if (!renamed || renamed.name === node.label) return node;
+        changed = true;
+        return Object.assign({}, node, { label: renamed.name });
+    });
+    return changed ? Object.assign({}, snapshot, { nodes: nodes }) : snapshot;
 }
 
 const PRKS_CONCEPTS_LIST_KEY =
@@ -1878,6 +1915,29 @@ async function prksEffectiveFolderCatalogue(ops) {
         rows = cached && Array.isArray(cached.value) ? cached.value : [];
     } catch (_e) { rows = []; }
     return await prksEffectiveFolderRows(rows, ops);
+}
+
+/** The Position list this device holds, with pending intent applied. */
+async function prksEffectivePositionRows(rows, ops) {
+    if (!Array.isArray(rows) || typeof prksEffectivePositions !== 'function') return rows;
+    return prksEffectivePositions(rows, ops || await prksDurableOperationsOrNone());
+}
+
+/** The same overlay, reading the list from cache for a caller that has none. */
+async function prksEffectivePositionCatalogue(ops) {
+    let rows = [];
+    try {
+        const cached = await prksOfflineReadList(PRKS_POSITIONS_LIST_KEY, '/api/positions', {});
+        rows = cached && Array.isArray(cached.value) ? cached.value : [];
+    } catch (_e) { rows = []; }
+    return await prksEffectivePositionRows(rows, ops);
+}
+
+/** A Position that exists only because of an unsynchronized creation. */
+function prksPendingCreatedPosition(positionId, ops) {
+    if (typeof prksPendingPositionCreates !== 'function') return null;
+    const op = prksPendingPositionCreates(ops).find(row => row.entity_id === positionId);
+    return op ? prksPositionRowFromOp(op) : null;
 }
 
 /** The Concept vocabulary this device holds, with pending intent applied. */
@@ -2320,6 +2380,11 @@ async function prksHydratePendingWorkMetadata() {
      * several surfaces, so a pending rename has to be known before the paint. */
     if (typeof prksRefreshPendingConceptNames === 'function') {
         await prksRefreshPendingConceptNames();
+    }
+    /* And Position NAMES. An Argument renders the name of every Position it
+     * targets, and the target picker renders them all -- both synchronously. */
+    if (typeof prksRefreshPendingPositionNames === 'function') {
+        await prksRefreshPendingPositionNames();
     }
 }
 
@@ -3767,8 +3832,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     { domain: PRKS_POSITIONS_DOMAIN, validate: prksIsPositionIndexShape }
                 );
                 if (stale()) return;
-                const positionItems = prksResolveOfflinePositionIndex(offlinePositions);
-                if (!positionItems) {
+                const cachedPositions = prksResolveOfflinePositionIndex(offlinePositions);
+                const positionOps = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                /* A Position created here is real, so a list this device could
+                 * not read is still a page when the queue holds one. */
+                const positionItems = await prksEffectivePositionRows(
+                    cachedPositions || [], positionOps);
+                if (stale()) return;
+                if (!cachedPositions && !(positionItems && positionItems.length)) {
                     if (typeof renderPositionsIndexUnavailable === 'function') renderPositionsIndexUnavailable(contentDiv);
                     else prksOfflineRenderUnavailable(contentDiv, 'Positions not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Positions not available offline' };
@@ -3781,20 +3853,41 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'position-detail': {
                 const positionId = route.params.positionId;
-                const offlinePosition = await prksOfflineDetailFetch(
-                    'position',
-                    positionId,
-                    '/api/positions/' + encodeURIComponent(positionId),
-                    routeSignal,
-                    {
-                        domain: PRKS_POSITIONS_DOMAIN,
-                        validate: function (value) {
-                            return prksIsPositionShape(value, positionId);
-                        },
-                    }
-                );
+                /* The durable queue first: a Position this device created and
+                 * has not sent cannot exist on the server, and a real 404 is a
+                 * domain answer rather than unavailability. */
+                const positionOps = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                const positionDeleted = typeof prksPendingPositionDeletions === 'function' &&
+                    prksPendingPositionDeletions(positionOps).has(positionId);
+                const positionUnsent = !positionDeleted &&
+                    typeof prksPendingPositionCreates === 'function' &&
+                    prksPendingPositionCreates(positionOps).some(op => op.entity_id === positionId);
+                const offlinePosition = positionUnsent
+                    ? { value: null, source: 'unavailable', cachedAt: null }
+                    : await prksOfflineDetailFetch(
+                        'position',
+                        positionId,
+                        '/api/positions/' + encodeURIComponent(positionId),
+                        routeSignal,
+                        {
+                            domain: PRKS_POSITIONS_DOMAIN,
+                            validate: function (value) {
+                                return prksIsPositionShape(value, positionId);
+                            },
+                        }
+                    );
                 if (stale()) return;
                 const resolvedPosition = prksResolveOfflinePosition(offlinePosition, positionId);
+                if (positionDeleted) {
+                    resolvedPosition.unavailable = true;
+                    resolvedPosition.position = null;
+                }
+                if (positionUnsent) {
+                    const pendingPosition = prksPendingCreatedPosition(positionId, positionOps);
+                    resolvedPosition.position = pendingPosition;
+                    resolvedPosition.unavailable = !pendingPosition;
+                }
                 if (resolvedPosition.unavailable) {
                     prksOfflineRenderUnavailable(contentDiv, 'Position not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Position not available offline' };
@@ -3806,10 +3899,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Position not found.</h2></div>';
                     titleOpts = { notFound: true, notFoundTitle: 'Position not found' };
                 } else {
-                    ctx.setEntity('position', item);
-                    if (typeof renderPositionDetail === 'function') renderPositionDetail(ctx, item, contentDiv);
+                    const item2 = typeof prksEffectivePositionDetail === 'function'
+                        ? prksEffectivePositionDetail(item, positionOps) : item;
+                    ctx.setEntity('position', item2);
+                    if (typeof renderPositionDetail === 'function') renderPositionDetail(ctx, item2, contentDiv);
                     prksOfflinePrependBanner(contentDiv, offlinePosition);
-                    titleOpts = { entityTitle: item.name || 'Position' };
+                    titleOpts = { entityTitle: item2.name || 'Position' };
                 }
                 break;
             }
@@ -3868,8 +3963,20 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     // Source and mention rows both name a Work's Title.
                     await prksHydratePendingWorkMetadata();
                     if (stale()) return;
-                    const effectiveArgument = typeof prksEffectiveWorkReferences === 'function'
+                    let effectiveArgument = typeof prksEffectiveWorkReferences === 'function'
                         ? prksEffectiveWorkReferences('argument', item) : item;
+                    /* A target row names the POSITION it points at, so a
+                     * pending Position rename has to reach it too -- the same
+                     * rule as a Work title on a source row. */
+                    if (typeof prksApplyPendingPositionNamesToTargets === 'function' &&
+                        Array.isArray(effectiveArgument.targets)) {
+                        const targets = prksApplyPendingPositionNamesToTargets(
+                            effectiveArgument.targets);
+                        if (targets !== effectiveArgument.targets) {
+                            effectiveArgument = Object.assign({}, effectiveArgument,
+                                { targets: targets });
+                        }
+                    }
                     ctx.setEntity('argument', effectiveArgument);
                     // A freshly rendered route always starts read-only, even if a
                     // previous mount left an edit session behind.
@@ -3881,8 +3988,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'research-graph': {
-                // Work nodes carry Work metadata; the snapshot is overlaid
-                // with pending edits, which needs the map read first.
+                // Work nodes carry Work metadata, and Concept/Position nodes
+                // carry names; the snapshot is overlaid with pending edits,
+                // which needs every map read first.
                 await prksHydratePendingWorkMetadata();
                 if (stale()) return;
                 if (typeof renderResearchGraph === 'function') {

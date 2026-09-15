@@ -93,6 +93,9 @@
         'SET_CONCEPT_IDENTITY',
         'SET_CONCEPT_PARENTS',
         'DELETE_CONCEPT',
+        'CREATE_POSITION',
+        'SET_POSITION_FIELD',
+        'DELETE_POSITION',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -236,6 +239,21 @@
      */
     function deletionAwaitsServer(op) {
         return !!op && op.status !== STATUS_ACKNOWLEDGED && op.status !== STATUS_CONFLICT;
+    }
+
+    /* The two editable Position columns. INDEPENDENT fields, not an aggregate:
+     * `positions.name` carries no UNIQUE constraint, renaming one writes
+     * nothing else, and joining them would make an unrelated description edit
+     * conflict with a rename. */
+    const POSITION_FIELDS = Object.freeze(['name', 'description']);
+
+    /* Every unsynchronized operation that names one Position. A deletion has to
+     * reason about all of them at once. */
+    function operationsNamingPosition(rows, positionId) {
+        return (Array.isArray(rows) ? rows : []).filter(function (row) {
+            return !!row && row.status !== STATUS_ACKNOWLEDGED &&
+                row.entity_type === 'position' && row.entity_id === positionId;
+        });
     }
 
     /* The one editable Concept column that is not part of its identity. The
@@ -1592,6 +1610,144 @@
                 });
         }
 
+        /* ---- Positions: construction, fields, deletion ---- */
+
+        function assertPositionIsNotBeingDeleted(rows, positionId, verb) {
+            const pendingDelete = (rows || []).find(r => r &&
+                r.operation === 'DELETE_POSITION' && r.entity_id === positionId &&
+                r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This position is being deleted, so it cannot be ' + verb + '.');
+            }
+        }
+
+        /**
+         * Construct a Position under an id this device mints.
+         *
+         * Permanent and distributed, so a Position created offline can be the
+         * target of an Argument before any server has heard of either.
+         */
+        function createPosition(fields) {
+            const src = isPlainObject(fields) ? fields : {};
+            const name = src.name == null ? '' : String(src.name).trim();
+            const description = src.description == null ? '' : String(src.description);
+            if (!name) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'A position needs a name.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'CREATE_POSITION', entity_type: 'position',
+                        entity_id: generateEntityId('P', uuid),
+                        payload: { name: name, description: description },
+                        base_revision: null,
+                    }, null));
+                });
+        }
+
+        /** One Save, however many of a Position's fields it touched. */
+        function savePositionFields(positionId, changes, base) {
+            if (!isNonBlankString(positionId) || !isPlainObject(changes) || !isPlainObject(base)) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid position save.'));
+            }
+            for (const field of Object.keys(changes)) {
+                const observed = base[field];
+                if (POSITION_FIELDS.indexOf(field) === -1) {
+                    return Promise.reject(localStoreError('unknown_field',
+                        'Not an editable position field: ' + field));
+                }
+                if (typeof changes[field] !== 'string' || !isPlainObject(observed) ||
+                    typeof observed.value !== 'string' ||
+                    !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                    return Promise.reject(localStoreError('invalid_base',
+                        'Invalid observed field state.'));
+                }
+            }
+            if (typeof changes.name === 'string' && !changes.name.trim()) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'A position needs a name.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertPositionIsNotBeingDeleted(rows, positionId, 'edited');
+                    const createOp = positionCreationDependency(rows, positionId,
+                        'it cannot be edited');
+                    const written = [];
+                    for (const field of Object.keys(changes)) {
+                        const desired = changes[field];
+                        const observed = base[field];
+                        const existing = rows.find(r => r.operation === 'SET_POSITION_FIELD' &&
+                            r.entity_type === 'position' && r.entity_id === positionId &&
+                            r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                        if (existing) {
+                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                                throw localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.');
+                            }
+                            if (existing.payload.value === desired) {
+                                written.push(existing);
+                                continue;
+                            }
+                            await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                        }
+                        if (desired === observed.value) continue;
+                        written.push(await insertEnvelopeIn(request, {
+                            operation: 'SET_POSITION_FIELD', entity_type: 'position',
+                            entity_id: positionId, payload: { field, value: desired },
+                            base_revision: observed.revision,
+                            depends_on: createOp ? [createOp.op_id] : [],
+                        }, null));
+                    }
+                    setResult(written);
+                });
+        }
+
+        /**
+         * Delete a Position, cancelling what was never sent.
+         *
+         * The server protects a Position an Argument still targets, so a
+         * deletion here is a tombstone: if it is refused, the Position comes
+         * back.
+         */
+        function deletePosition(positionId) {
+            if (!isNonBlankString(positionId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid position.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = operationsNamingPosition(rows, positionId);
+                    const already = mine.find(r => r.operation === 'DELETE_POSITION');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_POSITION');
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row) && row.operation !== 'CREATE_POSITION') {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_POSITION', entity_type: 'position',
+                        entity_id: positionId, payload: {},
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
         /* ---- Concepts: construction, definition, identity, hierarchy, deletion ---- */
 
         function assertConceptIsNotBeingDeleted(rows, conceptId, verb) {
@@ -2621,6 +2777,12 @@
                 'This playlist could not be created on the server, so ' + consequence + '.');
         }
 
+        /** The same three states, for a Position this device created. */
+        function positionCreationDependency(rows, positionId, consequence) {
+            return creationDependency(rows, 'CREATE_POSITION', 'position', positionId,
+                'This position could not be created on the server, so ' + consequence + '.');
+        }
+
         /** The same three states, for a Concept this device created. */
         function conceptCreationDependency(rows, conceptId, consequence) {
             return creationDependency(rows, 'CREATE_CONCEPT', 'concept', conceptId,
@@ -2946,6 +3108,9 @@
             createPerson,
             savePersonMetadataFields: savePersonMetadataFields,
             deletePerson: deletePerson,
+            createPosition: createPosition,
+            savePositionFields: savePositionFields,
+            deletePosition: deletePosition,
             createConcept: createConcept,
             saveConceptFields: saveConceptFields,
             setConceptIdentity: setConceptIdentity,
@@ -2990,6 +3155,7 @@
         PRKS_LOCAL_PERSON_FIELDS: PERSON_FIELDS,
         PRKS_LOCAL_FOLDER_FIELDS: FOLDER_FIELDS,
         prksDurableDeletionAwaitsServer: deletionAwaitsServer,
+        PRKS_LOCAL_POSITION_FIELDS: POSITION_FIELDS,
         PRKS_LOCAL_CONCEPT_FIELDS: CONCEPT_FIELDS,
         PRKS_LOCAL_CONCEPT_MAX_ALIASES: CONCEPT_MAX_ALIASES,
         PRKS_LOCAL_CONCEPT_MAX_PARENTS: CONCEPT_MAX_PARENTS,

@@ -55,6 +55,9 @@ DURABLE_FAMILIES = (
     "SET_CONCEPT_IDENTITY",
     "SET_CONCEPT_PARENTS",
     "DELETE_CONCEPT",
+    "CREATE_POSITION",
+    "SET_POSITION_FIELD",
+    "DELETE_POSITION",
 )
 
 
@@ -92,7 +95,8 @@ class AgentGuidanceTests(unittest.TestCase):
         """A per-domain sweep, so a family made durable later cannot leave its
         own section behind."""
         durable_domains = ("Playlists", "People", "Person Groups", "Folders",
-                           "Folders/Home", "Concepts", "Concept routes")
+                           "Folders/Home", "Concepts", "Concept routes",
+                           "Positions", "Position routes")
         for domain in durable_domains:
             with self.subTest(domain=domain):
                 pattern = re.compile(

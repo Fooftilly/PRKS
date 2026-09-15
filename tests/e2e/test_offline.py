@@ -2100,6 +2100,12 @@ class OfflineConceptTests(unittest.TestCase):
         _open_concept(page, child)
         _wait_content_contains(page, CONCEPT_CHILD_NAME)
         _wait_entity_cached(page, "concept", child)
+        # Editing offline needs the revisions the edit is measured against.
+        # Without them the refusal is "unknown base", which is a different
+        # thing from "no connection" and is the correct answer here.
+        page.evaluate("id => { void Promise.resolve(prksReadConceptState(id)).catch(() => {}); }",
+                      child)
+        _wait_entity_cached(page, "concept-state", child)
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
@@ -2860,9 +2866,12 @@ class OfflinePositionTests(unittest.TestCase):
         page.locator(".prks-research-index__empty", has_text="match").wait_for()
         self.assertEqual(seen, [], "offline Position search must issue zero API requests")
 
+        # New Position stays LIVE: a Position is created under an id this
+        # device mints, so it is real the moment it is written -- and can be an
+        # Argument's target before any server has heard of it.
         new_btn = page.locator("#prks-position-new")
-        self.assertTrue(new_btn.is_disabled())
-        self.assertEqual(new_btn.get_attribute("aria-disabled"), "true")
+        self.assertFalse(new_btn.is_disabled())
+        self.assertIsNone(new_btn.get_attribute("aria-disabled"))
 
     def test_uncached_position_index_offline_is_explicitly_unavailable(self):
         """No cached index is "not cached", never "No Positions yet."."""
@@ -2908,10 +2917,9 @@ class OfflinePositionTests(unittest.TestCase):
         _wait_offline_banner(page)
         body = _content_text(page)
         self.assertNotIn("not available offline", body)
-        page.wait_for_function(
-            "() => !!document.querySelector('#prks-position-new-empty[disabled]')", timeout=20000
-        )
-        self.assertTrue(page.locator("#prks-position-new").is_disabled())
+        # A cached-empty list is an ANSWER, and creating into it works offline.
+        self.assertFalse(page.locator("#prks-position-new-empty").is_disabled())
+        self.assertFalse(page.locator("#prks-position-new").is_disabled())
 
     # ---- cached detail ------------------------------------------------------
 
@@ -3166,7 +3174,7 @@ class OfflinePositionTests(unittest.TestCase):
         _wait_offline_unavailable(page)
         self.assertIn("#/graph?focus=position:", page.evaluate("decodeURIComponent(location.hash)"))
 
-    def test_offline_position_create_is_blocked(self):
+    def test_offline_position_create_is_durable(self):
         server, page, context, _collector = self._start()
 
         _wait_sw_active(page)
@@ -3193,18 +3201,32 @@ class OfflinePositionTests(unittest.TestCase):
         page.route("**/api/positions**", record_mutation)
         try:
             btn = page.locator("#prks-position-new")
-            self.assertTrue(btn.is_disabled())
-            self.assertEqual(btn.get_attribute("aria-disabled"), "true")
-            btn.click(force=True)
-            page.wait_for_timeout(300)
-            self.assertEqual(page.locator("#prks-modal-confirm .prks-modal-prompt__input").count(), 0)
-            self.assertEqual(mutations, [])
+            self.assertFalse(btn.is_disabled())
+            self.assertIsNone(btn.get_attribute("aria-disabled"))
+            btn.click()
+            prompt_input = page.locator("#prks-modal-confirm .prks-modal-prompt__input")
+            prompt_input.wait_for()
+            prompt_input.fill("Created with no server")
+            page.locator("#prks-modal-confirm-ok").click()
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'CREATE_POSITION'))",
+                timeout=30000, message="the creation was never enqueued")
+            self.assertEqual(mutations, [],
+                             "no canonical Position request left the browser")
         finally:
             _safe_unroute(page, "**/api/positions**", record_mutation)
 
-    def test_disconnect_while_position_prompt_open_blocks_the_create(self):
-        """The re-check immediately before createPosition() means clicking
-        Create after the connection dropped issues no POST."""
+    def test_disconnect_while_position_prompt_open_still_creates(self):
+        """A prompt opened online and confirmed after the connection dropped
+        must not lose what the user typed.
+
+        This used to assert that the create was refused. The invariant it
+        protects -- a disconnect mid-dialog never produces a silent half-action
+        -- is unchanged; the correct outcome is now that the Position is
+        created durably rather than discarded.
+        """
         server, page, context, _collector = self._start()
 
         _wait_sw_active(page)
@@ -3231,8 +3253,13 @@ class OfflinePositionTests(unittest.TestCase):
                 timeout=20000,
             )
             page.locator("#prks-modal-confirm-ok").click()
-            page.wait_for_timeout(500)
-            self.assertEqual(mutations, [], "no Position create may be attempted after disconnect")
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'CREATE_POSITION'))",
+                timeout=30000, message="the creation was never enqueued")
+            self.assertEqual(mutations, [],
+                             "no canonical Position request may be attempted after disconnect")
         finally:
             _safe_unroute(page, "**/api/**", block_api)
 
@@ -3241,11 +3268,20 @@ class OfflinePositionTests(unittest.TestCase):
             "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
             timeout=20000,
         )
+        _drain_durable(page)
         names = page.evaluate("() => fetchPositions().then(items => items.map(p => p.name))")
-        self.assertNotIn("Created while disconnected", names)
+        self.assertIn("Created while disconnected", names,
+                      "what the user typed before the drop reaches the server after it")
 
-    def test_live_position_pages_react_to_connectivity(self):
-        """Pages mounted online become read-only in place, without a reload."""
+    def test_live_position_pages_stay_usable_on_disconnect(self):
+        """Pages mounted online stay fully usable when PRKS stops answering,
+        without a reload.
+
+        This used to assert they went read-only in place. The invariant is
+        unchanged -- connectivity must reach a MOUNTED page, not only a freshly
+        routed one -- but every Position control is durable, so the page settles
+        to "still editable" rather than to "inert".
+        """
         server, page, _context, _collector = self._start()
         position_a = server.ids["position_a"]
 
@@ -3265,16 +3301,13 @@ class OfflinePositionTests(unittest.TestCase):
                 timeout=20000,
             )
             self.assertTrue(page.evaluate("() => navigator.onLine"))
-            page.wait_for_function(
-                "() => !!document.querySelector('#prks-position-new[disabled]')", timeout=20000
-            )
+            page.wait_for_timeout(300)
+            self.assertFalse(page.locator("#prks-position-new").is_disabled())
         finally:
             _safe_unroute(page, "**/api/**", abort_api)
 
         page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
-        page.wait_for_function(
-            "() => !document.querySelector('#prks-position-new[disabled]')", timeout=20000
-        )
+        self.assertFalse(page.locator("#prks-position-new").is_disabled())
 
         # Detail navigation remains enabled; content stays readable.
         _open_position(page, position_a)
@@ -3396,17 +3429,23 @@ class OfflinePositionTests(unittest.TestCase):
         _wait_entity_cached(page, "position", position_b)
         generation_before = _domain_generation(page, "positions")
 
-        page.evaluate("id => window.updatePosition(id, { description: 'Domain coherence check.' })", position_a)
+        page.evaluate("id => window.updatePosition(id, { description: 'Domain coherence check.' })",
+                      position_a)
+        _drain_durable(page)
+        # The Positions domain generation moves, which is the FENCE that stops a
+        # read begun before the acknowledgement from publishing afterwards. It
+        # is not an invalidation any more: the answer states the changed row
+        # exactly, so both the list and the Position that did not change are
+        # PATCHED rather than dropped -- an offline device must not lose its
+        # Position list to somebody else's description edit.
         self.assertGreater(_domain_generation(page, "positions"), generation_before)
-        # The whole domain goes, including the Position that did not change.
-        _wait_entity_uncached(page, "position", position_b)
-        _wait_list_uncached(page, "positions:index")
+        self.assertIsNotNone(_cached_entity(page, "position", position_b))
+        cached_index = _cached_list(page, "positions:index")
+        self.assertIsNotNone(cached_index)
 
         context.set_offline(True)
-        _open_position(page, position_b)
-        _wait_offline_unavailable(page)
-        _open_position_index(page)
-        _wait_offline_unavailable(page)
+        _open_position(page, position_a)
+        _wait_content_contains(page, "Domain coherence check.")
 
     def test_failed_position_mutation_retains_the_position_cache(self):
         server, page, context, _collector = self._start()
@@ -4783,31 +4822,45 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         page.evaluate(
             "id => window.updatePosition(id, { name: 'Renamed Target Position' })", server.ids["position_a"]
         )
+        _drain_durable(page)
         self._assert_arguments_invalidated(page, server, before)
 
-        # A failed Position update retains the cache.
+        # A DESCRIPTION edit reaches none of that: an Argument target row names
+        # the Position and nothing else about it.
+        self._cache_arguments(page, server)
+        before = _domain_generation(page, "arguments")
+        page.evaluate(
+            "id => window.updatePosition(id, { description: 'Not in any Argument.' })",
+            server.ids["position_a"])
+        _drain_durable(page)
+        self.assertEqual(_domain_generation(page, "arguments"), before)
+        self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
+
+        # And an operation the server has not answered retains the cache, since
+        # a durable write changes nothing cached until it is acknowledged.
         self._cache_arguments(page, server)
         before = _domain_generation(page, "arguments")
 
         def reject(route):
-            if route.request.method == "PATCH":
+            if route.request.method == "POST":
                 route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
                 return
             route.fallback()
 
-        page.route("**/api/positions/**", reject)
+        page.route("**/api/sync/operations**", reject)
         try:
-            page.evaluate(
-                """async (id) => {
-                    try { await window.updatePosition(id, { name: 'never applied' }); } catch (_e) {}
-                }""",
-                server.ids["position_a"],
-            )
-            page.wait_for_timeout(400)
+            page.evaluate("id => window.updatePosition(id, { name: 'never applied' })",
+                          server.ids["position_a"])
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'SET_POSITION_FIELD'))",
+                timeout=30000, message="the rename was never enqueued")
+            page.wait_for_timeout(600)
             self.assertEqual(_domain_generation(page, "arguments"), before)
             self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
         finally:
-            _safe_unroute(page, "**/api/positions/**", reject)
+            _safe_unroute(page, "**/api/sync/operations**", reject)
 
     def test_a_rename_reconciles_arguments_and_concepts_but_not_positions(self):
         """A Work Title appears in cached Argument sources/mentions and cached

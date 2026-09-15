@@ -707,22 +707,30 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("prksOfflineMarkArgumentsChanged", api)
         self.assertNotIn("'arguments:index'", api)
 
-    def test_position_mutations_invalidate_at_the_canonical_helper_boundary(self):
+    def test_position_mutations_route_through_durable_boundaries(self):
+        """Coherence for Positions happens on ACKNOWLEDGEMENT, not at the call.
+
+        The invariant this has always protected -- nothing publishes coherence
+        before the change is real -- is unchanged; where it is enforced moved.
+        """
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        for fn in (
-            "async function createPosition(",
-            "async function updatePosition(",
-            "async function deletePosition(",
+        for fn, writer in (
+            ("async function createPosition(", "prksCreatePositionDurably("),
+            ("async function updatePosition(", "prksSavePositionFieldsDurably("),
+            ("async function deletePosition(", "prksDeletePositionDurably("),
         ):
             start = api.index(fn)
-            body = api[start : start + 900]
-            # prksResearchJson throws on a non-ok response, so reaching the
-            # invalidation means the canonical mutation actually succeeded.
-            self.assertIn("prksResearchJson(", body, fn)
-            self.assertIn("prksMarkPositionsDomainChanged();", body, fn)
-            self.assertLess(
-                body.index("prksResearchJson("), body.index("prksMarkPositionsDomainChanged();"), fn
-            )
+            body = api[start : api.index("\n}", start)]
+            with self.subTest(fn=fn):
+                self.assertIn(writer, body)
+                self.assertNotIn("prksRequest('/api/positions", body)
+                self.assertNotIn("prksResearchJson(", body)
+                self.assertNotIn("prksMarkPositionsDomainChanged", body)
+        runtime = _read(_RUNTIME)
+        for name in ("reconcileCreatedPosition", "reconcilePositionField",
+                     "reconcileDeletedPosition"):
+            with self.subTest(name=name):
+                self.assertIn("async function %s(" % name, runtime)
 
     def test_argument_mutations_that_stale_position_summaries_invalidate_positions(self):
         """A cached Position detail embeds Argument name/kind/verdict and the
@@ -791,17 +799,25 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("prksMarkArgumentsDomainChanged();", targets_body)
         self.assertIn("prksMarkPositionsDomainChanged();", targets_body)
 
-    def test_position_rename_invalidates_arguments_but_create_delete_do_not(self):
-        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        update_start = api.index("async function updatePosition(")
-        update_body = api[update_start : api.index("async function deletePosition(")]
-        # A cached Argument's targets embed the Position's name.
-        self.assertIn("prksMarkArgumentsDomainChanged();", update_body)
-        create_body = api[api.index("async function createPosition(") : update_start]
-        self.assertNotIn("prksMarkArgumentsDomainChanged", create_body)
-        delete_start = api.index("async function deletePosition(")
-        delete_body = api[delete_start : delete_start + 800]
-        self.assertNotIn("prksMarkArgumentsDomainChanged", delete_body)
+    def test_a_position_rename_stales_arguments_but_a_description_edit_does_not(self):
+        """A cached Argument's targets embed the Position's NAME, and nothing
+        else about it -- so the dependency belongs to the rename alone, and the
+        reconciler is now where that distinction is drawn.
+
+        Create and delete still owe Arguments nothing of that kind: a brand-new
+        Position cannot already be targeted, and a targeted one cannot be
+        deleted.
+        """
+        runtime = _read(_RUNTIME)
+        start = runtime.index("async function reconcilePositionField(")
+        body = runtime[start : runtime.index("\n        /**", start)]
+        self.assertIn("if (field !== 'name' || !result.changed) return true;", body)
+        self.assertLess(body.index("if (field !== 'name'"),
+                        body.index("prksOfflineMarkArgumentsChanged();"),
+                        "a description edit must return before the Arguments fence")
+        start = runtime.index("async function reconcileCreatedPosition(")
+        create_body = runtime[start : runtime.index("\n        /**", start)]
+        self.assertNotIn("prksOfflineMarkArgumentsChanged", create_body)
 
     def test_work_title_helper_owns_both_dependent_domains(self):
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))

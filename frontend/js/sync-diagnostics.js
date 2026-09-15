@@ -100,6 +100,17 @@
             const where = (context.folder && context.folder.title) || op.payload.folder_id;
             return op.payload.folder_id ? 'File in ' + where : 'Remove from its folder';
         }
+        if (op.operation === 'CREATE_POSITION') {
+            return 'Create position "' + bounded(op.payload.name) + '"';
+        }
+        if (op.operation === 'SET_POSITION_FIELD') {
+            const labels = root.PRKS_POSITION_FIELD_LABELS || {};
+            const field = op.payload.field;
+            return (labels[field] || field) + ' = "' + bounded(op.payload.value) + '"';
+        }
+        if (op.operation === 'DELETE_POSITION') {
+            return 'Delete a position';
+        }
         if (op.operation === 'CREATE_CONCEPT') {
             return 'Create concept "' + bounded(op.payload.name) + '"';
         }
@@ -202,6 +213,9 @@
         /* Reached through the Work branch, which is where a filing belongs: the
          * folder a Work is in is a field on the WORK. */
         SET_WORK_FOLDER: 'work-folder-state',
+        CREATE_POSITION: 'position-state',
+        SET_POSITION_FIELD: 'position-state',
+        DELETE_POSITION: 'position-state',
         CREATE_CONCEPT: 'concept-state',
         SET_CONCEPT_FIELD: 'concept-state',
         SET_CONCEPT_IDENTITY: 'concept-state',
@@ -264,6 +278,16 @@
                 root.prksOfflineMarkFoldersChanged();
             }
             root.prksOfflineMarkEntityChanged('folder-state', op.entity_id);
+            return;
+        }
+        if (op.entity_type === 'position') {
+            /* The whole list: a discarded creation leaves one showing a
+             * Position the server never stored, and a discarded rename one
+             * showing a name nobody chose. */
+            if (typeof root.prksOfflineMarkPositionsChanged === 'function') {
+                root.prksOfflineMarkPositionsChanged();
+            }
+            root.prksOfflineMarkEntityChanged('position-state', op.entity_id);
             return;
         }
         if (op.entity_type === 'concept') {
@@ -337,6 +361,7 @@
         PERSON_NOT_FOUND: 'That person no longer exists on the server.',
         PERSON_HAS_LINKS: 'They are still credited on a file, so they cannot be deleted.',
         PLAYLIST_NOT_FOUND: 'That playlist no longer exists on the server.',
+        POSITION_IN_USE: 'An argument or stance still targets it, so it cannot be deleted.',
         CONCEPT_EXISTS: 'Another concept already has that name or alias.',
         AMBIGUOUS_CONCEPT: 'More than one concept matches that name.',
         ALIAS_CONFLICT: 'That search key already belongs to another concept.',

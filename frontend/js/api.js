@@ -1394,7 +1394,16 @@ async function putConceptAliases(id, aliases) {
     return { id: id };
 }
 
+/**
+ * The Position list a user should see: what this device holds, with every
+ * unsynchronized intent applied. A Position created here is real, so it is
+ * pickable as an Argument target before any server has heard of it.
+ */
 async function fetchPositions(options = {}) {
+    if (typeof prksEffectivePositionCatalogue === 'function') {
+        try { return await prksEffectivePositionCatalogue() || []; }
+        catch (_e) { return []; }
+    }
     const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/positions', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
@@ -1423,40 +1432,95 @@ async function fetchPosition(id, options = {}) {
     }
 }
 
+/* --- Durable Position mutations -------------------------------------------
+ * Every production Position write goes through these. None guards
+ * connectivity: a Position change is a semantic operation with a per-field
+ * revision and a defined conflict. What a caller can still be told is that the
+ * BASE is unknown -- a Position this device has never read has no revision to
+ * measure an edit against. */
+function prksPositionSaveMessage(error, action) {
+    switch (error && error.prksLocalStoreCode) {
+        case 'scope_busy':
+            return 'Part of this position is syncing or needs a decision. Try again shortly.';
+        case 'entity_deleted':
+            return 'This position is being deleted, so it cannot be changed.';
+        case 'dependency_failed':
+            return String(error.message || 'A change this one depends on could not be saved.');
+        case 'invalid_envelope':
+        case 'invalid_base':
+            return String(error.message || 'That is not a valid position change.');
+        default:
+            return 'Could not ' + action + ' locally. Please retry.';
+    }
+}
+
+function prksPositionBaseUnavailable() {
+    const err = new Error(
+        'This position cannot be edited offline yet. Open it once while connected to '
+        + 'PRKS so its synchronization state is prepared.');
+    err.prksPositionUnavailable = true;
+    return err;
+}
+
+/**
+ * Create a Position durably, under an id this device mints.
+ *
+ * Permanent and distributed, so a Position created offline can be the target
+ * of an Argument before any server has heard of either.
+ */
 async function createPosition(payload) {
-    const res = await prksRequest('/api/positions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    const data = await prksResearchJson(res, 'Could not create Position.', 'positions.create');
-    prksMarkPositionsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+    const src = payload && typeof payload === 'object' ? payload : {};
+    let op;
+    try {
+        op = await prksCreatePositionDurably({
+            name: src.name == null ? '' : String(src.name),
+            description: src.description == null ? '' : String(src.description),
+        });
+    } catch (error) {
+        throw new Error(prksPositionSaveMessage(error, 'create this position'));
+    }
+    return op ? { id: op.entity_id, name: op.payload.name,
+                  description: op.payload.description } : null;
 }
 
+/**
+ * Edit a Position, sending only what changed.
+ *
+ * The two fields are INDEPENDENT, so a description edit here never conflicts
+ * with a rename elsewhere -- and each is measured against the acknowledged
+ * base rather than against whatever the page happens to be showing.
+ */
 async function updatePosition(id, payload) {
-    const res = await prksRequest('/api/positions/' + encodeURIComponent(id), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
+    const src = payload && typeof payload === 'object' ? payload : {};
+    const draft = {};
+    (PRKS_POSITION_FIELDS || []).forEach(function (field) {
+        if (!Object.prototype.hasOwnProperty.call(src, field)) return;
+        const value = src[field];
+        draft[field] = value == null || value === false ? '' : String(value);
     });
-    const data = await prksResearchJson(res, 'Could not update Position.', 'positions.update');
-    prksMarkPositionsDomainChanged();
-    // A cached Argument's targets embed the Position's name, so a rename stales
-    // Arguments too. Create/delete do not: a brand-new Position cannot already
-    // be targeted, and a targeted Position cannot be deleted.
-    prksMarkArgumentsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+    if (!Object.keys(draft).length) return { id: id };
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    const base = await prksAcknowledgedPositionBase(id, ops);
+    if (!base) throw prksPositionBaseUnavailable();
+    const changes = prksDirtyPositionFields(id, draft, base, ops);
+    if (!Object.keys(changes).length) return { id: id };
+    try {
+        await prksSavePositionFieldsDurably(id, changes, base);
+    } catch (error) {
+        throw new Error(prksPositionSaveMessage(error, 'save this position'));
+    }
+    return { id: id };
 }
 
+/** Delete a Position durably. A tombstone: a refusal brings it back. */
 async function deletePosition(id) {
-    const res = await prksRequest('/api/positions/' + encodeURIComponent(id), { method: 'DELETE' });
-    const data = await prksResearchJson(res, 'Could not delete Position.', 'positions.delete');
-    prksMarkPositionsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+    try {
+        await prksDeletePositionDurably(id);
+    } catch (error) {
+        throw new Error(prksPositionSaveMessage(error, 'delete this position'));
+    }
+    return { status: 'deleted' };
 }
 
 async function fetchArguments(kind, options = {}) {

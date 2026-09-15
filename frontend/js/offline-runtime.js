@@ -1268,6 +1268,140 @@
             return true;
         }
 
+        /* ---- Positions ---------------------------------------------------- */
+
+        async function cachedPositionRows() {
+            const cached = await store.getList(POSITIONS_LIST_KEY)
+                .catch(function () { return null; });
+            return cached && Array.isArray(cached.value) ? cached.value : null;
+        }
+
+        async function writePositionRows(rows) {
+            const token = currentDomainGeneration(DOMAIN_POSITIONS) + 1;
+            domainGeneration.set(DOMAIN_POSITIONS, token);
+            return cacheListForDomain(POSITIONS_LIST_KEY, rows, DOMAIN_POSITIONS, token);
+        }
+
+        /* A Position node already IN the cached Graph snapshot, patched in
+         * place. `record_id` is the Position's own id -- a node's `id` is the
+         * namespaced `position:<id>`, because the projection holds several
+         * record types in one list. Nothing is ever synthesized: a Position the
+         * snapshot does not contain is one the server did not put there. */
+        async function patchGraphPositionLabel(positionId, name) {
+            const kinds = ['research-graph-core', 'research-graph-people'];
+            for (let i = 0; i < kinds.length; i += 1) {
+                await patchEntity(kinds[i], 'snapshot', function (snapshot) {
+                    if (!snapshot || !Array.isArray(snapshot.nodes)) return null;
+                    let changed = false;
+                    const nodes = snapshot.nodes.map(function (node) {
+                        if (!node || node.type !== 'position') return node;
+                        if (node.record_id !== positionId) return node;
+                        if (node.label === name) return node;
+                        changed = true;
+                        return Object.assign({}, node, { label: name });
+                    });
+                    return changed ? Object.assign({}, snapshot, { nodes: nodes }) : null;
+                });
+            }
+        }
+
+        /** A Position the server has accepted. */
+        async function reconcileCreatedPosition(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const position = result && result.position;
+            if (!position || position.id !== result.position_id) return false;
+            const rows = await cachedPositionRows();
+            if (rows) {
+                const merged = rows.filter(row => row && row.id !== position.id)
+                    .concat([position]);
+                merged.sort(function (a, b) {
+                    return String(a.name || '').localeCompare(String(b.name || ''),
+                        undefined, { sensitivity: 'base' });
+                });
+                if (!await writePositionRows(merged)) return false;
+            }
+            if (result.changed && typeof root.prksNewPositionState === 'function') {
+                await patchEntity('position-state', position.id,
+                    () => root.prksNewPositionState(position.id));
+            }
+            /* A brand-new Position is in NO cached Graph snapshot -- the server
+             * computed those before it existed -- and must not be invented into
+             * one. The snapshots go stale instead. */
+            if (result.changed) prksOfflineMarkResearchGraphCoreChanged();
+            return true;
+        }
+
+        /** One Position field the server has applied. */
+        async function reconcilePositionField(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.position_id;
+            const field = result.field;
+            if (!root.prksIsSupportedPositionField ||
+                !root.prksIsSupportedPositionField(field)) return false;
+            const value = String((op && op.payload && op.payload.value) || '');
+            await patchEntity('position-state', id, function (state) {
+                if (typeof root.prksIsPositionStateShape === 'function' &&
+                    !root.prksIsPositionStateShape(state, id)) return null;
+                const entry = state.fields[field];
+                if (!entry || entry.revision > result.server_revision) return null;
+                const next = Object.assign({}, state,
+                    { fields: Object.assign({}, state.fields) });
+                next.fields[field] = { revision: result.server_revision };
+                return next;
+            });
+            const rows = await cachedPositionRows();
+            if (rows && rows.some(row => row && row.id === id)) {
+                const patched = rows.map(function (row) {
+                    if (!row || row.id !== id) return row;
+                    const next = Object.assign({}, row);
+                    next[field] = value;
+                    return next;
+                });
+                patched.sort(function (a, b) {
+                    return String(a.name || '').localeCompare(String(b.name || ''),
+                        undefined, { sensitivity: 'base' });
+                });
+                if (!await writePositionRows(patched)) return false;
+            }
+            await patchEntity('position', id, function (position) {
+                if (!position || position.id !== id) return null;
+                const next = Object.assign({}, position);
+                next[field] = value;
+                return next;
+            });
+            if (field !== 'name' || !result.changed) return true;
+            /* A cached ARGUMENT embeds the name of every Position it targets,
+             * and this device cannot patch those without knowing which
+             * Arguments point here -- the Position detail does not say. So the
+             * Arguments domain is fenced, exactly as the ordinary rename has
+             * always done. A description edit reaches none of that. */
+            prksOfflineMarkArgumentsChanged();
+            /* The Graph node carries the LABEL, which the acknowledgement's own
+             * operation states exactly, so it is corrected in place. */
+            await patchGraphPositionLabel(id, value);
+            return true;
+        }
+
+        /** A Position the server has removed. */
+        async function reconcileDeletedPosition(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.position_id;
+            const rows = await cachedPositionRows();
+            if (rows) {
+                if (!await writePositionRows(rows.filter(row => row && row.id !== id))) {
+                    return false;
+                }
+            }
+            await invalidateEntity('position', id);
+            await invalidateEntity('position-state', id);
+            /* The server refuses a Position an Argument targets, so a deletion
+             * that got this far was targeted by none -- but a cached Argument
+             * list may still have been built when it existed. */
+            prksOfflineMarkArgumentsChanged();
+            prksOfflineMarkResearchGraphCoreChanged();
+            return true;
+        }
+
         /* ---- Concepts ----------------------------------------------------- */
 
         async function cachedConceptRows() {
@@ -2310,6 +2444,9 @@
             reconcileConceptIdentity,
             reconcileConceptParents,
             reconcileDeletedConcept,
+            reconcileCreatedPosition,
+            reconcilePositionField,
+            reconcileDeletedPosition,
             reconcileCreatedTag,
             reconcileDeletedTag,
             reconcileCreatedPerson,
@@ -2560,6 +2697,12 @@
             production.reconcileConceptParents(result, op),
         prksOfflineReconcileDeletedConcept: result =>
             production.reconcileDeletedConcept(result),
+        prksOfflineReconcileCreatedPosition: result =>
+            production.reconcileCreatedPosition(result),
+        prksOfflineReconcilePositionField: (result, op) =>
+            production.reconcilePositionField(result, op),
+        prksOfflineReconcileDeletedPosition: result =>
+            production.reconcileDeletedPosition(result),
         prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
         prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),

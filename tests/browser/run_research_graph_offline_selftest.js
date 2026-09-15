@@ -151,7 +151,7 @@ async function run() {
     // Graph is fenced (or its label patched) by the reconciler, once the server
     // has actually answered. Publishing a Graph invalidation for an intent that
     // has not landed would discard a snapshot to show the same thing.
-    for(const fn of ['createPosition','updatePosition','deletePosition','createArgument','updateArgument','deleteArgument','putArgumentSources','putArgumentTargets']) {
+    for(const fn of ['createArgument','updateArgument','deleteArgument','putArgumentSources','putArgumentTargets']) {
         for(const ok of [true,false]) {
             const e=environment();e.setRequest(async()=>({ok,status:ok?200:400,json:async()=>({})}));
             try {await e.ctx[fn]('id',[]);}catch(err){assert(!ok);}
@@ -163,7 +163,7 @@ async function run() {
     // And the durable half of that rule, asserted rather than assumed: a
     // Concept write issues no canonical request and moves neither Graph
     // generation, whatever the (unused) transport would have answered.
-    for(const fn of ['createConcept','updateConcept','deleteConcept','putConceptParents','putConceptAliases']) {
+    for(const fn of ['createConcept','updateConcept','deleteConcept','putConceptParents','putConceptAliases','createPosition','updatePosition','deletePosition']) {
         const e=environment();
         let requests=0;
         e.setRequest(async()=>{requests+=1;return {ok:true,status:200,json:async()=>({})};});
