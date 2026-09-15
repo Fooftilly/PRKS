@@ -410,6 +410,11 @@
     async function setWorkFolderDurably(workId, folderId, observed, localContext) {
         const runtime = sync();
         const op = await runtime.store.setWorkFolder(workId, folderId, observed, localContext);
+        /* Refresh the synchronous map HERE, not only at route hydration. A file
+         * moved on the folder page has to name its new folder the moment the
+         * user reaches it, and the surfaces that render a folder read the map
+         * synchronously. */
+        await refreshPendingWorkFolders();
         if (typeof runtime.changed === 'function') runtime.changed();
         return op;
     }

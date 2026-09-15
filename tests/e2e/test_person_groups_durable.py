@@ -158,6 +158,17 @@ class DurablePersonGroupTests(unittest.TestCase):
                       person_id)
         page.locator('#group-add-member-btn').click()
 
+    def save_editor(self, page):
+        """Click Save and wait for the editor to CLOSE.
+
+        A successful save closes it and re-renders the page. Reopening before
+        that has happened matches the OLD panel, which is then replaced
+        underneath the freshly bound handler -- and the next click does nothing
+        at all.
+        """
+        page.locator('#gd-save-btn').click()
+        page.locator('.group-sidebar-pane--edit').wait_for(state='detached', timeout=60000)
+
     def open_editor(self, page):
         # The route has to have finished rendering: `openPersonGroupEdit` reads
         # the group off the tab context, and a click during the navigation
@@ -239,7 +250,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         self.detail(page, group)
         self.open_editor(page)
         page.locator('#gd-name').fill('Renamed Offline')
-        page.locator('#gd-save-btn').click()
+        self.save_editor(page)
         self.wait_for_family(page, 'SET_PERSON_GROUP_FIELD')
         o._wait_content_contains(page, 'Renamed Offline', timeout=60000)
 
@@ -264,7 +275,7 @@ class DurablePersonGroupTests(unittest.TestCase):
 
         self.open_editor(page)
         page.locator('#gd-name').fill('Temporarily Renamed')
-        page.locator('#gd-save-btn').click()
+        self.save_editor(page)
         self.wait_for_family(page, 'SET_PERSON_GROUP_FIELD')
         o._wait_content_contains(page, 'Temporarily Renamed', timeout=60000)
 
@@ -273,7 +284,7 @@ class DurablePersonGroupTests(unittest.TestCase):
                          'Temporarily Renamed',
                          'the editor opens from the effective group, not the cached one')
         page.locator('#gd-name').fill(PERSON_GROUP_NAME)
-        page.locator('#gd-save-btn').click()
+        self.save_editor(page)
         wait_for_async(
             page,
             "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
@@ -288,7 +299,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         self.open_editor(page)
         page.locator('#gd-name').fill('Both Changed')
         page.locator('#gd-description').fill('A new description')
-        page.locator('#gd-save-btn').click()
+        self.save_editor(page)
         wait_for_async(
             page,
             "() => prksSync.store.listOperations().then(rows => rows.length === 2)",
@@ -305,7 +316,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         })""")
         self.open_editor(page)
         page.locator('#gd-description').fill('Edited again')
-        page.locator('#gd-save-btn').click()
+        self.save_editor(page)
         wait_for_async(
             page,
             "() => prksSync.store.listOperations().then(rows => rows.some("

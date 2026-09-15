@@ -222,7 +222,18 @@ async function fetchWorks(options = {}) {
         return [];
     }
 }
+/**
+ * The Folder hierarchy every picker and dashboard reads.
+ *
+ * The EFFECTIVE hierarchy: a folder created on this device is a real folder,
+ * and a picker that could not offer it -- or a dashboard that did not list it
+ * -- would make offline creation useless the moment it succeeded.
+ */
 async function fetchFolders(options = {}) {
+    if (typeof prksEffectiveFolderCatalogue === 'function') {
+        try { return await prksEffectiveFolderCatalogue() || []; }
+        catch (_e) { return []; }
+    }
     const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/folders', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());

@@ -3486,14 +3486,34 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 }
                 /* Where this file has been FILED, as the user last decided --
                  * the acknowledged record plus any unsynchronized move. The
-                 * card that names its folder is rendered from this object. */
-                if (typeof prksRefreshPendingWorkFolders === 'function') {
-                    await prksRefreshPendingWorkFolders();
-                    if (stale()) return;
-                }
+                 * card that names its folder is rendered from this object.
+                 *
+                 * The map is applied synchronously and refreshed WITHOUT
+                 * blocking: this page renders from the cached entity, and
+                 * making it wait on a durable read first would delay the whole
+                 * Work behind bookkeeping. When the refresh lands it corrects
+                 * the record in place rather than holding up the paint. */
                 const work = offlineWork.value && typeof prksApplyPendingWorkFolders === 'function'
                     ? prksApplyPendingWorkFolders([offlineWork.value])[0]
                     : offlineWork.value;
+                if (work && typeof prksRefreshPendingWorkFolders === 'function') {
+                    void prksRefreshPendingWorkFolders().then(function () {
+                        if (stale() || !ctx.getEntity) return;
+                        const current = ctx.getEntity('work');
+                        if (!current || current.id !== work.id) return;
+                        const next = prksApplyPendingWorkFolders([current])[0];
+                        if (next === current) return;
+                        ctx.setEntity('work', next);
+                        /* Only when this tab actually owns the shared panel. A
+                         * background tab whose bookkeeping happens to land late
+                         * must never replace what the user is looking at. */
+                        const focused = typeof prksTabContextIsFocused === 'function'
+                            ? prksTabContextIsFocused(ctx) : true;
+                        if (focused && typeof updatePanelContent === 'function') {
+                            updatePanelContent('details');
+                        }
+                    }).catch(function () { /* bookkeeping never breaks the page */ });
+                }
                 if (!work && offlineWork.source === 'unavailable') {
                     prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'File not available offline' };
@@ -4310,7 +4330,8 @@ function initForms() {
 
     if (folderBtn) {
         folderBtn.onclick = async () => {
-            if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
+            /* No offline guard: a folder is created durably, under an id this
+             * device mints, so it exists and is usable the moment it is saved. */
             const ownerCtx =
                 typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
             if (folderBtn.disabled) return;
@@ -4376,7 +4397,10 @@ function initForms() {
                 }
                 return;
             }
-            window.location.reload();
+            /* Not a reload: the record is local, and reloading would throw away
+             * every other pending change on the page. The Folder Library is
+             * where a new folder belongs, so go there. */
+            if (typeof prksNavigate === 'function') prksNavigate('#/folders');
         };
     }
 

@@ -599,25 +599,32 @@ class OfflineFoundationTests(unittest.TestCase):
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
-        page.evaluate(
+        folder_id = page.evaluate(
             """async (workId) => {
                 const folderId = await createFolder('Offline coherence folder add', '');
-                return addWorkToFolder(folderId, workId);
+                await addWorkToFolder(folderId, workId);
+                return folderId;
             }""",
             arg=work_a,
         )
-        wait_for_async(page,
-            "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
-            arg=work_a,
-            timeout=15000,
-        )
+        _wait_sync_settled(page)
+        # Filing is durable now, and the acknowledgement states the new folder
+        # and its title exactly -- so the Work's snapshot is PATCHED rather than
+        # dropped. Discarding it would cost the user a page they can no longer
+        # re-read once offline, for a change already known in full.
+        cached = _cached_entity(page, "work", work_a)
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached["value"]["folder_id"], folder_id)
 
         context.set_offline(True)
         page.evaluate("id => { void window.prksNavigate('#/works/' + id); }", work_a)
-        page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+        _wait_content_contains(page, WORK_A_TITLE)
 
-    def test_failed_folder_add_work_retains_offline_work_cache(self):
-        """Non-success Folder attachment never advances Work coherence."""
+    def test_a_filing_with_no_readable_base_is_refused_and_keeps_the_cache(self):
+        """Filing cannot fail on the wire any more -- it is durable. What can
+        still stop it is a base this device cannot read: without the revision
+        the move was measured against it would have to guess, and guessing is
+        what a base revision exists to prevent."""
         server, page, _context, _collector = self._start()
         work_a = server.ids["work_a"]
 
@@ -625,14 +632,16 @@ class OfflineFoundationTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
         folder_id = page.evaluate("() => createFolder('Offline failed folder add', '')")
+        _wait_sync_settled(page)
 
-        def reject_folder_add(route):
-            if route.request.method == "POST" and urlparse(route.request.url).path == "/api/folders/" + folder_id + "/works":
-                route.fulfill(status=409, content_type="application/json", body='{"error":"test failure"}')
+        def refuse_base(route):
+            if urlparse(route.request.url).path.endswith("/folder-state"):
+                route.fulfill(status=500, content_type="application/json",
+                              body='{"error":"test failure"}')
                 return
             route.fallback()
 
-        page.route("**/api/folders/*/works", reject_folder_add)
+        page.route("**/api/works/**", refuse_base)
         try:
             failed = page.evaluate(
                 """async ([folderId, workId]) => {
@@ -643,8 +652,17 @@ class OfflineFoundationTests(unittest.TestCase):
             )
             self.assertTrue(failed)
             self.assertIsNotNone(_cached_entity(page, "work", work_a))
+            self.assertEqual(
+                page.evaluate("() => prksSync.store.listOperations().then(rows => rows.filter("
+                              "  o => o.operation === 'SET_WORK_FOLDER').length)"), 0,
+                "nothing is queued against a base it could not read")
         finally:
-            page.unroute("**/api/folders/*/works", reject_folder_add)
+            page.unroute("**/api/works/**", refuse_base)
+            _collector.console_errors[:] = [
+                e for e in _collector.console_errors
+                if "500 (Internal Server Error)" not in e
+            ]
+            _collector.http_5xx.clear()
 
     def test_failed_notes_save_retains_previous_work_cache(self):
         """A rejected notes PATCH leaves the last known-good snapshot available."""
@@ -6268,6 +6286,14 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         page.evaluate(
             """async (id) => {
                 const folderId = await createFolder('People-neutral folder', '');
+                /* The folder is durable: the server has to have been told about
+                 * it before a canonical bulk move can name it. */
+                const deadline = Date.now() + 30000;
+                while (Date.now() < deadline) {
+                    const rows = await prksSync.store.listOperations();
+                    if (!rows.some(o => o.status !== 'conflict')) break;
+                    await new Promise(r => setTimeout(r, 100));
+                }
                 await window.bulkUpdateWorks({ action: 'move_folder', work_ids: [id], folder_id: folderId });
                 const tagRes = await window.prksRequest('/api/tags', {
                     method: 'POST',
