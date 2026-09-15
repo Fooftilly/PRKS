@@ -2782,6 +2782,13 @@ class PRKSDatabase:
             conn.execute("BEGIN")
             return position_sync.get_position_state_on_conn(conn, position_id)
 
+    def get_argument_sync_state(self, argument_id: str) -> Optional[dict]:
+        """Field revisions plus the two aggregates' revisions."""
+        from backend import argument_sync
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return argument_sync.get_argument_state_on_conn(conn, argument_id)
+
     def get_concept_sync_state(self, concept_id: str) -> Optional[dict]:
         """Field revisions plus the two aggregates and their revisions."""
         from backend import concept_sync

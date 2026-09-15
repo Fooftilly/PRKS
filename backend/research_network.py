@@ -779,19 +779,23 @@ def create_argument(
     sources=None,
     targets=None,
 ) -> dict:
-    n = _plain_name(name, max_len=ARGUMENT_NAME_MAX)
-    k = _validate_kind(kind)
-    text = _optional_markdown(main_text, max_len=ARGUMENT_TEXT_MAX)
+    """Construct an Argument through the boundary the durable family shares.
+
+    Scalar columns, sources and targets stay in ONE transaction: this endpoint
+    has never been able to leave a disconnected Argument behind, and the
+    durable family inherits that rather than weakening it.
+
+    The lazy import is required, not stylistic: `argument_sync` reads its
+    normalization rules from this module, so a top-level import here would be a
+    cycle. Concepts and Positions needed the same treatment for the same reason.
+    """
+    from backend import argument_sync
+
     aid = db.generate_id("A")
     with db.connection() as conn:
-        conn.execute(
-            "INSERT INTO arguments (id, name, kind, main_text) VALUES (?, ?, ?, ?)",
-            (aid, n, k, text),
-        )
-        if sources is not None:
-            _replace_sources_on_conn(conn, aid, sources)
-        if targets is not None:
-            _replace_targets_on_conn(conn, aid, targets)
+        conn.execute("BEGIN IMMEDIATE")
+        argument_sync.insert_argument_on_conn(conn, aid, name, kind, main_text,
+                                              sources, targets)
         LOGGER.info("argument_created argument_id=%s", safe_log_id(aid))
         return _argument_bundle(conn, aid)
 
@@ -804,58 +808,59 @@ def update_argument(
     kind=None,
     main_text=None,
 ) -> dict:
+    """Edit an Argument through the revision-aware boundary.
+
+    One call per field actually supplied, so each field advances only its OWN
+    revision -- that is what keeps a body edit from conflicting with a rename,
+    and it is the property the durable family relies on.
+    """
+    from backend import argument_sync
+
     aid = (argument_id or "").strip()
     if not aid:
         raise ResearchError("not_found", "Argument not found.", 404)
     with db.connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if not _fetchone(conn, "SELECT 1 FROM arguments WHERE id = ?", (aid,)):
             raise ResearchError("not_found", "Argument not found.", 404)
         if name is None and kind is None and main_text is None:
             raise ResearchError("nothing_to_update", "Nothing to update.")
-        if name is not None:
-            conn.execute(
-                "UPDATE arguments SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (_plain_name(name, max_len=ARGUMENT_NAME_MAX), aid),
-            )
-        if kind is not None:
-            conn.execute(
-                "UPDATE arguments SET kind = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (_validate_kind(kind), aid),
-            )
-        if main_text is not None:
-            conn.execute(
-                "UPDATE arguments SET main_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (_optional_markdown(main_text, max_len=ARGUMENT_TEXT_MAX), aid),
-            )
+        for field, value in (("name", name), ("kind", kind), ("main_text", main_text)):
+            if value is not None:
+                argument_sync.set_field_on_conn(conn, aid, field, value)
         LOGGER.info("argument_updated argument_id=%s", safe_log_id(aid))
         return _argument_bundle(conn, aid)
 
 
 def delete_argument(db: PRKSDatabase, argument_id: str) -> None:
+    """Destruction, through the boundary the durable family shares.
+
+    Both protections are unchanged. The shared primitive reports them as codes,
+    which are translated back into the `ResearchError` contract this endpoint
+    has always raised.
+    """
+    from backend import argument_sync
+
     aid = (argument_id or "").strip()
     if not aid:
         raise ResearchError("not_found", "Argument not found.", 404)
     with db.connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if not _fetchone(conn, "SELECT 1 FROM arguments WHERE id = ?", (aid,)):
             raise ResearchError("not_found", "Argument not found.", 404)
-        if _canonical_notes_reference_argument(conn, aid):
+        _deleted, refusal = argument_sync.delete_argument_on_conn(conn, aid)
+        if refusal == "ARGUMENT_IN_USE":
             raise ResearchError(
                 "argument_in_use",
                 "This Argument is still referenced in research notes.",
                 409,
             )
-        targeted = _fetchone(
-            conn,
-            "SELECT 1 FROM argument_target_arguments WHERE target_argument_id = ? LIMIT 1",
-            (aid,),
-        )
-        if targeted:
+        if refusal == "ARGUMENT_TARGETED":
             raise ResearchError(
                 "argument_targeted",
                 "Another Argument or Stance still responds to this record.",
                 409,
             )
-        conn.execute("DELETE FROM arguments WHERE id = ?", (aid,))
     LOGGER.info("argument_deleted argument_id=%s", safe_log_id(aid))
 
 
@@ -895,15 +900,20 @@ def _replace_sources_on_conn(conn: sqlite3.Connection, arg_id: str, sources) -> 
 
 
 def replace_argument_sources(db: PRKSDatabase, argument_id: str, sources) -> dict:
+    """Replace the citation list through the revision-aware boundary.
+
+    An ONLINE replacement must advance the same revision an offline client
+    measures its own edit against, or that client's conflict detection is
+    detecting nothing.
+    """
+    from backend import argument_sync
+
     aid = (argument_id or "").strip()
     with db.connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if not _fetchone(conn, "SELECT 1 FROM arguments WHERE id = ?", (aid,)):
             raise ResearchError("not_found", "Argument not found.", 404)
-        _replace_sources_on_conn(conn, aid, sources)
-        conn.execute(
-            "UPDATE arguments SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (aid,),
-        )
+        argument_sync.set_sources_on_conn(conn, aid, sources)
         return _argument_bundle(conn, aid)
 
 
@@ -1004,15 +1014,19 @@ def _replace_targets_on_conn(conn: sqlite3.Connection, arg_id: str, targets) -> 
 
 
 def replace_argument_targets(db: PRKSDatabase, argument_id: str, targets) -> dict:
+    """Replace the whole target list through the revision-aware boundary.
+
+    One list across both target tables, for the same reason the durable family
+    treats it as one aggregate: it is a single decision the user made.
+    """
+    from backend import argument_sync
+
     aid = (argument_id or "").strip()
     with db.connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if not _fetchone(conn, "SELECT 1 FROM arguments WHERE id = ?", (aid,)):
             raise ResearchError("not_found", "Argument not found.", 404)
-        _replace_targets_on_conn(conn, aid, targets)
-        conn.execute(
-            "UPDATE arguments SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (aid,),
-        )
+        argument_sync.set_targets_on_conn(conn, aid, targets)
         return _argument_bundle(conn, aid)
 
 

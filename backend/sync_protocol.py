@@ -174,7 +174,7 @@ def process_operation(db, data):
 # Registration is explicit and lives here so the set of families PRKS accepts
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
-    concept_sync, folder_sync, person_group_sync, person_metadata_sync, person_sync,
+    argument_sync, concept_sync, folder_sync, person_group_sync, person_metadata_sync, person_sync,
     playlist_sync, position_sync, tag_sync, work_metadata_sync, work_open_sync,
     work_role_sync, work_source_sync, work_tag_sync,
 )
@@ -254,3 +254,16 @@ register("DELETE_CONCEPT", concept_sync.DELETE_HANDLER, entity_type="concept")
 register("CREATE_POSITION", position_sync.CREATE_HANDLER, entity_type="position")
 register("SET_POSITION_FIELD", position_sync.FIELD_HANDLER, entity_type="position")
 register("DELETE_POSITION", position_sync.DELETE_HANDLER, entity_type="position")
+# Arguments and Stances. Construction carries the argument's INITIAL sources and
+# targets because `create_argument` applies them in one transaction: "Create
+# response" and "Create from Work" both produce an already-connected record, and
+# splitting that would let the creation be acknowledged while its connection was
+# refused. The three columns are independent FIELDS. Sources are one ordered
+# AGGREGATE, and so are targets -- and targets are ONE aggregate across two
+# tables, because `_replace_targets_on_conn` takes a single mixed list, deletes
+# from both tables, and checks acyclicity over both.
+register("CREATE_ARGUMENT", argument_sync.CREATE_HANDLER, entity_type="argument")
+register("SET_ARGUMENT_FIELD", argument_sync.FIELD_HANDLER, entity_type="argument")
+register("SET_ARGUMENT_SOURCES", argument_sync.SOURCES_HANDLER, entity_type="argument")
+register("SET_ARGUMENT_TARGETS", argument_sync.TARGETS_HANDLER, entity_type="argument")
+register("DELETE_ARGUMENT", argument_sync.DELETE_HANDLER, entity_type="argument")
