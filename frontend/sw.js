@@ -107,6 +107,7 @@
         '/js/playlist-state.js',
         '/js/concept-state.js',
         '/js/position-state.js',
+        '/js/argument-state.js',
         '/js/work-open-state.js',
         '/js/work-metadata-state.js',
     '/js/work-source-state.js',

@@ -253,6 +253,15 @@
             CREATE_POSITION: root.prksPositionCreateSyncHandler,
             SET_POSITION_FIELD: root.prksPositionFieldSyncHandler,
             DELETE_POSITION: root.prksPositionDeleteSyncHandler,
+            // Arguments and Stances. Construction carries the initial
+            // sources and targets, so the server can never acknowledge a
+            // half-connected record. The two lists are AGGREGATES, and
+            // targets are one aggregate over both kinds of target.
+            CREATE_ARGUMENT: root.prksArgumentCreateSyncHandler,
+            SET_ARGUMENT_FIELD: root.prksArgumentFieldSyncHandler,
+            SET_ARGUMENT_SOURCES: root.prksArgumentSourcesSyncHandler,
+            SET_ARGUMENT_TARGETS: root.prksArgumentTargetsSyncHandler,
+            DELETE_ARGUMENT: root.prksArgumentDeleteSyncHandler,
             CREATE_CONCEPT: root.prksConceptCreateSyncHandler,
             SET_CONCEPT_FIELD: root.prksConceptFieldSyncHandler,
             SET_CONCEPT_IDENTITY: root.prksConceptIdentitySyncHandler,

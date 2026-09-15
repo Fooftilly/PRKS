@@ -1402,6 +1402,163 @@
             return true;
         }
 
+        /* ---- Arguments and Stances ---------------------------------------- */
+
+        /* An Argument node already IN the cached Graph snapshot, patched in
+         * place. `record_id` is the Argument's own id -- a node's `id` is the
+         * namespaced `argument:<id>`. Stances are `argument` nodes too, so a
+         * kind change moves nothing here. Nothing is ever synthesized. */
+        async function patchGraphArgumentLabel(argumentId, name) {
+            const kinds = ['research-graph-core', 'research-graph-people'];
+            for (let i = 0; i < kinds.length; i += 1) {
+                await patchEntity(kinds[i], 'snapshot', function (snapshot) {
+                    if (!snapshot || !Array.isArray(snapshot.nodes)) return null;
+                    let changed = false;
+                    const nodes = snapshot.nodes.map(function (node) {
+                        if (!node || node.type !== 'argument') return node;
+                        if (node.record_id !== argumentId) return node;
+                        if (node.label === name) return node;
+                        changed = true;
+                        return Object.assign({}, node, { label: name });
+                    });
+                    return changed ? Object.assign({}, snapshot, { nodes: nodes }) : null;
+                });
+            }
+        }
+
+        async function patchArgumentStateRevision(argumentId, mutate) {
+            await patchEntity('argument-state', argumentId, function (state) {
+                if (typeof root.prksIsArgumentStateShape === 'function' &&
+                    !root.prksIsArgumentStateShape(state, argumentId)) return null;
+                return mutate(state);
+            });
+        }
+
+        /**
+         * An Argument the server has accepted.
+         *
+         * The cached index is FENCED rather than patched. An index row carries
+         * the names of everything the Argument targets, the titles and authors
+         * of the Works it cites, and a response count -- all derived from rows
+         * this device may never have seen, so a synthesized row would be a
+         * guess presented as a fact. The Positions domain goes with it because
+         * a Position detail lists the Arguments answering it.
+         */
+        async function reconcileCreatedArgument(result) {
+            if (!store || !await store.isAvailable()) return false;
+            if (!result || typeof result.argument_id !== 'string') return false;
+            if (!result.changed) return true;
+            prksOfflineMarkArgumentsChanged();
+            prksOfflineMarkPositionsChanged();
+            /* A brand-new Argument is in NO cached Graph snapshot -- the server
+             * computed those before it existed -- and must not be invented into
+             * one. The snapshots go stale instead. */
+            prksOfflineMarkResearchGraphCoreChanged();
+            return true;
+        }
+
+        /** One Argument field the server has applied. */
+        async function reconcileArgumentField(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.argument_id;
+            const field = result.field;
+            if (!root.prksIsSupportedArgumentField ||
+                !root.prksIsSupportedArgumentField(field)) return false;
+            const value = String((op && op.payload && op.payload.value) || '');
+            await patchArgumentStateRevision(id, function (state) {
+                const entry = state.fields[field];
+                if (!entry || entry.revision > result.server_revision) return null;
+                const next = Object.assign({}, state,
+                    { fields: Object.assign({}, state.fields) });
+                next.fields[field] = { revision: result.server_revision };
+                return next;
+            });
+            await patchEntity('argument', id, function (argument) {
+                if (!argument || argument.id !== id) return null;
+                const next = Object.assign({}, argument);
+                next[field] = value;
+                return next;
+            });
+            if (!result.changed) return true;
+            if (field === 'main_text') {
+                /* The body is shown on the Argument's own page and nowhere
+                 * else: no index row carries it, and no other record embeds
+                 * it. Patching the detail above is the whole consequence. */
+                prksOfflineMarkResearchGraphCoreChanged();
+                return true;
+            }
+            /* A name or a kind, on the other hand, is embedded by every record
+             * that points here -- other Arguments' target and response lists,
+             * Position details, note mentions -- and this device cannot
+             * enumerate those, because nothing it holds says who points at
+             * this Argument. So the two domains are fenced, exactly as the
+             * ordinary edit has always done. */
+            prksOfflineMarkArgumentsChanged();
+            prksOfflineMarkPositionsChanged();
+            if (field === 'name') {
+                /* The Graph node carries the LABEL, which the acknowledgement's
+                 * own operation states exactly, so it is corrected in place. */
+                await patchGraphArgumentLabel(id, value);
+                prksOfflineMarkResearchGraphPeopleChanged();
+            } else {
+                prksOfflineMarkResearchGraphCoreChanged();
+            }
+            return true;
+        }
+
+        /** The whole citation list the server has applied. */
+        async function reconcileArgumentSources(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.argument_id;
+            await patchArgumentStateRevision(id, function (state) {
+                const entry = state.sources;
+                if (!entry || entry.revision > result.server_revision) return null;
+                return Object.assign({}, state,
+                    { sources: { revision: result.server_revision } });
+            });
+            if (!result.changed) return true;
+            /* A cached source row carries the Work's title and its authors,
+             * which this operation names by id alone -- so the rows cannot be
+             * rebuilt here, and the domain is fenced. Positions are untouched:
+             * which Works an Argument cites changes nothing a Position shows,
+             * which is why the ordinary endpoint does not stale them either. */
+            prksOfflineMarkArgumentsChanged();
+            prksOfflineMarkResearchGraphCoreChanged();
+            return true;
+        }
+
+        /** The whole target list the server has applied. */
+        async function reconcileArgumentTargets(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.argument_id;
+            await patchArgumentStateRevision(id, function (state) {
+                const entry = state.targets;
+                if (!entry || entry.revision > result.server_revision) return null;
+                return Object.assign({}, state,
+                    { targets: { revision: result.server_revision } });
+            });
+            if (!result.changed) return true;
+            /* Targets are the one thing that changes what a POSITION shows --
+             * its list of answering Arguments is this relationship read from
+             * the other end -- and the Graph's edges are this list too. */
+            prksOfflineMarkArgumentsChanged();
+            prksOfflineMarkPositionsChanged();
+            prksOfflineMarkResearchGraphCoreChanged();
+            return true;
+        }
+
+        /** An Argument the server has removed. */
+        async function reconcileDeletedArgument(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.argument_id;
+            await invalidateEntity('argument', id);
+            await invalidateEntity('argument-state', id);
+            prksOfflineMarkArgumentsChanged();
+            prksOfflineMarkPositionsChanged();
+            prksOfflineMarkResearchGraphCoreChanged();
+            return true;
+        }
+
         /* ---- Concepts ----------------------------------------------------- */
 
         async function cachedConceptRows() {
@@ -2447,6 +2604,11 @@
             reconcileCreatedPosition,
             reconcilePositionField,
             reconcileDeletedPosition,
+            reconcileCreatedArgument,
+            reconcileArgumentField,
+            reconcileArgumentSources,
+            reconcileArgumentTargets,
+            reconcileDeletedArgument,
             reconcileCreatedTag,
             reconcileDeletedTag,
             reconcileCreatedPerson,
@@ -2703,6 +2865,16 @@
             production.reconcilePositionField(result, op),
         prksOfflineReconcileDeletedPosition: result =>
             production.reconcileDeletedPosition(result),
+        prksOfflineReconcileCreatedArgument: result =>
+            production.reconcileCreatedArgument(result),
+        prksOfflineReconcileArgumentField: (result, op) =>
+            production.reconcileArgumentField(result, op),
+        prksOfflineReconcileArgumentSources: (result, op) =>
+            production.reconcileArgumentSources(result, op),
+        prksOfflineReconcileArgumentTargets: (result, op) =>
+            production.reconcileArgumentTargets(result, op),
+        prksOfflineReconcileDeletedArgument: result =>
+            production.reconcileDeletedArgument(result),
         prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
         prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),

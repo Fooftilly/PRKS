@@ -96,6 +96,11 @@
         'CREATE_POSITION',
         'SET_POSITION_FIELD',
         'DELETE_POSITION',
+        'CREATE_ARGUMENT',
+        'SET_ARGUMENT_FIELD',
+        'SET_ARGUMENT_SOURCES',
+        'SET_ARGUMENT_TARGETS',
+        'DELETE_ARGUMENT',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -253,6 +258,32 @@
         return (Array.isArray(rows) ? rows : []).filter(function (row) {
             return !!row && row.status !== STATUS_ACKNOWLEDGED &&
                 row.entity_type === 'position' && row.entity_id === positionId;
+        });
+    }
+
+    /* An Argument's three independent columns. `kind` is one of them rather
+     * than part of an identity: an Argument and a Stance are stored and
+     * projected identically, so changing it writes nothing else. */
+    const ARGUMENT_FIELDS = Object.freeze(['name', 'kind', 'main_text']);
+    const ARGUMENT_KINDS = Object.freeze(['argument', 'stance']);
+
+    /* Mirrors `backend/argument_sync.MAX_SOURCES` / `MAX_TARGETS`. Each list
+     * travels as ONE payload -- that is what makes it an aggregate -- so what
+     * it can name is bounded by what an envelope may carry. */
+    const ARGUMENT_MAX_SOURCES = 200;
+    const ARGUMENT_MAX_TARGETS = 200;
+
+    /* Every unsynchronized operation that names one Argument, whatever it does
+     * to it -- including another Argument that has been given it as a TARGET,
+     * which a deletion has to know about because the server refuses to delete
+     * an Argument something still answers. */
+    function operationsNamingArgument(rows, argumentId) {
+        return (Array.isArray(rows) ? rows : []).filter(function (row) {
+            if (!row || row.status === STATUS_ACKNOWLEDGED) return false;
+            if (row.entity_type === 'argument' && row.entity_id === argumentId) return true;
+            return row.operation === 'SET_ARGUMENT_TARGETS' &&
+                Array.isArray(row.payload && row.payload.targets) &&
+                row.payload.targets.some(t => t && t.type === 'argument' && t.id === argumentId);
         });
     }
 
@@ -2032,6 +2063,359 @@
                 });
         }
 
+        /* ---- Arguments and Stances: construction, fields, two aggregates, deletion ---- */
+
+        function assertArgumentIsNotBeingDeleted(rows, argumentId, verb) {
+            const pendingDelete = (rows || []).find(r => r &&
+                r.operation === 'DELETE_ARGUMENT' && r.entity_id === argumentId &&
+                r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This argument is being deleted, so it cannot be ' + verb + '.');
+            }
+        }
+
+        /**
+         * The shape check both aggregate writers and construction share.
+         *
+         * Returns the canonical list, or throws. What it does NOT check is
+         * existence, the verdict vocabulary or acyclicity: those live in the
+         * database, an offline device cannot see them, and pretending to know
+         * them here would refuse edits the server would have accepted.
+         */
+        function canonicalArgumentTargets(targets) {
+            if (!Array.isArray(targets) || targets.length > ARGUMENT_MAX_TARGETS) {
+                throw localStoreError('invalid_envelope', 'Invalid argument targets.');
+            }
+            const out = [];
+            const seen = [];
+            for (const raw of targets) {
+                if (!isPlainObject(raw) || !isNonBlankString(raw.id) ||
+                    !isNonBlankString(raw.verdict_id) ||
+                    (raw.type !== 'position' && raw.type !== 'argument')) {
+                    throw localStoreError('invalid_envelope', 'Invalid argument target.');
+                }
+                const key = raw.type + ':' + raw.id.trim();
+                if (seen.indexOf(key) !== -1) {
+                    throw localStoreError('invalid_envelope', 'Duplicate argument target.');
+                }
+                seen.push(key);
+                out.push({ type: raw.type, id: raw.id.trim(),
+                           verdict_id: raw.verdict_id.trim() });
+            }
+            return out;
+        }
+
+        /** The same, for the ordered citation list. */
+        function canonicalArgumentSources(sources) {
+            if (!Array.isArray(sources) || sources.length > ARGUMENT_MAX_SOURCES) {
+                throw localStoreError('invalid_envelope', 'Invalid argument sources.');
+            }
+            const out = [];
+            const seen = [];
+            for (const raw of sources) {
+                if (!isPlainObject(raw) || !isNonBlankString(raw.work_id)) {
+                    throw localStoreError('invalid_envelope', 'Invalid argument source.');
+                }
+                const wid = raw.work_id.trim();
+                if (seen.indexOf(wid) !== -1) {
+                    throw localStoreError('invalid_envelope', 'Duplicate source Work.');
+                }
+                seen.push(wid);
+                const pages = raw.pages == null ? '' : String(raw.pages).trim();
+                out.push({ work_id: wid, pages: pages });
+            }
+            return out;
+        }
+
+        /**
+         * Every still-unacknowledged creation a target list depends on.
+         *
+         * A Position or an Argument this device minted offline can be targeted
+         * before any server has heard of it, and the dependency is what keeps
+         * the two in order. Works are NOT in this list because PRKS has no
+         * durable Work creation: a source can only name a Work the server
+         * already has.
+         */
+        function argumentTargetDependencies(rows, targets, waitFor) {
+            for (const target of targets) {
+                if (target.type === 'position') {
+                    assertPositionIsNotBeingDeleted(rows, target.id, 'targeted');
+                    const op = positionCreationDependency(rows, target.id,
+                        'nothing can target it');
+                    if (op && waitFor.indexOf(op.op_id) === -1) waitFor.push(op.op_id);
+                } else {
+                    assertArgumentIsNotBeingDeleted(rows, target.id, 'targeted');
+                    const op = argumentCreationDependency(rows, target.id,
+                        'nothing can respond to it');
+                    if (op && waitFor.indexOf(op.op_id) === -1) waitFor.push(op.op_id);
+                }
+            }
+            return waitFor;
+        }
+
+        /**
+         * Construct an Argument under an id this device mints, CARRYING its
+         * initial sources and targets.
+         *
+         * They are part of the construction rather than two follow-up
+         * operations because the server applies them in one transaction: the
+         * Response and Create-from-Work flows both produce an already-connected
+         * record. Splitting them here would make the halves separately
+         * refusable, and a user who asked to answer something would be left
+         * with a standalone Argument instead.
+         */
+        function createArgument(fields) {
+            const src = isPlainObject(fields) ? fields : {};
+            const name = src.name == null ? '' : String(src.name).trim();
+            const kind = src.kind == null ? 'argument' : String(src.kind).trim();
+            const mainText = src.main_text == null ? '' : String(src.main_text);
+            if (!name) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'An argument needs a name.'));
+            }
+            if (ARGUMENT_KINDS.indexOf(kind) === -1) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Kind must be argument or stance.'));
+            }
+            let sources;
+            let targets;
+            try {
+                sources = canonicalArgumentSources(src.sources == null ? [] : src.sources);
+                targets = canonicalArgumentTargets(src.targets == null ? [] : src.targets);
+            } catch (error) {
+                return Promise.reject(error);
+            }
+            const argumentId = generateEntityId('A', uuid);
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const waitFor = argumentTargetDependencies(rows, targets, []);
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'CREATE_ARGUMENT', entity_type: 'argument',
+                        entity_id: argumentId,
+                        payload: { name: name, kind: kind, main_text: mainText,
+                                   sources: sources, targets: targets },
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
+        /** One Save, however many of an Argument's fields it touched. */
+        function saveArgumentFields(argumentId, changes, base) {
+            if (!isNonBlankString(argumentId) || !isPlainObject(changes) || !isPlainObject(base)) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid argument save.'));
+            }
+            for (const field of Object.keys(changes)) {
+                const observed = base[field];
+                if (ARGUMENT_FIELDS.indexOf(field) === -1) {
+                    return Promise.reject(localStoreError('unknown_field',
+                        'Not an editable argument field: ' + field));
+                }
+                if (typeof changes[field] !== 'string' || !isPlainObject(observed) ||
+                    typeof observed.value !== 'string' ||
+                    !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                    return Promise.reject(localStoreError('invalid_base',
+                        'Invalid observed field state.'));
+                }
+            }
+            if (typeof changes.name === 'string' && !changes.name.trim()) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'An argument needs a name.'));
+            }
+            if (typeof changes.kind === 'string' &&
+                ARGUMENT_KINDS.indexOf(changes.kind.trim()) === -1) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Kind must be argument or stance.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertArgumentIsNotBeingDeleted(rows, argumentId, 'edited');
+                    const createOp = argumentCreationDependency(rows, argumentId,
+                        'it cannot be edited');
+                    const written = [];
+                    for (const field of Object.keys(changes)) {
+                        const desired = changes[field];
+                        const observed = base[field];
+                        const existing = rows.find(r => r.operation === 'SET_ARGUMENT_FIELD' &&
+                            r.entity_type === 'argument' && r.entity_id === argumentId &&
+                            r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                        if (existing) {
+                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                                throw localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.');
+                            }
+                            if (existing.payload.value === desired) {
+                                written.push(existing);
+                                continue;
+                            }
+                            await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                        }
+                        if (desired === observed.value) continue;
+                        written.push(await insertEnvelopeIn(request, {
+                            operation: 'SET_ARGUMENT_FIELD', entity_type: 'argument',
+                            entity_id: argumentId, payload: { field, value: desired },
+                            base_revision: observed.revision,
+                            depends_on: createOp ? [createOp.op_id] : [],
+                        }, null));
+                    }
+                    setResult(written);
+                });
+        }
+
+        /**
+         * Replace the whole citation list.
+         *
+         * ORDERED, unlike a Concept's parents: the same Works in a different
+         * order is a different list, so equality here compares positions too.
+         */
+        function setArgumentSources(argumentId, sources, observed) {
+            if (!isNonBlankString(argumentId) || !isPlainObject(observed) ||
+                !Array.isArray(observed.sources) ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid argument sources.'));
+            }
+            let desired;
+            try {
+                desired = canonicalArgumentSources(sources);
+            } catch (error) {
+                return Promise.reject(error);
+            }
+            const same = list => Array.isArray(list) && list.length === desired.length &&
+                desired.every((row, i) => list[i] && list[i].work_id === row.work_id &&
+                    (list[i].pages == null ? '' : String(list[i].pages)) === row.pages);
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertArgumentIsNotBeingDeleted(rows, argumentId, 'cited');
+                    const waitFor = [];
+                    const createOp = argumentCreationDependency(rows, argumentId,
+                        'its sources cannot be changed');
+                    if (createOp) waitFor.push(createOp.op_id);
+                    const existing = rows.find(r => r.operation === 'SET_ARGUMENT_SOURCES' &&
+                        r.entity_type === 'argument' && r.entity_id === argumentId &&
+                        r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy',
+                                'This argument’s sources are syncing or need resolution.');
+                        }
+                        if (same(existing.payload.sources || [])) { setResult(existing); return; }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    if (same(observed.sources)) { setResult(null); return; }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'SET_ARGUMENT_SOURCES', entity_type: 'argument',
+                        entity_id: argumentId, payload: { sources: desired },
+                        base_revision: observed.revision, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
+        /**
+         * Replace the whole target list, Positions and Arguments together.
+         *
+         * ONE operation across both, because the user chose one list: sending
+         * two would let each overwrite the other's half, and the server's
+         * acyclicity rule spans both anyway.
+         */
+        function setArgumentTargets(argumentId, targets, observed) {
+            if (!isNonBlankString(argumentId) || !isPlainObject(observed) ||
+                !Array.isArray(observed.targets) ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid argument targets.'));
+            }
+            let desired;
+            try {
+                desired = canonicalArgumentTargets(targets);
+            } catch (error) {
+                return Promise.reject(error);
+            }
+            if (desired.some(t => t.type === 'argument' && t.id === argumentId)) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'An argument cannot respond to itself.'));
+            }
+            const same = list => Array.isArray(list) && list.length === desired.length &&
+                desired.every((row, i) => list[i] && list[i].type === row.type &&
+                    list[i].id === row.id && list[i].verdict_id === row.verdict_id);
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertArgumentIsNotBeingDeleted(rows, argumentId, 'retargeted');
+                    const waitFor = [];
+                    const createOp = argumentCreationDependency(rows, argumentId,
+                        'its targets cannot be changed');
+                    if (createOp) waitFor.push(createOp.op_id);
+                    argumentTargetDependencies(rows, desired, waitFor);
+                    const existing = rows.find(r => r.operation === 'SET_ARGUMENT_TARGETS' &&
+                        r.entity_type === 'argument' && r.entity_id === argumentId &&
+                        r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy',
+                                'This argument’s targets are syncing or need resolution.');
+                        }
+                        if (same(existing.payload.targets || [])) { setResult(existing); return; }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    if (same(observed.targets)) { setResult(null); return; }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'SET_ARGUMENT_TARGETS', entity_type: 'argument',
+                        entity_id: argumentId, payload: { targets: desired },
+                        base_revision: observed.revision, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
+        /**
+         * Delete an Argument, cancelling what was never sent.
+         *
+         * An Argument this device had given to another as a TARGET counts as
+         * naming it: sending "respond to that" immediately before "delete that"
+         * asks the server to do work the next operation destroys, and the
+         * server would then refuse the deletion for being targeted.
+         */
+        function deleteArgument(argumentId) {
+            if (!isNonBlankString(argumentId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid argument.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = operationsNamingArgument(rows, argumentId);
+                    const already = mine.find(r => r.operation === 'DELETE_ARGUMENT');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_ARGUMENT' &&
+                        r.entity_id === argumentId);
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row) && !(row.operation === 'CREATE_ARGUMENT' &&
+                                row.entity_id === argumentId)) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_ARGUMENT', entity_type: 'argument',
+                        entity_id: argumentId, payload: {},
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
         /* ---- Playlists: construction, fields, membership, order, deletion ---- */
 
         function assertPlaylistIsNotBeingDeleted(rows, playlistId, verb) {
@@ -2783,6 +3167,12 @@
                 'This position could not be created on the server, so ' + consequence + '.');
         }
 
+        /** The same three states, for an Argument this device created. */
+        function argumentCreationDependency(rows, argumentId, consequence) {
+            return creationDependency(rows, 'CREATE_ARGUMENT', 'argument', argumentId,
+                'This argument could not be created on the server, so ' + consequence + '.');
+        }
+
         /** The same three states, for a Concept this device created. */
         function conceptCreationDependency(rows, conceptId, consequence) {
             return creationDependency(rows, 'CREATE_CONCEPT', 'concept', conceptId,
@@ -3111,6 +3501,11 @@
             createPosition: createPosition,
             savePositionFields: savePositionFields,
             deletePosition: deletePosition,
+            createArgument: createArgument,
+            saveArgumentFields: saveArgumentFields,
+            setArgumentSources: setArgumentSources,
+            setArgumentTargets: setArgumentTargets,
+            deleteArgument: deleteArgument,
             createConcept: createConcept,
             saveConceptFields: saveConceptFields,
             setConceptIdentity: setConceptIdentity,
@@ -3156,6 +3551,10 @@
         PRKS_LOCAL_FOLDER_FIELDS: FOLDER_FIELDS,
         prksDurableDeletionAwaitsServer: deletionAwaitsServer,
         PRKS_LOCAL_POSITION_FIELDS: POSITION_FIELDS,
+        PRKS_LOCAL_ARGUMENT_FIELDS: ARGUMENT_FIELDS,
+        PRKS_LOCAL_ARGUMENT_KINDS: ARGUMENT_KINDS,
+        PRKS_LOCAL_ARGUMENT_MAX_SOURCES: ARGUMENT_MAX_SOURCES,
+        PRKS_LOCAL_ARGUMENT_MAX_TARGETS: ARGUMENT_MAX_TARGETS,
         PRKS_LOCAL_CONCEPT_FIELDS: CONCEPT_FIELDS,
         PRKS_LOCAL_CONCEPT_MAX_ALIASES: CONCEPT_MAX_ALIASES,
         PRKS_LOCAL_CONCEPT_MAX_PARENTS: CONCEPT_MAX_PARENTS,
