@@ -146,14 +146,31 @@ async function run() {
         for(const k of ['concept','position','argument','person','person-group','playlist','work'])assert(e.entities.has(k));
     }
     // Canonical API successes, failures and exclusions, without UI ownership dependencies.
-    for(const fn of ['createConcept','updateConcept','deleteConcept','putConceptParents','createPosition','updatePosition','deletePosition','createArgument','updateArgument','deleteArgument','putArgumentSources','putArgumentTargets','putConceptAliases']) {
+    // Concepts are deliberately absent: they are DURABLE, so a Concept write
+    // reaches no request at all and stales nothing at the call site -- the
+    // Graph is fenced (or its label patched) by the reconciler, once the server
+    // has actually answered. Publishing a Graph invalidation for an intent that
+    // has not landed would discard a snapshot to show the same thing.
+    for(const fn of ['createPosition','updatePosition','deletePosition','createArgument','updateArgument','deleteArgument','putArgumentSources','putArgumentTargets']) {
         for(const ok of [true,false]) {
             const e=environment();e.setRequest(async()=>({ok,status:ok?200:400,json:async()=>({})}));
             try {await e.ctx[fn]('id',[]);}catch(err){assert(!ok);}
-            const expected=ok&&fn!=='putConceptAliases'?1:0;
+            const expected=ok?1:0;
             assert.equal(e.ctx.prksOfflineDomainGeneration(core),expected,fn);
             assert.equal(e.ctx.prksOfflineDomainGeneration(people),expected,fn);
         }
+    }
+    // And the durable half of that rule, asserted rather than assumed: a
+    // Concept write issues no canonical request and moves neither Graph
+    // generation, whatever the (unused) transport would have answered.
+    for(const fn of ['createConcept','updateConcept','deleteConcept','putConceptParents','putConceptAliases']) {
+        const e=environment();
+        let requests=0;
+        e.setRequest(async()=>{requests+=1;return {ok:true,status:200,json:async()=>({})};});
+        try {await e.ctx[fn]('id',[]);}catch(err){/* an unknown base is a refusal, not a request */}
+        assert.equal(requests,0,fn+' must not reach the network');
+        assert.equal(e.ctx.prksOfflineDomainGeneration(core),0,fn);
+        assert.equal(e.ctx.prksOfflineDomainGeneration(people),0,fn);
     }
     /* A role change never stales the CORE graph, and no longer stales the
      * People graph either: a role acknowledgement patches that edge exactly --

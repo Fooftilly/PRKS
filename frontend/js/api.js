@@ -979,7 +979,16 @@ async function prksResearchJson(res, fallbackMessage, source) {
     return data;
 }
 
+/**
+ * The Concept vocabulary a user should see: what this device holds, with every
+ * unsynchronized intent applied. A Concept created here is real, so it is
+ * pickable as a parent before any server has heard of it.
+ */
 async function fetchConcepts(options = {}) {
+    if (typeof prksEffectiveConceptCatalogue === 'function') {
+        try { return await prksEffectiveConceptCatalogue() || []; }
+        catch (_e) { return []; }
+    }
     const errorOwner = prksApiErrorOwner(options);
     try {
         const res = await prksRequest('/api/concepts', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
@@ -1242,60 +1251,147 @@ function prksMarkWorkAuthorDisplayChanged(workId, roleType) {
     return prksMarkWorkRoleChanged(workId, roleType);
 }
 
+/* --- Durable Concept mutations --------------------------------------------
+ * Every production Concept write goes through these, so there is exactly one
+ * boundary per operation. None of them guards connectivity: a Concept change
+ * is a semantic operation with a revision and a defined conflict, so it is
+ * written to the durable queue and is as real offline as online.
+ *
+ * What a caller can still be told is that the BASE is unknown -- a Concept this
+ * device has never read has no revision to measure an edit against, and
+ * guessing would silently overwrite whatever another device wrote. That is a
+ * different refusal from "no connection", and it is the only one this layer
+ * makes. */
+function prksConceptSaveMessage(error, action) {
+    switch (error && error.prksLocalStoreCode) {
+        case 'scope_busy':
+            return 'Part of this concept is syncing or needs a decision. Try again shortly.';
+        case 'entity_deleted':
+            return 'This concept is being deleted, so it cannot be changed.';
+        case 'dependency_failed':
+            return String(error.message || 'A change this one depends on could not be saved.');
+        case 'invalid_envelope':
+        case 'invalid_base':
+            return String(error.message || 'That is not a valid concept change.');
+        default:
+            return 'Could not ' + action + ' locally. Please retry.';
+    }
+}
+
+function prksConceptBaseUnavailable() {
+    const err = new Error(
+        'This concept cannot be edited offline yet. Open it once while connected to '
+        + 'PRKS so its synchronization state is prepared.');
+    err.prksConceptUnavailable = true;
+    return err;
+}
+
+/**
+ * Create a Concept durably, under an id this device mints.
+ *
+ * Unlike a Folder or a Playlist there is no placeholder name: a Concept's name
+ * is its identity. Uniqueness over the name-or-alias space stays canonical --
+ * only the server sees the whole vocabulary — so a taken name comes back as a
+ * named refusal rather than being guessed at here.
+ */
 async function createConcept(payload) {
-    const res = await prksRequest('/api/concepts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    const data = await prksResearchJson(res, 'Could not create Concept.', 'concepts.create');
-    prksMarkConceptsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+    const src = payload && typeof payload === 'object' ? payload : {};
+    let op;
+    try {
+        op = await prksCreateConceptDurably({
+            name: src.name == null ? '' : String(src.name),
+            description: src.description == null ? '' : String(src.description),
+        });
+    } catch (error) {
+        throw new Error(prksConceptSaveMessage(error, 'create this concept'));
+    }
+    return op ? { id: op.entity_id, name: op.payload.name,
+                  description: op.payload.description, aliases: [],
+                  parents: [], children: [] } : null;
 }
 
+/**
+ * Edit a Concept, sending only what changed.
+ *
+ * `name` and `description` arrive together from the ordinary PATCH shape but
+ * belong to two different families: the definition is a scalar FIELD, and the
+ * name is half of the identity aggregate, because renaming keeps the old name
+ * reachable as an alias.
+ */
 async function updateConcept(id, payload) {
-    const res = await prksRequest('/api/concepts/' + encodeURIComponent(id), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    const data = await prksResearchJson(res, 'Could not update Concept.', 'concepts.update');
-    prksMarkConceptsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+    const src = payload && typeof payload === 'object' ? payload : {};
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    if (Object.prototype.hasOwnProperty.call(src, 'description')) {
+        const base = await prksAcknowledgedConceptFields(id, ops);
+        if (!base) throw prksConceptBaseUnavailable();
+        const draft = { description: src.description == null ? '' : String(src.description) };
+        const changes = prksDirtyConceptFields(id, draft, base, ops);
+        if (Object.keys(changes).length) {
+            try {
+                await prksSaveConceptFieldsDurably(id, changes, base);
+            } catch (error) {
+                throw new Error(prksConceptSaveMessage(error, 'save this concept'));
+            }
+        }
+    }
+    if (Object.prototype.hasOwnProperty.call(src, 'name')) {
+        const observed = await prksAcknowledgedConceptIdentity(id, ops);
+        if (!observed) throw prksConceptBaseUnavailable();
+        /* The alias set travels unchanged: the server adds the old name to it
+         * when the identity actually moves, exactly as the ordinary PATCH
+         * always did. */
+        try {
+            await prksSetConceptIdentityDurably(
+                id, String(src.name == null ? '' : src.name), observed.aliases, observed);
+        } catch (error) {
+            throw new Error(prksConceptSaveMessage(error, 'rename this concept'));
+        }
+    }
+    return { id: id };
 }
 
+/** Delete a Concept durably. A tombstone: nothing acknowledged is destroyed. */
 async function deleteConcept(id) {
-    const res = await prksRequest('/api/concepts/' + encodeURIComponent(id), { method: 'DELETE' });
-    const data = await prksResearchJson(res, 'Could not delete Concept.', 'concepts.delete');
-    prksMarkConceptsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+    try {
+        await prksDeleteConceptDurably(id);
+    } catch (error) {
+        throw new Error(prksConceptSaveMessage(error, 'delete this concept'));
+    }
+    return { status: 'deleted' };
 }
 
+/** The whole parent set, as one structural judgement. */
 async function putConceptParents(id, parentIds) {
-    const res = await prksRequest('/api/concepts/' + encodeURIComponent(id) + '/parents', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parent_ids: parentIds || [] }),
-    });
-    const data = await prksResearchJson(res, 'Could not update Concept parents.', 'concepts.parents');
-    prksMarkConceptsDomainChanged();
-    prksMarkResearchGraphCoreChanged();
-    return data;
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    const observed = await prksAcknowledgedConceptParents(id, ops);
+    if (!observed) throw prksConceptBaseUnavailable();
+    try {
+        await prksSetConceptParentsDurably(id, parentIds || [], observed);
+    } catch (error) {
+        throw new Error(prksConceptSaveMessage(error, 'reparent this concept'));
+    }
+    return { id: id };
 }
 
+/**
+ * The alias set -- which is half of the identity, not a list of its own.
+ *
+ * The name travels unchanged, so an alias edit and a rename are the same
+ * operation seen from two ends and cannot overwrite each other's half.
+ */
 async function putConceptAliases(id, aliases) {
-    const res = await prksRequest('/api/concepts/' + encodeURIComponent(id) + '/aliases', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aliases: aliases || [] }),
-    });
-    // Aliases affect note resolution, not Graph labels or explicit hierarchy.
-    const data = await prksResearchJson(res, 'Could not update Concept aliases.', 'concepts.aliases');
-    prksMarkConceptsDomainChanged();
-    return data;
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    const observed = await prksAcknowledgedConceptIdentity(id, ops);
+    if (!observed) throw prksConceptBaseUnavailable();
+    try {
+        await prksSetConceptIdentityDurably(id, observed.name, aliases || [], observed);
+    } catch (error) {
+        throw new Error(prksConceptSaveMessage(error, 'save these aliases'));
+    }
+    return { id: id };
 }
 
 async function fetchPositions(options = {}) {

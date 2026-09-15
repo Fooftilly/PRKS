@@ -157,22 +157,39 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # ... and only on acknowledged success, never on a failed/aborted save.
         self.assertIn("if (ok && typeof prksOfflineMarkConceptsChanged === 'function')", notes_body)
 
-    def test_concept_mutations_invalidate_at_the_canonical_helper_boundary(self):
+    def test_concept_mutations_route_through_durable_boundaries(self):
+        """Coherence for Concepts happens on ACKNOWLEDGEMENT, not at the call.
+
+        The invariant this test has always protected -- nothing publishes
+        coherence before the change is real -- is unchanged; what moved is where
+        it is enforced. A durable write changes nothing cached until the server
+        answers, so marking a domain at the call site would discard a page to
+        show the same thing.
+        """
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        for fn in (
-            "async function createConcept(",
-            "async function updateConcept(",
-            "async function deleteConcept(",
-            "async function putConceptParents(",
-            "async function putConceptAliases(",
+        for fn, writer in (
+            ("async function createConcept(", "prksCreateConceptDurably("),
+            ("async function updateConcept(", "prksSetConceptIdentityDurably("),
+            ("async function deleteConcept(", "prksDeleteConceptDurably("),
+            ("async function putConceptParents(", "prksSetConceptParentsDurably("),
+            ("async function putConceptAliases(", "prksSetConceptIdentityDurably("),
         ):
             start = api.index(fn)
-            body = api[start : start + 900]
-            # prksResearchJson throws on a non-ok response, so reaching the
-            # invalidation means the canonical mutation actually succeeded.
-            self.assertIn("prksResearchJson(", body, fn)
-            self.assertIn("prksMarkConceptsDomainChanged();", body, fn)
-            self.assertLess(body.index("prksResearchJson("), body.index("prksMarkConceptsDomainChanged();"), fn)
+            body = api[start : api.index("\n}", start)]
+            with self.subTest(fn=fn):
+                self.assertIn(writer, body)
+                self.assertNotIn("prksRequest('/api/concepts", body)
+                self.assertNotIn("prksResearchJson(", body)
+                self.assertNotIn("prksMarkConceptsDomainChanged", body)
+                self.assertNotIn("prksMarkResearchGraphCoreChanged", body)
+        # The reconcilers own it instead, and each one says which projections it
+        # can patch and which it must fence.
+        runtime = _read(_RUNTIME)
+        for name in ("reconcileCreatedConcept", "reconcileConceptField",
+                     "reconcileConceptIdentity", "reconcileConceptParents",
+                     "reconcileDeletedConcept"):
+            with self.subTest(name=name):
+                self.assertIn("async function %s(" % name, runtime)
 
     def test_positions_domain_shape_is_defined_once(self):
         src = _read(_RUNTIME)

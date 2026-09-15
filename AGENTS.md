@@ -596,7 +596,18 @@ operation with validation, a revision or an explicit "no base revision" rule,
 reconciliation and named refusals. See *Adding a family: the four shapes and
 what each must declare* in `docs/local-first-sync.md` before starting one.
 
-Concept routes are **read-only** offline. The Concept index uses the `lists`
+Concepts are **local-first**. Creating one, editing its definition, renaming it,
+changing its aliases, reparenting it and deleting it are durable operations
+(`CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`,
+`SET_CONCEPT_PARENTS`, `DELETE_CONCEPT`) -- see *Concepts (3H)* in
+`docs/local-first-sync.md`. The NAME and the ALIAS SET are ONE aggregate,
+because renaming keeps the old name reachable as an alias so that existing notes
+go on resolving; do not split them. The parent set is one structural judgement,
+not a collection of edges. Name-or-alias uniqueness and acyclicity stay
+canonical, and `CONCEPT_IN_USE` still refuses a Concept that notes name.
+
+The read cache below still backs the pages themselves. The Concept index uses
+the `lists`
 store under the stable key `concepts:index`; Concept detail uses the `entities`
 store under `kind: 'concept'`. The two caches are independent by design and the
 index deliberately does **not** prefetch every Concept detail — seeing a Concept
@@ -605,19 +616,20 @@ Concept correctly reports "not available offline" rather than "Concept not
 found." Index search stays entirely client-side over the already-loaded array
 (zero API requests offline, and no offline FTS). Every Concept mutation surface
 (New Concept — including the `prksCreateConceptFlow()` entry point used from
-Work Research Notes — Rename, Delete, Definition, aliases, parents) is guarded
-before its dialog opens *and* re-checked immediately before the canonical
-request, because connectivity can change while a dialog is open. "View in
-graph" navigates normally; the Graph route owns snapshot availability. A Concept page mounted while
-online becomes read-only in place via `prksBindConceptOfflineState()`, whose
-subscription belongs to the route's TabContext — never a global per-render
-listener, and never a global Concept runtime singleton.
+Work Research Notes — Rename, Delete, Definition, aliases, parents) is durable
+and carries **no** connectivity guard. What they can still refuse is an unknown
+base, via `prksConceptBaseUnavailable()`. "View in graph" navigates normally;
+the Graph route owns snapshot availability. `prksBindConceptOfflineState()`
+survives with an empty server-bound selector: adding one back means asserting
+that the action genuinely cannot be represented offline, not that disabling it
+is easier.
 
 An unavailable cached list is not an empty one. A cached `[]` that the server
 genuinely returned may render the ordinary "No Concepts yet." empty state (with
 New Concept still disabled offline); *no* cached list must render an explicit
 "Concepts not available offline / This list has not been cached on this device."
-The shape guarantees the old `fetchConcepts`/`fetchConcept` helpers provided are
+A vocabulary this device could not read is still a page when the durable queue
+holds a Concept created here. The shape guarantees the old `fetchConcepts`/`fetchConcept` helpers provided are
 not lost by routing through the runtime: a wrong-shaped *server* body is a route
 error, while a wrong-shaped *cached* body makes the cache unavailable (and is
 discarded best-effort), never a silent empty list or a false "not found."

@@ -100,6 +100,31 @@
             const where = (context.folder && context.folder.title) || op.payload.folder_id;
             return op.payload.folder_id ? 'File in ' + where : 'Remove from its folder';
         }
+        if (op.operation === 'CREATE_CONCEPT') {
+            return 'Create concept "' + bounded(op.payload.name) + '"';
+        }
+        if (op.operation === 'SET_CONCEPT_FIELD') {
+            const labels = root.PRKS_CONCEPT_FIELD_LABELS || {};
+            const field = op.payload.field;
+            return (labels[field] || field) + ' = "' + bounded(op.payload.value) + '"';
+        }
+        if (op.operation === 'SET_CONCEPT_IDENTITY') {
+            /* Named together, because they ARE one decision -- a rename writes
+             * an alias, so reporting them apart would describe two changes the
+             * user never made separately. */
+            const aliases = Array.isArray(op.payload.aliases) ? op.payload.aliases.length : 0;
+            return 'Name = "' + bounded(op.payload.name) + '" with ' + aliases +
+                (aliases === 1 ? ' alias' : ' aliases');
+        }
+        if (op.operation === 'SET_CONCEPT_PARENTS') {
+            const count = Array.isArray(op.payload.parent_ids) ? op.payload.parent_ids.length : 0;
+            return count
+                ? 'Put under ' + count + (count === 1 ? ' concept' : ' concepts')
+                : 'Move concept to the top level';
+        }
+        if (op.operation === 'DELETE_CONCEPT') {
+            return 'Delete a concept';
+        }
         if (op.operation === 'CREATE_PLAYLIST') {
             return 'Create playlist "' + bounded(op.payload.title) + '"';
         }
@@ -177,6 +202,11 @@
         /* Reached through the Work branch, which is where a filing belongs: the
          * folder a Work is in is a field on the WORK. */
         SET_WORK_FOLDER: 'work-folder-state',
+        CREATE_CONCEPT: 'concept-state',
+        SET_CONCEPT_FIELD: 'concept-state',
+        SET_CONCEPT_IDENTITY: 'concept-state',
+        SET_CONCEPT_PARENTS: 'concept-state',
+        DELETE_CONCEPT: 'concept-state',
         CREATE_PLAYLIST: 'playlist-state',
         SET_PLAYLIST_FIELD: 'playlist-state',
         REORDER_PLAYLIST_ITEMS: 'playlist-state',
@@ -234,6 +264,17 @@
                 root.prksOfflineMarkFoldersChanged();
             }
             root.prksOfflineMarkEntityChanged('folder-state', op.entity_id);
+            return;
+        }
+        if (op.entity_type === 'concept') {
+            /* The whole vocabulary: a discarded creation leaves an index that
+             * was showing a Concept the server never stored, a discarded
+             * rename one showing a name nobody chose, and a discarded
+             * reparent a hierarchy that describes no edge. */
+            if (typeof root.prksOfflineMarkConceptsChanged === 'function') {
+                root.prksOfflineMarkConceptsChanged();
+            }
+            root.prksOfflineMarkEntityChanged('concept-state', op.entity_id);
             return;
         }
         if (op.entity_type === 'playlist') {
@@ -296,6 +337,11 @@
         PERSON_NOT_FOUND: 'That person no longer exists on the server.',
         PERSON_HAS_LINKS: 'They are still credited on a file, so they cannot be deleted.',
         PLAYLIST_NOT_FOUND: 'That playlist no longer exists on the server.',
+        CONCEPT_EXISTS: 'Another concept already has that name or alias.',
+        AMBIGUOUS_CONCEPT: 'More than one concept matches that name.',
+        ALIAS_CONFLICT: 'That search key already belongs to another concept.',
+        CONCEPT_CYCLE: 'That would put the concept inside one of its own subconcepts.',
+        CONCEPT_IN_USE: 'It is still referenced in research notes, so it cannot be deleted.',
         ENTITY_NOT_FOUND: 'It no longer exists on the server.',
     });
 
@@ -311,6 +357,11 @@
         /* Named per code. A group refused because its name is taken and one
          * refused because its parent would make a cycle are different problems
          * with different fixes, and "Needs a decision" is neither of them. */
+        /* A code shared by two families needs the family's words. "The group it
+         * would go inside no longer exists" is actively wrong on a Concept. */
+        if (result.code === 'PARENT_NOT_FOUND' && op.entity_type === 'concept') {
+            return ' A concept it would go under no longer exists.';
+        }
         if (NAMED_REFUSALS[result.code]) return ' ' + NAMED_REFUSALS[result.code];
         /* An order carries no "current value" to report -- a long playlist's
          * ids would not fit the durable result -- so it says what actually
@@ -318,6 +369,12 @@
         if (op.operation === 'REORDER_PLAYLIST_ITEMS') {
             return ' This playlist was reordered somewhere else, so there are two'
                 + ' orders and only one can stand.';
+        }
+        /* The hierarchy carries no "current value" either -- a deep one's ids
+         * would not fit the durable result -- so it says what happened. */
+        if (op.operation === 'SET_CONCEPT_PARENTS') {
+            return ' This concept was reparented somewhere else, so there are two'
+                + ' hierarchies and only one can stand.';
         }
         if (typeof result.current_state === 'boolean' &&
             typeof result.current_value !== 'string') {

@@ -1873,6 +1873,101 @@ catalogue, and the Work card's playlist picker reads the Playlist catalogue.
 Both only disable a SEARCH. Every decision those searches lead to is durable,
 and Clear -- which names no playlist at all -- is live offline.
 
+## Concepts (3H)
+
+Five shapes, and the one non-obvious split is forced by what the ordinary
+endpoint already did.
+
+| Operation | Shape | Conflict unit | Base revision |
+| --- | --- | --- | --- |
+| `CREATE_CONCEPT` | construction | the concept | none |
+| `SET_CONCEPT_FIELD` | scalar mutation | one field (`description`) | `concept-field/[concept, field]` |
+| `SET_CONCEPT_IDENTITY` | aggregate | the name AND the aliases | `concept-identity/[concept]` |
+| `SET_CONCEPT_PARENTS` | aggregate | the whole parent set | `concept-parents/[concept]` |
+| `DELETE_CONCEPT` | destruction | the identity | none |
+
+### The name and the aliases are one decision
+
+Renaming a Concept is not a field write. When the normalized key changes,
+`update_concept` inserts the OLD name into `concept_aliases`, because every note
+that already says `[[concept:Old Name]]` must go on resolving. So a rename
+*writes into the alias set*, and both are matched by one uniqueness rule --
+`resolve_concept_key` searches name-or-alias over a single normalized space.
+
+Splitting them would let a rename and an alias edit each think it owned a value
+the other was changing, and the loser's half would vanish silently. They share
+one revision, exactly as a Folder's title and parent could not be judged apart.
+
+`description` is the only column left that is not part of identity, so it is the
+only FIELD.
+
+### Identity does not converge; the hierarchy does
+
+The two aggregates behave differently on purpose.
+
+Two devices that gave one Concept different alias sets have made two claims
+about what it IS, and the names happening to agree says nothing about the
+aliases -- so a stale identity base conflicts whatever it carries.
+
+Two devices that chose the same parents made the same decision, whatever order
+they wrote them in -- so a stale hierarchy base whose SET matches converges.
+
+### An edge moves both ends
+
+A parent renders its children from the same table, so
+`SET_CONCEPT_PARENTS` advances the hierarchy revision of every Concept that
+joined or left the set as well as the child's own. Deleting a Concept advances
+the hierarchy revision of everything it was joined to, for the same reason. A
+device holding one of those pages has to be able to discover it was overtaken.
+
+### There is no placeholder name
+
+A Folder gets "Untitled Folder" and a Playlist "Untitled playlist". A Concept
+does not: its name IS its identity, and inventing one would invent a key that
+note resolution then has to honour. An empty name is refused as a malformed
+envelope, on both paths.
+
+### Deletion keeps its canonical protection
+
+`CONCEPT_IN_USE` is unchanged: a Concept still named by canonical research notes
+is refused rather than cascaded, because deleting it would leave notes pointing
+at nothing. Deleting cancels every unsynchronized operation naming the Concept
+that was never attempted -- including one that gave it to another Concept as a
+PARENT, which is work the deletion only undoes.
+
+### What a pending change reaches, and what an acknowledgement does
+
+A pending creation, definition edit, rename, alias edit, reparent or deletion is
+an overlay over the durable queue and is never written into the acknowledged
+cache. A pending rename reaches the vocabulary (re-sorted, because the endpoint
+orders by name), the Concept's own page, and every chip that names one. A
+pending reparent reaches BOTH ends -- the child gains a parent and the parent
+gains a child -- but only where this device holds a row for the other end; a
+Concept whose name it cannot know is left out rather than invented.
+
+On acknowledgement the vocabulary is PATCHED: a creation and a rename both state
+the stored row exactly. A reparent does not -- its answer names ids, not the
+names a rendered hierarchy needs -- so the affected Concept *details* are
+dropped while the catalogue is kept, because an offline device must not lose its
+Concept list to a reparent.
+
+**Graph is a projection, and is treated as one.** A rename patches the `label`
+of a Concept node that is already in a cached snapshot, and nothing else. A
+creation cannot patch a snapshot the server computed before the Concept existed,
+so the snapshot is fenced instead -- a node is never synthesized from a domain
+cache, because that would show a graph nobody computed. A reparent fences too:
+edges are structure, and the projection has its own rules about them. A
+definition edit touches the Graph not at all.
+
+### One construction primitive
+
+The ordinary `POST /api/concepts`, the durable `CREATE_CONCEPT` and
+research-note auto-creation all construct through
+`concept_sync.insert_concept_on_conn()`, so there is exactly one answer to what
+a legal Concept is. Note auto-creation reuses the database primitive, never the
+operation handler: resolve-then-construct stays a higher-level workflow inside
+the caller's note-save transaction.
+
 ## Adding a family: the four shapes and what each must declare
 
 The families that exist fall into a small number of shapes. New work should

@@ -1880,6 +1880,36 @@ async function prksEffectiveFolderCatalogue(ops) {
     return await prksEffectiveFolderRows(rows, ops);
 }
 
+/** The Concept vocabulary this device holds, with pending intent applied. */
+async function prksEffectiveConceptRows(rows, ops) {
+    if (!Array.isArray(rows) || typeof prksEffectiveConcepts !== 'function') return rows;
+    return prksEffectiveConcepts(rows, ops || await prksDurableOperationsOrNone());
+}
+
+/** The same overlay, reading the vocabulary from cache for a caller that has none. */
+async function prksEffectiveConceptCatalogue(ops) {
+    let rows = [];
+    try {
+        const cached = await prksOfflineReadList(PRKS_CONCEPTS_LIST_KEY, '/api/concepts', {});
+        rows = cached && Array.isArray(cached.value) ? cached.value : [];
+    } catch (_e) { rows = []; }
+    return await prksEffectiveConceptRows(rows, ops);
+}
+
+/**
+ * A Concept that exists only because of an unsynchronized creation.
+ *
+ * Its empty aliases, parents and children are the truth rather than a
+ * placeholder: nothing the server holds can point at a Concept it has never
+ * heard of. The route's own overlay then applies whatever this device has
+ * since decided about it.
+ */
+function prksPendingCreatedConcept(conceptId, ops) {
+    if (typeof prksPendingConceptCreates !== 'function') return null;
+    const op = prksPendingConceptCreates(ops).find(row => row.entity_id === conceptId);
+    return op ? prksConceptRowFromOp(op) : null;
+}
+
 /** The Playlist catalogue this device holds, with pending intent applied. */
 async function prksEffectivePlaylistRows(rows, ops) {
     if (!Array.isArray(rows) || typeof prksEffectivePlaylists !== 'function') return rows;
@@ -2285,6 +2315,11 @@ async function prksHydratePendingWorkMetadata() {
      * applies again. */
     if (typeof prksRefreshPendingWorkPlaylists === 'function') {
         await prksRefreshPendingWorkPlaylists();
+    }
+    /* And Concept NAMES. A Concept chip renders from synchronous code on
+     * several surfaces, so a pending rename has to be known before the paint. */
+    if (typeof prksRefreshPendingConceptNames === 'function') {
+        await prksRefreshPendingConceptNames();
     }
 }
 
@@ -3633,8 +3668,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     { domain: PRKS_CONCEPTS_DOMAIN, validate: prksIsConceptIndexShape }
                 );
                 if (stale()) return;
-                const conceptItems = prksResolveOfflineConceptIndex(offlineConcepts);
-                if (!conceptItems) {
+                const cachedConcepts = prksResolveOfflineConceptIndex(offlineConcepts);
+                const conceptOps = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                /* A Concept created here is real, so a vocabulary this device
+                 * could not read is still a page when the queue holds one. */
+                const conceptItems = await prksEffectiveConceptRows(
+                    cachedConcepts || [], conceptOps);
+                if (stale()) return;
+                if (!cachedConcepts && !(conceptItems && conceptItems.length)) {
                     if (typeof renderConceptsIndexUnavailable === 'function') renderConceptsIndexUnavailable(contentDiv);
                     else prksOfflineRenderUnavailable(contentDiv, 'Concepts not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Concepts not available offline' };
@@ -3647,20 +3689,41 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'concept-detail': {
                 const conceptId = route.params.conceptId;
-                const offlineConcept = await prksOfflineDetailFetch(
-                    'concept',
-                    conceptId,
-                    '/api/concepts/' + encodeURIComponent(conceptId),
-                    routeSignal,
-                    {
-                        domain: PRKS_CONCEPTS_DOMAIN,
-                        validate: function (value) {
-                            return prksIsConceptShape(value, conceptId);
-                        },
-                    }
-                );
+                /* The durable queue first: a Concept this device created and
+                 * has not sent cannot exist on the server, and a real 404 is a
+                 * domain answer ("no such Concept") rather than unavailability. */
+                const conceptOps = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                const conceptDeleted = typeof prksPendingConceptDeletions === 'function' &&
+                    prksPendingConceptDeletions(conceptOps).has(conceptId);
+                const conceptUnsent = !conceptDeleted &&
+                    typeof prksPendingConceptCreates === 'function' &&
+                    prksPendingConceptCreates(conceptOps).some(op => op.entity_id === conceptId);
+                const offlineConcept = conceptUnsent
+                    ? { value: null, source: 'unavailable', cachedAt: null }
+                    : await prksOfflineDetailFetch(
+                        'concept',
+                        conceptId,
+                        '/api/concepts/' + encodeURIComponent(conceptId),
+                        routeSignal,
+                        {
+                            domain: PRKS_CONCEPTS_DOMAIN,
+                            validate: function (value) {
+                                return prksIsConceptShape(value, conceptId);
+                            },
+                        }
+                    );
                 if (stale()) return;
                 const resolvedConcept = prksResolveOfflineConcept(offlineConcept, conceptId);
+                if (conceptDeleted) {
+                    resolvedConcept.unavailable = true;
+                    resolvedConcept.concept = null;
+                }
+                if (conceptUnsent) {
+                    const pendingConcept = prksPendingCreatedConcept(conceptId, conceptOps);
+                    resolvedConcept.concept = pendingConcept;
+                    resolvedConcept.unavailable = !pendingConcept;
+                }
                 if (resolvedConcept.unavailable) {
                     prksOfflineRenderUnavailable(contentDiv, 'Concept not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Concept not available offline' };
@@ -3678,8 +3741,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                      * cached Concept is never rewritten. */
                     await prksHydratePendingWorkMetadata();
                     if (stale()) return;
+                    /* The Concept's own pending intent too -- its definition,
+                     * its name and aliases, and both ends of its hierarchy. The
+                     * vocabulary supplies the NAME of a parent or child created
+                     * on this device, which no cache holds. */
+                    const conceptCatalogue = typeof prksEffectiveConceptCatalogue === 'function'
+                        ? await prksEffectiveConceptCatalogue(conceptOps) : [];
+                    if (stale()) return;
+                    const overlaid = typeof prksEffectiveConceptDetail === 'function'
+                        ? prksEffectiveConceptDetail(item, conceptOps, conceptCatalogue) : item;
                     const effective = typeof prksEffectiveWorkReferences === 'function'
-                        ? prksEffectiveWorkReferences('concept', item) : item;
+                        ? prksEffectiveWorkReferences('concept', overlaid) : overlaid;
                     ctx.setEntity('concept', effective);
                     if (typeof renderConceptDetail === 'function') renderConceptDetail(ctx, effective, contentDiv);
                     prksOfflinePrependBanner(contentDiv, offlineConcept);

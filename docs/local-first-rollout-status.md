@@ -23,6 +23,7 @@ projection, and is proven by focused E2E coverage.
 | Person Groups | `CREATE_PERSON_GROUP`, `SET_PERSON_GROUP_FIELD`, `ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`, `DELETE_PERSON_GROUP` | four shapes over one entity; deletion is a tombstone |
 | Person deletion | `DELETE_PERSON` | tombstone; a Person credited on a file stays protected |
 | Folders | `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`, `SET_WORK_FOLDER` | moving is a field; a Work's folder is a scalar on the Work |
+| Concepts | `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`, `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT` | name+aliases are one aggregate; the parent set is another |
 | Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; deletion has no UI control today (see below) |
 
 ## What one overnight pass added
@@ -85,8 +86,6 @@ they should take, and what each must declare before implementation, are in
 * **Folder tags** — `ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG`, the one Folder
   relationship still on the network. It mirrors the Work-Tag family exactly and
   is the obvious next increment.
-* **Concepts** — create, field edits, aliases, parents, delete. Aliases and
-  parents are aggregates; note resolution depends on the complete vocabulary.
 * **Positions** — create, edit, delete. Lightweight scalar claim records.
 * **Arguments and stances** — create, field edits, `SET_ARGUMENT_SOURCES`,
   `SET_ARGUMENT_TARGETS`, delete. Sources and targets are coherent replacements

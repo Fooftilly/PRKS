@@ -1268,6 +1268,218 @@
             return true;
         }
 
+        /* ---- Concepts ----------------------------------------------------- */
+
+        async function cachedConceptRows() {
+            const cached = await store.getList(CONCEPTS_LIST_KEY)
+                .catch(function () { return null; });
+            return cached && Array.isArray(cached.value) ? cached.value : null;
+        }
+
+        async function writeConceptRows(rows) {
+            const token = currentDomainGeneration(DOMAIN_CONCEPTS) + 1;
+            domainGeneration.set(DOMAIN_CONCEPTS, token);
+            return cacheListForDomain(CONCEPTS_LIST_KEY, rows, DOMAIN_CONCEPTS, token);
+        }
+
+        /* A Concept node already IN the cached Graph snapshot, patched in
+         * place. Nothing is ever synthesized: a Concept the snapshot does not
+         * contain is a Concept the server did not put there, and inventing a
+         * node from a domain cache would show a graph nobody computed. */
+        async function patchGraphConceptLabel(conceptId, name) {
+            const kinds = ['research-graph-core', 'research-graph-people'];
+            for (let i = 0; i < kinds.length; i += 1) {
+                await patchEntity(kinds[i], 'snapshot', function (snapshot) {
+                    if (!snapshot || !Array.isArray(snapshot.nodes)) return null;
+                    let changed = false;
+                    const nodes = snapshot.nodes.map(function (node) {
+                        if (!node || node.type !== 'concept' || node.id !== conceptId) return node;
+                        if (node.label === name) return node;
+                        changed = true;
+                        return Object.assign({}, node, { label: name });
+                    });
+                    return changed ? Object.assign({}, snapshot, { nodes: nodes }) : null;
+                });
+            }
+        }
+
+        /** A Concept the server has accepted. */
+        async function reconcileCreatedConcept(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const concept = result && result.concept;
+            if (!concept || concept.id !== result.concept_id) return false;
+            const rows = await cachedConceptRows();
+            if (rows) {
+                const merged = rows.filter(row => row && row.id !== concept.id)
+                    .concat([Object.assign({ aliases: [] }, concept)]);
+                merged.sort(function (a, b) {
+                    return String(a.name || '').localeCompare(String(b.name || ''),
+                        undefined, { sensitivity: 'base' });
+                });
+                if (!await writeConceptRows(merged)) return false;
+            }
+            if (result.changed && typeof root.prksNewConceptState === 'function') {
+                await patchEntity('concept-state', concept.id,
+                    () => root.prksNewConceptState(concept.id, concept));
+            }
+            /* A brand-new Concept is in NO cached Graph snapshot -- the server
+             * computed those before it existed -- and must not be invented
+             * into one. The snapshots go stale instead, which is what every
+             * Concept creation has always done. */
+            if (result.changed) prksOfflineMarkResearchGraphCoreChanged();
+            return true;
+        }
+
+        /** One Concept field the server has applied. */
+        async function reconcileConceptField(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.concept_id;
+            const field = result.field;
+            if (!root.prksIsSupportedConceptField ||
+                !root.prksIsSupportedConceptField(field)) return false;
+            const value = String((op && op.payload && op.payload.value) || '');
+            await patchEntity('concept-state', id, function (state) {
+                if (typeof root.prksIsConceptStateShape === 'function' &&
+                    !root.prksIsConceptStateShape(state, id)) return null;
+                const entry = state.fields[field];
+                if (!entry || entry.revision > result.server_revision) return null;
+                const next = Object.assign({}, state,
+                    { fields: Object.assign({}, state.fields) });
+                next.fields[field] = { revision: result.server_revision };
+                return next;
+            });
+            const rows = await cachedConceptRows();
+            if (rows && rows.some(row => row && row.id === id)) {
+                const patched = rows.map(function (row) {
+                    if (!row || row.id !== id) return row;
+                    const next = Object.assign({}, row);
+                    next[field] = value;
+                    return next;
+                });
+                if (!await writeConceptRows(patched)) return false;
+            }
+            await patchEntity('concept', id, function (concept) {
+                if (!concept || concept.id !== id) return null;
+                const next = Object.assign({}, concept);
+                next[field] = value;
+                return next;
+            });
+            /* A definition is not a Graph label and not a note reference, so no
+             * projection outside the Concept domain shows it. */
+            return true;
+        }
+
+        /** A Concept's name and alias set, as the server now has them. */
+        async function reconcileConceptIdentity(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.concept_id;
+            const name = result.name;
+            const aliases = Array.isArray(result.aliases) ? result.aliases.slice() : [];
+            await patchEntity('concept-state', id, function (state) {
+                if (typeof root.prksIsConceptStateShape === 'function' &&
+                    !root.prksIsConceptStateShape(state, id)) return null;
+                if (state.identity_revision > result.server_revision) return null;
+                return Object.assign({}, state, {
+                    identity: { name: name, aliases: aliases },
+                    identity_revision: result.server_revision,
+                });
+            });
+            /* The answer states the stored name and the stored alias set
+             * exactly, so both the catalogue and the detail are PATCHED. */
+            const rows = await cachedConceptRows();
+            if (rows && rows.some(row => row && row.id === id)) {
+                const patched = rows.map(function (row) {
+                    if (!row || row.id !== id) return row;
+                    return Object.assign({}, row, { name: name, aliases: aliases.slice() });
+                });
+                patched.sort(function (a, b) {
+                    return String(a.name || '').localeCompare(String(b.name || ''),
+                        undefined, { sensitivity: 'base' });
+                });
+                if (!await writeConceptRows(patched)) return false;
+            }
+            await patchEntity('concept', id, function (concept) {
+                if (!concept || concept.id !== id) return null;
+                return Object.assign({}, concept, { name: name, aliases: aliases.slice() });
+            });
+            if (!result.changed) return true;
+            /* Every OTHER Concept's cached detail may name this one as a parent
+             * or a child, and this device cannot know which without reading
+             * them all -- so the domain's entities go stale while the
+             * catalogue, whose exact new row is known, is kept. */
+            await invalidateConceptNeighbours(id);
+            /* A Graph node carries the LABEL, which the answer states, so the
+             * node is corrected in place rather than the snapshot dropped. An
+             * alias is not a Graph label and moves nothing there. */
+            await patchGraphConceptLabel(id, name);
+            return true;
+        }
+
+        /** Cached Concept details other than `id` that may embed its name. */
+        async function invalidateConceptNeighbours(conceptId) {
+            const rows = await cachedConceptRows();
+            if (!rows) return;
+            for (let i = 0; i < rows.length; i += 1) {
+                const other = rows[i] && rows[i].id;
+                if (other && other !== conceptId) await invalidateEntity('concept', other);
+            }
+        }
+
+        /** A Concept's parent set, as the server now has it. */
+        async function reconcileConceptParents(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.concept_id;
+            const parentIds = Array.isArray(result.parent_ids) ? result.parent_ids.slice() : [];
+            await patchEntity('concept-state', id, function (state) {
+                if (typeof root.prksIsConceptStateShape === 'function' &&
+                    !root.prksIsConceptStateShape(state, id)) return null;
+                if (state.parents_revision > result.server_revision) return null;
+                return Object.assign({}, state, {
+                    parent_ids: parentIds, parents_revision: result.server_revision,
+                });
+            });
+            if (!result.changed) return true;
+            /* An edge moves BOTH ends and the answer names only the ids, not
+             * the names a rendered hierarchy needs -- so the Concept details
+             * are dropped rather than half-patched. The catalogue carries no
+             * hierarchy and is deliberately kept: an offline device must not
+             * lose its Concept list to a reparent. */
+            await invalidateEntity('concept', id);
+            for (let i = 0; i < parentIds.length; i += 1) {
+                await invalidateEntity('concept', parentIds[i]);
+            }
+            const previous = Array.isArray(op && op.local_context && op.local_context.previous)
+                ? op.local_context.previous : [];
+            for (let i = 0; i < previous.length; i += 1) {
+                if (parentIds.indexOf(previous[i]) === -1) {
+                    await invalidateEntity('concept', previous[i]);
+                }
+            }
+            /* The hierarchy IS Graph structure, and edges are not something a
+             * client may compute -- the projection has its own rules. */
+            prksOfflineMarkResearchGraphCoreChanged();
+            return true;
+        }
+
+        /** A Concept the server has removed. */
+        async function reconcileDeletedConcept(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.concept_id;
+            const rows = await cachedConceptRows();
+            if (rows) {
+                if (!await writeConceptRows(rows.filter(row => row && row.id !== id))) {
+                    return false;
+                }
+            }
+            await invalidateEntity('concept', id);
+            await invalidateEntity('concept-state', id);
+            /* Its edges went with it, and every other cached Concept detail may
+             * have named it. */
+            await invalidateConceptNeighbours(id);
+            prksOfflineMarkResearchGraphCoreChanged();
+            return true;
+        }
+
         /* ---- Playlists --------------------------------------------------- */
 
         async function cachedPlaylistRows() {
@@ -2088,6 +2300,11 @@
             reconcileWorkPlaylist,
             reconcilePlaylistOrder,
             reconcileDeletedPlaylist,
+            reconcileCreatedConcept,
+            reconcileConceptField,
+            reconcileConceptIdentity,
+            reconcileConceptParents,
+            reconcileDeletedConcept,
             reconcileCreatedTag,
             reconcileDeletedTag,
             reconcileCreatedPerson,
@@ -2328,6 +2545,16 @@
             production.reconcilePlaylistOrder(result, op),
         prksOfflineReconcileDeletedPlaylist: result =>
             production.reconcileDeletedPlaylist(result),
+        prksOfflineReconcileCreatedConcept: result =>
+            production.reconcileCreatedConcept(result),
+        prksOfflineReconcileConceptField: (result, op) =>
+            production.reconcileConceptField(result, op),
+        prksOfflineReconcileConceptIdentity: (result, op) =>
+            production.reconcileConceptIdentity(result, op),
+        prksOfflineReconcileConceptParents: (result, op) =>
+            production.reconcileConceptParents(result, op),
+        prksOfflineReconcileDeletedConcept: result =>
+            production.reconcileDeletedConcept(result),
         prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
         prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),

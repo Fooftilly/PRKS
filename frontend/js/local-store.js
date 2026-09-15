@@ -88,6 +88,11 @@
         'REORDER_PLAYLIST_ITEMS',
         'DELETE_PLAYLIST',
         'SET_WORK_PLAYLIST',
+        'CREATE_CONCEPT',
+        'SET_CONCEPT_FIELD',
+        'SET_CONCEPT_IDENTITY',
+        'SET_CONCEPT_PARENTS',
+        'DELETE_CONCEPT',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -211,6 +216,31 @@
             payload[name] = value == null ? '' : String(value).trim();
         });
         return payload;
+    }
+
+    /* The one editable Concept column that is not part of its identity. The
+     * name and the aliases are NOT here: renaming writes an alias, so they are
+     * one aggregate under `SET_CONCEPT_IDENTITY` rather than fields. */
+    const CONCEPT_FIELDS = Object.freeze(['description']);
+
+    /* Mirrors `backend/concept_sync.MAX_ALIASES` / `MAX_PARENTS`. Both travel
+     * as ONE payload -- that is what makes each an aggregate -- so what they
+     * can name is bounded by what an envelope may carry. */
+    const CONCEPT_MAX_ALIASES = 64;
+    const CONCEPT_MAX_PARENTS = 64;
+
+    /* Every unsynchronized operation that names one Concept, whatever it does
+     * to it -- including another Concept that has been given it as a PARENT,
+     * which a deletion has to know about because the server would refuse a
+     * parent it has just been told to destroy. */
+    function operationsNamingConcept(rows, conceptId) {
+        return (Array.isArray(rows) ? rows : []).filter(function (row) {
+            if (!row || row.status === STATUS_ACKNOWLEDGED) return false;
+            if (row.entity_type === 'concept' && row.entity_id === conceptId) return true;
+            return row.operation === 'SET_CONCEPT_PARENTS' && !!row.payload &&
+                Array.isArray(row.payload.parent_ids) &&
+                row.payload.parent_ids.indexOf(conceptId) !== -1;
+        });
     }
 
     /* The editable columns on a Person Group, in the server's vocabulary. */
@@ -1542,6 +1572,290 @@
                 });
         }
 
+        /* ---- Concepts: construction, definition, identity, hierarchy, deletion ---- */
+
+        function assertConceptIsNotBeingDeleted(rows, conceptId, verb) {
+            const pendingDelete = (rows || []).find(r => r &&
+                r.operation === 'DELETE_CONCEPT' && r.entity_id === conceptId &&
+                r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This concept is being deleted, so it cannot be ' + verb + '.');
+            }
+        }
+
+        /**
+         * Construct a Concept under an id this device mints.
+         *
+         * Unlike a Folder or a Playlist there is NO placeholder name: a
+         * Concept's name is its identity, and inventing one would invent a key
+         * that note resolution then has to honour.
+         */
+        function createConcept(fields) {
+            const src = isPlainObject(fields) ? fields : {};
+            const name = src.name == null ? '' : String(src.name).trim();
+            const description = src.description == null ? '' : String(src.description);
+            if (!name) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'A concept needs a name.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'CREATE_CONCEPT', entity_type: 'concept',
+                        entity_id: generateEntityId('C', uuid),
+                        payload: { name: name, description: description },
+                        base_revision: null,
+                    }, null));
+                });
+        }
+
+        /** The definition, and only the definition. */
+        function saveConceptFields(conceptId, changes, base) {
+            if (!isNonBlankString(conceptId) || !isPlainObject(changes) || !isPlainObject(base)) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid concept save.'));
+            }
+            for (const field of Object.keys(changes)) {
+                const observed = base[field];
+                if (CONCEPT_FIELDS.indexOf(field) === -1) {
+                    return Promise.reject(localStoreError('unknown_field',
+                        'Not an editable concept field: ' + field));
+                }
+                if (typeof changes[field] !== 'string' || !isPlainObject(observed) ||
+                    typeof observed.value !== 'string' ||
+                    !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                    return Promise.reject(localStoreError('invalid_base',
+                        'Invalid observed field state.'));
+                }
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertConceptIsNotBeingDeleted(rows, conceptId, 'edited');
+                    const createOp = conceptCreationDependency(rows, conceptId,
+                        'it cannot be edited');
+                    const written = [];
+                    for (const field of Object.keys(changes)) {
+                        const desired = changes[field];
+                        const observed = base[field];
+                        const existing = rows.find(r => r.operation === 'SET_CONCEPT_FIELD' &&
+                            r.entity_type === 'concept' && r.entity_id === conceptId &&
+                            r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                        if (existing) {
+                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                                throw localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.');
+                            }
+                            if (existing.payload.value === desired) {
+                                written.push(existing);
+                                continue;
+                            }
+                            await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                        }
+                        if (desired === observed.value) continue;
+                        written.push(await insertEnvelopeIn(request, {
+                            operation: 'SET_CONCEPT_FIELD', entity_type: 'concept',
+                            entity_id: conceptId, payload: { field, value: desired },
+                            base_revision: observed.revision,
+                            depends_on: createOp ? [createOp.op_id] : [],
+                        }, null));
+                    }
+                    setResult(written);
+                });
+        }
+
+        /**
+         * The NAME and the ALIAS SET, as one decision.
+         *
+         * Renaming keeps the old name reachable as an alias, so a rename writes
+         * into the set an alias edit changes. They cannot be separate conflict
+         * units without each silently overwriting the other's half.
+         *
+         * `observed` is `{name, aliases, revision}`.
+         */
+        function setConceptIdentity(conceptId, name, aliases, observed) {
+            if (!isNonBlankString(conceptId) || !Array.isArray(aliases) ||
+                !isPlainObject(observed) || typeof observed.name !== 'string' ||
+                !Array.isArray(observed.aliases) ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid concept identity.'));
+            }
+            const desiredName = String(name == null ? '' : name).trim();
+            if (!desiredName) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'A concept needs a name.'));
+            }
+            if (aliases.length > CONCEPT_MAX_ALIASES) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'That is too many aliases.'));
+            }
+            const desiredAliases = [];
+            for (const alias of aliases) {
+                if (typeof alias !== 'string') {
+                    return Promise.reject(localStoreError('invalid_envelope',
+                        'Each alias must be a string.'));
+                }
+                const trimmed = alias.trim();
+                if (!trimmed || desiredAliases.indexOf(trimmed) !== -1) continue;
+                desiredAliases.push(trimmed);
+            }
+            const sameAs = (otherName, otherAliases) =>
+                otherName === desiredName &&
+                otherAliases.length === desiredAliases.length &&
+                otherAliases.every((a, i) => a === desiredAliases[i]);
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertConceptIsNotBeingDeleted(rows, conceptId, 'renamed');
+                    const createOp = conceptCreationDependency(rows, conceptId,
+                        'it cannot be renamed');
+                    const existing = rows.find(r => r.operation === 'SET_CONCEPT_IDENTITY' &&
+                        r.entity_type === 'concept' && r.entity_id === conceptId &&
+                        r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy',
+                                'This concept’s name is syncing or needs resolution.');
+                        }
+                        if (sameAs(existing.payload.name, existing.payload.aliases || [])) {
+                            setResult(existing);
+                            return;
+                        }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    if (sameAs(observed.name, observed.aliases)) { setResult(null); return; }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'SET_CONCEPT_IDENTITY', entity_type: 'concept',
+                        entity_id: conceptId,
+                        payload: { name: desiredName, aliases: desiredAliases },
+                        base_revision: observed.revision,
+                        depends_on: createOp ? [createOp.op_id] : [],
+                    }, null));
+                });
+        }
+
+        /**
+         * The whole parent set, as ONE structural judgement.
+         *
+         * A Concept created on this device may be chosen as a parent before the
+         * server has heard of it, so this waits for every such creation -- the
+         * server cannot put a Concept under a parent it does not have.
+         *
+         * `observed` is `{parent_ids, revision}`.
+         */
+        function setConceptParents(conceptId, parentIds, observed) {
+            if (!isNonBlankString(conceptId) || !Array.isArray(parentIds) ||
+                !isPlainObject(observed) || !Array.isArray(observed.parent_ids) ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid concept parents.'));
+            }
+            if (parentIds.length > CONCEPT_MAX_PARENTS) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'That is too many parents.'));
+            }
+            const desired = [];
+            for (const raw of parentIds) {
+                if (!isNonBlankString(raw)) {
+                    return Promise.reject(localStoreError('invalid_envelope',
+                        'Each parent id must be a string.'));
+                }
+                const pid = raw.trim();
+                if (pid === conceptId) {
+                    return Promise.reject(localStoreError('invalid_envelope',
+                        'A concept cannot be its own parent.'));
+                }
+                if (desired.indexOf(pid) === -1) desired.push(pid);
+            }
+            /* A SET, so order is not part of the decision -- two devices that
+             * chose the same parents made the same choice. */
+            const sameSet = list => list.length === desired.length &&
+                desired.every(id => list.indexOf(id) !== -1);
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertConceptIsNotBeingDeleted(rows, conceptId, 'reparented');
+                    const waitFor = [];
+                    const createOp = conceptCreationDependency(rows, conceptId,
+                        'it cannot be reparented');
+                    if (createOp) waitFor.push(createOp.op_id);
+                    for (const pid of desired) {
+                        assertConceptIsNotBeingDeleted(rows, pid, 'used as a parent');
+                        const parentOp = conceptCreationDependency(rows, pid,
+                            'nothing can be put under it');
+                        if (parentOp && waitFor.indexOf(parentOp.op_id) === -1) {
+                            waitFor.push(parentOp.op_id);
+                        }
+                    }
+                    const existing = rows.find(r => r.operation === 'SET_CONCEPT_PARENTS' &&
+                        r.entity_type === 'concept' && r.entity_id === conceptId &&
+                        r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy',
+                                'This concept’s hierarchy is syncing or needs resolution.');
+                        }
+                        if (sameSet(existing.payload.parent_ids || [])) {
+                            setResult(existing);
+                            return;
+                        }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    if (sameSet(observed.parent_ids)) { setResult(null); return; }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'SET_CONCEPT_PARENTS', entity_type: 'concept',
+                        entity_id: conceptId, payload: { parent_ids: desired },
+                        base_revision: observed.revision,
+                        depends_on: waitFor,
+                    }, null));
+                });
+        }
+
+        /**
+         * Delete a Concept, cancelling what was never sent.
+         *
+         * A Concept this device had given to another as a PARENT counts as
+         * naming it: sending "put this under that" immediately before "delete
+         * that" asks the server to do work the next operation destroys, and
+         * would make the parent assignment fail.
+         */
+        function deleteConcept(conceptId) {
+            if (!isNonBlankString(conceptId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid concept.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = operationsNamingConcept(rows, conceptId);
+                    const already = mine.find(r => r.operation === 'DELETE_CONCEPT');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_CONCEPT');
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row) && row.operation !== 'CREATE_CONCEPT') {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_CONCEPT', entity_type: 'concept',
+                        entity_id: conceptId, payload: {},
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
         /* ---- Playlists: construction, fields, membership, order, deletion ---- */
 
         function assertPlaylistIsNotBeingDeleted(rows, playlistId, verb) {
@@ -2287,6 +2601,12 @@
                 'This playlist could not be created on the server, so ' + consequence + '.');
         }
 
+        /** The same three states, for a Concept this device created. */
+        function conceptCreationDependency(rows, conceptId, consequence) {
+            return creationDependency(rows, 'CREATE_CONCEPT', 'concept', conceptId,
+                'This concept could not be created on the server, so ' + consequence + '.');
+        }
+
         function reappliable(row) {
             const codes = REAPPLIABLE_RESULTS[row.operation];
             return !!codes && !!row.server_result &&
@@ -2606,6 +2926,11 @@
             createPerson,
             savePersonMetadataFields: savePersonMetadataFields,
             deletePerson: deletePerson,
+            createConcept: createConcept,
+            saveConceptFields: saveConceptFields,
+            setConceptIdentity: setConceptIdentity,
+            setConceptParents: setConceptParents,
+            deleteConcept: deleteConcept,
             createPlaylist: createPlaylist,
             savePlaylistFields: savePlaylistFields,
             setWorkPlaylist: setWorkPlaylist,
@@ -2644,6 +2969,9 @@
         PRKS_LOCAL_WORK_ROLE_OPERATIONS: WORK_ROLE_OPERATIONS,
         PRKS_LOCAL_PERSON_FIELDS: PERSON_FIELDS,
         PRKS_LOCAL_FOLDER_FIELDS: FOLDER_FIELDS,
+        PRKS_LOCAL_CONCEPT_FIELDS: CONCEPT_FIELDS,
+        PRKS_LOCAL_CONCEPT_MAX_ALIASES: CONCEPT_MAX_ALIASES,
+        PRKS_LOCAL_CONCEPT_MAX_PARENTS: CONCEPT_MAX_PARENTS,
         PRKS_LOCAL_PLAYLIST_FIELDS: PLAYLIST_FIELDS,
         PRKS_LOCAL_PLAYLIST_MAX_ITEMS: PLAYLIST_MAX_ITEMS,
         PRKS_LOCAL_PERSON_GROUP_FIELDS: PERSON_GROUP_FIELDS,

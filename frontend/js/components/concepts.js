@@ -177,29 +177,39 @@
         );
     }
 
-    /* --- Offline policy for Concept routes (AGENTS.md "Offline / PWA") -------
-     * Concepts are read-only offline in Phase 1: cached index/detail render, but
-     * every canonical mutation is blocked outright -- never queued, never faked.
-     * Controls carry these roles so one helper can disable them all, including
-     * markup rerendered after the initial bind. */
+    /* --- Offline policy for Concept routes -----------------------------------
+     * Concepts are local-first: creating one, editing its definition, renaming
+     * it, changing its aliases, reparenting it and deleting it are all semantic
+     * operations with revisions and defined conflicts, so nothing here is
+     * disabled for want of a connection.
+     *
+     * The role and the selector survive because the markup carries them and
+     * tests identify controls by them, but the helper now settles NOTHING --
+     * there is no Concept control left that needs a server. It is kept as the
+     * one place a genuinely server-bound Concept action would be registered, so
+     * a future one cannot be added without a decision. */
     const CONCEPT_MUTATION_ROLE = 'concept-mutation-control';
     const CONCEPT_CONTROL_SELECTOR = '[data-prks-role="' + CONCEPT_MUTATION_ROLE + '"]';
+
+    /* Deliberately empty: every Concept mutation is durable. Adding a selector
+     * here means asserting that the action genuinely cannot be represented
+     * offline, not that it is easier to disable it. */
+    const CONCEPT_SERVER_BOUND_SELECTOR = '';
 
     function conceptRuntimeState() {
         return typeof root.prksOfflineRuntimeState === 'function' ? root.prksOfflineRuntimeState() : 'online';
     }
 
-    /** Blocks a canonical Concept mutation while PRKS is unreachable. */
-    function conceptMutationBlocked(message) {
-        return typeof root.prksOfflineGuardMutation === 'function'
-            ? root.prksOfflineGuardMutation(message)
-            : false;
-    }
-
     function applyConceptOfflineState(container) {
         if (!container || !container.querySelectorAll) return;
+        if (!CONCEPT_SERVER_BOUND_SELECTOR) {
+            /* Every Concept control is durable. Leave them exactly as rendered
+             * -- and in particular do not clear a `disabled` another concern
+             * set, which is why this returns rather than enabling everything. */
+            return;
+        }
         const online = conceptRuntimeState() === 'online';
-        const nodes = container.querySelectorAll(CONCEPT_CONTROL_SELECTOR);
+        const nodes = container.querySelectorAll(CONCEPT_SERVER_BOUND_SELECTOR);
         for (let i = 0; i < nodes.length; i++) {
             const el = nodes[i];
             // Native `disabled` blocks both pointer and keyboard activation and
@@ -379,9 +389,9 @@
     }
 
     async function createConceptFlow(initialName) {
-        // Guard before the dialog opens: nothing typed into an editor that can
-        // never save. Also reachable from the Work Research Notes markup flow.
-        if (conceptMutationBlocked('Creating a Concept requires a connection to PRKS.')) return null;
+        /* No connectivity guard: a Concept is created under an id this device
+         * mints, so it is real the moment it is written. Also reachable from
+         * the Work Research Notes markup flow. */
         const name = await promptText({
             title: 'New Concept',
             defaultValue: initialName || '',
@@ -389,9 +399,6 @@
         });
         if (name == null || !String(name).trim()) return null;
         if (typeof root.createConcept !== 'function') return null;
-        // Connectivity can change while the dialog is open; re-check immediately
-        // before the canonical request so no POST is ever attempted offline.
-        if (conceptMutationBlocked('Creating a Concept requires a connection to PRKS.')) return null;
         try {
             const created = await root.createConcept({ name: String(name).trim() });
             if (created && created.id && typeof root.prksNavigate === 'function') {
@@ -423,6 +430,18 @@
             return typeof root.prksTabContextOwnsEntityRoute === 'function'
                 ? root.prksTabContextOwnsEntityRoute(ctx, generation, 'concept', c.id, 'concept-detail')
                 : !!(ctx && ctx.isCurrent && ctx.isCurrent(generation));
+        };
+        /* A durable write can still be refused -- an unknown base, a scope
+         * already syncing, a prerequisite that failed -- and each of these
+         * handlers is invoked with `void`, so an unreported throw would be an
+         * unhandled rejection rather than something the user is told. */
+        const reportConceptFailure = async function (err, fallback) {
+            if (!ownsConcept()) return;
+            if (typeof root.prksAlertDialog !== 'function') return;
+            await root.prksAlertDialog({
+                title: fallback,
+                message: (err && err.message) || fallback,
+            });
         };
         const refreshConcept = function () {
             if (!ownsConcept() || typeof root.prksNavigate !== 'function') return;
@@ -565,7 +584,6 @@
         });
         container.querySelector('#prks-concept-edit-def').addEventListener('click', function () {
             void (async function () {
-                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const next = await promptText({
                     title: 'Definition',
                     message: 'Markdown',
@@ -575,15 +593,17 @@
                 });
                 if (next == null) return;
                 if (!ownsConcept()) return;
-                // Connectivity may have dropped while the dialog was open.
-                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
-                await root.updateConcept(c.id, { description: next });
+                try {
+                    await root.updateConcept(c.id, { description: next });
+                } catch (err) {
+                    await reportConceptFailure(err, 'Could not save the definition');
+                    return;
+                }
                 refreshConcept();
             })();
         });
         container.querySelector('#prks-concept-edit-aliases').addEventListener('click', function () {
             void (async function () {
-                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const next = await promptText({
                     title: 'Search keys / aliases',
                     message: 'One alias per line',
@@ -593,15 +613,18 @@
                 });
                 if (next == null) return;
                 if (!ownsConcept()) return;
-                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const aliases = next.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean);
-                await root.putConceptAliases(c.id, aliases);
+                try {
+                    await root.putConceptAliases(c.id, aliases);
+                } catch (err) {
+                    await reportConceptFailure(err, 'Could not save these aliases');
+                    return;
+                }
                 refreshConcept();
             })();
         });
         container.querySelector('#prks-concept-edit-parents').addEventListener('click', function () {
             void (async function () {
-                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const next = await promptText({
                     title: 'Parent concepts',
                     message: 'Parent Concept IDs, comma-separated',
@@ -610,9 +633,13 @@
                 });
                 if (next == null) return;
                 if (!ownsConcept()) return;
-                if (conceptMutationBlocked('Editing a Concept requires a connection to PRKS.')) return;
                 const ids = next.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-                await root.putConceptParents(c.id, ids);
+                try {
+                    await root.putConceptParents(c.id, ids);
+                } catch (err) {
+                    await reportConceptFailure(err, 'Could not save these parents');
+                    return;
+                }
                 refreshConcept();
             })();
         });
@@ -621,7 +648,6 @@
     }
 
     async function renameConcept(ctx, generation, c) {
-        if (conceptMutationBlocked('Renaming a Concept requires a connection to PRKS.')) return;
         const next = await promptText({
             title: 'Rename Concept',
             defaultValue: c.name || '',
@@ -629,8 +655,6 @@
         });
         if (next == null || !String(next).trim()) return;
         if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
-        // Re-check: PRKS may have become unreachable while the dialog was open.
-        if (conceptMutationBlocked('Renaming a Concept requires a connection to PRKS.')) return;
         try {
             await root.updateConcept(c.id, { name: String(next).trim() });
             if (
@@ -652,7 +676,6 @@
     }
 
     async function deleteConcept(ctx, generation, c) {
-        if (conceptMutationBlocked('Deleting a Concept requires a connection to PRKS.')) return;
         const ok =
             typeof root.prksConfirmDestructive === 'function'
                 ? await root.prksConfirmDestructive({
@@ -663,8 +686,6 @@
                 : true;
         if (!ok) return;
         if (!ctx || !ctx.isCurrent || !ctx.isCurrent(generation)) return;
-        // Re-check: PRKS may have become unreachable while the confirm was open.
-        if (conceptMutationBlocked('Deleting a Concept requires a connection to PRKS.')) return;
         try {
             await root.deleteConcept(c.id);
             if (
