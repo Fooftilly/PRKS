@@ -14,7 +14,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import (person_group_sync, person_metadata_sync, person_sync,
+from backend import (person_group_sync, person_metadata_sync, person_sync, tag_sync,
                      work_metadata_sync, work_open_sync, work_role_sync, work_source_sync,
                      work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
@@ -3993,8 +3993,10 @@ class PRKSDatabase:
             }
         tag_id = self.generate_id("T")
         with self.connection() as conn:
-            conn.execute("INSERT INTO tags (id, name, color) VALUES (?, ?, ?)", (tag_id, raw, color))
-            conn.execute("INSERT INTO sync_tag_lifecycle (tag_id, state) VALUES (?, 'active')", (tag_id,))
+            # The same construction boundary the durable CREATE_TAG uses, so a
+            # Tag can never exist without the lifecycle row every later answer
+            # about it is read from.
+            tag_sync.insert_tag_on_conn(conn, tag_id, raw, color)
         return {"id": tag_id, "name": raw, "color": color, "existed": False}
 
     def add_tag_alias(self, tag_id: str, alias: str) -> None:

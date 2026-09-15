@@ -20,6 +20,16 @@
             !seen.has(t.tag_id) && !!seen.add(t.tag_id)) &&
             Object.entries(v.known_absent).every(([k, r]) => id(k) && revision(r) && r > 0 && !seen.has(k));
     }
+    /** Every unsynchronized operation, or an empty list. */
+    async function durableOperations() {
+        try {
+            if (root.prksSync && root.prksSync.store) {
+                return await root.prksSync.store.listOperations();
+            }
+        } catch (_e) { /* an unreadable store overlays nothing */ }
+        return [];
+    }
+
     async function readTags(options = {}) {
         const result = await root.prksOfflineReadList('tags:index', '/api/tags', {
             ...options, domain: 'tags', validate: tagsShape,
@@ -27,6 +37,14 @@
         if (result.value !== null && !tagsShape(result.value)) {
             await root.prksOfflineInvalidateList('tags:index');
             return { value: null, source: 'unavailable', cachedAt: null };
+        }
+        /* The catalogue a caller gets is the EFFECTIVE one: a Tag created on
+         * this device is a real Tag the picker can attach, and one deleted here
+         * must stop being offered. The acknowledged list is never written
+         * through -- this overlay is recomputed from the durable queue. */
+        if (result.value !== null && typeof root.prksEffectiveTagCatalogue === 'function') {
+            const ops = await durableOperations();
+            return { ...result, value: root.prksEffectiveTagCatalogue(result.value, ops) };
         }
         return result;
     }

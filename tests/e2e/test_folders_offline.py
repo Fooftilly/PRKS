@@ -685,7 +685,19 @@ class FoldersOfflineTests(unittest.TestCase):
         o._wait_entity_cached(page, 'work', ids['work_a'])
 
         before = self.generations(page)
-        page.evaluate("async (tid) => { await deleteTag(tid); }", ids['folder_tag'])
+        # Deleting a Tag is durable now, so coherence follows the CANONICAL
+        # change -- the acknowledgement -- rather than the click. The answer
+        # names exactly the Works that carried the Tag, so only those are
+        # staled.
+        page.evaluate("async (tid) => { await prksDeleteTagDurably(tid); }", ids['folder_tag'])
+        page.evaluate("""async () => {
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                const rows = await prksSync.store.listOperations();
+                if (!rows.some(o => o.status !== 'conflict')) return;
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }""")
 
         self.changed(page, before, {'folders'})
         o._wait_entity_uncached(page, 'work', ids['work_a'])

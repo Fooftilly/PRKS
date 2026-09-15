@@ -12,7 +12,8 @@ projection, and is proven by focused E2E coverage.
 
 | Domain | Operations | Notes |
 | --- | --- | --- |
-| Work tags | `ADD_WORK_TAG`, `REMOVE_WORK_TAG` | the relationship only; the Tag vocabulary itself is not |
+| Work tags | `ADD_WORK_TAG`, `REMOVE_WORK_TAG` | element conflict unit `(work, tag)` |
+| Tag vocabulary | `CREATE_TAG`, `DELETE_TAG` | client-minted `T-` id; deletion is a tombstone |
 | Work opens | `MARK_WORK_OPENED` | coalesced per Work |
 | Work metadata | `SET_WORK_METADATA_FIELD` | per-field conflict unit |
 | Work source | `SET_WORK_SOURCE` | aggregate: provider + id + url are one decision |
@@ -47,10 +48,12 @@ they should take, and what each must declare before implementation, are in
 *Adding a family: the four shapes and what each must declare* in
 `docs/local-first-sync.md`.
 
-* **Tag vocabulary** — `CREATE_TAG`, rename, `DELETE_TAG`, `MERGE_TAG`. Merge is
-  an identity transformation rather than a field change and needs care: a
-  pending merge must not let new relationship intents target a doomed source
-  identity, and must not rewrite an already-sent envelope.
+* **Tag merge** — `MERGE_TAG` is an identity transformation rather than a field
+  change and needs care: a pending merge must not let new relationship intents
+  target a doomed source identity, and must not rewrite an already-sent
+  envelope. The rule this rollout would use is to refuse the merge while any
+  unsynchronized operation still names the source, rather than retargeting
+  intents whose base revision belongs to a scope that is about to change.
 * **Folders** — create, field edits, move, delete, and the Work-side
   `SET_WORK_FOLDER`. Moving a folder is structural; cycle prevention stays
   canonical.
@@ -76,6 +79,16 @@ they should take, and what each must declare before implementation, are in
   creation** for types needing no binary ingestion.
 * **Saved Views**, and a clearly-labelled cached-data search mode. Global search
   over uncached server records is not offered and should not be implied.
+
+### Deliberately not built, because it would be new product semantics
+
+* **Renaming a Tag, and editing a Tag's colour.** PRKS has neither today:
+  `POST /api/tags` either creates a Tag or hands back the existing one, every
+  caller sends the same default colour, and no UI offers either action. Adding
+  a rename means deciding what happens to the old name — does it become an
+  alias, as a merge would make it, or simply disappear? — and that is a product
+  decision rather than a synchronization one. `CREATE_TAG` and `DELETE_TAG` are
+  the vocabulary's whole surface until that decision is made.
 
 ## Standing invariants the rollout must not trade away
 

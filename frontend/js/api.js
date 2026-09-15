@@ -774,18 +774,6 @@ function prksPublishTagCoherence(data) {
     return payload;
 }
 
-async function deleteTag(tagId) {
-    prksGuardFolderMutation('Deleting a tag requires a connection to PRKS.');
-    const res = await prksRequest('/api/tags/' + encodeURIComponent(tagId), { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        const err = new Error(data.error || 'Could not delete tag.');
-        err.httpStatus = res.status;
-        throw err;
-    }
-    return prksPublishTagCoherence(data);
-}
-
 async function mergeTags(sourceTagId, targetTagId) {
     prksGuardFolderMutation('Merging tags requires a connection to PRKS.');
     const res = await prksRequest('/api/tags/merge', {
@@ -1521,7 +1509,6 @@ window.prksOfflineWasGuardRefusal = prksOfflineWasGuardRefusal;
 window.deleteFolderCanonical = deleteFolderCanonical;
 window.addTagToFolder = addTagToFolder;
 window.removeTagFromFolder = removeTagFromFolder;
-window.deleteTag = deleteTag;
 window.mergeTags = mergeTags;
 window.prksMarkWorkRoleChanged = prksMarkWorkRoleChanged;
 window.prksMarkWorkRoleDependenciesChanged = prksMarkWorkRoleDependenciesChanged;

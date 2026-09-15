@@ -81,6 +81,12 @@
                 op.entity_id;
             return 'Create ' + who;
         }
+        if (op.operation === 'CREATE_TAG') {
+            return 'Create tag "' + bounded(op.payload.name) + '"';
+        }
+        if (op.operation === 'DELETE_TAG') {
+            return 'Delete a tag';
+        }
         if (op.operation === 'DELETE_PERSON') {
             return 'Delete a person';
         }
@@ -124,6 +130,8 @@
     const DISCARD_INVALIDATES = Object.freeze({
         SET_WORK_METADATA_FIELD: 'work-metadata-state',
         SET_WORK_SOURCE: 'work-source-state',
+        CREATE_TAG: 'tags:index',
+        DELETE_TAG: 'tags:index',
         ADD_WORK_TAG: 'work-tag-options',
         REMOVE_WORK_TAG: 'work-tag-options',
         ADD_WORK_PERSON_ROLE: 'work-people-state',
@@ -164,6 +172,15 @@
             root.prksOfflineMarkEntityChanged('person-metadata-state', op.entity_id);
             return;
         }
+        if (op.entity_type === 'tag') {
+            /* The whole vocabulary, not one row: a discarded creation leaves a
+             * catalogue that was showing a Tag the server never stored, and a
+             * discarded deletion one that was hiding a Tag it still has. */
+            if (typeof root.prksOfflineMarkTagsChanged === 'function') {
+                root.prksOfflineMarkTagsChanged();
+            }
+            return;
+        }
         if (op.entity_type === 'person-group') {
             if (typeof root.prksOfflineMarkPersonGroupsChanged === 'function') {
                 root.prksOfflineMarkPersonGroupsChanged();
@@ -193,7 +210,9 @@
      * durable row holds a CODE -- a closed vocabulary the store validates --
      * and this is the one place it becomes a sentence. */
     const NAMED_REFUSALS = Object.freeze({
-        NAME_TAKEN: 'Another group already has that name.',
+        NAME_TAKEN: 'Something else already has that name.',
+        TAG_MERGED: 'That tag was merged into another one.',
+        TAG_DELETED: 'That tag was deleted on the server.',
         PARENT_NOT_FOUND: 'The group it would go inside no longer exists.',
         PARENT_CYCLE: 'That would put the group inside one of its own subgroups.',
         PERSON_NOT_FOUND: 'That person no longer exists on the server.',

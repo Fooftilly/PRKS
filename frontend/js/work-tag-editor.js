@@ -126,6 +126,16 @@
         } catch (_) { state.error = unavailable; }
         await paint(ctx, state);
     }
+    /** Every unsynchronized operation, or an empty list. */
+    async function vocabularyOperations() {
+        try {
+            if (root.prksSync && root.prksSync.store) {
+                return await root.prksSync.store.listOperations();
+            }
+        } catch (_e) { /* an unreadable store overlays nothing */ }
+        return [];
+    }
+
     function bindPicker(ctx, state) {
         const input = document.getElementById('work-tag-search');
         const results = document.getElementById('work-tag-search-results');
@@ -134,11 +144,24 @@
             if (!owns(ctx, state) || input.disabled) return;
             if (state.catalogGeneration !== root.prksOfflineDomainGeneration('tags')) await prepare(ctx, state);
             if (!owns(ctx, state) || !state.catalog) return;
+            /* The vocabulary overlay is applied HERE rather than trusted from
+             * the last prepare. A Tag created or deleted on this device changes
+             * nothing canonical, so the tags domain generation does not move --
+             * and a picker that still offered a Tag with a pending deletion
+             * would only produce an operation the server refuses. */
+            const catalog = typeof root.prksEffectiveTagCatalogue === 'function'
+                ? root.prksEffectiveTagCatalogue(state.catalog, await vocabularyOperations())
+                : state.catalog;
+            if (!owns(ctx, state)) return;
             const value = input.value.trim(); const query = value.toLowerCase();
-            const tags = root.prksEffectiveWorkTags(ctx.getEntity('work'), state.operations);
+            const tags = root.prksEffectiveTagChips
+                ? root.prksEffectiveTagChips(
+                    root.prksEffectiveWorkTags(ctx.getEntity('work'), state.operations),
+                    await vocabularyOperations())
+                : root.prksEffectiveWorkTags(ctx.getEntity('work'), state.operations);
             const assigned = new Set(tags.map(t => t.id));
             results.innerHTML = '';
-            const available = state.catalog.filter(t => !assigned.has(t.id));
+            const available = catalog.filter(t => !assigned.has(t.id));
             function item(text, action, disabled, modifier) {
                 const div = document.createElement('div');
                 div.className = 'result-item' + (modifier ? ' ' + modifier : ''); div.textContent = text;
@@ -146,15 +169,14 @@
                 else div.onmousedown = ev => { ev.preventDefault(); void action(); };
                 results.appendChild(div);
             }
-            if (value && !state.catalog.some(t => root.prksTagExactMatch(t, query))) {
-                // The shared create affordance every other PRKS combobox uses.
-                // The offline row is an explanation, not an action, so it is
-                // deliberately not styled as one.
-                if (root.prksOfflineRuntimeState() === 'online') {
-                    item('Create tag "' + value + '"',
-                        () => root.prksSubmitNewTag('work', state.workId, value, ctx, input),
-                        false, 'result-item--create');
-                } else item('Creating new Tags requires a connection.', null, true);
+            if (value && !catalog.some(t => root.prksTagExactMatch(t, query))) {
+                /* The shared create affordance every other PRKS combobox uses,
+                 * with or without a server: the Tag's id is minted on this
+                 * device, so it is a real Tag the moment it is written, and the
+                 * attachment that follows is ordered behind its creation. */
+                item('Create tag "' + value + '"',
+                    () => root.prksSubmitNewTag('work', state.workId, value, ctx, input),
+                    false, 'result-item--create');
             }
             available.filter(t => root.prksTagMatchesQuery(t, query)).slice(0, 40).forEach(tag => {
                 item(root.prksTagComboboxLabel(tag, query), () => edit(ctx, tag.id, true), blocked(state, tag.id));
@@ -189,17 +211,32 @@
             state.preparing = prepare(ctx, state);
         }
     }
-    async function edit(ctx, tagId, present) {
+    /**
+     * `knownTag` is a Tag this device has just CREATED and not yet sent.
+     *
+     * It is in no catalogue the server could have answered with -- its id was
+     * minted here a moment ago -- so the caller hands the row over directly.
+     * Without it the picker would create a Tag and then be unable to attach the
+     * very Tag it created, which is the whole point of creating one.
+     */
+    async function edit(ctx, tagId, present, knownTag) {
         const state = ctx && ctx.getResource('workTagEditor');
         if (!state || !live(ctx, state)) return;
         try {
             if (state.preparing) await state.preparing;
             if (!state.options) throw new Error();
-            if (present && state.catalogGeneration !== root.prksOfflineDomainGeneration('tags')) await prepare(ctx, state);
-            const tag = (state.catalog || []).find(t => t.id === tagId) ||
+            if (present && !knownTag &&
+                state.catalogGeneration !== root.prksOfflineDomainGeneration('tags')) {
+                await prepare(ctx, state);
+            }
+            const tag = knownTag || (state.catalog || []).find(t => t.id === tagId) ||
                 ctx.getEntity('work').tags.find(t => t.id === tagId) ||
                 state.operations.map(o => o.local_context && o.local_context.tag).find(t => t && t.id === tagId);
-            if (!tag || (present && !state.catalog)) throw new Error();
+            if (!tag || (present && !state.catalog && !knownTag)) throw new Error();
+            if (knownTag && Array.isArray(state.catalog) &&
+                !state.catalog.some(t => t.id === tagId)) {
+                state.catalog = state.catalog.concat([knownTag]);
+            }
             const base = root.prksWorkTagBase(state.options, tagId);
             await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, base.present, base.revision, tag);
             if (!live(ctx, state)) { root.prksSync.changed(); return; }

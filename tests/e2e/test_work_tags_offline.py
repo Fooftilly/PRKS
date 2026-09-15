@@ -266,21 +266,48 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.pending(page, 0)
         self.assertEqual(self.db_for(server).get_work_tags(server.ids['work_a']), [])
 
-    def test_offline_tag_creation_is_explained_not_offered(self):
+    def test_a_tag_created_offline_is_attachable_immediately(self):
+        """The id is minted on this device, so it is a real Tag the moment it
+        is written -- and the attachment that follows is ordered behind its
+        creation by the generic dependency mechanism."""
         server, page, context = self.start()
         self.offline(page, context)
         seen = self.record_requests(page)
         page.locator('#work-tag-search').fill('Brand New Offline Tag')
-        row = page.locator('#work-tag-search-results .result-item',
-                           has_text='Creating new Tags requires a connection.')
+        row = page.locator('#work-tag-search-results .result-item--create',
+                           has_text='Create tag "Brand New Offline Tag"')
         row.wait_for()
-        self.assertEqual(row.get_attribute('aria-disabled'), 'true')
         row.click()
-        page.wait_for_timeout(300)
-        self.assertEqual(page.locator('#work-tags-list .work-tag-chip',
-                                      has_text='Brand New Offline Tag').count(), 0)
-        self.assertEqual([url for method, url in seen if method != 'GET'], [])
-        self.assertEqual(self.tag_operations(page), [])
+        page.locator('#work-tags-list .work-tag-chip',
+                     has_text='Brand New Offline Tag').wait_for(timeout=30000)
+        self.assertEqual([url for method, url in seen if method != 'GET'], [],
+                         'nothing is sent while there is no server')
+        created = page.evaluate(
+            "() => prksSync.store.listOperations().then(rows => rows.filter("
+            "  r => r.operation === 'CREATE_TAG'))")
+        self.assertEqual(len(created), 1, created)
+        self.assertRegex(created[0]['entity_id'], r'^T-[0-9A-F]{32}$')
+        attached = self.tag_operations(page)
+        self.assertEqual(len(attached), 1, attached)
+        self.assertEqual(attached[0]['depends_on'], [created[0]['op_id']])
+
+        # Reconnecting creates it once, then attaches it.
+        self.reconnect(page, context)
+        page.evaluate("""async () => {
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                const rows = await prksSync.store.listOperations();
+                if (!rows.some(o => o.status !== 'conflict')) return;
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }""")
+        db = self.db_for(server)
+        rows = [t for t in db.get_all_tags() if t['name'] == 'Brand New Offline Tag']
+        self.assertEqual(len(rows), 1, 'created once, not twice')
+        self.assertEqual(rows[0]['id'], created[0]['entity_id'],
+                         'the id the client minted is the id SQLite stores')
+        self.assertIn(rows[0]['id'],
+                      [t['id'] for t in db.get_work_tags(server.ids['work_a'])])
 
     # ---- Phase H: one durable-first path, online and offline ----
 
@@ -422,3 +449,56 @@ class OfflineWorkTagTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => rows.every(r => !%s))" % self.TAG_OPS)
         self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
         self.assertEqual([r['status'] for r in self.tag_ledger(server, 'status')], ['REVISION_CONFLICT'])
+
+    # ---- the Tag vocabulary itself -------------------------------------------
+
+    def test_deleting_a_tag_offline_hides_it_and_reaches_the_server(self):
+        """A tombstone, not a destruction: nothing acknowledged is discarded,
+        so a server that refuses restores the Tag by doing nothing."""
+        server, page, context = self.start()
+        self.offline(page, context)
+        page.evaluate("id => prksDeleteTagDurably(id)", server.ids['tag'])
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'DELETE_TAG'))",
+            timeout=30000, message='the deletion was never recorded durably')
+
+        # Gone from the picker: offering a Tag that is about to stop existing
+        # would only produce an operation the server refuses. The name is free
+        # again, so what the picker offers is to CREATE one -- which is the
+        # honest reading of a vocabulary this device has just removed it from.
+        page.locator('#work-tag-search').fill('Offline Existing')
+        page.locator('#work-tag-search-results .result-item--create').wait_for(timeout=15000)
+        offered = page.evaluate(
+            "() => Array.from(document.querySelectorAll("
+            "  '#work-tag-search-results .result-item:not(.result-item--create)'))"
+            "  .map(el => el.textContent)")
+        self.assertEqual([t for t in offered if 'Offline Existing' in t], [], offered)
+
+        self.reconnect(page, context)
+        page.evaluate("""async () => {
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                const rows = await prksSync.store.listOperations();
+                if (!rows.some(o => o.status !== 'conflict')) return;
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }""")
+        db = self.db_for(server)
+        self.assertEqual(
+            [t for t in db.get_all_tags() if t['id'] == server.ids['tag']], [])
+
+    def test_deleting_a_tag_cancels_the_attachment_it_would_undo(self):
+        server, page, context = self.start()
+        self.offline(page, context)
+        self.add(page)
+        self.pending(page, 1)
+        page.evaluate("id => prksDeleteTagDurably(id)", server.ids['tag'])
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 1)",
+            timeout=30000,
+            message='attaching a Tag immediately before deleting it is work the delete undoes')
+        rows = page.evaluate("() => prksSync.store.listOperations()")
+        self.assertEqual(rows[0]['operation'], 'DELETE_TAG')

@@ -498,6 +498,7 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             }""",
             arg=tab_a,
         )
+        _wait_sync_settled(page)
         saved = page.evaluate(
             """async ids => {
                 const a = await (await fetch('/api/persons/' + ids.a)).json();
@@ -522,14 +523,18 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
         person_a = server.ids["person_a"]
         person_b = server.ids["person_b"]
         tab_a, tab_b = _open_two_person_split(page, server)
+        # The group picker reads the EFFECTIVE catalogue now -- the cached list
+        # plus this device's unsynchronized intent -- so that is the read to
+        # delay. What the test is about is unchanged: a slow mount completing
+        # later must not bind or mutate an editor that has since been replaced.
         page.evaluate(
             """() => {
-                window.__prksOriginalFetchPersonGroups = window.fetchPersonGroups;
+                window.__prksOriginalCatalogue = window.prksEffectivePersonGroupCatalogue;
                 window.__prksHeldPersonGroupsCalls = 0;
-                window.fetchPersonGroups = function () {
+                window.prksEffectivePersonGroupCatalogue = function (...args) {
                     window.__prksHeldPersonGroupsCalls += 1;
                     if (window.__prksHeldPersonGroupsCalls !== 1) {
-                        return window.__prksOriginalFetchPersonGroups();
+                        return window.__prksOriginalCatalogue(...args);
                     }
                     return new Promise(resolve => { window.__prksReleaseHeldPersonGroups = resolve; });
                 };
@@ -566,11 +571,11 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
                     if (window.__prksReleaseHeldPersonGroups) {
                         window.__prksReleaseHeldPersonGroups(window.allGroups || []);
                     }
-                    if (window.__prksOriginalFetchPersonGroups) {
-                        window.fetchPersonGroups = window.__prksOriginalFetchPersonGroups;
+                    if (window.__prksOriginalCatalogue) {
+                        window.prksEffectivePersonGroupCatalogue = window.__prksOriginalCatalogue;
                     }
                     delete window.__prksReleaseHeldPersonGroups;
-                    delete window.__prksOriginalFetchPersonGroups;
+                    delete window.__prksOriginalCatalogue;
                     delete window.__prksHeldPersonGroupsCalls;
                 }"""
             )
@@ -635,9 +640,16 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
         tab_a, tab_b = _open_two_person_split(page, server)
         held = []
 
+        # Creating a Group from the profile editor is durable now, so there is
+        # no POST to delay. The asynchronous step that remains is the catalogue
+        # re-read that follows it -- and what this test is really about is that
+        # a slow step completing later touches only the draft it started from.
+        arm = {"on": False}
+
         def hold_group_create(route):
             req = route.request
-            if req.method == "POST" and urlparse(req.url).path == "/api/person-groups":
+            if arm["on"] and req.method == "GET" and urlparse(req.url).path == "/api/person-groups":
+                arm["on"] = False
                 held.append(route)
                 return
             route.fallback()
@@ -647,11 +659,12 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             _focus_workspace_tab(page, tab_a)
             _open_focused_person_editor(page, person_a)
             page.locator("#pd-group-search").fill("Group Async A")
+            arm["on"] = True
             page.locator("#pd-group-add-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "new-Group POST was not intercepted")
+            self.assertTrue(held, "the catalogue re-read was not intercepted")
 
             _focus_workspace_tab(page, tab_b)
             _open_focused_person_editor(page, person_b)
@@ -673,11 +686,12 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             page.locator("#pd-group-chips .pd-group-chip", has_text="Group Async A").wait_for()
 
             page.locator("#pd-group-search").fill("Group Async Discarded")
+            arm["on"] = True
             page.locator("#pd-group-add-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "second new-Group POST was not intercepted")
+            self.assertTrue(held, "the second catalogue re-read was not intercepted")
             page.locator(".person-panel-edit button", has_text="Cancel").click()
             self.assertIsNone(page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft", arg=tab_a))
             held.pop(0).continue_()
@@ -695,31 +709,47 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
         failed = []
 
         def fail_once(route):
-            # Profile fields cannot fail a save any more -- they are durable.
-            # Group membership is a relationship, still a canonical request,
-            # and still the half that can be refused. A refusal there keeps the
-            # editor open, because the part that failed is the part the user
-            # has to retry.
+            # Nothing in this editor can fail on the WIRE any more: both halves
+            # are durable. What can still stop the membership half is a base
+            # this device cannot read -- without the (group, person) revision
+            # the change would have to guess, and guessing is what a base
+            # revision exists to prevent. That refusal keeps the editor open,
+            # because the part that failed is the part the user has to retry.
             req = route.request
-            if req.method == "PATCH" and urlparse(req.url).path == "/api/persons/" + person_a and not failed:
+            path = urlparse(req.url).path
+            # Either end of the (group, person) pair answers for its base, so
+            # the refusal has to reach the one this save actually asks: the
+            # GROUP's, since the group already exists on the server.
+            if (armed and req.method == "GET"
+                    and (path.endswith("/sync-state") or path.endswith("/group-state"))):
+                # BOTH ends of the pair answer for its base, so both have to be
+                # refused: falling back to the other one would find the base and
+                # the save would succeed.
                 failed.append(True)
-                route.fulfill(status=400, content_type="application/json", body='{"error":"forced test failure"}')
+                route.fulfill(status=500, content_type="application/json",
+                              body='{"error":"forced test failure"}')
                 return
             route.fallback()
 
-        page.route("**/api/persons/*", fail_once)
+        # Armed only once the editor is open: opening it WARMS the same
+        # projection, and a failure consumed there would never reach the save.
+        armed = False
+        page.route("**/api/person**", fail_once)
         try:
             _focus_workspace_tab(page, tab_a)
             _open_focused_person_editor(page, person_a)
             page.locator("#pd-about").fill("Draft survives failed save")
             _add_person_group_through_editor(page, "Group Gamma")
+            armed = True
             page.locator("#pd-save-btn").click()
-            page.locator("#prks-modal-confirm:not(.hidden)", has_text="forced test failure").wait_for()
+            page.locator("#prks-modal-confirm:not(.hidden)",
+                         has_text="group change could not be recorded").wait_for()
             self.assertTrue(page.evaluate("id => window.prksGetTabContext(id).ui.personDetailEditing", arg=tab_a))
             self.assertEqual(
                 page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft.about", arg=tab_a),
                 "Draft survives failed save",
             )
+            armed = False
             page.locator("#prks-modal-confirm-ok").click()
             page.wait_for_function("() => !document.querySelector('#pd-save-btn').disabled")
             self.assertEqual(page.locator("#pd-about").input_value(), "Draft survives failed save")
@@ -741,6 +771,7 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
                 }""",
                 arg=tab_a,
             )
+            _wait_sync_settled(page)
             saved = page.evaluate(
                 "async id => await (await fetch('/api/persons/' + id)).json()",
                 arg=person_a,
@@ -756,11 +787,34 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
                 arg=server.ids["person_b"],
             )
             self.assertTrue(page.locator("#prks-modal-confirm").get_attribute("class").find("hidden") >= 0)
-            collector.console_errors[:] = [
-                error for error in collector.console_errors if "400 (Bad Request)" not in error
-            ]
         finally:
-            page.unroute("**/api/persons/*", fail_once)
+            # The stub 500 was deliberate -- don't fail teardown's assert_clean.
+            collector.console_errors[:] = [
+                error for error in collector.console_errors
+                if "400 (Bad Request)" not in error and "500 (Internal Server Error)" not in error
+            ]
+            collector.http_5xx.clear()
+            page.unroute("**/api/person**", fail_once)
+
+
+def _wait_sync_settled(page, timeout_ms=30000):
+    """Every durable operation has drained.
+
+    A durable save completes when the intent is WRITTEN, not when it reaches
+    the server -- so a test that reads canonical state straight afterwards is
+    reading it too early.
+    """
+    page.evaluate(
+        """async ms => {
+            const deadline = Date.now() + ms;
+            while (Date.now() < deadline) {
+                const rows = await prksSync.store.listOperations();
+                if (!rows.some(o => o.status !== 'conflict')) return;
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }""",
+        timeout_ms,
+    )
 
 
 class DirtyNavigationGuardTests(_BrowserE2E):
@@ -1253,21 +1307,20 @@ class PersonGroupPolishTests(_BrowserE2E):
         page.locator(".group-detail__section-head button", has_text="Manage members").click()
         page.locator("#group-add-member-search").wait_for()
         self.assertEqual(page.locator("#gd-name").count(), 0)
-        member_posts = []
-        member_deletes = []
+        # Membership is durable now: one semantic operation per changed PAIR,
+        # and no canonical /members request at all.
+        member_requests = []
 
         def on_request(req):
-            if req.method == "POST" and "/members" in urlparse(req.url).path:
-                member_posts.append(req.url)
-            if req.method == "DELETE" and "/members/" in urlparse(req.url).path:
-                member_deletes.append(req.url)
+            if "/members" in urlparse(req.url).path and req.method != "GET":
+                member_requests.append((req.method, req.url))
 
         page.on("request", on_request)
         page.locator("#group-add-member-search").fill(PERSON_DISPLAY)
         page.locator("#group-add-member-results .result-item--person-pick").click()
         page.locator("#group-add-member-btn").click()
         page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).wait_for()
-        self.assertEqual(len(member_posts), 1)
+        self.assertEqual(member_requests, [])
         self.assertEqual(page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).count(), 1)
         page.locator("#group-add-member-search").wait_for()
         page.locator("[data-remove-member]").wait_for()
@@ -1280,7 +1333,7 @@ class PersonGroupPolishTests(_BrowserE2E):
         page.locator("[data-remove-member]").click()
         page.locator("#prks-modal-confirm-ok").click()
         page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).wait_for(state="detached")
-        self.assertEqual(len(member_deletes), 1)
+        self.assertEqual(member_requests, [])
         page.locator("#group-add-member-search").wait_for()
         page.locator(".group-detail__section-head button", has_text="Done").wait_for()
         self.assertEqual(page.locator("[data-remove-member]").count(), 0)
@@ -4159,21 +4212,24 @@ class TabContextHostRootTests(_BrowserE2E):
         page.locator("#panel-content button", has_text="Edit group").click()
         page.wait_for_selector("#gd-save-btn")
 
-        def hold_group_patch(route):
+        # There is no Group PATCH any more: the save is durable. What it DOES
+        # await is the revision base it measures the edit against, so that read
+        # is the in-flight window this test needs.
+        def hold_group_state(route):
             req = route.request
             path = urlparse(req.url).path
-            if req.method == "PATCH" and path == "/api/person-groups/" + group_id:
+            if req.method == "GET" and path.endswith("/sync-state") and group_id in path:
                 held.append(route)
                 return
             route.fallback()
 
-        page.route("**/api/person-groups/*", hold_group_patch)
+        page.route("**/api/person-groups/**", hold_group_state)
         try:
             page.locator("#gd-save-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "Person Group PATCH was not intercepted")
+            self.assertTrue(held, "the Group's revision base read was not intercepted")
             save_btn = page.locator("#gd-save-btn")
             self.assertTrue(save_btn.is_disabled())
             self.assertEqual(save_btn.get_attribute("aria-busy"), "true")
@@ -4187,7 +4243,7 @@ class TabContextHostRootTests(_BrowserE2E):
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/person-groups/*", hold_group_patch)
+                page.unroute("**/api/person-groups/**", hold_group_state)
             except Exception:
                 pass
 
@@ -4211,12 +4267,13 @@ class TabContextHostRootTests(_BrowserE2E):
         def hold_then_fail_once(route):
             req = route.request
             path = urlparse(req.url).path
-            if req.method == "PATCH" and path == "/api/person-groups/" + group_id and fail_next["value"]:
+            if (req.method == "GET" and path.endswith("/sync-state")
+                    and group_id in path and fail_next["value"]):
                 held.append(route)
                 return
             route.fallback()
 
-        page.route("**/api/person-groups/*", hold_then_fail_once)
+        page.route("**/api/person-groups/**", hold_then_fail_once)
         try:
             self.assertIsNone(page.locator("#gd-save-btn").get_attribute("aria-busy"))
             save_btn = page.locator("#gd-save-btn")
@@ -4224,7 +4281,7 @@ class TabContextHostRootTests(_BrowserE2E):
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "Person Group PATCH was not intercepted")
+            self.assertTrue(held, "the Group's revision base read was not intercepted")
 
             # Busy state must actually be visible while the request is pending --
             # not just absent-both-before-and-after by coincidence.
@@ -4233,9 +4290,13 @@ class TabContextHostRootTests(_BrowserE2E):
             self.assertEqual(save_btn.inner_text(), "Saving…")
 
             fail_next["value"] = False
+            # A base this device cannot read is the one thing that still stops a
+            # durable save: without the group's revisions the edit would have to
+            # guess, and guessing is what a base revision exists to prevent.
             held.pop().fulfill(status=500, content_type="application/json", body='{"error": "stub failure"}')
             page.wait_for_selector("#prks-modal-confirm:not(.hidden)")
-            self.assertIn("stub failure", page.locator("#prks-modal-confirm-desc").inner_text())
+            self.assertIn("cannot be edited offline yet",
+                          page.locator("#prks-modal-confirm-desc").inner_text())
             page.locator("#prks-modal-confirm-ok").click()
             page.wait_for_selector("#prks-modal-confirm", state="hidden")
             # The stub 500 was deliberate -- don't fail teardown's assert_clean on it.
@@ -4256,7 +4317,7 @@ class TabContextHostRootTests(_BrowserE2E):
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/person-groups/*", hold_then_fail_once)
+                page.unroute("**/api/person-groups/**", hold_then_fail_once)
             except Exception:
                 pass
 
@@ -4811,6 +4872,15 @@ class WorkspaceTilingTests(_BrowserE2E):
             page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
             page.wait_for_selector("#pd-about")
             page.fill("#pd-about", saved_about)
+            # Opening the editor WARMS the same revision base, so whatever is
+            # held at this point belongs to the open, not to the save. Release
+            # it first or the save's own read is the one left hanging.
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            _continue_held_routes(held)
+            held.clear()
+            page.wait_for_timeout(200)
             page.locator("#pd-save-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
@@ -5055,6 +5125,15 @@ class WorkspaceTilingTests(_BrowserE2E):
             page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
             page.wait_for_selector("#pd-about")
             page.fill("#pd-about", saved_about)
+            # Opening the editor WARMS the same revision base, so whatever is
+            # held at this point belongs to the open, not to the save. Release
+            # it first or the save's own read is the one left hanging.
+            deadline = time.time() + 8
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            _continue_held_routes(held)
+            held.clear()
+            page.wait_for_timeout(200)
             page.locator("#pd-save-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:

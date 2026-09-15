@@ -1030,14 +1030,23 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertIn("!prksIsFolderParentId(value)", app)
 
     def test_tag_mutations_publish_coherence_from_the_server_answer(self):
+        """Merging is still a canonical request and still publishes coherence
+        from the server's own answer. DELETING is durable now: it reconciles at
+        acknowledgement instead, which is where the canonical change is."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        for fn in ("async function deleteTag(", "async function mergeTags("):
-            body = _fn_body(api, fn)
-            with self.subTest(fn=fn):
-                self.assertIn("prksGuardFolderMutation(", body)
-                self.assertIn("prksPublishTagCoherence(data)", body)
-                # Coherence only after acknowledged success.
-                self.assertLess(body.index("if (!res.ok)"), body.index("prksPublishTagCoherence"))
+        self.assertNotIn("async function deleteTag(", api)
+        body = _fn_body(api, "async function mergeTags(")
+        self.assertIn("prksGuardFolderMutation(", body)
+        self.assertIn("prksPublishTagCoherence(data)", body)
+        # Coherence only after acknowledged success.
+        self.assertLess(body.index("if (!res.ok)"), body.index("prksPublishTagCoherence"))
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        at = runtime.index("async function reconcileDeletedTag(")
+        deleted = runtime[at : runtime.index("\n        /*", at)]
+        # The catalogue is PATCHED; only the Works the answer NAMES are staled.
+        self.assertIn("TAGS_LIST_KEY", deleted)
+        self.assertIn("result.affected_work_ids", deleted)
+        self.assertIn("invalidateEntity('work-tag-options'", deleted)
         publish = _fn_body(api, "function prksPublishTagCoherence(")
         self.assertIn("affected_folder_ids", publish)
         self.assertIn("affected_work_ids", publish)

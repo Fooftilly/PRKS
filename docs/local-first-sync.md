@@ -1666,6 +1666,36 @@ Memberships are removed through the Group family's revision-aware boundary, so a
 device holding "this person is in that group" can discover it was overtaken
 rather than replaying an add against somebody who no longer exists.
 
+## The Tag vocabulary (3E)
+
+The Work-Tag *relationship* has been durable since Phase 2. `CREATE_TAG` and
+`DELETE_TAG` are the other half, and they are the whole half: PRKS has no rename
+and no colour editor, so a `SET_TAG_FIELD` family would be inventing product
+semantics rather than moving existing ones off the network.
+
+A Tag name is unique across canonical names **and aliases**, case-insensitively,
+and only the server sees every Tag. A client that minted an id for a name
+somebody else already used is refused with `NAME_TAKEN`, which carries the id it
+collided with. It is deliberately NOT converged onto that Tag: operations
+already queued behind the creation name the id this device minted, and silently
+redirecting them to a different Tag is exactly what the Work-Tag family refuses
+to do when a Tag turns out to have been merged. The ordinary `POST /api/tags`
+keeps converging, because nothing is queued behind it.
+
+Construction goes through `insert_tag_on_conn` on both paths, so a Tag can never
+exist without the `sync_tag_lifecycle` row every later answer about it is read
+from -- a Tag inserted without one comes back `UNKNOWN` to the very relationship
+family that depends on it.
+
+Deletion carries no base revision and cancels every unsynchronized operation
+naming the Tag that was never attempted: attaching a Tag immediately before
+deleting it asks the server to do work the next operation destroys. A row that
+may be on the wire is waited for instead. The lifecycle row survives the Tag, so
+an offline device replaying an attach is told the Tag was `DELETED` rather than
+that it never existed.
+
+Tag identity stays PERSISTENT. Nothing here garbage-collects an unused Tag.
+
 ## Adding a family: the four shapes and what each must declare
 
 The families that exist fall into a small number of shapes. New work should

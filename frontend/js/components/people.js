@@ -1011,13 +1011,17 @@ function openPersonProfileEdit() {
      * the user declares an intent to change something, and it is the last
      * moment the device is reliably able to ask: a save attempted after a
      * disconnect can only use what was cached before it. */
+    /* Warm-ups, and nothing more: a read that fails here changes nothing the
+     * user asked for, so its rejection is swallowed rather than escaping as an
+     * unhandled one. Whether a SAVE can proceed is decided at save time, where
+     * the answer can actually be reported. */
     if (typeof prksReadPersonMetadataState === 'function' && person.id) {
-        void prksReadPersonMetadataState(person.id);
+        void Promise.resolve(prksReadPersonMetadataState(person.id)).catch(() => {});
     }
     /* And the membership revisions, for the same reason: opening the editor is
      * the last moment this device can reliably ask. */
     if (typeof prksReadPersonGroupsStateForPerson === 'function' && person.id) {
-        void prksReadPersonGroupsStateForPerson(person.id);
+        void Promise.resolve(prksReadPersonGroupsStateForPerson(person.id)).catch(() => {});
     }
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
     /* Settle the freshly rendered editor against the CURRENT connectivity.

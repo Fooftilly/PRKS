@@ -243,6 +243,9 @@
         // The registry, in one readable place. Families share a handler
         // when they share meaning, not when they share a code path.
         handlers: {
+            // The Tag VOCABULARY, as opposed to the relationship below.
+            CREATE_TAG: root.prksTagCreateSyncHandler,
+            DELETE_TAG: root.prksTagDeleteSyncHandler,
             ADD_WORK_TAG: root.prksWorkTagSyncHandler,
             REMOVE_WORK_TAG: root.prksWorkTagSyncHandler,
             MARK_WORK_OPENED: root.prksWorkOpenSyncHandler,

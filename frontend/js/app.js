@@ -1864,24 +1864,6 @@ async function prksDurableOperationsOrNone() {
     return [];
 }
 
-/**
- * Whether this device has asked for an entity to stop existing.
- *
- * A tombstone has to hold on the entity's OWN page too. The acknowledged cache
- * still holds the record -- nothing local is destroyed, so a refusal restores
- * it -- which means a bookmark or the back button would otherwise walk straight
- * past the deletion and show a record the user has already removed.
- */
-async function prksPendingTombstone(kind, id, ops) {
-    const operations = ops || await prksDurableOperationsOrNone();
-    const deletions = kind === 'person'
-        ? (typeof prksPendingPersonDeletions === 'function'
-            ? prksPendingPersonDeletions(operations) : null)
-        : (typeof prksPendingPersonGroupDeletions === 'function'
-            ? prksPendingPersonGroupDeletions(operations) : null);
-    return !!deletions && deletions.has(id);
-}
-
 /** The People index rows this device holds, or an empty list. */
 async function prksCachedPeopleRows() {
     try {
@@ -3143,30 +3125,33 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'person-group-detail': {
                 const groupId = route.params.groupId;
-                const offlineGroup = await prksOfflineDetailFetch(
-                    'person-group', groupId, '/api/person-groups/' + encodeURIComponent(groupId), routeSignal,
-                    { domain: PRKS_PERSON_GROUPS_DOMAIN, validate: (value) => prksIsPersonGroupShape(value, groupId) }
-                );
+                /* Read the durable queue FIRST. A record this device created
+                 * and has not sent cannot exist on the server, so asking would
+                 * 404 by construction -- and a real HTTP 404 is a domain answer
+                 * ("no such group"), not unavailability, so the page would say
+                 * "not found" about a group the user is looking at. */
+                const groupOps = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                const groupDeleted = prksPendingPersonGroupDeletions(groupOps).has(groupId);
+                const groupUnsent = !groupDeleted &&
+                    prksPendingPersonGroupCreates(groupOps).some(op => op.entity_id === groupId);
+                const offlineGroup = groupUnsent
+                    ? { value: null, source: 'unavailable', cachedAt: null }
+                    : await prksOfflineDetailFetch(
+                        'person-group', groupId, '/api/person-groups/' + encodeURIComponent(groupId), routeSignal,
+                        { domain: PRKS_PERSON_GROUPS_DOMAIN, validate: (value) => prksIsPersonGroupShape(value, groupId) }
+                    );
                 if (stale()) return;
                 const resolvedGroup = prksResolveOfflinePersonGroup(offlineGroup, groupId);
-                const groupDeleted = await prksPendingTombstone('person-group', groupId);
-                if (stale()) return;
                 if (groupDeleted) {
                     resolvedGroup.unavailable = true;
                     resolvedGroup.group = null;
                 }
-                if (resolvedGroup.unavailable && !groupDeleted) {
-                    /* A Group created on this device and not yet sent exists in
-                     * no cache at all; its detail is built from the durable
-                     * creation, exactly as a pending Person's is. Not for a
-                     * tombstoned one: the deletion is queued behind that very
-                     * creation. */
+                if (groupUnsent) {
                     const pendingGroup = await prksPendingCreatedPersonGroup(groupId);
                     if (stale()) return;
-                    if (pendingGroup) {
-                        resolvedGroup.unavailable = false;
-                        resolvedGroup.group = pendingGroup;
-                    }
+                    resolvedGroup.group = pendingGroup;
+                    resolvedGroup.unavailable = !pendingGroup;
                 }
                 if (resolvedGroup.unavailable) {
                     ctx.setEntity('personGroup', null);
@@ -3637,37 +3622,40 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'person': {
                 const personId = route.params.personId;
-                const offlinePerson = await prksOfflineDetailFetch(
-                    'person',
-                    personId,
-                    '/api/persons/' + encodeURIComponent(personId),
-                    routeSignal,
-                    {
-                        domain: PRKS_PEOPLE_DOMAIN,
-                        validate: function (value) {
-                            return prksIsPersonShape(value, personId);
-                        },
-                    }
-                );
+                /* The durable queue first, for the same reason the Group route
+                 * reads it first: a Person this device created and has not sent
+                 * cannot exist on the server, and a real 404 would render "not
+                 * found" for somebody the user is looking at. */
+                const personOps = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                const personDeleted = prksPendingPersonDeletions(personOps).has(personId);
+                const personUnsent = !personDeleted &&
+                    prksPendingPersonCreates(personOps).some(op => op.entity_id === personId);
+                const offlinePerson = personUnsent
+                    ? { value: null, source: 'unavailable', cachedAt: null }
+                    : await prksOfflineDetailFetch(
+                        'person',
+                        personId,
+                        '/api/persons/' + encodeURIComponent(personId),
+                        routeSignal,
+                        {
+                            domain: PRKS_PEOPLE_DOMAIN,
+                            validate: function (value) {
+                                return prksIsPersonShape(value, personId);
+                            },
+                        }
+                    );
                 if (stale()) return;
                 const resolvedPerson = prksResolveOfflinePerson(offlinePerson, personId);
-                const personDeleted = await prksPendingTombstone('person', personId);
-                if (stale()) return;
                 if (personDeleted) {
                     resolvedPerson.unavailable = true;
                     resolvedPerson.person = null;
                 }
-                if (resolvedPerson.unavailable && !personDeleted) {
-                    /* Not for a tombstoned Person: a creation still in flight
-                     * is exactly what the deletion is queued behind, and
-                     * rebuilding the page from it would show a record the user
-                     * has already removed. */
+                if (personUnsent) {
                     const pendingPerson = await prksPendingCreatedPerson(personId);
                     if (stale()) return;
-                    if (pendingPerson) {
-                        resolvedPerson.unavailable = false;
-                        resolvedPerson.person = pendingPerson;
-                    }
+                    resolvedPerson.person = pendingPerson;
+                    resolvedPerson.unavailable = !pendingPerson;
                 }
                 if (resolvedPerson.unavailable) {
                     prksOfflineRenderUnavailable(contentDiv, 'Person not available offline');

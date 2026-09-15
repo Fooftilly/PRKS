@@ -45,6 +45,8 @@
     const ARGUMENTS_LIST_KEY = 'arguments:index';
     const DOMAIN_PEOPLE = 'people';
     const PEOPLE_LIST_KEY = 'people:index';
+    const DOMAIN_TAGS = 'tags';
+    const TAGS_LIST_KEY = 'tags:index';
     const DOMAIN_PERSON_GROUPS = 'person-groups';
     const PERSON_GROUPS_LIST_KEY = 'person-groups:index';
     const DOMAIN_RESEARCH_GRAPH_CORE = 'research-graph-core';
@@ -1116,6 +1118,65 @@
             return true;
         }
 
+        /* ---- the Tag vocabulary ------------------------------------------ */
+
+        /**
+         * A Tag the server has accepted.
+         *
+         * The acknowledgement carries the stored row, so the catalogue is
+         * PATCHED rather than dropped: discarding it would leave an offline
+         * device with no Tag list, and the picker unable to offer anything.
+         */
+        async function reconcileCreatedTag(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const tag = result && result.tag;
+            if (!tag || tag.id !== result.tag_id) return false;
+            const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
+            if (cached) {
+                const rows = Array.isArray(cached.value) ? cached.value : [];
+                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
+                domainGeneration.set(DOMAIN_TAGS, token);
+                const merged = rows.filter(row => row && row.id !== tag.id)
+                    .concat([Object.assign({ aliases: [] }, tag)]);
+                if (!await cacheListForDomain(TAGS_LIST_KEY, merged, DOMAIN_TAGS, token)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /**
+         * A Tag the server has destroyed.
+         *
+         * Its relationships went with it, so every Work that carried it has a
+         * stale chip and a stale tag-options snapshot. The acknowledgement
+         * names exactly those Works, so only they are staled -- the rest of the
+         * cache is untouched.
+         */
+        async function reconcileDeletedTag(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.tag_id;
+            const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
+            if (cached) {
+                const rows = Array.isArray(cached.value) ? cached.value : [];
+                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
+                domainGeneration.set(DOMAIN_TAGS, token);
+                if (!await cacheListForDomain(TAGS_LIST_KEY,
+                    rows.filter(row => row && row.id !== id), DOMAIN_TAGS, token)) return false;
+            }
+            const affected = Array.isArray(result.affected_work_ids)
+                ? result.affected_work_ids : [];
+            for (let i = 0; i < affected.length; i += 1) {
+                await invalidateEntity('work', affected[i]);
+                await invalidateEntity('work-tag-options', affected[i]);
+            }
+            if (affected.length) {
+                prksOfflineMarkWorksBrowseChanged();
+                prksOfflineMarkFoldersChanged();
+            }
+            return true;
+        }
+
         /* ---- Person Groups ---------------------------------------------- */
 
         /** The cached Group catalogue, or null when this device holds none. */
@@ -1669,6 +1730,8 @@
             reconcileWorkSource,
             reconcileWorkRole,
             reconcileRecentOpen,
+            reconcileCreatedTag,
+            reconcileDeletedTag,
             reconcileCreatedPerson,
             reconcilePersonField,
             reconcileDeletedPerson,
@@ -1881,6 +1944,8 @@
         prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
         prksOfflineReconcileWorkRole: result => production.reconcileWorkRole(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
+        prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
+        prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
         prksOfflineReconcilePersonField: (result, op) => production.reconcilePersonField(result, op),
         prksOfflineReconcileDeletedPerson: result => production.reconcileDeletedPerson(result),

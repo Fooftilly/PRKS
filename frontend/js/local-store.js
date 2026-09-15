@@ -62,6 +62,8 @@
      * envelope no coordinator knows how to send. */
     const OPERATION_TYPES = Object.freeze([
         'MARK_WORK_OPENED',
+        'CREATE_TAG',
+        'DELETE_TAG',
         'ADD_WORK_TAG',
         'REMOVE_WORK_TAG',
         'SET_WORK_METADATA_FIELD',
@@ -933,6 +935,99 @@
          * Only NEVER SENT pending rows may be canceled. A pending retry may
          * already be ledgered by the server after a lost response; keep its id.
          * No immutable envelope is ever rewritten. */
+        /** The `CREATE_TAG` a Tag-scoped operation must wait for, if any. */
+        function tagCreationDependency(rows, tagId, consequence) {
+            return creationDependency(rows, 'CREATE_TAG', 'tag', tagId,
+                'This tag could not be created on the server, so ' + consequence + '.');
+        }
+
+        /* A Tag already carrying a pending deletion accepts nothing else: every
+         * later operation naming it could only come back TAG_DELETED. */
+        function assertTagIsNotBeingDeleted(rows, tagId, verb) {
+            const pendingDelete = (rows || []).find(r => r && r.operation === 'DELETE_TAG' &&
+                r.entity_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This tag is being deleted, so it cannot be ' + verb + '.');
+            }
+        }
+
+        /**
+         * Create a Tag under an id this device mints.
+         *
+         * The NAME is unique across canonical names and aliases, and only the
+         * server sees every Tag -- so this refuses an obvious local collision
+         * early, as a better error sooner, while the authoritative answer stays
+         * canonical. `known` is the effective catalogue the caller is showing.
+         */
+        function createTag(fields, known) {
+            const src = isPlainObject(fields) ? fields : {};
+            const name = String(src.name == null ? '' : src.name).trim();
+            if (!name) {
+                return Promise.reject(localStoreError('invalid_envelope', 'A tag needs a name.'));
+            }
+            const clash = (Array.isArray(known) ? known : []).find(row => row &&
+                String(row.name || '').toLowerCase() === name.toLowerCase());
+            if (clash) {
+                return Promise.reject(localStoreError('name_taken',
+                    'A tag called ' + name + ' already exists.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'CREATE_TAG', entity_type: 'tag',
+                        entity_id: generateEntityId('T', uuid),
+                        payload: { name: name, color: String(src.color || '#6d6cf7') },
+                        base_revision: null,
+                    }, null));
+                });
+        }
+
+        /**
+         * Delete a Tag, cancelling the relationship intents it makes pointless.
+         *
+         * The same rule every other destruction uses: an unsynchronized
+         * operation naming this Tag that was NEVER attempted is cancelled --
+         * attaching a Tag immediately before deleting it asks the server to do
+         * work the next operation destroys -- and one that may be on the wire
+         * is waited for instead of rewritten.
+         */
+        function deleteTag(tagId) {
+            if (!isNonBlankString(tagId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid tag.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = rows.filter(r => r && r.status !== STATUS_ACKNOWLEDGED &&
+                        ((r.entity_type === 'tag' && r.entity_id === tagId) ||
+                            (!!r.payload && r.payload.tag_id === tagId)));
+                    const already = mine.find(r => r.operation === 'DELETE_TAG');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_TAG');
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row) && row.operation !== 'CREATE_TAG') {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_TAG', entity_type: 'tag', entity_id: tagId,
+                        payload: {}, base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
         function coalesceWorkTag(workId, tagId, present, baseState, baseRevision, tag) {
             if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
                 !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -940,6 +1035,11 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertTagIsNotBeingDeleted(rows, tagId, 'attached or removed');
+                /* A Tag this device created and has not sent yet: the
+                 * relationship waits for it, by the generic mechanism. */
+                const createOp = tagCreationDependency(rows, tagId,
+                    'it cannot be attached to anything');
                 const existing = rows.find(r => r.entity_type === 'work' && r.entity_id === workId &&
                     r.payload.tag_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
                 if (existing) {
@@ -955,6 +1055,7 @@
                 setResult(await insertEnvelopeIn(request, {
                     operation: present ? 'ADD_WORK_TAG' : 'REMOVE_WORK_TAG', entity_type: 'work',
                     entity_id: workId, payload: { tag_id: tagId }, base_revision: baseRevision,
+                    depends_on: createOp ? [createOp.op_id] : [],
                 }, { tag }));
             });
         }
@@ -2013,6 +2114,8 @@
         return {
             getOrCreateDeviceId: getOrCreateDeviceId,
             enqueueOperation: enqueueOperation,
+            createTag: createTag,
+            deleteTag: deleteTag,
             coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, saveWorkSource,
             saveWorkPersonRole,
             createPerson,

@@ -348,16 +348,22 @@ function prksWireTagsPageAliasPanel(container) {
             });
             if (!confirmed) return;
             try {
-                await deleteTag(tag.id);
+                /* Durable: a tombstone, not a destruction. Nothing acknowledged
+                 * is discarded, so a server that refuses restores the Tag by
+                 * doing nothing -- and relationship intents this device had
+                 * queued for it are cancelled rather than sent for the deletion
+                 * to undo a moment later. */
+                await prksDeleteTagDurably(tag.id);
                 prksCloseTagsAliasModal();
                 const container = prksTagsPageCtx.containerEl;
                 if (container && typeof renderTagsPage === 'function') {
                     await renderTagsPage(container);
                 }
             } catch (err) {
-                if (prksOfflineWasGuardRefusal(err)) return;
-                console.error(err);
-                await prksAlertMessage(err.message || 'Could not delete tag.', 'Error');
+                await prksAlertMessage(
+                    typeof prksTagVocabularyMessage === 'function'
+                        ? prksTagVocabularyMessage(err, 'delete this tag')
+                        : 'Could not delete tag.', 'Could not delete');
             }
         };
     }

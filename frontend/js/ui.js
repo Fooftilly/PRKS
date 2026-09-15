@@ -3953,9 +3953,9 @@ function prksWorkTagOwnerLive(ownerCtx, generation, workId, input) {
     return !!liveInput && liveInput === input && prksRightPanelOwnedBy(ownerCtx, liveInput);
 }
 
-async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, triggerInput) {
+async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, triggerInput, knownTag) {
     if (entityType === 'work') {
-        await prksWorkTagEdit(ownerCtx, tagId, true);
+        await prksWorkTagEdit(ownerCtx, tagId, true, knownTag);
         if (triggerInput) { triggerInput.disabled = false; triggerInput.removeAttribute('aria-busy'); }
         return;
     }
@@ -4014,8 +4014,31 @@ function prksTagComboboxLabel(tag, valLower) {
     return name;
 }
 
+/** One message per refusal the Tag vocabulary can produce. */
+function prksTagVocabularyMessage(error, action) {
+    switch (error && error.prksLocalStoreCode) {
+        case 'name_taken':
+            return String(error.message || 'A tag with that name already exists.');
+        case 'entity_deleted':
+            return 'This tag is being deleted, so it cannot be used.';
+        case 'invalid_envelope':
+            return String(error.message || 'That is not a valid tag.');
+        default:
+            return 'Could not ' + action + ' locally. Please retry.';
+    }
+}
+window.prksTagVocabularyMessage = prksTagVocabularyMessage;
+
+/**
+ * Create a Tag and attach it, durably.
+ *
+ * No connectivity guard: the id is minted on this device, so the Tag is real
+ * the moment it is written and the relationship that follows is ordered behind
+ * its creation by the generic dependency mechanism. Name uniqueness stays
+ * canonical -- only the server sees every Tag -- and an obvious local
+ * collision is refused early as a better error sooner.
+ */
 async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInput) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const trimmed = (name || '').trim();
     if (!trimmed) return;
     if (triggerInput) {
@@ -4023,22 +4046,19 @@ async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInp
         triggerInput.setAttribute('aria-busy', 'true');
     }
     try {
-        const res = await prksRequest('/api/tags', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: trimmed, color: '#6d6cf7' }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.id) throw new Error(data.error || 'No tag id');
-        if (typeof prksOfflineMarkTagsChanged === 'function') prksOfflineMarkTagsChanged();
-        await prksAttachExistingTag(entityType, entityId, data.id, ownerCtx, triggerInput);
+        const known = typeof fetchTags === 'function' ? await fetchTags() : [];
+        const created = await prksCreateTagDurably({ name: trimmed, color: '#6d6cf7' }, known);
+        /* The row is handed over rather than looked up: this Tag's id was
+         * minted a moment ago and is in no catalogue the server could have
+         * answered with. */
+        await prksAttachExistingTag(entityType, entityId, created.entity_id, ownerCtx,
+            triggerInput, { id: created.entity_id, name: trimmed, color: '#6d6cf7', aliases: [] });
     } catch (e) {
-        console.error(e);
         if (triggerInput) {
             triggerInput.disabled = false;
             triggerInput.removeAttribute('aria-busy');
         }
-        await prksAlertMessage('Could not create tag.', 'Error');
+        await prksAlertMessage(prksTagVocabularyMessage(e, 'create this tag'), 'Could not save');
     }
 }
 
@@ -4696,23 +4716,18 @@ function initUploadTagCombobox() {
                 ev.preventDefault();
                 void (async () => {
                     try {
-                        const res = await prksRequest('/api/tags', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name: val, color: '#6d6cf7' }),
-                        });
-                        const data = await res.json();
-                        if (!res.ok || !data.id) throw new Error(data.error || 'no id');
-                        if (typeof prksOfflineMarkTagsChanged === 'function') prksOfflineMarkTagsChanged();
-                        if (!attachedIds().has(data.id)) {
-                            uploadTagsSelected.push({ id: data.id, name: data.name || val });
+                        const known = typeof fetchTags === 'function' ? await fetchTags() : [];
+                        const created = await prksCreateTagDurably(
+                            { name: val, color: '#6d6cf7' }, known);
+                        if (!attachedIds().has(created.entity_id)) {
+                            uploadTagsSelected.push({ id: created.entity_id, name: val });
                             renderUploadTagsChips();
                         }
                         input.value = '';
                         prksHideInlineComboboxResults(results);
                     } catch (e) {
-                        console.error(e);
-                        await prksAlertMessage('Could not create tag.', 'Error');
+                        await prksAlertMessage(
+                            prksTagVocabularyMessage(e, 'create this tag'), 'Could not save');
                     }
                 })();
             };
