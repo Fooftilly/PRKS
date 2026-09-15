@@ -2092,7 +2092,8 @@ class OfflineConceptTests(unittest.TestCase):
     # ---- mutation blocking --------------------------------------------------
 
     def test_offline_concept_detail_edits_durably(self):
-        """Every Concept mutation surface is inert offline and issues no request."""
+        """Every Concept mutation surface stays live offline, and an edit made
+        there becomes a durable operation without any canonical request."""
         server, page, context, _collector = self._start()
         child = server.ids["concept_child"]
 
@@ -2149,8 +2150,13 @@ class OfflineConceptTests(unittest.TestCase):
                 timeout=30000, message="the edit never became a durable operation")
             # The New Concept flow is also reachable from Work Research Notes, so
             # drive it directly: it opens its dialog offline like any other.
-            page.evaluate("""async () => {
-                    try { await window.prksCreateConceptFlow('Offline concept'); } catch (_e) {}
+            # Fire and forget: the flow does not settle until the dialog is
+            # answered, and page.evaluate() awaits a returned promise with no
+            # timeout, so awaiting it here would deadlock against the Escape
+            # below.
+            page.evaluate("""() => {
+                    void Promise.resolve(window.prksCreateConceptFlow('Offline concept'))
+                        .catch(() => {});
                 }""")
             page.locator("#prks-modal-confirm .prks-modal-prompt__input").wait_for()
             page.keyboard.press("Escape")

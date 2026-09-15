@@ -341,8 +341,10 @@ class ResearchGraphOfflineTests(unittest.TestCase):
     def test_core_canonical_mutations_and_alias_exclusion(self):
         server, page, context = self.start()
         ids = server.ids
+        # A Position RENAME is deliberately not in this list: its only Graph
+        # consequence is a label, so it is patched rather than invalidated.
+        # See test_a_position_rename_patches_the_graph_node_it_already_has.
         operations = [
-            ('position rename', 'ids => updatePosition(ids.position_a, {name:"Renamed position"})', (True, True)),
             ('argument targets', 'ids => putArgumentTargets(ids.argument_a, [{type:"position",id:ids.position_a,verdict_id:"supports"}])', (True, True)),
             ('argument sources', 'ids => putArgumentSources(ids.argument_a, [{work_id:ids.work_b,pages:"3"}])', (True, True)),
         ]
@@ -352,6 +354,44 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                 before = self.generations(page)
                 page.evaluate(operation, ids)
                 self.changed(page, before, expected)
+
+    def test_a_position_rename_patches_the_graph_node_it_already_has(self):
+        """A Position rename follows the same projection rule as a Concept's.
+
+        The only thing a Position's name decides in the Graph is the label on a
+        node that is already there. Nothing is added, nothing is removed and no
+        edge moves, so the snapshot an offline device warmed survives and is
+        patched. Editing the DESCRIPTION is the counter-case: the Graph never
+        showed it, so it changes nothing there either way.
+        """
+        server, page, context = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        page.evaluate("id => { void Promise.resolve(prksReadPositionState(id)).catch(() => {}); }",
+                      ids['position_a'])
+        o._wait_entity_cached(page, 'position-state', ids['position_a'])
+
+        before = self.generations(page)
+        page.evaluate('ids => updatePosition(ids.position_a, {description:"Edited body"})', ids)
+        self.drained(page)
+        self.changed(page, before, (False, False))
+
+        before = self.generations(page)
+        page.evaluate('ids => updatePosition(ids.position_a, {name:"Renamed position"})', ids)
+        self.drained(page)
+        # The snapshot SURVIVES, carrying the new label.
+        self.changed(page, before, (False, False))
+        seen = 0
+        for kind in ('research-graph-core', 'research-graph-people'):
+            cached = o._cached_entity(page, kind, 'snapshot')
+            if not cached:
+                continue
+            labels = [n['label'] for n in cached['value']['nodes']
+                      if n.get('type') == 'position']
+            with self.subTest(kind=kind):
+                self.assertIn('Renamed position', labels)
+            seen += 1
+        self.assertTrue(seen, 'no cached Graph snapshot survived the rename')
 
     def test_a_concept_rename_patches_the_graph_node_it_already_has(self):
         """Graph is a PROJECTION, and a Concept rename is the one Concept change
