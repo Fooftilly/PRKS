@@ -24,6 +24,25 @@ projection, and is proven by focused E2E coverage.
 | Person deletion | `DELETE_PERSON` | tombstone; a Person credited on a file stays protected |
 | Folders | `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`, `SET_WORK_FOLDER` | moving is a field; a Work's folder is a scalar on the Work |
 
+## What one overnight pass added
+
+Person profile editing completed (acknowledged/effective/draft kept apart, and
+only what the session changed is sent), then Person Groups, Person deletion, the
+Tag vocabulary, and Folders. Five families' worth of surfaces moved off the
+network, and the gate stayed green between each.
+
+Four product defects surfaced along the way and were fixed where they lived,
+not worked around:
+
+* a Person-profile save measured its edit against the record on SCREEN, which
+  is already overlaid, so editing a field back to the server's value left a
+  pending operation asking for a value nobody changed;
+* a Tag-creation refusal (`NAME_TAKEN`) was not recognized as a terminal answer
+  and would have retried forever;
+* a pending group rename never reached the group chips on a Person's page;
+* a folder bookkeeping refresh ran on the Work route's paint path, and its late
+  completion could replace the panel from a background tab.
+
 ## Still connection-required
 
 Everything below still calls a canonical endpoint and is disabled or refused
