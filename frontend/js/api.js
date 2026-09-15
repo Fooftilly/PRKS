@@ -658,94 +658,117 @@ function prksOfflineWasGuardRefusal(err) {
     return !!(err && err.prksOfflineRefused === true);
 }
 
-async function addWorkToFolder(folderId, workId) {
-    prksGuardFolderMutation('Changing a file\'s folder requires a connection to PRKS.');
-    const res = await prksRequest('/api/folders/' + encodeURIComponent(folderId) + '/works', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ work_id: workId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error(data.error || 'Could not add file to folder.');
+/** One message per refusal the Folder families can produce. */
+function prksFolderSaveMessage(error, action) {
+    switch (error && error.prksLocalStoreCode) {
+        case 'scope_busy':
+            return 'Part of this folder is syncing or needs a decision. Try again shortly.';
+        case 'entity_deleted':
+            return 'This folder is being deleted, so it cannot be changed.';
+        case 'dependency_failed':
+            return String(error.message || 'A change this one depends on could not be saved.');
+        case 'invalid_envelope':
+        case 'invalid_base':
+            return String(error.message || 'That is not a valid folder change.');
+        default:
+            return 'Could not ' + action + ' locally. Please retry.';
     }
-    prksMarkFoldersDomainChanged();
-    // Only the Recently-added projection carries `folder_id` (it filters
-    // locally over the folder title); the stable catalog deliberately does
-    // not, because #/progress and #/types never render a folder.
-    prksMarkRecentlyAddedChanged();
-    return typeof prksOfflineMarkEntityChanged === 'function'
-        ? prksOfflineMarkEntityChanged('work', workId)
-        : null;
+}
+
+/**
+ * Which folder a Work is in, durably.
+ *
+ * `addWorkToFolder` and `patchWorkFolder` are the same operation seen from two
+ * ends -- a Work is in at most ONE folder, so filing, moving and clearing all
+ * set the same scalar. Both names are kept so their callers do not change.
+ */
+async function prksFileWorkInFolder(workId, folderIdOrNull) {
+    const observed = await prksAcknowledgedWorkFolder(workId);
+    if (!observed) {
+        /* Unknown is not empty: without the revision this filing was measured
+         * against, it would have to guess 0 and could silently overwrite
+         * wherever another device had filed it. */
+        const err = new Error(
+            'This file cannot be moved offline yet. Open it once while connected to PRKS '
+            + 'so its synchronization state is prepared.');
+        err.prksFolderUnavailable = true;
+        throw err;
+    }
+    try {
+        await prksSetWorkFolderDurably(
+            workId, folderIdOrNull == null ? '' : String(folderIdOrNull), observed);
+    } catch (error) {
+        throw new Error(prksFolderSaveMessage(error, 'move this file'));
+    }
+}
+
+async function addWorkToFolder(folderId, workId) {
+    return prksFileWorkInFolder(workId, folderId);
 }
 
 async function patchWorkFolder(workId, folderIdOrNull) {
-    prksGuardFolderMutation('Changing a file\'s folder requires a connection to PRKS.');
-    const res = await prksRequest('/api/works/' + encodeURIComponent(workId), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_id: folderIdOrNull }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error(data.error || 'Could not update folder.');
-    }
-    prksMarkFoldersDomainChanged();
-    // Only the Recently-added projection carries `folder_id` (it filters
-    // locally over the folder title); the stable catalog deliberately does
-    // not, because #/progress and #/types never render a folder.
-    prksMarkRecentlyAddedChanged();
-    return typeof prksOfflineMarkEntityChanged === 'function'
-        ? prksOfflineMarkEntityChanged('work', workId)
-        : null;
+    return prksFileWorkInFolder(workId, folderIdOrNull);
 }
 
+/**
+ * Create a folder durably, under an id this device mints.
+ *
+ * No connectivity guard: the folder is real the moment it is written, and
+ * anything filed into it is ordered behind its creation by the generic
+ * dependency mechanism. Title uniqueness within a parent stays canonical --
+ * only the server sees the whole hierarchy.
+ */
 async function createFolder(title, description = '', options = {}) {
     const parentIdRaw = options && Object.prototype.hasOwnProperty.call(options, 'parent_id')
         ? options.parent_id
         : '';
-    const parentId = parentIdRaw == null ? null : String(parentIdRaw).trim();
-    prksGuardFolderMutation('Creating a folder requires a connection to PRKS.');
-    const res = await prksRequest('/api/folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    const parentId = parentIdRaw == null ? '' : String(parentIdRaw).trim();
+    try {
+        const created = await prksCreateFolderDurably({
             title: (title || '').trim() || 'Untitled Folder',
             description: (description || '').trim(),
-            parent_id: parentId || null,
-        }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error(data.error || 'Could not create folder.');
+            parent_id: parentId,
+            private_notes: '',
+        });
+        return created.entity_id;
+    } catch (error) {
+        throw new Error(prksFolderSaveMessage(error, 'create this folder'));
     }
-    if (!data.id) {
-        throw new Error('Could not create folder.');
-    }
-    prksMarkFoldersDomainChanged();
-    return data.id;
 }
 
+/**
+ * Edit a folder's fields durably, sending only what changed.
+ *
+ * The three concepts stay apart, exactly as the Person editor keeps them: the
+ * `updates` are the draft, the acknowledged base comes from the cache and the
+ * revisions projection, and the difference is measured against what the caller
+ * was SHOWING. Sending every field would let one syncing field refuse the whole
+ * form.
+ */
 async function patchFolder(folderId, updates) {
-    prksGuardFolderMutation('Editing a folder requires a connection to PRKS.');
-    const res = await prksRequest('/api/folders/' + encodeURIComponent(folderId), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates || {}),
+    const draft = {};
+    Object.keys(updates || {}).forEach(function (field) {
+        if ((PRKS_FOLDER_FIELDS || []).indexOf(field) === -1) return;
+        const value = updates[field];
+        draft[field] = value == null || value === false ? '' : String(value);
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        throw new Error(data.error || 'Could not update folder.');
+    if (!Object.keys(draft).length) return;
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    const base = await prksAcknowledgedFolderBase(folderId, ops);
+    if (!base) {
+        const err = new Error(
+            'This folder cannot be edited offline yet. Open it once while connected to PRKS '
+            + 'so its synchronization state is prepared.');
+        err.prksFolderUnavailable = true;
+        throw err;
     }
-    prksMarkFoldersDomainChanged();
-    // Only a rename can stale a member Work's own cached detail (it embeds
-    // folder_title). The canonical response reports exactly those members, so
-    // description/private-notes/parent-only edits evict nothing extra and this
-    // never depends on which page happened to be focused.
-    if (typeof prksOfflineMarkEntityChanged === 'function' && Array.isArray(data.member_work_ids)) {
-        data.member_work_ids.forEach(function (workId) {
-            prksOfflineMarkEntityChanged('work', workId);
-        });
+    const changes = prksDirtyFolderFields(folderId, draft, base, ops);
+    if (!Object.keys(changes).length) return;
+    try {
+        await prksSaveFolderFieldsDurably(folderId, changes, base);
+    } catch (error) {
+        throw new Error(prksFolderSaveMessage(error, 'save this folder'));
     }
 }
 
@@ -790,20 +813,17 @@ async function mergeTags(sourceTagId, targetTagId) {
     return prksPublishTagCoherence(data);
 }
 
-/** Canonical Folder deletion boundary (empty folders only, server-enforced). */
+/** Folder deletion, durably. The empty-only rule stays server-enforced. */
 async function deleteFolderCanonical(folderId) {
-    prksGuardFolderMutation('Deleting a folder requires a connection to PRKS.');
-    const res = await prksRequest('/api/folders/' + encodeURIComponent(folderId), {
-        method: 'DELETE',
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        const err = new Error(data.error || 'Could not delete folder.');
-        err.httpStatus = res.status;
-        throw err;
+    /* A tombstone, not a destruction: nothing acknowledged is discarded, so a
+     * server that refuses -- a folder holding files or subfolders is protected
+     * -- restores it by doing nothing. */
+    try {
+        await prksDeleteFolderDurably(folderId);
+    } catch (error) {
+        throw new Error(prksFolderSaveMessage(error, 'delete this folder'));
     }
-    prksMarkFoldersDomainChanged();
-    return data;
+    return { status: 'deleted' };
 }
 
 /* Folder tag membership is rendered by the Folder detail right panel, so both
@@ -1507,6 +1527,8 @@ window.prksMarkRecentlyAddedChanged = prksMarkRecentlyAddedChanged;
 window.prksMarkWorkBrowseDisplayChanged = prksMarkWorkBrowseDisplayChanged;
 window.prksOfflineWasGuardRefusal = prksOfflineWasGuardRefusal;
 window.deleteFolderCanonical = deleteFolderCanonical;
+window.prksFolderSaveMessage = prksFolderSaveMessage;
+window.prksFileWorkInFolder = prksFileWorkInFolder;
 window.addTagToFolder = addTagToFolder;
 window.removeTagFromFolder = removeTagFromFolder;
 window.mergeTags = mergeTags;

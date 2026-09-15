@@ -22,6 +22,7 @@ projection, and is proven by focused E2E coverage.
 | Person profile | `SET_PERSON_METADATA_FIELD` | per-field; acknowledged/effective/draft kept apart |
 | Person Groups | `CREATE_PERSON_GROUP`, `SET_PERSON_GROUP_FIELD`, `ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`, `DELETE_PERSON_GROUP` | four shapes over one entity; deletion is a tombstone |
 | Person deletion | `DELETE_PERSON` | tombstone; a Person credited on a file stays protected |
+| Folders | `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`, `SET_WORK_FOLDER` | moving is a field; a Work's folder is a scalar on the Work |
 
 ## Still connection-required
 
@@ -54,9 +55,9 @@ they should take, and what each must declare before implementation, are in
   envelope. The rule this rollout would use is to refuse the merge while any
   unsynchronized operation still names the source, rather than retargeting
   intents whose base revision belongs to a scope that is about to change.
-* **Folders** — create, field edits, move, delete, and the Work-side
-  `SET_WORK_FOLDER`. Moving a folder is structural; cycle prevention stays
-  canonical.
+* **Folder tags** — `ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG`, the one Folder
+  relationship still on the network. It mirrors the Work-Tag family exactly and
+  is the obvious next increment.
 * **Playlists** — create, field edits, delete, item add/remove, and reordering.
   Ordering is an aggregate: an ordered list must not be modelled as independently
   racing `order_index` fields.

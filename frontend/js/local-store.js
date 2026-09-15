@@ -62,6 +62,10 @@
      * envelope no coordinator knows how to send. */
     const OPERATION_TYPES = Object.freeze([
         'MARK_WORK_OPENED',
+        'CREATE_FOLDER',
+        'SET_FOLDER_FIELD',
+        'DELETE_FOLDER',
+        'SET_WORK_FOLDER',
         'CREATE_TAG',
         'DELETE_TAG',
         'ADD_WORK_TAG',
@@ -145,6 +149,31 @@
             if (row.entity_type === 'person' && row.entity_id === personId) return true;
             return !!row.payload && row.payload.person_id === personId;
         });
+    }
+
+    /* The editable columns on a Folder, in the server's vocabulary. */
+    const FOLDER_FIELDS = Object.freeze(['title', 'description', 'private_notes', 'parent_id']);
+
+    /* Every unsynchronized operation that names one folder, whatever it does to
+     * it -- including the Works filed into it, which a deletion has to know
+     * about because a folder holding files cannot be deleted. */
+    function operationsNamingFolder(rows, folderId) {
+        return (Array.isArray(rows) ? rows : []).filter(function (row) {
+            if (!row || row.status === STATUS_ACKNOWLEDGED) return false;
+            if (row.entity_type === 'folder' && row.entity_id === folderId) return true;
+            return row.operation === 'SET_WORK_FOLDER' && !!row.payload &&
+                row.payload.folder_id === folderId;
+        });
+    }
+
+    function canonicalFolderPayload(input) {
+        const src = isPlainObject(input) ? input : {};
+        const payload = {};
+        FOLDER_FIELDS.forEach(function (name) {
+            const value = src[name];
+            payload[name] = value == null ? '' : String(value).trim();
+        });
+        return payload;
     }
 
     /* The editable columns on a Person Group, in the server's vocabulary. */
@@ -1293,6 +1322,189 @@
                 });
         }
 
+        /* ---- Folders: construction, fields, filing, deletion ---- */
+
+        function folderCreationDependency(rows, folderId, consequence) {
+            return creationDependency(rows, 'CREATE_FOLDER', 'folder', folderId,
+                'This folder could not be created on the server, so ' + consequence + '.');
+        }
+
+        function assertFolderIsNotBeingDeleted(rows, folderId, verb) {
+            const pendingDelete = (rows || []).find(r => r && r.operation === 'DELETE_FOLDER' &&
+                r.entity_id === folderId && r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This folder is being deleted, so it cannot be ' + verb + '.');
+            }
+        }
+
+        function createFolder(fields) {
+            const payload = canonicalFolderPayload(fields);
+            if (!payload.title) payload.title = 'Untitled Folder';
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    /* A folder created INSIDE one this device also created
+                     * waits for it: the server validates the hierarchy, and a
+                     * parent it has never heard of is a refusal rather than a
+                     * tree. */
+                    const parentOp = payload.parent_id
+                        ? folderCreationDependency(rows, payload.parent_id,
+                            'a folder cannot be created inside it')
+                        : null;
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'CREATE_FOLDER', entity_type: 'folder',
+                        entity_id: generateEntityId('F', uuid),
+                        payload: payload, base_revision: null,
+                        depends_on: parentOp ? [parentOp.op_id] : [],
+                    }, null));
+                });
+        }
+
+        /** One Save, however many of a folder's fields it touched. */
+        function saveFolderFields(folderId, changes, base) {
+            if (!isNonBlankString(folderId) || !isPlainObject(changes) || !isPlainObject(base)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid folder save.'));
+            }
+            for (const field of Object.keys(changes)) {
+                const observed = base[field];
+                if (FOLDER_FIELDS.indexOf(field) === -1) {
+                    return Promise.reject(localStoreError('unknown_field',
+                        'Not an editable folder field: ' + field));
+                }
+                if (typeof changes[field] !== 'string' || !isPlainObject(observed) ||
+                    typeof observed.value !== 'string' ||
+                    !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                    return Promise.reject(localStoreError('invalid_base',
+                        'Invalid observed field state.'));
+                }
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertFolderIsNotBeingDeleted(rows, folderId, 'edited');
+                    const createOp = folderCreationDependency(rows, folderId,
+                        'it cannot be edited');
+                    const written = [];
+                    for (const field of Object.keys(changes)) {
+                        const desired = changes[field];
+                        const observed = base[field];
+                        const existing = rows.find(r => r.operation === 'SET_FOLDER_FIELD' &&
+                            r.entity_type === 'folder' && r.entity_id === folderId &&
+                            r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                        if (existing) {
+                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                                throw localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.');
+                            }
+                            if (existing.payload.value === desired) {
+                                written.push(existing);
+                                continue;
+                            }
+                            await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                        }
+                        if (desired === observed.value) continue;
+                        const parentOp = field === 'parent_id' && desired
+                            ? folderCreationDependency(rows, desired,
+                                'nothing can be moved into it')
+                            : null;
+                        written.push(await insertEnvelopeIn(request, {
+                            operation: 'SET_FOLDER_FIELD', entity_type: 'folder',
+                            entity_id: folderId, payload: { field, value: desired },
+                            base_revision: observed.revision,
+                            depends_on: [createOp, parentOp].filter(Boolean)
+                                .map(op => op.op_id),
+                        }, null));
+                    }
+                    setResult(written);
+                });
+        }
+
+        /**
+         * "This Work is now filed in that folder", coalescing.
+         *
+         * A Work is in at most ONE folder, so this is a scalar on the Work and
+         * `''` means "in no folder". Filing it back where it already was leaves
+         * no intent at all. `observed` is `{folder_id, revision}`.
+         */
+        function setWorkFolder(workId, folderId, observed, localContext) {
+            if (!isNonBlankString(workId) || typeof folderId !== 'string' ||
+                !isPlainObject(observed) || typeof observed.folder_id !== 'string' ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid filing.'));
+            }
+            const desired = folderId.trim();
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    if (desired) assertFolderIsNotBeingDeleted(rows, desired, 'filed into');
+                    const existing = rows.find(r => r.operation === 'SET_WORK_FOLDER' &&
+                        r.entity_type === 'work' && r.entity_id === workId &&
+                        r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy',
+                                'This file\u2019s folder is syncing or needs resolution.');
+                        }
+                        if (existing.payload.folder_id === desired) { setResult(existing); return; }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    if (desired === observed.folder_id) { setResult(null); return; }
+                    const createOp = desired
+                        ? folderCreationDependency(rows, desired, 'nothing can be filed in it')
+                        : null;
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'SET_WORK_FOLDER', entity_type: 'work', entity_id: workId,
+                        payload: { folder_id: desired }, base_revision: observed.revision,
+                        depends_on: createOp ? [createOp.op_id] : [],
+                    }, localContext || null));
+                });
+        }
+
+        /**
+         * Delete a folder, cancelling what was never sent.
+         *
+         * The same rule every other destruction uses. A Work this device had
+         * filed INTO the folder counts as naming it: sending "file it here"
+         * immediately before "delete this" asks the server to do work the next
+         * operation destroys -- and would make the deletion fail, because a
+         * folder holding files is protected.
+         */
+        function deleteFolder(folderId) {
+            if (!isNonBlankString(folderId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid folder.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = operationsNamingFolder(rows, folderId);
+                    const already = mine.find(r => r.operation === 'DELETE_FOLDER');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_FOLDER');
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row) && row.operation !== 'CREATE_FOLDER') {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_FOLDER', entity_type: 'folder',
+                        entity_id: folderId, payload: {},
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
         /* ---- Person Groups: construction, fields, membership, deletion ---- */
 
         function createPersonGroup(fields) {
@@ -2121,6 +2333,10 @@
             createPerson,
             savePersonMetadataFields: savePersonMetadataFields,
             deletePerson: deletePerson,
+            createFolder: createFolder,
+            saveFolderFields: saveFolderFields,
+            setWorkFolder: setWorkFolder,
+            deleteFolder: deleteFolder,
             createPersonGroup: createPersonGroup,
             savePersonGroupFields: savePersonGroupFields,
             setPersonGroupMember: setPersonGroupMember,
@@ -2149,6 +2365,7 @@
         PRKS_LOCAL_WORK_SOURCE_URL_BYTES: WORK_SOURCE_URL_BYTES,
         PRKS_LOCAL_WORK_ROLE_OPERATIONS: WORK_ROLE_OPERATIONS,
         PRKS_LOCAL_PERSON_FIELDS: PERSON_FIELDS,
+        PRKS_LOCAL_FOLDER_FIELDS: FOLDER_FIELDS,
         PRKS_LOCAL_PERSON_GROUP_FIELDS: PERSON_GROUP_FIELDS,
         PRKS_LOCAL_PERSON_GROUP_OPERATIONS: PERSON_GROUP_OPERATIONS,
         prksGenerateEntityId: generateEntityId,

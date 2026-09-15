@@ -81,6 +81,25 @@
                 op.entity_id;
             return 'Create ' + who;
         }
+        if (op.operation === 'CREATE_FOLDER') {
+            return 'Create folder "' + bounded(op.payload.title) + '"';
+        }
+        if (op.operation === 'SET_FOLDER_FIELD') {
+            const labels = root.PRKS_FOLDER_FIELD_LABELS || {};
+            const field = op.payload.field;
+            if (field === 'parent_id') {
+                return op.payload.value
+                    ? 'Move folder into ' + op.payload.value : 'Move folder to the top level';
+            }
+            return (labels[field] || field) + ' = "' + bounded(op.payload.value) + '"';
+        }
+        if (op.operation === 'DELETE_FOLDER') {
+            return 'Delete a folder';
+        }
+        if (op.operation === 'SET_WORK_FOLDER') {
+            const where = (context.folder && context.folder.title) || op.payload.folder_id;
+            return op.payload.folder_id ? 'File in ' + where : 'Remove from its folder';
+        }
         if (op.operation === 'CREATE_TAG') {
             return 'Create tag "' + bounded(op.payload.name) + '"';
         }
@@ -130,6 +149,12 @@
     const DISCARD_INVALIDATES = Object.freeze({
         SET_WORK_METADATA_FIELD: 'work-metadata-state',
         SET_WORK_SOURCE: 'work-source-state',
+        CREATE_FOLDER: 'folder-state',
+        SET_FOLDER_FIELD: 'folder-state',
+        DELETE_FOLDER: 'folder-state',
+        /* Reached through the Work branch, which is where a filing belongs: the
+         * folder a Work is in is a field on the WORK. */
+        SET_WORK_FOLDER: 'work-folder-state',
         CREATE_TAG: 'tags:index',
         DELETE_TAG: 'tags:index',
         ADD_WORK_TAG: 'work-tag-options',
@@ -172,6 +197,16 @@
             root.prksOfflineMarkEntityChanged('person-metadata-state', op.entity_id);
             return;
         }
+        if (op.entity_type === 'folder') {
+            /* The whole hierarchy: a discarded creation leaves a library that
+             * was showing a folder the server never stored, and a discarded
+             * deletion one that was hiding a folder it still has. */
+            if (typeof root.prksOfflineMarkFoldersChanged === 'function') {
+                root.prksOfflineMarkFoldersChanged();
+            }
+            root.prksOfflineMarkEntityChanged('folder-state', op.entity_id);
+            return;
+        }
         if (op.entity_type === 'tag') {
             /* The whole vocabulary, not one row: a discarded creation leaves a
              * catalogue that was showing a Tag the server never stored, and a
@@ -212,6 +247,10 @@
     const NAMED_REFUSALS = Object.freeze({
         NAME_TAKEN: 'Something else already has that name.',
         TAG_MERGED: 'That tag was merged into another one.',
+        TITLE_TAKEN: 'Something here already has that name.',
+        FOLDER_NOT_FOUND: 'That folder no longer exists on the server.',
+        FOLDER_NOT_EMPTY: 'It still holds files, so it cannot be deleted.',
+        FOLDER_HAS_SUBFOLDERS: 'It still has subfolders, so it cannot be deleted.',
         TAG_DELETED: 'That tag was deleted on the server.',
         PARENT_NOT_FOUND: 'The group it would go inside no longer exists.',
         PARENT_CYCLE: 'That would put the group inside one of its own subgroups.',
@@ -260,7 +299,9 @@
         for (const op of operations) {
             const row = document.createElement('p');
             const link = document.createElement('a');
-            link.href = op.entity_type === 'person'
+            link.href = op.entity_type === 'folder'
+                ? '#/folders/' + encodeURIComponent(op.entity_id)
+                : op.entity_type === 'person'
                 ? '#/people/' + encodeURIComponent(op.entity_id)
                 : op.entity_type === 'person-group'
                     ? '#/people/groups/' + encodeURIComponent(op.entity_id)

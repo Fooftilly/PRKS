@@ -1864,6 +1864,40 @@ async function prksDurableOperationsOrNone() {
     return [];
 }
 
+/** The Folder hierarchy this device holds, with pending intent applied. */
+async function prksEffectiveFolderRows(rows, ops) {
+    if (!Array.isArray(rows) || typeof prksEffectiveFolders !== 'function') return rows;
+    return prksEffectiveFolders(rows, ops || await prksDurableOperationsOrNone());
+}
+
+/** The same overlay, reading the hierarchy from cache for a caller that has none. */
+async function prksEffectiveFolderCatalogue(ops) {
+    let rows = [];
+    try {
+        const cached = await prksOfflineReadList(PRKS_FOLDERS_LIST_KEY, '/api/folders', {});
+        rows = cached && Array.isArray(cached.value) ? cached.value : [];
+    } catch (_e) { rows = []; }
+    return await prksEffectiveFolderRows(rows, ops);
+}
+
+/** A Folder that exists only because of an unsynchronized creation. */
+async function prksPendingCreatedFolder(folderId) {
+    if (typeof prksPendingFolderCreates !== 'function') return null;
+    const ops = await prksDurableOperationsOrNone();
+    const op = prksPendingFolderCreates(ops).find(row => row.entity_id === folderId);
+    if (!op) return null;
+    const row = prksFolderRowFromOp(op);
+    if (!row) return null;
+    const catalogue = await prksEffectiveFolderCatalogue(ops);
+    const parent = row.parent_id
+        ? (catalogue || []).find(f => f && f.id === row.parent_id) : null;
+    return Object.assign({}, row, {
+        works: [], tags: [],
+        children: (catalogue || []).filter(f => f && f.parent_id === row.id),
+        parent: parent ? { id: parent.id, title: parent.title } : null,
+    });
+}
+
 /** The People index rows this device holds, or an empty list. */
 async function prksCachedPeopleRows() {
     try {
@@ -2212,6 +2246,11 @@ async function prksHydratePendingWorkMetadata() {
     if (typeof prksRefreshPendingPersonNames === 'function') {
         await prksRefreshPendingPersonNames();
     }
+    /* And where each file has been FILED. A card names its folder, so the same
+     * rule applies: the row has to know the pending folder before it paints. */
+    if (typeof prksRefreshPendingWorkFolders === 'function') {
+        await prksRefreshPendingWorkFolders();
+    }
 }
 
 /* Two overlays, applied in a fixed order and never by each other.
@@ -2231,6 +2270,11 @@ function prksEffectiveWorkRows(rows) {
      * NAME of whoever ended up there. Running it earlier would rename rows the
      * relationship overlay then replaced. */
     if (out) out = prksEffectiveWorkRowPersonNames(out);
+    /* And where the file has been filed. Independent of the other three: it
+     * corrects the FOLDER a row names, which none of them touch. */
+    if (out && typeof prksApplyPendingWorkFolders === 'function') {
+        out = prksApplyPendingWorkFolders(out);
+    }
     return out;
 }
 
@@ -2959,7 +3003,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     { domain: PRKS_FOLDERS_DOMAIN, validate: prksIsFoldersIndexShape }
                 );
                 if (stale()) return;
-                const folders = prksResolveOfflineFoldersIndex(offlineFolders);
+                const cachedFolders = prksResolveOfflineFoldersIndex(offlineFolders);
+                const folderOps = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                /* A device that created a folder here and holds no hierarchy at
+                 * all still has folders: its own. */
+                const folders = cachedFolders === null &&
+                    prksPendingFolderCreates(folderOps).length
+                    ? await prksEffectiveFolderRows([], folderOps)
+                    : await prksEffectiveFolderRows(cachedFolders, folderOps);
+                if (stale()) return;
                 if (!folders) {
                     // A cached [] is a real empty library; only a MISSING
                     // snapshot is an unavailable state.
@@ -3036,19 +3089,51 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'folder-detail': {
                 const folderId = route.params.folderId;
-                const offlineFolder = await prksOfflineDetailFetch(
-                    'folder', folderId, '/api/folders/' + encodeURIComponent(folderId), routeSignal,
-                    { domain: PRKS_FOLDERS_DOMAIN, validate: (value) => prksIsFolderShape(value, folderId) }
-                );
+                /* The durable queue first: a folder this device created and has
+                 * not sent cannot exist on the server, and a real 404 is a
+                 * domain answer ("no such folder") rather than unavailability. */
+                const detailOps = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                const folderDeleted = prksPendingFolderDeletions(detailOps).has(folderId);
+                const folderUnsent = !folderDeleted &&
+                    prksPendingFolderCreates(detailOps).some(op => op.entity_id === folderId);
+                const offlineFolder = folderUnsent
+                    ? { value: null, source: 'unavailable', cachedAt: null }
+                    : await prksOfflineDetailFetch(
+                        'folder', folderId, '/api/folders/' + encodeURIComponent(folderId), routeSignal,
+                        { domain: PRKS_FOLDERS_DOMAIN, validate: (value) => prksIsFolderShape(value, folderId) }
+                    );
                 if (stale()) return;
                 const resolvedFolder = prksResolveOfflineFolder(offlineFolder, folderId);
+                if (folderDeleted) {
+                    resolvedFolder.unavailable = true;
+                    resolvedFolder.folder = null;
+                }
+                if (folderUnsent) {
+                    const pendingFolder = await prksPendingCreatedFolder(folderId);
+                    if (stale()) return;
+                    resolvedFolder.folder = pendingFolder;
+                    resolvedFolder.unavailable = !pendingFolder;
+                }
                 if (resolvedFolder.unavailable) {
                     ctx.setEntity('folder', null);
                     prksOfflineRenderUnavailable(contentDiv, 'Folder not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Folder not available offline' };
                     break;
                 }
-                const folder = resolvedFolder.folder;
+                /* The browse catalogue is read only when a filing is pending:
+                 * it is the one place a row for a file moved in can come from,
+                 * and a device with nothing pending must not pay for it. */
+                let filedWorks = [];
+                if (typeof prksPendingWorkFolders === 'function' &&
+                    prksPendingWorkFolders(detailOps).size) {
+                    const browse = await prksOfflineWorksBrowseFetch(routeSignal);
+                    if (stale()) return;
+                    filedWorks = prksResolveOfflineWorksBrowse(browse) || [];
+                }
+                const folder = typeof prksEffectiveFolderDetail === 'function'
+                    ? prksEffectiveFolderDetail(resolvedFolder.folder, detailOps, filedWorks)
+                    : resolvedFolder.folder;
                 await prksHydratePendingWorkMetadata();
                 if (stale()) return;
                 ctx.setEntity('folder', folder);
@@ -3399,7 +3484,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (!internalRefresh && offlineWork.value && typeof prksRecordWorkOpened === 'function') {
                     void prksRecordWorkOpened(offlineWork.value);
                 }
-                const work = offlineWork.value;
+                /* Where this file has been FILED, as the user last decided --
+                 * the acknowledged record plus any unsynchronized move. The
+                 * card that names its folder is rendered from this object. */
+                if (typeof prksRefreshPendingWorkFolders === 'function') {
+                    await prksRefreshPendingWorkFolders();
+                    if (stale()) return;
+                }
+                const work = offlineWork.value && typeof prksApplyPendingWorkFolders === 'function'
+                    ? prksApplyPendingWorkFolders([offlineWork.value])[0]
+                    : offlineWork.value;
                 if (!work && offlineWork.source === 'unavailable') {
                     prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'File not available offline' };

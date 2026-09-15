@@ -1696,6 +1696,70 @@ that it never existed.
 
 Tag identity stays PERSISTENT. Nothing here garbage-collects an unused Tag.
 
+## Folders (3F)
+
+Four shapes, and the split is a reading of the schema rather than a template.
+
+| Operation | Shape | Conflict unit | Base revision |
+| --- | --- | --- | --- |
+| `CREATE_FOLDER` | construction | the folder | none |
+| `SET_FOLDER_FIELD` | scalar mutation | one field | `folder-field/[folder, field]` |
+| `SET_WORK_FOLDER` | scalar mutation of the WORK | the Work | `work-folder/[work]` |
+| `DELETE_FOLDER` | destruction | the identity | none |
+
+### Moving a folder is a field, not a structure
+
+The hierarchy is a parent pointer on one row, so a move changes exactly one
+value. Modelling it as an aggregate would make an unrelated rename conflict with
+it, which is the opposite of what a per-field unit exists to give. Acyclicity
+stays canonical: only the server sees the whole tree.
+
+A title is unique WITHIN ITS PARENT, so `title` and `parent_id` cannot be judged
+apart -- a move can collide with a sibling exactly as a rename can, and
+`set_field_on_conn` evaluates both whichever one is being written. The ordinary
+PATCH applies `title` before `parent_id` for the same reason: renaming first
+avoids colliding with a sibling the folder is about to leave behind.
+
+### Which folder a Work is in is a field on the WORK
+
+A Work is in at most one folder -- `move_work_to_folder` clears and reassigns in
+one step -- so this is a scalar rather than membership of a set. Filing, moving
+and clearing are one operation with different values, and `''` means "in no
+folder". Filing it back where it already was leaves no intent at all.
+
+Its acknowledgement carries the folder's TITLE, because a cached Work detail
+renders it and a client whose folder catalogue does not hold that folder could
+not build the row without it.
+
+### Deletion stays empty-only
+
+`FOLDER_NOT_EMPTY` and `FOLDER_HAS_SUBFOLDERS` are the canonical rules,
+unchanged. Deleting cancels every unsynchronized operation naming the folder
+that was never attempted -- including a Work filed INTO it, which matters twice
+over: the filing is work the deletion destroys, and it would make the deletion
+fail, because a folder holding files is protected.
+
+### What a pending change reaches, and what an acknowledgement does
+
+A pending creation, rename, move or deletion is an overlay over the durable
+queue and is never written into the acknowledged cache. A pending filing reaches
+the file's own page, every card that names its folder, and the folder page's own
+file list -- but only where this device already holds a row for the file: the
+operation names an id, the page renders a card, and inventing one would put a
+value in front of the user that nothing canonical ever said.
+
+`work_count` is deliberately NOT adjusted for a pending filing. The count moves
+between two folders and the catalogue projection cannot know which folder a file
+is leaving; a number this device cannot compute correctly is better left as the
+last one the server stated.
+
+On acknowledgement the hierarchy is PATCHED rather than dropped -- the Folder
+Library is PRKS's home route, and discarding it would land an offline launch on
+an empty library. A rename's answer NAMES the member Works, so exactly those
+snapshots are staled. Among the browse projections only Recently added carries
+`folder_id`; Progress and File types never render a folder, so staling them
+would cost the user their offline browse pages for a value neither shows.
+
 ## Adding a family: the four shapes and what each must declare
 
 The families that exist fall into a small number of shapes. New work should

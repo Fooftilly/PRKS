@@ -244,6 +244,12 @@
         // when they share meaning, not when they share a code path.
         handlers: {
             // The Tag VOCABULARY, as opposed to the relationship below.
+            // Folders. Moving one is a FIELD; which folder a Work is in is a
+            // field on the WORK, because a Work is in at most one folder.
+            CREATE_FOLDER: root.prksFolderCreateSyncHandler,
+            SET_FOLDER_FIELD: root.prksFolderFieldSyncHandler,
+            DELETE_FOLDER: root.prksFolderDeleteSyncHandler,
+            SET_WORK_FOLDER: root.prksWorkFolderSyncHandler,
             CREATE_TAG: root.prksTagCreateSyncHandler,
             DELETE_TAG: root.prksTagDeleteSyncHandler,
             ADD_WORK_TAG: root.prksWorkTagSyncHandler,

@@ -1118,6 +1118,156 @@
             return true;
         }
 
+        /* ---- Folders ------------------------------------------------------ */
+
+        async function cachedFolderRows() {
+            const cached = await store.getList(FOLDERS_LIST_KEY)
+                .catch(function () { return null; });
+            if (!cached) return null;
+            return Array.isArray(cached.value) ? cached.value : null;
+        }
+
+        async function writeFolderRows(rows) {
+            const token = currentDomainGeneration(DOMAIN_FOLDERS) + 1;
+            domainGeneration.set(DOMAIN_FOLDERS, token);
+            return cacheListForDomain(FOLDERS_LIST_KEY, rows, DOMAIN_FOLDERS, token);
+        }
+
+        /**
+         * A Folder the server has accepted.
+         *
+         * The acknowledgement carries the stored row, so the hierarchy is
+         * PATCHED rather than dropped -- the Folder Library is PRKS's home
+         * route, and discarding it would land an offline launch on an empty
+         * library.
+         */
+        async function reconcileCreatedFolder(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const folder = result && result.folder;
+            if (!folder || folder.id !== result.folder_id) return false;
+            const rows = await cachedFolderRows();
+            if (rows) {
+                const merged = rows.filter(row => row && row.id !== folder.id).concat([folder]);
+                if (!await writeFolderRows(merged)) return false;
+            }
+            if (result.changed && typeof root.prksNewFolderState === 'function') {
+                await patchEntity('folder-state', folder.id,
+                    () => root.prksNewFolderState(folder.id));
+            }
+            return true;
+        }
+
+        /** One Folder field the server has applied. */
+        async function reconcileFolderField(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.folder_id;
+            const field = result.field;
+            if (!root.prksIsSupportedFolderField ||
+                !root.prksIsSupportedFolderField(field)) return false;
+            const raw = String((op && op.payload && op.payload.value) || '');
+            const value = field === 'parent_id' ? (raw || null) : raw;
+            await patchEntity('folder-state', id, function (state) {
+                if (typeof root.prksIsFolderStateShape === 'function' &&
+                    !root.prksIsFolderStateShape(state, id)) return null;
+                const entry = state.fields[field];
+                if (!entry || entry.revision > result.server_revision) return null;
+                const next = Object.assign({}, state,
+                    { fields: Object.assign({}, state.fields) });
+                next.fields[field] = { revision: result.server_revision };
+                return next;
+            });
+            const rows = await cachedFolderRows();
+            if (rows && rows.some(row => row && row.id === id)) {
+                const patched = rows.map(function (row) {
+                    if (!row || row.id !== id) return row;
+                    const next = Object.assign({}, row);
+                    next[field] = value;
+                    return next;
+                });
+                if (!await writeFolderRows(patched)) return false;
+            }
+            if (field === 'parent_id') {
+                /* The cached detail carries a `parent` OBJECT this
+                 * acknowledgement does not name. */
+                await invalidateEntity('folder', id);
+            } else {
+                await patchEntity('folder', id, function (folder) {
+                    if (!folder || folder.id !== id) return null;
+                    const next = Object.assign({}, folder);
+                    next[field] = value;
+                    return next;
+                });
+            }
+            if (field === 'title') {
+                /* A cached Work detail embeds `folder_title`, and so does every
+                 * card that names a file's folder. The answer NAMES the members
+                 * rather than making this device guess, so exactly those Works
+                 * are staled and the rest of the cache is untouched. */
+                const members = Array.isArray(result.member_work_ids)
+                    ? result.member_work_ids : [];
+                for (let i = 0; i < members.length; i += 1) {
+                    await invalidateEntity('work', members[i]);
+                }
+                if (members.length) {
+                    prksOfflineMarkWorksBrowseChanged();
+                    prksOfflineMarkRecentChanged();
+                    prksOfflineMarkRecentlyAddedChanged();
+                }
+            }
+            return true;
+        }
+
+        /** Which folder a Work is in, as the server now has it. */
+        async function reconcileWorkFolder(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const workId = result.work_id;
+            await patchEntity('work-folder-state', workId, function (state) {
+                if (typeof root.prksIsWorkFolderStateShape === 'function' &&
+                    !root.prksIsWorkFolderStateShape(state, workId)) return null;
+                if (state.revision > result.server_revision) return null;
+                return Object.assign({}, state, { folder_id: result.folder_id,
+                    revision: result.server_revision });
+            });
+            /* The Work's own snapshot and its cards carry the folder's TITLE,
+             * and the acknowledgement states it exactly -- so they are patched
+             * rather than dropped. */
+            await patchEntity('work', workId, function (work) {
+                if (!work || work.id !== workId) return null;
+                return Object.assign({}, work, {
+                    folder_id: result.folder_id || null,
+                    folder_title: result.folder_title || '',
+                });
+            });
+            if (!result.changed) return true;
+            /* Both folders' contents changed, and this device does not know
+             * which folder the Work left -- the answer names only where it
+             * landed -- so the hierarchy's counts are what go stale.
+             *
+             * Among the browse projections ONLY Recently added carries
+             * `folder_id`: it filters locally over the folder title, while
+             * Progress and File types never render a folder at all. Staling
+             * those two would cost the user their offline browse pages for a
+             * value neither of them shows. */
+            prksOfflineMarkFoldersChanged();
+            prksOfflineMarkRecentlyAddedChanged();
+            return true;
+        }
+
+        /** A Folder the server has removed. It was empty, so nothing moved. */
+        async function reconcileDeletedFolder(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.folder_id;
+            const rows = await cachedFolderRows();
+            if (rows) {
+                if (!await writeFolderRows(rows.filter(row => row && row.id !== id))) {
+                    return false;
+                }
+            }
+            await invalidateEntity('folder', id);
+            await invalidateEntity('folder-state', id);
+            return true;
+        }
+
         /* ---- the Tag vocabulary ------------------------------------------ */
 
         /**
@@ -1730,6 +1880,10 @@
             reconcileWorkSource,
             reconcileWorkRole,
             reconcileRecentOpen,
+            reconcileCreatedFolder,
+            reconcileFolderField,
+            reconcileWorkFolder,
+            reconcileDeletedFolder,
             reconcileCreatedTag,
             reconcileDeletedTag,
             reconcileCreatedPerson,
@@ -1944,6 +2098,12 @@
         prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
         prksOfflineReconcileWorkRole: result => production.reconcileWorkRole(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
+        prksOfflineReconcileCreatedFolder: result => production.reconcileCreatedFolder(result),
+        prksOfflineReconcileFolderField: (result, op) =>
+            production.reconcileFolderField(result, op),
+        prksOfflineReconcileWorkFolder: (result, op) =>
+            production.reconcileWorkFolder(result, op),
+        prksOfflineReconcileDeletedFolder: result => production.reconcileDeletedFolder(result),
         prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
         prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),

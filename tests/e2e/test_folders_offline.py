@@ -94,6 +94,36 @@ class FoldersOfflineTests(unittest.TestCase):
         else:
             self.assertIsNotNone(o._cached_list(page, 'folders:index'))
 
+    def settled(self, page):
+        """Every durable operation has drained.
+
+        A durable save completes when the intent is WRITTEN, so coherence --
+        which follows the canonical change -- has not happened yet.
+        """
+        page.evaluate("""async () => {
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                const rows = await prksSync.store.listOperations();
+                if (!rows.some(op => op.status !== 'conflict')) return;
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }""")
+
+    def patched(self, page, before, expected):
+        """Like `changed`, but the hierarchy is PATCHED rather than dropped.
+
+        The acknowledgement carries the stored row, and the Folder Library is
+        PRKS's home route -- discarding it would land an offline launch on an
+        empty library for a change already known in full.
+        """
+        for domain, generation in before.items():
+            with self.subTest(domain=domain):
+                if domain in expected:
+                    self.assertGreater(o._domain_generation(page, domain), generation)
+                else:
+                    self.assertEqual(o._domain_generation(page, domain), generation)
+        self.assertIsNotNone(o._cached_list(page, 'folders:index'))
+
     def offline(self, page, context):
         context.set_offline(True)
         page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
@@ -467,7 +497,10 @@ class FoldersOfflineTests(unittest.TestCase):
         self.cache(page, ids, all_domains=True)
         before = self.generations(page)
         page.evaluate("async () => { await createFolder('Coherence New', ''); }")
-        self.changed(page, before, {'folders'})
+        self.settled(page)
+        self.patched(page, before, {'folders'})
+        self.assertIn('Coherence New', [row['title'] for row in
+                                        o._cached_list(page, 'folders:index')['value']])
 
     def test_description_only_update_keeps_member_work_snapshots(self):
         server, page, context, _c = self.start()
@@ -478,7 +511,8 @@ class FoldersOfflineTests(unittest.TestCase):
         before = self.generations(page)
         page.evaluate("async (id) => { await patchFolder(id, { description: 'Edited.' }); }",
                       ids['folder_parent'])
-        self.changed(page, before, {'folders'})
+        self.settled(page)
+        self.patched(page, before, {'folders'})
         # Only the title is embedded in a cached Work detail.
         self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_a']))
 
@@ -493,7 +527,8 @@ class FoldersOfflineTests(unittest.TestCase):
         before = self.generations(page)
         page.evaluate("async (id) => { await patchFolder(id, { title: 'Renamed Parent' }); }",
                       ids['folder_parent'])
-        self.changed(page, before, {'folders'})
+        self.settled(page)
+        self.patched(page, before, {'folders'})
         # work_a is a member; work_b lives in the child folder and must survive.
         o._wait_entity_uncached(page, 'work', ids['work_a'])
         self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_b']))
@@ -507,7 +542,8 @@ class FoldersOfflineTests(unittest.TestCase):
         before = self.generations(page)
         page.evaluate("async ([child, parent]) => { await patchFolder(child, { parent_id: null }); }",
                       [ids['folder_child'], ids['folder_parent']])
-        self.changed(page, before, {'folders'})
+        self.settled(page)
+        self.patched(page, before, {'folders'})
         self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_a']))
 
     def test_moving_a_work_invalidates_folders_and_that_work(self):
@@ -519,8 +555,15 @@ class FoldersOfflineTests(unittest.TestCase):
         before = self.generations(page)
         page.evaluate("async ([wid, fid]) => { await patchWorkFolder(wid, fid); }",
                       [ids['work_a'], ids['folder_child']])
+        self.settled(page)
+        # The hierarchy's COUNTS moved between two folders and this device does
+        # not know which folder the file left, so the hierarchy is staled -- but
+        # the Work's own snapshot carries the new folder title exactly, so it is
+        # patched rather than dropped.
         self.changed(page, before, {'folders'})
-        o._wait_entity_uncached(page, 'work', ids['work_a'])
+        cached = o._cached_entity(page, 'work', ids['work_a'])
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached['value']['folder_id'], ids['folder_child'])
 
     def test_bulk_move_folder_invalidates_folders(self):
         server, page, context, _c = self.start()

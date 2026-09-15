@@ -975,16 +975,29 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertNotIn(".length === 0", body)
 
     def test_canonical_folder_wrappers_guard_and_publish_coherence(self):
+        """Folder TAG membership is still a canonical request, and still
+        publishes coherence from the server's answer. Everything else about a
+        folder is durable now and reconciles at acknowledgement instead."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        for fn in ("async function createFolder(", "async function patchFolder(",
-                   "async function deleteFolderCanonical(", "async function addWorkToFolder(",
-                   "async function patchWorkFolder(", "async function addTagToFolder(",
-                   "async function removeTagFromFolder("):
+        for fn in ("async function addTagToFolder(", "async function removeTagFromFolder("):
             at = api.index(fn)
             body = api[at : at + 1400]
             with self.subTest(fn=fn):
                 self.assertIn("prksGuardFolderMutation(", body)
                 self.assertIn("prksMarkFoldersDomainChanged()", body)
+        for fn in ("async function createFolder(", "async function patchFolder(",
+                   "async function deleteFolderCanonical(", "async function addWorkToFolder(",
+                   "async function patchWorkFolder("):
+            body = _fn_body(api, fn)
+            with self.subTest(fn=fn):
+                self.assertNotIn("prksGuardFolderMutation(", body)
+                self.assertNotIn("prksRequest(", body)
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        for reconciler in ("async function reconcileCreatedFolder(",
+                           "async function reconcileFolderField(",
+                           "async function reconcileWorkFolder(",
+                           "async function reconcileDeletedFolder("):
+            self.assertIn(reconciler, runtime, reconciler)
 
     def test_no_production_surface_writes_folders_outside_the_wrappers(self):
         """A raw Folder write anywhere else silently reopens the guard gap.
@@ -1011,12 +1024,16 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertIn("Documented exception to the canonical-Folder-wrapper rule", ui)
 
     def test_folder_title_rename_evicts_member_work_snapshots(self):
-        api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        at = api.index("async function patchFolder(")
-        body = api[at : at + 1400]
-        # Narrow, canonical, and independent of which page is focused.
-        self.assertIn("member_work_ids", body)
-        self.assertIn("prksOfflineMarkEntityChanged('work', workId)", body)
+        """A cached Work detail embeds `folder_title`. The acknowledgement NAMES
+        the members, so exactly those are staled -- narrow, canonical, and
+        independent of which page is focused."""
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        at = runtime.index("async function reconcileFolderField(")
+        body = runtime[at : runtime.index("\n        /**", at)]
+        self.assertIn("result.member_work_ids", body)
+        self.assertIn("invalidateEntity('work', members[i])", body)
+        backend = _read(os.path.join(_PROJECT_DIR, "backend", "folder_sync.py"))
+        self.assertIn('result["member_work_ids"]', backend)
 
     def test_folder_parent_id_must_be_present_not_merely_nullish(self):
         """A truncated HTTP-200 row must not be read as a root folder."""
@@ -1220,13 +1237,20 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertNotIn("prksMarkRecentChanged();", body)
 
     def test_folder_membership_marks_recently_added_only(self):
+        """Filing a Work is durable now, so its coherence moved to the
+        reconciler -- the canonical change is the acknowledgement."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
         for fn in ("async function addWorkToFolder(", "async function patchWorkFolder("):
             body = _fn_body(api, fn)
             with self.subTest(fn=fn):
-                self.assertIn("prksMarkRecentlyAddedChanged();", body)
-                # The stable catalog carries no folder_id at all.
-                self.assertNotIn("prksMarkWorksBrowseChanged();", body)
+                self.assertIn("prksFileWorkInFolder(", body)
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        at = runtime.index("async function reconcileWorkFolder(")
+        body = runtime[at : runtime.index("\n        /**", at)]
+        self.assertIn("prksOfflineMarkRecentlyAddedChanged();", body)
+        # The Work's own snapshot carries `folder_title`, and the answer states
+        # it exactly -- so it is PATCHED rather than dropped.
+        self.assertIn("folder_title: result.folder_title", body)
 
     def test_display_hooks_reach_all_three_projections(self):
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))

@@ -273,6 +273,12 @@ class BrowseOfflineTests(unittest.TestCase):
         cases = (
             ('folder move', """async ([wid, fid]) => {
                     await patchWorkFolder(wid, fid);
+                    const deadline = Date.now() + 30000;
+                    while (Date.now() < deadline) {
+                        const rows = await prksSync.store.listOperations();
+                        if (!rows.some(op => op.status !== 'conflict')) break;
+                        await new Promise(r => setTimeout(r, 100));
+                    }
                     await fetchWorkDetails(wid);
                 }""", ['work_a', 'folder_child']),
             ('tag add', """async ([wid, tid]) => {
@@ -389,6 +395,15 @@ class BrowseOfflineTests(unittest.TestCase):
         before = self.generations(page)
         page.evaluate("async ([wid, fid]) => { await patchWorkFolder(wid, fid); }",
                       [ids['work_a'], ids['folder_child']])
+        # Filing is durable now, so coherence follows the acknowledgement.
+        page.evaluate("""async () => {
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                const rows = await prksSync.store.listOperations();
+                if (!rows.some(op => op.status !== 'conflict')) return;
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }""")
         # Only Recently added carries folder_id; Progress/Types never render it.
         self.changed(page, before, {'recently-added'})
 

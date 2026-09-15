@@ -14,9 +14,9 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import (person_group_sync, person_metadata_sync, person_sync, tag_sync,
-                     work_metadata_sync, work_open_sync, work_role_sync, work_source_sync,
-                     work_tag_sync)
+from backend import (folder_sync, person_group_sync, person_metadata_sync, person_sync,
+                     tag_sync, work_metadata_sync, work_open_sync, work_role_sync,
+                     work_source_sync, work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.entity_ids import generate as generate_entity_id, is_distributed
 from backend.log_safety import safe_error_type, safe_log_label
@@ -2982,14 +2982,13 @@ class PRKSDatabase:
         description: str = "",
         parent_id: Optional[str] = None,
     ) -> str:
-        t = (title or "").strip() or "Untitled Folder"
-        d = (description or "").strip()
         pid = self._normalize_folder_parent_id(parent_id)
-        if self._folder_title_taken(t, pid):
-            raise ValueError("A folder with this name already exists in this location.")
         folder_id = self.generate_id("F")
-        query = "INSERT INTO folders (id, title, description, parent_id) VALUES (?, ?, ?, ?)"
-        self.execute_query(query, (folder_id, t, d, pid))
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            # The same construction boundary the durable CREATE_FOLDER uses, so
+            # the two paths cannot drift on what a legal folder is.
+            folder_sync.insert_folder_on_conn(conn, folder_id, title, description, pid or "")
         return folder_id
 
     def get_all_folders(self) -> List[dict]:
@@ -3065,37 +3064,32 @@ class PRKSDatabase:
         return [r["work_id"] for r in rows if r["work_id"]]
 
     def update_folder_metadata(self, folder_id: str, fields: dict):
-        """Update editable folder fields including hierarchy metadata."""
-        allowed = {"title", "description", "private_notes", "parent_id"}
-        updates = {k: v for k, v in fields.items() if k in allowed}
+        """Update editable folder fields, through the revision-aware writer.
+
+        The ordinary PATCH and the durable `SET_FOLDER_FIELD` share one
+        boundary, so a folder can never change without its revision: an offline
+        device holding the old value would otherwise have no way to discover it
+        had been overtaken.
+
+        Fields are applied in a deliberate order. A title is unique WITHIN its
+        parent, so a request that renames AND moves has to rename first -- the
+        other order can collide with a sibling the folder is about to leave
+        behind.
+        """
+        updates = {k: v for k, v in fields.items() if k in folder_sync.FIELD_SET}
         if not updates:
             return
-        exists = self.execute_query("SELECT id FROM folders WHERE id = ?", (folder_id,))
-        if not exists:
-            raise ValueError("Folder not found.")
-        if "parent_id" in updates:
-            updates["parent_id"] = self._normalize_folder_parent_id(updates["parent_id"], folder_id)
-        final_title = None
-        final_parent = None
-        if "title" in updates:
-            final_title = (updates["title"] or "").strip() or "Untitled Folder"
-            updates["title"] = final_title
-        if "parent_id" in updates:
-            final_parent = updates["parent_id"]
-        if final_title is not None or final_parent is not None:
-            row = self.execute_query("SELECT title, parent_id FROM folders WHERE id = ?", (folder_id,))
-            if not row:
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute(
+                    "SELECT 1 FROM folders WHERE id = ?", (folder_id,)).fetchone():
                 raise ValueError("Folder not found.")
-            candidate_title = final_title if final_title is not None else (row[0]["title"] or "").strip()
-            candidate_parent = final_parent if final_parent is not None else row[0]["parent_id"]
-            if self._folder_title_taken(candidate_title, candidate_parent, exclude_folder_id=folder_id):
-                raise ValueError("A folder with this name already exists in this location.")
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [folder_id]
-        self.execute_query(
-            f"UPDATE folders SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            tuple(values),
-        )
+            for field in ("title", "parent_id", "description", "private_notes"):
+                if field not in updates:
+                    continue
+                value = updates[field]
+                folder_sync.set_field_on_conn(
+                    conn, folder_id, field, "" if value in (None, False) else str(value))
 
     def add_work_to_folder(self, folder_id: str, work_id: str):
         """Attach a work to a folder. Fails if the work is already in a different folder."""
@@ -3120,33 +3114,20 @@ class PRKSDatabase:
         )
 
     def move_work_to_folder(self, work_id: str, folder_id: Optional[str]) -> None:
-        """Remove folder membership, then optionally assign to one folder (assign / move / clear)."""
+        """Assign / move / clear, through the revision-aware boundary.
+
+        A Work is in at most one folder, so this is a SCALAR write: the durable
+        `SET_WORK_FOLDER` family shares this boundary, and without that an
+        offline device holding the old folder could never discover it had been
+        overtaken.
+        """
         wid = (work_id or "").strip()
         if not wid:
             raise ValueError("work_id is required")
-        raw = folder_id
-        if raw is None:
-            fid: Optional[str] = None
-        else:
-            fid = str(raw).strip() or None
-        conn = self.get_connection()
-        try:
-            conn.execute("DELETE FROM folder_files WHERE work_id = ?", (wid,))
-            if fid:
-                chk = conn.execute("SELECT id FROM folders WHERE id = ?", (fid,)).fetchone()
-                if not chk:
-                    conn.rollback()
-                    raise ValueError("Folder not found.")
-                conn.execute(
-                    "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?)",
-                    (fid, wid),
-                )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            folder_sync.set_work_folder_on_conn(
+                conn, wid, "" if folder_id is None else str(folder_id))
 
     def _normalize_bulk_ids(self, raw, *, kind: str) -> List[str]:
         if not isinstance(raw, list):
@@ -3692,6 +3673,18 @@ class PRKSDatabase:
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             person_group_sync.set_member_on_conn(conn, group_id, person_id, False)
+
+    def get_folder_sync_state(self, folder_id: str) -> Optional[dict]:
+        """Field revisions for one folder."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return folder_sync.get_folder_state_on_conn(conn, folder_id)
+
+    def get_work_folder_state(self, work_id: str) -> Optional[dict]:
+        """Which folder a Work is in, and the revision that says so."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return folder_sync.get_work_folder_state_on_conn(conn, work_id)
 
     def get_person_group_sync_state(self, group_id: str) -> Optional[dict]:
         """Field revisions and membership revisions for one group."""
