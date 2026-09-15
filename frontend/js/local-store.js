@@ -101,6 +101,8 @@
         'SET_ARGUMENT_SOURCES',
         'SET_ARGUMENT_TARGETS',
         'DELETE_ARGUMENT',
+        'SET_WORK_RESEARCH_NOTE',
+        'SET_WORK_PRIVATE_NOTE',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -129,6 +131,11 @@
      * bounds PROVENANCE on a non-video Work, this one bounds the aggregate's
      * URL. They are equal today and are free to diverge. */
     const WORK_SOURCE_URL_BYTES = 64 * 1024;
+    /* Mirrors `backend/work_note_sync` body caps. Research Notes are the
+     * large whole-document aggregate; Private Notes stay a reminder. Bounded
+     * on the VALUE, not its JSON encoding, for the same reason abstracts are. */
+    const WORK_RESEARCH_NOTE_BYTES = 32 * 1024 * 1024;
+    const WORK_PRIVATE_NOTE_BYTES = 64 * 1024;
     /* Mirrors `backend/playlist_sync.MAX_ITEMS`. An order travels as ONE
      * payload -- that is what makes it an aggregate -- so the number of videos
      * it can name is bounded by what an envelope may carry. */
@@ -508,7 +515,11 @@
      * split contract local-first exists to remove. Its payload is a fixed
      * two-key object around the URL.
      *
-     * The shape is checked EXACTLY in both cases. An envelope with an extra
+     * Whole-document notes are the same shape: `{text: <string>}` exactly,
+     * bounded on the VALUE. Research Notes may be 32 MiB; the generic 64 KiB
+     * envelope cap would make a note savable online and impossible offline.
+     *
+     * The shape is checked EXACTLY in every case. An envelope with an extra
      * key, a non-string value or a field outside the registry falls through to
      * the ordinary bound, so the exception cannot be used to smuggle an
      * unbounded payload.
@@ -529,6 +540,13 @@
                 Object.keys(source).length === 2 && source.kind === 'video' &&
                 typeof source.url === 'string') {
                 return utf8ByteLength(source.url) <= WORK_SOURCE_URL_BYTES;
+            }
+        }
+        if (operation === 'SET_WORK_RESEARCH_NOTE' || operation === 'SET_WORK_PRIVATE_NOTE') {
+            const limit = operation === 'SET_WORK_RESEARCH_NOTE'
+                ? WORK_RESEARCH_NOTE_BYTES : WORK_PRIVATE_NOTE_BYTES;
+            if (Object.keys(payload).length === 1 && typeof payload.text === 'string') {
+                return utf8ByteLength(payload.text) <= limit;
             }
         }
         return jsonByteLength(payload) <= MAX_PAYLOAD_BYTES;
@@ -557,6 +575,8 @@
         REMOVE_WORK_TAG: Object.freeze(['REVISION_CONFLICT']),
         SET_WORK_METADATA_FIELD: Object.freeze(['REVISION_CONFLICT']),
         SET_WORK_SOURCE: Object.freeze(['SOURCE_REVISION_CONFLICT']),
+        SET_WORK_RESEARCH_NOTE: Object.freeze(['REVISION_CONFLICT']),
+        SET_WORK_PRIVATE_NOTE: Object.freeze(['REVISION_CONFLICT']),
     });
 
     /**
@@ -2991,6 +3011,44 @@
          * one is the user's to resolve; either way it stays immutable and this
          * refuses with `scope_busy` rather than guessing.
          */
+        function saveWorkNote(workId, operation, text, observed) {
+            if (!isNonBlankString(workId) || (operation !== 'SET_WORK_RESEARCH_NOTE' && operation !== 'SET_WORK_PRIVATE_NOTE')) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid note save.'));
+            }
+            if (typeof text !== 'string') return Promise.reject(localStoreError('invalid_envelope', 'Note text must be a string.'));
+            if (!isPlainObject(observed) || typeof observed.value !== 'string' ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_base', 'Invalid observed note state.'));
+            }
+            const limit = operation === 'SET_WORK_RESEARCH_NOTE' ? WORK_RESEARCH_NOTE_BYTES : WORK_PRIVATE_NOTE_BYTES;
+            if (utf8ByteLength(text) > limit) return Promise.reject(localStoreError('payload_too_large', 'Note exceeds byte limit.'));
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                const active = rows.filter(r => r.operation === operation &&
+                    r.entity_type === 'work' && r.entity_id === workId && r.status !== STATUS_ACKNOWLEDGED)
+                    .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+                if (active.length > 1) {
+                    throw localStoreError('scope_busy', 'Note has ' + active.length + ' unsynchronized changes; let them finish.');
+                }
+                const existing = active[0];
+                if (existing) {
+                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                        throw localStoreError('scope_busy', 'Note is syncing or needs resolution.');
+                    }
+                    if (existing.payload.text === text) { setResult(existing); return; }
+                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                }
+                /* Compare with the ACKNOWLEDGED value after dropping the
+                 * never-sent row. Deleting B and then enqueueing A is how
+                 * A -> B -> A became two operations instead of none. */
+                if (text === observed.value) { setResult(null); return; }
+                setResult(await insertEnvelopeIn(request, {
+                    operation, entity_type: 'work', entity_id: workId,
+                    payload: { text }, base_revision: observed.revision,
+                }, null));
+            });
+        }
+
         function saveWorkSource(workId, source, observed) {
             if (!isNonBlankString(workId) || !isPlainObject(source) ||
                 !isNonBlankString(source.url) || source.kind !== 'video' ||
@@ -3493,7 +3551,8 @@
             enqueueOperation: enqueueOperation,
             createTag: createTag,
             deleteTag: deleteTag,
-            coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, saveWorkSource,
+            coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
+            saveWorkSource,
             saveWorkPersonRole,
             createPerson,
             savePersonMetadataFields: savePersonMetadataFields,
@@ -3546,6 +3605,8 @@
         PRKS_LOCAL_OPERATION_STATUSES: STATUSES,
         PRKS_LOCAL_REAPPLIABLE_RESULTS: REAPPLIABLE_RESULTS,
         PRKS_LOCAL_WORK_SOURCE_URL_BYTES: WORK_SOURCE_URL_BYTES,
+        PRKS_LOCAL_WORK_RESEARCH_NOTE_BYTES: WORK_RESEARCH_NOTE_BYTES,
+        PRKS_LOCAL_WORK_PRIVATE_NOTE_BYTES: WORK_PRIVATE_NOTE_BYTES,
         PRKS_LOCAL_WORK_ROLE_OPERATIONS: WORK_ROLE_OPERATIONS,
         PRKS_LOCAL_PERSON_FIELDS: PERSON_FIELDS,
         PRKS_LOCAL_FOLDER_FIELDS: FOLDER_FIELDS,

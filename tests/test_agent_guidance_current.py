@@ -58,6 +58,8 @@ DURABLE_FAMILIES = (
     "CREATE_POSITION",
     "SET_POSITION_FIELD",
     "DELETE_POSITION",
+    "SET_WORK_RESEARCH_NOTE",
+    "SET_WORK_PRIVATE_NOTE",
 )
 
 
@@ -139,7 +141,7 @@ class AgentGuidanceTests(unittest.TestCase):
     def test_agents_md_still_names_what_is_server_bound(self):
         """The list must stay honest in both directions -- a reader has to be
         able to find what is NOT durable."""
-        for phrase in ("research-note editing", "PDF annotations",
+        for phrase in ("PDF annotations",
                        "multi-user sync", "server push"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.agents)

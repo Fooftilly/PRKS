@@ -2457,11 +2457,15 @@ function prksPrunePrivateNoteDrafts() {
 function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
     const key = prksPrivateNoteKey(entityType, entityId);
     const server = String(serverText == null ? '' : serverText);
+    let acknowledged = server;
+    if (entityType === 'work' && typeof prksPendingWorkNoteText === 'function') {
+        acknowledged = prksPendingWorkNoteText(entityId, 'work-private-note', server);
+    }
     const entry = prksPrivateNoteDrafts.get(key);
-    if (!entry) return server;
-    if (entry.state === 'committed' && !entry.promise && entry.draftText === server) {
+    if (!entry) return acknowledged;
+    if (entry.state === 'committed' && !entry.promise && entry.draftText === acknowledged) {
         prksPrivateNoteDrafts.delete(key);
-        return server;
+        return acknowledged;
     }
     return entry.draftText;
 }
@@ -2477,10 +2481,102 @@ function prksPrivateNotesSetStatus(editor, text) {
     editor.statusEl.textContent = text;
 }
 
+function prksPrivateNotesStatusForResult(code) {
+    if (code === 'saved') return 'Saved';
+    if (code === 'scope_busy') return 'Still syncing — wait or resolve the conflict in Diagnostics';
+    if (code === 'unknown_base') {
+        return 'Reminders cannot be saved yet — open this file while connected once';
+    }
+    if (code === 'too-long') return 'This reminder is too large to save';
+    if (code === 'unavailable') return 'Local changes could not be read from browser storage';
+    return 'Could not save';
+}
+
+function prksEnqueueWorkPrivateNoteSave(editor) {
+    const entry = prksPrivateNoteDraft(editor.entityType, editor.entityId, editor.textarea.value);
+    const content = String(entry.draftText);
+    editor.dirty = false;
+    entry.saveSequence += 1;
+    const token = entry.saveSequence;
+    entry.latestSaveToken = token;
+    entry.latestSaveEditGeneration = entry.editGeneration;
+    entry.state = 'saving';
+    entry.saveError = false;
+    entry.updatedAt = Date.now();
+    prksPrivateNotesSetStatus(editor, 'Saving…');
+    const promise = (async function () {
+        if (typeof prksEnsureWorkNotesBase === 'function' &&
+            typeof prksWorkNoteObserved === 'function' &&
+            !prksWorkNoteObserved(editor.ctx, 'work-private-note')) {
+            const work = editor.ctx && editor.ctx.getEntity ? editor.ctx.getEntity('work') : null;
+            await prksEnsureWorkNotesBase(
+                editor.ctx,
+                (editor.ctx.getResource && editor.ctx.getResource('workNotesCanonical')) || work
+            );
+        }
+        const observed = typeof prksWorkNoteObserved === 'function'
+            ? prksWorkNoteObserved(editor.ctx, 'work-private-note')
+            : null;
+        if (typeof prksSaveWorkNoteDurably !== 'function') return { code: 'unavailable' };
+        return prksSaveWorkNoteDurably(editor.entityId, 'work-private-note', content, observed);
+    })();
+    entry.promise = promise;
+    void promise
+        .then(async function (result) {
+            const code = result && result.code;
+            const ok = code === 'saved';
+            if (ok && typeof prksRefreshPendingWorkNotes === 'function') {
+                await prksRefreshPendingWorkNotes();
+            }
+            if (token !== entry.latestSaveToken) return;
+            const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
+            entry.settledSaveToken = token;
+            entry.promise = null;
+            entry.saveError = !ok && !hasNewerDraft;
+            entry.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
+            entry.updatedAt = Date.now();
+            prksPrunePrivateNoteDrafts();
+            if (!prksPrivateNotesOwnerCurrent(editor)) return;
+            const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
+            if (liveEditor !== editor) return;
+            if (hasNewerDraft) {
+                prksPrivateNotesSetStatus(editor, 'Drafting…');
+                return;
+            }
+            if (!ok) {
+                prksPrivateNotesSetStatus(editor, prksPrivateNotesStatusForResult(code));
+                return;
+            }
+            prksPrivateNotesSetStatus(editor, 'Saved');
+            const timer = window.setTimeout(function () {
+                if (editor.ctx && editor.ctx.timers && editor.ctx.timers.get('privateNotesStatus') === timer) {
+                    editor.ctx.clearTimer('privateNotesStatus');
+                }
+                if (editor.statusEl && editor.statusEl.textContent === 'Saved') editor.statusEl.textContent = '';
+            }, 1800);
+            editor.ctx.setTimer('privateNotesStatus', timer);
+        })
+        .catch(function () {
+            if (token !== entry.latestSaveToken) return;
+            const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
+            entry.settledSaveToken = token;
+            entry.promise = null;
+            entry.saveError = !hasNewerDraft;
+            entry.state = hasNewerDraft ? 'drafting' : 'error';
+            entry.updatedAt = Date.now();
+            if (prksPrivateNotesOwnerCurrent(editor)) {
+                prksPrivateNotesSetStatus(editor, hasNewerDraft ? 'Drafting…' : 'Could not save');
+            }
+        });
+    return promise;
+}
+
 function prksEnqueuePrivateNotesSave(editor) {
     if (!editor) return null;
+    if (editor.entityType === 'work') {
+        return prksEnqueueWorkPrivateNoteSave(editor);
+    }
     if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') {
-        // No offline mutation outbox in Phase 1: keep the typed draft local only.
         prksPrivateNotesSetStatus(editor, 'Offline — notes are read-only');
         return null;
     }
@@ -2499,7 +2595,7 @@ function prksEnqueuePrivateNotesSave(editor) {
     // coalesced autosave with its own draft lifecycle, and it is already gated
     // by the runtime check at the top of this function. Its success branch
     // publishes the same Folder coherence a wrapper would.
-    const url = editor.entityType === 'work' ? `/api/works/${editor.entityId}` : `/api/folders/${editor.entityId}`;
+    const url = `/api/folders/${editor.entityId}`;
     const promise = prksRequest(
         url,
         {
@@ -2513,12 +2609,7 @@ function prksEnqueuePrivateNotesSave(editor) {
     void promise
         .then(async function (res) {
             const ok = !!(res && res.ok);
-            if (ok && editor.entityType === 'work' && typeof prksOfflineMarkEntityChanged === 'function') {
-                // Canonical success matters even when this UI save is stale.
-                prksOfflineMarkEntityChanged('work', editor.entityId);
-            }
-            if (ok && editor.entityType === 'folder' && typeof prksMarkFoldersDomainChanged === 'function') {
-                // private_notes is part of the cached Folder detail payload.
+            if (ok && typeof prksMarkFoldersDomainChanged === 'function') {
                 prksMarkFoldersDomainChanged();
             }
             if (token !== entry.latestSaveToken) return;
@@ -2574,7 +2665,7 @@ function prksFlushPendingPrivateNotes(ctx) {
     prksEnqueuePrivateNotesSave(editor);
 }
 
-/** Private notes stay explicitly read-only while offline -- same Phase 1 rule as Research Notes. */
+/** Folder private notes stay read-only while offline. Work reminders are durable. */
 if (typeof prksOfflineRuntimeSubscribe === 'function') {
     prksOfflineRuntimeSubscribe(function (state) {
         if (typeof prksForEachLiveTabContext !== 'function') return;
@@ -2582,6 +2673,11 @@ if (typeof prksOfflineRuntimeSubscribe === 'function') {
         prksForEachLiveTabContext(function (ctx) {
             const editor = ctx && ctx.getResource ? ctx.getResource('privateNotesEditor') : null;
             if (!editor || !editor.textarea) return;
+            if (editor.entityType === 'work') {
+                editor.textarea.readOnly = false;
+                if (editor.dirty) prksEnqueuePrivateNotesSave(editor);
+                return;
+            }
             editor.textarea.readOnly = offline;
             if (offline) {
                 prksPrivateNotesSetStatus(editor, 'Offline — notes are read-only');
@@ -2617,10 +2713,9 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
         dirty: !!(entry && entry.state === 'drafting'),
     };
     const schedule = function () {
-        // The textarea's readOnly flag blocks ordinary user typing, but this is
-        // a defensive belt-and-suspenders check: offline must never enter
-        // drafting state or arm a save debounce, no matter how input fired.
-        if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') return;
+        if (editor.entityType !== 'work' &&
+            typeof prksOfflineRuntimeState === 'function' &&
+            prksOfflineRuntimeState() !== 'online') return;
         const draft = prksPrivateNoteDraft(entityType, entityId, ta.value);
         draft.draftText = ta.value;
         draft.editGeneration += 1;
@@ -2647,12 +2742,14 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
         ta.removeEventListener('input', schedule);
         ta.removeEventListener('blur', blur);
     });
-    // Immediately reflect the current offline state -- an editor constructed
-    // AFTER the runtime already left 'online' must never wait for a future
-    // prksOfflineRuntimeSubscribe callback to become read-only.
-    if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') {
+    if (editor.entityType !== 'work' &&
+        typeof prksOfflineRuntimeState === 'function' &&
+        prksOfflineRuntimeState() !== 'online') {
         ta.readOnly = true;
         prksPrivateNotesSetStatus(editor, 'Offline — notes are read-only');
+    }
+    if (editor.entityType === 'work' && typeof prksBindWorkNotesSync === 'function') {
+        prksBindWorkNotesSync(ctx);
     }
 }
 

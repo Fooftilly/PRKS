@@ -3109,16 +3109,6 @@ class WorkspaceTabsTests(_BrowserE2E):
         server, page, _collector = self._start_app()
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
-        held = []
-
-        def hold_notes_patch(route):
-            req = route.request
-            path = urlparse(req.url).path
-            body = req.post_data or ""
-            if req.method == "PATCH" and path == "/api/works/" + work_a and "text_content" in body:
-                held.append(route)
-                return
-            route.fallback()
 
         _open_work_from_home(page, WORK_A_TITLE)
         page.wait_for_selector(".CodeMirror")
@@ -3128,43 +3118,28 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
         new_text = "PARK-REMOUNT-NEW-%s" % int(time.time() * 1000)
-        page.route("**/api/works/*", hold_notes_patch)
-        try:
-            page.evaluate(
-                """(text) => {
-                    const ctx = window.prksGetFocusedTabContext();
-                    const notes = ctx.getResource('workNotes');
-                    notes.editor.value(text);
-                }""",
-                arg=new_text,
-            )
-            page.locator('[data-prks-role="editor-status"]', has_text="Drafting").wait_for()
-            page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
-            deadline = time.time() + 8
-            while time.time() < deadline and not held:
-                page.wait_for_timeout(50)
-            self.assertTrue(held, "Research Notes PATCH was not intercepted")
-            page.wait_for_function("id => location.hash.indexOf('/works/' + id) !== -1", arg=work_b)
-            page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
-            page.wait_for_function("id => location.hash.indexOf('/works/' + id) !== -1", arg=work_a)
-            page.wait_for_selector(".CodeMirror")
-            page.wait_for_function(
-                """(text) => {
-                    const ctx = window.prksGetFocusedTabContext();
-                    const notes = ctx && ctx.getResource('workNotes');
-                    return !!(notes && notes.editor && notes.editor.value() === text);
-                }""",
-                arg=new_text,
-            )
-            _continue_held_routes(held)
-            page.wait_for_timeout(300)
-            self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), new_text)
-        finally:
-            _continue_held_routes(held)
-            try:
-                page.unroute("**/api/works/*", hold_notes_patch)
-            except Exception:
-                pass
+        page.evaluate(
+            """(text) => {
+                const ctx = window.prksGetFocusedTabContext();
+                const notes = ctx.getResource('workNotes');
+                notes.editor.value(text);
+            }""",
+            arg=new_text,
+        )
+        page.locator('[data-prks-role="editor-status"]', has_text="Drafting").wait_for()
+        page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("id => location.hash.indexOf('/works/' + id) !== -1", arg=work_b)
+        page.locator(".prks-workspace-tab").nth(0).locator(".prks-workspace-tab__activate").click()
+        page.wait_for_function("id => location.hash.indexOf('/works/' + id) !== -1", arg=work_a)
+        page.wait_for_selector(".CodeMirror")
+        page.wait_for_function(
+            """(text) => {
+                const ctx = window.prksGetFocusedTabContext();
+                const notes = ctx && ctx.getResource('workNotes');
+                return !!(notes && notes.editor && notes.editor.value() === text);
+            }""",
+            arg=new_text,
+        )
 
         final_text = new_text + "!"
         page.evaluate("(text) => %s.value(text)" % _FOCUSED_WORK_NOTES, arg=final_text)
@@ -3179,16 +3154,6 @@ class WorkspaceTabsTests(_BrowserE2E):
         server, page, _collector = self._start_app()
         work_a = server.ids["work_a"]
         work_b = server.ids["work_b"]
-        held = []
-
-        def hold_private_patch(route):
-            req = route.request
-            path = urlparse(req.url).path
-            body = req.post_data or ""
-            if req.method == "PATCH" and path == "/api/works/" + work_a and "private_notes" in body:
-                held.append(route)
-                return
-            route.fallback()
 
         _open_work_from_home(page, WORK_A_TITLE)
         page.evaluate("(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })", arg=work_b)
@@ -3204,38 +3169,27 @@ class WorkspaceTabsTests(_BrowserE2E):
         selector = "#prks-private-notes-work-" + work_a
         page.locator(selector).wait_for()
         new_text = "PRIVATE-PARK-NEW-%s" % int(time.time() * 1000)
-        page.route("**/api/works/*", hold_private_patch)
-        try:
-            page.locator(selector).fill(new_text)
-            page.evaluate("id => window.prksWorkspaceHideLeaf(id)", arg=ids["a"])
-            deadline = time.time() + 8
-            while time.time() < deadline and not held:
-                page.wait_for_timeout(50)
-            self.assertTrue(held, "Private reminder PATCH was not intercepted")
-            page.evaluate("id => window.prksWorkspaceTileTab(id)", arg=ids["a"])
-            page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
-            page.locator(selector).wait_for()
-            page.wait_for_function(
-                """(args) => {
-                    const el = document.querySelector(args.selector);
-                    return !!(el && el.value === args.text);
-                }""",
-                arg={"selector": selector, "text": new_text},
-            )
-            _continue_held_routes(held)
-            page.wait_for_timeout(300)
-            self.assertEqual(page.locator(selector).input_value(), new_text)
-        finally:
-            _continue_held_routes(held)
-            try:
-                page.unroute("**/api/works/*", hold_private_patch)
-            except Exception:
-                pass
+        page.locator(selector).fill(new_text)
+        page.evaluate("id => window.prksWorkspaceHideLeaf(id)", arg=ids["a"])
+        page.evaluate("id => window.prksWorkspaceTileTab(id)", arg=ids["a"])
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.locator(selector).wait_for()
+        page.wait_for_function(
+            """(args) => {
+                const el = document.querySelector(args.selector);
+                return !!(el && el.value === args.text);
+            }""",
+            arg={"selector": selector, "text": new_text},
+        )
 
         final_text = new_text + "!"
         page.locator(selector).fill(final_text)
         page.locator(selector).press("Tab")
-        page.locator("#prks-private-notes-status-work-" + work_a, has_text="Saved").wait_for(timeout=15000)
+        wait_for_async(page,
+            """() => prksSync.store.listOperations().then(rows =>
+                rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE').length === 0)""",
+            timeout=15000,
+        )
         persisted = page.evaluate(
             """async (id) => (await (await fetch('/api/works/' + id)).json()).private_notes""",
             arg=work_a,
@@ -3448,7 +3402,7 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.keyboard.insert_text(unique)
         page.locator('[data-prks-role="editor-status"]', has_text="Drafting").wait_for()
         with page.expect_response(
-            lambda r: r.request.method == "PATCH" and "/api/works/" in r.url and r.ok
+            lambda r: r.request.method == "POST" and "/api/sync/operations" in r.url and r.ok
         ):
             page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
@@ -3476,11 +3430,14 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
         patches = []
+        syncs = []
 
         def on_request(req):
             path = urlparse(req.url).path
             if req.method == "PATCH" and path == "/api/works/" + work_a:
                 patches.append(path)
+            if req.method == "POST" and path == "/api/sync/operations":
+                syncs.append(path)
 
         page.on("request", on_request)
         unique = "DEBOUNCE-SAVE-NOTE-%s" % int(time.time() * 1000)
@@ -3495,11 +3452,12 @@ class WorkspaceTabsTests(_BrowserE2E):
             }""",
             timeout=15000,
         )
-        after_save = len(patches)
+        after_save = len(syncs)
         self.assertGreaterEqual(after_save, 1)
+        self.assertEqual(patches, [])
         page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
-        self.assertEqual(len(patches), after_save)
+        self.assertEqual(len(syncs), after_save)
 
     def test_pdf_work_warm_parks_and_resumes_without_reload(self):
         server, page, _collector = self._start_app()
@@ -5236,13 +5194,9 @@ class WorkspaceTilingTests(_BrowserE2E):
         work_a, work_b, ids = _open_work_work_split(page, server)
         held = []
 
-        def hold_notes_patch(route):
+        def hold_notes_sync(route):
             req = route.request
-            if (
-                req.method == "PATCH"
-                and urlparse(req.url).path == "/api/works/" + work_a
-                and "text_content" in (req.post_data or "")
-            ):
+            if req.method == "POST" and urlparse(req.url).path == "/api/sync/operations":
                 held.append(route)
                 return
             route.fallback()
@@ -5255,7 +5209,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             }""",
             arg=ids["mainTabId"],
         )
-        page.route("**/api/works/*", hold_notes_patch)
+        page.route("**/api/sync/operations", hold_notes_sync)
         try:
             page.evaluate(
                 """(args) => {
@@ -5268,7 +5222,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "Work save was not intercepted")
+            self.assertTrue(held, "Work note sync was not intercepted")
             page.evaluate("id => window.prksWorkspaceMakeMain(id)", arg=ids["secondaryTabId"])
             self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"), ids["secondaryTabId"])
             _continue_held_routes(held)
@@ -5293,7 +5247,7 @@ class WorkspaceTilingTests(_BrowserE2E):
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/works/*", hold_notes_patch)
+                page.unroute("**/api/sync/operations", hold_notes_sync)
             except Exception:
                 pass
 

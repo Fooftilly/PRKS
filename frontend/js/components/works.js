@@ -68,11 +68,14 @@ function prksPruneResearchDrafts() {
 function prksResearchNotesTextForWork(workId, serverText) {
     const id = String(workId || '');
     const server = String(serverText == null ? '' : serverText);
+    const acknowledged = (typeof prksPendingWorkNoteText === 'function')
+        ? prksPendingWorkNoteText(id, 'work-research-note', server)
+        : server;
     const entry = id ? prksWorkResearchDrafts.get(id) : null;
-    if (!entry) return server;
-    if (entry.state === 'committed' && !entry.promise && entry.text === server) {
+    if (!entry) return acknowledged;
+    if (entry.state === 'committed' && !entry.promise && entry.text === acknowledged) {
         prksWorkResearchDrafts.delete(id);
-        return server;
+        return acknowledged;
     }
     return entry.text;
 }
@@ -104,7 +107,7 @@ function prksSyncLiveResearchDraft(workId, entry) {
                   ? 'Saving...'
                   : entry.state === 'drafting'
                     ? 'Drafting...'
-                    : 'All changes saved';
+                    : 'Waiting to sync';
         }
         if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
             window.prksWorkspaceRefreshTabStatus(ctx.tabId);
@@ -171,10 +174,7 @@ function prksFilterWorksForWikiHint(rows, query) {
 
 /** CodeMirror hint pick: replace query with title and close wiki link. */
 function prksWikiLinkCompletionPick(cm, data, completion) {
-    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
-        if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
-        return;
-    }
+    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) return;
     const from = completion.from != null ? completion.from : data.from;
     const to = completion.to != null ? completion.to : data.to;
     const title = typeof completion.text === 'string' ? completion.text : '';
@@ -361,10 +361,7 @@ function prksFilterPdfAnnForHint(rows, query) {
 }
 
 function prksPdfAnnLinkCompletionPick(cm, data, completion) {
-    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
-        if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
-        return;
-    }
+    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) return;
     const from = completion.from != null ? completion.from : data.from;
     const to = completion.to != null ? completion.to : data.to;
     const id = typeof completion.text === 'string' ? completion.text : '';
@@ -454,10 +451,7 @@ function prksFilterConceptsForHint(query, cm) {
 }
 
 function prksConceptLinkCompletionPick(cm, data, completion) {
-    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
-        if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
-        return;
-    }
+    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) return;
     const from = completion.from != null ? completion.from : data.from;
     const to = completion.to != null ? completion.to : data.to;
     const name = typeof completion.text === 'string' ? completion.text : '';
@@ -487,14 +481,13 @@ function prksConceptLinkHint(cm) {
  * CodeMirror state first. This is the one predicate every PRKS-owned
  * programmatic Research Notes edit boundary must check before mutating
  * anything. It requires:
- *   - current PRKS connectivity == online
- *   - `ctx` (the resolved owner TabContext) is still live/current -- it may
- *     be stale (route navigated away) even while PRKS itself is online
+ *   - `ctx` (the resolved owner TabContext) is still live/current
  *   - a live `workNotes` resource on that ctx
  *   - when a CodeMirror instance `cm` is supplied (every real caller has
  *     one), it is the *exact* live instance still installed at
  *     notes.editor.codemirror -- never a detached CodeMirror from a picker/
  *     autocomplete callback that outlived a navigation to a different Work
+ * Connectivity is not part of this predicate: Research Notes are durable.
  */
 function prksWorkNotesMutationAllowed(ctx, cm) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
@@ -509,7 +502,6 @@ function prksWorkNotesMutationAllowed(ctx, cm) {
     const notes = typeof owner.getResource === 'function' ? owner.getResource('workNotes') : null;
     if (!notes || !notes.editor) return false;
     if (cm && notes.editor.codemirror !== cm) return false;
-    if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') return false;
     return true;
 }
 
@@ -517,10 +509,7 @@ window.prksWorkNotesMutationAllowed = prksWorkNotesMutationAllowed;
 
 function prksInsertNotesMarkup(cm, markup) {
     if (!cm || !markup) return;
-    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
-        if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
-        return;
-    }
+    if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) return;
     const cur = cm.getCursor();
     cm.replaceRange(markup, cur, cur, 'complete');
     cm.focus();
@@ -718,10 +707,7 @@ function prksOpenArgumentPicker(cm, work) {
         });
     };
     function insertCreatedArgument(kind, name) {
-        if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) {
-            if (typeof prksOfflineGuardMutation === 'function') prksOfflineGuardMutation();
-            return;
-        }
+        if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) return;
         void (async function () {
             if (typeof window.prksCreateArgumentFromWork !== 'function') return;
             const created = await window.prksCreateArgumentFromWork({
@@ -859,7 +845,10 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">File not found.</p>';
         return;
     }
-    work.text_content = prksResearchNotesTextForWork(work.id, work.text_content);
+    if (typeof prksRememberWorkNotesCanonical === 'function') {
+        prksRememberWorkNotesCanonical(ctx, work);
+    }
+    if (typeof prksBindWorkNotesSync === 'function') prksBindWorkNotesSync(ctx);
     /* The EFFECTIVE source: a pending identity change decides which video
      * plays before the server has heard about it. All four columns move
      * together, so the viewer can never be handed a URL naming one video and
@@ -985,7 +974,9 @@ async function renderWorkDetails(ctx, work, requestCtx) {
     `;
 
     const notesTa = ctx.query('[data-prks-role="research-notes-editor"]');
-    if (notesTa) notesTa.value = work.text_content || '';
+    if (notesTa) {
+        notesTa.value = prksResearchNotesTextForWork(work.id, work.text_content);
+    }
     container.querySelectorAll('.prks-person-chip').forEach((el) => {
         el.style.cursor = 'pointer';
     });
@@ -1057,6 +1048,18 @@ async function renderWorkDetails(ctx, work, requestCtx) {
             if (typeof ctx.setResource === 'function') ctx.setResource('argumentHintList', []);
         }
         if (!isCurrent()) return;
+        if (typeof prksRefreshPendingWorkNotes === 'function') {
+            await prksRefreshPendingWorkNotes();
+            if (!isCurrent()) return;
+        }
+        if (typeof prksEnsureWorkNotesBase === 'function') {
+            await prksEnsureWorkNotesBase(ctx, ctx.getResource && ctx.getResource('workNotesCanonical') || work);
+            if (!isCurrent()) return;
+        }
+        const notesTaLive = ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
+        if (notesTaLive && !notesTaLive.dataset.prksNotesBound) {
+            notesTaLive.value = prksResearchNotesTextForWork(work.id, work.text_content);
+        }
         initEasyMDE(ctx, work);
         setupWorkNotesSplitResize(ctx, work.id);
         setupWorkNotesCollapseToggle(ctx, work.id);
@@ -1186,7 +1189,7 @@ function initEasyMDE(ctx, work) {
         element: notesEl,
         spellChecker: false,
         autoDownloadFontAwesome: false,
-        /* Server PATCH below is the source of truth; EasyMDE localStorage autosave would restore stale drafts after reload (autosave delay > PATCH delay). */
+        /* Durable store is the source of truth; EasyMDE localStorage autosave would restore stale drafts after reload. */
         autosave: { enabled: false },
         toolbar: [
             "bold",
@@ -1282,8 +1285,6 @@ function initEasyMDE(ctx, work) {
                 const cm = easyMDE.codemirror;
                 const handler = easyMDE.__notesChangeHandler;
                 if (cm && handler) cm.off('change', handler);
-                const beforeChangeHandler = easyMDE.__notesBeforeChangeHandler;
-                if (cm && beforeChangeHandler) cm.off('beforeChange', beforeChangeHandler);
             } catch (_e) {}
             try {
                 if (typeof easyMDE.toTextArea === 'function') easyMDE.toTextArea();
@@ -1293,14 +1294,23 @@ function initEasyMDE(ctx, work) {
     if (transient) prksSyncResearchNotesState(workNotes, transient);
     if (ctx && typeof ctx.setResource === 'function') {
         ctx.setResource('workNotes', workNotes, function () {
+            if (typeof workNotes.stopSync === 'function') workNotes.stopSync();
             workNotes.destroy();
         });
     }
-    // Immediately reflect the current offline state -- an editor created
-    // AFTER the runtime already left 'online' must never wait for a future
-    // prksOfflineRuntimeSubscribe callback to become read-only.
-    if (typeof prksOfflineRuntimeState === 'function') {
-        prksApplyOfflineNotesReadOnly(ctx, prksOfflineRuntimeState() !== 'online');
+    if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
+        workNotes.stopSync = window.prksSync.subscribe(function (event) {
+            if (!event || event.operation !== 'SET_WORK_RESEARCH_NOTE') return;
+            if (event.op && event.op.entity_id !== workNotes.workId) return;
+            if (workNotes.drafting) return;
+            const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+            if (!statusEl) return;
+            if (event.acknowledged) {
+                statusEl.innerText = 'All changes saved';
+            } else if (event.op && event.op.status === 'conflict') {
+                statusEl.innerText = 'This note needs a decision in Diagnostics';
+            }
+        });
     }
     prksAttachWikiLinkAutocomplete(easyMDE.codemirror, ctx);
     const toolbarHost = ctx && ctx.query ? ctx.query('.work-notes-editor-wrap .editor-toolbar') : null;
@@ -1327,10 +1337,6 @@ function initEasyMDE(ctx, work) {
     }
 
     const notesChangeHandler = () => {
-        // CodeMirror's readOnly option blocks ordinary user edits, but this is a
-        // defensive belt-and-suspenders check: offline must never enter drafting
-        // state or arm a save debounce, no matter how the change event fired.
-        if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') return;
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
         prksWorkNotesMarkEdit(workNotes, work.id, easyMDE.value());
@@ -1341,26 +1347,6 @@ function initEasyMDE(ctx, work) {
     };
     easyMDE.codemirror.on("change", notesChangeHandler);
     easyMDE.__notesChangeHandler = notesChangeHandler;
-
-    // Hard offline mutation barrier: CodeMirror's `readOnly` option only
-    // blocks DOM-driven input (keyboard/mouse); it does not stop a
-    // programmatic replaceRange/replaceSelection call from a toolbar
-    // command, EasyMDE internal command, autocomplete pick, or a stale
-    // picker callback left over from a previous Work. `beforeChange` fires
-    // for every change regardless of origin and can cancel it outright, so
-    // it is the one barrier that actually can't be bypassed by any of
-    // those paths. 'setValue' is the sole allowlisted origin -- EasyMDE's
-    // own initial-content set during construction (before this handler is
-    // even attached) and any future programmatic full-content replace never
-    // represent a user/tool mutation.
-    const notesBeforeChangeHandler = function (_instance, changeObj) {
-        if (!changeObj || changeObj.origin === 'setValue') return;
-        if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') {
-            if (typeof changeObj.cancel === 'function') changeObj.cancel();
-        }
-    };
-    easyMDE.codemirror.on('beforeChange', notesBeforeChangeHandler);
-    easyMDE.__notesBeforeChangeHandler = notesBeforeChangeHandler;
 }
 
 function prksWorkNotesMarkEdit(notes, workId, text) {
@@ -1419,16 +1405,24 @@ window.prksWorkNotesBeginSave = prksWorkNotesBeginSave;
 window.prksWorkNotesSettleSave = prksWorkNotesSettleSave;
 window.prksScheduleWorkResearchNotesSave = prksScheduleWorkResearchNotesSave;
 
+function prksResearchNotesStatusForResult(code, pending) {
+    if (code === 'saved') {
+        if (!pending) return 'All changes saved';
+        return (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online')
+            ? 'Offline · saved locally'
+            : 'Waiting to sync';
+    }
+    if (code === 'scope_busy') return 'Still syncing — wait or resolve the conflict in Diagnostics';
+    if (code === 'unknown_base') {
+        return 'Notes cannot be saved yet — open this file while connected once';
+    }
+    if (code === 'too-long') return 'This note is too large to save';
+    if (code === 'unavailable') return 'Local changes could not be read from browser storage';
+    return 'Error saving changes';
+}
+
 function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
-    if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') {
-        // No offline mutation outbox in Phase 1: leave the draft local (still visible/typed,
-        // never silently discarded) rather than attempt a network PATCH that would only fail.
-        // The connectivity subscriber below re-enqueues this once the app is back online.
-        const statusEl = owner && owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
-        if (statusEl) statusEl.innerText = 'Offline — notes are read-only';
-        return undefined;
-    }
     const _cwSave = owner && owner.getEntity ? owner.getEntity('work') : null;
     const id = workId || (_cwSave && _cwSave.id);
     if (!id) return;
@@ -1468,39 +1462,37 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     if (owner && owner.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
         window.prksWorkspaceRefreshTabStatus(owner.tabId);
     }
-    const savePromise = prksRequest(
-        '/api/works/' + encodeURIComponent(id),
-        {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text_content: content }),
-        },
-        {
-            coalesceKey: 'work-research-notes:' + id,
+
+    const savePromise = (async function () {
+        if (typeof prksEnsureWorkNotesBase === 'function' &&
+            typeof prksWorkNoteObserved === 'function' &&
+            !prksWorkNoteObserved(owner, 'work-research-note')) {
+            await prksEnsureWorkNotesBase(
+                owner,
+                (owner.getResource && owner.getResource('workNotesCanonical')) || _cwSave
+            );
         }
-    );
+        const observed = typeof prksWorkNoteObserved === 'function'
+            ? prksWorkNoteObserved(owner, 'work-research-note')
+            : null;
+        if (typeof prksSaveWorkNoteDurably !== 'function') {
+            return { code: 'unavailable' };
+        }
+        return prksSaveWorkNoteDurably(id, 'work-research-note', content, observed);
+    })();
     if (transient) transient.promise = savePromise;
     void savePromise
-        .then(async function (res) {
-            const ok = !!(res && res.ok);
-            if (ok && typeof prksOfflineMarkEntityChanged === 'function') {
-                // Canonical success matters even when this editor token is stale.
-                prksOfflineMarkEntityChanged('work', id);
+        .then(async function (result) {
+            const code = result && result.code;
+            const ok = code === 'saved';
+            if (ok && typeof prksRefreshPendingWorkNotes === 'function') {
+                await prksRefreshPendingWorkNotes();
             }
-            if (ok && typeof prksMarkResearchGraphCoreChanged === 'function') prksMarkResearchGraphCoreChanged();
-            if (ok && typeof prksOfflineMarkConceptsChanged === 'function') {
-                // Research Notes are the canonical source of Work -> Concept
-                // mentions, and unknown [[concept:...]] markup can create
-                // Concepts outright, so every acknowledged notes save stales the
-                // cached Concept index/details -- stale-for-UI is still a
-                // successful canonical mutation here.
-                prksOfflineMarkConceptsChanged();
-            }
-            if (ok && typeof prksOfflineMarkArgumentsChanged === 'function') {
-                // Notes are equally the canonical source of [[argument:...]]
-                // mentions, which cached Argument list/detail carry as
-                // mention_count and mentions[].
-                prksOfflineMarkArgumentsChanged();
+            let pending = false;
+            if (ok && typeof prksRefreshPendingWorkNotes === 'function' &&
+                typeof prksWorkNoteOperations === 'function') {
+                const rows = await prksRefreshPendingWorkNotes();
+                pending = prksWorkNoteOperations(rows, id, 'work-research-note').length > 0;
             }
             const localApplied = prksWorkNotesSettleSave(notes, token, ok);
             let transientApplied = false;
@@ -1522,40 +1514,9 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 statusEl.innerText =
                     transientApplied && transient.state === 'drafting'
                         ? 'Drafting...'
-                        : ok
-                          ? 'All changes saved'
-                          : 'Error saving changes';
+                        : prksResearchNotesStatusForResult(code, pending);
             }
-            if (ok && typeof fetchWorkDetails === 'function') {
-                let liveOwner = null;
-                if (typeof prksForEachLiveTabContext === 'function') {
-                    prksForEachLiveTabContext(function (candidate) {
-                        if (liveOwner) return;
-                        const liveWork = candidate.getEntity ? candidate.getEntity('work') : null;
-                        if (liveWork && String(liveWork.id) === String(id)) liveOwner = candidate;
-                    });
-                }
-                if (!liveOwner) return undefined;
-                const generation = liveOwner.generation;
-                const signal = liveOwner.abortController && liveOwner.abortController.signal;
-                return fetchWorkDetails(id, { signal: signal }).then(function (latest) {
-                    if (!liveOwner.isCurrent(generation)) return;
-                    const live = liveOwner.getEntity ? liveOwner.getEntity('work') : null;
-                    if (!live || String(live.id) !== String(id)) return;
-                    if (latest && latest.research_refs) live.research_refs = latest.research_refs;
-                    const currentDraft = prksWorkResearchDrafts.get(String(id));
-                    if (
-                        currentDraft &&
-                        currentDraft.state === 'committed' &&
-                        !currentDraft.promise &&
-                        latest &&
-                        String(latest.text_content == null ? '' : latest.text_content) === currentDraft.text
-                    ) {
-                        prksWorkResearchDrafts.delete(String(id));
-                    }
-                });
-            }
-            return undefined;
+            return result;
         })
         .catch(function () {
             const applied = prksWorkNotesSettleSave(notes, token, false);
@@ -1598,12 +1559,6 @@ window.prksEnqueueWorkResearchNotesSave = prksEnqueueWorkResearchNotesSave;
 window.prksFlushPendingWorkResearchNotes = prksFlushPendingWorkResearchNotes;
 
 /**
- * Research Notes stay explicitly read-only while offline (AGENTS.md "Research
- * Notes and private notes" -- no offline outbox yet, autosave must not let a
- * user type for minutes only to discover nothing persisted). Reconnecting
- * quietly re-enqueues any draft that was held back while offline.
- */
-/**
  * EasyMDE toolbar buttons that alter Markdown content. PRKS's own Concept/
  * Argument buttons call picker/insert logic directly and never consult
  * CodeMirror's readOnly flag at all -- disabling every mutating button here
@@ -1634,45 +1589,6 @@ function prksSetEasyMDEToolbarMutationEnabled(ctx, enabled) {
         btn.classList.toggle('prks-toolbar-btn--disabled', !enabled);
         if (enabled) btn.removeAttribute('aria-disabled');
         else btn.setAttribute('aria-disabled', 'true');
-    });
-}
-
-function prksApplyOfflineNotesReadOnly(ctx, offline) {
-    const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
-    const cm = notes && notes.editor && notes.editor.codemirror;
-    if (!cm) return;
-    cm.setOption('readOnly', !!offline);
-    prksSetEasyMDEToolbarMutationEnabled(ctx, !offline);
-    const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
-    if (!statusEl) return;
-    if (offline) {
-        statusEl.innerText = 'Offline — notes are read-only';
-    } else if (notes.drafting) {
-        statusEl.innerText = 'Drafting...';
-    } else if (notes.pendingSave) {
-        statusEl.innerText = 'Saving...';
-    } else if (notes.saveError) {
-        statusEl.innerText = 'Error saving changes';
-    } else {
-        statusEl.innerText = 'All changes saved';
-    }
-}
-
-if (typeof prksOfflineRuntimeSubscribe === 'function') {
-    prksOfflineRuntimeSubscribe(function (state) {
-        if (typeof prksForEachLiveTabContext !== 'function') return;
-        const offline = state !== 'online';
-        prksForEachLiveTabContext(function (ctx) {
-            prksApplyOfflineNotesReadOnly(ctx, offline);
-        });
-        if (!offline) {
-            prksForEachLiveTabContext(function (ctx) {
-                const notes = ctx && ctx.getResource ? ctx.getResource('workNotes') : null;
-                if (notes && notes.drafting) {
-                    void prksEnqueueWorkResearchNotesSave(ctx, notes.workId);
-                }
-            });
-        }
     });
 }
 

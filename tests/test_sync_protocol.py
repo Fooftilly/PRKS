@@ -39,7 +39,8 @@ class SyncProtocolTests(unittest.TestCase):
                           "SET_CONCEPT_PARENTS", "SET_FOLDER_FIELD", "SET_PERSON_GROUP_FIELD",
                           "SET_PERSON_METADATA_FIELD", "SET_PLAYLIST_FIELD", "SET_POSITION_FIELD",
                           "SET_WORK_FOLDER", "SET_WORK_METADATA_FIELD", "SET_WORK_PERSON_ROLE_CREDIT",
-                          "SET_WORK_PLAYLIST", "SET_WORK_SOURCE"
+                          "SET_WORK_PLAYLIST", "SET_WORK_PRIVATE_NOTE", "SET_WORK_RESEARCH_NOTE",
+                          "SET_WORK_SOURCE"
                          ])
 
     def test_unregistered_operation_is_refused_and_unledgered(self):

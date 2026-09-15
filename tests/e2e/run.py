@@ -70,6 +70,7 @@ E2E_MODULES = (
     "tests.e2e.test_work_opens_offline",
     "tests.e2e.test_work_metadata_offline",
     "tests.e2e.test_work_source_offline",
+    "tests.e2e.test_work_notes_offline",
     "tests.e2e.test_work_people_offline",
     "tests.e2e.test_person_create_offline",
     "tests.e2e.test_person_edit_offline",

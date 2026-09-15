@@ -3722,6 +3722,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     return placed;
                 };
                 const work = prksPlacePendingWork(offlineWork.value);
+                if (typeof prksRefreshPendingWorkNotes === 'function') {
+                    await prksRefreshPendingWorkNotes();
+                    if (stale()) return;
+                }
+                if (work && typeof prksRememberWorkNotesCanonical === 'function') {
+                    prksRememberWorkNotesCanonical(ctx, work);
+                }
+                if (work && typeof prksEnsureWorkNotesBase === 'function') {
+                    void prksEnsureWorkNotesBase(ctx, work);
+                }
                 if (work) {
                     void Promise.all([
                         typeof prksRefreshPendingWorkFolders === 'function'

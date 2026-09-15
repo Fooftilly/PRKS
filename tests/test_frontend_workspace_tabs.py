@@ -280,7 +280,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("createPrksWorkspaceTabs", ws)
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         self.assertIn("prksFlushPendingWorkResearchNotes", works)
-        self.assertIn("work-research-notes:", works)
+        self.assertIn("prksSaveWorkNoteDurably", works)
         self.assertIn("latestSaveToken", works)
         self.assertIn("saveSequence", works)
 

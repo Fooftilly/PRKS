@@ -27,6 +27,7 @@ projection, and is proven by focused E2E coverage.
 | Arguments / Stances | `CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`, `SET_ARGUMENT_SOURCES`, `SET_ARGUMENT_TARGETS`, `DELETE_ARGUMENT` | permanent `A-` id; construction atomically includes initial sources/targets; later sources and targets are separate ordered aggregates |
 | Concepts | `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`, `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT` | name+aliases are one aggregate; the parent set is another |
 | Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; deletion has no UI control today (see below) |
+| Work notes | `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE` | independent whole-document aggregates; Research ACK fences Concept/Argument/Graph; Private ACK does not |
 
 ## What one overnight pass added
 
@@ -88,11 +89,6 @@ they should take, and what each must declare before implementation, are in
 * **Folder tags** — `ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG`, the one Folder
   relationship still on the network. It mirrors the Work-Tag family exactly and
   is the obvious next increment.
-* **Research notes and private notes** — one note body is one conflict unit,
-  with revision-based optimistic concurrency. The ACK must keep using the
-  canonical note-save boundary so Concept auto-creation and reference indexing
-  behave exactly as they do online; the browser must not re-implement research
-  markup parsing to decide canonical results.
 * **PDF annotations** — only where the PDF is already cached. Annotation
   identity must be audited first: if annotations receive server-generated ids
   today, new ones need permanent distributed ids before offline creation is

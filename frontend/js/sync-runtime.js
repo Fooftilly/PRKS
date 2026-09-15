@@ -281,6 +281,8 @@
             // Source identity is an AGGREGATE, not a field: one decision, one
             // revision, one conflict, four columns.
             SET_WORK_SOURCE: root.prksWorkSourceSyncHandler,
+            SET_WORK_RESEARCH_NOTE: root.prksNoteSyncHandler,
+            SET_WORK_PRIVATE_NOTE: root.prksNoteSyncHandler,
             // A Work-Person link is an ELEMENT: one person, one role, its own
             // revision. All three name that element's state, so they share a
             // handler and a scope.

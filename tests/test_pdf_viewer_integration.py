@@ -416,8 +416,8 @@ class PdfViewerIntegrationTests(unittest.TestCase):
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         args = _read(os.path.join(_FRONTEND, "js", "components", "arguments.js"))
         self.assertIn("initPdfViewerForWork", works)
-        save_block = works.split("JSON.stringify({ text_content: content })", 1)[1].split(
-            "function prksDestroyWorkNotesEditor", 1
+        save_block = works.split("function prksEnqueueWorkResearchNotesSave", 1)[1].split(
+            "function prksFlushPendingWorkResearchNotes", 1
         )[0]
         self.assertNotIn("initPdfViewerForWork", save_block)
         self.assertNotIn("prksNavigate", save_block)

@@ -22,6 +22,9 @@
     function payloadValue(op) {
         if (op.operation === 'SET_WORK_METADATA_FIELD') return op.payload.value;
         if (op.operation === 'SET_WORK_SOURCE') return op.payload.source && op.payload.source.url;
+        if (op.operation === 'SET_WORK_RESEARCH_NOTE' || op.operation === 'SET_WORK_PRIVATE_NOTE') {
+            return op.payload && op.payload.text;
+        }
         if (op.operation === 'SET_WORK_PERSON_ROLE_CREDIT') return op.payload.credit_name;
         return null;
     }
@@ -57,6 +60,12 @@
         }
         if (op.operation === 'SET_WORK_SOURCE') {
             return 'Video source = "' + bounded(payloadValue(op)) + '"';
+        }
+        if (op.operation === 'SET_WORK_RESEARCH_NOTE') {
+            return 'Research notes = "' + bounded(payloadValue(op)) + '"';
+        }
+        if (op.operation === 'SET_WORK_PRIVATE_NOTE') {
+            return 'Reminders = "' + bounded(payloadValue(op)) + '"';
         }
         if (root.PRKS_WORK_ROLE_OPERATION_TYPES &&
             root.PRKS_WORK_ROLE_OPERATION_TYPES.indexOf(op.operation) !== -1) {
@@ -233,6 +242,8 @@
     const DISCARD_INVALIDATES = Object.freeze({
         SET_WORK_METADATA_FIELD: 'work-metadata-state',
         SET_WORK_SOURCE: 'work-source-state',
+        SET_WORK_RESEARCH_NOTE: 'work-notes-state',
+        SET_WORK_PRIVATE_NOTE: 'work-notes-state',
         CREATE_FOLDER: 'folder-state',
         SET_FOLDER_FIELD: 'folder-state',
         DELETE_FOLDER: 'folder-state',
@@ -464,6 +475,13 @@
             (result.code === 'REVISION_CONFLICT' || result.code === 'FUTURE_REVISION')) {
             return ' Its ordered Position-and-Argument target list changed somewhere else; server revision is ' +
                 String(result.current_revision) + '.';
+        }
+        if ((op.operation === 'SET_WORK_RESEARCH_NOTE' || op.operation === 'SET_WORK_PRIVATE_NOTE') &&
+            (result.code === 'REVISION_CONFLICT' || result.code === 'FUTURE_REVISION')) {
+            const label = op.operation === 'SET_WORK_RESEARCH_NOTE' ? 'Research notes' : 'Reminders';
+            return ' ' + label + ' changed somewhere else; server revision is ' +
+                String(result.current_revision) + ' (' +
+                String(result.current_bytes) + ' bytes).';
         }
         if (typeof result.current_state === 'boolean' &&
             typeof result.current_value !== 'string') {

@@ -518,8 +518,8 @@ class OfflineFoundationTests(unittest.TestCase):
     # which can make a cache read fail. A browser test cannot, without a
     # product hook that exists only for the test.
 
-    def test_successful_research_notes_save_invalidates_work_cache(self):
-        """A partial notes PATCH cannot make an older cached complete Work eligible."""
+    def test_successful_research_notes_save_patches_work_cache(self):
+        """ACK patches the Work snapshot in place so the file stays available offline."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
 
@@ -531,17 +531,23 @@ class OfflineFoundationTests(unittest.TestCase):
         page.keyboard.insert_text("offline coherence research note")
         page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
         wait_for_async(page,
-            "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
+            """id => window.createPrksOfflineStore().getEntity('work', id)
+                .then(row => !!(row && row.value && row.value.text_content === 'offline coherence research note'))""",
             arg=work_a,
             timeout=15000,
         )
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
-        page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+        page.wait_for_selector(".CodeMirror")
+        self.assertIn(work_a, page.evaluate("() => location.hash"))
+        self.assertEqual(
+            page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES),
+            "offline coherence research note",
+        )
 
-    def test_successful_private_notes_save_invalidates_work_cache(self):
-        """Private Work note PATCH is partial too; cache must be absent until a fresh Work read."""
+    def test_successful_private_notes_save_patches_work_cache(self):
+        """ACK patches private_notes onto the cached Work; the file stays available offline."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
         selector = "#prks-private-notes-work-" + work_a
@@ -551,16 +557,22 @@ class OfflineFoundationTests(unittest.TestCase):
         _wait_entity_cached(page, "work", work_a)
         page.locator(selector).fill("offline coherence private note")
         page.locator(selector).blur()
-        page.locator("#prks-private-notes-status-work-" + work_a, has_text="Saved").wait_for(timeout=15000)
         wait_for_async(page,
-            "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row === null)",
+            """() => prksSync.store.listOperations().then(rows =>
+                rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE').length === 0)""",
+            timeout=15000,
+        )
+        wait_for_async(page,
+            """id => window.createPrksOfflineStore().getEntity('work', id)
+                .then(row => !!(row && row.value && row.value.private_notes === 'offline coherence private note'))""",
             arg=work_a,
             timeout=15000,
         )
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
-        page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+        page.locator(selector).wait_for()
+        self.assertEqual(page.locator(selector).input_value(), "offline coherence private note")
 
     def test_authoritative_tag_refresh_replaces_offline_work_cache(self):
         """Representative relationship mutation stores only its refreshed full Work."""
@@ -922,10 +934,9 @@ class OfflineFoundationTests(unittest.TestCase):
         self.assertEqual(page.locator('[data-prks-role="work-identity-editor"]').count(), 1,
                          "the editor still renders; only saving is refused")
 
-    def test_research_notes_are_read_only_immediately_when_offline(self):
-        """Scenario 7: reopening a cached Work directly offline must never leave
-        the Research Notes editor briefly editable while waiting for a later
-        connectivity-subscriber callback -- it starts read-only immediately."""
+    def test_research_notes_stay_editable_immediately_when_offline(self):
+        """Reopening a cached Work offline must leave Research Notes editable
+        -- they are durable, not a connectivity-gated PATCH."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
 
@@ -933,14 +944,13 @@ class OfflineFoundationTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
         page.wait_for_selector(".CodeMirror")
-        original_text = page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES)
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
         self.assertIn(work_a, page.evaluate("() => location.hash"))
         page.wait_for_selector(".CodeMirror")
 
-        self.assertTrue(
+        self.assertFalse(
             page.evaluate(
                 """() => {
                     const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
@@ -950,41 +960,32 @@ class OfflineFoundationTests(unittest.TestCase):
                 }"""
             )
         )
-        page.locator(
-            '[data-prks-role="editor-status"]', has_text="Offline — notes are read-only"
-        ).wait_for()
-
         page.locator(".CodeMirror").click()
-        page.keyboard.type("SHOULD-NOT-APPEAR")
+        page.keyboard.type(" OFFLINE-EDIT")
         page.wait_for_timeout(200)
-        self.assertEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
+        self.assertIn("OFFLINE-EDIT", page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES))
 
-    def test_private_notes_are_read_only_immediately_when_offline(self):
-        """Scenario 8: same read-only-on-init guarantee for the Private Notes
-        textarea -- offline from the start, never a moment of editability."""
+    def test_private_notes_stay_editable_immediately_when_offline(self):
+        """Same guarantee for Work Reminders -- the textarea starts editable."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
         selector = "#prks-private-notes-work-" + work_a
-        status_selector = "#prks-private-notes-status-work-" + work_a
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
         page.locator(selector).wait_for()
-        original_value = page.locator(selector).input_value()
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
         self.assertIn(work_a, page.evaluate("() => location.hash"))
         page.locator(selector).wait_for()
 
-        self.assertTrue(page.evaluate("(sel) => document.querySelector(sel).readOnly", selector))
-        page.locator(status_selector, has_text="Offline — notes are read-only").wait_for()
-
+        self.assertFalse(page.evaluate("(sel) => document.querySelector(sel).readOnly", selector))
         page.locator(selector).click()
-        page.keyboard.type("SHOULD-NOT-APPEAR")
+        page.keyboard.type("OFFLINE-EDIT")
         page.wait_for_timeout(200)
-        self.assertEqual(page.locator(selector).input_value(), original_value)
+        self.assertIn("OFFLINE-EDIT", page.locator(selector).input_value())
 
     def test_cached_pdf_reopened_offline_has_no_annotation_tools(self):
         """Scenario 9: a previously-cached PDF reopened offline mounts the vendor
@@ -1810,7 +1811,7 @@ class OfflineFoundationTests(unittest.TestCase):
             self.assertTrue(page.evaluate("() => navigator.onLine"))
             page.wait_for_function("() => !document.getElementById('prks-connectivity-indicator').hidden")
             self.assertIn("Offline", page.locator("#prks-connectivity-indicator").inner_text())
-            self.assertTrue(
+            self.assertFalse(
                 page.evaluate(
                     """() => {
                         const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
@@ -1820,10 +1821,7 @@ class OfflineFoundationTests(unittest.TestCase):
                     }"""
                 )
             )
-            page.locator(
-                '[data-prks-role="editor-status"]', has_text="Offline — notes are read-only"
-            ).wait_for()
-            self.assertTrue(page.evaluate("(sel) => document.querySelector(sel).readOnly", private_selector))
+            self.assertFalse(page.evaluate("(sel) => document.querySelector(sel).readOnly", private_selector))
             page.wait_for_function(_PDF_READ_ONLY_JS, timeout=20000)
             self.assertEqual(_pdf_mode(page), "preview")
         finally:
@@ -2515,8 +2513,8 @@ class OfflineConceptTests(unittest.TestCase):
         _wait_list_uncached(page, "concepts:index")
 
     def test_superseded_notes_save_still_invalidates_concept_domain(self):
-        """Save #1 succeeded canonically even if a newer save #2 fails: stale for
-        the UI is not the same as unsuccessful."""
+        """Save #1 ACKed even if a later save cannot leave the device: the first
+        canonical write already fenced Concepts."""
         server, page, _context, _collector = self._start()
         child = server.ids["concept_child"]
 
@@ -2530,22 +2528,26 @@ class OfflineConceptTests(unittest.TestCase):
         page.locator('[data-prks-role="editor-status"]', has_text="All changes saved").wait_for(timeout=15000)
         generation_after_first = _concept_domain_generation(page)
 
-        def reject_notes(route):
-            if route.request.method == "PATCH":
-                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
-                return
-            route.fallback()
+        def reject_sync(route):
+            route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
 
-        page.route("**/api/works/**", reject_notes)
+        page.route("**/api/sync/operations", reject_sync)
         try:
             page.locator(".work-notes-editor-wrap .CodeMirror").first.click()
             page.keyboard.press("Control+A")
-            page.keyboard.insert_text("second save that fails")
-            page.locator('[data-prks-role="editor-status"]', has_text="Error saving changes").wait_for(timeout=15000)
+            page.keyboard.insert_text("second save that stays local")
+            page.evaluate("""() => {
+                const ctx = window.prksGetFocusedTabContext();
+                window.prksFlushPendingWorkResearchNotes(ctx);
+            }""")
+            wait_for_async(page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'SET_WORK_RESEARCH_NOTE'))""",
+                timeout=15000,
+            )
         finally:
-            _safe_unroute(page, "**/api/works/**", reject_notes)
+            _safe_unroute(page, "**/api/sync/operations", reject_sync)
 
-        # The failed second save adds nothing, but the first one already did.
         self.assertGreaterEqual(generation_after_first, 1)
         self.assertIsNone(_cached_entity(page, "concept", child))
 

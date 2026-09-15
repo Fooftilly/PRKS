@@ -146,16 +146,18 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
 
     def test_concept_domain_invalidated_by_canonical_research_changes(self):
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
-        # Successful Research Notes save and successful Work deletion both change
-        # canonical Work -> Concept research data.
         notes_at = works.index("function prksEnqueueWorkResearchNotesSave(")
         notes_body = works[notes_at : notes_at + 6000]
-        self.assertIn("prksOfflineMarkConceptsChanged()", notes_body)
+        # Durable enqueue; Concept coherence happens on ACK in the reconciler.
+        self.assertIn("prksSaveWorkNoteDurably", notes_body)
+        self.assertNotIn("prksOfflineMarkConceptsChanged()", notes_body)
         delete_at = works.index("async function deleteWork(")
         delete_body = works[delete_at : delete_at + 2500]
         self.assertIn("prksOfflineMarkConceptsChanged()", delete_body)
-        # ... and only on acknowledged success, never on a failed/aborted save.
-        self.assertIn("if (ok && typeof prksOfflineMarkConceptsChanged === 'function')", notes_body)
+        runtime = _read(_RUNTIME)
+        reconcile = runtime[runtime.index("async function reconcileWorkNoteBody("):]
+        reconcile = reconcile[: reconcile.index("\n        async function reconcileWorkNote(")]
+        self.assertIn("DOMAIN_CONCEPTS", reconcile)
 
     def test_concept_mutations_route_through_durable_boundaries(self):
         """Coherence for Concepts happens on ACKNOWLEDGEMENT, not at the call.
@@ -851,12 +853,15 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         notes_at = works.index("function prksEnqueueWorkResearchNotesSave(")
         notes_body = works[notes_at : notes_at + 7000]
-        # Notes are the canonical source of [[argument:...]] mentions.
-        self.assertIn("prksOfflineMarkArgumentsChanged()", notes_body)
-        self.assertIn("if (ok && typeof prksOfflineMarkArgumentsChanged === 'function')", notes_body)
+        self.assertIn("prksSaveWorkNoteDurably", notes_body)
+        self.assertNotIn("prksOfflineMarkArgumentsChanged()", notes_body)
         delete_at = works.index("async function deleteWork(")
         delete_body = works[delete_at : delete_at + 3000]
         self.assertIn("prksOfflineMarkArgumentsChanged()", delete_body)
+        runtime = _read(_RUNTIME)
+        reconcile = runtime[runtime.index("async function reconcileWorkNoteBody("):]
+        reconcile = reconcile[: reconcile.index("\n        async function reconcileWorkNote(")]
+        self.assertIn("DOMAIN_ARGUMENTS", reconcile)
 
     def test_person_rename_invalidates_arguments_only_on_a_real_name_change(self):
         """The rule survived the move to durable editing; only its home did.

@@ -1060,6 +1060,21 @@ def save_work_notes_on_conn(conn, db: PRKSDatabase, work_id: str, text_content) 
 
 
 def save_work_notes(db: PRKSDatabase, work_id: str, text_content) -> None:
-    """Public canonical note save, revision-aware for every caller."""
+    """Public canonical note save, revision-aware for every caller.
+
+    The durable path refuses a bad body as ``INVALID_ENVELOPE``. This wrapper
+    keeps the ordinary PATCH contract: the same inputs raise ``ResearchError``
+    with ``invalid_text``, so HTTP callers still get 400 rather than 500.
+    """
     from backend import work_note_sync
-    work_note_sync.set_research_note(db, work_id, text_content)
+    try:
+        work_note_sync.set_research_note(db, work_id, text_content)
+    except ValueError as exc:
+        if str(exc) != "INVALID_ENVELOPE":
+            raise
+        if not isinstance(text_content, str):
+            raise ResearchError("invalid_text", "Research notes must be a string.") from exc
+        if _CONTROL_RE.search(text_content):
+            raise ResearchError(
+                "invalid_text", "Research notes contain invalid characters.") from exc
+        raise ResearchError("invalid_text", "Research notes are too long.") from exc

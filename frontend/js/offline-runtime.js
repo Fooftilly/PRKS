@@ -820,6 +820,75 @@
             return true;
         }
 
+        /**
+         * Patch one whole-document note into the cached Work and notes-state.
+         *
+         * The ACK omits the body (`value_omitted`); the immutable operation
+         * carries the text the server applied. Notes-state holds revisions
+         * only. Research Notes also fence Concept / Argument / Graph
+         * projections because the server ran canonical markup processing --
+         * this client does not parse the body to decide what those caches
+         * contain.
+         */
+        async function reconcileWorkNoteBody(result, op, field, revisionKey, fenceResearch) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.work_id;
+            if (!id || id !== op.entity_id) return false;
+            const text = op.payload && typeof op.payload.text === 'string' ? op.payload.text : null;
+            if (text === null) return false;
+            if (!Number.isSafeInteger(result.server_revision) || result.server_revision < 0) {
+                return false;
+            }
+            const kinds = ['work', 'work-notes-state'];
+            const tokens = kinds.map(function (kind) {
+                const token = currentEntityGeneration(kind, id) + 1;
+                entityCoherence.set(entityKey(kind, id), token);
+                return token;
+            });
+            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
+            const work = snapshots[0] && snapshots[0].value;
+            const state = snapshots[1] && snapshots[1].value;
+            if (work) {
+                const nextWork = Object.assign({}, work);
+                nextWork[field] = field === 'private_notes' ? (text || null) : text;
+                if (!await cacheEntityIfCurrent('work', id, nextWork, tokens[0])) return false;
+            }
+            if (state) {
+                if (typeof root.prksNoteStateShape === 'function' &&
+                    !root.prksNoteStateShape(state, id)) return false;
+                const current = state[revisionKey];
+                if (!Number.isSafeInteger(current) || current <= result.server_revision) {
+                    const next = Object.assign({}, state);
+                    next[revisionKey] = result.server_revision;
+                    if (!await cacheEntityIfCurrent('work-notes-state', id, next, tokens[1])) {
+                        return false;
+                    }
+                }
+            }
+            if (fenceResearch && result.changed) {
+                markDomainChanged(DOMAIN_CONCEPTS, {
+                    entityKinds: ['concept'], listKeys: [CONCEPTS_LIST_KEY],
+                });
+                markDomainChanged(DOMAIN_ARGUMENTS, {
+                    entityKinds: ['argument'], listKeys: [ARGUMENTS_LIST_KEY],
+                });
+                markDomainChanged(DOMAIN_RESEARCH_GRAPH_CORE, {
+                    entityKinds: [DOMAIN_RESEARCH_GRAPH_CORE], listKeys: [],
+                });
+            }
+            return true;
+        }
+
+        async function reconcileWorkNote(result, op) {
+            return reconcileWorkNoteBody(result, op, 'text_content',
+                'research_note_revision', true);
+        }
+
+        async function reconcilePrivateNote(result, op) {
+            return reconcileWorkNoteBody(result, op, 'private_notes',
+                'private_note_revision', false);
+        }
+
         async function reconcileWorkReferences(result) {
             const kinds = root.PRKS_WORK_REFERENCE_KINDS || [];
             for (const kind of kinds) {
@@ -2585,6 +2654,8 @@
             reconcileWorkTag,
             reconcileWorkField,
             reconcileWorkSource,
+            reconcileWorkNote,
+            reconcilePrivateNote,
             reconcileWorkRole,
             reconcileRecentOpen,
             reconcileCreatedFolder,
@@ -2831,6 +2902,9 @@
         prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
         prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
+        prksOfflineReconcileWorkNote: (result, op) => production.reconcileWorkNote(result, op),
+        prksOfflineReconcilePrivateNote: (result, op) =>
+            production.reconcilePrivateNote(result, op),
         prksOfflineReconcileWorkRole: result => production.reconcileWorkRole(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineReconcileCreatedFolder: result => production.reconcileCreatedFolder(result),

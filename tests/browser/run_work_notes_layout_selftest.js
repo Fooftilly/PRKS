@@ -214,13 +214,25 @@ function tick() {
     });
 }
 
-async function runSaveGenerationRace() {
-    const pending = [];
-    sandbox.prksRequest = function () {
-        return new Promise(function (resolve) {
-            pending.push(resolve);
+function installDurableSave(pending) {
+    sandbox.prksWorkNoteObserved = function () {
+        return { value: '', revision: 0 };
+    };
+    sandbox.prksRefreshPendingWorkNotes = async function () { return []; };
+    sandbox.prksWorkNoteOperations = function () { return []; };
+    sandbox.prksSaveWorkNoteDurably = function () {
+        return new Promise(function (resolve, reject) {
+            pending.push(function (result) {
+                if (result instanceof Error) reject(result);
+                else resolve(result);
+            });
         });
     };
+}
+
+async function runSaveGenerationRace() {
+    const pending = [];
+    installDurableSave(pending);
     sandbox.fetchWorkDetails = function () {
         return Promise.resolve(null);
     };
@@ -263,14 +275,14 @@ async function runSaveGenerationRace() {
     assertEq('B save token newest', notes.latestSaveToken, 2);
     assertEq('two delayed mutations', pending.length, 2);
 
-    pending[0]({ ok: true });
+    pending[0]({ code: 'saved' });
     await tick();
     assertEq('stale A does not settle newest', notes.settledSaveToken, 0);
     assertEq('stale A leaves pending', notes.latestSaveToken > notes.settledSaveToken, true);
     assert('status after stale A still busy', !!(notes.drafting || notes.latestSaveToken > notes.settledSaveToken));
     assertEq('stale A does not mark saved', statusEl.innerText === 'All changes saved', false);
 
-    pending[1]({ ok: true });
+    pending[1]({ code: 'saved' });
     await tick();
     assertEq('B settles newest', notes.settledSaveToken, 2);
     assertEq('B clears pending', notes.latestSaveToken > notes.settledSaveToken, false);
@@ -283,11 +295,11 @@ async function runSaveGenerationRace() {
     sandbox.prksWorkNotesMarkEdit(notes);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-save');
     assertEq('retry queued two more', pending.length, 4);
-    pending[2]({ ok: false });
+    pending[2]({ code: 'failed' });
     await tick();
     assertEq('stale failure ignored', notes.saveError, false);
     assertEq('stale failure does not settle B', notes.settledSaveToken, 2);
-    pending[3]({ ok: true });
+    pending[3]({ code: 'saved' });
     await tick();
     assertEq('newest retry settled', notes.settledSaveToken, 4);
     assertEq('newest retry not error', notes.saveError, false);
@@ -315,8 +327,8 @@ async function runSaveGenerationRace() {
     const tokenB = dup.latestSaveToken;
     assertEq('same-generation duplicate reuses token', tokenA, tokenB);
     assertEq('same-generation token stays newest', dup.latestSaveToken, tokenB);
-    assertEq('same-generation sends one PATCH', pending.length, 5);
-    pending[4]({ ok: true });
+    assertEq('same-generation sends one save', pending.length, 5);
+    pending[4]({ code: 'saved' });
     await tick();
     assertEq('same-generation request settled', dup.settledSaveToken, tokenB);
     assertEq('same-generation idle pending', dup.latestSaveToken > dup.settledSaveToken, false);
@@ -346,32 +358,26 @@ async function runSaveGenerationRace() {
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-newer-draft');
     newestText = 'newest';
     sandbox.prksWorkNotesMarkEdit(newerDraft, 'W-newer-draft', newestText);
-    pending[5]({ ok: false });
+    pending[5]({ code: 'failed' });
     await tick();
     assertEq('failed older save keeps newer unsent edit drafting', newerDraft.drafting, true);
     assertEq('failed older save does not mark newer edit error', newerDraft.saveError, false);
     assertEq('failed older save leaves drafting status', statusEl.innerText, 'Drafting...');
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-newer-draft');
-    pending[6]({ ok: true });
+    pending[6]({ code: 'saved' });
     await tick();
     assertEq('newer edit settles after older failure', newerDraft.drafting, false);
     assertEq('newer edit success clears error', newerDraft.saveError, false);
 }
 
 /* Regression: a Research Notes save started while a PDF Work is mounted must finish
- * coherently after the Work becomes warm-suspended (tab switched away before the PATCH
+ * coherently after the Work becomes warm-suspended (tab switched away before the save
  * resolves). Warm suspension must not pause or orphan the in-flight save. */
 async function runWarmSaveSettlement() {
     const pending = [];
-    sandbox.prksRequest = function () {
-        return new Promise(function (resolve) {
-            pending.push(resolve);
-        });
-    };
-    let fetchCalls = 0;
+    installDurableSave(pending);
     sandbox.fetchWorkDetails = function () {
-        fetchCalls += 1;
-        return Promise.resolve({ text_content: 'warm note', research_refs: ['concept:warm-ref'] });
+        throw new Error('ACK does not GET Work details');
     };
     sandbox.prksWorkspaceRefreshTabStatus = function () {};
     sandbox.window.prksWorkspaceRefreshTabStatus = sandbox.prksWorkspaceRefreshTabStatus;
@@ -404,14 +410,14 @@ async function runWarmSaveSettlement() {
 
     sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-a', 'warm note');
     sandbox.prksEnqueueWorkResearchNotesSave(ctxWarm, 'W-warm-a');
-    assertEq('warm-save PATCH issued while mounted', pending.length, 1);
+    assertEq('warm-save issued while mounted', pending.length, 1);
     assertEq('warm-save status shows Saving while mounted', statusEl.innerText, 'Saving...');
 
-    /* Switch to another Work: A becomes warm-suspended before the PATCH resolves. */
+    /* Switch to another Work: A becomes warm-suspended before the save resolves. */
     ctxWarm.mounted = false;
     ctxWarm.suspended = true;
 
-    pending[0]({ ok: true });
+    pending[0]({ code: 'saved' });
     await tick();
     await tick();
 
@@ -419,13 +425,6 @@ async function runWarmSaveSettlement() {
     assertEq('A is not remounted by save settlement', ctxWarm.mounted, false);
     assertEq('workNotes resource settles while warm', notes.settledSaveToken, notes.latestSaveToken);
     assertEq('warm preserved status settles to saved', statusEl.innerText, 'All changes saved');
-    assertEq('post-save Work refresh still runs while warm', fetchCalls, 1);
-    const liveWork = ctxWarm.getEntity('work');
-    assertEq(
-        'research_refs refresh while warm',
-        JSON.stringify(liveWork.research_refs),
-        JSON.stringify(['concept:warm-ref'])
-    );
 
     /* Resume A: same DOM root reused, status already correct, no rerender needed. */
     ctxWarm.mounted = true;
@@ -438,11 +437,7 @@ async function runWarmSaveSettlement() {
  * revert that to a stale "Saving..." status. */
 async function runWarmSaveErrorSettlement() {
     const pending = [];
-    sandbox.prksRequest = function () {
-        return new Promise(function (_resolve, reject) {
-            pending.push(reject);
-        });
-    };
+    installDurableSave(pending);
     sandbox.fetchWorkDetails = function () {
         return Promise.resolve(null);
     };
@@ -477,7 +472,7 @@ async function runWarmSaveErrorSettlement() {
 
     sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-err', 'warm error note');
     sandbox.prksEnqueueWorkResearchNotesSave(ctxWarmErr, 'W-warm-err');
-    assertEq('warm-error PATCH issued', pending.length, 1);
+    assertEq('warm-error save issued', pending.length, 1);
 
     ctxWarmErr.mounted = false;
     ctxWarmErr.suspended = true;
@@ -509,11 +504,16 @@ function runDebounceBookkeeping() {
         }
     };
 
-    let patches = 0;
-    sandbox.prksRequest = function () {
-        assertEq('timer key gone at PATCH', ctxD.timers.has('saveNotesTimeout'), false);
-        patches += 1;
-        return Promise.resolve({ ok: true });
+    let saves = 0;
+    sandbox.prksWorkNoteObserved = function () {
+        return { value: '', revision: 0 };
+    };
+    sandbox.prksRefreshPendingWorkNotes = async function () { return []; };
+    sandbox.prksWorkNoteOperations = function () { return []; };
+    sandbox.prksSaveWorkNoteDurably = function () {
+        assertEq('timer key gone at save', ctxD.timers.has('saveNotesTimeout'), false);
+        saves += 1;
+        return Promise.resolve({ code: 'saved' });
     };
 
     const ctxD = prksEnsureTabContext('notes-debounce');
@@ -545,14 +545,14 @@ function runDebounceBookkeeping() {
     sandbox.prksScheduleWorkResearchNotesSave(ctxD, 'W-debounce');
     assertEq('debounce timer key exists', ctxD.timers.has('saveNotesTimeout'), true);
     assertEq('debounce delay', fakeTimers.length === 1 && fakeTimers[0].ms, 2000);
-    assertEq('no PATCH before fire', patches, 0);
+    assertEq('no save before fire', saves, 0);
 
     fakeTimers[0].fn();
     assertEq('timer key removed before enqueue', ctxD.timers.has('saveNotesTimeout'), false);
-    assertEq('exactly one PATCH after fire', patches, 1);
+    assertEq('exactly one save after fire', saves, 1);
 
     sandbox.prksFlushPendingWorkResearchNotes(ctxD);
-    assertEq('flush after fire does not PATCH again', patches, 1);
+    assertEq('flush after fire does not save again', saves, 1);
 }
 
 function runHorizontalSplitterCleanup() {

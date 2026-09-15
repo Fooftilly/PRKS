@@ -514,6 +514,7 @@ server, survive reload, and reconcile on acknowledgement):
 - Concepts: `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`,
   `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT`
 - Positions: `CREATE_POSITION`, `SET_POSITION_FIELD`, `DELETE_POSITION`
+- Work notes: `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE`
 
 `docs/local-first-rollout-status.md` is the running score and is authoritative
 when this file and it disagree. Anything not listed there still calls a
@@ -591,13 +592,22 @@ repopulate invalidated snapshots; cleanup failure blocks only the affected domai
 The durable families above have an outbox, conflict resolution and
 reconciliation; **this read cache must never grow one**. Durable user intent
 belongs in `local-store.js` and the sync coordinator. There is still no CRDT or
-character-level merging, no multi-user sync and no server push, and Research
-Notes and PDF annotations are not yet editable offline.
+character-level merging, no multi-user sync and no server push, and
+PDF annotations are not yet editable offline.
 
 A family becomes durable only by being *implemented* as one — a semantic
 operation with validation, a revision or an explicit "no base revision" rule,
 reconciliation and named refusals. See *Adding a family: the four shapes and
 what each must declare* in `docs/local-first-sync.md` before starting one.
+
+Work notes are **local-first**. Research Notes (`SET_WORK_RESEARCH_NOTE`) and
+Reminders (`SET_WORK_PRIVATE_NOTE`) are independent whole-document revisioned
+aggregates. One user decision is one body and one conflict. The ACK patches
+the canonical Work field and the matching notes-state revision. A Research
+ACK also fences Concept, Argument and Research Graph derived projections
+because the server ran canonical markup processing -- the browser must not
+parse the body to decide that. A Private ACK never invalidates those
+projections. Folder private notes are not this family.
 
 Concepts are **local-first**. Creating one, editing its definition, renaming it,
 changing its aliases, reparenting it and deleting it are durable operations
@@ -1881,7 +1891,7 @@ Other mutations remain server-required. The implementation contract is in
 - Tag creation/deletion, Folder edits, Person and Person Group edits and
   Playlists are all durable now — see *Which families are durable today* under
   "Offline / PWA", and `docs/local-first-rollout-status.md` for the running
-  score. Still absent: research-note editing, PDF annotations, CRDTs,
+  score. Still absent: PDF annotations, CRDTs,
   multi-user sync and server push. Open events joined the protocol in 2C
   and the Work fields in `SYNCED_FIELDS` (2D/2E/2F/2G/2H/2I); nothing else has. `year` and
   `published_date` (2G) are the high fan-out case: they reach all three browse
