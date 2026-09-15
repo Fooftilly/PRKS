@@ -81,6 +81,29 @@
                 op.entity_id;
             return 'Create ' + who;
         }
+        if (op.operation === 'CREATE_PERSON_GROUP') {
+            return 'Create group "' + bounded(op.payload.name) + '"';
+        }
+        if (op.operation === 'SET_PERSON_GROUP_FIELD') {
+            const labels = root.PRKS_PERSON_GROUP_FIELD_LABELS || {};
+            const field = op.payload.field;
+            if (field === 'parent_id') {
+                return op.payload.value
+                    ? 'Move group into ' + op.payload.value : 'Move group to the top level';
+            }
+            return (labels[field] || field) + ' = "' + bounded(op.payload.value) + '"';
+        }
+        if (op.operation === 'ADD_PERSON_GROUP_MEMBER' ||
+            op.operation === 'REMOVE_PERSON_GROUP_MEMBER') {
+            const who = (context.person && context.person.canonical_name) ||
+                op.payload.person_id;
+            return (op.operation === 'ADD_PERSON_GROUP_MEMBER' ? 'Add ' : 'Remove ') +
+                who + (op.operation === 'ADD_PERSON_GROUP_MEMBER' ? ' to' : ' from') +
+                ' a group';
+        }
+        if (op.operation === 'DELETE_PERSON_GROUP') {
+            return 'Delete a group';
+        }
         if (op.operation === 'ADD_WORK_TAG' || op.operation === 'REMOVE_WORK_TAG') {
             return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') +
                 ((context.tag && context.tag.name) || 'Tag');
@@ -110,6 +133,15 @@
          * field. Listed anyway so the registry stays the readable answer to
          * "what does discarding this stale?" for every durable family. */
         SET_PERSON_METADATA_FIELD: 'person-metadata-state',
+        /* Reached only through the `person-group` branch of `invalidate()`,
+         * for the same reason the Person entry above is. Listed so the
+         * registry stays the readable answer to "what does discarding this
+         * stale?" for every durable family. */
+        CREATE_PERSON_GROUP: 'person-group-state',
+        SET_PERSON_GROUP_FIELD: 'person-group-state',
+        ADD_PERSON_GROUP_MEMBER: 'person-group-state',
+        REMOVE_PERSON_GROUP_MEMBER: 'person-group-state',
+        DELETE_PERSON_GROUP: 'person-group-state',
     });
 
     /** The cached read models a discarded operation's intent was overlaying. */
@@ -128,10 +160,41 @@
             root.prksOfflineMarkEntityChanged('person-metadata-state', op.entity_id);
             return;
         }
+        if (op.entity_type === 'person-group') {
+            if (typeof root.prksOfflineMarkPersonGroupsChanged === 'function') {
+                root.prksOfflineMarkPersonGroupsChanged();
+            } else {
+                root.prksOfflineMarkEntityChanged('person-group', op.entity_id);
+            }
+            /* The revisions this edit was measured against are cached
+             * separately from the group itself, and a membership discarded
+             * here leaves the PERSON's side of the pair stale too -- the two
+             * projections describe the same scopes from opposite ends. */
+            root.prksOfflineMarkEntityChanged('person-group-state', op.entity_id);
+            const personId = op.payload && op.payload.person_id;
+            if (personId) {
+                root.prksOfflineMarkEntityChanged('person-group-memberships', personId);
+                if (typeof root.prksOfflineMarkPeopleChanged === 'function') {
+                    root.prksOfflineMarkPeopleChanged();
+                }
+            }
+            return;
+        }
         root.prksOfflineMarkEntityChanged('work', op.entity_id);
         const projection = DISCARD_INVALIDATES[op.operation];
         if (projection) root.prksOfflineMarkEntityChanged(projection, op.entity_id);
     }
+
+    /* Terminal refusals a durable result can carry, in the user's words. The
+     * durable row holds a CODE -- a closed vocabulary the store validates --
+     * and this is the one place it becomes a sentence. */
+    const NAMED_REFUSALS = Object.freeze({
+        NAME_TAKEN: 'Another group already has that name.',
+        PARENT_NOT_FOUND: 'The group it would go inside no longer exists.',
+        PARENT_CYCLE: 'That would put the group inside one of its own subgroups.',
+        PERSON_NOT_FOUND: 'That person no longer exists on the server.',
+        ENTITY_NOT_FOUND: 'It no longer exists on the server.',
+    });
 
     function conflictDetail(op) {
         const result = op.server_result || {};
@@ -141,6 +204,16 @@
          * dependency walk exists to prevent the user from being left in. */
         if (result.code === 'DEPENDENCY_FAILED') {
             return ' It was waiting on another change that could not be saved.';
+        }
+        /* Named per code. A group refused because its name is taken and one
+         * refused because its parent would make a cycle are different problems
+         * with different fixes, and "Needs a decision" is neither of them. */
+        if (NAMED_REFUSALS[result.code]) return ' ' + NAMED_REFUSALS[result.code];
+        if (typeof result.current_state === 'boolean' &&
+            typeof result.current_value !== 'string') {
+            return result.current_state
+                ? ' The server already has this relationship.'
+                : ' The server does not have this relationship.';
         }
         if (typeof result.current_preview === 'string') {
             return ' Server currently has "' + bounded(result.current_preview) + '" (' +
@@ -165,7 +238,9 @@
             const link = document.createElement('a');
             link.href = op.entity_type === 'person'
                 ? '#/people/' + encodeURIComponent(op.entity_id)
-                : '#/works/' + encodeURIComponent(op.entity_id);
+                : op.entity_type === 'person-group'
+                    ? '#/people/groups/' + encodeURIComponent(op.entity_id)
+                    : '#/works/' + encodeURIComponent(op.entity_id);
             link.textContent = describe(op);
             row.append(link, document.createTextNode(
                 ' · ' + op.entity_id + sizeNote(op) + ' · ' + status(op) + conflictDetail(op) + ' '));

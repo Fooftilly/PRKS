@@ -14,8 +14,8 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import (person_metadata_sync, work_metadata_sync, work_open_sync, work_role_sync,
-                     work_source_sync, work_tag_sync)
+from backend import (person_group_sync, person_metadata_sync, work_metadata_sync,
+                     work_open_sync, work_role_sync, work_source_sync, work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.entity_ids import generate as generate_entity_id, is_distributed
 from backend.log_safety import safe_error_type, safe_log_label
@@ -3543,23 +3543,9 @@ class PRKSDatabase:
     def add_person_group(
         self, name: str, parent_id: Optional[str] = None, description: str = ""
     ) -> str:
-        n = (name or "").strip()
-        if not n:
-            raise ValueError("Group name is required.")
-        self._assert_group_name_free(n)
-        if parent_id:
-            ok = self.execute_query("SELECT 1 FROM person_groups WHERE id = ?", (parent_id,))
-            if not ok:
-                raise ValueError("Parent group not found.")
-        gid = self.generate_id("PG")
-        self.execute_query(
-            """
-            INSERT INTO person_groups (id, name, parent_id, description)
-            VALUES (?, ?, ?, ?)
-            """,
-            (gid, n, parent_id or None, (description or "").strip()),
-        )
-        return gid
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return self._insert_person_group(conn, name, parent_id, description)
 
     def add_person_group_with_parent_options(
         self,
@@ -3579,21 +3565,14 @@ class PRKSDatabase:
             return self._insert_person_group(conn, n, pid, description)
 
     def _insert_person_group(self, conn, name, parent_id=None, description="") -> str:
-        n = (name or "").strip()
-        if not n:
-            raise ValueError("Group name is required.")
-        if conn.execute("SELECT 1 FROM person_groups WHERE LOWER(name) = LOWER(?)", (n,)).fetchone():
-            raise ValueError("A group with this name already exists.")
-        if parent_id and not conn.execute(
-            "SELECT 1 FROM person_groups WHERE id = ?", (parent_id,)
-        ).fetchone():
-            raise ValueError("Parent group not found.")
-        gid = self.generate_id("PG")
-        conn.execute(
-            "INSERT INTO person_groups (id, name, parent_id, description) VALUES (?, ?, ?, ?)",
-            (gid, n, parent_id or None, (description or "").strip()),
-        )
-        return gid
+        """Construction, through the same boundary the sync handler uses.
+
+        Construction is not mutation: a group created with a name and a parent
+        has not "changed" twice, so no field revision is advanced here and
+        every field starts at 0.
+        """
+        return person_group_sync.insert_group_on_conn(
+            conn, self.generate_id("PG"), name, parent_id or "", description or "")
 
     def _resolve_group_parent(self, conn, name) -> str:
         row = conn.execute(
@@ -3614,59 +3593,27 @@ class PRKSDatabase:
             self._update_person_group(conn, group_id, fields)
 
     def _update_person_group(self, conn, group_id, fields) -> None:
-        allowed = {"name", "parent_id", "description"}
-        updates = {k: v for k, v in fields.items() if k in allowed}
-        if not updates:
-            return
-        if "parent_id" in updates:
-            raw_p = updates["parent_id"]
-            new_parent = None if raw_p in (None, "", False) else raw_p
-            updates["parent_id"] = new_parent
-            if new_parent == group_id:
-                raise ValueError("A group cannot be its own parent.")
-            if new_parent:
-                ok = conn.execute(
-                    "SELECT 1 FROM person_groups WHERE id = ?", (new_parent,)
-                ).fetchone()
-                if not ok:
-                    raise ValueError("Parent group not found.")
-                desc = {row[0] for row in conn.execute(
-                    """WITH RECURSIVE sub(id) AS (
-                        SELECT id FROM person_groups WHERE parent_id = ?
-                        UNION SELECT g.id FROM person_groups g JOIN sub ON g.parent_id = sub.id
-                    ) SELECT id FROM sub""", (group_id,)
-                )}
-                if new_parent in desc:
-                    raise ValueError("Cannot set parent to a subgroup (cycle).")
-        if "name" in updates:
-            updates["name"] = (updates["name"] or "").strip()
-            if not updates["name"]:
-                raise ValueError("Group name is required.")
-            if conn.execute(
-                "SELECT 1 FROM person_groups WHERE LOWER(name) = LOWER(?) AND id != ?",
-                (updates["name"], group_id),
-            ).fetchone():
-                raise ValueError("A group with this name already exists.")
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        vals = list(updates.values()) + [group_id]
-        conn.execute(
-            f"UPDATE person_groups SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            tuple(vals),
-        )
+        """Every editable column, through the revision-aware field writer.
+
+        The ordinary PATCH and the durable operation share one boundary, so a
+        group can never change without its revision: an offline device holding
+        the old value would otherwise have no way to discover it had been
+        overtaken, and would overwrite a decision it never saw. Name
+        uniqueness, parent existence and the cycle walk live there too, so the
+        two paths cannot drift apart on what is legal.
+        """
+        for field in person_group_sync.FIELDS:
+            if field not in fields:
+                continue
+            value = fields[field]
+            person_group_sync.set_field_on_conn(
+                conn, group_id, field, "" if value in (None, False) else str(value))
 
     def delete_person_group(self, group_id: str) -> None:
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT parent_id FROM person_groups WHERE id = ?", (group_id,)
-            ).fetchone()
-            if not row:
+            if not person_group_sync.delete_group_on_conn(conn, group_id):
                 raise ValueError("Group not found.")
-            conn.execute(
-                "UPDATE person_groups SET parent_id = ? WHERE parent_id = ?",
-                (row["parent_id"], group_id),
-            )
-            conn.execute("DELETE FROM person_groups WHERE id = ?", (group_id,))
 
     def get_all_person_groups(self) -> List[dict]:
         q = """
@@ -3727,23 +3674,35 @@ class PRKSDatabase:
         return g
 
     def add_person_to_group(self, person_id: str, group_id: str) -> None:
-        ok_p = self.execute_query("SELECT 1 FROM persons WHERE id = ?", (person_id,))
-        ok_g = self.execute_query("SELECT 1 FROM person_groups WHERE id = ?", (group_id,))
-        if not ok_p or not ok_g:
-            raise ValueError("Person or group not found.")
-        self.execute_query(
-            """
-            INSERT OR IGNORE INTO person_group_members (person_id, group_id)
-            VALUES (?, ?)
-            """,
-            (person_id, group_id),
-        )
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            ok_p = conn.execute("SELECT 1 FROM persons WHERE id = ?", (person_id,)).fetchone()
+            ok_g = conn.execute(
+                "SELECT 1 FROM person_groups WHERE id = ?", (group_id,)).fetchone()
+            if not ok_p or not ok_g:
+                raise ValueError("Person or group not found.")
+            person_group_sync.set_member_on_conn(conn, group_id, person_id, True)
 
     def remove_person_from_group(self, person_id: str, group_id: str) -> None:
-        self.execute_query(
-            "DELETE FROM person_group_members WHERE person_id = ? AND group_id = ?",
-            (person_id, group_id),
-        )
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            person_group_sync.set_member_on_conn(conn, group_id, person_id, False)
+
+    def get_person_group_sync_state(self, group_id: str) -> Optional[dict]:
+        """Field revisions and membership revisions for one group."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return person_group_sync.get_group_state_on_conn(conn, group_id)
+
+    def get_person_groups_state(self, person_id: str) -> Optional[dict]:
+        """The same membership bookkeeping, keyed by PERSON.
+
+        Membership is edited from both ends, and each end needs the revisions
+        for the pairs it can change.
+        """
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return person_group_sync.get_person_group_state_on_conn(conn, person_id)
 
     def get_person_metadata_state(self, person_id: str) -> Optional[dict]:
         """Synchronization state for the supported Person fields.
@@ -3800,16 +3759,25 @@ class PRKSDatabase:
                 # one transaction WITHOUT the profile half bypassing the
                 # revision model that offline devices depend on.
                 person_metadata_sync.set_field_on_conn(conn, person_id, field, _person_wire(value))
-            conn.execute("DELETE FROM person_group_members WHERE person_id = ?", (person_id,))
-            for gid in clean:
-                conn.execute(
-                    """
-                    INSERT INTO person_group_members (person_id, group_id)
-                    VALUES (?, ?)
-                    """,
-                    (person_id, gid),
-                )
+            self._replace_person_group_memberships(conn, person_id, clean)
             conn.commit()
+
+    @staticmethod
+    def _replace_person_group_memberships(conn, person_id, group_ids) -> None:
+        """Replace the set by DIFFING it, not by deleting and reinserting.
+
+        Every pair goes through the revision-aware boundary, and a pair that
+        did not change advances nothing: a revision records the relationship
+        actually changing, and inflating it would manufacture staleness for
+        every device that already holds the current membership.
+        """
+        desired = set(group_ids)
+        current = {row[0] for row in conn.execute(
+            "SELECT group_id FROM person_group_members WHERE person_id = ?", (person_id,))}
+        for gid in sorted(current - desired):
+            person_group_sync.set_member_on_conn(conn, gid, person_id, False)
+        for gid in sorted(desired - current):
+            person_group_sync.set_member_on_conn(conn, gid, person_id, True)
 
     def set_person_group_memberships(self, person_id: str, group_ids: List[str]) -> None:
         ok = self.execute_query("SELECT 1 FROM persons WHERE id = ?", (person_id,))
@@ -3826,15 +3794,8 @@ class PRKSDatabase:
                 raise ValueError(f"Unknown group id: {gid}")
             clean.append(gid)
         with self.connection() as conn:
-            conn.execute("DELETE FROM person_group_members WHERE person_id = ?", (person_id,))
-            for gid in clean:
-                conn.execute(
-                    """
-                    INSERT INTO person_group_members (person_id, group_id)
-                    VALUES (?, ?)
-                    """,
-                    (person_id, gid),
-                )
+            conn.execute("BEGIN IMMEDIATE")
+            self._replace_person_group_memberships(conn, person_id, clean)
             conn.commit()
 
     # --- Roles (Linking) ---

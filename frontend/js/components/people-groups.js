@@ -9,51 +9,144 @@ function escapeHtmlGroup(s) {
         .replace(/'/g, '&#39;');
 }
 
-function prksPersonGroupMutationBlocked(message) {
-    return typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation(message);
+/* No connectivity gating in this file any more.
+ *
+ * Creating a group, renaming it, moving it, deleting it and changing who is in
+ * it are all durable intents now, so a cached Group page is exactly as usable
+ * as a connected one -- the same feature, not two. What can still stop a save
+ * is not knowing this group's revisions, which is a fact about this device's
+ * cache rather than about the network and is decided at save time by
+ * `prksAcknowledgedPersonGroupBase`.
+ */
+
+/**
+ * What this device believes the parent should be, as an id.
+ *
+ * The combobox writes an id; a free-typed name is resolved against the
+ * EFFECTIVE catalogue, which includes groups created on this device and not
+ * yet sent. A name that matches nothing becomes a new group, created durably
+ * and named as this one's prerequisite -- the ordinary endpoint resolved the
+ * same "or create it" server-side, and doing it as two visible operations is
+ * what lets it happen with no server at all.
+ *
+ * Returns the id, '' for "top level", or undefined when it was refused.
+ */
+async function prksResolvePersonGroupParent(parentId, parentName, selfId) {
+    const typed = String(parentName || '').trim();
+    // Both answers are known without reading anything. The catalogue read
+    // below goes through the ordinary read-through, which offline has to let a
+    // request fail before the cache answers -- so it is worth not doing.
+    if (String(parentId || '').trim()) return String(parentId).trim();
+    if (!typed) return '';
+    const catalogue = typeof prksEffectivePersonGroupCatalogue === 'function'
+        ? await prksEffectivePersonGroupCatalogue() : [];
+    const label = row => (row && String(row.name || '')).toLowerCase();
+    const match = (catalogue || []).find(row => row && row.id !== selfId &&
+        (label(row) === typed.toLowerCase() ||
+            prksGroupRowLabel(row, catalogue).toLowerCase() === typed.toLowerCase()));
+    if (match) return match.id;
+    try {
+        const created = await prksCreatePersonGroupDurably({ name: typed, description: '' });
+        return created.entity_id;
+    } catch (error) {
+        await prksAlertMessage(prksPersonGroupSaveMessage(error, 'create that parent group'),
+            'Could not save');
+        return undefined;
+    }
 }
 
-function prksApplyPersonGroupOfflineState(container) {
-    if (!container) return;
-    const online = typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
-    const selector = '[data-prks-role="group-mutation-control"], [data-remove-member], ' +
-        '#group-add-member-search, #group-add-member-btn, #gd-name, #gd-description, ' +
-        '#gd-parent-search, #gd-save-btn, #gd-delete-btn';
-    container.querySelectorAll(selector).forEach((el) => {
-        el.disabled = !online || el.getAttribute('aria-busy') === 'true';
-        if (online) el.removeAttribute('aria-disabled');
-        else el.setAttribute('aria-disabled', 'true');
-    });
-    container.querySelectorAll('#gd-parent-results, #group-add-member-results').forEach((el) => {
-        el.inert = !online;
-        if (!online) el.classList.add('hidden');
-    });
+/** One message per refusal the store can produce. Never a generic bucket. */
+function prksPersonGroupSaveMessage(error, action) {
+    switch (error && error.prksLocalStoreCode) {
+        case 'scope_busy':
+            return 'Part of this group is syncing or needs a decision. Try again shortly.';
+        case 'dependency_failed':
+            return String(error.message || 'A change this one depends on could not be saved.');
+        case 'entity_deleted':
+            return 'This group is being deleted, so it cannot be changed.';
+        case 'invalid_envelope':
+            return String(error.message || 'That is not a valid group.');
+        default:
+            return 'Could not ' + action + ' locally. Please retry.';
+    }
 }
 
-function prksApplyPersonGroupPanelOfflineState(ctx) {
-    const panel = document.getElementById('panel-content');
-    if (!panel || typeof prksRightPanelOwnedBy !== 'function' || !prksRightPanelOwnedBy(ctx, panel)) return;
-    prksApplyPersonGroupOfflineState(panel);
+/**
+ * Save a Group's editable fields durably, sending only what changed.
+ *
+ * Returns true when the editor may close. The three concepts stay apart: the
+ * draft is what was typed, the base is what the server last confirmed, and the
+ * difference is measured against what the form was SHOWING.
+ */
+async function prksSavePersonGroupDraft(groupId, draft) {
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    const base = await prksAcknowledgedPersonGroupBase(groupId, ops);
+    if (!base) {
+        await prksAlertMessage(
+            'This group cannot be edited offline yet. Open it once while connected to PRKS '
+            + 'so its synchronization state is prepared.', 'Unavailable');
+        return false;
+    }
+    const changes = prksDirtyPersonGroupFields(groupId, draft, base, ops);
+    if (!Object.keys(changes).length) return true;
+    try {
+        await prksSavePersonGroupFieldsDurably(groupId, changes, base);
+    } catch (error) {
+        await prksAlertMessage(prksPersonGroupSaveMessage(error, 'save this group'),
+            'Could not save');
+        return false;
+    }
+    return true;
 }
 
-function prksBindPersonGroupOfflineState(ctx, container) {
-    if (!container) return;
-    if (container.__prksGroupOfflineDispose) container.__prksGroupOfflineDispose();
-    const apply = () => {
-        prksApplyPersonGroupOfflineState(container);
-        prksApplyPersonGroupPanelOfflineState(ctx);
+/**
+ * Add or remove one membership durably. Returns true when it was recorded.
+ *
+ * `quiet` suppresses the message: a caller changing SEVERAL pairs at once --
+ * the Person editor saves a whole selection -- reports one refusal rather than
+ * one dialog per pair.
+ */
+async function prksSetPersonGroupMembership(groupId, personId, present, quiet) {
+    const say = async (message, title) => {
+        if (!quiet) await prksAlertMessage(message, title);
+        return false;
     };
-    apply();
-    const unsubscribe = typeof prksOfflineRuntimeSubscribe === 'function'
-        ? prksOfflineRuntimeSubscribe(apply) : () => {};
-    let unregister = () => {};
-    const dispose = () => {
-        unsubscribe();
-        unregister();
-        if (container.__prksGroupOfflineDispose === dispose) container.__prksGroupOfflineDispose = null;
-    };
-    container.__prksGroupOfflineDispose = dispose;
-    if (ctx && ctx.registerCleanup) unregister = ctx.registerCleanup(dispose);
+    const ops = typeof prksDurableOperationsOrNone === 'function'
+        ? await prksDurableOperationsOrNone() : [];
+    const observed = await prksAcknowledgedPersonGroupMembership(groupId, personId, ops);
+    if (!observed) {
+        return await say(
+            'This group\u2019s members cannot be changed offline yet. Open it once while '
+            + 'connected to PRKS so its synchronization state is prepared.', 'Unavailable');
+    }
+    try {
+        await prksSetPersonGroupMemberDurably(groupId, personId, present, observed);
+    } catch (error) {
+        return await say(
+            prksPersonGroupSaveMessage(error, 'change this membership'), 'Could not save');
+    }
+    return true;
+}
+
+/**
+ * Re-render the Group page from the intent just written -- no refetch.
+ *
+ * A refetch would make Save fail for a reason the user cannot act on, and a
+ * re-navigation would throw away every other pending change on the page.
+ */
+async function prksRerenderPersonGroupDetail(ctx, groupId) {
+    if (!ctx || ctx.destroyed) return;
+    const live = ctx.getEntity ? ctx.getEntity('personGroup') : null;
+    if (!live || String(live.id) !== String(groupId)) return;
+    const group = typeof prksPersonGroupRecordFor === 'function'
+        ? await prksPersonGroupRecordFor(groupId) : null;
+    if (!group || ctx.destroyed) return;
+    const stillLive = ctx.getEntity ? ctx.getEntity('personGroup') : null;
+    if (!stillLive || String(stillLive.id) !== String(groupId)) return;
+    ctx.setEntity('personGroup', group);
+    if (ctx.root) renderPersonGroupDetail(group, ctx.root, ctx);
+    if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
 
 function groupPathLabel(groupId, byId) {
@@ -74,8 +167,14 @@ function prksGroupRowLabel(g, allList) {
     return path === g.name ? g.name : `${g.name} (${path})`;
 }
 
+/* The Group catalogue every picker and label reads, through the offline
+ * read-through and with this device's pending intent applied: a group created
+ * here and not yet sent is a real group, and a picker that could not offer it
+ * would make offline creation useless the moment it succeeded. */
 async function prksEnsureAllGroupsCache() {
-    window.allGroups = await fetchPersonGroups();
+    window.allGroups = typeof prksEffectivePersonGroupCatalogue === 'function'
+        ? await prksEffectivePersonGroupCatalogue()
+        : await fetchPersonGroups();
     return window.allGroups || [];
 }
 
@@ -369,7 +468,6 @@ function prksRerenderGroupTreeOnly(root) {
     const host = root.querySelector('[data-prks-group-tree-host]');
     if (host) {
         host.innerHTML = prksGroupLibraryTreeInnerHtml(st.groups, st.filterQuery);
-        prksApplyPersonGroupOfflineState(host);
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
     }
     prksUpdateGroupLibraryExpandToggleBtn(root);
@@ -555,7 +653,6 @@ function renderPersonGroupsPage(groups, container, ctx) {
             expandToggle.addEventListener('click', () => prksToggleAllGroupNodes(expandToggle));
         }
     }
-    prksBindPersonGroupOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
@@ -625,7 +722,6 @@ function prksSyncPersonGroupMemberEditUi(ownerCtx) {
 }
 
 function openPersonGroupEdit() {
-    if (prksPersonGroupMutationBlocked('Editing a Person Group requires a connection to PRKS.')) return;
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     if (ctx && ctx.ui) {
         ctx.ui.personGroupMembersEditing = false;
@@ -651,7 +747,6 @@ function prksTogglePersonGroupMembersEdit() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const g = ctx && ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!ctx || !g) return;
-    if (!ctx.ui.personGroupMembersEditing && prksPersonGroupMutationBlocked('Managing members requires a connection to PRKS.')) return;
     ctx.ui.personGroupEditing = false;
     ctx.ui.personGroupMembersEditing = !ctx.ui.personGroupMembersEditing;
     if (ctx.root) renderPersonGroupDetail(g, ctx.root, ctx);
@@ -677,7 +772,6 @@ async function mountPersonGroupEditPanel(g, ownerCtx) {
     const editor = panel && panel.querySelector('.group-sidebar-pane--edit');
     const current = () => !!(ownerCtx && ownerCtx.isCurrent(generation) && editor && editor.isConnected &&
         prksRightPanelOwnedBy(ownerCtx, panel) && panel.querySelector('.group-sidebar-pane--edit') === editor);
-    prksApplyPersonGroupPanelOfflineState(ownerCtx);
     const all = await prksEnsureAllGroupsCache();
     if (!current()) return;
     if (ownerCtx && typeof generation === 'number' && typeof ownerCtx.isCurrent === 'function' && !ownerCtx.isCurrent(generation)) {
@@ -702,43 +796,38 @@ async function mountPersonGroupEditPanel(g, ownerCtx) {
     const saveBtn = document.getElementById('gd-save-btn');
     if (saveBtn) {
         saveBtn.onclick = async () => {
-            if (!current() || prksPersonGroupMutationBlocked()) return;
+            if (!current()) return;
             const saveCtx = ownerCtx;
             const btn = document.getElementById('gd-save-btn');
             const name = document.getElementById('gd-name').value.trim();
             const description = document.getElementById('gd-description').value;
             const hid = (document.getElementById('gd-parent-id') || {}).value || '';
             const search = (document.getElementById('gd-parent-search') || {}).value || '';
-            const payload = { name, description };
-            if (hid.trim()) payload.parent_id = hid.trim();
-            else if (search.trim()) payload.parent_name = search.trim();
-            else payload.parent_id = null;
             if (!name) {
                 await prksAlertMessage('Name is required.', 'Validation');
                 return;
             }
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, true, { busyLabel: 'Saving…' });
             try {
-                const { ok: res_ok, data } = await updatePersonGroup(g.id, payload);
-                if (!res_ok) {
-                    await prksAlertMessage(data.error || 'Could not save group.', 'Could not save');
-                    return;
-                }
+                /* Durable-first, with or without the server. Saving creates the
+                 * intent and updates effective local state; putting it on the
+                 * wire is subsequent work. */
+                const parentId = await prksResolvePersonGroupParent(hid, search, g.id);
+                if (parentId === undefined || !current()) return;
+                const saved = await prksSavePersonGroupDraft(g.id, {
+                    name: name, description: description, parent_id: parentId,
+                });
+                if (!saved) return;
                 if (saveCtx && saveCtx.ui) {
                     saveCtx.ui.personGroupEditing = false;
                     saveCtx.ui.personGroupMembersEditing = false;
                 }
-                prksNavigateIfOwnerFocused(
-                    saveCtx,
-                    '#/people/groups/' + encodeURIComponent(g.id),
-                    g.id
-                );
+                await prksRerenderPersonGroupDetail(saveCtx, g.id);
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not save group.', 'Error');
             } finally {
                 if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
-                prksApplyPersonGroupPanelOfflineState(ownerCtx);
             }
         };
     }
@@ -746,7 +835,7 @@ async function mountPersonGroupEditPanel(g, ownerCtx) {
     const delBtn = document.getElementById('gd-delete-btn');
     if (delBtn) {
         delBtn.onclick = async () => {
-            if (!current() || prksPersonGroupMutationBlocked()) return;
+            if (!current()) return;
             const delCtx = ownerCtx;
             const confirmed = await prksConfirmDestructive({
                 title: `Delete group “${g.name}”?`,
@@ -755,18 +844,19 @@ async function mountPersonGroupEditPanel(g, ownerCtx) {
                 confirmLabel: 'Delete group',
             });
             if (!confirmed) return;
-            if (!current() || prksPersonGroupMutationBlocked()) return;
+            if (!current()) return;
             try {
-                const { ok: res_ok, data } = await deletePersonGroup(g.id);
-                if (!res_ok) {
-                    await prksAlertMessage(data.error || 'Could not delete.', 'Error');
-                    return;
-                }
-                prksNavigateIfOwnerFocused(delCtx, '#/people/groups');
+                /* A tombstone, not a destruction: the acknowledged rows are
+                 * untouched, so the group comes back by itself if the server
+                 * refuses. A group created here and never sent folds away
+                 * entirely -- nothing about it ever reaches the server. */
+                await prksDeletePersonGroupDurably(g.id);
             } catch (e) {
-                console.error(e);
-                await prksAlertMessage('Could not delete group.', 'Error');
+                await prksAlertMessage(
+                    prksPersonGroupSaveMessage(e, 'delete this group'), 'Could not delete');
+                return;
             }
+            prksNavigateIfOwnerFocused(delCtx, '#/people/groups');
         };
     }
 }
@@ -776,7 +866,6 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
     buttons.forEach((btn) => {
         btn.addEventListener('click', async (ev) => {
             ev.stopPropagation();
-            if (prksPersonGroupMutationBlocked()) return;
             const pid = btn.getAttribute('data-remove-member');
             if (!pid) return;
             const member = (g.members || []).find((m) => String(m.id) === String(pid));
@@ -790,25 +879,15 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
                 confirmLabel: 'Remove from group',
             });
             if (!confirmed) return;
-            if (prksPersonGroupMutationBlocked()) return;
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, true);
             try {
-                const { ok: res_ok, data } = await removePersonGroupMember(g.id, pid);
-                if (!res_ok) {
-                    await prksAlertMessage(data.error || 'Could not remove member.', 'Error');
-                    return;
-                }
-                prksNavigateIfOwnerFocused(
-                    ownerCtx,
-                    '#/people/groups/' + encodeURIComponent(g.id),
-                    g.id
-                );
+                if (!await prksSetPersonGroupMembership(g.id, pid, false)) return;
+                await prksRerenderPersonGroupDetail(ownerCtx, g.id);
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not remove member.', 'Error');
             } finally {
                 if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(btn, false);
-                prksApplyPersonGroupOfflineState(ownerCtx.root);
             }
         });
     });
@@ -820,7 +899,10 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
     if (!input) return;
     const generation = ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined;
 
-    const persons = await fetchPersons();
+    /* The People this device holds, effective: someone created offline is a
+     * real person and must be addable to a group. */
+    const persons = typeof prksOfflinePeopleFetch === 'function'
+        ? ((await prksOfflinePeopleFetch()).value || []) : await fetchPersons();
     const liveGroup = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('personGroup') : null;
     const liveInput = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-search') : null;
     if (
@@ -844,7 +926,6 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
     const addBtn = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-btn') : null;
     if (addBtn) {
         addBtn.onclick = async () => {
-            if (prksPersonGroupMutationBlocked()) return;
             const idInput = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-id') : null;
             const pid = idInput ? idInput.value : '';
             if (!pid) {
@@ -853,22 +934,14 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
             }
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(addBtn, true, { busyLabel: 'Adding…' });
             try {
-                const { ok: res_ok, data } = await addPersonGroupMember(g.id, pid);
-                if (!res_ok) {
-                    await prksAlertMessage(data.error || 'Could not add member.', 'Error');
-                    return;
-                }
-                prksNavigateIfOwnerFocused(
-                    ownerCtx,
-                    '#/people/groups/' + encodeURIComponent(g.id),
-                    g.id
-                );
+                if (!await prksSetPersonGroupMembership(g.id, pid, true)) return;
+                if (idInput) idInput.value = '';
+                await prksRerenderPersonGroupDetail(ownerCtx, g.id);
             } catch (e) {
                 console.error(e);
                 await prksAlertMessage('Could not add member.', 'Error');
             } finally {
                 if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(addBtn, false);
-                prksApplyPersonGroupOfflineState(ownerCtx.root);
             }
         };
     }
@@ -954,7 +1027,6 @@ function renderPersonGroupDetail(group, container, ownerCtx) {
         void mountPersonGroupAddMemberControls(g, ctx);
     }
     prksSyncPersonGroupMemberEditUi(ctx);
-    prksBindPersonGroupOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
@@ -1091,35 +1163,20 @@ async function prksMountPersonProfileGroupPicker(ctx, person, editor) {
             addGroupId(existing.id, existing.name);
             return;
         }
-        // Creating a brand-new Group is a canonical mutation and cannot happen
-        // offline, even from an editor that was already open.
-        if (typeof prksOfflineGuardMutation === 'function') {
-            if (prksOfflineGuardMutation('Creating a group requires a connection to PRKS.')) return;
-        }
+        /* A brand-new Group is durable and carries an id this device minted, so
+         * it is a real group the moment it is created -- with or without a
+         * server. Uniqueness of the NAME stays canonical: only the server sees
+         * every group, so a collision comes back as a refusal the user
+         * resolves, rather than being guessed at here. */
         try {
-            const { ok, data } = await createPersonGroup({ name: typed, description: '' });
-            if (!logicalSessionCurrent()) return;
-            if (!ok) {
-                if (data.error && String(data.error).includes('already exists')) {
-                    await prksEnsureAllGroupsCache();
-                    if (!logicalSessionCurrent()) return;
-                    const again = prksPersonEditFindGroupByNameInsensitive(typed, window.allGroups);
-                    if (again) {
-                        addGroupId(again.id, again.name);
-                        return;
-                    }
-                }
-                if (typeof prksRightPanelOwnedBy === 'function' && prksRightPanelOwnedBy(ctx)) {
-                    await prksAlertMessage(data.error || 'Could not create group.', 'Could not save');
-                }
-                return;
-            }
+            const created = await prksCreatePersonGroupDurably({ name: typed, description: '' });
             await prksEnsureAllGroupsCache();
             if (!logicalSessionCurrent()) return;
-            addGroupId(data.id, typed);
-        } catch (_e) {
+            addGroupId(created.entity_id, typed);
+        } catch (error) {
             if (logicalSessionCurrent() && typeof prksRightPanelOwnedBy === 'function' && prksRightPanelOwnedBy(ctx)) {
-                await prksAlertMessage('Could not create group.', 'Error');
+                await prksAlertMessage(
+                    prksPersonGroupSaveMessage(error, 'create this group'), 'Could not save');
             }
         }
     };

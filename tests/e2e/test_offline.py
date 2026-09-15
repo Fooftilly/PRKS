@@ -309,6 +309,37 @@ def _person_row_names(page):
     )
 
 
+def _set_group_membership(page, group_id, person_id, present):
+    """Through the durable path, and drained: the canonical change a coherence
+    rule follows is the acknowledgement, not the click."""
+    page.evaluate(
+        """async ([g, p, present]) => {
+            const ops = await prksSync.store.listOperations();
+            const observed = await prksAcknowledgedPersonGroupMembership(g, p, ops);
+            await prksSetPersonGroupMemberDurably(g, p, present, observed);
+        }""",
+        [group_id, person_id, present],
+    )
+    _wait_sync_settled(page)
+
+
+def _rename_group(page, group_id, name):
+    page.evaluate(
+        """async ([g, name]) => {
+            const ops = await prksSync.store.listOperations();
+            const base = await prksAcknowledgedPersonGroupBase(g, ops);
+            await prksSavePersonGroupFieldsDurably(g, { name }, base);
+        }""",
+        [group_id, name],
+    )
+    _wait_sync_settled(page)
+
+
+def _delete_group(page, group_id):
+    page.evaluate("g => prksDeletePersonGroupDurably(g)", group_id)
+    _wait_sync_settled(page)
+
+
 def _wait_sync_settled(page, timeout_ms=30000):
     """Every durable operation sent and retired."""
     page.evaluate("""async ms => {
@@ -5612,7 +5643,7 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         _open_people_index(page)
         _wait_content_contains(page, "Created Offline")
 
-    def test_cached_person_detail_allows_profile_edits_but_not_relationships(self):
+    def test_cached_person_detail_allows_profile_and_group_edits_but_not_work_links(self):
         server, page, context, _collector = self._start()
         person_a = server.ids["person_a"]
 
@@ -5654,9 +5685,11 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         # tests.e2e.test_person_edit_offline owns that behaviour.
         page.evaluate("() => { try { openPersonProfileEdit(); } catch (_e) {} }")
         page.locator(".person-panel-edit").wait_for(timeout=15000)
-        # Group membership inside that editor is a relationship, not a profile
-        # scalar, and stays connection-required.
-        self.assertTrue(page.locator("#pd-group-add-btn").is_disabled())
+        # Group membership inside that editor is durable too now: a membership
+        # is its own operation keyed by the (group, person) PAIR, so it queues
+        # offline exactly as it sends online.
+        self.assertFalse(page.locator("#pd-group-add-btn").is_disabled())
+        self.assertFalse(page.locator("#pd-group-search").is_disabled())
         # Work links stay usable.
         self.assertGreaterEqual(page.locator('[data-prks-route^="#/works/"]').count(), 1)
 
@@ -5724,20 +5757,16 @@ class OfflinePeopleMutationTests(unittest.TestCase):
                 "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
                 timeout=20000,
             )
-            page.wait_for_function(
-                "() => !!document.querySelector('#pd-group-add-btn[disabled]')", timeout=20000
-            )
             # The draft is still there ...
             self.assertEqual(
                 page.evaluate("() => document.getElementById('pd-about').value"), draft)
-            # ... and so is the ability to save it. Profile fields are durable,
-            # so an editor that went inert on disconnect would take away a
-            # change this device can perfectly well record. Group membership is
-            # a relationship rather than a profile scalar and stays
-            # connection-required.
+            # ... and so is the ability to save it. Every control in this
+            # editor is durable now -- profile fields and group membership
+            # alike -- so one that went inert on disconnect would take away a
+            # change this device can perfectly well record.
             self.assertFalse(page.locator("#pd-first-name").is_disabled())
+            self.assertFalse(page.locator("#pd-group-add-btn").is_disabled())
             self.assertFalse(page.locator("#pd-save-btn").is_disabled())
-            self.assertTrue(page.locator("#pd-group-add-btn").is_disabled())
             # ... Cancel stays usable ...
             self.assertFalse(
                 page.locator('.person-panel-edit [data-prks-person-cancel]').is_disabled()
@@ -6392,34 +6421,45 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
 
     # ---- Group mutations ----------------------------------------------------
 
-    def test_group_membership_update_and_delete_invalidate_people(self):
+    def test_group_membership_update_and_delete_reconcile_people(self):
+        """Membership is durable now, so coherence follows the CANONICAL
+        change -- the acknowledgement -- rather than the click. And the
+        acknowledgement carries the exact new state, so the People rows this
+        device holds are PATCHED: dropping them would leave a device that has
+        just gone offline with no People index at all."""
         server, page, _context, _collector = self._start()
         group_id = server.ids["person_group"]
         person_b = server.ids["person_b"]
 
         self._cache_people(page, server)
         before = _domain_generation(page, "people")
-        page.evaluate(
-            "([g, p]) => window.addPersonGroupMember(g, p)", [group_id, person_b]
-        )
-        self._assert_people_invalidated(page, server, before)
+        _set_group_membership(page, group_id, person_b, True)
+        self._assert_people_reconciled(page, server, before)
 
         self._cache_people(page, server)
         before = _domain_generation(page, "people")
-        page.evaluate(
-            "([g, p]) => window.removePersonGroupMember(g, p)", [group_id, person_b]
-        )
-        self._assert_people_invalidated(page, server, before)
+        _set_group_membership(page, group_id, person_b, False)
+        self._assert_people_reconciled(page, server, before)
 
+        # A RENAME reaches the group chips embedded in every People row. The
+        # INDEX rows carry the new name exactly, so they are patched -- but a
+        # Person DETAIL is keyed by id and there is no list of the cached ones
+        # to walk, so those are dropped. Reconciliation only ever runs while
+        # connected, which is exactly when a refetch is affordable.
         self._cache_people(page, server)
         before = _domain_generation(page, "people")
-        page.evaluate("g => window.updatePersonGroup(g, { name: 'Renamed Group' })", group_id)
-        self._assert_people_invalidated(page, server, before)
+        _rename_group(page, group_id, "Renamed Group")
+        self.assertGreater(_domain_generation(page, "people"), before)
+        self.assertIsNotNone(_cached_list(page, "people:index"))
+        _wait_entity_uncached(page, "person", server.ids["person_a"])
 
+        # A DELETION removes the chip from the rows this device holds, and
+        # stales every cached Person detail that may carry it -- there is no
+        # list of those to walk.
         self._cache_people(page, server)
         before = _domain_generation(page, "people")
-        page.evaluate("g => window.deletePersonGroup(g)", group_id)
-        self._assert_people_invalidated(page, server, before)
+        _delete_group(page, group_id)
+        self.assertGreater(_domain_generation(page, "people"), before)
 
     def test_creating_an_unassigned_group_leaves_people_eligible(self):
         """A brand-new Group appears in no existing Person's read model."""
@@ -6494,11 +6534,9 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         }
 
         # A Group membership change is People-only.
-        page.evaluate(
-            "([g, p]) => window.addPersonGroupMember(g, p)",
-            [server.ids["person_group"], server.ids["person_b"]],
-        )
-        self._assert_people_invalidated(page, server, before)
+        _set_group_membership(page, server.ids["person_group"],
+                              server.ids["person_b"], True)
+        self._assert_people_reconciled(page, server, before)
         for domain, gen in others.items():
             self.assertEqual(_domain_generation(page, domain), gen, domain)
             self.assertFalse(_domain_blocked(page, domain), domain)

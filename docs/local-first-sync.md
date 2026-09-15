@@ -1552,6 +1552,96 @@ boundary drew the same line before this milestone, for the same reason: a
 biography, a link or a date is absent from all of them and must not cost the
 user their cache.
 
+## Person Groups (3D)
+
+Four shapes over one entity, and the split is a reading of the schema rather
+than a template.
+
+| Operation | Shape | Conflict unit | Base revision |
+| --- | --- | --- | --- |
+| `CREATE_PERSON_GROUP` | construction | the group | none |
+| `SET_PERSON_GROUP_FIELD` | scalar mutation | one field | `person-group-field/[group, field]` |
+| `ADD_PERSON_GROUP_MEMBER` / `REMOVE_PERSON_GROUP_MEMBER` | relationship | one `(group, person)` pair | `person-group-member/[group, person]` |
+| `DELETE_PERSON_GROUP` | destruction | the identity | none |
+
+### Why membership is a pair and not a replacement
+
+The ordinary PATCH replaces a Person's whole group set, and the Person editor
+still presents it that way. The durable family does not: a set replacement
+would make every membership on one Person a single conflict unit, so two
+devices that added *different* people to one group -- or the same person to two
+different groups -- would be told they had disagreed. The editor diffs its draft
+and writes one intent per changed pair, exactly as the Work-Person role family
+does for the same reason.
+
+### Why deletion carries no base revision
+
+Destruction addresses an identity, not a value. Absence is idempotent, so there
+is no second state for two devices to disagree about, and a revision would
+manufacture a conflict with no answer. A rename that arrives after the deletion
+is told `ENTITY_NOT_FOUND` and becomes the user's decision -- the honest answer
+rather than an invented disagreement.
+
+Deleting cancels every unsynchronized operation naming the group that has NEVER
+been attempted: sending "rename it" immediately before "delete it" asks the
+server to do work the next operation destroys. A row that may already be on the
+wire is left alone -- rewriting a sent envelope is the one way to apply it twice
+-- and the deletion is ordered behind it so the server sees the user's decisions
+in the order they made them. A group created on this device and never sent folds
+away entirely: the creation is cancelled too, and nothing about the group ever
+reaches the server.
+
+A group carrying a pending deletion accepts nothing else. The only possible
+outcome for a later edit would be `ENTITY_NOT_FOUND` -- born unsendable -- so it
+is refused at enqueue time, in the terms the user was working in.
+
+### Canonical rules stay canonical
+
+Name uniqueness (case-insensitive) and the acyclicity of the hierarchy are
+enforced on the server, because only the server sees every group. The client
+resolves a typed parent name against its own effective catalogue and refuses an
+obviously local problem early -- a better error, sooner -- but its answer can
+never be the authoritative one. Both come back as named terminal codes
+(`NAME_TAKEN`, `PARENT_NOT_FOUND`, `PARENT_CYCLE`), and Diagnostics turns each
+into a sentence: a group refused because its name is taken and one refused
+because its parent would make a cycle are different problems with different
+fixes.
+
+Two groups this device created compose through the generic dependency
+mechanism: a group created inside another waits for it, a reparent into a
+locally-created group waits for it, and a membership between a Person and a
+Group both created here waits for both. Nothing about that ordering is private
+to this family.
+
+### Deletion is a tombstone, never a destruction
+
+A pending deletion hides the group from the effective catalogue and reparents
+its children to its own parent, exactly as the canonical delete does -- so the
+effective hierarchy stays connected instead of growing an orphan the moment a
+delete is enqueued. The acknowledged rows are untouched, so a refusal restores
+the group by doing nothing at all.
+
+### What the ordinary endpoints share
+
+`add_person_group`, `update_person_group`, `delete_person_group`,
+`add_person_to_group`, `remove_person_from_group`, `set_person_group_memberships`
+and the group half of `update_person_profile` all write through
+`person_group_sync`. Revisions record CANONICAL history, not sync-endpoint
+history. Two consequences worth stating:
+
+* replacing a membership set DIFFS it rather than deleting and reinserting, so
+  a profile save that did not touch the groups advances nothing;
+* deleting a group reparents its children *and advances their `parent_id`
+  revisions*, because that is a canonical change to other groups -- without it a
+  device holding a child's old parent would have no way to discover it had been
+  overtaken.
+
+`GET /api/person-groups/{id}/sync-state` reports field revisions and membership
+revisions (tombstones included); `GET /api/persons/{id}/group-state` reports the
+same membership scopes from the Person's end, because membership is edited from
+both. Both are revisions only: the catalogue already carries every group's name,
+parent and description, and the detail carries its members.
+
 ## Adding a family: the four shapes and what each must declare
 
 The families that exist fall into a small number of shapes. New work should

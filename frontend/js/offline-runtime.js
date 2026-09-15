@@ -1082,6 +1082,285 @@
             return true;
         }
 
+        /* ---- Person Groups ---------------------------------------------- */
+
+        /** The cached Group catalogue, or null when this device holds none. */
+        async function cachedGroupRows() {
+            const cached = await store.getList(PERSON_GROUPS_LIST_KEY)
+                .catch(function () { return null; });
+            if (!cached) return null;
+            return Array.isArray(cached.value) ? cached.value : null;
+        }
+
+        async function writeGroupRows(rows) {
+            const token = currentDomainGeneration(DOMAIN_PERSON_GROUPS) + 1;
+            domainGeneration.set(DOMAIN_PERSON_GROUPS, token);
+            return cacheListForDomain(PERSON_GROUPS_LIST_KEY, rows,
+                DOMAIN_PERSON_GROUPS, token);
+        }
+
+        async function patchEntity(kind, id, mutate) {
+            const token = currentEntityGeneration(kind, id) + 1;
+            entityCoherence.set(entityKey(kind, id), token);
+            const snapshot = await store.getEntity(kind, id).catch(function () { return null; });
+            const value = snapshot && snapshot.value;
+            if (!value) return true;
+            const next = mutate(value);
+            if (next === null) return true;
+            return cacheEntityIfCurrent(kind, id, next, token);
+        }
+
+        /**
+         * A Group the server has accepted.
+         *
+         * The acknowledgement carries the stored row, so the catalogue is
+         * PATCHED rather than dropped -- discarding it would leave an offline
+         * device with no Group list at all, which is the one thing it cannot
+         * refetch. The sync-state projection is written too: a group that has
+         * just been created has every field at revision 0 and no members, which
+         * is KNOWN rather than assumed, and is what lets the next edit be made
+         * before anything else is read.
+         */
+        async function reconcileCreatedPersonGroup(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const group = result && result.group;
+            if (!group || group.id !== result.group_id) return false;
+            const rows = await cachedGroupRows();
+            if (rows) {
+                const merged = rows.filter(row => row && row.id !== group.id).concat([group]);
+                if (!await writeGroupRows(merged)) return false;
+            }
+            if (result.changed && typeof root.prksNewPersonGroupState === 'function') {
+                await patchEntity('person-group-state', group.id,
+                    () => root.prksNewPersonGroupState(group.id));
+            }
+            return true;
+        }
+
+        /**
+         * One Group field the server has applied.
+         *
+         * The value comes from the OPERATION, not the answer: a description has
+         * no length bound worth echoing into a ledger with no retention policy,
+         * so the acknowledgement omits it and the client reads the
+         * authoritative copy out of its own immutable payload.
+         */
+        async function reconcilePersonGroupField(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.group_id;
+            const field = result.field;
+            if (!root.prksIsSupportedPersonGroupField ||
+                !root.prksIsSupportedPersonGroupField(field)) return false;
+            const raw = String((op && op.payload && op.payload.value) || '');
+            const value = field === 'parent_id' ? (raw || null) : raw;
+            await patchEntity('person-group-state', id, function (state) {
+                if (typeof root.prksIsPersonGroupStateShape === 'function' &&
+                    !root.prksIsPersonGroupStateShape(state, id)) return null;
+                const entry = state.fields[field];
+                // An acknowledgement older than what the cache already holds has
+                // been superseded; applying it would move the field back.
+                if (!entry || entry.revision > result.server_revision) return null;
+                const next = Object.assign({}, state,
+                    { fields: Object.assign({}, state.fields) });
+                next.fields[field] = { revision: result.server_revision };
+                return next;
+            });
+            const rows = await cachedGroupRows();
+            if (rows && rows.some(row => row && row.id === id)) {
+                const patched = rows.map(function (row) {
+                    if (!row || row.id !== id) return row;
+                    const next = Object.assign({}, row);
+                    next[field] = value;
+                    return next;
+                });
+                if (!await writeGroupRows(patched)) return false;
+            }
+            if (field === 'parent_id') {
+                /* The cached detail carries a `parent` OBJECT, which this
+                 * acknowledgement does not name -- there is no precise patch to
+                 * make, and reconciliation only runs while connected, which is
+                 * exactly when a refetch is affordable. */
+                await invalidateEntity('person-group', id);
+            } else {
+                await patchEntity('person-group', id, function (group) {
+                    if (!group || group.id !== id) return null;
+                    const next = Object.assign({}, group);
+                    next[field] = value;
+                    return next;
+                });
+            }
+            if (field === 'name') {
+                /* A group chip carries the NAME, and chips are embedded in the
+                 * People index rows and in every cached Person detail. The rows
+                 * this device holds are patched; a Person snapshot is keyed by
+                 * id and there is no list of them to walk, so the People domain
+                 * is staled for those. */
+                const people = await store.getList(PEOPLE_LIST_KEY)
+                    .catch(function () { return null; });
+                const peopleRows = people && Array.isArray(people.value) ? people.value : null;
+                if (peopleRows) {
+                    const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
+                    domainGeneration.set(DOMAIN_PEOPLE, token);
+                    const patched = peopleRows.map(function (row) {
+                        if (!row || !Array.isArray(row.groups)) return row;
+                        if (!row.groups.some(g => g && g.id === id)) return row;
+                        return Object.assign({}, row, {
+                            groups: row.groups.map(g => (g && g.id === id
+                                ? Object.assign({}, g, { name: raw }) : g)),
+                        });
+                    });
+                    if (!await cacheListForDomain(PEOPLE_LIST_KEY, patched,
+                        DOMAIN_PEOPLE, token)) return false;
+                }
+                await production.markDomainChanged(DOMAIN_PEOPLE, {
+                    entityKinds: ['person'], listKeys: [],
+                });
+            }
+            return true;
+        }
+
+        /** One membership the server has applied, in both directions. */
+        async function reconcilePersonGroupMember(result, op) {
+            if (!store || !await store.isAvailable()) return false;
+            const groupId = result.group_id;
+            const personId = result.person_id;
+            const present = result.present === true;
+            await patchEntity('person-group-state', groupId, function (state) {
+                if (typeof root.prksIsPersonGroupStateShape === 'function' &&
+                    !root.prksIsPersonGroupStateShape(state, groupId)) return null;
+                const members = (state.members || [])
+                    .filter(m => m.person_id !== personId)
+                    .concat([{ person_id: personId, revision: result.server_revision,
+                        present: present }]);
+                members.sort((a, b) => a.person_id.localeCompare(b.person_id));
+                return Object.assign({}, state, { members: members });
+            });
+            await patchEntity('person-group-memberships', personId, function (state) {
+                if (typeof root.prksIsPersonGroupMembershipStateShape === 'function' &&
+                    !root.prksIsPersonGroupMembershipStateShape(state, personId)) return null;
+                const groups = (state.groups || [])
+                    .filter(g => g.group_id !== groupId)
+                    .concat([{ group_id: groupId, revision: result.server_revision,
+                        present: present }]);
+                groups.sort((a, b) => a.group_id.localeCompare(b.group_id));
+                return Object.assign({}, state, { groups: groups });
+            });
+            if (!result.changed) return true;
+            const people = await store.getList(PEOPLE_LIST_KEY)
+                .catch(function () { return null; });
+            const peopleRows = people && Array.isArray(people.value) ? people.value : null;
+            const person = peopleRows
+                ? peopleRows.find(row => row && row.id === personId) : null;
+            const rows = await cachedGroupRows();
+            const group = rows ? rows.find(row => row && row.id === groupId) : null;
+            if (rows && group) {
+                const patched = rows.map(function (row) {
+                    if (!row || row.id !== groupId) return row;
+                    return Object.assign({}, row, {
+                        member_count: Math.max(0,
+                            Number(row.member_count || 0) + (present ? 1 : -1)),
+                    });
+                });
+                if (!await writeGroupRows(patched)) return false;
+            }
+            if (peopleRows && person) {
+                const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
+                domainGeneration.set(DOMAIN_PEOPLE, token);
+                const chip = { id: groupId, name: group ? String(group.name || '') : '' };
+                const patched = peopleRows.map(function (row) {
+                    if (!row || row.id !== personId) return row;
+                    const chips = Array.isArray(row.groups) ? row.groups : [];
+                    const without = chips.filter(g => !g || g.id !== groupId);
+                    return Object.assign({}, row,
+                        { groups: present ? without.concat([chip]) : without });
+                });
+                if (!await cacheListForDomain(PEOPLE_LIST_KEY, patched,
+                    DOMAIN_PEOPLE, token)) return false;
+            }
+            /* The Group detail embeds whole People rows and the Person detail
+             * embeds group chips. Both are patched from what this device
+             * already holds; neither is invented when it does not. */
+            await patchEntity('person-group', groupId, function (value) {
+                if (!value || value.id !== groupId) return null;
+                const members = Array.isArray(value.members) ? value.members : [];
+                if (present) {
+                    if (members.some(m => m && m.id === personId)) return null;
+                    if (!person) return null;
+                    const next = Object.assign({}, value,
+                        { members: members.concat([person]) });
+                    next.member_count = next.members.length;
+                    return next;
+                }
+                const remaining = members.filter(m => !m || m.id !== personId);
+                if (remaining.length === members.length) return null;
+                const next = Object.assign({}, value, { members: remaining });
+                next.member_count = remaining.length;
+                return next;
+            });
+            await patchEntity('person', personId, function (value) {
+                if (!value || value.id !== personId) return null;
+                const chips = Array.isArray(value.groups) ? value.groups : [];
+                const without = chips.filter(g => !g || g.id !== groupId);
+                if (present) {
+                    if (without.length !== chips.length) return null;
+                    return Object.assign({}, value, {
+                        groups: chips.concat([{ id: groupId,
+                            name: group ? String(group.name || '') : '' }]),
+                    });
+                }
+                if (without.length === chips.length) return null;
+                return Object.assign({}, value, { groups: without });
+            });
+            return true;
+        }
+
+        /**
+         * A Group the server has removed.
+         *
+         * Its children are reparented to its own parent, exactly as the
+         * canonical delete does -- the effective hierarchy the user was already
+         * looking at becomes the acknowledged one, rather than briefly growing
+         * an orphan.
+         */
+        async function reconcileDeletedPersonGroup(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.group_id;
+            const rows = await cachedGroupRows();
+            if (rows) {
+                const gone = rows.find(row => row && row.id === id);
+                const inherited = gone ? (gone.parent_id || null) : null;
+                const remaining = rows
+                    .filter(row => row && row.id !== id)
+                    .map(row => (row.parent_id === id
+                        ? Object.assign({}, row, { parent_id: inherited }) : row));
+                if (!await writeGroupRows(remaining)) return false;
+            }
+            await invalidateEntity('person-group', id);
+            await invalidateEntity('person-group-state', id);
+            const people = await store.getList(PEOPLE_LIST_KEY)
+                .catch(function () { return null; });
+            const peopleRows = people && Array.isArray(people.value) ? people.value : null;
+            if (peopleRows && peopleRows.some(row => row && Array.isArray(row.groups) &&
+                    row.groups.some(g => g && g.id === id))) {
+                const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
+                domainGeneration.set(DOMAIN_PEOPLE, token);
+                const patched = peopleRows.map(function (row) {
+                    if (!row || !Array.isArray(row.groups)) return row;
+                    const without = row.groups.filter(g => !g || g.id !== id);
+                    return without.length === row.groups.length
+                        ? row : Object.assign({}, row, { groups: without });
+                });
+                if (!await cacheListForDomain(PEOPLE_LIST_KEY, patched,
+                    DOMAIN_PEOPLE, token)) return false;
+            }
+            /* Every cached Person detail may carry this group's chip, and there
+             * is no list of them to walk. */
+            await production.markDomainChanged(DOMAIN_PEOPLE, {
+                entityKinds: ['person'], listKeys: [],
+            });
+            return true;
+        }
+
         /** Remove a disposable entity snapshot. Never changes connectivity or server state. */
         function invalidateEntity(kind, id) {
             if (!store || typeof store.deleteEntity !== 'function') return Promise.resolve(false);
@@ -1358,6 +1637,10 @@
             reconcileRecentOpen,
             reconcileCreatedPerson,
             reconcilePersonField,
+            reconcileCreatedPersonGroup,
+            reconcilePersonGroupField,
+            reconcilePersonGroupMember,
+            reconcileDeletedPersonGroup,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
             invalidateEntity: invalidateEntity,
@@ -1565,6 +1848,14 @@
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
         prksOfflineReconcilePersonField: (result, op) => production.reconcilePersonField(result, op),
+        prksOfflineReconcileCreatedPersonGroup: result =>
+            production.reconcileCreatedPersonGroup(result),
+        prksOfflineReconcilePersonGroupField: (result, op) =>
+            production.reconcilePersonGroupField(result, op),
+        prksOfflineReconcilePersonGroupMember: (result, op) =>
+            production.reconcilePersonGroupMember(result, op),
+        prksOfflineReconcileDeletedPersonGroup: result =>
+            production.reconcileDeletedPersonGroup(result),
         prksOfflineMarkTagsChanged: () => production.markDomainChanged('tags', { entityKinds: [], listKeys: ['tags:index'] }),
         prksOfflineCacheEntityIfCurrent: prksOfflineCacheEntityIfCurrent,
         prksOfflineInvalidateEntity: prksOfflineInvalidateEntity,

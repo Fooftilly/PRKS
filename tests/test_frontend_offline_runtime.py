@@ -391,17 +391,16 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         create_at = app.index("if (res.ok && Array.isArray(payload.roles) && payload.roles.length) {")
         self.assertIn("prksMarkPersonGroupsDomainChanged();", app[create_at : create_at + 600])
-        # Person mutations: profile save and delete stale Groups, plain
-        # creation does not.
+        # Person deletion is the one Person mutation still requiring the
+        # server, so its coherence hook stays on canonical success. Group
+        # membership is durable now and reconciles instead.
         people = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
-        # Group membership is still a canonical request -- it is a
-        # relationship, not a profile scalar -- so its hooks stay on canonical
-        # success. The profile fields around it are durable now and reconcile
-        # instead, which is why the membership save has its own function.
-        for fn in ("async function prksSavePersonGroupMemberships(",
-                   "async function deletePerson("):
-            at = people.index(fn)
-            self.assertIn("prksMarkPersonGroupsDomainChanged", people[at : at + 5200], fn)
+        at = people.index("async function deletePerson(")
+        self.assertIn("prksMarkPersonGroupsDomainChanged", people[at : at + 5200])
+        at = people.index("async function prksSavePersonGroupMemberships(")
+        membership = people[at : people.index("\n}", at)]
+        self.assertIn("prksSetPersonGroupMembership(", membership)
+        self.assertNotIn("prksRequest(", membership)
         # Concept, Position and Argument mutations never touch it. (Research
         # Notes saves are covered behaviourally by the Person Groups E2Es.)
         for name in ("async function createConcept(",
@@ -555,35 +554,50 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertNotIn("method: 'PATCH'", rename_body)
         self.assertNotIn("prksPlaylistsChanged()", rename_body)
 
-    def test_group_mutations_invalidate_people_except_bare_creation(self):
+    def test_group_mutations_are_durable_and_never_raw_requests(self):
+        """Every Person Group mutation is a semantic operation now.
+
+        The canonical-request wrappers are gone: a raw PATCH or DELETE from a
+        component would bypass the revision model an offline device depends on
+        and would be, once again, a feature that exists only while connected.
+        """
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
-        for fn in (
-            "async function updatePersonGroup(",
-            "async function deletePersonGroup(",
-            "async function addPersonGroupMember(",
-            "async function removePersonGroupMember(",
-        ):
-            start = api.index(fn)
-            body = api[start : api.index('\nasync function ', start + 1)]
-            self.assertIn("if (res.ok) {", body, fn)
-            self.assertIn("prksMarkPeopleDomainChanged();", body, fn)
-            self.assertIn("prksMarkPersonGroupsDomainChanged();", body, fn)
-        # A brand-new unassigned Group cannot appear in any Person's read model.
-        create = api.split('async function createPersonGroup(', 1)[1].split('async function updatePersonGroup(', 1)[0]
-        self.assertNotIn('prksMarkPeopleDomainChanged', create)
-        self.assertIn('prksMarkPersonGroupsDomainChanged', create)
+        for gone in ("async function createPersonGroup(",
+                     "async function updatePersonGroup(",
+                     "async function deletePersonGroup(",
+                     "async function addPersonGroupMember(",
+                     "async function removePersonGroupMember("):
+            self.assertNotIn(gone, api, gone)
         groups = _read(os.path.join(_FRONTEND, "js", "components", "people-groups.js"))
-        # Every Group mutation goes through the wrappers, none direct.
-        self.assertNotIn("`/api/person-groups/${", groups)
-        self.assertNotIn("prksRequest('/api/person-groups'", groups)
-        self.assertNotIn("prksRequest('/api/person-groups'", _read(os.path.join(_FRONTEND, 'js', 'app.js')))
-        for wrapper in (
-            "updatePersonGroup(",
-            "deletePersonGroup(",
-            "addPersonGroupMember(",
-            "removePersonGroupMember(",
-        ):
-            self.assertIn(wrapper, groups)
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        for source, name in ((groups, "people-groups.js"), (app, "app.js")):
+            self.assertNotIn("`/api/person-groups/${", source, name)
+            self.assertNotIn("prksRequest('/api/person-groups'", source, name)
+        for durable in ("prksCreatePersonGroupDurably(",
+                        "prksSavePersonGroupFieldsDurably(",
+                        "prksSetPersonGroupMemberDurably(",
+                        "prksDeletePersonGroupDurably("):
+            self.assertIn(durable, groups + app, durable)
+
+    def test_group_coherence_moved_to_the_reconcilers(self):
+        """Coherence follows the CANONICAL change, which for a durable family
+        is the acknowledgement rather than the click."""
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        for fn in ("async function reconcileCreatedPersonGroup(",
+                   "async function reconcilePersonGroupField(",
+                   "async function reconcilePersonGroupMember(",
+                   "async function reconcileDeletedPersonGroup("):
+            self.assertIn(fn, runtime, fn)
+        # A rename reaches the group chips embedded in every People row; a
+        # description or a reparent appears in none of them.
+        at = runtime.index("async function reconcilePersonGroupField(")
+        body = runtime[at: runtime.index("\n        /**", at + 10)]
+        self.assertIn("if (field === 'name') {", body)
+        self.assertLess(body.index("if (field === 'name') {"), body.index("DOMAIN_PEOPLE"))
+        # A creation cannot appear in any Person's read model: nobody is in it.
+        at = runtime.index("async function reconcileCreatedPersonGroup(")
+        create = runtime[at: runtime.index("\n        /**", at + 10)]
+        self.assertNotIn("DOMAIN_PEOPLE", create)
 
     def test_people_are_not_invalidated_by_unrelated_read_models(self):
         """Research Notes, Concepts, Positions and Argument mutations do not

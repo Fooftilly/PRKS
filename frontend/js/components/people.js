@@ -143,9 +143,10 @@ const PERSON_CREATE_ROLE = 'person-create-control';
 
 /* Editing a Person's PROFILE is durable too, so "Edit profile" is never
  * disabled: the fields are field-scoped operations that queue offline exactly
- * as they send online. Deleting a Person and changing their GROUP memberships
- * are still canonical requests, so those keep `PERSON_MUTATION_ROLE`. Three
- * roles rather than one, because the three decisions genuinely differ. */
+ * as they send online. Group membership became durable with the Person Group
+ * families, so its controls are no longer disabled either. Deleting a Person
+ * is the one Person mutation still requiring the server, and it keeps
+ * `PERSON_MUTATION_ROLE`. */
 const PERSON_EDIT_ROLE = 'person-edit-control';
 
 /* Group chips keep this role for styling/test identification only: since Person
@@ -156,17 +157,15 @@ const PERSON_CONTROL_SELECTOR = '[data-prks-role="' + PERSON_MUTATION_ROLE + '"]
 /* The profile editor's own inputs: disabled while offline so a draft is held
  * rather than silently discarded. Cancel is deliberately excluded so the user
  * can always leave edit mode. */
-/* Controls inside an OPEN editor that still require the server.
+/* Nothing inside an open editor requires the server any more.
  *
- * The profile fields and Save are deliberately absent: they are durable now,
- * so an editor that went inert the moment PRKS stopped answering would be the
- * old "two features" behaviour wearing a different shape -- the user would
- * lose the ability to record a change that this device can perfectly well
- * keep. What remains is group membership, which is a relationship rather than
- * a profile scalar and is not in this milestone's durable vocabulary. */
-const PERSON_EDITOR_SELECTOR =
-    '.person-panel-edit #pd-group-search, .person-panel-edit #pd-group-add-btn,' +
-    ' .person-panel-edit .pd-group-chip-remove';
+ * The profile fields, Save, and now the group controls are all durable, so an
+ * editor that went inert the moment PRKS stopped answering would be the old
+ * "two features" behaviour wearing a different shape -- the user would lose
+ * the ability to record a change this device can perfectly well keep. The
+ * selector stays as an empty registry rather than disappearing, so the next
+ * control that genuinely IS server-bound has an obvious home. */
+const PERSON_EDITOR_SELECTOR = '';
 
 function prksPersonRuntimeState() {
     return typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : 'online';
@@ -204,6 +203,7 @@ function prksApplyPersonPanelOfflineState(ctx) {
     if (!panel) return;
     if (typeof prksRightPanelOwnedBy === 'function' && !prksRightPanelOwnedBy(ctx, panel)) return;
     prksApplyPersonOfflineState(panel);
+    if (!PERSON_EDITOR_SELECTOR) return;
     const online = prksPersonRuntimeState() === 'online';
     const editorNodes = panel.querySelectorAll(PERSON_EDITOR_SELECTOR);
     for (let i = 0; i < editorNodes.length; i++) {
@@ -1007,6 +1007,11 @@ function openPersonProfileEdit() {
     if (typeof prksReadPersonMetadataState === 'function' && person.id) {
         void prksReadPersonMetadataState(person.id);
     }
+    /* And the membership revisions, for the same reason: opening the editor is
+     * the last moment this device can reliably ask. */
+    if (typeof prksReadPersonGroupsStateForPerson === 'function' && person.id) {
+        void prksReadPersonGroupsStateForPerson(person.id);
+    }
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
     /* Settle the freshly rendered editor against the CURRENT connectivity.
      * The binding only reacts to changes, so an editor opened while already
@@ -1227,8 +1232,8 @@ function renderPersonProfileEditFormHtml(person, draft) {
                         <p class="meta-row">Search for a group, pick from the list, or type a new name and <strong>Add</strong> to create a top-level group. Names are unique. <a href="#/people/groups">Browse groups</a>.</p>
                         <div id="pd-group-chips" class="tag-cloud person-groups-fieldset__chips"></div>
                         <label for="pd-group-search">Add group</label>
-                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell"><div class="tag-add-shell__field">${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}<input type="text" id="pd-group-search" data-prks-role="${PERSON_MUTATION_ROLE}" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add"></div><input type="hidden" id="pd-group-pick-id" value=""><div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div></div>
-                        <button type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action" data-prks-role="${PERSON_MUTATION_ROLE}" id="pd-group-add-btn">Add group</button>
+                        <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell"><div class="tag-add-shell__field">${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}<input type="text" id="pd-group-search" class="tag-add-shell__input" placeholder="Search or type new group name…" autocomplete="off" aria-label="Search group to add"></div><input type="hidden" id="pd-group-pick-id" value=""><div id="pd-group-results" class="combobox-results combobox-results--tag-panel hidden"></div></div>
+                        <button type="button" class="prks-btn prks-btn--primary person-groups-fieldset__action" id="pd-group-add-btn">Add group</button>
                     </fieldset>
                 </section>
             </div>
@@ -1265,44 +1270,57 @@ async function prksReadPersonProfileBase(personId) {
 }
 
 /**
- * Group membership, which is NOT part of the durable profile vocabulary.
+ * Group membership, as one durable intent per PAIR.
  *
- * A membership is a relationship, not a profile scalar, and belongs to its own
- * milestone -- so it stays a canonical request and the controls that change it
- * are disabled offline. Its coherence hooks therefore still fire HERE, on
- * canonical success, unlike the profile fields whose canonical change now
- * happens at acknowledgement.
+ * A membership is a relationship, not a profile scalar: the conflict unit is
+ * `(group, person)`, so two devices that added different people to one group
+ * have not collided and a profile-wide replacement would have made them look
+ * as though they had. Each pair the form changed becomes its own operation,
+ * measured against its own acknowledged state.
+ *
+ * Returns true when every change was recorded. A pair that could not be
+ * measured -- this device has never read that group's revisions -- is reported
+ * and the editor stays open, because the profile half is already durable and
+ * the part worth retrying is the part that failed.
  */
 async function prksSavePersonGroupMemberships(ctx, personId, groupIds) {
-    if (prksPersonRuntimeState() !== 'online') return true;
-    if (!prksPersonGroupsDiffer(ctx, groupIds)) return true;
-    const res = await prksRequest(`/api/persons/${personId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ group_ids: groupIds })
-    });
-    if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        /* Reports only what it owns: the profile was already saved durably
-         * before this ran, so "could not save" would be wrong twice over. */
-        await prksAlertMessage(body.error || 'The profile was saved, but its groups could not '
-            + 'be updated.', 'Groups not updated');
-        return false;
+    const before = prksPersonEditGroupIds(ctx);
+    const after = (groupIds || []).map(String);
+    const added = after.filter(id => before.indexOf(id) === -1);
+    const removed = before.filter(id => after.indexOf(id) === -1);
+    if (!added.length && !removed.length) return true;
+    const failures = [];
+    for (const groupId of added.concat(removed)) {
+        const present = added.indexOf(groupId) !== -1;
+        try {
+            if (!await prksSetPersonGroupMembership(groupId, personId, present, true)) {
+                failures.push(groupId);
+            }
+        } catch (_e) {
+            failures.push(groupId);
+        }
     }
-    if (typeof prksMarkPeopleDomainChanged === 'function') prksMarkPeopleDomainChanged();
-    if (typeof prksMarkPersonGroupsDomainChanged === 'function') {
-        prksMarkPersonGroupsDomainChanged();
+    if (failures.length) {
+        /* Reports only what it owns, once. The profile half is already durable
+         * by the time this runs, so "could not save" would be wrong twice
+         * over -- and one dialog per pair would be worse than useless. */
+        await prksAlertMessage(
+            failures.length === 1
+                ? 'The profile was saved, but one group change could not be recorded. '
+                  + 'Open that group once while connected to PRKS and try again.'
+                : 'The profile was saved, but ' + failures.length + ' group changes could '
+                  + 'not be recorded. Open those groups once while connected to PRKS and '
+                  + 'try again.',
+            'Groups not updated');
     }
-    return true;
+    return failures.length === 0;
 }
 
-/** Whether the draft's group selection differs from what the cache holds. */
-function prksPersonGroupsDiffer(ctx, groupIds) {
+/** The groups the Person record on screen says they are in. */
+function prksPersonEditGroupIds(ctx) {
     const person = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
-    const before = (person && Array.isArray(person.groups) ? person.groups : [])
-        .map(g => String(g && g.id)).sort();
-    const after = (groupIds || []).map(String).sort();
-    return before.length !== after.length || before.some((id, i) => id !== after[i]);
+    return (person && Array.isArray(person.groups) ? person.groups : [])
+        .map(g => String(g && g.id));
 }
 
 async function savePersonProfile(personId) {
@@ -1419,8 +1437,11 @@ async function savePersonProfile(personId) {
          * intent just written. No refetch -- there is nothing to fetch, the
          * change is local, and a reload would throw away every other pending
          * change on the page. */
-        const cached = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
-        const person = await prksEffectivePersonRecord(cached);
+        /* Rebuilt from the ACKNOWLEDGED record, not from the one on screen:
+         * that one is already overlaid, and an overlay can add or remove but
+         * cannot restore what an earlier overlay removed -- so a membership
+         * this save cancelled would survive on the page. */
+        const person = await prksPersonRecordFor(personId);
         if (person) {
             if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
             if (ctx) ctx.routeSidebar = {

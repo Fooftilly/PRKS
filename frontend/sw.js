@@ -109,6 +109,7 @@
     '/js/work-role-editor.js',
     '/js/person-state.js',
     '/js/person-metadata-state.js',
+    '/js/person-group-state.js',
         '/js/work-metadata-editor.js',
     '/js/work-source-editor.js',
         '/js/sync-diagnostics.js',

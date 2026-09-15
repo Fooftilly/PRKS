@@ -174,8 +174,8 @@ def process_operation(db, data):
 # Registration is explicit and lives here so the set of families PRKS accepts
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
-    person_metadata_sync, person_sync, work_metadata_sync, work_open_sync, work_role_sync,
-    work_source_sync, work_tag_sync,
+    person_group_sync, person_metadata_sync, person_sync, work_metadata_sync,
+    work_open_sync, work_role_sync, work_source_sync, work_tag_sync,
 )
 
 register("ADD_WORK_TAG", work_tag_sync.HANDLER)
@@ -196,3 +196,16 @@ register("CREATE_PERSON", person_sync.HANDLER, entity_type="person")
 # Editing a Person is FIELD-scoped, not profile-scoped: see
 # person_metadata_sync's module docstring for the schema evidence behind that.
 register("SET_PERSON_METADATA_FIELD", person_metadata_sync.HANDLER, entity_type="person")
+# Person Groups: four shapes over one entity. Construction mints the id, the
+# three editable columns are independent FIELDS, membership is an element of a
+# SET, and deletion addresses the identity and so carries no base revision.
+register("CREATE_PERSON_GROUP", person_group_sync.CREATE_HANDLER,
+         entity_type="person-group")
+register("SET_PERSON_GROUP_FIELD", person_group_sync.FIELD_HANDLER,
+         entity_type="person-group")
+register("ADD_PERSON_GROUP_MEMBER", person_group_sync.MEMBER_HANDLER,
+         entity_type="person-group")
+register("REMOVE_PERSON_GROUP_MEMBER", person_group_sync.MEMBER_HANDLER,
+         entity_type="person-group")
+register("DELETE_PERSON_GROUP", person_group_sync.DELETE_HANDLER,
+         entity_type="person-group")

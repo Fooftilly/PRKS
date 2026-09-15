@@ -71,6 +71,11 @@
         'SET_WORK_PERSON_ROLE_CREDIT',
         'CREATE_PERSON',
         'SET_PERSON_METADATA_FIELD',
+        'CREATE_PERSON_GROUP',
+        'SET_PERSON_GROUP_FIELD',
+        'ADD_PERSON_GROUP_MEMBER',
+        'REMOVE_PERSON_GROUP_MEMBER',
+        'DELETE_PERSON_GROUP',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -123,6 +128,29 @@
         PERSON_FIELDS.forEach(function (name) {
             const value = src[name];
             payload[name] = value == null ? '' : String(value);
+        });
+        return payload;
+    }
+
+    /* The editable columns on a Person Group, in the server's vocabulary. */
+    const PERSON_GROUP_FIELDS = Object.freeze(['name', 'description', 'parent_id']);
+
+    const PERSON_GROUP_MEMBER_OPERATIONS = Object.freeze([
+        'ADD_PERSON_GROUP_MEMBER', 'REMOVE_PERSON_GROUP_MEMBER',
+    ]);
+
+    /* Every unsynchronized operation that names one group, whatever it does to
+     * it. Deleting a group has to reason about all of them at once. */
+    const PERSON_GROUP_OPERATIONS = Object.freeze([
+        'CREATE_PERSON_GROUP', 'SET_PERSON_GROUP_FIELD', 'DELETE_PERSON_GROUP',
+    ].concat(PERSON_GROUP_MEMBER_OPERATIONS));
+
+    function canonicalPersonGroupPayload(input) {
+        const src = isPlainObject(input) ? input : {};
+        const payload = {};
+        PERSON_GROUP_FIELDS.forEach(function (name) {
+            const value = src[name];
+            payload[name] = value == null ? '' : String(value).trim();
         });
         return payload;
     }
@@ -1089,6 +1117,228 @@
             });
         }
 
+        /* ---- Person Groups: construction, fields, membership, deletion ---- */
+
+        function createPersonGroup(fields) {
+            const payload = canonicalPersonGroupPayload(fields);
+            if (!payload.name) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'A group needs a name.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    /* A group created under a parent this device also created
+                     * offline waits for that parent: the server validates the
+                     * hierarchy, and a parent it has never heard of is a
+                     * refusal rather than a tree. */
+                    const parentOp = payload.parent_id
+                        ? personGroupCreationDependency(rows, payload.parent_id,
+                            'a group cannot be created inside it')
+                        : null;
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'CREATE_PERSON_GROUP',
+                        entity_type: 'person-group',
+                        entity_id: generateEntityId('PG', uuid),
+                        payload: payload,
+                        base_revision: null,
+                        depends_on: parentOp ? [parentOp.op_id] : [],
+                    }, null));
+                });
+        }
+
+        /**
+         * One Save, however many of a group's fields it touched.
+         *
+         * `changes` is field -> desired value; `base` is the ACKNOWLEDGED state
+         * (field -> {value, revision}). A field whose desired value already
+         * matches its base produces nothing, and an existing never-sent intent
+         * for it is CANCELLED -- editing back to what the server holds is not a
+         * change, and leaving the row would send a write the server does not
+         * need and a revision it would advance.
+         */
+        function savePersonGroupFields(groupId, changes, base) {
+            if (!isNonBlankString(groupId) || !isPlainObject(changes) || !isPlainObject(base)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid group save.'));
+            }
+            for (const field of Object.keys(changes)) {
+                const observed = base[field];
+                if (PERSON_GROUP_FIELDS.indexOf(field) === -1) {
+                    return Promise.reject(localStoreError('unknown_field',
+                        'Not an editable group field: ' + field));
+                }
+                if (typeof changes[field] !== 'string' || !isPlainObject(observed) ||
+                    typeof observed.value !== 'string' ||
+                    !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                    return Promise.reject(localStoreError('invalid_base',
+                        'Invalid observed field state.'));
+                }
+            }
+            if (typeof changes.name === 'string' && !changes.name.trim()) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'A group needs a name.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertGroupIsNotBeingDeleted(rows, groupId, 'edited');
+                    const createOp = personGroupCreationDependency(rows, groupId,
+                        'it cannot be edited');
+                    const written = [];
+                    for (const field of Object.keys(changes)) {
+                        const desired = changes[field];
+                        const observed = base[field];
+                        const existing = rows.find(r => r.operation === 'SET_PERSON_GROUP_FIELD' &&
+                            r.entity_type === 'person-group' && r.entity_id === groupId &&
+                            r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                        if (existing) {
+                            if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                                throw localStoreError('scope_busy',
+                                    'This field is syncing or needs resolution.');
+                            }
+                            if (existing.payload.value === desired) {
+                                written.push(existing);
+                                continue;
+                            }
+                            await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                        }
+                        if (desired === observed.value) continue;
+                        /* Moving a group INTO one this device also created
+                         * offline waits for that group too: the server
+                         * validates the hierarchy, and a parent it has never
+                         * heard of is a refusal rather than a tree. */
+                        const parentOp = field === 'parent_id' && desired
+                            ? personGroupCreationDependency(rows, desired,
+                                'nothing can be moved into it')
+                            : null;
+                        written.push(await insertEnvelopeIn(request, {
+                            operation: 'SET_PERSON_GROUP_FIELD', entity_type: 'person-group',
+                            entity_id: groupId, payload: { field, value: desired },
+                            base_revision: observed.revision,
+                            depends_on: [createOp, parentOp].filter(Boolean)
+                                .map(op => op.op_id),
+                        }, null));
+                    }
+                    setResult(written);
+                });
+        }
+
+        /**
+         * "This person is / is not in this group", coalescing to one intent.
+         *
+         * The pair is the conflict unit, so adding someone and then removing
+         * them again before either was sent leaves NOTHING -- it is not two
+         * changes, it is none. `observed` is the acknowledged state of the
+         * pair: `{present, revision}`.
+         */
+        function setPersonGroupMember(groupId, personId, present, observed) {
+            if (!isNonBlankString(groupId) || !isNonBlankString(personId) ||
+                !isPlainObject(observed) || typeof observed.present !== 'boolean' ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid membership change.'));
+            }
+            const desired = !!present;
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertGroupIsNotBeingDeleted(rows, groupId, 'changed');
+                    const existing = rows.find(r =>
+                        PERSON_GROUP_MEMBER_OPERATIONS.indexOf(r.operation) !== -1 &&
+                        r.entity_type === 'person-group' && r.entity_id === groupId &&
+                        r.payload.person_id === personId && r.status !== STATUS_ACKNOWLEDGED);
+                    if (existing) {
+                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                            throw localStoreError('scope_busy',
+                                'This membership is syncing or needs resolution.');
+                        }
+                        const already = existing.operation === 'ADD_PERSON_GROUP_MEMBER';
+                        if (already === desired) { setResult(existing); return; }
+                        await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    }
+                    if (desired === observed.present) { setResult(null); return; }
+                    const createOp = personGroupCreationDependency(rows, groupId,
+                        'nobody can be added to it');
+                    const personOp = personCreationDependency(rows, personId,
+                        'they cannot be added to a group');
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: desired ? 'ADD_PERSON_GROUP_MEMBER'
+                            : 'REMOVE_PERSON_GROUP_MEMBER',
+                        entity_type: 'person-group', entity_id: groupId,
+                        payload: { person_id: personId },
+                        base_revision: observed.revision,
+                        depends_on: [createOp, personOp].filter(Boolean).map(op => op.op_id),
+                    }, null));
+                });
+        }
+
+        /* A group already carrying a pending deletion accepts nothing else.
+         *
+         * The alternative is an edit whose only possible outcome is
+         * ENTITY_NOT_FOUND -- born unsendable, and refused here in the terms
+         * the user was working in rather than by the server later. */
+        function assertGroupIsNotBeingDeleted(rows, groupId, verb) {
+            const pendingDelete = rows.find(r => r && r.operation === 'DELETE_PERSON_GROUP' &&
+                r.entity_id === groupId && r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This group is being deleted, so it cannot be ' + verb + '.');
+            }
+        }
+
+        /**
+         * Delete a group, cancelling what was never sent.
+         *
+         * Every unsynchronized operation naming this group is about to become
+         * meaningless. A row that has NEVER been attempted is cancelled: it
+         * exists only on this device, and sending "rename it" immediately
+         * before "delete it" asks the server to do work whose result the next
+         * operation destroys. A row that may already be on the wire is left
+         * alone -- rewriting a sent envelope is the one way to apply it twice
+         * -- and the deletion is ordered behind it instead, so the server sees
+         * the user's decisions in the order they made them.
+         *
+         * A group created on this device and never sent is the whole case
+         * folding away: the creation is cancelled too, and nothing about the
+         * group ever reaches the server.
+         */
+        function deletePersonGroup(groupId) {
+            if (!isNonBlankString(groupId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid group.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = rows.filter(r => r &&
+                        PERSON_GROUP_OPERATIONS.indexOf(r.operation) !== -1 &&
+                        r.entity_id === groupId && r.status !== STATUS_ACKNOWLEDGED);
+                    const already = mine.find(r => r.operation === 'DELETE_PERSON_GROUP');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_PERSON_GROUP');
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row) && row.operation !== 'CREATE_PERSON_GROUP') {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_PERSON_GROUP', entity_type: 'person-group',
+                        entity_id: groupId, payload: {},
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
         /* One effective never-sent open event per Work.
          *
          * Opening the same Work three times offline is one fact -- "last opened
@@ -1353,18 +1603,26 @@
          *              server to refuse in turn. Refuse here, in the terms the
          *              user was working in.
          */
-        function personCreationDependency(rows, personId, consequence) {
+        function creationDependency(rows, operation, entityType, entityId, refusal) {
             const creates = (Array.isArray(rows) ? rows : []).filter(
-                r => r && r.operation === 'CREATE_PERSON' &&
-                    r.entity_type === 'person' && r.entity_id === personId);
+                r => r && r.operation === operation &&
+                    r.entity_type === entityType && r.entity_id === entityId);
             if (creates.some(dependencySucceeded)) return null;
             const live = creates.find(r => !dependencyTerminallyFailed(r));
             if (live) return live;
-            if (creates.length) {
-                throw localStoreError('dependency_failed',
-                    'This person could not be created on the server, so ' + consequence + '.');
-            }
+            if (creates.length) throw localStoreError('dependency_failed', refusal);
             return null;
+        }
+
+        function personCreationDependency(rows, personId, consequence) {
+            return creationDependency(rows, 'CREATE_PERSON', 'person', personId,
+                'This person could not be created on the server, so ' + consequence + '.');
+        }
+
+        /** The same three states, for a Group this device created. */
+        function personGroupCreationDependency(rows, groupId, consequence) {
+            return creationDependency(rows, 'CREATE_PERSON_GROUP', 'person-group', groupId,
+                'This group could not be created on the server, so ' + consequence + '.');
         }
 
         function reappliable(row) {
@@ -1683,6 +1941,10 @@
             saveWorkPersonRole,
             createPerson,
             savePersonMetadataFields: savePersonMetadataFields,
+            createPersonGroup: createPersonGroup,
+            savePersonGroupFields: savePersonGroupFields,
+            setPersonGroupMember: setPersonGroupMember,
+            deletePersonGroup: deletePersonGroup,
             resolveConflict, claimOperation,
             markDependentsFailed: markDependentsFailed,
             getOperation: getOperation,
@@ -1707,6 +1969,8 @@
         PRKS_LOCAL_WORK_SOURCE_URL_BYTES: WORK_SOURCE_URL_BYTES,
         PRKS_LOCAL_WORK_ROLE_OPERATIONS: WORK_ROLE_OPERATIONS,
         PRKS_LOCAL_PERSON_FIELDS: PERSON_FIELDS,
+        PRKS_LOCAL_PERSON_GROUP_FIELDS: PERSON_GROUP_FIELDS,
+        PRKS_LOCAL_PERSON_GROUP_OPERATIONS: PERSON_GROUP_OPERATIONS,
         prksGenerateEntityId: generateEntityId,
         prksWorkPersonRoleState: workPersonRoleState,
         PRKS_LOCAL_MAX_PAYLOAD_BYTES: MAX_PAYLOAD_BYTES,

@@ -6,7 +6,8 @@ from urllib.parse import urlparse
 
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PRKSDatabase, StorageConfig, SCHEMA, seed_people_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import (AppServer, open_app_page, require_chromium,
+                               wait_for_async)
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -126,7 +127,9 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         # under /api/ would be.
         self.assertEqual(
             [p for p in seen if p.startswith('/api/') and p != '/api/settings'], [])
-        self.assertTrue(page.locator('[data-prks-role="group-mutation-control"]').first.is_disabled())
+        # New Group stays live offline: it writes a durable intent under an id
+        # this device mints, so it is the same feature with or without PRKS.
+        self.assertFalse(page.locator('[data-prks-role="group-mutation-control"]').first.is_disabled())
         page.locator('a.prks-group-tree__link', has_text='Child Branch').click()
         o._wait_offline_unavailable(page)
         self.assertIn('Group not available offline', o._content_text(page))
@@ -145,8 +148,11 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         page.reload(wait_until='domcontentloaded')
         o._wait_offline_banner(page)
         self.assertIn('No Person Groups yet.', o._content_text(page))
+        # And New Group stays live: a group is created durably under an id this
+        # device mints, so an empty library offline is a library you can start
+        # filling rather than a dead end.
         for button in page.locator('[data-prks-role="group-mutation-control"]').all():
-            self.assertTrue(button.is_disabled())
+            self.assertFalse(button.is_disabled())
         o._clear_cached_list(page, 'person-groups:index')
         page.reload(wait_until='domcontentloaded')
         o._wait_offline_unavailable(page)
@@ -292,53 +298,64 @@ class PersonGroupsOfflineTests(unittest.TestCase):
                 self.assertEqual(page.locator('.document-view--group-detail').count(), 0)
                 self.assertEqual(errors, [])
 
-    def test_creation_modal_guard_and_disconnect_before_submit(self):
+    def enqueued(self, page, operation):
+        return page.evaluate(
+            "op => prksSync.store.listOperations().then(rows => rows.filter("
+            "  o => o.operation === op).length)", operation)
+
+    def test_the_creation_modal_opens_offline_and_records_a_durable_intent(self):
+        """A group is created under an id this device mints, so it exists the
+        moment it is saved. No POST is issued while offline -- but an operation
+        is, which is the difference between "blocked" and "durable"."""
         server, page, context = self.start()
         self.index(page)
         page.wait_for_selector('.prks-group-library')
         page.evaluate("openModal('group-modal')")
         page.locator('#group-name').fill('Disconnected group')
         self.offline(page, context)
-        posts = []
-        page.on('request', lambda req: posts.append(req.url) if req.method == 'POST' and '/api/person-groups' in req.url else None)
+        posts = self.watch(page, ('POST',))
         page.locator('#save-group-btn').click()
-        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
-        self.assertEqual(posts, [])
-        page.evaluate('closeModals()')
-        page.evaluate("openModal('group-modal')")
-        self.assertEqual(page.locator('#group-modal:not(.hidden)').count(), 0)
-        self.assertEqual(posts, [])
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'CREATE_PERSON_GROUP'))",
+            timeout=30000, message='the group was never recorded durably')
+        self.assertEqual(posts, [], 'nothing is sent while there is no server')
+        o._wait_content_contains(page, 'Disconnected group')
 
-    def test_global_new_group_surfaces_are_covered_by_the_central_guard(self):
+    def test_global_new_group_surfaces_stay_usable_offline(self):
         """The ribbon and the command palette both route through
-        openModal('group-modal'), so guarding openModal covers every surface at
-        once. One global surface is exercised offline to prove that in situ."""
+        openModal('group-modal'), so one global surface is exercised offline to
+        prove the whole set is live."""
         server, page, context = self.start()
         self.index(page)
         page.wait_for_selector('.prks-group-library')
         self.offline(page, context)
-        posts = self.watch(page, ('POST',))
         page.locator('#prks-ribbon-new-more').click()
         page.wait_for_selector('#prks-create-menu:not([hidden])')
         page.locator("#prks-create-menu [role='menuitem']", has_text='New Group').click()
-        page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
-        self.assertEqual(page.locator('#group-modal:not(.hidden)').count(), 0)
-        self.assertEqual(posts, [])
+        page.wait_for_selector('#group-modal:not(.hidden)')
+        self.assertEqual(page.locator('#prks-modal-confirm:not(.hidden)').count(), 0,
+                         'no "requires a connection" dialog: it no longer does')
 
-    def test_cached_group_cannot_enter_mutation_modes(self):
+    def test_a_cached_group_enters_every_mutation_mode_offline(self):
         server, page, context = self.start()
         self.cache(page, server.ids)
         context.set_offline(True)
         page.reload(wait_until='domcontentloaded')
         o._wait_offline_banner(page)
+        o._open_details_drawer_if_tiled(page)
         page.evaluate('openPersonGroupEdit()')
+        page.wait_for_selector('.group-sidebar-pane--edit')
+        page.evaluate('closePersonGroupEdit()')
         page.evaluate('prksTogglePersonGroupMembersEdit()')
-        self.assertEqual(page.locator('.group-sidebar-pane--edit').count(), 0)
-        self.assertEqual(page.locator('#group-add-member-btn').count(), 0)
+        page.wait_for_selector('#group-add-member-btn')
         for button in page.locator('[data-prks-role="group-mutation-control"]').all():
-            self.assertTrue(button.is_disabled())
+            self.assertFalse(button.is_disabled())
 
-    def test_editor_draft_survives_disconnect_and_controls_restore(self):
+    def test_the_editor_stays_usable_after_a_disconnect(self):
+        """The binding only reacts to CHANGES, so an editor opened while
+        connected and then disconnected is where a stale guard would show."""
         server, page, context = self.start()
         self.detail(page, server.ids['person_group'])
         o._wait_content_contains(page, 'Group description')
@@ -347,20 +364,17 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         page.wait_for_function("!!document.querySelector('#gd-save-btn')?.onclick")
         page.locator('#gd-name').fill('Unsaved name')
         page.locator('#gd-description').fill('Unsaved description')
-        page.locator('#gd-parent-search').fill('Unsaved parent')
         self.offline(page, context)
-        for field in ('#gd-name','#gd-description','#gd-parent-search','#gd-save-btn','#gd-delete-btn'):
-            self.assertTrue(page.locator(field).is_disabled(), field)
+        for field in ('#gd-name', '#gd-description', '#gd-parent-search',
+                      '#gd-save-btn', '#gd-delete-btn'):
+            self.assertFalse(page.locator(field).is_disabled(), field)
         self.assertEqual(page.locator('#gd-name').input_value(), 'Unsaved name')
-        self.assertEqual(page.locator('#gd-parent-search').input_value(), 'Unsaved parent')
-        self.online(page, context)
-        self.assertFalse(page.locator('#gd-save-btn').is_disabled())
-        self.assertEqual(page.locator('#gd-description').input_value(), 'Unsaved description')
-        self.offline(page, context)
+        self.assertEqual(page.locator('#gd-description').input_value(),
+                         'Unsaved description')
         page.locator('button[onclick="closePersonGroupEdit()"]').click()
         self.assertEqual(page.locator('.group-sidebar-pane--edit').count(), 0)
 
-    def test_member_manager_survives_disconnect_and_done_remains_live(self):
+    def test_the_member_manager_stays_usable_after_a_disconnect(self):
         server, page, context = self.start()
         self.detail(page, server.ids['person_group'])
         o._wait_content_contains(page, 'Group description')
@@ -368,60 +382,68 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         page.wait_for_function("!!document.querySelector('#group-add-member-btn')?.onclick")
         page.locator('#group-add-member-search').fill('Unsaved search')
         self.offline(page, context)
-        for selector in ('#group-add-member-search','#group-add-member-btn','[data-remove-member]'):
-            self.assertTrue(page.locator(selector).first.is_disabled())
+        for selector in ('#group-add-member-search', '#group-add-member-btn',
+                         '[data-remove-member]'):
+            self.assertFalse(page.locator(selector).first.is_disabled(), selector)
         o._wait_content_contains(page, o.PERSON_DISPLAY)
-        self.online(page, context)
-        self.assertFalse(page.locator('#group-add-member-btn').is_disabled())
-        self.assertEqual(page.locator('#group-add-member-search').input_value(), 'Unsaved search')
-        self.offline(page, context)
+        self.assertEqual(page.locator('#group-add-member-search').input_value(),
+                         'Unsaved search')
         page.locator('button[onclick="prksTogglePersonGroupMembersEdit()"]').click()
         self.assertEqual(page.locator('#group-add-member-btn').count(), 0)
 
-    def test_group_save_after_disconnect_issues_no_patch(self):
-        """Disabled controls are the visible half; the guards inside the Save
-        handler and inside updatePersonGroup() are what actually has to hold
-        when the click still arrives."""
+    def test_a_save_after_a_disconnect_records_an_intent_and_sends_no_patch(self):
         server, page, context = self.start()
         self.detail(page, server.ids['person_group'])
         o._wait_content_contains(page, 'Group description')
         o._open_details_drawer_if_tiled(page)
+        page.evaluate("id => { void prksReadPersonGroupState(id); }",
+                      server.ids['person_group'])
+        o._wait_entity_cached(page, 'person-group-state', server.ids['person_group'])
         page.evaluate('openPersonGroupEdit()')
         page.wait_for_function("!!document.querySelector('#gd-save-btn')?.onclick")
         page.locator('#gd-name').fill('Renamed while connected')
         self.offline(page, context)
         seen = self.watch(page, ('PATCH',))
-        # The button is disabled, so invoke the handler directly: the guards
-        # inside it -- not the disabled attribute -- are what is under test.
-        page.evaluate("() => { void document.getElementById('gd-save-btn').onclick(); }")
-        page.wait_for_timeout(500)
-        self.assertEqual(seen, [])
-        self.assertEqual(page.locator('#gd-name').input_value(), 'Renamed while connected')
-        self.assertEqual(page.locator('.group-sidebar-pane--edit').count(), 1)
+        page.locator('#gd-save-btn').click()
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'SET_PERSON_GROUP_FIELD'))",
+            timeout=30000, message='the rename was never recorded durably')
+        self.assertEqual(seen, [], 'the durable path never issues the old PATCH')
+        o._wait_content_contains(page, 'Renamed while connected')
 
-    def test_delete_confirmed_after_disconnect_issues_no_delete(self):
-        """The connection can drop while the confirmation dialog is open, so the
-        handler re-checks after the user confirms, not only before asking."""
+    def test_a_delete_confirmed_after_a_disconnect_records_a_tombstone(self):
+        """The connection can drop while the confirmation dialog is open. The
+        deletion is durable either way, so what matters is that it is recorded
+        and that no DELETE is attempted."""
         server, page, context = self.start()
         self.detail(page, server.ids['person_group'])
         o._wait_content_contains(page, 'Group description')
         o._open_details_drawer_if_tiled(page)
         page.evaluate('openPersonGroupEdit()')
         page.wait_for_function("!!document.querySelector('#gd-delete-btn')?.onclick")
+        # Invoked directly: Delete lives in a collapsed advanced section, so
+        # which markup happens to expose it is not what this proves.
         page.evaluate("() => { void document.getElementById('gd-delete-btn').onclick(); }")
         page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
         self.offline(page, context)
         seen = self.watch(page, ('DELETE',))
         page.locator('#prks-modal-confirm-ok').click()
-        page.wait_for_timeout(500)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'DELETE_PERSON_GROUP'))",
+            timeout=30000, message='the deletion was never recorded durably')
         self.assertEqual(seen, [])
-        self.assertEqual(page.evaluate("() => location.hash").split('/')[-1], server.ids['person_group'])
 
-    def test_member_remove_confirmed_after_disconnect_issues_no_delete(self):
+    def test_a_member_removal_after_a_disconnect_records_an_intent(self):
         server, page, context = self.start()
         gid = server.ids['person_group']
         self.detail(page, gid)
         o._wait_content_contains(page, 'Group description')
+        page.evaluate("id => { void prksReadPersonGroupState(id); }", gid)
+        o._wait_entity_cached(page, 'person-group-state', gid)
         page.evaluate('prksTogglePersonGroupMembersEdit()')
         page.wait_for_function("!!document.querySelector('#group-add-member-btn')?.onclick")
         page.locator('[data-remove-member]').first.click()
@@ -429,61 +451,135 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.offline(page, context)
         seen = self.watch(page, ('DELETE',))
         page.locator('#prks-modal-confirm-ok').click()
-        page.wait_for_timeout(500)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'REMOVE_PERSON_GROUP_MEMBER'))",
+            timeout=30000, message='the removal was never recorded durably')
         self.assertEqual(seen, [])
-        for member in (o.PERSON_DISPLAY, o.PERSON_UNVISITED_DISPLAY):
-            self.assertIn(member, o._content_text(page))
 
-    def test_member_add_after_disconnect_issues_no_post(self):
+    def test_a_member_added_after_a_disconnect_records_an_intent(self):
         server, page, context = self.start()
         gid = server.ids['person_group']
         self.detail(page, gid)
         o._wait_content_contains(page, 'Group description')
+        page.evaluate("id => { void prksReadPersonGroupState(id); }", gid)
+        o._wait_entity_cached(page, 'person-group-state', gid)
         page.evaluate('prksTogglePersonGroupMembersEdit()')
         page.wait_for_function("!!document.querySelector('#group-add-member-btn')?.onclick")
         page.evaluate("pid => { document.getElementById('group-add-member-id').value = pid; }",
                       server.ids['person_b'])
         self.offline(page, context)
         seen = self.watch(page, ('POST',))
-        page.evaluate("() => { void document.getElementById('group-add-member-btn').onclick(); }")
-        page.wait_for_timeout(500)
-        self.assertEqual(seen, [])
-        self.assertEqual(page.evaluate("() => document.getElementById('group-add-member-id').value"),
-                         server.ids['person_b'])
+        page.locator('#group-add-member-btn').click()
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.operation === 'ADD_PERSON_GROUP_MEMBER'))",
+            timeout=30000, message='the addition was never recorded durably')
+        self.assertEqual([u for u in seen if '/members' in u], [])
 
-    def test_direct_group_operations_invalidate_exact_domains(self):
+    def durable(self, page, expression, arg=None):
+        """Run one durable Group write and drain the queue.
+
+        The canonical change a coherence rule follows is the ACKNOWLEDGEMENT,
+        not the click, so nothing is asserted until the queue is empty.
+        """
+        page.evaluate(expression, arg)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => "
+            "  rows.every(o => o.status === 'conflict'))",
+            timeout=30000, message='the durable write never drained')
+
+    def patched(self, page, before, expected):
+        """Like `changed`, but the catalogue is PATCHED rather than dropped.
+
+        The acknowledgement carries the exact new state, so discarding the
+        cached catalogue would cost the user a list they cannot rebuild
+        offline -- for a change already known in full.
+        """
+        for domain, generation in before.items():
+            with self.subTest(domain=domain):
+                if domain in expected:
+                    self.assertGreater(o._domain_generation(page, domain), generation)
+                else:
+                    self.assertEqual(o._domain_generation(page, domain), generation)
+        self.assertIsNotNone(o._cached_list(page, 'person-groups:index'))
+
+    def test_group_acknowledgements_patch_the_caches_they_own(self):
         server, page, context = self.start()
         ids = server.ids
-        actions = [
-            ("createPersonGroup({name:'Unassigned'})", {'person-groups'}),
-            ("updatePersonGroup(ids.person_group,{name:'Renamed group'})", {'people','person-groups'}),
-            ("addPersonGroupMember(ids.person_group,ids.person_b)", {'people','person-groups'}),
-            ("removePersonGroupMember(ids.person_group,ids.person_b)", {'people','person-groups'}),
-            ("deletePersonGroup(ids.group_child)", {'people','person-groups'}),
-        ]
-        for expression, expected in actions:
-            with self.subTest(expression=expression):
-                self.cache(page, ids, all_domains=True)
-                before = self.generations(page)
-                self.assertTrue(page.evaluate('ids => ' + expression, ids)['ok'])
-                self.changed(page, before, expected)
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        # A brand-new unassigned Group cannot appear in any Person's read model.
+        self.durable(page, "() => prksCreatePersonGroupDurably("
+                           "  { name: 'Unassigned', description: '' })")
+        self.patched(page, before, {'person-groups'})
+        self.assertIn('Unassigned', [row['name'] for row in
+                                     o._cached_list(page, 'person-groups:index')['value']])
 
-    def test_failed_group_operations_retain_good_caches(self):
+        # A rename reaches the chips embedded in the People rows.
+        before = self.generations(page)
+        self.durable(page, """async id => {
+            const ops = await prksSync.store.listOperations();
+            const base = await prksAcknowledgedPersonGroupBase(id, ops);
+            await prksSavePersonGroupFieldsDurably(id, { name: 'Renamed group' }, base);
+        }""", ids['person_group'])
+        self.patched(page, before, {'people', 'person-groups'})
+
+        # A membership reaches both ends.
+        before = self.generations(page)
+        self.durable(page, """async ([g, p]) => {
+            const ops = await prksSync.store.listOperations();
+            const observed = await prksAcknowledgedPersonGroupMembership(g, p, ops);
+            await prksSetPersonGroupMemberDurably(g, p, true, observed);
+        }""", [ids['person_group'], ids['person_b']])
+        self.patched(page, before, {'people', 'person-groups'})
+
+        # A deletion stales every cached Person detail that may carry the chip.
+        before = self.generations(page)
+        self.durable(page, "id => prksDeletePersonGroupDurably(id)", ids['group_child'])
+        self.assertGreater(o._domain_generation(page, 'person-groups'),
+                           before['person-groups'])
+        self.assertGreater(o._domain_generation(page, 'people'), before['people'])
+        for domain in ('concepts', 'positions', 'arguments'):
+            self.assertEqual(o._domain_generation(page, domain), before[domain], domain)
+
+    def test_a_refused_group_change_becomes_a_decision_and_keeps_the_cache(self):
+        """The server owns name uniqueness. A collision is not a lost edit: it
+        is a conflict the user resolves, and nothing cached is discarded for
+        it."""
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids)
         good = o._cached_entity(page, 'person-group', ids['person_group'])
         before = self.generations(page)
-        result = page.evaluate("ids => updatePersonGroup(ids.person_group,{name:'Parent Branch',parent_name:'Orphan'})", ids)
-        self.assertFalse(result['ok'])
-        self.assertNotIn('Orphan', page.evaluate('() => fetchPersonGroups().then(rows => rows.map(r=>r.name))'))
+        page.evaluate("""async id => {
+            const ops = await prksSync.store.listOperations();
+            const base = await prksAcknowledgedPersonGroupBase(id, ops);
+            await prksSavePersonGroupFieldsDurably(id, { name: 'Parent Branch' }, base);
+        }""", ids['person_group'])
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.some("
+            "  o => o.status === 'conflict'))",
+            timeout=30000, message='the refusal never became a decision')
+        state = page.evaluate(
+            "() => prksSync.store.listOperations().then(rows => (rows.find("
+            "  o => o.status === 'conflict') || {}).server_result)")
+        self.assertEqual(state['code'], 'NAME_TAKEN')
         self.changed(page, before, set())
-        self.assertEqual(o._cached_entity(page, 'person-group', ids['person_group']), good)
-        page.route('**/api/person-groups/**', lambda route: route.fulfill(status=500, content_type='application/json', body='{}'))
-        self.assertFalse(page.evaluate('id => deletePersonGroup(id)', ids['person_group'])['ok'])
-        self.changed(page, before, set())
+        # The VALUE, not the envelope: a read-through that re-cached the same
+        # body moves `cachedAt` without changing anything the user sees.
+        self.assertEqual(
+            o._cached_entity(page, 'person-group', ids['person_group'])['value'],
+            good['value'])
 
-    def test_person_draft_group_creation_invalidates_groups_only(self):
+    def test_person_draft_group_creation_is_durable_and_not_yet_a_membership(self):
+        """Typing a new group name in the Person editor creates a real group --
+        it has an id this device minted -- but joining it is a separate
+        decision that only Save records."""
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids, all_domains=True)
@@ -492,13 +588,20 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         o._open_details_drawer_if_tiled(page)
         page.evaluate('openPersonProfileEdit()')
         page.wait_for_function("!!document.querySelector('#pd-group-add-btn')?.onclick")
-        before = self.generations(page)
         page.locator('#pd-group-search').fill('Draft-only group')
         page.locator('#pd-group-add-btn').click()
         page.locator('#pd-group-chips', has_text='Draft-only group').wait_for()
-        self.changed(page, before, {'person-groups'})
-        canonical = page.evaluate('id => fetchPersonDetails(id)', ids['person_a'])
-        self.assertNotIn('Draft-only group', [g['name'] for g in canonical['groups']])
+        # The group is REAL: created durably under an id this device minted,
+        # and -- connected -- already acknowledged.
+        wait_for_async(
+            page,
+            "() => fetchPersonGroups().then(rows => rows.some("
+            "  r => r.name === 'Draft-only group'))",
+            timeout=30000, message='the group was never created')
+        self.assertEqual(
+            page.evaluate("() => prksSync.store.listOperations().then(rows => rows.filter("
+                          "  o => o.operation === 'ADD_PERSON_GROUP_MEMBER').length)"), 0,
+            'joining it is a separate decision, recorded only on Save')
 
     def test_person_profile_name_and_biography_coherence(self):
         server, page, context = self.start()
@@ -596,15 +699,32 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.assertEqual(o._domain_generation(page, 'person-groups'), before)
         self.assertIsNotNone(o._cached_list(page, 'person-groups:index'))
 
-    def test_stale_index_and_detail_reads_cannot_repopulate(self):
+    def test_a_stale_read_cannot_undo_what_an_acknowledgement_patched(self):
+        """A GET that began before the change carries the OLD body.
+
+        The durable path PATCHES the catalogue on acknowledgement rather than
+        dropping it -- so what has to hold is that a read already in flight
+        cannot write its stale answer over the patched one afterwards.
+        """
         server, page, context = self.start()
         gid = server.ids['person_group']
+        self.cache(page, server.ids)
+        # The base is read BEFORE the route is held: it is itself a GET under
+        # /api/person-groups, and holding it would deadlock the save.
+        base = page.evaluate("""async id => {
+            const ops = await prksSync.store.listOperations();
+            return await prksAcknowledgedPersonGroupBase(id, ops);
+        }""", gid)
+        self.assertIsNotNone(base)
+
         held = []
+
         def hold(route):
             if route.request.method == 'GET':
                 held.append(route)
             else:
                 route.fallback()
+
         page.route('**/api/person-groups**', hold)
         page.evaluate("""id => {
             window.pendingGroups = prksOfflineReadList('person-groups:index','/api/person-groups',
@@ -613,15 +733,25 @@ class PersonGroupsOfflineTests(unittest.TestCase):
                 {domain:'person-groups',validate:v=>prksIsPersonGroupShape(v,id)});
         }""", gid)
         for _ in range(100):
-            if len(held) >= 2: break
+            if len(held) >= 2:
+                break
             page.wait_for_timeout(50)
         self.assertEqual(len(held), 2)
-        page.evaluate("id => updatePersonGroup(id,{description:'Changed while reading'})", gid)
-        page.wait_for_function("!prksOfflineIsDomainBlocked('person-groups')")
-        for route in held: route.fallback()
+
+        page.evaluate(
+            "([id, base]) => prksSavePersonGroupFieldsDurably("
+            "  id, { description: 'Changed while reading' }, base)",
+            [gid, base])
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=30000, message='the rename never reached the server')
+
+        for route in held:
+            route.fallback()
         page.evaluate('() => Promise.all([pendingGroups,pendingGroup])')
-        self.assertIsNone(o._cached_list(page, 'person-groups:index'))
-        self.assertIsNone(o._cached_entity(page, 'person-group', gid))
+        cached = o._cached_entity(page, 'person-group', gid)
+        self.assertIsNotNone(cached, 'the patched snapshot is not dropped')
+        self.assertEqual(cached['value']['description'], 'Changed while reading',
+                         'a read that began earlier cannot publish its older body')
         page.unroute('**/api/person-groups**', hold)
-        self.detail(page, gid)
-        o._wait_entity_cached(page, 'person-group', gid)

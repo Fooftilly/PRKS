@@ -130,12 +130,14 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
             "function renderPersonGroupAddMemberPanelHtml", 1
         )[0]
         self.assertIn("const generation =", mount)
-        self.assertLess(mount.index("const generation ="), mount.index("await fetchPersons()"))
+        self.assertLess(mount.index("const generation ="), mount.index("const persons ="))
         self.assertIn("ownerCtx.isCurrent(generation)", mount)
         self.assertIn("ownerCtx.ui.personGroupMembersEditing", mount)
         self.assertIn("ownerCtx.getEntity('personGroup')", mount)
         self.assertIn("liveInput !== input", mount)
-        self.assertLess(mount.index("const persons = await fetchPersons();"), mount.index("allPersons = persons;"))
+        self.assertLess(mount.index("const persons ="), mount.index("allPersons = persons;"))
+        self.assertIn("prksOfflinePeopleFetch(", mount,
+                      "someone created offline must be addable to a group")
         self.assertLess(mount.index("allPersons = persons;"), mount.index("initSearchableCombobox("))
 
     def test_member_picker_publishes_fresh_people_only_for_live_owner(self):

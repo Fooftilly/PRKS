@@ -262,6 +262,14 @@
             // decisions, and a profile-wide unit would manufacture conflicts
             // between devices that changed different things.
             SET_PERSON_METADATA_FIELD: root.prksPersonMetadataSyncHandler,
+            // Person Groups: four shapes over one entity. Membership is an
+            // ELEMENT keyed by (group, person), so add and remove name the
+            // same scope and share a handler.
+            CREATE_PERSON_GROUP: root.prksPersonGroupCreateSyncHandler,
+            SET_PERSON_GROUP_FIELD: root.prksPersonGroupFieldSyncHandler,
+            ADD_PERSON_GROUP_MEMBER: root.prksPersonGroupMemberSyncHandler,
+            REMOVE_PERSON_GROUP_MEMBER: root.prksPersonGroupMemberSyncHandler,
+            DELETE_PERSON_GROUP: root.prksPersonGroupDeleteSyncHandler,
         },
         lock: root.navigator.locks ? fn => root.navigator.locks.request('prks-sync', { ifAvailable: true }, lock => lock ? fn() : undefined) : null,
     });

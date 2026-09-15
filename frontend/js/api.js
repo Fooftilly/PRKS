@@ -948,93 +948,6 @@ async function deleteSavedView(id) {
     }
 }
 
-/* Group operations publish coherence only after acknowledged canonical success. */
-async function createPersonGroup(payload) {
-    if (typeof prksOfflineGuardMutation === 'function' &&
-        prksOfflineGuardMutation('Creating a Person Group requires a connection to PRKS.')) {
-        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
-    }
-    const res = await prksRequest('/api/person-groups', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) prksMarkPersonGroupsDomainChanged();
-    return { ok: res.ok, data };
-}
-
-async function updatePersonGroup(groupId, payload) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
-        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
-    }
-    const res = await prksRequest('/api/person-groups/' + encodeURIComponent(groupId), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {}),
-    });
-    const data = await res.json().catch(() => ({}));
-    // Conservative: a rename directly stales the Group chips embedded in
-    // People, and a description/hierarchy-only edit invalidating too is an
-    // acceptable Phase-1 cost against field-diffing this shape.
-    if (res.ok) {
-        prksMarkPeopleDomainChanged();
-        prksMarkPersonGroupsDomainChanged();
-    }
-    return { ok: res.ok, data: data };
-}
-
-async function deletePersonGroup(groupId) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
-        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
-    }
-    const res = await prksRequest('/api/person-groups/' + encodeURIComponent(groupId), {
-        method: 'DELETE',
-    });
-    const data = await res.json().catch(() => ({}));
-    // Deleting a Group removes memberships from every Person that was in it.
-    if (res.ok) {
-        prksMarkPeopleDomainChanged();
-        prksMarkPersonGroupsDomainChanged();
-    }
-    return { ok: res.ok, data: data };
-}
-
-async function addPersonGroupMember(groupId, personId) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
-        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
-    }
-    const res = await prksRequest('/api/person-groups/' + encodeURIComponent(groupId) + '/members', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ person_id: personId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-        prksMarkPeopleDomainChanged();
-        prksMarkPersonGroupsDomainChanged();
-    }
-    return { ok: res.ok, data: data };
-}
-
-async function removePersonGroupMember(groupId, personId) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
-        return { ok: false, data: { error: 'Requires a connection to PRKS.' } };
-    }
-    const res = await prksRequest(
-        '/api/person-groups/' +
-            encodeURIComponent(groupId) +
-            '/members/' +
-            encodeURIComponent(personId),
-        { method: 'DELETE' }
-    );
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-        prksMarkPeopleDomainChanged();
-        prksMarkPersonGroupsDomainChanged();
-    }
-    return { ok: res.ok, data: data };
-}
-
 async function prksResearchJson(res, fallbackMessage, source) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -1610,11 +1523,6 @@ window.addTagToFolder = addTagToFolder;
 window.removeTagFromFolder = removeTagFromFolder;
 window.deleteTag = deleteTag;
 window.mergeTags = mergeTags;
-window.createPersonGroup = createPersonGroup;
-window.updatePersonGroup = updatePersonGroup;
-window.deletePersonGroup = deletePersonGroup;
-window.addPersonGroupMember = addPersonGroupMember;
-window.removePersonGroupMember = removePersonGroupMember;
 window.prksMarkWorkRoleChanged = prksMarkWorkRoleChanged;
 window.prksMarkWorkRoleDependenciesChanged = prksMarkWorkRoleDependenciesChanged;
 window.prksMarkWorkAuthorDisplayChanged = prksMarkWorkAuthorDisplayChanged;

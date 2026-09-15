@@ -1846,6 +1846,11 @@ async function prksOfflinePeopleFetch(signal) {
     if (value && typeof prksEffectivePersonRows === 'function') {
         value = prksEffectivePersonRows(value, ops);
     }
+    if (value && typeof prksEffectivePersonGroupChipRows === 'function' &&
+        prksPersonGroupChipsAreOverlaid(ops)) {
+        value = prksEffectivePersonGroupChipRows(
+            value, ops, await prksEffectivePersonGroupCatalogue(ops));
+    }
     return value ? Object.assign({}, result, { value: value }) : result;
 }
 
@@ -1859,10 +1864,125 @@ async function prksDurableOperationsOrNone() {
     return [];
 }
 
+/** The People index rows this device holds, or an empty list. */
+async function prksCachedPeopleRows() {
+    try {
+        const cached = await prksOfflineReadList(PRKS_PEOPLE_LIST_KEY, '/api/persons', {});
+        return cached && Array.isArray(cached.value) ? cached.value : [];
+    } catch (_e) { return []; }
+}
+
+/** The Group catalogue this device holds, with pending intent applied. */
+async function prksEffectivePersonGroupRows(rows, ops) {
+    if (!Array.isArray(rows) || typeof prksEffectivePersonGroups !== 'function') return rows;
+    return prksEffectivePersonGroups(rows, ops || await prksDurableOperationsOrNone());
+}
+
+/** The same overlay, reading the catalogue from cache for a caller that has none. */
+async function prksEffectivePersonGroupCatalogue(ops) {
+    let rows = [];
+    try {
+        const cached = await prksOfflineReadList(
+            PRKS_PERSON_GROUPS_LIST_KEY, '/api/person-groups', {});
+        rows = cached && Array.isArray(cached.value) ? cached.value : [];
+    } catch (_e) { rows = []; }
+    return await prksEffectivePersonGroupRows(rows, ops);
+}
+
+/**
+ * One Group's detail, with this device's pending fields and membership.
+ *
+ * The People index supplies the rows for anyone added while unsynchronized:
+ * the operation names an id, a member chip renders a profile name, and
+ * inventing one here would put a value in front of the user that nothing
+ * canonical ever said.
+ */
+async function prksEffectivePersonGroupRecord(group) {
+    if (!group || typeof prksEffectivePersonGroupDetail !== 'function') return group;
+    const ops = await prksDurableOperationsOrNone();
+    /* The People index is only needed to NAME someone added while
+     * unsynchronized, so a device with nothing pending never reads it. */
+    const memberships = prksPendingPersonGroupMemberships(ops);
+    if (!memberships.size) return prksEffectivePersonGroupDetail(group, ops, []);
+    const people = await prksCachedPeopleRows();
+    return prksEffectivePersonGroupDetail(group, ops,
+        typeof prksEffectivePeople === 'function'
+            ? prksEffectivePeople(people, ops) || people : people);
+}
+
+/** A Group that exists only because of an unsynchronized creation. */
+async function prksPendingCreatedPersonGroup(groupId) {
+    if (typeof prksPendingPersonGroupCreates !== 'function') return null;
+    const ops = await prksDurableOperationsOrNone();
+    const op = prksPendingPersonGroupCreates(ops).find(row => row.entity_id === groupId);
+    if (!op) return null;
+    const row = prksPersonGroupRowFromOp(op);
+    if (!row) return null;
+    const catalogue = await prksEffectivePersonGroupCatalogue(ops);
+    const parent = row.parent_id
+        ? (catalogue || []).find(g => g && g.id === row.parent_id) : null;
+    const detail = Object.assign({}, row, {
+        members: [], children: (catalogue || []).filter(g => g && g.parent_id === row.id),
+        parent: parent ? { id: parent.id, name: parent.name } : null,
+    });
+    return await prksEffectivePersonGroupRecord(detail);
+}
+
+/**
+ * A Person detail, acknowledged plus this device's intent, with no refetch.
+ *
+ * The record a component is holding is already EFFECTIVE, so re-overlaying it
+ * would keep a membership this device has since cancelled -- the overlay can
+ * add and remove, but it cannot restore what an earlier overlay removed. The
+ * acknowledged record is the only sound starting point.
+ */
+async function prksPersonRecordFor(personId) {
+    let cached = null;
+    try {
+        const result = await prksOfflineReadEntity('person', personId,
+            '/api/persons/' + encodeURIComponent(personId),
+            { validate: value => prksIsPersonShape(value, personId) });
+        cached = result && result.value;
+    } catch (_e) { cached = null; }
+    if (!cached) return await prksPendingCreatedPerson(personId);
+    return await prksEffectivePersonRecord(cached);
+}
+
+/**
+ * A Group detail, acknowledged plus this device's intent, with no refetch.
+ *
+ * The record a component is holding is already EFFECTIVE, so re-overlaying it
+ * would keep a membership this device has since cancelled -- the overlay can
+ * add and remove, but it cannot restore what an earlier overlay removed. The
+ * acknowledged record is the only sound starting point.
+ */
+async function prksPersonGroupRecordFor(groupId) {
+    let cached = null;
+    try {
+        const result = await prksOfflineReadEntity('person-group', groupId,
+            '/api/person-groups/' + encodeURIComponent(groupId),
+            { validate: value => prksIsPersonGroupShape(value, groupId) });
+        cached = result && result.value;
+    } catch (_e) { cached = null; }
+    if (!cached) return await prksPendingCreatedPersonGroup(groupId);
+    return await prksEffectivePersonGroupRecord(cached);
+}
+
+/** A Person record with this device's unsynchronized group memberships. */
+async function prksEffectivePersonGroupChipsFor(person, ops) {
+    if (!person || typeof prksEffectivePersonGroupChips !== 'function') return person;
+    const operations = ops || await prksDurableOperationsOrNone();
+    if (!prksPersonGroupChipsAreOverlaid(operations)) return person;
+    return prksEffectivePersonGroupChips(person, operations,
+        await prksEffectivePersonGroupCatalogue(operations));
+}
+
 /** A Person record with this device's unsynchronized profile edits applied. */
 async function prksEffectivePersonRecord(person) {
     if (!person || typeof prksEffectivePersonFields !== 'function') return person;
-    return prksEffectivePersonFields(person, await prksDurableOperationsOrNone());
+    const ops = await prksDurableOperationsOrNone();
+    return await prksEffectivePersonGroupChipsFor(
+        prksEffectivePersonFields(person, ops), ops);
 }
 
 function prksIsPersonGroupRowShape(row) {
@@ -2984,7 +3104,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     { domain: PRKS_PERSON_GROUPS_DOMAIN, validate: prksIsPersonGroupsIndexShape }
                 );
                 if (stale()) return;
-                const groups = prksResolveOfflinePersonGroupsIndex(offlineGroups);
+                const cachedGroups = prksResolveOfflinePersonGroupsIndex(offlineGroups);
+                const ops = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                /* A device that created a group here and holds no catalogue at
+                 * all still has groups: its own. Reporting "not available"
+                 * would deny the user the record they just made. */
+                const groups = cachedGroups === null && prksPendingPersonGroupCreates(ops).length
+                    ? await prksEffectivePersonGroupRows([], ops)
+                    : await prksEffectivePersonGroupRows(cachedGroups, ops);
+                if (stale()) return;
                 if (!groups) {
                     prksOfflineRenderUnavailable(contentDiv, 'Person Groups not available offline');
                     break;
@@ -3003,12 +3132,24 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (stale()) return;
                 const resolvedGroup = prksResolveOfflinePersonGroup(offlineGroup, groupId);
                 if (resolvedGroup.unavailable) {
+                    /* A Group created on this device and not yet sent exists in
+                     * no cache at all; its detail is built from the durable
+                     * creation, exactly as a pending Person's is. */
+                    const pendingGroup = await prksPendingCreatedPersonGroup(groupId);
+                    if (stale()) return;
+                    if (pendingGroup) {
+                        resolvedGroup.unavailable = false;
+                        resolvedGroup.group = pendingGroup;
+                    }
+                }
+                if (resolvedGroup.unavailable) {
                     ctx.setEntity('personGroup', null);
                     prksOfflineRenderUnavailable(contentDiv, 'Group not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'Group not available offline' };
                     break;
                 }
-                const group = resolvedGroup.group;
+                const group = await prksEffectivePersonGroupRecord(resolvedGroup.group);
+                if (stale()) return;
                 if (!group) {
                     contentDiv.innerHTML =
                         '<div class="prks-page-header page-header"><h2 class="prks-page-title">Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
@@ -4265,35 +4406,34 @@ function initForms() {
     const saveGroupBtn = document.getElementById('save-group-btn');
     if (saveGroupBtn) {
         saveGroupBtn.onclick = async () => {
-            if (typeof prksOfflineGuardMutation === 'function' &&
-                prksOfflineGuardMutation('Creating a Person Group requires a connection to PRKS.')) return;
+            /* No offline guard: a Group is created durably, under an id this
+             * device mints, so it exists and is usable the moment it is saved. */
             const name = document.getElementById('group-name')?.value || '';
             const parentHid = document.getElementById('group-parent-id')?.value?.trim() || '';
             const parentSearch = document.getElementById('group-parent-search')?.value?.trim() || '';
             const description = document.getElementById('group-description')?.value || '';
-            const payload = {
-                name: name.trim(),
-                description: description.trim()
-            };
-            if (!payload.name) {
+            if (!name.trim()) {
                 await prksAlertMessage('Group name is required.', 'Validation');
                 return;
             }
-            if (parentHid) payload.parent_id = parentHid;
-            else if (parentSearch) payload.parent_name = parentSearch;
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveGroupBtn, true, { busyLabel: 'Creating…' });
             try {
-                const { ok, data } = await createPersonGroup(payload);
-                if (!ok) {
-                    await prksAlertMessage(data.error || 'Could not create group.', 'Could not save');
-                    return;
-                }
+                const parentId = await prksResolvePersonGroupParent(parentHid, parentSearch, null);
+                if (parentId === undefined) return;
+                const created = await prksCreatePersonGroupDurably({
+                    name: name.trim(), description: description.trim(), parent_id: parentId,
+                });
                 closeModals();
-                if (typeof prksNavigate === 'function') {
-                    prksNavigate('#/people/groups/' + (data.id || ''));
+                /* No reload and no refetch: the record is local, and a reload
+                 * would throw away every other pending change on the page. */
+                if (created && created.entity_id && typeof prksNavigate === 'function') {
+                    prksNavigate('#/people/groups/' + encodeURIComponent(created.entity_id));
                 }
             } catch (e) {
-                await prksAlertMessage('Network error — could not create group.', 'Error');
+                await prksAlertMessage(
+                    typeof prksPersonGroupSaveMessage === 'function'
+                        ? prksPersonGroupSaveMessage(e, 'create this group')
+                        : 'Could not create group.', 'Could not save');
             } finally {
                 if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveGroupBtn, false);
             }

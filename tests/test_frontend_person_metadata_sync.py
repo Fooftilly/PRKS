@@ -147,15 +147,21 @@ class PersonMetadataSyncFrontendTests(unittest.TestCase):
         # there is one, so an untouched field never looks dirty.
         self.assertIn('pending.has(field) ? pending.get(field) : observed.value', body)
 
-    def test_group_membership_stayed_out_of_the_durable_vocabulary(self):
-        """A membership is a relationship, not a profile scalar. Including it
-        would have meant inventing a second conflict unit for this milestone."""
+    def test_group_membership_stayed_out_of_the_profile_vocabulary(self):
+        """A membership is a relationship, not a profile scalar.
+
+        It became durable with its own family, whose conflict unit is the
+        `(group, person)` PAIR -- so two devices that added different people to
+        one group have not collided. Folding it into the profile would have
+        given every membership on a Person one shared conflict, and would have
+        made a single busy biography block a group change.
+        """
         self.assertNotIn('group_ids', person_metadata_sync.SYNCED_FIELDS)
         people = (FRONTEND / 'components' / 'people.js').read_text()
         at = people.index('async function prksSavePersonGroupMemberships(')
         body = people[at: people.index('\n}', at)]
-        self.assertIn("prksPersonRuntimeState() !== 'online'", body,
-                      'and it remains connection-required')
+        self.assertIn('prksSetPersonGroupMembership(', body, 'its own durable family')
+        self.assertIn('added.concat(removed)', body, 'one intent per pair, not a replacement')
 
     def test_the_rename_overlay_is_applied_last_and_only_to_names(self):
         """Three overlays, one order. The first two decide which people are

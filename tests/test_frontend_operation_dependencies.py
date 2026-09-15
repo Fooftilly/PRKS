@@ -115,12 +115,13 @@ class OperationDependencyTests(unittest.TestCase):
         predicate = store[at: store.index('\n        }\n', at)]
         self.assertIn('!dependencySucceeded(row)', predicate)
 
-    def test_the_role_writer_uses_the_stores_definition_of_a_healthy_dependency(self):
+    def test_every_writer_uses_the_stores_definition_of_a_healthy_dependency(self):
         store = (FRONTEND / 'local-store.js').read_text()
-        # ONE helper, asked by every Person-scoped writer. A family that
-        # re-derived "is this creation usable" would be free to disagree with
-        # the enqueue boundary about it.
-        at = store.index('function personCreationDependency(')
+        # ONE helper, asked by every writer that can depend on a construction.
+        # A family that re-derived "is this creation usable" would be free to
+        # disagree with the enqueue boundary about it -- and would hand that
+        # boundary a dependency it has to reject anyway.
+        at = store.index('function creationDependency(')
         helper = store[at: store.index('\n        }\n', at)]
         self.assertIn('dependencyTerminallyFailed(', helper,
                       'the helper must not select a refused creation')
@@ -128,11 +129,31 @@ class OperationDependencyTests(unittest.TestCase):
                       'nor name one that is already canonical')
         self.assertIn("'dependency_failed'", helper,
                       'and must refuse rather than silently drop the dependency')
-        for writer in ('function saveWorkPersonRole(', 'function savePersonMetadataFields('):
+        # Each family names the helper rather than filtering rows itself, and
+        # says what the user loses in ITS words.
+        for named in ('function personCreationDependency(',
+                      'function personGroupCreationDependency('):
+            at = store.index(named)
+            body = store[at: store.index('\n        }\n', at)]
+            with self.subTest(helper=named):
+                self.assertIn('creationDependency(', body)
+        writers = {
+            'function saveWorkPersonRole(': 'personCreationDependency(',
+            'function savePersonMetadataFields(': 'personCreationDependency(',
+            'function savePersonGroupFields(': 'personGroupCreationDependency(',
+            'function createPersonGroup(': 'personGroupCreationDependency(',
+        }
+        for writer, expected in writers.items():
             at = store.index(writer)
             body = store[at: store.index('\n        function ', at + 10)]
             with self.subTest(writer=writer):
-                self.assertIn('personCreationDependency(', body)
+                self.assertIn(expected, body)
+        # Membership names BOTH: it is a relationship between two entities
+        # either of which this device may have created and not yet sent.
+        at = store.index('function setPersonGroupMember(')
+        body = store[at: store.index('\n        function ', at + 10)]
+        self.assertIn('personGroupCreationDependency(', body)
+        self.assertIn('personCreationDependency(', body)
 
     def test_every_role_surface_names_the_failed_dependency_explicitly(self):
         """G8: a refused prerequisite is not "could not save".

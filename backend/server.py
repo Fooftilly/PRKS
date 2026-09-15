@@ -2087,6 +2087,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 data = db.get_all_person_groups()
                 self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/person-groups/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
+                # REVISIONS ONLY. The catalogue already carries every group's
+                # name, parent and description and the detail carries its
+                # members, so echoing values here would make a second copy.
+                data = db.get_person_group_sync_state(unquote(path.split('/')[3]))
+                if data is None:
+                    self.send_json(404, {"error": "Group not found"})
+                else:
+                    etag = db.etag_for_representation("person-group-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/person-groups/') and len(path.split('/')) == 4:
                 g_id = path.split('/')[-1]
                 data = db.get_person_group(g_id)
@@ -2179,6 +2192,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(404, {"error": "Person not found"})
                 else:
                     etag = db.etag_for_representation("person-metadata-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/persons/') and path.endswith('/group-state') and len(path.split('/')) == 5:
+                # Membership revisions for one Person, including tombstones:
+                # a pair this device once removed has a revision, and adding it
+                # back is a mutation of that scope rather than a first write.
+                data = db.get_person_groups_state(unquote(path.split('/')[3]))
+                if data is None:
+                    self.send_json(404, {"error": "Person not found"})
+                else:
+                    etag = db.etag_for_representation("person-group-state", data)
                     if self._prks_if_none_match(etag):
                         self._send_json_not_modified(etag)
                         return
