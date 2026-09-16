@@ -190,9 +190,16 @@
         const rev = event.acknowledged.server_revision;
         if (!Number.isSafeInteger(rev) || rev < 0) return;
         const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
-        if (canonical && canonical.id === op.entity_id) {
-            if (op.operation === RESEARCH_OP) canonical.text_content = text;
-            else canonical.private_notes = text;
+        if (op.operation === RESEARCH_OP) {
+            work.text_content = text;
+            const refs = event.acknowledged.research_refs;
+            if (refs && typeof refs === 'object' && !Array.isArray(refs)) {
+                work.research_refs = refs;
+            }
+            if (canonical && canonical.id === op.entity_id) canonical.text_content = text;
+        } else {
+            work.private_notes = text;
+            if (canonical && canonical.id === op.entity_id) canonical.private_notes = text;
         }
         const base = ctx.getResource && ctx.getResource('workNotesObserved');
         if (base) {

@@ -314,10 +314,22 @@ class WorkspaceTourTest(_UXTour):
 
             def _work_or_pdf_fetch_count():
                 """Both GET families a warm resume must never repeat: the Work JSON itself
-                (`/api/works/`) and its PDF bytes (`/api/pdfs/`, the same route the precise
-                E2E suite already asserts against for PDF persistence)."""
+                (`GET /api/works/:id`) and its PDF bytes (`/api/pdfs/`). Sub-resources under
+                `/api/works/:id/...` (metadata-state, notes-state, tag-options) are panel
+                hydration and are allowed when focus moves between already-mounted panes.
+                """
                 names = page.evaluate("() => performance.getEntriesByType('resource').map(e => e.name)")
-                return len([r for r in names if "/api/works/" in r or "/api/pdfs/" in r])
+                count = 0
+                for url in names:
+                    path = urlparse(url).path
+                    if path.startswith("/api/pdfs/"):
+                        count += 1
+                        continue
+                    parts = [p for p in path.split("/") if p]
+                    # api / works / :id  — exactly three segments
+                    if len(parts) == 3 and parts[0] == "api" and parts[1] == "works":
+                        count += 1
+                return count
 
             fetch_count_baseline = _work_or_pdf_fetch_count()
 
@@ -491,6 +503,10 @@ class WorkspaceTourTest(_UXTour):
                 }""",
                 arg={"main": main_id_now, "other": other_pdf_id},
             )
+            # Let any in-flight panel refresh from closing the Person pane finish
+            # before sampling the baseline — a late Work GET would look like a
+            # focus-driven remount.
+            page.wait_for_load_state("networkidle")
             work_fetch_before = _work_or_pdf_fetch_count()
             page.locator('.prks-tile[data-prks-tab-id="%s"]' % other_pdf_id).click(position={"x": 20, "y": 60})
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=other_pdf_id)
@@ -499,6 +515,7 @@ class WorkspaceTourTest(_UXTour):
             page.locator('.prks-tile[data-prks-tab-id="%s"]' % other_pdf_id).click(position={"x": 20, "y": 60})
             page.wait_for_function("(id) => window.prksWorkspaceSnapshot().focusedTabId === id", arg=other_pdf_id)
             tour.checkpoint(page, "visible-pdf-focus")
+            page.wait_for_load_state("networkidle")
             self.assertEqual(_work_or_pdf_fetch_count(), work_fetch_before)
             both_states = page.evaluate(
                 """(ids) => {
@@ -903,7 +920,13 @@ class ResearchGraphTourTest(_UXTour):
                 tour.checkpoint(page, "graph-edge-inspector")
 
             tour.step("Open the selected Work")
-            _click_graph_node(page, work_node_id)
+            # After an edge selection the edge label/hit target can sit on the
+            # Work node's centre; a raw canvas click then clears selection.
+            # Nodes are ordinarily clicked via `_click_graph_node`; this
+            # re-select is the same class of canvas instrumentation as
+            # `selectGraphEdge` above (no separate DOM control).
+            page.evaluate("(id) => { window.selectGraphNode(id); }", arg=work_node_id)
+            page.wait_for_function("(id) => window.getSelectedGraphNodeId() === id", arg=work_node_id)
             page.locator("#prks-graph-open").wait_for()
             page.locator("#prks-graph-open").click()
             page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")

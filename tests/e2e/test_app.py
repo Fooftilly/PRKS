@@ -91,12 +91,12 @@ def _click_graph_node(page, node_id):
             const cy = debug && debug.cy;
             const node = cy && cy.getElementById(nodeId);
             if (!node || !node.length) return null;
+            // Always centre: after Find/filter a node can sit near the edge with
+            // a centre still "on canvas" while its body is not hittable — the
+            // click then lands on empty canvas and clears selection.
+            cy.center(node);
             const rect = cy.container().getBoundingClientRect();
-            let p = node.renderedPosition();
-            if (p.x < 0 || p.y < 0 || p.x > rect.width || p.y > rect.height) {
-                cy.center(node);
-                p = node.renderedPosition();
-            }
+            const p = node.renderedPosition();
             return { x: rect.left + p.x, y: rect.top + p.y };
         }""",
         arg=node_id,

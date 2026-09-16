@@ -904,6 +904,11 @@
             if (work) {
                 const nextWork = Object.assign({}, work);
                 nextWork[field] = field === 'private_notes' ? (text || null) : text;
+                if (fenceResearch && result.research_refs &&
+                    typeof result.research_refs === 'object' &&
+                    !Array.isArray(result.research_refs)) {
+                    nextWork.research_refs = result.research_refs;
+                }
                 if (!await cacheEntityIfCurrent('work', id, nextWork, tokens[0])) return false;
             }
             if (state) {
