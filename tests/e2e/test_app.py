@@ -4824,6 +4824,207 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.keyboard.press("Escape")
         page.wait_for_function("() => !document.body.classList.contains('prks-right-panel-open')")
 
+    def test_tiled_work_suppresses_back_and_duplicate_pdf_title(self):
+        """Tiled Work/PDF density: tile header owns identity — no in-pane Back row
+        and no repeated Work title in the PDF toolbar."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_work_split(page, server)
+        page.wait_for_function("() => document.getElementById('app-container').classList.contains('app-container--tiled')")
+
+        state = page.evaluate(
+            """() => {
+                const tiles = [...document.querySelectorAll('.prks-workspace-canvas--tiled .prks-tile')];
+                return tiles.map((tile) => {
+                    const back = tile.querySelector('.prks-nav-back-row--work');
+                    const title = tile.querySelector('.prks-pdf-toolbar__title');
+                    const tileTitle = tile.querySelector('.prks-tile-header__title');
+                    const cs = (el) => (el ? getComputedStyle(el).display : null);
+                    return {
+                        hasBackDom: !!back,
+                        backDisplay: cs(back),
+                        hasPdfTitleDom: !!title,
+                        pdfTitleDisplay: cs(title),
+                        tileTitle: tileTitle ? tileTitle.textContent.trim() : '',
+                    };
+                });
+            }"""
+        )
+        self.assertGreaterEqual(len(state), 2)
+        for row in state:
+            self.assertTrue(row["tileTitle"], "tile header must keep Work identity")
+            self.assertEqual(row["backDisplay"], "none")
+            self.assertEqual(row["pdfTitleDisplay"], "none")
+
+    def test_collapsed_notes_keeps_compact_save_status(self):
+        """Collapsed Research Notes stay a 28px disclosure but still show a compact
+        save/sync cue — never hide all note state, never restore a verbose row."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _work_a, _work_b, ids = _open_work_work_split(page, server)
+        page.wait_for_function("() => document.getElementById('app-container').classList.contains('app-container--tiled')")
+
+        page.evaluate(
+            """(tabId) => {
+                const ctx = window.prksGetTabContext(tabId);
+                const ws = ctx && ctx.root && ctx.root.querySelector('.work-workspace');
+                if (!ws) return;
+                const workId = ws.getAttribute('data-work-id');
+                if (workId) localStorage.setItem('prks.workNotesCollapsed.' + workId, '1');
+                ws.classList.add('work-workspace--notes-collapsed');
+                const status = ctx.root.querySelector('[data-prks-role="editor-status"]');
+                if (status) status.textContent = 'All changes saved';
+                if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
+                    window.prksReapplyWorkNotesSplitLayout(ctx);
+                }
+            }""",
+            arg=ids["mainTabId"],
+        )
+
+        metrics = page.evaluate(
+            """(tabId) => {
+                const tile = document.querySelector('.prks-tile[data-prks-tab-id=\"' + tabId + '\"]');
+                const ws = tile && tile.querySelector('.work-workspace');
+                const notes = tile && tile.querySelector('.work-notes-pane');
+                const header = tile && tile.querySelector('.work-notes-pane-header');
+                const status = tile && tile.querySelector('[data-prks-role="editor-status"]');
+                const editor = tile && tile.querySelector('.work-notes-editor-wrap');
+                const br = (el) => (el ? el.getBoundingClientRect().height : 0);
+                return {
+                    collapsed: !!(ws && ws.classList.contains('work-workspace--notes-collapsed')),
+                    drawer: !!(ws && ws.classList.contains('work-workspace--notes-drawer')),
+                    notesH: Math.round(br(notes)),
+                    headerH: Math.round(br(header)),
+                    statusDisplay: status ? getComputedStyle(status).display : null,
+                    statusText: status ? status.textContent.trim() : '',
+                    editorDisplay: editor ? getComputedStyle(editor).display : null,
+                };
+            }""",
+            arg=ids["mainTabId"],
+        )
+        self.assertTrue(metrics["collapsed"])
+        self.assertFalse(metrics["drawer"])
+        self.assertLessEqual(metrics["notesH"], 36)
+        self.assertGreaterEqual(metrics["notesH"], 24)
+        self.assertNotEqual(metrics["statusDisplay"], "none")
+        self.assertEqual(metrics["statusText"], "All changes saved")
+        self.assertEqual(metrics["editorDisplay"], "none")
+
+    def test_stacked_wide_sidecar_vs_tiled_drawer(self):
+        """Wide stacked Notes expand as a sidecar; tiled expanded Notes use a drawer
+        so they never sit as a side strip against the Main/Secondary splitter."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        page.wait_for_selector(".work-workspace")
+
+        page.evaluate(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext();
+                const ws = ctx && ctx.root && ctx.root.querySelector('.work-workspace');
+                if (!ws) return;
+                ws.classList.remove('work-workspace--notes-collapsed');
+                const workId = ws.getAttribute('data-work-id');
+                if (workId) localStorage.setItem('prks.workNotesCollapsed.' + workId, '0');
+                if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
+                    window.prksReapplyWorkNotesSplitLayout(ctx);
+                }
+            }"""
+        )
+        stacked = page.evaluate(
+            """() => {
+                const ws = document.querySelector('.prks-workspace-canvas:not(.prks-workspace-canvas--tiled) .work-workspace')
+                    || document.querySelector('.work-workspace');
+                return {
+                    side: ws.classList.contains('work-workspace--side'),
+                    drawer: ws.classList.contains('work-workspace--notes-drawer'),
+                    width: ws.clientWidth,
+                    tiled: !!ws.closest('.prks-workspace-canvas--tiled'),
+                };
+            }"""
+        )
+        self.assertFalse(stacked["tiled"])
+        self.assertGreaterEqual(stacked["width"], 720)
+        self.assertTrue(stacked["side"])
+        self.assertFalse(stacked["drawer"])
+
+        _work_a, _work_b, ids = _open_work_work_split(page, server)
+        page.wait_for_function("() => document.getElementById('app-container').classList.contains('app-container--tiled')")
+        page.evaluate(
+            """(tabId) => {
+                const ctx = window.prksGetTabContext(tabId);
+                const ws = ctx && ctx.root && ctx.root.querySelector('.work-workspace');
+                if (!ws) return;
+                ws.classList.remove('work-workspace--notes-collapsed');
+                const workId = ws.getAttribute('data-work-id');
+                if (workId) localStorage.setItem('prks.workNotesCollapsed.' + workId, '0');
+                if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
+                    window.prksReapplyWorkNotesSplitLayout(ctx);
+                }
+            }""",
+            arg=ids["secondaryTabId"],
+        )
+        tiled = page.evaluate(
+            """(tabId) => {
+                const tile = document.querySelector('.prks-tile[data-prks-tab-id=\"' + tabId + '\"]');
+                const ws = tile && tile.querySelector('.work-workspace');
+                return {
+                    side: !!(ws && ws.classList.contains('work-workspace--side')),
+                    drawer: !!(ws && ws.classList.contains('work-workspace--notes-drawer')),
+                    tiled: !!(ws && ws.closest('.prks-workspace-canvas--tiled')),
+                };
+            }""",
+            arg=ids["secondaryTabId"],
+        )
+        self.assertTrue(tiled["tiled"])
+        self.assertFalse(tiled["side"])
+        self.assertTrue(tiled["drawer"])
+
+        # Preference must not override tiled → drawer (narrow or wide tiles).
+        page.evaluate(
+            """(tabId) => {
+                localStorage.setItem('prks.ui.mobileWorkNotesRight', '1');
+                const ctx = window.prksGetTabContext(tabId);
+                const ws = ctx && ctx.root && ctx.root.querySelector('.work-workspace');
+                if (!ws) return;
+                ws.classList.remove('work-workspace--notes-collapsed');
+                if (typeof window.prksSyncWorkNotesMobileSideClass === 'function') {
+                    window.prksSyncWorkNotesMobileSideClass();
+                } else if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
+                    window.prksReapplyWorkNotesSplitLayout(ctx);
+                }
+            }""",
+            arg=ids["secondaryTabId"],
+        )
+        tiled_forced = page.evaluate(
+            """(tabId) => {
+                const tile = document.querySelector('.prks-tile[data-prks-tab-id=\"' + tabId + '\"]');
+                const ws = tile && tile.querySelector('.work-workspace');
+                return {
+                    side: !!(ws && ws.classList.contains('work-workspace--side')),
+                    drawer: !!(ws && ws.classList.contains('work-workspace--notes-drawer')),
+                    pref: localStorage.getItem('prks.ui.mobileWorkNotesRight'),
+                };
+            }""",
+            arg=ids["secondaryTabId"],
+        )
+        self.assertEqual(tiled_forced["pref"], "1")
+        self.assertFalse(tiled_forced["side"])
+        self.assertTrue(tiled_forced["drawer"])
+
+        # Splitter remains interactive while the Secondary Notes drawer is open.
+        before = _tile_box(page, ids["mainTabId"])
+        splitter = page.locator(".prks-splitter").first
+        box = splitter.bounding_box()
+        self.assertIsNotNone(box)
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] / 2 - 40, box["y"] + box["height"] / 2, steps=6)
+        page.mouse.up()
+        after = _tile_box(page, ids["mainTabId"])
+        self.assertNotAlmostEqual(after["width"], before["width"], delta=2)
+
     def test_delayed_person_save_updates_owner_without_replacing_other_focused_panel(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
@@ -5770,7 +5971,9 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertEqual(extra_pages, [])
 
         before = _workspace_tab_count(page)
-        page.locator(".prks-tile--main a[href^='#/']").first.click(modifiers=["Control"])
+        # Tiled PDF Works hide Back, and focused Secondary owns the right panel — so Main
+        # may have no visible in-pane #/ link. Ctrl/Cmd-click a visible Secondary link instead.
+        page.locator(".prks-tile--secondary a.prks-nav-back").click(modifiers=["Control"])
         page.wait_for_function(
             "n => document.querySelectorAll('.prks-workspace-tab').length === n",
             arg=before + 1,

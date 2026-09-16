@@ -409,8 +409,8 @@
         </section>
 
         <section class="prks-gallery__section" id="workspace" data-gallery-section="workspace">
-            <h2>Workspace tabs / future tiles / splitter</h2>
-            <p class="prks-field__help">Stacked tab-strip specimen. Tiling remains a static future contract.</p>
+            <h2>Workspace tabs / tiles / splitter</h2>
+            <p class="prks-field__help">Tab strip + tile headers. In tiled Work/PDF, the tile header owns identity; collapsed Research Notes is a 28px disclosure with a compact save/sync cue (shared production CSS — no inline imitation).</p>
             <div class="prks-workspace-tabs-shell">
                 <div class="prks-workspace-tabs" role="tablist" aria-label="Workspace tabs">
                     <div class="prks-workspace-tab is-main">
@@ -434,9 +434,29 @@
                 </div>
                 <button type="button" class="prks-icon-btn prks-icon-btn--ghost" aria-label="Open a new tab">+</button>
             </div>
-            <div class="prks-row" style="align-items:stretch;min-height:120px;margin-top:var(--space-md)">
-                <div class="prks-tile prks-tile--main prks-gallery__demo-tile" style="flex:1">
+            <div class="prks-row prks-gallery__demo-split" style="align-items:stretch;min-height:120px;margin-top:var(--space-md)">
+                <div class="prks-tile prks-tile--main prks-gallery__demo-tile" style="flex:1;display:flex;flex-direction:column;min-height:0">
                     <div class="prks-tile-header">Main tile</div>
+                    <div class="prks-tile__body" style="flex:1;min-height:0;display:flex;flex-direction:column">
+                        <div class="document-view document-view--work" style="flex:1;min-height:0;display:flex;flex-direction:column">
+                            <div class="work-workspace work-workspace--notes-collapsed" data-work-id="demo" style="flex:1;min-height:0;display:flex;flex-direction:column">
+                                <div class="work-pdf-pane work-pdf-pane--empty" style="flex:1;min-height:0" aria-hidden="true"></div>
+                                <div class="work-notes-pane">
+                                    <div class="work-notes-pane-header">
+                                        <h3 class="work-notes-title">Research Notes</h3>
+                                        <div class="work-notes-pane-header-actions">
+                                            <button type="button" class="work-notes-toggle-btn" aria-expanded="false" aria-label="Expand research notes editor" title="Expand notes"><span class="work-notes-toggle-btn__icon" aria-hidden="true">▾</span></button>
+                                            <div data-prks-role="annotation-sync-status" class="work-annotation-sync-status work-annotation-sync-status--hidden" aria-live="polite"></div>
+                                            <div data-prks-role="editor-status" class="work-editor-status">Saved</div>
+                                        </div>
+                                    </div>
+                                    <div class="work-notes-editor-wrap" data-prks-role="work-notes-editor-region">
+                                        <textarea data-prks-role="research-notes-editor" aria-hidden="true" tabindex="-1"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="prks-splitter prks-splitter--vertical" role="separator" aria-orientation="vertical" tabindex="0"></div>
                 <div class="prks-tile prks-tile--secondary prks-tile--focused prks-gallery__demo-tile" style="flex:0 0 40%">

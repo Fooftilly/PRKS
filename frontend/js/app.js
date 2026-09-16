@@ -352,17 +352,10 @@ function prksSyncWorkNotesMobileSideClass() {
     if (typeof window.prksSyncViewportHeightVar === 'function') {
         window.prksSyncViewportHeightVar();
     }
-    const mobileWorkNotesRightEnabled = prksGetMobileWorkNotesRightEnabled();
-    function applyToWorkspace(ws) {
-        if (!ws) return;
-        const narrow = ws.clientWidth > 0 && ws.clientWidth < 720;
-        const want = mobileWorkNotesRightEnabled && narrow;
-        ws.classList.toggle('work-workspace--side', want);
-    }
+    /* Layout classes (side vs drawer) are owned by prksReapplyWorkNotesSplitLayout —
+     * including the rule that tiled panes never take a side strip. */
     if (typeof prksForEachMountedTabContext === 'function') {
         prksForEachMountedTabContext(function (c) {
-            const ws = c && typeof c.query === 'function' ? c.query('.work-workspace[data-work-id]') : null;
-            applyToWorkspace(ws);
             if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
                 window.prksReapplyWorkNotesSplitLayout(c);
             }

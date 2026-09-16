@@ -606,7 +606,38 @@ Split control: **Split** (no leaf), **Show split** (tree exists but is parked/hi
 
 Tile chrome exists only in tiled mode. Headers keep a stable height. Loading and errors stay inside the route root; the tile shell/header is not torn down. The Work Notes divider (`.work-split-handle`) keeps its nested-content grip and sizing behavior; hover, drag, and keyboard-focus strength match the workspace splitter’s idle-thin / obvious-when-interacting language.
 
-Work notes side-by-side layout follows that Work’s tile/container width, not a global viewport class that would restyle the other tile.
+Work notes layout follows that Work’s tile/container width, not a global viewport class that would restyle the other tile.
+
+### Work / PDF composition (density)
+
+Dense tiled reading is the primary stress case. Prefer **composition** over indiscriminate shrink: remove redundant identity and reclaim height for the PDF (or other useful research context), not blank margin.
+
+**Identity hierarchy (one owner):**
+
+| Mode | Title authority | PDF toolbar identity |
+| --- | --- | --- |
+| Tiled | Tile header (and tab strip) | Do **not** repeat the Work title; doc-type badge may remain |
+| Stacked PDF (no `.page-header--work`) | PDF toolbar title (and tab strip) | Keep title + type |
+| Non-PDF Work | `.page-header--work` title | n/a |
+
+Do not add a third in-pane title row. Right-panel Details may still show the Title field for editing — that is metadata, not chrome duplication of the tile header.
+
+**Contextual Back:** The `.prks-nav-back-row--work` row is for stacked PDF-without-header navigation. In **tiled** mode, suppress it — workspace tabs and pane chrome already provide orientation. Do not remove Back from stacked PDF Works.
+
+**PDF viewer in tiles:** Inside a tiled Work pane, the viewer must honor the pane’s height (`min-height: 0` on `.prks-pdf-viewer`). A large vendor min-height must not force Secondary panes to clip or waste chrome.
+
+### Research Notes presentation
+
+Research Notes remain TabContext-owned (drafts, sync, EasyMDE). Presentation only:
+
+| State | Presentation |
+| --- | --- |
+| Collapsed | Tiny disclosure: one compact row at `--control-height-sm` (28px). Label + expand control + compact save/sync cue (short status text and/or quiet sync dot). Truncate long copy; do not hide all note/save/sync feedback, and do not restore a verbose status row. Discoverable, not a second title bar. |
+| Expanded, wide container (≥ ~720px), **stacked** | Sidecar beside the PDF (side split + `.work-split-handle`). |
+| Expanded, **tiled** pane (any width) | Drawer overlay — always. Never a side strip against the Main/Secondary separator (that stole divider pointer hits and stole PDF width). The “Research notes beside PDF when narrow” preference does **not** apply in tiled mode. |
+| Expanded, narrow stacked container (&lt; ~720px) | Drawer overlay over the PDF. The Settings toggle “Research notes beside PDF when narrow” may force a sidecar on narrow **stacked** widths only (container-aware, not phone-only; never overrides tiled). |
+
+Collapsed disclosure must stay visible in every Work that has Notes. Reclaimed space goes to the PDF (or existing research context), never to empty decorative padding.
 
 In the dense tiled desktop shell (and on mobile), the right Details/Annotations panel is a dismissible, fixed-position overlay (`position: fixed`, slides via `transform`), not a layout participant — opening or closing it never changes pane widths, split ratios, or workspace canvas width. It closes via Escape, the Details ribbon toggle, or an explicit Close (`×`, labeled "Close details") in its own header, all routed through the one canonical `prksToggleRightPanelOverlay()` path. Closing the panel is purely a visibility change: it must not clear a Graph node/edge selection or any other owning route's state — reopening the panel restores whatever it was already showing.
 
@@ -624,7 +655,7 @@ The root split between Main and Secondary is workspace-owned canonical preferenc
 
 Divider contract:
 
-- 1px normal separator (`.prks-splitter.prks-splitter--vertical`); a substantially wider invisible pointer hit target via `::after`
+- 1px normal separator (`.prks-splitter.prks-splitter--vertical`); a substantially wider invisible pointer hit target via `::after`; `z-index: var(--z-panel)` so the separator stays above adjacent tiles (tiles use `isolation: isolate` so Notes drawer / PDF overlays cannot escape over sibling dividers)
 - idle: almost invisible 1px track; hover / active drag: a centered indicator (`::before`) without changing the grid track; keyboard focus: the same indicator plus a clear `:focus-visible` outline
 - do not make the divider visually thick just to make it draggable; the visual indicator must not shift pane geometry
 - pointer drag uses `setPointerCapture()` so dragging stays stable while the pointer crosses tile content (PDF viewer, EasyMDE, buttons)
@@ -807,7 +838,7 @@ Settings is task-grouped, not one long scrolling page. `#settings-modal` shows a
 
 **General is the default and stays calm.** It only shows Appearance (theme), Annotation author, and Show help hints — no backup, maintenance, or diagnostics language anywhere in it. This is the everyday-preferences first impression the reorganization exists to protect.
 
-**Reading & layout** groups the three device-local layout toggles (Force mobile layout, Research notes beside PDF on mobile, Remember PDF page per file) with a panel-level "Stored on this device" note. The mobile-notes toggle explains its narrow-layout dependency without ever disabling the control itself.
+**Reading & layout** groups the three device-local layout toggles (Force mobile layout, Research notes beside PDF when narrow, Remember PDF page per file) with a panel-level "Stored on this device" note. The narrow-notes toggle applies only to narrow **stacked** containers (and Force mobile layout); tiled panes always keep Notes as a drawer. The control itself is never disabled.
 
 **Export** is the BibTeX/BibLaTeX field toggles plus Restore export defaults, given real width instead of a squeezed disclosure. A compact "N of M fields included" summary sits above the toggle grid and is derived from the existing toggle `aria-checked` state — it is not a second source of truth.
 
