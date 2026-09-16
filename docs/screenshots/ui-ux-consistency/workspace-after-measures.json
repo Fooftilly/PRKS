@@ -1,6 +1,6 @@
 {
   "label": "after",
-  "captured_at": "2026-09-16T08:11:52Z",
+  "captured_at": "2026-09-16T09:05:25Z",
   "viewport": {
     "width": 1024,
     "height": 582
@@ -12,9 +12,9 @@
       "E2E UX Tour PDF Work"
     ],
     "work_ids": {
-      "a": "W-2A6451E62C094ED68E150E1AF8C1397B",
-      "b": "W-3A6A395976F94832917D68072795610B",
-      "c": "W-56706050AC424D98BD25497A062F0C53"
+      "a": "W-DC7C8E8914034B3F807A7C67AD46FFD4",
+      "b": "W-9BDA6F9A2A5A432DA4CA34BC298FE49C",
+      "c": "W-ABA857BAB5094D21886B909811942E8A"
     },
     "titles_in_headers": [
       "E2E Research Work",
@@ -135,33 +135,33 @@
       "tabs": [
         {
           "id": "tab-1",
-          "route": "#/works/W-2A6451E62C094ED68E150E1AF8C1397B",
+          "route": "#/works/W-DC7C8E8914034B3F807A7C67AD46FFD4",
           "title": "E2E Research Work",
           "icon": "file-text",
           "history": [
-            "#/works/W-2A6451E62C094ED68E150E1AF8C1397B"
+            "#/works/W-DC7C8E8914034B3F807A7C67AD46FFD4"
           ],
           "historyIndex": 0,
           "titleRouteGen": 2
         },
         {
           "id": "tab-2",
-          "route": "#/works/W-3A6A395976F94832917D68072795610B",
+          "route": "#/works/W-9BDA6F9A2A5A432DA4CA34BC298FE49C",
           "title": "E2E Related Work",
           "icon": "file-text",
           "history": [
-            "#/works/W-3A6A395976F94832917D68072795610B"
+            "#/works/W-9BDA6F9A2A5A432DA4CA34BC298FE49C"
           ],
           "historyIndex": 0,
           "titleRouteGen": 1
         },
         {
           "id": "tab-3",
-          "route": "#/works/W-56706050AC424D98BD25497A062F0C53",
+          "route": "#/works/W-ABA857BAB5094D21886B909811942E8A",
           "title": "E2E UX Tour PDF Work",
           "icon": "file-text",
           "history": [
-            "#/works/W-56706050AC424D98BD25497A062F0C53"
+            "#/works/W-ABA857BAB5094D21886B909811942E8A"
           ],
           "historyIndex": 0,
           "titleRouteGen": 1
