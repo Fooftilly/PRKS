@@ -655,7 +655,7 @@ The root split between Main and Secondary is workspace-owned canonical preferenc
 
 Divider contract:
 
-- 1px normal separator (`.prks-splitter.prks-splitter--vertical`); a substantially wider invisible pointer hit target via `::after`
+- 1px normal separator (`.prks-splitter.prks-splitter--vertical`); a substantially wider invisible pointer hit target via `::after`; `z-index: var(--z-panel)` so adjacent tile content (Notes sidecar/drawer, PDF viewport) cannot steal those pointer hits
 - idle: almost invisible 1px track; hover / active drag: a centered indicator (`::before`) without changing the grid track; keyboard focus: the same indicator plus a clear `:focus-visible` outline
 - do not make the divider visually thick just to make it draggable; the visual indicator must not shift pane geometry
 - pointer drag uses `setPointerCapture()` so dragging stays stable while the pointer crosses tile content (PDF viewer, EasyMDE, buttons)
