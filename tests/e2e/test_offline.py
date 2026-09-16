@@ -909,13 +909,13 @@ class OfflineFoundationTests(unittest.TestCase):
             )
             self.assertIsNotNone(_cached_entity(page, "work", work_a))
 
-            open_count_before = wait_for_async(
-                page,
+            # Count may be 0 (initial open already ACKed before sync was
+            # blocked). wait_for_async treats 0 as failure, so evaluate.
+            open_count_before = page.evaluate(
                 """id => prksSync.store.listOperations().then(rows =>
                     rows.filter(r => r.operation === 'MARK_WORK_OPENED'
                         && r.entity_id === id).length)""",
-                arg=work_a,
-                timeout=5000,
+                work_a,
             )
 
             page.reload(wait_until="domcontentloaded")
@@ -958,13 +958,11 @@ class OfflineFoundationTests(unittest.TestCase):
                 ),
                 "pending DELETE must never publish the Work as the live entity",
             )
-            open_count_after = wait_for_async(
-                page,
+            open_count_after = page.evaluate(
                 """id => prksSync.store.listOperations().then(rows =>
                     rows.filter(r => r.operation === 'MARK_WORK_OPENED'
                         && r.entity_id === id).length)""",
-                arg=work_a,
-                timeout=5000,
+                work_a,
             )
             self.assertEqual(
                 open_count_after,
