@@ -1413,21 +1413,6 @@ function prksPromptTextDialog(options = {}) {
     });
 }
 
-async function prksPatchRoleCreditName(workId, personId, roleType, orderIndex, creditName) {
-    const res = await prksRequest(`/api/works/${encodeURIComponent(workId)}/roles`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            person_id: personId,
-            role_type: roleType,
-            order_index: orderIndex,
-            credit_name: creditName || '',
-        }),
-    });
-    const data = await res.json().catch(() => ({}));
-    return { ok: res.ok, data };
-}
-
 async function prksEditRoleCreditOnWork(btn) {
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
@@ -1680,7 +1665,7 @@ async function prepareRoleModal() {
      * picker has to work without the server -- `fetchPersons()` returns an
      * empty list offline, which made the one action this milestone enables
      * impossible to perform precisely when it matters. Creating a NEW Person
-     * stays online-only and is refused separately.
+     * is also durable (`CREATE_PERSON`) from this modal.
      */
     const people = typeof prksOfflinePeopleFetch === 'function'
         ? await prksOfflinePeopleFetch() : null;

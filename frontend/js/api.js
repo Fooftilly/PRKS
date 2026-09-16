@@ -652,19 +652,9 @@ function prksInferWorkSourceKind(work) {
 }
 
 /**
- * Shared refusal boundary for the canonical Folder wrappers. The guard itself
- * tells the user why, so the thrown error carries a marker letting call sites
- * skip a second, duplicate alert.
+ * Marker on errors already surfaced by an offline mutation guard, so call
+ * sites can skip a second, duplicate alert.
  */
-function prksGuardFolderMutation(message) {
-    if (typeof prksOfflineGuardMutation !== 'function') return;
-    if (!prksOfflineGuardMutation(message)) return;
-    const err = new Error('Requires a connection to PRKS.');
-    err.prksOfflineRefused = true;
-    throw err;
-}
-
-/** True for an error thrown by prksGuardFolderMutation (already surfaced). */
 function prksOfflineWasGuardRefusal(err) {
     return !!(err && err.prksOfflineRefused === true);
 }
@@ -1110,7 +1100,7 @@ function prksMarkConceptsDomainChanged() {
  * Coherence hook for a canonical change to the Positions read model. A cached
  * Position detail embeds derived Argument/Stance summaries (name, kind,
  * verdict) and its whole targeting list, so Argument-side changes stale it even
- * though no Position record moved. Phase 1 is deliberately conservative: any
+ * Positions domain policy is deliberately conservative: any
  * successful call to one of those helpers invalidates the whole Positions
  * domain rather than working out which Positions were actually affected.
  * Independent of the Concepts domain by construction -- see AGENTS.md

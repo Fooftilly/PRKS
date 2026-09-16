@@ -93,6 +93,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("Could not read this PDF", work_chunk)
         self.assertIn("prksNavigate", work_chunk)
         self.assertIn("prksCreateWorkDurably", work_chunk)
+        self.assertIn("attachWorkTagsAfterCreate", work_chunk)
         self.assertNotIn("window.location.reload()", work_chunk)
         self.assertIn("Creating…", ui)
         self.assertIn("prksShowUploadPdfSelected", ui)

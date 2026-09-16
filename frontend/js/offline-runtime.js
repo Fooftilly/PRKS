@@ -2783,9 +2783,10 @@
         }
 
         /**
-         * Call before a canonical mutation. Returns true (and surfaces the
-         * standard message) when the mutation must be blocked. Never queues
-         * or fakes success -- Phase 1 has no offline mutation outbox.
+         * Call before a canonical server-bound mutation. Returns true (and
+         * surfaces the standard message) when the mutation must be blocked.
+         * Never queues or fakes success. Durable local-first ops use
+         * `local-store.js` instead of this guard.
          */
         function guardMutation(message) {
             if (!isMutationBlocked()) return false;

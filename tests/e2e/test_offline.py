@@ -1895,7 +1895,7 @@ class OfflineFoundationTests(unittest.TestCase):
 
 
 class OfflineConceptTests(unittest.TestCase):
-    """Phase 1 read-only Concept routes: #/concepts and #/concepts/:conceptId."""
+    """Cached Concept routes: #/concepts and #/concepts/:conceptId (mutations are durable separately)."""
 
     def _start(self):
         server = AppServer(seed_fn=seed_concepts_library)
@@ -2800,7 +2800,7 @@ class OfflineConceptTests(unittest.TestCase):
 
 
 class OfflinePositionTests(unittest.TestCase):
-    """Phase 1 read-only Position routes: #/positions and #/positions/:positionId."""
+    """Cached Position routes: #/positions and #/positions/:positionId (mutations are durable separately)."""
 
     def _start(self):
         server = AppServer(seed_fn=seed_positions_library)
@@ -3729,7 +3729,7 @@ class OfflinePositionTests(unittest.TestCase):
 
 
 class OfflineArgumentTests(unittest.TestCase):
-    """Phase 1 read-only Argument/Stance routes: #/arguments and #/arguments/:id."""
+    """Cached Argument/Stance routes: #/arguments and #/arguments/:id (mutations are durable separately)."""
 
     def _start(self):
         server = AppServer(seed_fn=seed_arguments_library)
@@ -5086,7 +5086,7 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
 
 
 class OfflinePeopleTests(unittest.TestCase):
-    """Phase 1 read-only People routes: #/people, #/people/role/:role, #/people/:id."""
+    """Cached People routes: #/people, #/people/role/:role, #/people/:id (mutations are durable separately)."""
 
     def _start(self, seed_fn=seed_people_library):
         server = AppServer(seed_fn=seed_fn)
@@ -5683,8 +5683,9 @@ class OfflinePeopleTests(unittest.TestCase):
 
 
 class OfflinePeopleMutationTests(unittest.TestCase):
-    """Every Person mutation surface is online-only, and an open editor keeps
-    its draft when connectivity drops."""
+    """Person mutations are durable; an open editor keeps its draft when
+    connectivity drops. Work-relationship editing from the profile stays
+    connection-required."""
 
     def _start(self):
         server = AppServer(seed_fn=seed_people_library)

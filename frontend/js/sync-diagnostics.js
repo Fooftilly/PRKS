@@ -540,6 +540,10 @@
                         ? '#/concepts/' + encodeURIComponent(op.entity_id)
                     : op.entity_type === 'argument'
                         ? '#/arguments/' + encodeURIComponent(op.entity_id)
+                    : op.entity_type === 'playlist'
+                        ? '#/playlists/' + encodeURIComponent(op.entity_id)
+                    : op.entity_type === 'tag'
+                        ? '#/tags'
                     : '#/works/' + encodeURIComponent(op.entity_id);
             link.textContent = describe(op);
             row.append(link, document.createTextNode(

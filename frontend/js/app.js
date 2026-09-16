@@ -1399,7 +1399,7 @@ function initSidebarBrandHome() {
 }
 
 /**
- * Route-critical read models (Work only, Phase 1) go through the
+ * Route-critical read models go through the
  * offline-capable wrapper instead of the plain api.js fetcher: a genuine
  * network/server-unreachable failure falls back to the offline store
  * instead of silently becoming "not found", while a real HTTP domain
@@ -4583,6 +4583,20 @@ function initForms() {
                 };
                 const op = await prksCreateWorkDurably(createFields);
                 const newId = op && op.entity_id;
+                if (newId && typeof uploadTagsSelected !== 'undefined' && uploadTagsSelected.length &&
+                    typeof window.prksSync !== 'undefined' && window.prksSync.store &&
+                    typeof window.prksSync.store.attachWorkTagsAfterCreate === 'function') {
+                    try {
+                        await window.prksSync.store.attachWorkTagsAfterCreate(
+                            newId, op.op_id, uploadTagsSelected);
+                        if (typeof window.prksSync.changed === 'function') window.prksSync.changed();
+                    } catch (tagErr) {
+                        if (statusMsg) {
+                            statusMsg.textContent = 'File created, but one or more tags could not be attached.';
+                            statusMsg.classList.remove('hidden');
+                        }
+                    }
+                }
                 closeModals();
                 if (newId && typeof prksNavigate === 'function') {
                     prksNavigate('#/works/' + encodeURIComponent(newId));

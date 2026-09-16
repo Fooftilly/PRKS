@@ -126,19 +126,18 @@ function safeHttpUrl(url) {
 
 /** Cached profile image via API (remote fetch + disk cache server-side). */
 /* --- Offline policy for People routes (AGENTS.md "Offline / PWA") ------------
- * People are read-only offline in Phase 1: cached index/role views and Person
- * profiles render, every canonical mutation is blocked outright (never queued,
- * never faked). Graph navigation delegates availability to its route. Linked Work
- * cards and Group chips stay ordinary PRKS links so the Work and Group routes
- * decide for themselves. Controls carry these roles so one helper can settle
- * them all, including markup rerendered after the initial bind. */
+ * People mutations are local-first: create, profile fields, groups and delete
+ * enqueue durable ops. Cached index/role views and Person profiles still render
+ * from the disposable read cache. Graph navigation delegates availability to
+ * its route. Linked Work cards and Group chips stay ordinary PRKS links so the
+ * Work and Group routes decide for themselves. Controls carry these roles so
+ * one helper can settle them all, including markup rerendered after the initial
+ * bind. */
 const PERSON_MUTATION_ROLE = 'person-mutation-control';
 
 /* Creating a Person is durable-first, so its controls are NEVER disabled: the
  * identity is chosen on this device and the record is complete the moment it is
- * written locally. Editing and deleting an existing Person still require the
- * server, so they keep `PERSON_MUTATION_ROLE` and its offline disable. Two roles
- * rather than one, because the two decisions genuinely differ now. */
+ * written locally. */
 const PERSON_CREATE_ROLE = 'person-create-control';
 
 /* Editing a Person's PROFILE is durable too, so "Edit profile" is never
@@ -146,8 +145,9 @@ const PERSON_CREATE_ROLE = 'person-create-control';
  * as they send online. Group membership became durable with the Person Group
  * families, and deletion with `DELETE_PERSON`, so none of those controls is
  * disabled by connectivity any more. What `PERSON_MUTATION_ROLE` still covers
- * is the Work-RELATIONSHIP editing on this page, which has not been moved to
- * the durable role family yet. */
+ * is the Work-RELATIONSHIP editing on this page, which remains
+ * connection-required from the Person profile (the same links are durable from
+ * the Work's People panel). */
 const PERSON_EDIT_ROLE = 'person-edit-control';
 
 /* Deleting is durable, and carries its own role purely so tests and styling
@@ -999,8 +999,8 @@ function openPersonProfileEdit() {
      * not two. What CAN stop a save is not knowing this Person's revisions,
      * and that is decided at save time by `prksAcknowledgedPersonBase`,
      * because it is a fact about this device's cache rather than about the
-     * network. The group controls inside the editor stay connection-required:
-     * a membership is a relationship, not a profile scalar. */
+     * network. Group membership saves durably via the Person Group pair ops;
+     * unknown-base refusals are decided at save time, not by connectivity. */
     if (ctx && ctx.ui) {
         ctx.ui.personWorksEditing = false;
         ctx.ui.personDetailEditing = true;

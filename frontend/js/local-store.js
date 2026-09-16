@@ -1338,6 +1338,56 @@
             });
         }
 
+        /**
+         * Attach Tags to a Work this device just created. Each row waits on the
+         * CREATE_WORK op and any pending CREATE_TAG for that Tag.
+         */
+        function attachWorkTagsAfterCreate(workId, createOpId, tagSpecs) {
+            if (!isNonBlankString(workId) || !isNonBlankString(createOpId) ||
+                !Array.isArray(tagSpecs) || !tagSpecs.length) {
+                return Promise.resolve([]);
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const createOp = rows.find(r => r && r.op_id === createOpId);
+                    if (!createOp || createOp.operation !== 'CREATE_WORK' ||
+                        createOp.entity_id !== workId) {
+                        throw localStoreError('invalid_envelope', 'Unknown file creation.');
+                    }
+                    const created = [];
+                    for (let i = 0; i < tagSpecs.length; i += 1) {
+                        const spec = tagSpecs[i];
+                        const tagId = spec && spec.id;
+                        if (!isNonBlankString(tagId)) continue;
+                        assertTagIsNotBeingDeleted(rows, tagId, 'attached');
+                        assertTagIsNotBeingMerged(rows, tagId, 'attached');
+                        const tagCreateOp = tagCreationDependency(rows, tagId,
+                            'it cannot be attached to a new file');
+                        const existing = rows.find(r => r.entity_type === 'work' &&
+                            r.entity_id === workId && r.payload && r.payload.tag_id === tagId &&
+                            r.status !== STATUS_ACKNOWLEDGED);
+                        if (existing) {
+                            created.push(existing);
+                            continue;
+                        }
+                        const depends = [createOpId];
+                        if (tagCreateOp) depends.push(tagCreateOp.op_id);
+                        const tagContext = spec.name
+                            ? { tag: { id: tagId, name: spec.name } }
+                            : null;
+                        const op = await insertEnvelopeIn(request, {
+                            operation: 'ADD_WORK_TAG', entity_type: 'work',
+                            entity_id: workId, payload: { tag_id: tagId },
+                            base_revision: 0, depends_on: depends,
+                        }, tagContext);
+                        created.push(op);
+                        rows.push(op);
+                    }
+                    setResult(created);
+                });
+        }
+
         function coalesceFolderTag(folderId, tagId, present, baseState, baseRevision, tag) {
             if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
                 !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -3846,7 +3896,7 @@
             mergeTag: mergeTag,
             deleteWork: deleteWork,
             createWork: createWork,
-            coalesceWorkTag, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
+            coalesceWorkTag, attachWorkTagsAfterCreate, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
             saveWorkSource,
             saveWorkPersonRole,
             createPerson,
