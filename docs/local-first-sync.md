@@ -1282,8 +1282,9 @@ depending on a Person cache being present.
 Open a Work's **Manage tags** panel online once to prepare its catalog and
 relationship snapshot. Offline Add needs a cached Work, catalog and tag-options.
 Remove needs the Work and tag-options, so a missing catalog need not block it.
-Creating a Tag still requires a connection and is never an actionable offline
-picker result.
+Creating a Tag is durable (`CREATE_TAG`): the picker's create row is live with
+or without a server, and a following attachment waits on that construction via
+`depends_on`.
 
 The panel reports Offline · saved locally, Waiting to sync, Syncing, Conflict,
 Sync failed, or All changes synced. Settings → Diagnostics shows durable

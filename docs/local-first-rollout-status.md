@@ -60,8 +60,8 @@ not worked around:
 ## Still connection-required
 
 Everything below still calls a canonical endpoint and is disabled or refused
-while PRKS is unreachable. The list is the honest scope of "read-only offline"
-as it stands — not a claim that each is impossible.
+while PRKS is unreachable. The list is the honest scope of what still needs
+the server — not a claim that the rest of PRKS is read-only offline.
 
 ### Deliberately server-bound, and expected to stay so
 
