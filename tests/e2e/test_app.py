@@ -3185,8 +3185,10 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.locator(selector).wait_for()
         new_text = "PRIVATE-PARK-NEW-%s" % int(time.time() * 1000)
         page.locator(selector).fill(new_text)
-        page.evaluate("id => window.prksWorkspaceHideLeaf(id)", arg=ids["a"])
-        page.evaluate("id => window.prksWorkspaceTileTab(id)", arg=ids["a"])
+        # Hide/tile are async (leave preflight + flush). Awaiting both keeps the
+        # remount from racing the park and makes the unsettled draft observable.
+        page.evaluate("async id => { await window.prksWorkspaceHideLeaf(id); }", arg=ids["a"])
+        page.evaluate("async id => { await window.prksWorkspaceTileTab(id); }", arg=ids["a"])
         page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
         page.locator(selector).wait_for()
         page.wait_for_function(
@@ -3203,6 +3205,13 @@ class WorkspaceTabsTests(_BrowserE2E):
         wait_for_async(page,
             """() => prksSync.store.listOperations().then(rows =>
                 rows.filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE').length === 0)""",
+            timeout=15000,
+        )
+        wait_for_async(
+            page,
+            """(args) => fetch('/api/works/' + args.id).then(r => r.json()).then(w =>
+                w.private_notes === args.text)""",
+            arg={"id": work_a, "text": final_text},
             timeout=15000,
         )
         persisted = page.evaluate(
