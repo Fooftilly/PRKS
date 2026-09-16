@@ -48,6 +48,11 @@ class WorkspaceOverviewVisiblePanesTests(unittest.TestCase):
         self.assertIn("aria-modal", src)
         self.assertIn("trapKeydown", src)
         self.assertIn("previouslyFocused", src)
+        # Restore preference: explicit opener → activeElement → toolbar.
+        self.assertIn("explicit || activeOk || toolbar", src)
+        palette = _read(os.path.join(_ROOT, "frontend", "js", "command-palette.js"))
+        self.assertIn("prksWorkspaceOverviewOpen(opener", palette)
+        self.assertIn("restoreFocus: true", palette)
 
     def test_hide_split_and_narrow_fallback_main_only(self):
         _run_overview(

@@ -198,6 +198,18 @@
         const selected = state.ids.has(id);
         card.classList.toggle('is-selected', selected);
         card.setAttribute('aria-selected', selected ? 'true' : 'false');
+        /* While selecting, the card is not a navigable link: checkbox is the
+         * keyboard control, and Enter/Space on the card toggles selection. */
+        if (!card.hasAttribute('data-prks-bulk-nav-role')) {
+            const prevRole = card.getAttribute('role');
+            if (prevRole != null) card.setAttribute('data-prks-bulk-nav-role', prevRole);
+            else card.setAttribute('data-prks-bulk-nav-role', '');
+            const prevTab = card.getAttribute('tabindex');
+            if (prevTab != null) card.setAttribute('data-prks-bulk-nav-tabindex', prevTab);
+            else card.setAttribute('data-prks-bulk-nav-tabindex', '');
+        }
+        card.removeAttribute('role');
+        card.setAttribute('tabindex', '-1');
         let box = card.querySelector('.work-card__select');
         if (!box) {
             box = document.createElement('label');
@@ -222,6 +234,18 @@
         if (!card) return;
         card.classList.remove('is-selected');
         card.removeAttribute('aria-selected');
+        if (card.hasAttribute('data-prks-bulk-nav-role')) {
+            const prevRole = card.getAttribute('data-prks-bulk-nav-role');
+            if (prevRole) card.setAttribute('role', prevRole);
+            else card.removeAttribute('role');
+            card.removeAttribute('data-prks-bulk-nav-role');
+        }
+        if (card.hasAttribute('data-prks-bulk-nav-tabindex')) {
+            const prevTab = card.getAttribute('data-prks-bulk-nav-tabindex');
+            if (prevTab !== '') card.setAttribute('tabindex', prevTab);
+            else card.removeAttribute('tabindex');
+            card.removeAttribute('data-prks-bulk-nav-tabindex');
+        }
         const box = card.querySelector && card.querySelector('.work-card__select');
         if (box) box.remove();
     }
@@ -402,18 +426,32 @@
     }
 
     function onKeydownCapture(e) {
-        if (e.key !== 'Escape') return;
         if (!state.active) return;
-        if (typeof root.prksAnyModalOpen === 'function' && root.prksAnyModalOpen()) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (state.sheetKind) {
-            if (state.submitting) return;
-            closeSheet();
-            syncCountUi();
+        if (e.key === 'Escape') {
+            if (typeof root.prksAnyModalOpen === 'function' && root.prksAnyModalOpen()) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (state.sheetKind) {
+                if (state.submitting) return;
+                closeSheet();
+                syncCountUi();
+                return;
+            }
+            exitSelection();
             return;
         }
-        exitSelection();
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        if (state.submitting) return;
+        const target = e.target;
+        if (!target || !target.closest) return;
+        if (target.closest('input, button, a, textarea, select, [contenteditable="true"]')) return;
+        const card = target.closest('.project-card--work-card[data-work-id]');
+        if (!card) return;
+        const host = pageContent();
+        if (host && host.contains && !host.contains(card)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        toggleId(card.getAttribute('data-work-id'));
     }
 
     function onToolbarClick(e) {

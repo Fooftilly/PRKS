@@ -3897,10 +3897,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'work': {
                 const workId = route.params.workId;
-                /* Durable-queue hydration must not block a cached Work from
-                 * painting (metadata editor races gate listOperations on
-                 * purpose). Pending CREATE_WORK has no cache row — only then
-                 * await the queue before any network GET, so we never 404. */
+                /* Cached Work detail may start loading in parallel with the
+                 * durable queue, but CREATE_WORK / DELETE_WORK classification
+                 * must be reliable before this route decides the Work exists.
+                 * DELETE_WORK intentionally keeps the cache until ACK — racing
+                 * listOperations against an empty fallback can miss a pending
+                 * tombstone and re-render the deleted Work. */
                 const workOpsPromise = prksDurableOperationsOrNone();
                 let cachedWorkRow = null;
                 try {
@@ -3914,18 +3916,25 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 let workOps = [];
                 let offlineWork = { value: null, source: 'unavailable', cachedAt: null };
                 if (cachedWorkRow && cachedWorkRow.value) {
-                    const raced = await Promise.race([
-                        workOpsPromise.then(function (ops) { return { ops: ops || [] }; }),
-                        Promise.resolve({ ops: null }),
-                    ]);
-                    workOps = raced.ops || [];
-                    offlineWork = await prksOfflineDetailFetch(
+                    const fetchPromise = prksOfflineDetailFetch(
                         'work',
                         workId,
                         '/api/works/' + encodeURIComponent(workId),
                         routeSignal
                     );
+                    workOps = await workOpsPromise;
                     if (stale()) return;
+                    const workDeletedEarly = typeof prksPendingWorkDeletions === 'function' &&
+                        prksPendingWorkDeletions(workOps).has(workId);
+                    const workUnsentEarly = !workDeletedEarly &&
+                        typeof prksPendingWorkCreates === 'function' &&
+                        prksPendingWorkCreates(workOps).some(op => op.entity_id === workId);
+                    if (workDeletedEarly || workUnsentEarly) {
+                        offlineWork = { value: null, source: 'unavailable', cachedAt: null };
+                    } else {
+                        offlineWork = await fetchPromise;
+                        if (stale()) return;
+                    }
                 } else {
                     workOps = await workOpsPromise;
                     if (stale()) return;

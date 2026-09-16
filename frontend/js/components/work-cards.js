@@ -229,6 +229,13 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
         const t = e.target;
         if (!t || !t.closest) return;
         if (t.closest('input, button, a, textarea, select, [contenteditable="true"]')) return;
+        /* Bulk selection owns Enter/Space on Work cards (toggle, not navigate). */
+        if (typeof window.prksWorkSelectionIsActive === 'function' && window.prksWorkSelectionIsActive()) {
+            return;
+        }
+        if (document.body && document.body.classList.contains('prks-bulk-selection-active')) {
+            return;
+        }
         const card = t.closest('.project-card--work-card[data-prks-route][role="link"]');
         if (!card || t !== card) return;
         const hash = card.getAttribute('data-prks-route');

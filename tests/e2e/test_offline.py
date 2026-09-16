@@ -810,6 +810,63 @@ class OfflineFoundationTests(unittest.TestCase):
         finally:
             page.unroute("**/api/sync/operations", reject_sync)
 
+    def test_pending_delete_work_reopen_never_renders_cached_detail(self):
+        """Cached Work + pending DELETE_WORK must stay unavailable on reopen.
+
+        DELETE intentionally retains the disposable cache until ACK. The Work
+        route must still classify the tombstone reliably — never paint the
+        cached detail while deletion is pending.
+        """
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+
+        def reject_sync(route):
+            route.fulfill(status=500, content_type="application/json", body='{"error":"test failure"}')
+
+        page.route("**/api/sync/operations", reject_sync)
+        try:
+            _open_details_drawer_if_tiled(page)
+            advanced = page.locator(".work-details-advanced")
+            if advanced.get_attribute("open") is None:
+                advanced.locator("summary").click()
+            page.locator(".delete-work-btn").click()
+            page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
+            page.locator("#prks-modal-confirm-ok").click()
+            page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'DELETE_WORK'))""",
+                timeout=15000,
+            )
+            self.assertIsNotNone(_cached_entity(page, "work", work_a))
+
+            page.evaluate("id => { void window.prksNavigate('#/works/' + id); }", work_a)
+            page.wait_for_function(
+                "id => location.hash.indexOf('#/works/' + id) === 0",
+                arg=work_a,
+                timeout=15000,
+            )
+            page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+            self.assertEqual(page.locator(".work-detail").count(), 0)
+            self.assertNotIn(
+                WORK_A_TITLE,
+                page.locator("#page-content").inner_text(),
+            )
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'DELETE_WORK'))""",
+                timeout=5000,
+            )
+            self.assertIsNotNone(_cached_entity(page, "work", work_a))
+        finally:
+            page.unroute("**/api/sync/operations", reject_sync)
+
     def test_offline_open_of_uncached_work_shows_unavailable(self):
         """Scenario 2: offline navigation to a Work never opened online -- a clean
         offline-unavailable state, never a false "not found"."""

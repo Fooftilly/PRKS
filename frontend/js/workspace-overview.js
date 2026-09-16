@@ -257,12 +257,21 @@
         const el = ensurePopover();
         const btn = root.document && root.document.getElementById(BTN_ID);
         if (!el) return;
-        previouslyFocused =
-            (fromEl && fromEl.focus ? fromEl : null) ||
-            (btn && btn.focus ? btn : null) ||
-            (root.document && root.document.activeElement) ||
-            null;
-        openerEl = btn || fromEl || null;
+        /* Restore preference: explicit opener → current activeElement → toolbar.
+         * Command-palette context actions restore palette focus then open
+         * Overview; preferring the toolbar button would steal that restore. */
+        const explicit = fromEl && typeof fromEl.focus === 'function' ? fromEl : null;
+        const active = root.document && root.document.activeElement;
+        const activeOk =
+            active &&
+            typeof active.focus === 'function' &&
+            active !== root.document.body &&
+            !(el.contains && el.contains(active))
+                ? active
+                : null;
+        const toolbar = btn && typeof btn.focus === 'function' ? btn : null;
+        previouslyFocused = explicit || activeOk || toolbar || null;
+        openerEl = previouslyFocused;
         refreshBody();
         el.hidden = false;
         if (btn) btn.setAttribute('aria-expanded', 'true');

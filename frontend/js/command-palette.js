@@ -45,8 +45,12 @@
             }
         },
         'workspace-overview': function () {
+            /* closePalette({ restoreFocus: true }) already restored the
+             * palette opener; pass it through so Overview does not prefer the
+             * fixed toolbar Overview button over the real invocation source. */
+            const opener = root.document && root.document.activeElement;
             if (typeof root.prksWorkspaceOverviewOpen === 'function') {
-                root.prksWorkspaceOverviewOpen();
+                root.prksWorkspaceOverviewOpen(opener || undefined);
             }
         },
     };
