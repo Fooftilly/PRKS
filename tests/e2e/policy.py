@@ -225,6 +225,7 @@ AFFECTED_RULES = (
             "tests/e2e/fixtures.py",
             "tests/e2e/__init__.py",
             "tests/browser/pointer_capture.py",
+            "scripts/e2e",
         ),
         "features": ("smoke",),
         "fallback": "smoke",
