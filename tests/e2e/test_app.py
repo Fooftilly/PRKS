@@ -5770,7 +5770,9 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertEqual(extra_pages, [])
 
         before = _workspace_tab_count(page)
-        page.locator(".prks-tile--main a[href^='#/']").first.click(modifiers=["Control"])
+        # Tiled PDF Works hide Back, and focused Secondary owns the right panel — so Main
+        # may have no visible in-pane #/ link. Ctrl/Cmd-click a visible Secondary link instead.
+        page.locator(".prks-tile--secondary a.prks-nav-back").click(modifiers=["Control"])
         page.wait_for_function(
             "n => document.querySelectorAll('.prks-workspace-tab').length === n",
             arg=before + 1,
