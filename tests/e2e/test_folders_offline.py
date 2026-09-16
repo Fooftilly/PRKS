@@ -609,6 +609,14 @@ class FoldersOfflineTests(unittest.TestCase):
         page.locator('#work-title').fill('Folderless Creation')
         page.locator('#save-work-btn').click()
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
+        # Navigation follows local CREATE_WORK enqueue; folders coherence
+        # publishes only on ACK via reconcileCreatedWork.
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message='CREATE_WORK must acknowledge before folders coherence',
+        )
         self.assertGreater(o._domain_generation(page, 'folders'), before['folders'])
         o._wait_list_uncached(page, 'folders:index')
 
