@@ -274,13 +274,18 @@
             SET_WORK_PLAYLIST: root.prksWorkPlaylistSyncHandler,
             CREATE_TAG: root.prksTagCreateSyncHandler,
             DELETE_TAG: root.prksTagDeleteSyncHandler,
+            MERGE_TAG: root.prksTagMergeSyncHandler,
             ADD_WORK_TAG: root.prksWorkTagSyncHandler,
             REMOVE_WORK_TAG: root.prksWorkTagSyncHandler,
+            ADD_FOLDER_TAG: root.prksFolderTagSyncHandler,
+            REMOVE_FOLDER_TAG: root.prksFolderTagSyncHandler,
             MARK_WORK_OPENED: root.prksWorkOpenSyncHandler,
             SET_WORK_METADATA_FIELD: root.prksWorkMetadataSyncHandler,
             // Source identity is an AGGREGATE, not a field: one decision, one
             // revision, one conflict, four columns.
             SET_WORK_SOURCE: root.prksWorkSourceSyncHandler,
+            CREATE_WORK: root.prksWorkCreateSyncHandler,
+            DELETE_WORK: root.prksWorkDeleteSyncHandler,
             SET_WORK_RESEARCH_NOTE: root.prksNoteSyncHandler,
             SET_WORK_PRIVATE_NOTE: root.prksNoteSyncHandler,
             // A Work-Person link is an ELEMENT: one person, one role, its own

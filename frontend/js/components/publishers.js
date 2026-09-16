@@ -120,6 +120,8 @@ function prksEnsurePublishersPageDelegated(container) {
         const addBtn = e.target.closest('#publishers-page-add-btn');
         if (addBtn) {
             e.preventDefault();
+            if (typeof prksOfflineGuardMutation === 'function' &&
+                prksOfflineGuardMutation('Publishers require a connection to PRKS.')) return;
             const input = document.getElementById('publishers-page-new-name');
             const name = input ? String(input.value || '').trim() : '';
             if (!name) return;
@@ -165,6 +167,8 @@ function prksEnsurePublishersPageDelegated(container) {
                 confirmLabel: 'Delete publisher',
             });
             if (!confirmed) return;
+            if (typeof prksOfflineGuardMutation === 'function' &&
+                prksOfflineGuardMutation('Publishers require a connection to PRKS.')) return;
             try {
                 const res = await prksRequest('/api/publishers/' + encodeURIComponent(pub.id), {
                     method: 'DELETE',
@@ -189,6 +193,8 @@ function prksEnsurePublishersPageDelegated(container) {
             if (!pub || !input) return;
             const alias = String(input.value || '').trim();
             if (!alias) return;
+            if (typeof prksOfflineGuardMutation === 'function' &&
+                prksOfflineGuardMutation('Publishers require a connection to PRKS.')) return;
             try {
                 const res = await prksRequest(`/api/publishers/${encodeURIComponent(pub.id)}/aliases`, {
                     method: 'POST',
@@ -213,6 +219,8 @@ function prksEnsurePublishersPageDelegated(container) {
             if (!pub) return;
             const alias = rm.getAttribute('data-publisher-alias-remove');
             if (alias == null) return;
+            if (typeof prksOfflineGuardMutation === 'function' &&
+                prksOfflineGuardMutation('Publishers require a connection to PRKS.')) return;
             try {
                 const res = await prksRequest(
                     `/api/publishers/${encodeURIComponent(pub.id)}/aliases?alias=${encodeURIComponent(alias)}`,

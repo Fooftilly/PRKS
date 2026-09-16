@@ -2022,6 +2022,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(404, {"error": "Work not found"})
                 else:
                     self.send_json(200, data, etag=db.etag_for_representation("work-tag-options", data))
+            elif path.startswith('/api/folders/') and path.endswith('/tag-options') and len(path.split('/')) == 5:
+                data = db.get_folder_tag_options(path.split('/')[3])
+                if data is None:
+                    self.send_json(404, {"error": "Folder not found"})
+                else:
+                    self.send_json(200, data, etag=db.etag_for_representation("folder-tag-options", data))
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 data = db.get_work(w_id)
@@ -2470,6 +2476,25 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         LOGGER.warning(
                             "research_index_sync_failed work_id=%s error_type=%s",
                             safe_log_id(data.get("entity_id")), safe_error_type(e))
+                if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
+                        data.get("operation") == "DELETE_WORK"):
+                    if result.get("changed"):
+                        from backend.work_deletion import cleanup_after_work_delete
+                        # file_path is present only on the first ACK (ephemeral
+                        # apply return). Replay ledgers omit it. When supplied,
+                        # cleanup re-checks current Work references — never
+                        # trusts a deletion-time managed_pdf_still_referenced.
+                        cleanup_after_work_delete(
+                            db, text_index, data.get("entity_id"),
+                            file_path=result.get("file_path") or "",
+                            existed=True,
+                        )
+                    # Paths are not durable client state; strip before the wire.
+                    result = {
+                        "code": result["code"],
+                        "work_id": result["work_id"],
+                        "changed": result["changed"],
+                    }
                 self.send_json(status, result)
                 return
             if path == '/api/backups/progress':

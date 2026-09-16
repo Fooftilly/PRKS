@@ -68,8 +68,13 @@
         'SET_WORK_FOLDER',
         'CREATE_TAG',
         'DELETE_TAG',
+        'MERGE_TAG',
+        'CREATE_WORK',
+        'DELETE_WORK',
         'ADD_WORK_TAG',
         'REMOVE_WORK_TAG',
+        'ADD_FOLDER_TAG',
+        'REMOVE_FOLDER_TAG',
         'SET_WORK_METADATA_FIELD',
         'SET_WORK_SOURCE',
         'ADD_WORK_PERSON_ROLE',
@@ -177,6 +182,24 @@
             if (!row || row.status === STATUS_ACKNOWLEDGED) return false;
             if (row.entity_type === 'person' && row.entity_id === personId) return true;
             return !!row.payload && row.payload.person_id === personId;
+        });
+    }
+
+    /* Every unsynchronized operation that names one Work: its own field and
+     * relationship intents, and Argument constructions/source replacements that
+     * cite it. Deletion has to reason about all of them at once. */
+    function operationsNamingWork(rows, workId) {
+        return (Array.isArray(rows) ? rows : []).filter(function (row) {
+            if (!row || row.status === STATUS_ACKNOWLEDGED) return false;
+            if (row.entity_type === 'work' && row.entity_id === workId) return true;
+            if ((row.operation === 'CREATE_ARGUMENT' || row.operation === 'SET_ARGUMENT_SOURCES') &&
+                Array.isArray(row.payload && row.payload.sources) &&
+                row.payload.sources.some(function (s) {
+                    return s && s.work_id === workId;
+                })) {
+                return true;
+            }
+            return false;
         });
     }
 
@@ -573,6 +596,8 @@
         SET_WORK_PERSON_ROLE_CREDIT: Object.freeze(['REVISION_CONFLICT']),
         ADD_WORK_TAG: Object.freeze(['REVISION_CONFLICT']),
         REMOVE_WORK_TAG: Object.freeze(['REVISION_CONFLICT']),
+        ADD_FOLDER_TAG: Object.freeze(['REVISION_CONFLICT']),
+        REMOVE_FOLDER_TAG: Object.freeze(['REVISION_CONFLICT']),
         SET_WORK_METADATA_FIELD: Object.freeze(['REVISION_CONFLICT']),
         SET_WORK_SOURCE: Object.freeze(['SOURCE_REVISION_CONFLICT']),
         SET_WORK_RESEARCH_NOTE: Object.freeze(['REVISION_CONFLICT']),
@@ -1137,6 +1162,27 @@
             }
         }
 
+        /* A Tag already carrying a pending merge is a doomed identity: new
+         * relationship intents must not target it, and a second merge of the
+         * same source would rewrite an identity transform already in flight. */
+        function assertTagIsNotBeingMerged(rows, tagId, verb) {
+            const pendingMerge = (rows || []).find(r => r && r.operation === 'MERGE_TAG' &&
+                r.entity_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingMerge) {
+                throw localStoreError('entity_merged',
+                    'This tag is being merged, so it cannot be ' + verb + '.');
+            }
+        }
+
+        /** Unsettled ops that name a Tag id as subject, relationship, or merge target. */
+        function operationsNamingTag(rows, tagId) {
+            return (rows || []).filter(r => r && r.status !== STATUS_ACKNOWLEDGED && (
+                (r.entity_type === 'tag' && r.entity_id === tagId) ||
+                (!!r.payload && r.payload.tag_id === tagId) ||
+                (r.operation === 'MERGE_TAG' && r.payload && r.payload.target_tag_id === tagId)
+            ));
+        }
+
         /**
          * Create a Tag under an id this device mints.
          *
@@ -1213,6 +1259,51 @@
                 });
         }
 
+        /**
+         * Merge source into target: one identity transform, no base revision.
+         *
+         * Refuse while any unsynchronized operation still names the source —
+         * never rewrite an already-sent envelope, and never retarget a
+         * relationship whose base revision belongs to a scope about to change.
+         * A second identical merge decision is the same row.
+         */
+        function mergeTag(sourceTagId, targetTagId) {
+            if (!isNonBlankString(sourceTagId) || !isNonBlankString(targetTagId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid tag merge.'));
+            }
+            if (sourceTagId === targetTagId) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Cannot merge a tag into itself.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertTagIsNotBeingDeleted(rows, sourceTagId, 'merged');
+                    assertTagIsNotBeingDeleted(rows, targetTagId, 'merged into');
+                    assertTagIsNotBeingMerged(rows, targetTagId, 'merged into');
+                    const already = rows.find(r => r && r.operation === 'MERGE_TAG' &&
+                        r.entity_id === sourceTagId && r.status !== STATUS_ACKNOWLEDGED);
+                    if (already) {
+                        if (already.payload && already.payload.target_tag_id === targetTagId) {
+                            setResult(already);
+                            return;
+                        }
+                        throw localStoreError('entity_merged',
+                            'This tag is already being merged into a different tag.');
+                    }
+                    const naming = operationsNamingTag(rows, sourceTagId)
+                        .filter(r => !(r.operation === 'MERGE_TAG' && r.entity_id === sourceTagId));
+                    if (naming.length) {
+                        throw localStoreError('scope_busy',
+                            'Finish syncing changes that still use this tag before merging it.');
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'MERGE_TAG', entity_type: 'tag', entity_id: sourceTagId,
+                        payload: { target_tag_id: targetTagId }, base_revision: null,
+                    }, null));
+                });
+        }
+
         function coalesceWorkTag(workId, tagId, present, baseState, baseRevision, tag) {
             if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
                 !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -1220,7 +1311,9 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'tagged');
                 assertTagIsNotBeingDeleted(rows, tagId, 'attached or removed');
+                assertTagIsNotBeingMerged(rows, tagId, 'attached or removed');
                 /* A Tag this device created and has not sent yet: the
                  * relationship waits for it, by the generic mechanism. */
                 const createOp = tagCreationDependency(rows, tagId,
@@ -1240,6 +1333,37 @@
                 setResult(await insertEnvelopeIn(request, {
                     operation: present ? 'ADD_WORK_TAG' : 'REMOVE_WORK_TAG', entity_type: 'work',
                     entity_id: workId, payload: { tag_id: tagId }, base_revision: baseRevision,
+                    depends_on: createOp ? [createOp.op_id] : [],
+                }, { tag }));
+            });
+        }
+
+        function coalesceFolderTag(folderId, tagId, present, baseState, baseRevision, tag) {
+            if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
+                !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
+                return Promise.reject(localStoreError('invalid_base', 'Invalid relationship base.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertTagIsNotBeingDeleted(rows, tagId, 'attached or removed');
+                assertTagIsNotBeingMerged(rows, tagId, 'attached or removed');
+                const createOp = tagCreationDependency(rows, tagId,
+                    'it cannot be attached to anything');
+                const existing = rows.find(r => r.entity_type === 'folder' && r.entity_id === folderId &&
+                    r.payload.tag_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
+                if (existing) {
+                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                        throw localStoreError('scope_busy', 'This Tag change is syncing or needs resolution.');
+                    }
+                    if ((existing.operation === 'ADD_FOLDER_TAG') === present) { setResult(existing); return; }
+                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    setResult(null);
+                    return;
+                }
+                if (present === baseState) { setResult(null); return; }
+                setResult(await insertEnvelopeIn(request, {
+                    operation: present ? 'ADD_FOLDER_TAG' : 'REMOVE_FOLDER_TAG', entity_type: 'folder',
+                    entity_id: folderId, payload: { tag_id: tagId }, base_revision: baseRevision,
                     depends_on: createOp ? [createOp.op_id] : [],
                 }, { tag }));
             });
@@ -1283,6 +1407,7 @@
                 row.status !== STATUS_ACKNOWLEDGED;
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const allRows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(allRows, workId, 'credited');
                 assertPersonIsNotBeingDeleted(allRows, link.person_id, 'credited on a file');
                 const rows = allRows.filter(matches)
                     .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
@@ -1478,6 +1603,167 @@
                 });
         }
 
+        function assertWorkIsNotBeingDeleted(rows, workId, verb) {
+            const pendingDelete = (rows || []).find(r => r && r.operation === 'DELETE_WORK' &&
+                r.entity_id === workId && r.status !== STATUS_ACKNOWLEDGED);
+            if (pendingDelete) {
+                throw localStoreError('entity_deleted',
+                    'This file is being deleted, so it cannot be ' + verb + '.');
+            }
+        }
+
+        /**
+         * Create a video Work under a client-minted `W-` id.
+         *
+         * PDF / binary construction is refused here: that path stays on
+         * `POST /api/works` until durable Blob storage exists. Source identity
+         * uses the same intent form as `SET_WORK_SOURCE` (`{kind, url}`).
+         */
+        function canonicalWorkCreatePayload(input) {
+            const src = isPlainObject(input) ? input : {};
+            const sourceIn = isPlainObject(src.source) ? src.source : null;
+            if (!sourceIn || sourceIn.kind !== 'video' || typeof sourceIn.url !== 'string') {
+                throw localStoreError('invalid_envelope', 'A video file needs a YouTube URL.');
+            }
+            let canonicalSource = null;
+            if (typeof root.prksCanonicalWorkSource === 'function') {
+                const parsed = root.prksCanonicalWorkSource(sourceIn.url);
+                if (parsed && parsed.source_url) {
+                    canonicalSource = { kind: 'video', url: parsed.source_url };
+                }
+            } else if (typeof root.prksIsValidYoutubeUrl === 'function' &&
+                root.prksIsValidYoutubeUrl(sourceIn.url)) {
+                canonicalSource = { kind: 'video', url: String(sourceIn.url).trim() };
+            }
+            if (!canonicalSource) {
+                throw localStoreError('invalid_envelope', 'Enter a valid YouTube URL.');
+            }
+            const status = (src.status == null ? 'Not Started' : String(src.status)).trim() ||
+                'Not Started';
+            const statuses = root.PRKS_WORK_STATUSES ||
+                ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'];
+            if (statuses.indexOf(status) === -1) {
+                throw localStoreError('invalid_envelope', 'Invalid status.');
+            }
+            const rolesIn = Array.isArray(src.roles) ? src.roles : [];
+            const roles = [];
+            const seen = Object.create(null);
+            for (let i = 0; i < rolesIn.length; i += 1) {
+                const entry = rolesIn[i];
+                if (!isPlainObject(entry) || !isNonBlankString(entry.person_id) ||
+                    !isNonBlankString(entry.role_type)) {
+                    throw localStoreError('invalid_envelope', 'Invalid role.');
+                }
+                const credit = entry.credit_name == null ? '' : String(entry.credit_name);
+                const key = entry.person_id + '\0' + entry.role_type;
+                if (seen[key]) continue;
+                seen[key] = true;
+                roles.push({
+                    person_id: entry.person_id.trim(),
+                    role_type: entry.role_type,
+                    credit_name: credit,
+                });
+            }
+            const str = (name) => (src[name] == null ? '' : String(src[name]));
+            return {
+                title: str('title'),
+                status: status,
+                doc_type: 'online',
+                abstract: str('abstract'),
+                author_text: str('author_text'),
+                year: str('year'),
+                published_date: str('published_date'),
+                urldate: str('urldate'),
+                private_notes: str('private_notes'),
+                thumb_url: str('thumb_url'),
+                source: { kind: 'video', url: canonicalSource.url || String(sourceIn.url).trim() },
+                folder_id: str('folder_id').trim(),
+                playlist_id: str('playlist_id').trim(),
+                roles: roles,
+            };
+        }
+
+        function createWork(fields) {
+            let payload;
+            try {
+                payload = canonicalWorkCreatePayload(fields);
+            } catch (e) {
+                return Promise.reject(e);
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const deps = [];
+                    if (payload.folder_id) {
+                        assertFolderIsNotBeingDeleted(rows, payload.folder_id, 'filed into');
+                        const folderOp = folderCreationDependency(rows, payload.folder_id,
+                            'a file cannot be created inside it');
+                        if (folderOp) deps.push(folderOp.op_id);
+                    }
+                    if (payload.playlist_id) {
+                        assertPlaylistIsNotBeingDeleted(rows, payload.playlist_id, 'added to');
+                        const playlistOp = playlistCreationDependency(rows, payload.playlist_id,
+                            'a file cannot be added to it');
+                        if (playlistOp) deps.push(playlistOp.op_id);
+                    }
+                    for (let i = 0; i < payload.roles.length; i += 1) {
+                        const personId = payload.roles[i].person_id;
+                        assertPersonIsNotBeingDeleted(rows, personId, 'credited on a file');
+                        const personOp = personCreationDependency(rows, personId,
+                            'they cannot be credited on a new file');
+                        if (personOp) deps.push(personOp.op_id);
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'CREATE_WORK', entity_type: 'work',
+                        entity_id: generateEntityId('W', uuid),
+                        payload: payload, base_revision: null,
+                        depends_on: deps,
+                    }, null));
+                });
+        }
+
+        /**
+         * Delete a Work, cancelling the intents it makes pointless.
+         *
+         * Same rule every other destruction uses: never-sent ops naming this
+         * Work are cancelled; possibly-sent ones are waited for. A Work this
+         * device created and never sent folds away entirely.
+         */
+        function deleteWork(workId) {
+            if (!isNonBlankString(workId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid file.'));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const mine = operationsNamingWork(rows, workId);
+                    const already = mine.find(r => r.operation === 'DELETE_WORK');
+                    if (already) { setResult(already); return; }
+                    const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_WORK');
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
+                    const waitFor = [];
+                    for (const row of mine) {
+                        if (neverSent(row) && row.operation !== 'CREATE_WORK') {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        } else {
+                            waitFor.push(row.op_id);
+                        }
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'DELETE_WORK', entity_type: 'work',
+                        entity_id: workId, payload: {},
+                        base_revision: null, depends_on: waitFor,
+                    }, null));
+                });
+        }
+
         /* ---- Folders: construction, fields, filing, deletion ---- */
 
         function folderCreationDependency(rows, folderId, consequence) {
@@ -1593,6 +1879,7 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertWorkIsNotBeingDeleted(rows, workId, 'filed');
                     if (desired) assertFolderIsNotBeingDeleted(rows, desired, 'filed into');
                     const existing = rows.find(r => r.operation === 'SET_WORK_FOLDER' &&
                         r.entity_type === 'work' && r.entity_id === workId &&
@@ -2533,6 +2820,7 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    assertWorkIsNotBeingDeleted(rows, workId, 'added to a playlist');
                     if (desired) assertPlaylistIsNotBeingDeleted(rows, desired, 'added to');
                     const existing = rows.find(r => r.operation === 'SET_WORK_PLAYLIST' &&
                         r.entity_type === 'work' && r.entity_id === workId &&
@@ -2911,6 +3199,7 @@
             const at = Date.parse(occurredAt);
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'opened');
                 const existing = rows.find(r => r.operation === 'MARK_WORK_OPENED' &&
                     r.entity_type === 'work' && r.entity_id === workId &&
                     r.status === STATUS_PENDING && r.attempt_count === 0);
@@ -2953,6 +3242,7 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'edited');
                 const written = [];
                 for (const field of Object.keys(changes)) {
                     const desired = changes[field];
@@ -3024,6 +3314,7 @@
             if (utf8ByteLength(text) > limit) return Promise.reject(localStoreError('payload_too_large', 'Note exceeds byte limit.'));
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'edited');
                 const active = rows.filter(r => r.operation === operation &&
                     r.entity_type === 'work' && r.entity_id === workId && r.status !== STATUS_ACKNOWLEDGED)
                     .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
@@ -3061,6 +3352,7 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(rows, workId, 'edited');
                 const active = rows.filter(r => r.operation === 'SET_WORK_SOURCE' &&
                     r.entity_type === 'work' && r.entity_id === workId &&
                     r.status !== STATUS_ACKNOWLEDGED)
@@ -3551,7 +3843,10 @@
             enqueueOperation: enqueueOperation,
             createTag: createTag,
             deleteTag: deleteTag,
-            coalesceWorkTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
+            mergeTag: mergeTag,
+            deleteWork: deleteWork,
+            createWork: createWork,
+            coalesceWorkTag, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
             saveWorkSource,
             saveWorkPersonRole,
             createPerson,

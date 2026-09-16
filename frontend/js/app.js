@@ -3525,6 +3525,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'saved-views': {
+                if (typeof prksOfflineRuntimeState === 'function' &&
+                    prksOfflineRuntimeState() !== 'online') {
+                    prksOfflineRenderUnavailable(
+                        contentDiv,
+                        'Saved Views require a connection');
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Saved Views require a connection',
+                    };
+                    break;
+                }
                 const views = typeof fetchSavedViews === 'function' ? await fetchSavedViews({ signal: routeSignal }) : [];
                 if (stale()) return;
                 if (typeof renderSavedViewsIndex === 'function') {
@@ -3536,6 +3547,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'saved-view-detail': {
+                if (typeof prksOfflineRuntimeState === 'function' &&
+                    prksOfflineRuntimeState() !== 'online') {
+                    prksOfflineRenderUnavailable(
+                        contentDiv,
+                        'Saved View results require a connection');
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Saved View results require a connection',
+                    };
+                    break;
+                }
                 const viewId = route.params.viewId;
                 const view = typeof fetchSavedView === 'function' ? await fetchSavedView(viewId, { signal: routeSignal }) : null;
                 if (stale()) return;
@@ -3608,6 +3630,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'search': {
+                if (typeof prksOfflineRuntimeState === 'function' &&
+                    prksOfflineRuntimeState() !== 'online') {
+                    prksOfflineRenderUnavailable(
+                        contentDiv,
+                        'Search requires a connection');
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Search requires a connection',
+                    };
+                    break;
+                }
                 const query = route.params.q || '';
                 const tag = route.params.tag || '';
                 const author = route.params.author || '';
@@ -3638,6 +3671,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'publishers': {
+                if (typeof prksOfflineRuntimeState === 'function' &&
+                    prksOfflineRuntimeState() !== 'online') {
+                    prksOfflineRenderUnavailable(
+                        contentDiv,
+                        'Publishers require a connection');
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Publishers require a connection',
+                    };
+                    break;
+                }
                 if (typeof renderPublishersPage === 'function') {
                     await renderPublishersPage(contentDiv, generation, { signal: routeSignal, ctx: ctx });
                     if (stale()) return;
@@ -3683,12 +3727,21 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'work': {
                 const workId = route.params.workId;
-                const offlineWork = await prksOfflineDetailFetch(
-                    'work',
-                    workId,
-                    '/api/works/' + encodeURIComponent(workId),
-                    routeSignal
-                );
+                const workOps = await prksDurableOperationsOrNone();
+                if (stale()) return;
+                const workDeleted = typeof prksPendingWorkDeletions === 'function' &&
+                    prksPendingWorkDeletions(workOps).has(workId);
+                const workUnsent = !workDeleted &&
+                    typeof prksPendingWorkCreates === 'function' &&
+                    prksPendingWorkCreates(workOps).some(op => op.entity_id === workId);
+                const offlineWork = workUnsent
+                    ? { value: null, source: 'unavailable', cachedAt: null }
+                    : await prksOfflineDetailFetch(
+                        'work',
+                        workId,
+                        '/api/works/' + encodeURIComponent(workId),
+                        routeSignal
+                    );
                 if (stale()) return;
                 // This route IS the genuine foreground open, so it is the only
                 // place that records one. The read itself is pure; the explicit
@@ -3721,7 +3774,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     }
                     return placed;
                 };
-                const work = prksPlacePendingWork(offlineWork.value);
+                let work = prksPlacePendingWork(offlineWork.value);
+                if (workDeleted) {
+                    work = null;
+                }
+                if (workUnsent && typeof prksPendingWorkDetail === 'function') {
+                    const createOp = prksPendingWorkCreates(workOps).find(
+                        op => op.entity_id === workId);
+                    work = prksPlacePendingWork(prksPendingWorkDetail(createOp));
+                }
                 if (work && typeof prksRememberWorkNotesCanonical === 'function') {
                     prksRememberWorkNotesCanonical(ctx, work);
                 }
@@ -3754,14 +3815,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         }
                     }).catch(function () { /* bookkeeping never breaks the page */ });
                 }
-                if (!work && offlineWork.source === 'unavailable') {
+                if (!work && (workDeleted || offlineWork.source === 'unavailable')) {
                     prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'File not available offline' };
                     break;
                 }
                 await renderWorkDetails(ctx, work, { generation: generation, signal: routeSignal });
                 if (stale()) return;
-                prksOfflinePrependBanner(contentDiv, offlineWork);
+                if (!workUnsent) prksOfflinePrependBanner(contentDiv, offlineWork);
                 titleOpts = work
                     ? { entityTitle: String(work.title || '').trim() || 'File' }
                     : { notFound: true, notFoundTitle: 'File not found' };
@@ -4492,6 +4553,59 @@ function initForms() {
         if (statusMsg) {
             statusMsg.textContent = '';
             statusMsg.classList.add('hidden');
+        }
+
+        /* Video construction is durable (CREATE_WORK). PDF binary ingestion
+         * stays on POST /api/works until a Blob design exists. */
+        if (sourceKind === 'video' && typeof prksCreateWorkDurably === 'function') {
+            try {
+                const createFields = {
+                    title: payload.title,
+                    status: payload.status,
+                    doc_type: 'online',
+                    abstract: payload.abstract || '',
+                    author_text: payload.author_text || '',
+                    year: payload.year || '',
+                    published_date: payload.published_date || '',
+                    urldate: payload.urldate || '',
+                    private_notes: payload.private_notes || '',
+                    thumb_url: payload.thumb_url || '',
+                    source: { kind: 'video', url: sourceUrl },
+                    folder_id: payload.folder_id || '',
+                    playlist_id: payload.playlist_id || '',
+                    roles: Array.isArray(uploadRoles) ? uploadRoles.map(function (r) {
+                        return {
+                            person_id: r.person_id || r.id,
+                            role_type: r.role_type || 'Author',
+                            credit_name: r.credit_name || '',
+                        };
+                    }).filter(function (r) { return r.person_id; }) : [],
+                };
+                const op = await prksCreateWorkDurably(createFields);
+                const newId = op && op.entity_id;
+                closeModals();
+                if (newId && typeof prksNavigate === 'function') {
+                    prksNavigate('#/works/' + encodeURIComponent(newId));
+                }
+            } catch (e) {
+                const errText = (e && e.message) || 'Could not create the file.';
+                if (statusMsg) {
+                    statusMsg.textContent = errText;
+                    statusMsg.classList.remove('hidden');
+                }
+                if (videoUrlEl && /url|youtube/i.test(errText)) {
+                    if (typeof prksSetWorkModalFieldError === 'function') {
+                        prksSetWorkModalFieldError(videoUrlEl, 'Enter a valid YouTube URL.', 'work-video-url-error');
+                    }
+                    if (typeof prksFocusWorkModalControl === 'function') prksFocusWorkModalControl(videoUrlEl);
+                }
+            }
+            return;
+        }
+
+        if (typeof prksOfflineGuardMutation === 'function' &&
+            prksOfflineGuardMutation('Adding a PDF file requires a connection to PRKS.')) {
+            return;
         }
 
         let res;

@@ -1668,10 +1668,10 @@ rather than replaying an add against somebody who no longer exists.
 
 ## The Tag vocabulary (3E)
 
-The Work-Tag *relationship* has been durable since Phase 2. `CREATE_TAG` and
-`DELETE_TAG` are the other half, and they are the whole half: PRKS has no rename
-and no colour editor, so a `SET_TAG_FIELD` family would be inventing product
-semantics rather than moving existing ones off the network.
+The Work-Tag *relationship* has been durable since Phase 2. `CREATE_TAG`,
+`DELETE_TAG` and `MERGE_TAG` are the other half, and they are the whole half:
+PRKS has no rename and no colour editor, so a `SET_TAG_FIELD` family would be
+inventing product semantics rather than moving existing ones off the network.
 
 A Tag name is unique across canonical names **and aliases**, case-insensitively,
 and only the server sees every Tag. A client that minted an id for a name
@@ -1694,7 +1694,74 @@ may be on the wire is waited for instead. The lifecycle row survives the Tag, so
 an offline device replaying an attach is told the Tag was `DELETED` rather than
 that it never existed.
 
+### Merge is an identity transform
+
+`MERGE_TAG` rewrites source → target: relationships move, the source name
+becomes an alias of the target when the names differ, and the source lifecycle
+row survives as `merged`. It carries no base revision — the conflict unit is the
+identity, not a value. The client refuses the merge while any unsynchronized
+operation still names the source, rather than retargeting intents whose base
+revision belongs to a scope about to change; a pending merge hides the source
+from the catalogue and from chips, and relationship coalescing rejects that
+doomed id. Acknowledgement patches `tags:index` and stales exactly the Works and
+Folders the answer names (including Folder-tag option projections), the same
+way delete does.
+
 Tag identity stays PERSISTENT. Nothing here garbage-collects an unused Tag.
+
+## Work creation (CREATE_WORK)
+
+Video / YouTube construction under a client-minted `W-` id. Empty
+`base_revision`. Payload carries title/status/doc_type/bibliographic scalars,
+source intent `{kind: "video", url}`, optional `folder_id` / `playlist_id`, and
+initial `roles[]`. Provider columns are derived inside the mutation boundary via
+the same `_canonical_new_source` / `canonical_source` path as ordinary
+`POST /api/works` and `SET_WORK_SOURCE`. PDF / binary construction is refused —
+that stays intentionally online-only until durable Blob storage exists.
+
+Filing into Uncategorized (when `folder_id` is blank) and attaching playlist /
+roles are construction, not mutation: no folder/playlist/role revisions advance.
+Missing folder / playlist / person targets are named refusals
+(`FOLDER_NOT_FOUND` / `PLAYLIST_NOT_FOUND` / `PERSON_NOT_FOUND`); the client
+orders behind pending `CREATE_FOLDER` / `CREATE_PLAYLIST` / `CREATE_PERSON` via
+`depends_on`. A second envelope for an id that already exists acknowledges
+without overwriting.
+
+Acknowledgement fences folders, works-browse and recently-added always; playlists
+when construction carried a playlist; people and person-groups when it carried
+roles. Recent is deliberately untouched. Pending creates overlay Work detail
+from the durable envelope; never written into `prks-offline-v1`.
+
+## Work deletion (DELETE_WORK)
+
+Destruction of a Work identity. Empty payload, null base revision. Absence is
+convergence (`ACKNOWLEDGED` with `changed: false`) — the ordinary
+`DELETE /api/works/:id` has never refused a delete, and offline invents no
+`WORK_IN_USE` refusal. Cascade matches SQLite FK behaviour (tags/roles/folder/
+playlist/annotations/argument_sources relationships only; Tags/Persons/Arguments
+themselves stay). Filesystem and derived-index cleanup remain post-commit
+best-effort via `work_deletion.cleanup_after_work_delete`, shared with the HTTP
+path.
+
+Managed-PDF removal is **replay-safe**: cleanup always re-checks whether any
+*current* Work row still resolves to that managed filename. A deletion-time
+`managed_pdf_still_referenced` snapshot is never authoritative — an exact
+`op_id` replay can arrive after another Work has begun sharing the file.
+
+The immortal `sync_operations` ledger stores only the wire ACK shape
+(`code` / `work_id` / `changed`). The managed `file_path` may appear on the
+first in-memory apply return so post-commit cleanup can run once; it is
+redacted before ledger insert and stripped from the HTTP body. Filenames and
+paths must not live indefinitely in sync history (logging/privacy rules).
+Replay without a path skips PDF removal (index/thumbnail cleanup still runs);
+that prefers a possible orphan over deleting live shared bytes.
+
+The client cancels never-sent ops that name the Work (including Argument
+creates/source replacements that cite it) and waits for possibly-sent ones; a
+never-sent `CREATE_WORK` for the same id folds away entirely.
+Acknowledgement fences Concepts, Arguments, People, Person Groups, Folders,
+Playlists, browse catalogs and Research Graph core the same way the previous
+online-only `deleteWork` published coherence.
 
 ## Folders (3F)
 
@@ -1705,7 +1772,18 @@ Four shapes, and the split is a reading of the schema rather than a template.
 | `CREATE_FOLDER` | construction | the folder | none |
 | `SET_FOLDER_FIELD` | scalar mutation | one field | `folder-field/[folder, field]` |
 | `SET_WORK_FOLDER` | scalar mutation of the WORK | the Work | `work-folder/[work]` |
+| `ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG` | relationship element | `(folder, tag)` | `folder-tag/[folder, tag]` |
 | `DELETE_FOLDER` | destruction | the identity | none |
+
+### Folder tags mirror Work tags
+
+`ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG` are the same shape as Work-Tag
+membership: one pair, one revision, shared `set_state` for sync and direct HTTP,
+Tag lifecycle codes (`TAG_MERGED` / `TAG_DELETED`), and a per-Folder
+`folder-tag-options` projection. Merge and delete of a Tag advance Folder-tag
+revisions the same way they advance Work-tag ones. Pending overlays never enter
+the disposable cache; an unknown options base refuses the edit locally rather
+than guessing revision zero.
 
 ### Moving a folder is a field, not a structure
 
@@ -1832,14 +1910,13 @@ Deleting cancels every unsynchronized operation naming the playlist that was
 never attempted -- including a video added TO it, which is work the deletion
 would only undo.
 
-### `DELETE_PLAYLIST` has no UI control today
+### `DELETE_PLAYLIST` is offered from Playlist detail
 
-`DELETE /api/playlists/{id}` exists and PRKS has always been willing to delete a
-playlist, but no surface in the app offers it -- so the durable family is
-reachable only through the API and the tests. It is implemented anyway, because
-moving an existing endpoint onto the durable path is synchronization work; the
-button is a product decision (where it lives, what it warns about) and is left
-where it was.
+`DELETE /api/playlists/{id}` and the durable `DELETE_PLAYLIST` family share one
+boundary. Playlist detail shows **Delete playlist** in the page header. The
+confirm copy states that member videos stay in the library; only the playlist
+identity and its order are removed. The control stays live offline because the
+decision is durable.
 
 ### Playlists have never been unique by title
 
@@ -2085,7 +2162,7 @@ its API rather than the template.
 | Scalar mutation | `SET_WORK_METADATA_FIELD`, `SET_PERSON_METADATA_FIELD` | one field |
 | Relationship / set membership | `ADD_WORK_TAG`, `REMOVE_WORK_TAG`, `ADD_WORK_PERSON_ROLE` | one pair |
 | Aggregate / structural mutation | `SET_WORK_SOURCE` | the whole aggregate |
-| Destruction | (none yet) | the entity |
+| Destruction | `DELETE_WORK`, `DELETE_PERSON`, `DELETE_FOLDER`, … | the entity |
 
 The shape decides the conflict unit, and the conflict unit is the decision that
 matters most: it is what the user will be asked to resolve. Getting it wrong is

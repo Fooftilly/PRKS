@@ -804,24 +804,25 @@ function prksPublishTagCoherence(data) {
     }
     if (typeof prksOfflineMarkEntityChanged === 'function') {
         (payload.affected_tag_options_work_ids || works).forEach(workId => prksOfflineMarkEntityChanged('work-tag-options', workId));
+        (payload.affected_tag_options_folder_ids || folders).forEach(folderId =>
+            prksOfflineMarkEntityChanged('folder-tag-options', folderId));
     }
     return payload;
 }
 
 async function mergeTags(sourceTagId, targetTagId) {
-    prksGuardFolderMutation('Merging tags requires a connection to PRKS.');
-    const res = await prksRequest('/api/tags/merge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_tag_id: sourceTagId, target_tag_id: targetTagId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        const err = new Error(data.error || 'Could not merge tags.');
-        err.httpStatus = res.status;
-        throw err;
+    if (typeof prksMergeTagDurably !== 'function') {
+        throw new Error('Tag merge is not available.');
     }
-    return prksPublishTagCoherence(data);
+    try {
+        await prksMergeTagDurably(sourceTagId, targetTagId);
+    } catch (error) {
+        if (typeof prksTagVocabularyMessage === 'function') {
+            throw new Error(prksTagVocabularyMessage(error, 'merge these tags'));
+        }
+        throw error;
+    }
+    return { status: 'queued' };
 }
 
 /** Folder deletion, durably. The empty-only rule stays server-enforced. */
@@ -837,34 +838,85 @@ async function deleteFolderCanonical(folderId) {
     return { status: 'deleted' };
 }
 
-/* Folder tag membership is rendered by the Folder detail right panel, so both
- * directions are Folder-domain coherence boundaries. */
-async function addTagToFolder(folderId, tagId) {
-    prksGuardFolderMutation('Editing folder tags requires a connection to PRKS.');
-    const res = await prksRequest('/api/folders/' + encodeURIComponent(folderId) + '/tags', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag_id: tagId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Could not add tag.');
-    prksMarkFoldersDomainChanged();
-    return data;
+/* Folder-Tag membership is durable: conflict unit (folder, tag), same shape as
+ * Work-Tag. The right-panel editor is the ordinary UI path; these wrappers
+ * remain for call sites and tests and enqueue through the same store API. */
+async function prksEnqueueFolderTag(folderId, tagId, present, knownTag) {
+    if (!window.prksSync || !prksSync.store || typeof prksSync.store.coalesceFolderTag !== 'function') {
+        throw new Error('Local sync store is not available.');
+    }
+    if (typeof prksReadFolderTagOptions !== 'function' || typeof prksFolderTagBase !== 'function') {
+        throw new Error('Folder Tag sync is not available.');
+    }
+    const optionsResult = await prksReadFolderTagOptions(folderId);
+    if (!optionsResult || !optionsResult.value) {
+        const err = new Error(
+            'Tag editing not available offline for this Folder yet. Connect once and open the Tags panel to prepare it.'
+        );
+        err.prksFolderTagUnavailable = true;
+        throw err;
+    }
+    let tag = knownTag || null;
+    if (!tag && typeof prksReadTagsIndex === 'function') {
+        const catalog = await prksReadTagsIndex();
+        const rows = catalog && Array.isArray(catalog.value) ? catalog.value : [];
+        tag = rows.find((t) => t && String(t.id) === String(tagId)) || null;
+    }
+    if (present && !tag) {
+        throw new Error('Could not resolve that Tag locally.');
+    }
+    if (!tag) {
+        tag = { id: tagId, name: '', color: null, aliases: [] };
+    }
+    const base = prksFolderTagBase(optionsResult.value, tagId);
+    await prksSync.store.coalesceFolderTag(
+        folderId, tagId, present, base.present, base.revision, tag
+    );
+    if (typeof prksSync.changed === 'function') prksSync.changed();
+    return { status: present ? 'added' : 'removed' };
+}
+
+async function addTagToFolder(folderId, tagId, knownTag) {
+    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const entity = focused && focused.getEntity ? focused.getEntity('folder') : null;
+    const editor = focused && focused.getResource ? focused.getResource('folderTagEditor') : null;
+    if (
+        focused &&
+        entity &&
+        String(entity.id) === String(folderId) &&
+        editor &&
+        typeof prksFolderTagEdit === 'function'
+    ) {
+        await prksFolderTagEdit(focused, tagId, true, knownTag);
+        return { status: 'added' };
+    }
+    return prksEnqueueFolderTag(folderId, tagId, true, knownTag);
 }
 
 async function removeTagFromFolder(folderId, tagId) {
-    prksGuardFolderMutation('Editing folder tags requires a connection to PRKS.');
-    const res = await prksRequest(
-        '/api/folders/' + encodeURIComponent(folderId) + '/tags/' + encodeURIComponent(tagId),
-        { method: 'DELETE' }
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Could not remove tag.');
-    prksMarkFoldersDomainChanged();
-    return data;
+    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const entity = focused && focused.getEntity ? focused.getEntity('folder') : null;
+    const editor = focused && focused.getResource ? focused.getResource('folderTagEditor') : null;
+    if (
+        focused &&
+        entity &&
+        String(entity.id) === String(folderId) &&
+        editor &&
+        typeof prksFolderTagEdit === 'function'
+    ) {
+        await prksFolderTagEdit(focused, tagId, false);
+        return { status: 'removed' };
+    }
+    return prksEnqueueFolderTag(folderId, tagId, false);
 }
 
 async function bulkUpdateWorks(payload) {
+    if (typeof prksOfflineGuardMutation === 'function' &&
+        prksOfflineGuardMutation('Bulk organize requires a connection to PRKS.')) {
+        const err = new Error('Requires a connection to PRKS.');
+        err.prksOfflineRefused = true;
+        throw err;
+    }
     const res = await prksRequest('/api/works/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -931,7 +983,17 @@ async function fetchSavedView(id, options = {}) {
     }
 }
 
+function prksGuardSavedViewMutation(message) {
+    if (typeof prksOfflineGuardMutation !== 'function') return;
+    if (!prksOfflineGuardMutation(
+        message || 'Saved Views require a connection to PRKS.')) return;
+    const err = new Error('Requires a connection to PRKS.');
+    err.prksOfflineRefused = true;
+    throw err;
+}
+
 async function createSavedView(payload) {
+    prksGuardSavedViewMutation('Saving a view requires a connection to PRKS.');
     const res = await prksRequest('/api/saved-views', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -945,6 +1007,7 @@ async function createSavedView(payload) {
 }
 
 async function updateSavedView(id, payload) {
+    prksGuardSavedViewMutation('Editing a Saved View requires a connection to PRKS.');
     const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -958,6 +1021,7 @@ async function updateSavedView(id, payload) {
 }
 
 async function deleteSavedView(id) {
+    prksGuardSavedViewMutation('Deleting a Saved View requires a connection to PRKS.');
     const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), {
         method: 'DELETE',
     });

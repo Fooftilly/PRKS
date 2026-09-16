@@ -25,14 +25,14 @@ class SyncProtocolTests(unittest.TestCase):
     def test_registered_families(self):
         self.assertEqual(sorted(sync_protocol.supported_operations()),
                          [
-                          "ADD_PERSON_GROUP_MEMBER", "ADD_WORK_PERSON_ROLE", "ADD_WORK_TAG",
+                          "ADD_FOLDER_TAG", "ADD_PERSON_GROUP_MEMBER", "ADD_WORK_PERSON_ROLE", "ADD_WORK_TAG",
                           "CREATE_ARGUMENT", "CREATE_CONCEPT", "CREATE_FOLDER",
                           "CREATE_PERSON", "CREATE_PERSON_GROUP", "CREATE_PLAYLIST",
-                          "CREATE_POSITION", "CREATE_TAG", "DELETE_ARGUMENT",
+                          "CREATE_POSITION", "CREATE_TAG", "CREATE_WORK", "DELETE_ARGUMENT",
                           "DELETE_CONCEPT", "DELETE_FOLDER",
                           "DELETE_PERSON", "DELETE_PERSON_GROUP", "DELETE_PLAYLIST",
-                          "DELETE_POSITION", "DELETE_TAG", "MARK_WORK_OPENED",
-                          "REMOVE_PERSON_GROUP_MEMBER", "REMOVE_WORK_PERSON_ROLE", "REMOVE_WORK_TAG",
+                          "DELETE_POSITION", "DELETE_TAG", "DELETE_WORK", "MARK_WORK_OPENED", "MERGE_TAG",
+                          "REMOVE_FOLDER_TAG", "REMOVE_PERSON_GROUP_MEMBER", "REMOVE_WORK_PERSON_ROLE", "REMOVE_WORK_TAG",
                           "REORDER_PLAYLIST_ITEMS", "SET_ARGUMENT_FIELD",
                           "SET_ARGUMENT_SOURCES", "SET_ARGUMENT_TARGETS",
                           "SET_CONCEPT_FIELD", "SET_CONCEPT_IDENTITY",

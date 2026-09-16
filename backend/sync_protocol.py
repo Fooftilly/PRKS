@@ -167,15 +167,28 @@ def process_operation(db, data):
         if not dependencies_satisfied(conn, op):
             return 400, {"code": "UNSATISFIED_DEPENDENCY"}
         status, result = handler.apply(db, conn, op, received_at)
-        insert_result(conn, op, digest, status, result)
+        # DELETE_WORK may carry an ephemeral file_path for post-commit PDF
+        # cleanup on the first ACK. The immortal ledger must not retain
+        # filenames or paths (logging/privacy rules); replay returns only the
+        # wire ACK shape. PDF cleanup on replay either has no path (skip) or
+        # re-checks live Work references when a path is supplied.
+        to_store = result
+        if op["operation"] == "DELETE_WORK":
+            to_store = {
+                "code": result["code"],
+                "work_id": result["work_id"],
+                "changed": result["changed"],
+            }
+        insert_result(conn, op, digest, status, to_store)
         return status, result
 
 
 # Registration is explicit and lives here so the set of families PRKS accepts
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
-    argument_sync, concept_sync, folder_sync, person_group_sync, person_metadata_sync, person_sync,
-    playlist_sync, position_sync, tag_sync, work_metadata_sync, work_note_sync, work_open_sync,
+    argument_sync, concept_sync, folder_sync, folder_tag_sync, person_group_sync,
+    person_metadata_sync, person_sync, playlist_sync, position_sync, tag_sync,
+    work_lifecycle_sync, work_metadata_sync, work_note_sync, work_open_sync,
     work_role_sync, work_source_sync, work_tag_sync,
 )
 
@@ -184,13 +197,18 @@ from backend import (  # noqa: E402
 # be inventing product semantics rather than moving existing ones off the wire.
 register("CREATE_TAG", tag_sync.CREATE_HANDLER, entity_type="tag")
 register("DELETE_TAG", tag_sync.DELETE_HANDLER, entity_type="tag")
+register("MERGE_TAG", tag_sync.MERGE_HANDLER, entity_type="tag")
 register("ADD_WORK_TAG", work_tag_sync.HANDLER)
 register("REMOVE_WORK_TAG", work_tag_sync.HANDLER)
+register("ADD_FOLDER_TAG", folder_tag_sync.HANDLER, entity_type="folder")
+register("REMOVE_FOLDER_TAG", folder_tag_sync.HANDLER, entity_type="folder")
 register("MARK_WORK_OPENED", work_open_sync.HANDLER)
 register("SET_WORK_METADATA_FIELD", work_metadata_sync.HANDLER)
 # Source identity is an AGGREGATE, not a field: see work_source_sync's module
 # docstring for why three field-scoped operations would be the wrong unit.
 register("SET_WORK_SOURCE", work_source_sync.HANDLER)
+register("CREATE_WORK", work_lifecycle_sync.CREATE_HANDLER)
+register("DELETE_WORK", work_lifecycle_sync.DELETE_HANDLER)
 # Work-Person roles are ELEMENTS, not an ordered aggregate: see
 # work_role_sync's module docstring for the schema evidence behind that.
 register("ADD_WORK_PERSON_ROLE", work_role_sync.HANDLER)

@@ -20,7 +20,7 @@ from tests.e2e.fixtures import (
     WORK_B_TITLE,
     seed_folders_library,
 )
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -225,7 +225,7 @@ class FoldersOfflineTests(unittest.TestCase):
         text = o._content_text(page)
         self.assertNotIn('Folders not available offline', text)
         self.assertNotIn(FOLDER_PARENT_TITLE, text)
-        # Still read-only: an empty cached library is not a licence to create.
+        # Opening create still issues no network POST (CREATE_FOLDER is durable).
         posts = self.watch(page, {'POST'})
         page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Nope')")
         page.wait_for_timeout(400)
@@ -359,9 +359,9 @@ class FoldersOfflineTests(unittest.TestCase):
             timeout=20000,
         )
 
-    # ---- mutation surfaces stay online-only ---------------------------------
+    # ---- mutation surfaces (durable Folder ops; Search stays online-only) ---
 
-    def test_folder_creation_is_blocked_offline(self):
+    def test_folder_creation_enqueues_without_network_offline(self):
         server, page, context, _c = self.start()
         self.index(page)
         o._wait_list_cached(page, 'folders:index')
@@ -370,10 +370,8 @@ class FoldersOfflineTests(unittest.TestCase):
         o._wait_offline_banner(page)
         posts = self.watch(page, {'POST'})
 
-        # Creation-from-search is a direct surface, not only the modal.
         page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Brand New Folder')")
-        page.wait_for_timeout(400)
-        # ... and the canonical boundary refuses even if a surface got through.
+        page.wait_for_selector('#folder-modal:not(.hidden)')
         page.evaluate("""async () => {
             try { await createFolder('Direct', ''); } catch (_) {}
         }""")
@@ -398,7 +396,7 @@ class FoldersOfflineTests(unittest.TestCase):
         page.wait_for_timeout(600)
         self.assertEqual(posts, [])
 
-    def test_every_canonical_folder_wrapper_refuses_offline(self):
+    def test_every_canonical_folder_wrapper_issues_no_network_offline(self):
         server, page, context, _c = self.start()
         ids = server.ids
         self.cache(page, ids)
@@ -422,7 +420,7 @@ class FoldersOfflineTests(unittest.TestCase):
         page.wait_for_timeout(600)
         self.assertEqual(seen, [])
 
-    def test_cached_detail_delete_control_is_inert_offline(self):
+    def test_cached_detail_delete_control_stays_live_offline(self):
         server, page, context, _c = self.start()
         ids = server.ids
         # The child folder holds a Work, so seed an empty deletable one instead.
@@ -435,7 +433,7 @@ class FoldersOfflineTests(unittest.TestCase):
         deletes = self.watch(page, {'DELETE'})
         btn = page.locator('[data-delete-folder-id]')
         if btn.count():
-            self.assertTrue(btn.is_disabled())
+            self.assertFalse(btn.is_disabled())
         page.wait_for_timeout(300)
         self.assertEqual(deletes, [])
 
@@ -463,7 +461,7 @@ class FoldersOfflineTests(unittest.TestCase):
         if link.count():
             self.assertTrue(link.first.get_attribute('href').startswith('#/folders/'))
 
-    def test_open_work_folder_editor_freezes_controls_but_keeps_done(self):
+    def test_open_work_folder_editor_keeps_clear_new_and_done(self):
         server, page, context, _c = self.start()
         ids = server.ids
         o._open_work_from_home(page, WORK_A_TITLE)
@@ -481,11 +479,11 @@ class FoldersOfflineTests(unittest.TestCase):
             "() => { const b = document.getElementById('prks-work-folder-set-btn'); return !!b && b.disabled; }",
             timeout=20000,
         )
-        for sel in ('#prks-work-folder-set-btn', '#prks-work-folder-clear-btn',
-                    '#prks-work-folder-new-btn', '#prks-work-folder-search'):
+        for sel in ('#prks-work-folder-set-btn', '#prks-work-folder-search'):
             self.assertTrue(page.locator(sel).is_disabled(), sel)
-        # Done must stay usable: a user can always leave an edit they cannot save.
-        self.assertFalse(page.locator('#prks-work-folder-edit-btn').is_disabled())
+        for sel in ('#prks-work-folder-clear-btn', '#prks-work-folder-new-btn',
+                    '#prks-work-folder-edit-btn'):
+            self.assertFalse(page.locator(sel).is_disabled(), sel)
         page.wait_for_timeout(300)
         self.assertEqual(seen, [])
 
@@ -678,15 +676,38 @@ class FoldersOfflineTests(unittest.TestCase):
         self.assertEqual(o._domain_generation(page, 'folders'), before)
         self.assertIsNotNone(o._cached_list(page, 'folders:index'))
 
-    def test_folder_tag_mutation_invalidates_folders(self):
+    def test_folder_tag_mutation_patches_folder_without_dropping_index(self):
+        """ADD/REMOVE_FOLDER_TAG reconcile like Work tags: patch the Folder
+        entity (and folder-tag-options), never drop folders:index for a
+        relationship change the catalogue does not render."""
         server, page, context, _c = self.start()
         ids = server.ids
         self.cache(page, ids, all_domains=True)
+        # Warm tag-options so the durable enqueue has a known base.
+        page.evaluate(
+            """async (fid) => {
+                const res = await prksRequest(
+                    '/api/folders/' + encodeURIComponent(fid) + '/tag-options');
+                const body = await res.json();
+                await prksOfflineCacheEntity('folder-tag-options', fid, body);
+            }""",
+            ids['folder_parent'],
+        )
         before = self.generations(page)
         page.evaluate("async ([fid, tid]) => { await removeTagFromFolder(fid, tid); }",
                       [ids['folder_parent'], ids['folder_tag']])
-        self.changed(page, before, {'folders'})
-
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message='folder-tag remove must acknowledge',
+        )
+        self.assertEqual(o._domain_generation(page, 'folders'), before['folders'])
+        self.assertIsNotNone(o._cached_list(page, 'folders:index'))
+        folder = o._cached_entity(page, 'folder', ids['folder_parent'])
+        self.assertIsNotNone(folder)
+        tag_ids = [t.get('id') for t in (folder.get('tags') or [])]
+        self.assertNotIn(ids['folder_tag'], tag_ids)
     def test_unrelated_research_mutations_keep_folders_eligible(self):
         server, page, context, _c = self.start()
         ids = server.ids
@@ -776,8 +797,17 @@ class FoldersOfflineTests(unittest.TestCase):
         o._wait_entity_cached(page, 'work', ids['work_b'])
 
         before = self.generations(page)
+        # Merging a Tag is durable: coherence follows the acknowledgement.
         page.evaluate("async ([src, dst]) => { await mergeTags(src, dst); }",
                       [ids['folder_tag'], target])
+        page.evaluate("""async () => {
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                const rows = await prksSync.store.listOperations();
+                if (!rows.some(o => o.status !== 'conflict')) return;
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }""")
 
         self.changed(page, before, {'folders'})
         o._wait_entity_uncached(page, 'work', ids['work_a'])
@@ -796,14 +826,27 @@ class FoldersOfflineTests(unittest.TestCase):
         failed = page.evaluate(
             """async (tid) => {
                 const out = [];
-                try { await deleteTag('T-does-not-exist'); } catch (e) { out.push('delete'); }
-                try { await mergeTags(tid, 'T-does-not-exist'); } catch (e) { out.push('merge'); }
+                try { await prksDeleteTagDurably('T-does-not-exist'); } catch (e) { out.push('delete'); }
+                try {
+                    await mergeTags(tid, 'T-does-not-exist');
+                    const deadline = Date.now() + 15000;
+                    while (Date.now() < deadline) {
+                        const rows = await prksSync.store.listOperations();
+                        const mine = rows.find(o => o.operation === 'MERGE_TAG' &&
+                            o.entity_id === tid);
+                        if (!mine) { out.push('merge-acked'); break; }
+                        if (mine.status === 'conflict') { out.push('merge'); break; }
+                        await new Promise(r => setTimeout(r, 50));
+                    }
+                } catch (e) { out.push('merge'); }
                 return out;
             }""",
             ids['folder_tag'],
         )
-        self.assertEqual(failed, ['delete', 'merge'])
-        # Nothing canonical changed, so every cached snapshot stays eligible.
+        self.assertIn('merge', failed)
+        # Nothing canonical changed for the failed merge, so every cached
+        # snapshot stays eligible. A durable delete of an unknown id is
+        # convergence (ACK with changed:false) and also leaves caches alone.
         self.changed(page, before, set())
         self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_a']))
 

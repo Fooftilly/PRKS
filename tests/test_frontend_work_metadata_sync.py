@@ -282,10 +282,12 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'payload.field'):
             self.assertNotIn(forbidden, saved, forbidden)
         # The routes that call it must hydrate the map before rendering.
+        # Offline refuse blocks sit above the online path; keep the window
+        # wide enough to reach hydrate after those early returns.
         app = (FRONTEND / 'app.js').read_text()
         for marker in ("case 'search': {", "case 'saved-view-detail': {"):
             at = app.index(marker)   # missing marker is a failure, not a skip
-            self.assertIn('prksHydratePendingWorkMetadata', app[at: at + 1400], marker)
+            self.assertIn('prksHydratePendingWorkMetadata', app[at: at + 2400], marker)
 
     def test_credit_is_composed_after_the_overlay_not_before(self):
         """`author_text` is only one of three possible sources of a credit: a
@@ -531,13 +533,21 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
 
     def test_published_date_conversion_lives_in_the_field_codec(self):
         """The durable store stores what it is handed and must never learn what
-        a date is; the editor must not invent a second conversion."""
+        a date is; the editor must not invent a second conversion.
+
+        CREATE_WORK may name the `published_date` construction field, but must
+        not call the UI date codecs — the wire value is already canonical.
+        """
         state = (FRONTEND / 'work-metadata-state.js').read_text()
         self.assertIn('const CODECS = {', state)
         self.assertIn('published_date:', state[state.index('const CODECS = {'):])
         local_store = (FRONTEND / 'local-store.js').read_text()
-        for forbidden in ('prksParsePublishedDateInput', 'prksIsoToDdMmYyyy', 'published_date'):
+        for forbidden in ('prksParsePublishedDateInput', 'prksIsoToDdMmYyyy'):
             self.assertNotIn(forbidden, local_store, forbidden)
+        # Field name is allowed on CREATE_WORK construction only.
+        if 'published_date' in local_store:
+            self.assertIn('canonicalWorkCreatePayload', local_store)
+            self.assertIn("published_date: str('published_date')", local_store)
 
     def test_every_browse_route_uses_effective_rows(self):
         app = (FRONTEND / 'app.js').read_text()

@@ -127,6 +127,23 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         self.assertIn("row.operation === 'SET_WORK_PLAYLIST'",
                       self.store[at: self.store.index('\n    }', at)])
 
+    def test_playlist_detail_offers_delete_playlist(self):
+        """DELETE_PLAYLIST is a durable family; the product control must call
+        that path, warn that videos survive, and stay off the online-only
+        mutation selector (Add-video search)."""
+        pl = (FRONTEND / 'components' / 'playlists.js').read_text()
+        self.assertIn('id="prks-playlist-delete-btn"', pl)
+        self.assertIn('Delete playlist', pl)
+        at = pl.index('async function deletePlaylistFromDetail(')
+        body = pl[at: pl.index('\nfunction ', at)]
+        self.assertIn('prksConfirmDestructive', body)
+        self.assertIn('deletePlaylistCanonical', body)
+        self.assertIn('will stay in your library', body)
+        self.assertIn("prksNavigate('#/playlists'", body)
+        sel_at = pl.index('const PRKS_PLAYLIST_MUTATION_SELECTOR')
+        sel = pl[sel_at: pl.index('].join', sel_at)]
+        self.assertNotIn('prks-playlist-delete-btn', sel)
+
     def test_deletion_advances_every_members_membership_revision(self):
         """A device holding "this video is in that playlist" has to be able to
         discover it was overtaken."""

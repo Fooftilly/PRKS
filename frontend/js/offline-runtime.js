@@ -410,6 +410,50 @@
             return true;
         }
 
+        async function reconcileFolderTag(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.folder_id;
+            const kinds = ['folder', 'folder-tag-options'];
+            const tokens = kinds.map(kind => {
+                const key = entityKey(kind, id);
+                const token = currentEntityGeneration(kind, id) + 1;
+                entityCoherence.set(key, token);
+                return token;
+            });
+            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
+            const folder = snapshots[0] && snapshots[0].value;
+            const options = snapshots[1] && snapshots[1].value;
+            if (options && typeof root.prksIsFolderTagOptionsShape === 'function' &&
+                !root.prksIsFolderTagOptionsShape(options, id)) {
+                return false;
+            }
+            let revision = 0;
+            if (options) {
+                const assigned = options.assigned.find(r => r.tag_id === result.tag_id);
+                revision = assigned ? assigned.relation_revision : (options.known_absent[result.tag_id] || 0);
+            }
+            if (revision > result.server_revision) return true;
+            if (folder) {
+                if (!Array.isArray(folder.tags)) return false;
+                folder.tags = folder.tags.filter(t => t.id !== result.tag_id);
+                if (result.present) folder.tags.push(result.tag);
+            }
+            if (options) {
+                options.assigned = options.assigned.filter(t => t.tag_id !== result.tag_id);
+                delete options.known_absent[result.tag_id];
+                if (result.present) {
+                    options.assigned.push({ tag_id: result.tag_id, relation_revision: result.server_revision });
+                } else if (result.server_revision) {
+                    options.known_absent[result.tag_id] = result.server_revision;
+                }
+            }
+            const values = [folder, options];
+            for (let i = 0; i < kinds.length; i++) {
+                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
+            }
+            return true;
+        }
+
         /* Reconcile one acknowledged field edit into both cached records that
          * carry it: the Work itself and its metadata-state projection.
          *
@@ -2089,10 +2133,10 @@
         /**
          * A Tag the server has destroyed.
          *
-         * Its relationships went with it, so every Work that carried it has a
-         * stale chip and a stale tag-options snapshot. The acknowledgement
-         * names exactly those Works, so only they are staled -- the rest of the
-         * cache is untouched.
+         * Its relationships went with it, so every Work or Folder that carried
+         * it has a stale chip and a stale tag-options snapshot. The
+         * acknowledgement names exactly those entities, so only they are
+         * staled -- the rest of the cache is untouched.
          */
         async function reconcileDeletedTag(result) {
             if (!store || !await store.isAvailable()) return false;
@@ -2105,15 +2149,174 @@
                 if (!await cacheListForDomain(TAGS_LIST_KEY,
                     rows.filter(row => row && row.id !== id), DOMAIN_TAGS, token)) return false;
             }
-            const affected = Array.isArray(result.affected_work_ids)
+            const works = Array.isArray(result.affected_work_ids)
                 ? result.affected_work_ids : [];
-            for (let i = 0; i < affected.length; i += 1) {
-                await invalidateEntity('work', affected[i]);
-                await invalidateEntity('work-tag-options', affected[i]);
+            const folders = Array.isArray(result.affected_folder_ids)
+                ? result.affected_folder_ids : [];
+            const optionWorks = Array.isArray(result.affected_tag_options_work_ids)
+                ? result.affected_tag_options_work_ids : works;
+            const optionFolders = Array.isArray(result.affected_tag_options_folder_ids)
+                ? result.affected_tag_options_folder_ids : folders;
+            for (let i = 0; i < works.length; i += 1) {
+                await invalidateEntity('work', works[i]);
             }
-            if (affected.length) {
-                prksOfflineMarkWorksBrowseChanged();
-                prksOfflineMarkFoldersChanged();
+            for (let i = 0; i < optionWorks.length; i += 1) {
+                await invalidateEntity('work-tag-options', optionWorks[i]);
+            }
+            for (let i = 0; i < folders.length; i += 1) {
+                await invalidateEntity('folder', folders[i]);
+            }
+            for (let i = 0; i < optionFolders.length; i += 1) {
+                await invalidateEntity('folder-tag-options', optionFolders[i]);
+            }
+            if (works.length) prksOfflineMarkWorksBrowseChanged();
+            if (folders.length) prksOfflineMarkFoldersChanged();
+            return true;
+        }
+
+        /**
+         * A Tag the server has merged into another.
+         *
+         * The source identity is gone; its name becomes an alias of the
+         * canonical target when the names differ. Relationship chips on every
+         * named Work/Folder are staled exactly as delete does -- the answer
+         * lists them -- and tag-options projections that held the source scope
+         * go with them.
+         */
+        async function reconcileMergedTag(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const sourceId = result.tag_id;
+            const targetId = result.canonical_tag_id;
+            if (!sourceId || !targetId) return false;
+            const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
+            if (cached) {
+                const rows = Array.isArray(cached.value) ? cached.value : [];
+                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
+                domainGeneration.set(DOMAIN_TAGS, token);
+                let sourceName = null;
+                const withoutSource = [];
+                for (let i = 0; i < rows.length; i += 1) {
+                    const row = rows[i];
+                    if (!row) continue;
+                    if (row.id === sourceId) {
+                        sourceName = row.name;
+                        continue;
+                    }
+                    withoutSource.push(row);
+                }
+                const next = withoutSource.map(function (row) {
+                    if (row.id !== targetId || !sourceName) return row;
+                    const aliases = Array.isArray(row.aliases) ? row.aliases.slice() : [];
+                    const lower = String(sourceName).toLowerCase();
+                    if (String(row.name || '').toLowerCase() === lower) return row;
+                    if (aliases.some(a => String(a || '').toLowerCase() === lower)) return row;
+                    return Object.assign({}, row, { aliases: aliases.concat([sourceName]) });
+                });
+                if (!await cacheListForDomain(TAGS_LIST_KEY, next, DOMAIN_TAGS, token)) {
+                    return false;
+                }
+            }
+            const works = Array.isArray(result.affected_work_ids)
+                ? result.affected_work_ids : [];
+            const folders = Array.isArray(result.affected_folder_ids)
+                ? result.affected_folder_ids : [];
+            const optionWorks = Array.isArray(result.affected_tag_options_work_ids)
+                ? result.affected_tag_options_work_ids : works;
+            const optionFolders = Array.isArray(result.affected_tag_options_folder_ids)
+                ? result.affected_tag_options_folder_ids : folders;
+            for (let i = 0; i < works.length; i += 1) {
+                await invalidateEntity('work', works[i]);
+            }
+            for (let i = 0; i < optionWorks.length; i += 1) {
+                await invalidateEntity('work-tag-options', optionWorks[i]);
+            }
+            for (let i = 0; i < folders.length; i += 1) {
+                await invalidateEntity('folder', folders[i]);
+            }
+            for (let i = 0; i < optionFolders.length; i += 1) {
+                await invalidateEntity('folder-tag-options', optionFolders[i]);
+            }
+            if (works.length) prksOfflineMarkWorksBrowseChanged();
+            if (folders.length) prksOfflineMarkFoldersChanged();
+            return true;
+        }
+
+        /**
+         * A Work the server has destroyed.
+         *
+         * Cascades already removed relationships; every projection that could
+         * have shown this Work is staled the same way the online DELETE path
+         * published coherence — Concepts, Arguments, People, Groups, Folders,
+         * Playlists, browse catalogs and Research Graph core.
+         */
+        async function reconcileDeletedWork(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result && result.work_id;
+            if (!id) return false;
+            await invalidateEntity('work', id);
+            await invalidateEntity('work-metadata-state', id);
+            await invalidateEntity('work-source-state', id);
+            await invalidateEntity('work-tag-options', id);
+            await invalidateEntity('work-people-state', id);
+            await invalidateEntity('work-folder-state', id);
+            await invalidateEntity('work-playlist-state', id);
+            await invalidateEntity('work-notes-state', id);
+            if (typeof prksMarkResearchGraphCoreChanged === 'function') {
+                prksMarkResearchGraphCoreChanged();
+            }
+            if (typeof prksOfflineMarkConceptsChanged === 'function') {
+                prksOfflineMarkConceptsChanged();
+            }
+            if (typeof prksOfflineMarkArgumentsChanged === 'function') {
+                prksOfflineMarkArgumentsChanged();
+            }
+            if (typeof prksOfflineMarkPeopleChanged === 'function') {
+                prksOfflineMarkPeopleChanged();
+            }
+            if (typeof prksOfflineMarkPersonGroupsChanged === 'function') {
+                prksOfflineMarkPersonGroupsChanged();
+            }
+            if (typeof prksMarkFoldersDomainChanged === 'function') {
+                prksMarkFoldersDomainChanged();
+            }
+            if (typeof prksMarkWorkBrowseDisplayChanged === 'function') {
+                prksMarkWorkBrowseDisplayChanged();
+            }
+            if (typeof prksOfflineMarkPlaylistsChanged === 'function') {
+                prksOfflineMarkPlaylistsChanged();
+            }
+            return true;
+        }
+
+        /**
+         * A Work this device constructed that the server has accepted.
+         *
+         * Mirrors the online create coherence publish: folders always, browse
+         * + recently-added always, playlists when construction carried a
+         * playlist, people / person-groups when it carried roles. Recent is
+         * deliberately untouched (last_opened_at is still NULL).
+         */
+        async function reconcileCreatedWork(result) {
+            if (!result || !result.work_id) return false;
+            if (typeof prksMarkWorksBrowseChanged === 'function') {
+                prksMarkWorksBrowseChanged();
+            }
+            if (typeof prksMarkRecentlyAddedChanged === 'function') {
+                prksMarkRecentlyAddedChanged();
+            }
+            if (typeof prksMarkFoldersDomainChanged === 'function') {
+                prksMarkFoldersDomainChanged();
+            }
+            if (result.playlist_id && typeof prksOfflineMarkPlaylistsChanged === 'function') {
+                prksOfflineMarkPlaylistsChanged();
+            }
+            if (result.role_count > 0) {
+                if (typeof prksOfflineMarkPeopleChanged === 'function') {
+                    prksOfflineMarkPeopleChanged();
+                }
+                if (typeof prksOfflineMarkPersonGroupsChanged === 'function') {
+                    prksOfflineMarkPersonGroupsChanged();
+                }
             }
             return true;
         }
@@ -2667,6 +2870,7 @@
             readThroughEntity: readThroughEntity,
             readThroughList: readThroughList,
             reconcileWorkTag,
+            reconcileFolderTag,
             reconcileWorkField,
             reconcileWorkSource,
             reconcileWorkNote,
@@ -2697,6 +2901,9 @@
             reconcileDeletedArgument,
             reconcileCreatedTag,
             reconcileDeletedTag,
+            reconcileMergedTag,
+            reconcileCreatedWork,
+            reconcileDeletedWork,
             reconcileCreatedPerson,
             reconcilePersonField,
             reconcileDeletedPerson,
@@ -2915,6 +3122,7 @@
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
         prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
+        prksOfflineReconcileFolderTag: result => production.reconcileFolderTag(result),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
         prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
         prksOfflineReconcileWorkNote: (result, op) => production.reconcileWorkNote(result, op),
@@ -2966,6 +3174,9 @@
             production.reconcileDeletedArgument(result),
         prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
         prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
+        prksOfflineReconcileMergedTag: result => production.reconcileMergedTag(result),
+        prksOfflineReconcileCreatedWork: result => production.reconcileCreatedWork(result),
+        prksOfflineReconcileDeletedWork: result => production.reconcileDeletedWork(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
         prksOfflineReconcilePersonField: (result, op) => production.reconcilePersonField(result, op),
         prksOfflineReconcileDeletedPerson: result => production.reconcileDeletedPerson(result),

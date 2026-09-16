@@ -756,7 +756,6 @@ function prksOpenArgumentPicker(cm, work) {
 }
 
 async function deleteWork(w_id, ownerCtx) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     const generation = ctx && ctx.generation;
     const confirmed = await prksConfirmDestructive({
@@ -770,52 +769,10 @@ async function deleteWork(w_id, ownerCtx) {
         !prksTabContextOwnsEntityRoute(ctx, generation, 'work', w_id, 'work')
     ) return;
     try {
-        const res = await prksRequest('/api/works/' + encodeURIComponent(w_id), { method: 'DELETE' });
-        if (!res.ok) {
-            if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
-                await prksAlertMessage('Error deleting file!', 'Error');
-            }
-            return;
+        if (typeof prksDeleteWorkDurably !== 'function') {
+            throw new Error('File deletion is not available.');
         }
-        if (typeof prksOfflineMarkEntityChanged === 'function') {
-            // DELETE is canonical only after this acknowledged success.
-            prksOfflineMarkEntityChanged('work', w_id);
-        }
-        if (typeof prksMarkResearchGraphCoreChanged === 'function') prksMarkResearchGraphCoreChanged();
-        if (typeof prksOfflineMarkConceptsChanged === 'function') {
-            // Deleting a Work removes its Concept mentions from canonical
-            // research data, so cached Concept details/counts are now stale.
-            prksOfflineMarkConceptsChanged();
-        }
-        if (typeof prksOfflineMarkArgumentsChanged === 'function') {
-            // Two independent effects on cached Arguments: relational cleanup
-            // drops any argument_sources rows for this Work, and its
-            // research-note backlinks disappear from mentions.
-            prksOfflineMarkArgumentsChanged();
-        }
-        if (typeof prksOfflineMarkPeopleChanged === 'function') {
-            // Deleting a Work removes its role rows, so every Person that was
-            // linked to it loses a Work card and possibly an assigned role.
-            prksOfflineMarkPeopleChanged();
-        }
-        if (typeof prksOfflineMarkPersonGroupsChanged === 'function') prksOfflineMarkPersonGroupsChanged();
-        if (typeof prksMarkFoldersDomainChanged === 'function') {
-            // Canonical cleanup drops this Work's folder_files row, so its
-            // Folder's cached detail and every folders:index work_count are
-            // stale.
-            prksMarkFoldersDomainChanged();
-        }
-        if (typeof prksMarkWorkBrowseDisplayChanged === 'function') {
-            // A deleted Work disappears from every browse projection it could
-            // have appeared in -- catalog, Recent and Recently added alike.
-            prksMarkWorkBrowseDisplayChanged();
-        }
-        if (typeof prksOfflineMarkPlaylistsChanged === 'function') {
-            // Canonical cleanup drops this Work's playlist_items row, so
-            // every cached Playlist's item_count and items are now stale.
-            prksOfflineMarkPlaylistsChanged();
-        }
-        window.__prksRecentlyAddedDirty = true;
+        await prksDeleteWorkDurably(w_id);
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
             prksTabContextOwnsEntityRoute(ctx, generation, 'work', w_id, 'work') &&
@@ -825,7 +782,9 @@ async function deleteWork(w_id, ownerCtx) {
         }
     } catch (_e) {
         if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
-            await prksAlertMessage('Error deleting file!', 'Error');
+            await prksAlertMessage(
+                (_e && _e.message) || 'Error deleting file!',
+                'Error');
         }
     }
 }

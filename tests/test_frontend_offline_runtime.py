@@ -105,9 +105,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("const CONCEPTS_LIST_KEY = 'concepts:index';", src)
         # Every canonical caller shares that one definition rather than
         # re-listing the domain's kinds/list keys at each call site.
+        # Work deletion fences Concepts from the DELETE_WORK reconciler, not
+        # from works.js (which only enqueues durable intent).
         for path in (
             os.path.join(_FRONTEND, "js", "api.js"),
-            os.path.join(_FRONTEND, "js", "components", "works.js"),
+            os.path.join(_FRONTEND, "js", "offline-runtime.js"),
         ):
             caller = _read(path)
             self.assertIn("prksOfflineMarkConceptsChanged", caller)
@@ -118,6 +120,9 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             os.path.join(_FRONTEND, "js", "components", "playlists.js"),
         ):
             self.assertNotIn("entityKinds:", _read(path))
+        works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
+        self.assertIn("prksDeleteWorkDurably", works)
+        self.assertNotIn("prksOfflineMarkConceptsChanged", works)
 
     def test_every_work_title_surface_uses_the_shared_coherence_helper(self):
         """A cached Concept detail shows the titles of the Works that mention it,
@@ -153,8 +158,12 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertNotIn("prksOfflineMarkConceptsChanged()", notes_body)
         delete_at = works.index("async function deleteWork(")
         delete_body = works[delete_at : delete_at + 2500]
-        self.assertIn("prksOfflineMarkConceptsChanged()", delete_body)
+        self.assertIn("prksDeleteWorkDurably", delete_body)
+        self.assertNotIn("prksOfflineMarkConceptsChanged()", delete_body)
         runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkConceptsChanged()", reconcile_del)
         reconcile = runtime[runtime.index("async function reconcileWorkNoteBody("):]
         reconcile = reconcile[: reconcile.index("\n        async function reconcileWorkNote(")]
         self.assertIn("DOMAIN_CONCEPTS", reconcile)
@@ -377,7 +386,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             )
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         delete_at = works.index("async function deleteWork(")
-        self.assertIn("prksOfflineMarkPeopleChanged()", works[delete_at : delete_at + 3000])
+        self.assertIn("prksDeleteWorkDurably", works[delete_at : delete_at + 3000])
+        runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkPeopleChanged()", reconcile_del)
         # Managed PDF save changes file_size_bytes and can add Mentioned roles.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         pdf_at = pdf.index("async function exportAndPersistPdfCopy(")
@@ -409,7 +422,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # Work deletion drops role rows out of every cached Group member row.
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         delete_at = works.index("async function deleteWork(")
-        self.assertIn("prksOfflineMarkPersonGroupsChanged()", works[delete_at : delete_at + 3000])
+        self.assertIn("prksDeleteWorkDurably", works[delete_at : delete_at + 3000])
+        runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkPersonGroupsChanged()", reconcile_del)
         # The managed PDF save owns it; the separate annotations JSON save does not.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         pdf_at = pdf.index("async function exportAndPersistPdfCopy(")
@@ -567,7 +584,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # Work deletion drops the playlist_items row.
         works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
         delete_at = works.index("async function deleteWork(")
-        self.assertIn("prksOfflineMarkPlaylistsChanged()", works[delete_at : delete_at + 3800])
+        self.assertIn("prksDeleteWorkDurably", works[delete_at : delete_at + 3800])
+        runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkPlaylistsChanged()", reconcile_del)
         # The managed PDF save does not: no rendered Playlist field changes.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         self.assertNotIn("Playlists", pdf)
@@ -857,8 +878,12 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertNotIn("prksOfflineMarkArgumentsChanged()", notes_body)
         delete_at = works.index("async function deleteWork(")
         delete_body = works[delete_at : delete_at + 3000]
-        self.assertIn("prksOfflineMarkArgumentsChanged()", delete_body)
+        self.assertIn("prksDeleteWorkDurably", delete_body)
+        self.assertNotIn("prksOfflineMarkArgumentsChanged()", delete_body)
         runtime = _read(_RUNTIME)
+        reconcile_del = runtime[runtime.index("async function reconcileDeletedWork("):]
+        reconcile_del = reconcile_del[: reconcile_del.index("\n        /*")]
+        self.assertIn("prksOfflineMarkArgumentsChanged()", reconcile_del)
         reconcile = runtime[runtime.index("async function reconcileWorkNoteBody("):]
         reconcile = reconcile[: reconcile.index("\n        async function reconcileWorkNote(")]
         self.assertIn("DOMAIN_ARGUMENTS", reconcile)
@@ -995,16 +1020,19 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertNotIn(".length === 0", body)
 
     def test_canonical_folder_wrappers_guard_and_publish_coherence(self):
-        """Folder TAG membership is still a canonical request, and still
-        publishes coherence from the server's answer. Everything else about a
-        folder is durable now and reconciles at acknowledgement instead."""
+        """Folder TAG membership is durable (ADD/REMOVE_FOLDER_TAG). Folder
+        create/field/delete/work-folder remain durable and reconcile at ACK.
+        Tag merge is also durable (MERGE_TAG) and reconciles at acknowledgement."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
         for fn in ("async function addTagToFolder(", "async function removeTagFromFolder("):
-            at = api.index(fn)
-            body = api[at : at + 1400]
+            body = _fn_body(api, fn)
             with self.subTest(fn=fn):
-                self.assertIn("prksGuardFolderMutation(", body)
-                self.assertIn("prksMarkFoldersDomainChanged()", body)
+                self.assertNotIn("prksGuardFolderMutation(", body)
+                self.assertNotIn("prksRequest(", body)
+                self.assertIn("prksEnqueueFolderTag(", body)
+        # Direct durable enqueue helper must exist for non-mounted call sites.
+        self.assertIn("async function prksEnqueueFolderTag(", api)
+        self.assertIn("coalesceFolderTag(", api)
         for fn in ("async function createFolder(", "async function patchFolder(",
                    "async function deleteFolderCanonical(", "async function addWorkToFolder(",
                    "async function patchWorkFolder("):
@@ -1016,19 +1044,19 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         for reconciler in ("async function reconcileCreatedFolder(",
                            "async function reconcileFolderField(",
                            "async function reconcileWorkFolder(",
-                           "async function reconcileDeletedFolder("):
+                           "async function reconcileDeletedFolder(",
+                           "async function reconcileFolderTag("):
             self.assertIn(reconciler, runtime, reconciler)
 
     def test_no_production_surface_writes_folders_outside_the_wrappers(self):
         """A raw Folder write anywhere else silently reopens the guard gap.
 
-        api.js holds the canonical wrappers. ui.js keeps one documented
-        exception: the coalesced private-notes autosave, gated by the runtime
-        check at the top of its own function, which publishes Folder coherence
-        on success. Everywhere else must go through a wrapper.
+        api.js holds the canonical wrappers. Folder private-notes autosave
+        goes through patchFolder (SET_FOLDER_FIELD). Everywhere else must
+        also go through a wrapper — never a raw /api/folders mutation.
         """
         for name in ("app.js", "components/folders.js", "components/processing-files.js",
-                     "components/works.js"):
+                     "components/works.js", "ui.js"):
             src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
             with self.subTest(module=name):
                 # A write is a /api/folders URL paired with a mutating method.
@@ -1038,10 +1066,10 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
                         self.assertNotIn(method, window,
                                          "%s writes /api/folders directly" % name)
         ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
-        # The one exception must still be the private-notes autosave, and must
-        # still publish Folder coherence.
-        self.assertIn("prksMarkFoldersDomainChanged", ui)
-        self.assertIn("Documented exception to the canonical-Folder-wrapper rule", ui)
+        folder_notes = _fn_body(ui, "function prksEnqueuePrivateNotesSave(")
+        self.assertIn("patchFolder(", folder_notes)
+        self.assertNotIn("prksRequest(", folder_notes)
+        self.assertNotIn("Documented exception to the canonical-Folder-wrapper rule", ui)
 
     def test_folder_title_rename_evicts_member_work_snapshots(self):
         """A cached Work detail embeds `folder_title`. The acknowledgement NAMES
@@ -1067,23 +1095,29 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertIn("!prksIsFolderParentId(value)", app)
 
     def test_tag_mutations_publish_coherence_from_the_server_answer(self):
-        """Merging is still a canonical request and still publishes coherence
-        from the server's own answer. DELETING is durable now: it reconciles at
-        acknowledgement instead, which is where the canonical change is."""
+        """Deleting and merging are durable: coherence follows the
+        acknowledgement. The ordinary HTTP merge path (if any residual caller
+        remains) still publishes through prksPublishTagCoherence; the durable
+        wrappers reconcile the same affected ids at ACK."""
         api = _read(os.path.join(_FRONTEND, "js", "api.js"))
         self.assertNotIn("async function deleteTag(", api)
         body = _fn_body(api, "async function mergeTags(")
-        self.assertIn("prksGuardFolderMutation(", body)
-        self.assertIn("prksPublishTagCoherence(data)", body)
-        # Coherence only after acknowledged success.
-        self.assertLess(body.index("if (!res.ok)"), body.index("prksPublishTagCoherence"))
+        self.assertIn("prksMergeTagDurably(", body)
+        self.assertNotIn("prksGuardFolderMutation(", body)
+        self.assertNotIn("prksPublishTagCoherence(data)", body)
         runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
         at = runtime.index("async function reconcileDeletedTag(")
-        deleted = runtime[at : runtime.index("\n        /*", at)]
-        # The catalogue is PATCHED; only the Works the answer NAMES are staled.
+        deleted = runtime[at : runtime.index("\n        /**", at)]
+        # The catalogue is PATCHED; only the Works/Folders the answer NAMES are staled.
         self.assertIn("TAGS_LIST_KEY", deleted)
         self.assertIn("result.affected_work_ids", deleted)
+        self.assertIn("result.affected_folder_ids", deleted)
         self.assertIn("invalidateEntity('work-tag-options'", deleted)
+        self.assertIn("invalidateEntity('folder-tag-options'", deleted)
+        merge_at = runtime.index("async function reconcileMergedTag(")
+        merged = runtime[merge_at : runtime.index("\n        /* ---- Person Groups", merge_at)]
+        self.assertIn("result.canonical_tag_id", merged)
+        self.assertIn("result.affected_folder_ids", merged)
         publish = _fn_body(api, "function prksPublishTagCoherence(")
         self.assertIn("affected_folder_ids", publish)
         self.assertIn("affected_work_ids", publish)
@@ -1136,6 +1170,22 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         guard_at = body.index("if (!prksFolderRuntimeOnline())")
         fetch_at = body.index("await fetchFolders()")
         self.assertLess(guard_at, fetch_at)
+
+    def test_work_folder_offline_policy_matches_playlist_clear_new(self):
+        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
+        self.assertIn("PRKS_WORK_FOLDER_MUTATION_SELECTOR", folders)
+        start = folders.index("const PRKS_WORK_FOLDER_MUTATION_SELECTOR")
+        # Bound the declaration tightly — Clear/New appear later as live controls.
+        decl = folders[start : start + 180]
+        self.assertIn("prks-work-folder-search", decl)
+        self.assertIn("prks-work-folder-set-btn", decl)
+        self.assertNotIn("prks-work-folder-clear-btn", decl)
+        self.assertNotIn("prks-work-folder-new-btn", decl)
+        open_body = _fn_body(folders, "function prksOpenFolderModalFromLibrarySearch(")
+        self.assertNotIn("prksOfflineGuardMutation", open_body)
+        apply = _fn_body(folders, "function prksApplyWorkFolderOfflineState(")
+        self.assertIn("prks-work-folder-clear-btn", apply)
+        self.assertIn("el.disabled = false", apply)
 
 
 class FrontendBrowseProjectionTests(unittest.TestCase):
@@ -1248,6 +1298,8 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
                     self.assertNotIn('deleteList("%s")' % key, src)
 
     def test_work_create_marks_catalog_and_recently_added_but_not_recent(self):
+        """PDF create still publishes at the call site; video CREATE_WORK ACKs
+        through reconcileCreatedWork with the same domains (never Recent)."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("if (res.ok && typeof prksMarkWorksBrowseChanged === 'function')")
         body = app[at: at + 600]
@@ -1255,6 +1307,15 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertIn("prksMarkRecentlyAddedChanged();", body)
         # A new Work has last_opened_at NULL, so it cannot be in Recent.
         self.assertNotIn("prksMarkRecentChanged();", body)
+        self.assertIn("prksCreateWorkDurably", app)
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        at = runtime.index("async function reconcileCreatedWork(")
+        end = runtime.index("\n        /**", at)
+        reconcile = runtime[at:end]
+        self.assertIn("prksMarkWorksBrowseChanged()", reconcile)
+        self.assertIn("prksMarkRecentlyAddedChanged()", reconcile)
+        self.assertIn("prksMarkFoldersDomainChanged()", reconcile)
+        self.assertNotIn("prksMarkRecentChanged()", reconcile)
 
     def test_folder_membership_marks_recently_added_only(self):
         """Filing a Work is durable now, so its coherence moved to the

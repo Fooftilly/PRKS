@@ -13,7 +13,9 @@ projection, and is proven by focused E2E coverage.
 | Domain | Operations | Notes |
 | --- | --- | --- |
 | Work tags | `ADD_WORK_TAG`, `REMOVE_WORK_TAG` | element conflict unit `(work, tag)` |
-| Tag vocabulary | `CREATE_TAG`, `DELETE_TAG` | client-minted `T-` id; deletion is a tombstone |
+| Tag vocabulary | `CREATE_TAG`, `DELETE_TAG`, `MERGE_TAG` | client-minted `T-` id; deletion is a tombstone; merge is an identity transform (null base; refuse while source is named in the queue) |
+| Work creation (video) | `CREATE_WORK` | client-minted `W-` id; YouTube-only; PDF binary stays online-only |
+| Work deletion | `DELETE_WORK` | destruction; cascade like the ordinary DELETE; absence is convergence |
 | Work opens | `MARK_WORK_OPENED` | coalesced per Work |
 | Work metadata | `SET_WORK_METADATA_FIELD` | per-field conflict unit |
 | Work source | `SET_WORK_SOURCE` | aggregate: provider + id + url are one decision |
@@ -22,11 +24,11 @@ projection, and is proven by focused E2E coverage.
 | Person profile | `SET_PERSON_METADATA_FIELD` | per-field; acknowledged/effective/draft kept apart |
 | Person Groups | `CREATE_PERSON_GROUP`, `SET_PERSON_GROUP_FIELD`, `ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`, `DELETE_PERSON_GROUP` | four shapes over one entity; deletion is a tombstone |
 | Person deletion | `DELETE_PERSON` | tombstone; a Person credited on a file stays protected |
-| Folders | `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`, `SET_WORK_FOLDER` | moving is a field; a Work's folder is a scalar on the Work |
+| Folders | `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`, `SET_WORK_FOLDER`, `ADD_FOLDER_TAG`, `REMOVE_FOLDER_TAG` | moving is a field; a Work's folder is a scalar on the Work; folder tags mirror Work tags `(folder, tag)` |
 | Positions | `CREATE_POSITION`, `SET_POSITION_FIELD`, `DELETE_POSITION` | two INDEPENDENT fields; deletion refused while an Argument targets it |
 | Arguments / Stances | `CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`, `SET_ARGUMENT_SOURCES`, `SET_ARGUMENT_TARGETS`, `DELETE_ARGUMENT` | permanent `A-` id; construction atomically includes initial sources/targets; later sources and targets are separate ordered aggregates |
 | Concepts | `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`, `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT` | name+aliases are one aggregate; the parent set is another |
-| Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; deletion has no UI control today (see below) |
+| Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; detail page offers Delete playlist |
 | Work notes | `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE` | independent whole-document aggregates; Research ACK fences Concept/Argument/Graph when the body changed or the revision advanced past the observed base; Private ACK does not |
 
 ## What one overnight pass added
@@ -72,39 +74,28 @@ as it stands — not a claim that each is impossible.
   and lifetime, large-file behaviour, acknowledgement, cleanup after ACK or
   discard, and duplicate/retry semantics. Until that design exists, this is an
   intentional binary boundary rather than an oversight.
+* **PDF annotation edits.** Online flush pairs metadata replace with managed-PDF
+  byte overwrite. Metadata-only durable ops without a byte strategy would
+  desync canvas and sidebar. Escalation:
+  Project `internal/pdf-annotations-escalation.md`. Preview-from-cache remains.
+* **Saved Views and global Search.** Live execute is `/api/search` (FTS, tags,
+  PDF text index). Offline routes refuse explicitly; CRUD is guarded. Do not
+  approximate search over browse cards.
+* **Tag aliases.** Add/remove alternate Tag names stays server-backed; guarded
+  offline. Identity transform for names is `MERGE_TAG`.
+* **Publishers vocabulary.** `#/publishers` create/delete/aliases are
+  connection-required; the route refuses offline.
+* **Bulk Organize.** `POST /api/works/bulk` (status / folder / tags) stays
+  server-backed and guarded; per-Work durable paths cover the same decisions
+  one file at a time.
 
 ### Not yet durable, no known blocker
 
-Each of these is a normal family that has simply not been built yet. The shapes
-they should take, and what each must declare before implementation, are in
-*Adding a family: the four shapes and what each must declare* in
-`docs/local-first-sync.md`.
-
-* **Tag merge** — `MERGE_TAG` is an identity transformation rather than a field
-  change and needs care: a pending merge must not let new relationship intents
-  target a doomed source identity, and must not rewrite an already-sent
-  envelope. The rule this rollout would use is to refuse the merge while any
-  unsynchronized operation still names the source, rather than retargeting
-  intents whose base revision belongs to a scope that is about to change.
-* **Folder tags** — `ADD_FOLDER_TAG` / `REMOVE_FOLDER_TAG`, the one Folder
-  relationship still on the network. It mirrors the Work-Tag family exactly and
-  is the obvious next increment.
-* **PDF annotations** — only where the PDF is already cached. Annotation
-  identity must be audited first: if annotations receive server-generated ids
-  today, new ones need permanent distributed ids before offline creation is
-  possible.
-* **Work deletion and the remaining Work relationships**, then **offline Work
-  creation** for types needing no binary ingestion.
-* **Saved Views**, and a clearly-labelled cached-data search mode. Global search
-  over uncached server records is not offered and should not be implied.
+_(none — remaining connection-required surfaces above are classified.)_
 
 ### Implemented, but with no control in the app
 
-* **Deleting a playlist.** `DELETE /api/playlists/{id}` has always existed and
-  the durable `DELETE_PLAYLIST` family now shares its boundary, but no PRKS
-  surface offers the action — so it is reachable only through the API and the
-  tests. Adding the button is a product decision (where it lives, what it
-  warns about) rather than a synchronization one.
+_(none — `DELETE_PLAYLIST` is offered from Playlist detail via Delete playlist.)_
 
 ### Deliberately not built, because it would be new product semantics
 

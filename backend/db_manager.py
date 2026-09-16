@@ -14,8 +14,8 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import (folder_sync, person_group_sync, person_metadata_sync, person_sync,
-                     playlist_sync, tag_sync, work_metadata_sync, work_open_sync,
+from backend import (folder_sync, folder_tag_sync, person_group_sync, person_metadata_sync,
+                     person_sync, playlist_sync, tag_sync, work_metadata_sync, work_open_sync,
                      work_role_sync, work_source_sync, work_tag_sync)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
 from backend.entity_ids import generate as generate_entity_id, is_distributed
@@ -2041,33 +2041,10 @@ class PRKSDatabase:
         return f'W/"prks-recently-added-{row["c"]}-{row["m"]}"'
 
     def delete_work_record(self, work_id: str) -> Optional[DeletedWorkRecord]:
+        from backend.work_lifecycle_sync import delete_work_record_on_conn
+
         with self.connection() as conn:
-            row = conn.execute(
-                "SELECT file_path FROM works WHERE id = ?",
-                (work_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            file_path = "" if row["file_path"] is None else str(row["file_path"])
-            deleted_filename = managed_pdf_filename(file_path)
-            # Deleting a Work removes its work_tags rows (via ON DELETE
-            # CASCADE) and nothing more: Tag identity is persistent -- see
-            # delete_tag().
-            conn.execute("DELETE FROM works WHERE id = ?", (work_id,))
-            still_referenced = False
-            if deleted_filename is not None:
-                survivors = conn.execute(
-                    "SELECT file_path FROM works WHERE file_path IS NOT NULL"
-                ).fetchall()
-                still_referenced = any(
-                    referenced_managed_pdf_filename(r["file_path"]) == deleted_filename
-                    for r in survivors
-                )
-            return DeletedWorkRecord(
-                work_id=work_id,
-                file_path=file_path,
-                managed_pdf_still_referenced=still_referenced,
-            )
+            return delete_work_record_on_conn(conn, work_id)
 
     def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
         ordered_ids = [str(wid).strip() for wid in (work_ids or []) if str(wid).strip()]
@@ -4063,8 +4040,8 @@ class PRKSDatabase:
             (aid, tag_id, al),
         )
 
-    def merge_tags_into(self, source_tag_id: str, target_tag_id: str) -> Dict[str, Any]:
-        """Move all links from source tag to target, drop source row, add source name as alias of target."""
+    def merge_tags_into_on_conn(self, conn, source_tag_id: str, target_tag_id: str) -> Dict[str, Any]:
+        """Identity transform on the caller's transaction (sync + HTTP share this)."""
         source = (source_tag_id or "").strip()
         target = (target_tag_id or "").strip()
         if not source or not target:
@@ -4072,93 +4049,98 @@ class PRKSDatabase:
         if source == target:
             raise ValueError("cannot merge a tag into itself")
 
-        with self.connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            srow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (source,)).fetchone()
-            trow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (target,)).fetchone()
-            if not srow or not trow:
-                raise ValueError("tag not found")
+        srow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (source,)).fetchone()
+        trow = conn.execute("SELECT id, name FROM tags WHERE id = ?", (target,)).fetchone()
+        if not srow or not trow:
+            raise ValueError("tag not found")
 
-            source_name = (srow["name"] or "").strip()
-            target_name = (trow["name"] or "").strip()
+        source_name = (srow["name"] or "").strip()
+        target_name = (trow["name"] or "").strip()
 
-            # Everything linked to the SOURCE has its rendered tag list change:
-            # the source name disappears, whether or not the target was already
-            # present. Entities linked only to the target are untouched.
-            affected = self._entities_linked_to_tag_on_conn(conn, source)
+        # Everything linked to the SOURCE has its rendered tag list change:
+        # the source name disappears, whether or not the target was already
+        # present. Entities linked only to the target are untouched.
+        affected = self._entities_linked_to_tag_on_conn(conn, source)
 
-            for wid in affected["affected_work_ids"]:
-                work_tag_sync.set_state(conn, wid, target, True)
-                work_tag_sync.set_state(conn, wid, source, False)
-            conn.execute("UPDATE sync_tag_lifecycle SET state = 'merged', target_tag_id = ?, changed_at = CURRENT_TIMESTAMP WHERE tag_id = ? OR (state = 'merged' AND target_tag_id = ?)", (target, source, source))
+        for wid in affected["affected_work_ids"]:
+            work_tag_sync.set_state(conn, wid, target, True)
+            work_tag_sync.set_state(conn, wid, source, False)
+        for fid in affected["affected_folder_ids"]:
+            folder_tag_sync.set_state(conn, fid, target, True)
+            folder_tag_sync.set_state(conn, fid, source, False)
+        conn.execute(
+            "UPDATE sync_tag_lifecycle SET state = 'merged', target_tag_id = ?, "
+            "changed_at = CURRENT_TIMESTAMP WHERE tag_id = ? OR "
+            "(state = 'merged' AND target_tag_id = ?)",
+            (target, source, source),
+        )
 
-            conn.execute(
-                "INSERT OR IGNORE INTO folder_tags (folder_id, tag_id) "
-                "SELECT folder_id, ? FROM folder_tags WHERE tag_id = ?",
-                (target, source),
-            )
-            conn.execute("DELETE FROM folder_tags WHERE tag_id = ?", (source,))
+        # Staged Processing Files reference Tags too. A merge means
+        # "replace S with T everywhere", so these links move like the
+        # others -- without this the source row is deleted below and
+        # `processing_file_tags.tag_id ON DELETE CASCADE` destroys the
+        # relationship, leaving the staged file with neither tag.
+        conn.execute(
+            "INSERT OR IGNORE INTO processing_file_tags (processing_file_id, tag_id) "
+            "SELECT processing_file_id, ? FROM processing_file_tags WHERE tag_id = ?",
+            (target, source),
+        )
+        conn.execute("DELETE FROM processing_file_tags WHERE tag_id = ?", (source,))
 
-            # Staged Processing Files reference Tags too. A merge means
-            # "replace S with T everywhere", so these links move like the
-            # others -- without this the source row is deleted below and
-            # `processing_file_tags.tag_id ON DELETE CASCADE` destroys the
-            # relationship, leaving the staged file with neither tag.
-            conn.execute(
-                "INSERT OR IGNORE INTO processing_file_tags (processing_file_id, tag_id) "
-                "SELECT processing_file_id, ? FROM processing_file_tags WHERE tag_id = ?",
-                (target, source),
-            )
-            conn.execute("DELETE FROM processing_file_tags WHERE tag_id = ?", (source,))
+        alias_rows = conn.execute(
+            "SELECT id, alias FROM tag_aliases WHERE tag_id = ?", (source,)
+        ).fetchall()
+        for ar in alias_rows:
+            aid = ar["id"]
+            al = (ar["alias"] or "").strip()
+            if not al:
+                conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
+                continue
+            if al.lower() == target_name.lower():
+                conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
+                continue
+            other = conn.execute(
+                "SELECT id FROM tag_aliases WHERE LOWER(alias) = LOWER(?) AND id != ?",
+                (al, aid),
+            ).fetchone()
+            if other:
+                conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
+            else:
+                conn.execute(
+                    "UPDATE tag_aliases SET tag_id = ? WHERE id = ?",
+                    (target, aid),
+                )
 
-            alias_rows = conn.execute(
-                "SELECT id, alias FROM tag_aliases WHERE tag_id = ?", (source,)
-            ).fetchall()
-            for ar in alias_rows:
-                aid = ar["id"]
-                al = (ar["alias"] or "").strip()
-                if not al:
-                    conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
-                    continue
-                if al.lower() == target_name.lower():
-                    conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
-                    continue
-                other = conn.execute(
-                    "SELECT id FROM tag_aliases WHERE LOWER(alias) = LOWER(?) AND id != ?",
-                    (al, aid),
-                ).fetchone()
-                if other:
-                    conn.execute("DELETE FROM tag_aliases WHERE id = ?", (aid,))
-                else:
+        conn.execute("DELETE FROM tags WHERE id = ?", (source,))
+
+        if source_name and source_name.lower() != target_name.lower():
+            exists = conn.execute(
+                """
+                SELECT 1 FROM tag_aliases
+                WHERE tag_id = ? AND LOWER(alias) = LOWER(?)
+                LIMIT 1
+                """,
+                (target, source_name),
+            ).fetchone()
+            if not exists:
+                new_aid = self.generate_id("L")
+                try:
                     conn.execute(
-                        "UPDATE tag_aliases SET tag_id = ? WHERE id = ?",
-                        (target, aid),
+                        "INSERT INTO tag_aliases (id, tag_id, alias) VALUES (?, ?, ?)",
+                        (new_aid, target, source_name),
                     )
-
-            conn.execute("DELETE FROM tags WHERE id = ?", (source,))
-
-            if source_name and source_name.lower() != target_name.lower():
-                exists = conn.execute(
-                    """
-                    SELECT 1 FROM tag_aliases
-                    WHERE tag_id = ? AND LOWER(alias) = LOWER(?)
-                    LIMIT 1
-                    """,
-                    (target, source_name),
-                ).fetchone()
-                if not exists:
-                    new_aid = self.generate_id("L")
-                    try:
-                        conn.execute(
-                            "INSERT INTO tag_aliases (id, tag_id, alias) VALUES (?, ?, ?)",
-                            (new_aid, target, source_name),
-                        )
-                    except sqlite3.IntegrityError:
-                        pass
-
-            conn.commit()
+                except sqlite3.IntegrityError:
+                    pass
 
         return {"canonical_tag_id": target, "canonical_name": target_name, **affected}
+
+    def merge_tags_into(self, source_tag_id: str, target_tag_id: str) -> Dict[str, Any]:
+        """Move all links from source tag to target, drop source row, add source name as alias of target."""
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = self.merge_tags_into_on_conn(conn, source_tag_id, target_tag_id)
+            conn.commit()
+        return result
 
     def delete_tag_alias(self, tag_id: str, alias: str) -> bool:
         al = (alias or "").strip()
@@ -4326,8 +4308,14 @@ class PRKSDatabase:
             pair = json.loads(row["scope_id"])
             if pair[1] == tag_id:
                 option_works.add(pair[0])
+        option_folders = set(folders)
+        for row in conn.execute("SELECT scope_id FROM sync_entity_revisions WHERE scope_type = 'folder-tag'"):
+            pair = json.loads(row["scope_id"])
+            if pair[1] == tag_id:
+                option_folders.add(pair[0])
         return {"affected_work_ids": works, "affected_folder_ids": folders,
-                "affected_tag_options_work_ids": sorted(option_works)}
+                "affected_tag_options_work_ids": sorted(option_works),
+                "affected_tag_options_folder_ids": sorted(option_folders)}
 
     def delete_tag(self, tag_id: str) -> Dict[str, Any]:
         """Explicitly destroy a Tag. Relationships cascade.
@@ -4368,6 +4356,8 @@ class PRKSDatabase:
             affected = self._entities_linked_to_tag_on_conn(conn, tid)
             for wid in affected["affected_work_ids"]:
                 work_tag_sync.set_state(conn, wid, tid, False)
+            for fid in affected["affected_folder_ids"]:
+                folder_tag_sync.set_state(conn, fid, tid, False)
             conn.execute("UPDATE sync_tag_lifecycle SET state = 'deleted', target_tag_id = NULL, changed_at = CURRENT_TIMESTAMP WHERE tag_id = ?", (tid,))
             conn.execute("DELETE FROM tags WHERE id = ?", (tid,))
         return {"status": "deleted", **affected}
@@ -4386,13 +4376,20 @@ class PRKSDatabase:
             return work_tag_sync.tag_options(conn, work_id)
 
     def add_tag_to_folder(self, folder_id: str, tag_id: str):
-        self.execute_query("INSERT INTO folder_tags (folder_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", (folder_id, tag_id))
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            folder_tag_sync.set_state(conn, folder_id, tag_id, True)
 
     def remove_tag_from_folder(self, folder_id: str, tag_id: str):
         # Relationship only; see remove_tag_from_work.
-        self.execute_query(
-            "DELETE FROM folder_tags WHERE folder_id = ? AND tag_id = ?", (folder_id, tag_id)
-        )
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            folder_tag_sync.set_state(conn, folder_id, tag_id, False)
+
+    def get_folder_tag_options(self, folder_id: str):
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return folder_tag_sync.tag_options(conn, folder_id)
 
     def get_work_tags(self, work_id: str) -> List[dict]:
         query = """

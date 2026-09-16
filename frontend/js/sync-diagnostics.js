@@ -199,6 +199,15 @@
         if (op.operation === 'DELETE_TAG') {
             return 'Delete a tag';
         }
+        if (op.operation === 'MERGE_TAG') {
+            return 'Merge a tag into ' + bounded(op.payload.target_tag_id);
+        }
+        if (op.operation === 'CREATE_WORK') {
+            return 'Create file "' + bounded(op.payload.title || 'Untitled') + '"';
+        }
+        if (op.operation === 'DELETE_WORK') {
+            return 'Delete a file';
+        }
         if (op.operation === 'DELETE_PERSON') {
             return 'Delete a person';
         }
@@ -227,6 +236,10 @@
         }
         if (op.operation === 'ADD_WORK_TAG' || op.operation === 'REMOVE_WORK_TAG') {
             return (op.operation === 'ADD_WORK_TAG' ? 'Add ' : 'Remove ') +
+                ((context.tag && context.tag.name) || 'Tag');
+        }
+        if (op.operation === 'ADD_FOLDER_TAG' || op.operation === 'REMOVE_FOLDER_TAG') {
+            return (op.operation === 'ADD_FOLDER_TAG' ? 'Add ' : 'Remove ') +
                 ((context.tag && context.tag.name) || 'Tag');
         }
         /* Never a guess. Describing an unknown family as a Tag edit is how a
@@ -272,8 +285,13 @@
         SET_WORK_PLAYLIST: 'work-playlist-state',
         CREATE_TAG: 'tags:index',
         DELETE_TAG: 'tags:index',
+        MERGE_TAG: 'tags:index',
+        CREATE_WORK: 'work',
+        DELETE_WORK: 'work',
         ADD_WORK_TAG: 'work-tag-options',
         REMOVE_WORK_TAG: 'work-tag-options',
+        ADD_FOLDER_TAG: 'folder-tag-options',
+        REMOVE_FOLDER_TAG: 'folder-tag-options',
         ADD_WORK_PERSON_ROLE: 'work-people-state',
         REMOVE_WORK_PERSON_ROLE: 'work-people-state',
         SET_WORK_PERSON_ROLE_CREDIT: 'work-people-state',

@@ -497,7 +497,9 @@ pending or conflicted value must never be written into this cache.
 server, survive reload, and reconcile on acknowledgement):
 
 - Work Tags: `ADD_WORK_TAG`, `REMOVE_WORK_TAG`
-- the Tag vocabulary: `CREATE_TAG`, `DELETE_TAG`
+- the Tag vocabulary: `CREATE_TAG`, `DELETE_TAG`, `MERGE_TAG`
+- Work creation (video / YouTube): `CREATE_WORK`
+- Work deletion: `DELETE_WORK`
 - Work opens: `MARK_WORK_OPENED`
 - Work metadata: `SET_WORK_METADATA_FIELD`
 - Work source identity: `SET_WORK_SOURCE`
@@ -508,7 +510,7 @@ server, survive reload, and reconcile on acknowledgement):
   `ADD_PERSON_GROUP_MEMBER`, `REMOVE_PERSON_GROUP_MEMBER`,
   `DELETE_PERSON_GROUP`
 - Folders: `CREATE_FOLDER`, `SET_FOLDER_FIELD`, `DELETE_FOLDER`,
-  `SET_WORK_FOLDER`
+  `SET_WORK_FOLDER`, `ADD_FOLDER_TAG`, `REMOVE_FOLDER_TAG`
 - Playlists: `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`,
   `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST`
 - Concepts: `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`,
@@ -1318,21 +1320,21 @@ those, add the dependency **then**.
 Every production Folder write goes through the `api.js` wrappers
 (`createFolder`, `patchFolder`, `deleteFolderCanonical`, `addWorkToFolder`,
 `patchWorkFolder`, `addTagToFolder`, `removeTagFromFolder`), so there is exactly
-one boundary per operation. The first five are **durable** and carry no
-connectivity guard; what they can still refuse is an unknown base, via
-`prksFolderSaveMessage()`. The two Folder-**tag** wrappers are the exception and
-still call `prksGuardFolderMutation()`, because folder tags are the one Folder
-relationship not yet durable; a refusal throws an error tagged
-`prksOfflineRefused`, which `prksOfflineWasGuardRefusal()` detects so call sites
-skip a second dialog. The three former quick-create surfaces (the Folder modal
+one boundary per operation. All of them are **durable** and carry no
+connectivity guard; what they can still refuse is an unknown base (Folder fields
+via `prksFolderSaveMessage()`, Folder tags when `folder-tag-options` has never
+been prepared). Folder-tag add/remove enqueue `ADD_FOLDER_TAG` /
+`REMOVE_FOLDER_TAG` through `coalesceFolderTag` / `prksFolderTagEdit`, mirroring
+Work tags. The three former quick-create surfaces (the Folder modal
 in `app.js`, `quickCreateFolder()` in `ui.js`, and the processing inbox) all
 route through `createFolder()` rather than posting raw. The one documented
 exception is the coalesced private-notes autosave in `ui.js`, which is gated by
 its own runtime check and publishes Folder coherence on success;
 `tests/test_frontend_offline_runtime.py` fails the build if any other module
-pairs an `/api/folders` URL with a mutating method. Tag **merge** is guarded by
-the same helper and stays online-only — `MERGE_TAG` is an identity
-transformation, not a field change, and is deliberately not yet durable.
+pairs an `/api/folders` URL with a mutating method. Tag **merge** is durable
+(`MERGE_TAG`): an identity transform with a null base that refuses while any
+unsynchronized operation still names the source, rather than retargeting
+intents.
 
 `prksOpenFolderModalFromLibrarySearch()` no longer guards anything: the folder
 is real the moment it is written, so the dashboard and the create-from-search
@@ -1364,20 +1366,22 @@ one second, all against a real `If-None-Match`.
 
 **Tag delete and merge report what they staled.** A cached Work detail embeds
 `work.tags[]` and a cached Folder detail `folder.tags[]`, so
-`DELETE /api/tags/:id` and `POST /api/tags/merge` stale both read models.
+`DELETE /api/tags/:id` and `POST /api/tags/merge` (and their durable
+`DELETE_TAG` / `MERGE_TAG` counterparts) stale both read models.
 Both collect the linked entities **before** the write (the FK cascade and the
 link move respectively destroy the evidence) and return `affected_work_ids` /
-`affected_folder_ids`; `deleteTag()` and `mergeTags()` in `api.js` publish
-Folder-domain invalidation and per-Work eviction from that answer through
-`prksPublishTagCoherence()`. Server-reported IDs are what make this correct
-regardless of the active route, the focused tab, which surface initiated the
-mutation, or whether this client had ever loaded those relationships. For a
-merge the affected set is everything linked to the **source**: its name
-disappears from the rendered list whether or not the target was already
-present. Tag **alias** mutations deliberately publish nothing — aliases live in
-`tag_aliases` and never appear in a cached `tags[]`. Only acknowledged
-canonical success publishes: a transport failure, HTTP error, validation error
-or abort leaves every snapshot eligible, because nothing canonical changed.
+`affected_folder_ids`. The ordinary HTTP merge path still publishes through
+`prksPublishTagCoherence()`; durable delete/merge reconcile the same IDs at
+acknowledgement (`reconcileDeletedTag` / `reconcileMergedTag`). Server-reported
+IDs are what make this correct regardless of the active route, the focused tab,
+which surface initiated the mutation, or whether this client had ever loaded
+those relationships. For a merge the affected set is everything linked to the
+**source**: its name disappears from the rendered list whether or not the
+target was already present. Tag **alias** mutations deliberately publish
+nothing — aliases live in `tag_aliases` and never appear in a cached `tags[]`.
+Only acknowledged canonical success publishes: a transport failure, HTTP error,
+validation error or abort leaves every snapshot eligible, because nothing
+canonical changed.
 
 **`parent_id` must be present, not merely nullish.** `get_all_folders()`
 selects `f.*`, `get_folder()` selects `*`, and the children query names the
