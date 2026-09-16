@@ -91,6 +91,9 @@ class _TimingResult(unittest.TextTestResult):
 
     def startTest(self, test):
         self._started_at = time.perf_counter()
+        # Workers redirect stdout to their log file; print the id so a hung
+        # shard names the test it never left (TextTestRunner stream is StringIO).
+        print(test.id(), flush=True)
         super().startTest(test)
 
     def stopTest(self, test):
