@@ -1282,8 +1282,9 @@ depending on a Person cache being present.
 Open a Work's **Manage tags** panel online once to prepare its catalog and
 relationship snapshot. Offline Add needs a cached Work, catalog and tag-options.
 Remove needs the Work and tag-options, so a missing catalog need not block it.
-Creating a Tag still requires a connection and is never an actionable offline
-picker result.
+Creating a Tag is durable (`CREATE_TAG`): the picker's create row is live with
+or without a server, and a following attachment waits on that construction via
+`depends_on`.
 
 The panel reports Offline · saved locally, Waiting to sync, Syncing, Conflict,
 Sync failed, or All changes synced. Settings → Diagnostics shows durable
@@ -1726,6 +1727,12 @@ Missing folder / playlist / person targets are named refusals
 orders behind pending `CREATE_FOLDER` / `CREATE_PLAYLIST` / `CREATE_PERSON` via
 `depends_on`. A second envelope for an id that already exists acknowledges
 without overwriting.
+
+Selected Tags at create time are ordinary `ADD_WORK_TAG` operations written in
+the **same** local-store transaction as `CREATE_WORK`. Each tag row depends on
+the new create (and on any pending `CREATE_TAG`). Sync wakes only after that
+batch commits — never between create and tags. Tags are not stuffed into the
+`CREATE_WORK` payload.
 
 Acknowledgement fences folders, works-browse and recently-added always; playlists
 when construction carried a playlist; people and person-groups when it carried

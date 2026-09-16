@@ -40,8 +40,8 @@
     const SHELL_PRECACHE_PATHS = ['/', '/index.html'];
 
     // Explicit static-shell asset manifest: every same-origin CSS/JS/font file
-    // the ordinary PRKS shell needs to boot and render the full Phase-1
-    // read-only offline surface, precached eagerly on install so the shell
+    // the ordinary PRKS shell needs to boot and render the offline read cache
+    // plus durable local-first UI, precached eagerly on install so the shell
     // launches offline without depending on a page having already loaded
     // once under an active, controlling service worker (see
     // tests/test_frontend_service_worker.py's ShellManifestMatchesIndexHtml

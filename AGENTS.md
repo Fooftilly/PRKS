@@ -516,6 +516,8 @@ server, survive reload, and reconcile on acknowledgement):
 - Concepts: `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`,
   `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT`
 - Positions: `CREATE_POSITION`, `SET_POSITION_FIELD`, `DELETE_POSITION`
+- Arguments / Stances: `CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`,
+  `SET_ARGUMENT_SOURCES`, `SET_ARGUMENT_TARGETS`, `DELETE_ARGUMENT`
 - Work notes: `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE`
 
 `docs/local-first-rollout-status.md` is the running score and is authoritative
@@ -794,7 +796,8 @@ that is the main reason People is useful offline. There is no offline-specific
 router: every one of these destinations is reached through the same
 `prksNavigate` as online.
 
-**Offline media policy.** Phase 1 caches structured data only. A Person route
+**Offline media policy.** Structured data only — portraits and Work thumbnails
+are never part of the disposable cache. A Person route
 mounted from cache sets `ctx.ui.personOfflineCached`, which suppresses the
 portrait (`/api/persons/:id/profile-image`) and passes `suppressThumbnail: true`
 to `prksWorkCardHtml()`, so a cached mount issues no PRKS media request and
@@ -1215,14 +1218,13 @@ the same invariant as the Person profile PATCH and the Person Group mutations
 above.
 
 Folders/Home are **local-first**. Creating a folder (including inside one just
-created), renaming it, editing its description and private notes, moving it, and
-deleting it are durable operations (`CREATE_FOLDER`, `SET_FOLDER_FIELD`,
-`DELETE_FOLDER`), and which folder a file is in is a scalar on the **Work**
-(`SET_WORK_FOLDER`) because a file is in at most one. Name uniqueness within a
-parent and acyclicity stay canonical, and the empty-only delete rule is
-unchanged — `FOLDER_NOT_EMPTY` / `FOLDER_HAS_SUBFOLDERS` come back as named
-refusals. Changing a folder's **tags** is the one Folder relationship still
-online-only.
+created), renaming it, editing its description and private notes, moving it,
+changing its tags, and deleting it are durable operations (`CREATE_FOLDER`,
+`SET_FOLDER_FIELD`, `DELETE_FOLDER`, `ADD_FOLDER_TAG`, `REMOVE_FOLDER_TAG`), and
+which folder a file is in is a scalar on the **Work** (`SET_WORK_FOLDER`)
+because a file is in at most one. Name uniqueness within a parent and
+acyclicity stay canonical, and the empty-only delete rule is unchanged —
+`FOLDER_NOT_EMPTY` / `FOLDER_HAS_SUBFOLDERS` come back as named refusals.
 
 The read cache below still backs the pages themselves. `#/folders` is PRKS's
 default route, so
@@ -1238,14 +1240,14 @@ offline-unavailable, and the two must not be collapsed. Folder search and
 expand/collapse are local projections of the cached list and issue zero
 requests offline.
 
-The Folder Library's **Recently added** tab is deliberately *not* part of this
-milestone: it reads `/api/recently-added`, which has no cache to fall back on.
-Offline it is disabled, a restored `recently-added` session tab falls back to
-Folders rather than firing a doomed request, and
-`prksLoadFolderLibraryRecentlyAdded()` re-checks connectivity itself so a stale
-timer or a mid-load disconnect cannot leak one either. The stored tab
-preference is left untouched and the control returns on reconnect. Do not let
-this imply that every Home dashboard tab is cached.
+The Folder Library's **Recently added** tab is backed by the disposable
+`recently-added:index` list (coherence domain `recently-added`), the same
+compact projection as `#/recent` and browse. Offline it reopens from cache when
+this device has warmed it; a missing snapshot is offline-unavailable rather than
+an empty library. Session-tab restore and mid-load disconnect checks still avoid
+firing doomed requests when the list is not cached. Do not collapse "uncached"
+with "empty", and do not imply every Home dashboard control is cached without
+checking its domain.
 
 The Folder validators (`prksIsFoldersIndexShape`, `prksIsFolderShape`) protect
 what the renderers dereference: `id`/`title`/`description`/`parent_id` plus
@@ -1861,7 +1863,8 @@ The families are deliberately different in kind, and that is the point:
 ### Local-first Work Tags (Milestone 2B)
 
 Existing Work Tag add/remove uses one durable-first path online and offline.
-Other mutations remain server-required. The implementation contract is in
+See `docs/local-first-rollout-status.md` for other families and for surfaces that
+remain connection-required. The Work-Tag implementation contract is in
 [docs/local-first-sync.md](docs/local-first-sync.md).
 
 - `local-store.js` owns `prks-local-v1`, physically separate from the disposable
@@ -1872,8 +1875,9 @@ Other mutations remain server-required. The implementation contract is in
   overlay. `work-tag-editor.js` owns TabContext-local editing and conflict UI.
   `sync-runtime.js` alone owns semantic transport, one in-flight operation and
   bounded retry. Never queue arbitrary URLs/methods/request bodies.
-- The server accepts only ADD_WORK_TAG/REMOVE_WORK_TAG at
-  POST /api/sync/operations. `backend/work_tag_sync.py` shares connection-aware
+- `POST /api/sync/operations` dispatches every registered durable operation
+  (Work Tags among many others; see `backend/sync_protocol.py`).
+  `backend/work_tag_sync.py` shares connection-aware
   canonical relationship helpers with direct add/remove, bulk, merge and delete.
   Domain writes, revision advancement and ledger insertion commit together.
 - Schema 14 sync_operations, sync_entity_revisions and sync_tag_lifecycle are
@@ -1894,12 +1898,10 @@ Other mutations remain server-required. The implementation contract is in
   Tag catalog copy. Catalog edits invalidate tags, relationship edits do not.
   `work-tag-options` is per Work and contains no catalog ETag. Only affected
   Work projections invalidate, including absent tombstones on delete/merge.
-- Tag creation/deletion, Folder edits, Person and Person Group edits and
-  Playlists are all durable now — see *Which families are durable today* under
-  "Offline / PWA", and `docs/local-first-rollout-status.md` for the running
-  score. Still absent: PDF annotations, CRDTs,
-  multi-user sync and server push. Open events joined the protocol in 2C
-  and the Work fields in `SYNCED_FIELDS` (2D/2E/2F/2G/2H/2I); nothing else has. `year` and
+- The durable family list under "Offline / PWA" and
+  `docs/local-first-rollout-status.md` are the running score. Still absent as
+  product: PDF annotations as a durable family, CRDTs, multi-user sync and
+  server push. `year` and
   `published_date` (2G) are the high fan-out case: they reach all three browse
   catalogs AND the Work summaries embedded in cached Folder, Person and
   Playlist details, which are patched -- never invalidated -- under a

@@ -742,11 +742,14 @@ Application operational states:
 | warning | used | warning + text |
 | offline | used | calm, not destructive; icon + “Offline” (`.prks-connectivity-indicator`) |
 | stale | used | visible but calm; cached data remains readable (`.prks-offline-banner`, “Offline · cached 18:42”) |
-| queued | reserved | not styled like error; “N changes queued” |
-| syncing | reserved | “Checking…” / “Syncing…” |
-| conflict | reserved | warning/danger with icon + “Conflict” |
+| queued | used | not styled like error; “N changes queued” / “Waiting to sync” |
+| syncing | used | “Checking…” / “Syncing…” |
+| conflict | used | warning/danger with icon + “Conflict” |
 
-Only implement operational states that exist today. Offline/PWA Phase 1 (read-only) implemented `offline` and `stale`; `queued`/`syncing`/`conflict` stay reserved until an offline mutation outbox exists in a later phase, so that project does not create a separate visual system in the meantime.
+Only implement operational states that exist today. Offline connectivity uses
+`offline` and `stale` for the disposable read cache. Durable local-first edits
+use `queued` / `syncing` / `conflict` on editors and in Settings → Diagnostics
+(`prks-local-v1` outbox). Do not invent a parallel visual system for sync UI.
 
 Rules:
 
@@ -1147,7 +1150,8 @@ This document is updated in the same change that introduces a new primitive. The
 
 Upcoming work that must not invent a parallel visual system:
 
-- tiling / window-manager behavior
-- PWA queued / syncing / conflict UI (offline mutation outbox, a later phase; offline/stale shipped in Offline/PWA Phase 1 using the contract above)
+- tiling / window-manager behavior refinements that must reuse existing chrome
 
-Those features are out of scope for the design-system migration. Their visual contracts are already specified above.
+Queued / syncing / conflict sync UI already ships with the durable outbox and
+must keep using the operational-state contract above — do not invent a parallel
+visual system.

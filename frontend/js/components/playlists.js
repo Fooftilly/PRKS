@@ -956,7 +956,8 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     // draft, but must not reach for the Playlist catalog: `fetchPlaylists()`
     // rethrows non-abort transport failures, and this function is invoked with
     // `void`, so that would surface as an unhandled rejection as well as
-    // breaking the Phase-1 read-only contract.
+    // reaching for a catalogue that is intentionally online-only while
+    // offline (Clear / New / Done stay live without it).
     let playlists = [];
     if (prksPlaylistRuntimeOnline()) {
         try {

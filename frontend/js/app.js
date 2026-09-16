@@ -1399,7 +1399,7 @@ function initSidebarBrandHome() {
 }
 
 /**
- * Route-critical read models (Work only, Phase 1) go through the
+ * Route-critical read models go through the
  * offline-capable wrapper instead of the plain api.js fetcher: a genuine
  * network/server-unreachable failure falls back to the offline store
  * instead of silently becoming "not found", while a real HTTP domain
@@ -4581,8 +4581,14 @@ function initForms() {
                         };
                     }).filter(function (r) { return r.person_id; }) : [],
                 };
-                const op = await prksCreateWorkDurably(createFields);
-                const newId = op && op.entity_id;
+                const selectedTags = (typeof uploadTagsSelected !== 'undefined' &&
+                    Array.isArray(uploadTagsSelected))
+                    ? uploadTagsSelected.map(function (t) {
+                        return { id: t.id, name: t.name || '' };
+                    }).filter(function (t) { return t.id; })
+                    : [];
+                const batch = await prksCreateWorkDurably(createFields, { tags: selectedTags });
+                const newId = batch && batch.create && batch.create.entity_id;
                 closeModals();
                 if (newId && typeof prksNavigate === 'function') {
                     prksNavigate('#/works/' + encodeURIComponent(newId));

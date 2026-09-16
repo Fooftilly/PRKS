@@ -79,9 +79,8 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
     def test_mutation_guard_never_queues(self):
         src = _read(_RUNTIME)
         self.assertIn("This change requires a connection to PRKS.", src)
-        # The module documents that it deliberately has no outbox (Phase 1), it
-        # must never actually implement queuing/persisting a blocked mutation.
-        self.assertIn("no offline mutation outbox", src)
+        # guardMutation blocks server-bound ops only; durable intent uses local-store.js.
+        self.assertIn("local-store.js", src)
         self.assertNotIn("queueMutation", src)
         self.assertNotIn("pendingMutation", src)
 
