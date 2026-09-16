@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Convenience wrapper around tests/e2e/run.py (PRKS has no root npm Playwright suite).
+# Usage:
+#   scripts/e2e smoke [--jobs 2]
+#   scripts/e2e feature graph [--jobs 2]
+#   scripts/e2e affected [--base origin/master]
+#   scripts/e2e last-failed
+#   scripts/e2e dev --feature tabs
+#   scripts/e2e full --jobs 4
+#   scripts/e2e list-features
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+PY="${PYTHON:-python3}"
+RUN=("$PY" tests/e2e/run.py)
+
+if [[ $# -lt 1 ]]; then
+  cat <<'EOF' >&2
+usage: scripts/e2e <smoke|feature|affected|last-failed|dev|full|list-features|list-tests> [args...]
+EOF
+  exit 2
+fi
+
+cmd="$1"
+shift
+case "$cmd" in
+  smoke)
+    exec "${RUN[@]}" --smoke --no-pointer-capture "$@"
+    ;;
+  feature)
+    if [[ $# -lt 1 ]]; then
+      echo "usage: scripts/e2e feature <name>[,name...] [run.py args...]" >&2
+      exit 2
+    fi
+    name="$1"
+    shift
+    exec "${RUN[@]}" --feature "$name" --no-pointer-capture "$@"
+    ;;
+  affected)
+    exec "${RUN[@]}" --affected --no-pointer-capture "$@"
+    ;;
+  last-failed|last_failed)
+    exec "${RUN[@]}" --last-failed --no-pointer-capture "$@"
+    ;;
+  dev)
+    exec "${RUN[@]}" --dev "$@"
+    ;;
+  full)
+    exec "${RUN[@]}" "$@"
+    ;;
+  list-features|list_features)
+    exec "${RUN[@]}" --list-features "$@"
+    ;;
+  list-tests|list_tests)
+    exec "${RUN[@]}" --list-tests "$@"
+    ;;
+  *)
+    echo "unknown command: $cmd" >&2
+    echo "usage: scripts/e2e <smoke|feature|affected|last-failed|dev|full|list-features|list-tests>" >&2
+    exit 2
+    ;;
+esac

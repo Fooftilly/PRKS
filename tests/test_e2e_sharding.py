@@ -297,13 +297,25 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
         sink = io.StringIO()
         with _import_runner() as runner:
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-                return runner.run_parallel(ids, jobs, {}, fail_fast)
+                ok, observed, _failed = runner.run_parallel(ids, jobs, {}, fail_fast)
+                return ok, observed
 
     def test_passing_shards_report_success_and_timings(self):
         ids = _ids(_CASES, "PassingCases", "test_first", "test_second")
         ok, observed = self._run(ids, 2)
         self.assertTrue(ok)
         self.assertEqual(sorted(observed), sorted(ids))
+
+    def test_failing_worker_records_failed_ids(self):
+        ids = _ids(_CASES, "PassingCases", "test_first") + _ids(
+            _CASES, "FailingCases", "test_fails"
+        )
+        sink = io.StringIO()
+        with _import_runner() as runner:
+            with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                ok, _observed, failed = runner.run_parallel(ids, 2, {}, False)
+        self.assertFalse(ok)
+        self.assertTrue(any(fid.endswith("test_fails") for fid in failed))
 
     def test_a_failing_worker_fails_the_parent(self):
         ids = _ids(_CASES, "PassingCases", "test_first") + _ids(

@@ -5,8 +5,9 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 ## Commands
 
 - Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`. UX Interaction Tour (separate, opt-in, artifact-producing): `python run_tests.py --ux-tour`.
-- Full E2E gate: `timeout 1200 python tests/e2e/run.py --jobs 4` (expected ~7-10 min; over ~15 min is a hang to investigate, not a slow run). Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow".
-- **Never run browser E2E tests while iterating** — not the full suite, not a whole module — unless the behavior can only be verified in a browser. Use unit tests, Node selftests, static contracts and API tests instead. Run the relevant E2E module once a vertical slice or the milestone implementation is finished (`python tests/e2e/run.py --jobs 4 --no-pointer-capture <module>`, never raw `python -m unittest`, which is serial), and the full parallel suite once after that. Debug any failure with `--jobs 1 <test id>`, never by rerunning the suite. See "E2E test workflow".
+- Full E2E gate: `timeout 1200 python tests/e2e/run.py --jobs 4` (expected ~7-10 min; over ~15 min is a hang to investigate, not a slow run). Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow" / "E2E TESTING POLICY".
+- Agent/dev E2E loop (preferred): `python tests/e2e/run.py --smoke`, `--feature <group>`, `--affected`, `--last-failed`, or `--dev --feature <group>` — never iterate on the full suite. Convenience: `scripts/e2e smoke|feature|affected|last-failed|dev|full`.
+- **Never run browser E2E tests while iterating** — not the full suite, not a whole module — unless the behavior can only be verified in a browser. Use unit tests, Node selftests, static contracts and API tests instead. Run the relevant E2E feature/module once a vertical slice or the milestone implementation is finished (`python tests/e2e/run.py --jobs 4 --no-pointer-capture --feature <group>` or a module path; never raw `python -m unittest`, which is serial), and the full parallel suite once after that. Debug any failure with `--jobs 1 <test id>` or `--last-failed`, never by rerunning the suite. See "E2E TESTING POLICY".
 - App, default for agents: `python prks_app.py --testing`
 - Real app or Compose: only with run-real authorization from the user
 - Git hooks: after clone, `./scripts/setup-git-hooks.sh` (sets local `core.hooksPath` to `.githooks`). Successful commits overwrite gitignored `prks-latest.zip` at the repo root with `git archive` of the new `HEAD`. Verify with `git config --get core.hooksPath` (expected: `.githooks`).
@@ -1951,21 +1952,93 @@ snapshots and restores exact button contents (icon markup included), so
 callers must restore it from a `finally` rather than only on the success or
 failure path.
 
+## E2E TESTING POLICY
+
+PRKS E2E is Python unittest + Playwright Chromium via `tests/e2e/run.py`
+(not an npm Playwright project). Tiers:
+
+| Tier | Command | Meaning |
+| --- | --- | --- |
+| Targeted | `python tests/e2e/run.py --jobs 1 <test id>` | One test/class/module |
+| Feature | `python tests/e2e/run.py --feature graph` | One domain group |
+| Smoke | `python tests/e2e/run.py --smoke` | Curated essential suite (~9 tests) |
+| Affected | `python tests/e2e/run.py --affected` | Git diff → feature groups |
+| Last-failed | `python tests/e2e/run.py --last-failed` | Prior run's failures only |
+| Dev | `python tests/e2e/run.py --dev --feature tabs` | Fail-fast + no pointer-capture |
+| Full | `timeout 1200 python tests/e2e/run.py --jobs 4` | Complete regression gate |
+
+Convenience wrapper: `scripts/e2e smoke|feature|affected|last-failed|dev|full`.
+Catalog: `python tests/e2e/run.py --list-features`. Mapping lives in
+`tests/e2e/policy.py` (declarative, edit there).
+
+Reports always name the tier. A PASS on targeted/feature/smoke/affected/dev
+is **not** equivalent to a full E2E gate. Say which tier ran.
+
+### During implementation
+
+1. Run the relevant unit/self-tests first.
+2. Run only E2E tests for the changed feature (`--feature` or a test id).
+3. Prefer `--affected` when the working-tree diff is the right scope.
+4. Use `--dev` (fail-fast, no pointer-capture) while debugging. Retries are
+   already off; do not add retries that hide failures.
+5. Stop quickly on failures (`--fail-fast` / `--dev`).
+6. If an E2E test fails, reproduce that specific failure before any broader run.
+7. After fixing, rerun the failed test (`--last-failed` or the test id).
+8. Then rerun the affected feature group.
+9. Then run `--smoke` if the change touches shell/navigation/shared paths.
+10. Run the complete E2E suite **only** when the implementation is otherwise
+    ready for final validation.
+
+Agents must not perform more than **two consecutive full E2E executions**
+without narrowing a failure to targeted tests and investigating it.
+
+### When the full E2E suite fails
+
+* Do **not** immediately rerun the entire suite.
+* Narrow to the failing test/spec (`--last-failed` or the printed test id).
+* Reproduce it individually (`--jobs 1`).
+* Diagnose and fix it.
+* Rerun the failing test until it passes reliably.
+* Run its feature group.
+* Run smoke if relevant.
+* Only then rerun the full gate **once**.
+
+### `--affected` defaults
+
+Compares the working tree (+ relevant untracked production/E2E paths) to
+`HEAD`, or to `--base <ref>` when given. Prints every changed path, the rule
+that matched, and the selected features. Unmapped production files fall back
+to **smoke** (not the full suite). Shared core (`app.js`, `server.py`,
+`db_manager.py`, …) selects smoke + shell/tabs/offline/sync. Docs/unit-only
+paths select nothing. Add new production areas by editing `AFFECTED_RULES`
+and `FEATURES` in `tests/e2e/policy.py`. Classify a new E2E module by adding
+its module/class prefix to the right feature's `selectors`.
+
+Optional stress: `tests/e2e/stress_cache_offline.py` — never part of normal
+iteration or the full gate.
+
 ## E2E test workflow
 
 `tests/e2e/run.py` is the only entry point for the real-Chromium suite.
 
 ```
-python tests/e2e/run.py                 # serial, deterministic (debugging)
-python tests/e2e/run.py --jobs 4        # sharded across 4 worker processes
-PRKS_E2E_JOBS=4 python run_tests.py --e2e
-python tests/e2e/run.py --jobs 4 --fail-fast
+python tests/e2e/run.py --smoke --jobs 2
+python tests/e2e/run.py --feature graph --jobs 2 --no-pointer-capture
+python tests/e2e/run.py --affected
+python tests/e2e/run.py --affected --base origin/master
+python tests/e2e/run.py --last-failed
+python tests/e2e/run.py --dev --feature tabs
+python tests/e2e/run.py --jobs 4                # full regression gate
 python tests/e2e/run.py --jobs 1 tests.e2e.test_playlists_offline.OfflinePlaylistTests.test_x
 python tests/e2e/run.py --jobs 4 --no-pointer-capture tests.e2e.test_playlists_offline
+scripts/e2e smoke
+scripts/e2e feature graph --jobs 2
+scripts/e2e full --jobs 4
 ```
 
 `--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
-accidentally parallel.
+accidentally parallel. There is no Playwright retry loop in this runner;
+failed tests stay failed.
 
 The E2E performance milestone is closed. Console suppression ignores only
 `blob:` resource failures containing `ERR_FILE_NOT_FOUND`; other blob errors
@@ -1981,11 +2054,12 @@ every sync, projection, validator and coherence question is answerable that
 way, in seconds rather than minutes.
 
 **After a complete user-visible vertical slice, or once the milestone's
-implementation is finished, run the relevant targeted E2E module once.** That
-is where a browser earns its cost: real navigation, real IndexedDB, real
+implementation is finished, run the relevant targeted E2E feature/module once.**
+That is where a browser earns its cost: real navigation, real IndexedDB, real
 service worker. Always through the sharding runner, never raw unittest:
 
 ```
+python tests/e2e/run.py --jobs 4 --no-pointer-capture --feature sync
 python tests/e2e/run.py --jobs 4 --no-pointer-capture tests.e2e.test_x
 ```
 
@@ -2026,9 +2100,10 @@ limit only when the suite genuinely grows, and re-measure rather than guess.
 
 ```
 python tests/e2e/run.py --jobs 1 tests.e2e.test_x.Class.test_name
+python tests/e2e/run.py --last-failed
 ```
 
-Fix it, re-run its module, and only then spend the full parallel gate once
+Fix it, re-run its feature group, and only then spend the full parallel gate once
 more. Never rerun the full suite to find out whether a fix worked.
 
 A full run costs several minutes of wall clock and saturates the machine; a

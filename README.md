@@ -522,11 +522,45 @@ Then open the printed origin’s `/tests/browser/design_system.html?theme=light`
 
 ```bash
 python run_tests.py          # unit/API/structural/Node (no Chromium)
-python run_tests.py --e2e    # real Chromium + real PRKS server
+python run_tests.py --e2e    # real Chromium + real PRKS server (full gate)
 python run_tests.py --all    # unit suite, then E2E
 python run_tests.py --ux-tour                    # UX interaction tour (see below)
 PRKS_UX_RECORD=1 python run_tests.py --ux-tour   # record every scenario for review
 ```
+
+### E2E tiers (agent-friendly)
+
+PRKS E2E is `tests/e2e/run.py` (Python unittest + Playwright), not npm Playwright.
+See **E2E TESTING POLICY** in `AGENTS.md` for the authoritative agent rules.
+Declarative feature/smoke/affected mapping: `tests/e2e/policy.py`.
+
+```bash
+# One test
+python tests/e2e/run.py --jobs 1 tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads_and_real_navigation
+
+# One feature/domain group
+python tests/e2e/run.py --list-features
+python tests/e2e/run.py --feature graph --jobs 2 --no-pointer-capture
+scripts/e2e feature sync --jobs 2
+
+# Git-diff → likely feature groups (working tree vs HEAD; override with --base)
+python tests/e2e/run.py --affected
+python tests/e2e/run.py --affected --base origin/master
+
+# Curated smoke (~9 essential tests)
+python tests/e2e/run.py --smoke --jobs 2
+scripts/e2e smoke --jobs 2
+
+# Rerun only previous failures / fail-fast dev loop
+python tests/e2e/run.py --last-failed
+python tests/e2e/run.py --dev --feature tabs
+
+# Full regression gate (final validation only)
+timeout 1200 python tests/e2e/run.py --jobs 4
+scripts/e2e full --jobs 4
+```
+
+A smoke/feature/affected PASS is **not** a full-gate PASS. Reports print the tier.
 
 `-e2e`, `-all`, and `-ux-tour` are the same flags. Unflagged `python run_tests.py` discovers tests under `tests/` and does not launch Chromium. It always forces `PRKS_TESTING=1` and `PRKS_STORAGE` to the repo’s `data_testing/` directory and clears `PRKS_FOR_PROCESSING_DIR` and `PRKS_LOG_FILE`. That is stricter than `python prks_app.py --testing`, which may honor an explicit safe `PRKS_STORAGE`. Neither path uses `./data` or container `/data`. `--ux-tour` is a separate, explicitly opt-in suite: it never runs as part of the default, `--e2e`, or `--all` modes.
 

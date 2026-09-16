@@ -37,6 +37,17 @@ from tests.e2e.harness import (
     stop_all_servers,
 )
 from tests.e2e.install_browser import ensure_chromium_installed
+from tests.e2e.policy import (
+    LAST_FAILED_PATH,
+    format_feature_catalog,
+    list_changed_paths,
+    load_last_failed,
+    report_banner,
+    save_last_failed,
+    select_affected,
+    select_features,
+    select_smoke,
+)
 from tests.e2e.sharding import (
     TIMINGS_PATH,
     aggregate_worker_results,
@@ -223,6 +234,7 @@ def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
         "failures": 0,
         "errors": 0,
         "skipped": 0,
+        "failed_ids": [],
         "timings": {},
         "output": "",
         "detail": "",
@@ -240,6 +252,7 @@ def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
         report["failures"] = len(result.failures)
         report["errors"] = len(result.errors)
         report["skipped"] = len(result.skipped)
+        report["failed_ids"] = _failed_ids_from_result(result)
         report["timings"] = {k: round(v, 3) for k, v in result.timings.items()}
         report["detail"] = _failure_detail(result)
         rc = 0 if result.wasSuccessful() else 1
@@ -263,6 +276,14 @@ def _failure_detail(result) -> str:
         for test, trace in group:
             chunks.append("%s: %s\n%s" % (label, test.id(), trace))
     return "\n".join(chunks)
+
+
+def _failed_ids_from_result(result) -> list:
+    ids = []
+    for group in (result.failures, result.errors):
+        for test, _trace in group:
+            ids.append(test.id())
+    return ids
 
 
 # --- parallel parent -----------------------------------------------------
@@ -343,12 +364,13 @@ def _tail(path, limit=4000):
         return ""
 
 
-def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict]:
+def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
     buckets = assign_shards(test_ids, jobs, timings)
     estimates = shard_estimates(buckets, timings)
     browsers_path = apply_e2e_playwright_env()
     observed = {}
     reports = []
+    failed_ids = []
     started = time.perf_counter()
 
     with tempfile.TemporaryDirectory(prefix="prks-e2e-jobs-") as raw:
@@ -404,6 +426,9 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict]:
                     reports.append(entry)
                     if report:
                         observed.update(report.get("timings") or {})
+                        for fid in report.get("failed_ids") or []:
+                            if fid not in failed_ids:
+                                failed_ids.append(fid)
                     ok = report is not None and rc == 0
                     print(
                         "[E2E %d/%d] %s — %.1fs (%d tests)"
@@ -468,7 +493,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict]:
     )
     for problem in problems:
         print("  %s" % problem, file=sys.stderr)
-    return ok, observed
+    return ok, observed, failed_ids
 
 
 def _print_worker_failure(worker, jobs, report):
@@ -497,7 +522,7 @@ def _print_worker_failure(worker, jobs, report):
 # --- serial parent -------------------------------------------------------
 
 
-def run_serial(test_ids, fail_fast) -> tuple[bool, dict]:
+def run_serial(test_ids, fail_fast) -> tuple[bool, dict, list]:
     runner = unittest.TextTestRunner(
         verbosity=2, failfast=fail_fast, resultclass=_result_factory
     )
@@ -513,7 +538,11 @@ def run_serial(test_ids, fail_fast) -> tuple[bool, dict]:
         "E2E workers=1 tests=%d failures=%d errors=%d skipped=%d in %.1fs"
         % (result.testsRun, len(result.failures), len(result.errors), len(result.skipped), wall)
     )
-    return result.wasSuccessful(), {k: round(v, 3) for k, v in result.timings.items()}
+    return (
+        result.wasSuccessful(),
+        {k: round(v, 3) for k, v in result.timings.items()},
+        _failed_ids_from_result(result),
+    )
 
 
 # --- CLI -----------------------------------------------------------------
@@ -524,8 +553,22 @@ def build_parser():
         prog="tests/e2e/run.py",
         description=(
             "Real Chromium E2E against isolated temporary PRKS storage. "
-            "Default is one worker (deterministic, best for debugging); "
+            "Default is the full suite on one worker (deterministic). "
+            "Use --smoke / --feature / --affected / --last-failed / --dev "
+            "for the agent development feedback loop. "
             "--jobs N shards individual test IDs across N processes."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python tests/e2e/run.py --smoke --jobs 2\n"
+            "  python tests/e2e/run.py --feature graph --jobs 2 --no-pointer-capture\n"
+            "  python tests/e2e/run.py --dev --feature tabs\n"
+            "  python tests/e2e/run.py --affected\n"
+            "  python tests/e2e/run.py --affected --base origin/master\n"
+            "  python tests/e2e/run.py --last-failed\n"
+            "  python tests/e2e/run.py --jobs 4   # full regression gate\n"
+            "  python tests/e2e/run.py --jobs 1 tests.e2e.test_app.AppShellAndNavigationTests\n"
         ),
     )
     parser.add_argument(
@@ -550,9 +593,57 @@ def build_parser():
         help="Skip the pointer-capture checks (they otherwise run once, after the workers).",
     )
     parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run the curated smoke suite (small essential shell + critical workflows).",
+    )
+    parser.add_argument(
+        "--feature",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=(
+            "Run one feature/domain group (repeatable). "
+            "Use --list-features for the catalog. Alias: pass 'smoke' as a feature name."
+        ),
+    )
+    parser.add_argument(
+        "--affected",
+        action="store_true",
+        help=(
+            "Select feature groups from the git working-tree diff "
+            "(default vs HEAD; override with --base)."
+        ),
+    )
+    parser.add_argument(
+        "--base",
+        default=None,
+        metavar="REF",
+        help="Git ref for --affected comparison (default: HEAD). Example: origin/master",
+    )
+    parser.add_argument(
+        "--last-failed",
+        action="store_true",
+        help="Rerun only tests that failed in the previous E2E run (.tests/e2e-last-failed.json).",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help=(
+            "Agent/dev mode: --fail-fast + --no-pointer-capture. "
+            "Requires an explicit selection (--feature/--smoke/--affected/--last-failed "
+            "or positional tests)."
+        ),
+    )
+    parser.add_argument(
         "--list-tests",
         action="store_true",
-        help="Print the discovered test IDs and exit.",
+        help="Print the discovered/selected test IDs and exit.",
+    )
+    parser.add_argument(
+        "--list-features",
+        action="store_true",
+        help="Print the E2E feature-group catalog and exit.",
     )
     # Internal: how the parent invokes one shard.
     parser.add_argument("--worker-index", type=int, default=None, help=argparse.SUPPRESS)
@@ -560,6 +651,111 @@ def build_parser():
     parser.add_argument("--tests-file", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--report-file", default=None, help=argparse.SUPPRESS)
     return parser
+
+
+def _print_affected_plan(plan):
+    print("Affected E2E plan:")
+    print("  comparison: working tree (+ untracked production/E2E paths) vs base")
+    for decision in plan["decisions"]:
+        if decision["skip"]:
+            print(
+                "  skip  %-40s rule=%s%s"
+                % (
+                    decision["path"],
+                    decision["rule"],
+                    (" — " + decision["note"]) if decision["note"] else "",
+                )
+            )
+        else:
+            print(
+                "  take  %-40s rule=%s features=%s%s"
+                % (
+                    decision["path"],
+                    decision["rule"],
+                    ",".join(decision["features"]) or "-",
+                    (" — " + decision["note"]) if decision["note"] else "",
+                )
+            )
+    if plan["features"]:
+        print("  selected features: %s" % ", ".join(plan["features"]))
+        print("  selected tests: %d" % len(plan["test_ids"]))
+    else:
+        print("  selected features: (none)")
+        if plan.get("empty_reason"):
+            print("  reason: %s" % plan["empty_reason"])
+
+
+def _resolve_selection(args, all_ids):
+    """Return (tier, test_ids, selection_note)."""
+    selection_modes = sum(
+        1
+        for flag in (
+            bool(args.smoke),
+            bool(args.feature),
+            bool(args.affected),
+            bool(args.last_failed),
+            bool(args.tests),
+        )
+        if flag
+    )
+    if selection_modes > 1:
+        raise ValueError(
+            "use only one of: positional tests, --smoke, --feature, --affected, --last-failed"
+        )
+
+    if args.last_failed:
+        data = load_last_failed(REPO / LAST_FAILED_PATH)
+        if not data or not data.get("test_ids"):
+            raise ValueError(
+                "no last-failed state at %s — run E2E once and let it fail first"
+                % (REPO / LAST_FAILED_PATH)
+            )
+        known = set(all_ids)
+        ids = [tid for tid in data["test_ids"] if tid in known]
+        missing = [tid for tid in data["test_ids"] if tid not in known]
+        note = "from %s (%d id(s))" % (LAST_FAILED_PATH, len(data["test_ids"]))
+        if missing:
+            note += "; dropped %d renamed/removed" % len(missing)
+        return "last-failed", ids, note
+
+    if args.affected:
+        changed = list_changed_paths(REPO, base=args.base)
+        print(
+            "Changed paths vs %s (%d):"
+            % (args.base or "HEAD", len(changed))
+        )
+        if not changed:
+            print("  (none)")
+        else:
+            for path in changed:
+                print("  %s" % path)
+        plan = select_affected(all_ids, changed)
+        _print_affected_plan(plan)
+        note = "features=%s" % (",".join(plan["features"]) or "-")
+        return "affected", plan["test_ids"], note
+
+    if args.smoke:
+        ids = select_smoke(all_ids)
+        return "smoke", ids, "%d curated smoke tests" % len(ids)
+
+    if args.feature:
+        names = []
+        for item in args.feature:
+            for part in item.split(","):
+                part = part.strip()
+                if part:
+                    names.append(part)
+        ids = select_features(all_ids, names)
+        return "feature", ids, "groups=%s" % ",".join(names)
+
+    if args.tests:
+        test_ids = []
+        loader = unittest.TestLoader()
+        for name in args.tests:
+            _flatten(loader.loadTestsFromName(name), test_ids)
+        return "targeted", test_ids, "explicit=%s" % " ".join(args.tests)
+
+    return "full", list(all_ids), "complete suite"
 
 
 def main(argv=None) -> int:
@@ -570,22 +766,40 @@ def main(argv=None) -> int:
             args.worker_index, args.worker_count or 1, args.tests_file, args.report_file
         )
 
-    apply_e2e_playwright_env()
-    try:
-        ensure_chromium_installed()
-    except RuntimeError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    apply_e2e_playwright_env()
+    if args.list_features:
+        print(format_feature_catalog())
+        return 0
 
-    targeted = bool(args.tests)
-    if targeted:
-        test_ids = []
-        loader = unittest.TestLoader()
-        for name in args.tests:
-            _flatten(loader.loadTestsFromName(name), test_ids)
-    else:
-        test_ids = discover_test_ids()
+    # Selection resolution can run before Chromium install for --list-tests.
+    apply_e2e_playwright_env()
+    needs_browser = not args.list_tests
+    if needs_browser:
+        try:
+            ensure_chromium_installed()
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        apply_e2e_playwright_env()
+
+    all_ids = discover_test_ids()
+    try:
+        tier, test_ids, note = _resolve_selection(args, all_ids)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if args.dev:
+        if tier == "full":
+            print(
+                "--dev refuses the full suite; pass --smoke, --feature, --affected, "
+                "--last-failed, or positional tests",
+                file=sys.stderr,
+            )
+            return 2
+        args.fail_fast = True
+        args.no_pointer_capture = True
+        tier = "dev"
+        note = (note + "; fail-fast") if note else "fail-fast"
 
     if args.list_tests:
         for test_id in test_ids:
@@ -594,10 +808,25 @@ def main(argv=None) -> int:
 
     if not test_ids:
         print("no E2E tests selected", file=sys.stderr)
+        if tier == "affected":
+            print(
+                "hint: no mapped production/E2E changes, or only docs/unit-test paths. "
+                "Use --smoke or --feature explicitly if you still want a browser run.",
+                file=sys.stderr,
+            )
         return 1
 
+    print(report_banner(tier, len(test_ids), note))
+    if tier != "full":
+        print(
+            "NOTE: a PASS here is %s coverage — not equivalent to the full E2E gate."
+            % tier
+        )
+
     try:
-        jobs = parse_jobs(args.jobs, os.environ.get("PRKS_E2E_JOBS"), default=1)
+        # Dev defaults to 1 worker unless the caller set jobs/env explicitly.
+        default_jobs = 1
+        jobs = parse_jobs(args.jobs, os.environ.get("PRKS_E2E_JOBS"), default=default_jobs)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -605,12 +834,27 @@ def main(argv=None) -> int:
 
     timings = load_timings(REPO / TIMINGS_PATH)
     if jobs == 1:
-        ok, observed = run_serial(test_ids, args.fail_fast)
+        ok, observed, failed_ids = run_serial(test_ids, args.fail_fast)
     else:
-        ok, observed = run_parallel(test_ids, jobs, timings, args.fail_fast)
+        ok, observed, failed_ids = run_parallel(test_ids, jobs, timings, args.fail_fast)
 
+    targeted = tier != "full"
     _persist_timings(observed, test_ids if not targeted else None)
     _print_slowest({**timings, **observed} if targeted else observed)
+
+    if failed_ids:
+        save_last_failed(
+            REPO / LAST_FAILED_PATH,
+            failed_ids,
+            meta={"tier": tier, "note": note},
+        )
+        print("Wrote last-failed (%d) → %s" % (len(failed_ids), LAST_FAILED_PATH))
+    elif ok and (REPO / LAST_FAILED_PATH).is_file():
+        # Clear stale failures after a clean selected run that had none.
+        try:
+            (REPO / LAST_FAILED_PATH).unlink()
+        except OSError:
+            pass
 
     pointer = None
     if ok and not args.no_pointer_capture:
@@ -623,7 +867,10 @@ def main(argv=None) -> int:
         print("skipping pointer_capture.py because E2E tests failed", file=sys.stderr)
 
     code = run_exit_code(ok, pointer)
-    print("E2E PASS" if code == 0 else "E2E FAIL")
+    if code == 0:
+        print("E2E PASS (%s)%s" % (tier, "" if tier == "full" else " — not a full gate"))
+    else:
+        print("E2E FAIL (%s)" % tier)
     return code
 
 
