@@ -1251,7 +1251,9 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         and it touches no other browse projection."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("case 'work': {")
-        body = app[at: at + 1800]
+        # Pending CREATE_WORK / durable-queue race logic lengthened this case;
+        # keep enough body to reach the open-event call at the end of setup.
+        body = app[at: at + 4500]
         self.assertIn("prksRecordWorkOpened(offlineWork.value)", body)
         for forbidden in ("prksMarkWorksBrowseChanged", "prksMarkRecentlyAddedChanged",
                           "prksMarkWorkBrowseDisplayChanged"):
@@ -1297,7 +1299,7 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("case 'work': {")
         # Fire-and-forget: never awaited on the render path.
-        self.assertIn("void prksRecordWorkOpened(", app[at: at + 1800])
+        self.assertIn("void prksRecordWorkOpened(", app[at: at + 4500])
         self.assertNotIn("await prksRecordWorkOpened(", app)
 
     def test_semantic_helpers_are_the_only_invalidation_path(self):
