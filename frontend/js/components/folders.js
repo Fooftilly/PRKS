@@ -978,21 +978,10 @@ async function prksCollectFolderLibraryGlanceExtras() {
 
         let addedN = null;
         const stMem = window.__prksFolderDashboardState;
+        /* Only reuse an already-loaded Recently-added RAM copy. Do not warm
+         * recently-added:index from Home glance — that domain is independent. */
         if (stMem && Array.isArray(stMem.recentlyAddedWorks)) {
             addedN = stMem.recentlyAddedWorks.length;
-        } else {
-            try {
-                if (typeof prksOfflineRecentlyAddedFetch === 'function') {
-                    const result = await prksOfflineRecentlyAddedFetch();
-                    const rows =
-                        typeof prksResolveOfflineRecentlyAdded === 'function'
-                            ? prksResolveOfflineRecentlyAdded(result)
-                            : result && result.value;
-                    if (Array.isArray(rows)) addedN = rows.length;
-                }
-            } catch (_e) {
-                addedN = null;
-            }
         }
         if (addedN != null && addedN > 0) {
             parts.push(addedN + ' recently added');
